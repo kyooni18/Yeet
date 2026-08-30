@@ -1,0 +1,43 @@
+{
+  "name": "harness-call-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider-neutral TypeScript LLM call core for agent harnesses",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./bridge-protocol": {
+      "types": "./dist/bridge-protocol.d.ts",
+      "import": "./dist/bridge-protocol.js"
+    },
+    "./edit-backend": {
+      "types": "./dist/edit-backend/index.d.ts",
+      "import": "./dist/edit-backend/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run build && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "harness-call-core-bridge": "./dist/bridge.js",
+    "yeet-editd": "./dist/edit-backend/daemon.js"
+  }
+}

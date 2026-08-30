@@ -1,0 +1,1 @@
+{"version":3,"file":"hashline.d.ts","sourceRoot":"","sources":["../../../src/edit-backend/dialects/hashline.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,YAAY,EAAQ,WAAW,EAA6B,MAAM,aAAa,CAAC;AAoC9F,qBAAa,eAAgB,YAAW,WAAW;IACjD,QAAQ,CAAC,EAAE,cAAc;IAEzB,KAAK,CAAC,KAAK,EAAE,MAAM,GAAG,YAAY;CAmGnC"}

@@ -1,0 +1,24 @@
+{
+	"configurations": [
+		{
+			"type": "swift",
+			"request": "launch",
+			"args": [],
+			"cwd": "${workspaceFolder:Yeet}",
+			"name": "Release yeet",
+			"target": "yeet",
+			"configuration": "release",
+			"preLaunchTask": "swift: Build Release yeet"
+		},
+		{
+			"type": "swift",
+			"request": "launch",
+			"args": [],
+			"cwd": "${workspaceFolder:Yeet}",
+			"name": "Debug yeet",
+			"target": "yeet",
+			"configuration": "debug",
+			"preLaunchTask": "swift: Build Debug yeet"
+		}
+	]
+}
