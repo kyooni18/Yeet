@@ -1,21 +1,25 @@
 import { providerFetch, readJson } from "../http.js";
+import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
 import type {
   ProviderCallRequest,
   CallResult,
   FetchLike,
   Message,
+  ModelInfo,
   ProviderAdapter,
   StreamEvent,
   ToolChoice,
 } from "../types.js";
-import { normalizeFinishReason, normalizeModelIds, normalizeToolCall, safeJsonParse, splitSystem, usage } from "../util.js";
+import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, splitLeadingSystem, toolResultContent, usage } from "../util.js";
 
 export interface AnthropicProviderOptions {
+  id?: string;
   apiKey?: string;
   baseUrl?: string;
   version?: string;
   fetch?: FetchLike;
+  apiCallLogger?: ProviderFetchLogger;
 }
 
 function mapToolChoice(choice: ToolChoice | undefined): unknown {
@@ -31,8 +35,9 @@ function mapMessages(messages: Message[]): unknown[] {
     if (message.role === "tool") {
       const block = {
         type: "tool_result",
-        tool_use_id: message.toolCallId ?? "",
-        content: message.content ?? "",
+        tool_use_id: message.toolCallId ?? message.toolResult?.toolCallId ?? "",
+        content: toolResultContent(message),
+        ...(message.toolResult?.isError !== undefined ? { is_error: message.toolResult.isError } : {}),
       };
       const last = output.at(-1);
       if (last?.role === "user" && Array.isArray(last.content)) last.content.push(block);
@@ -50,13 +55,32 @@ function mapMessages(messages: Message[]): unknown[] {
       continue;
     }
 
-    output.push({ role: "user", content: message.content ?? "" });
+    if (message.images?.length) {
+      output.push({
+        role: "user",
+        content: [
+          ...(message.content ? [{ type: "text", text: message.content }] : []),
+          ...message.images.map((image) => ({
+            type: "image",
+            source: { type: "base64", media_type: image.mediaType, data: image.data },
+          })),
+        ],
+      });
+    } else {
+      output.push({ role: "user", content: message.content ?? "" });
+    }
   }
   return output;
 }
 
 function requestBody(request: ProviderCallRequest, stream: boolean): Record<string, unknown> {
-  const split = splitSystem(request.messages, request.system);
+  // Only the immutable leading system prefix belongs in Anthropic's top-level
+  // system field. Request-local coordinator overlays intentionally remain at
+  // the tail, where mapMessages represents them as user guidance. Hoisting
+  // those volatile overlays invalidates the provider prompt prefix every
+  // agent round.
+  const split = splitLeadingSystem(request.messages, request.system);
+  const requestedCacheControl = request.providerOptions?.cache_control;
   return {
     ...(request.providerOptions ?? {}),
     model: request.model,
@@ -76,25 +100,38 @@ function requestBody(request: ProviderCallRequest, stream: boolean): Record<stri
       : {}),
     ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice) } : {}),
     ...(request.metadata ? { metadata: request.metadata } : {}),
+    cache_control: requestedCacheControl ?? { type: "ephemeral" },
   };
 }
 
+function cacheCreationTokens(value: any): number | undefined {
+  if (typeof value?.cache_creation_input_tokens === "number") return value.cache_creation_input_tokens;
+  const creation = value?.cache_creation;
+  if (!creation || typeof creation !== "object") return undefined;
+  const fiveMinute = typeof creation.ephemeral_5m_input_tokens === "number" ? creation.ephemeral_5m_input_tokens : 0;
+  const oneHour = typeof creation.ephemeral_1h_input_tokens === "number" ? creation.ephemeral_1h_input_tokens : 0;
+  return fiveMinute + oneHour || undefined;
+}
+
 export class AnthropicProvider implements ProviderAdapter {
-  readonly id = "anthropic";
+  readonly id: string;
   readonly #apiKey: string | undefined;
   readonly #baseUrl: string;
   readonly #version: string;
   readonly #fetch: FetchLike | undefined;
+  readonly #apiCallLogger: ProviderFetchLogger | undefined;
 
   constructor(options: AnthropicProviderOptions = {}) {
+    this.id = options.id ?? "anthropic";
     this.#apiKey = options.apiKey;
     this.#baseUrl = (options.baseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
     this.#version = options.version ?? "2023-06-01";
     this.#fetch = options.fetch;
+    this.#apiCallLogger = options.apiCallLogger;
   }
 
   #headers(): Record<string, string> {
-    if (!this.#apiKey) throw new Error("Missing API key for anthropic");
+    if (!this.#apiKey) throw new Error(`Missing API key for ${this.id}`);
     return {
       "x-api-key": this.#apiKey,
       "anthropic-version": this.#version,
@@ -103,7 +140,11 @@ export class AnthropicProvider implements ProviderAdapter {
   }
 
   async listModels(): Promise<string[]> {
-    const models: string[] = [];
+    return (await this.listModelInfo()).map((model) => model.id);
+  }
+
+  async listModelInfo(): Promise<ModelInfo[]> {
+    const models: ModelInfo[] = [];
     const seen = new Set<string>();
     let afterId: string | undefined;
 
@@ -116,12 +157,13 @@ export class AnthropicProvider implements ProviderAdapter {
         {
           provider: this.id,
           ...(this.#fetch ? { fetch: this.#fetch } : {}),
+          ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
         },
       );
       const raw = await readJson<any>(response);
-      for (const model of normalizeModelIds(raw)) {
-        if (!seen.has(model)) {
-          seen.add(model);
+      for (const model of normalizeModelInfo(raw)) {
+        if (!seen.has(model.id)) {
+          seen.add(model.id);
           models.push(model);
         }
       }
@@ -140,6 +182,7 @@ export class AnthropicProvider implements ProviderAdapter {
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
+        ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
         ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
         ...(request.retry ? { retry: request.retry } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
@@ -147,16 +190,33 @@ export class AnthropicProvider implements ProviderAdapter {
     );
     const raw = await readJson<any>(response);
     const text = (raw.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+    const reasoning = (raw.content ?? [])
+      .filter((b: any) => b.type === "thinking" && typeof b.thinking === "string")
+      .map((b: any) => b.thinking)
+      .join("");
+    const reasoningSummary = (raw.content ?? [])
+      .filter((b: any) => b.type === "thinking" && typeof b.summary === "string")
+      .map((b: any) => b.summary)
+      .join("");
     const toolCalls = (raw.content ?? [])
       .filter((b: any) => b.type === "tool_use")
       .map((b: any, index: number) => normalizeToolCall(b.id, b.name, b.input, index));
-    const normalizedUsage = usage(raw.usage?.input_tokens, raw.usage?.output_tokens);
+    const normalizedUsage = usage(
+      raw.usage?.input_tokens,
+      raw.usage?.output_tokens,
+      undefined,
+      raw.usage?.cache_read_input_tokens,
+      cacheCreationTokens(raw.usage),
+      raw.usage?.output_tokens_details?.thinking_tokens,
+    );
 
     return {
       provider: this.id,
       model: raw.model ?? request.model,
       ...(raw.id ? { id: raw.id } : {}),
       text,
+      ...(reasoning ? { reasoning } : {}),
+      ...(reasoningSummary ? { reasoningSummary } : {}),
       toolCalls,
       finishReason: normalizeFinishReason(raw.stop_reason),
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
@@ -171,6 +231,7 @@ export class AnthropicProvider implements ProviderAdapter {
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
+        ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
         ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
         ...(request.retry ? { retry: request.retry } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
@@ -183,6 +244,9 @@ export class AnthropicProvider implements ProviderAdapter {
     let finishReason = normalizeFinishReason(undefined);
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
+    let cachedInputTokens: number | undefined;
+    let cacheWriteInputTokens: number | undefined;
+    let reasoningTokens: number | undefined;
     const tools = new Map<number, { id?: string; name?: string; json: string }>();
 
     for await (const event of parseSSE(response)) {
@@ -197,6 +261,9 @@ export class AnthropicProvider implements ProviderAdapter {
         model = raw.message?.model ?? model;
         id = raw.message?.id ?? id;
         inputTokens = raw.message?.usage?.input_tokens ?? inputTokens;
+        cachedInputTokens = raw.message?.usage?.cache_read_input_tokens ?? cachedInputTokens;
+        cacheWriteInputTokens = cacheCreationTokens(raw.message?.usage) ?? cacheWriteInputTokens;
+        reasoningTokens = raw.message?.usage?.output_tokens_details?.thinking_tokens ?? reasoningTokens;
         if (!started) {
           started = true;
           yield { type: "start", provider: this.id, model, ...(id ? { id } : {}) };
@@ -226,6 +293,10 @@ export class AnthropicProvider implements ProviderAdapter {
         };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "text_delta") {
         if (raw.delta.text) yield { type: "text-delta", delta: raw.delta.text };
+      } else if (raw.type === "content_block_delta" && raw.delta?.type === "thinking_delta") {
+        if (raw.delta.thinking) yield { type: "reasoning-delta", delta: raw.delta.thinking };
+      } else if (raw.type === "content_block_delta" && raw.delta?.type === "thinking_summary_delta") {
+        if (raw.delta.summary) yield { type: "reasoning-summary-delta", delta: raw.delta.summary };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "input_json_delta") {
         const index = raw.index ?? 0;
         const current = tools.get(index) ?? { json: "" };
@@ -237,6 +308,7 @@ export class AnthropicProvider implements ProviderAdapter {
       } else if (raw.type === "message_delta") {
         finishReason = normalizeFinishReason(raw.delta?.stop_reason);
         outputTokens = raw.usage?.output_tokens ?? outputTokens;
+        reasoningTokens = raw.usage?.output_tokens_details?.thinking_tokens ?? reasoningTokens;
       }
     }
 
@@ -248,7 +320,14 @@ export class AnthropicProvider implements ProviderAdapter {
       };
     }
 
-    const normalizedUsage = usage(inputTokens, outputTokens);
+    const normalizedUsage = usage(
+      inputTokens,
+      outputTokens,
+      undefined,
+      cachedInputTokens,
+      cacheWriteInputTokens,
+      reasoningTokens,
+    );
     yield {
       type: "finish",
       finishReason,

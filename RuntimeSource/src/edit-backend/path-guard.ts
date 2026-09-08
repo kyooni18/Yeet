@@ -25,39 +25,42 @@ async function existingAncestor(candidate: string): Promise<string> {
 export class PathGuard {
   readonly root: string;
   readonly realRoot: string;
+  readonly allowOutside: boolean;
 
-  private constructor(root: string, realRoot: string) {
+  private constructor(root: string, realRoot: string, allowOutside: boolean) {
     this.root = root;
     this.realRoot = realRoot;
+    this.allowOutside = allowOutside;
   }
 
-  static async create(root: string): Promise<PathGuard> {
+  static async create(root: string, options: { allowOutside?: boolean } = {}): Promise<PathGuard> {
     const absolute = path.resolve(root);
     const resolved = await realpath(absolute);
-    return new PathGuard(absolute, resolved);
+    return new PathGuard(absolute, resolved, options.allowOutside ?? false);
   }
 
-  async resolve(input: string, options: { allowMissing?: boolean } = {}): Promise<string> {
+  async resolve(input: string, options: { allowMissing?: boolean; allowSymlink?: boolean } = {}): Promise<string> {
     const lexical = path.resolve(this.root, input);
-    if (!isInside(this.root, lexical)) throw new Error(`Path escapes workspace root: ${input}`);
+    if (!this.allowOutside && !isInside(this.root, lexical)) throw new Error(`Path escapes workspace root: ${input}`);
 
     try {
       const stat = await lstat(lexical);
-      if (stat.isSymbolicLink()) throw new Error(`Refusing to edit symbolic link: ${input}`);
+      if (stat.isSymbolicLink() && !options.allowSymlink) throw new Error(`Refusing to edit symbolic link: ${input}`);
       const canonical = await realpath(lexical);
-      if (!isInside(this.realRoot, canonical)) throw new Error(`Resolved path escapes workspace root: ${input}`);
+      if (!this.allowOutside && !isInside(this.realRoot, canonical)) throw new Error(`Resolved path escapes workspace root: ${input}`);
       return canonical;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" || !options.allowMissing) throw error;
       const ancestor = await existingAncestor(path.dirname(lexical));
       const realAncestor = await realpath(ancestor);
-      if (!isInside(this.realRoot, realAncestor)) throw new Error(`Parent path escapes workspace root: ${input}`);
+      if (!this.allowOutside && !isInside(this.realRoot, realAncestor)) throw new Error(`Parent path escapes workspace root: ${input}`);
       return lexical;
     }
   }
 
   display(canonical: string): string {
+    if (!isInside(this.realRoot, canonical)) return canonical;
     const relative = path.relative(this.realRoot, canonical);
     return relative === "" ? "." : relative.split(path.sep).join("/");
   }

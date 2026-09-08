@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import {
   mkdtemp,
+  mkdir,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -37,6 +39,7 @@ test("read snapshots enforce seen-line provenance and return a fresh snapshot", 
   try {
     const read = await f.backend.read({ path: "a.txt", startLine: 1, endLine: 2 });
     assert.equal(read.numbered, "1:one\n2:two");
+    assert.match(read.anchored, /^1:[0-9a-f]{4}\|one\n2:[0-9a-f]{4}\|two$/);
     await assert.rejects(
       f.backend.apply({
         changes: [{
@@ -57,7 +60,156 @@ test("read snapshots enforce seen-line provenance and return a fresh snapshot", 
       }],
     });
     assert.match(applied.files[0].snapshot, /^s_/);
+    assert.match(applied.files[0].anchors, /3:[0-9a-f]{4}\|THREE/);
     assert.equal(await readFile(f.file, "utf8"), "one\ntwo\nTHREE\nfour\n");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("read clamps default and explicit end lines to EOF", async () => {
+  const f = await fixture("one\ntwo\nthree\n");
+  try {
+    const defaultRead = await f.backend.read({ path: "a.txt" });
+    assert.equal(defaultRead.startLine, 1);
+    assert.equal(defaultRead.endLine, 3);
+    assert.equal(defaultRead.totalLines, 3);
+    assert.equal(defaultRead.content, "one\ntwo\nthree");
+
+    const oversizedRead = await f.backend.read({ path: "a.txt", startLine: 2, endLine: 400 });
+    assert.equal(oversizedRead.startLine, 2);
+    assert.equal(oversizedRead.endLine, 3);
+    assert.equal(oversizedRead.content, "two\nthree");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("read defaults to a bounded 160-line source page", async () => {
+  const content = Array.from({ length: 220 }, (_, index) => `line-${index + 1}`).join("\n");
+  const f = await fixture(content);
+  try {
+    const read = await f.backend.read({ path: "a.txt" });
+    assert.equal(read.startLine, 1);
+    assert.equal(read.endLine, 160);
+    assert.equal(read.totalLines, 220);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("workspace search returns compact matches and skips generated dependency trees", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "yeet-search-runtime-"));
+  try {
+    await mkdir(path.join(root, "Sources"), { recursive: true });
+    await mkdir(path.join(root, "node_modules", "noise"), { recursive: true });
+    await mkdir(path.join(root, "built", "localized"), { recursive: true });
+    await mkdir(path.join(root, ".yeet", "context-artifacts", "session"), { recursive: true });
+    await writeFile(path.join(root, "Sources", "A.swift"), "one\nNeedle here\nthree\n", "utf8");
+    await writeFile(path.join(root, "Sources", "B.swift"), "needle lower\n", "utf8");
+    await writeFile(path.join(root, "node_modules", "noise", "ignored.js"), "needle ignored\n", "utf8");
+    await writeFile(path.join(root, "built", "localized", "ignored.js"), "needle built\n", "utf8");
+    await writeFile(path.join(root, ".yeet", "context-artifacts", "session", "ignored.txt"), "needle yeet artifact\n", "utf8");
+    const backend = new EditBackend({ root, transactionDir: path.join(root, ".transactions") });
+    await backend.initialize();
+
+    const result = await backend.search({ query: "needle", maxResults: 10 });
+    assert.deepEqual(result.matches.map((item) => `${item.path}:${item.line}`), ["Sources/A.swift:2", "Sources/B.swift:1"]);
+    assert.equal(result.truncated, false);
+    assert.equal(result.filesScanned, 2);
+    await assert.rejects(
+      backend.search({ query: "needle", path: ".yeet" }),
+      /generated or internal workspace state/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace file listing discovers files without exposing generated or Yeet state", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "yeet-list-runtime-"));
+  try {
+    await mkdir(path.join(root, "Sources", "Core"), { recursive: true });
+    await mkdir(path.join(root, ".yeet", "context-artifacts"), { recursive: true });
+    await mkdir(path.join(root, "node_modules", "pkg"), { recursive: true });
+    await writeFile(path.join(root, "copy.swift"), "print(1)\n", "utf8");
+    await writeFile(path.join(root, "Sources", "Core", "A.swift"), "struct A {}\n", "utf8");
+    await writeFile(path.join(root, ".yeet", "context-artifacts", "noise.txt"), "noise\n", "utf8");
+    await writeFile(path.join(root, "node_modules", "pkg", "noise.js"), "noise\n", "utf8");
+    const backend = new EditBackend({ root, transactionDir: path.join(root, ".transactions") });
+    await backend.initialize();
+
+    const result = await backend.listFiles({ maxDepth: 4, maxResults: 20 });
+    assert.deepEqual(result.entries, [
+      { path: "Sources", kind: "directory" },
+      { path: "Sources/Core", kind: "directory" },
+      { path: "Sources/Core/A.swift", kind: "file" },
+      { path: "copy.swift", kind: "file" },
+    ]);
+    assert.equal(result.truncated, false);
+    await assert.rejects(
+      backend.listFiles({ path: ".yeet" }),
+      /generated or internal workspace state/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace search is literal by default and supports explicit regex", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "yeet-search-regex-"));
+  try {
+    await mkdir(path.join(root, "Sources"), { recursive: true });
+    await writeFile(path.join(root, "Sources", "A.swift"), "useRouter here\nDI.router here\nuseRouter|DI\\.router literal\n", "utf8");
+    const backend = new EditBackend({ root, transactionDir: path.join(root, ".transactions") });
+    await backend.initialize();
+
+    const literal = await backend.search({ query: "useRouter|DI\\.router" });
+    assert.deepEqual(literal.matches.map((item) => item.line), [3]);
+
+    const regex = await backend.search({ query: "useRouter|DI\\.router", regex: true });
+    assert.deepEqual(regex.matches.map((item) => item.line), [1, 2, 3]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("line hashes reject misaddressed edits before touching the file", async () => {
+  const f = await fixture("one\ntwo\nthree\n");
+  try {
+    const read = await f.backend.read({ path: "a.txt", startLine: 1, endLine: 3 });
+    const second = read.anchored.split("\n")[1];
+    const hash = /^2:([0-9a-f]{4})\|/.exec(second)?.[1];
+    assert.ok(hash);
+
+    await assert.rejects(
+      f.backend.apply({
+        changes: [{
+          path: "a.txt",
+          snapshot: read.snapshot,
+          edits: [{
+            kind: "replace",
+            range: { start: 2, end: 2, startHash: "0000", endHash: "0000" },
+            text: "TWO",
+          }],
+        }],
+      }),
+      /anchor mismatch/,
+    );
+    assert.equal(await readFile(f.file, "utf8"), "one\ntwo\nthree\n");
+
+    await f.backend.apply({
+      changes: [{
+        path: "a.txt",
+        snapshot: read.snapshot,
+        edits: [{
+          kind: "replace",
+          range: { start: 2, end: 2, startHash: hash, endHash: hash },
+          text: "TWO",
+        }],
+      }],
+    });
+    assert.equal(await readFile(f.file, "utf8"), "one\nTWO\nthree\n");
   } finally {
     await f.cleanup();
   }
@@ -150,6 +302,30 @@ test("hashline, unified patch, and sloppy dialects share the snapshot-safe apply
   }
 });
 
+test("unified patch rejects hunk content that disagrees with its snapshot", async () => {
+  const f = await fixture("one\ntwo\nthree\n");
+  try {
+    const read = await f.backend.read({ path: "a.txt", startLine: 1, endLine: 3 });
+    await assert.rejects(
+      f.backend.applyDialect(
+        [
+          "--- a/a.txt",
+          "+++ b/a.txt",
+          "@@ -2,1 +2,1 @@",
+          "-not-two",
+          "+TWO",
+          "",
+        ].join("\n"),
+        { dialect: "apply_patch", snapshots: { "a.txt": read.snapshot } },
+      ),
+      /context does not match snapshot/,
+    );
+    assert.equal(await readFile(f.file, "utf8"), "one\ntwo\nthree\n");
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("hashline block edits use the configured resolver", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-block-"));
   try {
@@ -211,6 +387,39 @@ test("transactions preserve BOM/CRLF and reject symlink and traversal paths", as
   }
 });
 
+test("unsafe outside access permits snapshot-free edits beyond the project root", async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-unlimited-"));
+  const root = path.join(parent, "project");
+  const external = path.join(parent, "outside.txt");
+  try {
+    await mkdir(root);
+    await writeFile(external, "outside\n", "utf8");
+    const backend = new EditBackend({
+      root,
+      allowOutside: true,
+      transactionDir: path.join(root, ".transactions"),
+    });
+    await backend.initialize();
+    const read = await backend.read({ path: external, startLine: 1, endLine: 1, unsafe: true });
+    assert.equal(read.path, await realpath(external));
+    await backend.apply({
+      unsafe: true,
+      changes: [{
+        path: external,
+        edits: [{ kind: "replace", range: { start: 1, end: 1 }, text: "changed" }],
+      }],
+    });
+    assert.equal(await readFile(external, "utf8"), "changed\n");
+
+    const link = path.join(root, "outside-link.txt");
+    await symlink(external, link);
+    const linked = await backend.read({ path: link, startLine: 1, endLine: 1, unsafe: true });
+    assert.equal(linked.content, "changed");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("transaction writer rolls back when the live digest differs", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-transaction-"));
   try {
@@ -244,6 +453,7 @@ test("move edits are committed transactionally and return a destination snapshot
     await assert.rejects(readFile(f.file, "utf8"));
     assert.equal(await readFile(path.join(f.root, "b.txt"), "utf8"), "one\nTWO\n");
     assert.match(result.files[0].snapshot, /^s_/);
+    assert.match(result.files[0].anchors, /2:[0-9a-f]{4}\|TWO/);
   } finally {
     await f.cleanup();
   }

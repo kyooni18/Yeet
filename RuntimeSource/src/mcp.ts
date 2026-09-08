@@ -6,10 +6,22 @@ import { dirname, join } from "node:path";
 import { parseSSE } from "./sse.js";
 import type { FetchLike } from "./types.js";
 
+export interface NativeAppApprovalRequest {
+  requestId: string;
+  server: string;
+  tool: string;
+  bundleId?: string;
+  appName?: string;
+  operation: string;
+  message: string;
+}
+
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
 const LEGACY_MCP_PROTOCOL_VERSION = "2025-11-25";
 const CLIENT_INFO = { name: "yeet", version: "0.1.0" } as const;
-const CLIENT_CAPABILITIES = {} as const;
+const CLIENT_CAPABILITIES = { elicitation: { form: {} } } as const;
+const MCP_CONNECT_TIMEOUT_MS = 15_000;
+const MCP_REQUEST_TIMEOUT_MS = 60_000;
 
 export type McpTransportKind = "stdio" | "http";
 
@@ -76,6 +88,8 @@ export interface McpCallToolResult {
   content: unknown[];
   structuredContent?: unknown;
   isError?: boolean;
+  /** Optional host-facing feedback supplied by an MCP tool implementation. */
+  feedback?: unknown;
   _meta?: Record<string, unknown>;
 }
 
@@ -108,6 +122,15 @@ interface JsonRpcResponse {
   error?: JsonRpcErrorShape;
 }
 
+interface JsonRpcRequest {
+  jsonrpc: "2.0";
+  id: string | number;
+  method: string;
+  params?: unknown;
+}
+
+export type NativeAppApprovalHandler = (request: NativeAppApprovalRequest, signal?: AbortSignal) => Promise<boolean>;
+
 export class McpError extends Error {
   readonly code: number | undefined;
   readonly data: unknown;
@@ -126,9 +149,26 @@ interface McpConnection {
   readonly configuration: McpServerConfiguration;
   readonly era: "modern" | "legacy" | undefined;
   readonly protocol: string | undefined;
-  connect(): Promise<void>;
-  request(method: string, params?: Record<string, unknown>, toolSchema?: Record<string, unknown>): Promise<unknown>;
+  connect(signal?: AbortSignal): Promise<void>;
+  request(method: string, params?: Record<string, unknown>, toolSchema?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
   close(): Promise<void>;
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("MCP request cancelled");
+}
+
+async function withTimeout<T>(operation: (signal: AbortSignal) => Promise<T>, timeoutMs: number, label: string, parent?: AbortSignal): Promise<T> {
+  if (parent?.aborted) throw abortReason(parent);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new McpError(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  const onAbort = () => controller.abort(abortReason(parent!));
+  parent?.addEventListener("abort", onAbort, { once: true });
+  try { return await operation(controller.signal); }
+  finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", onAbort);
+  }
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -208,62 +248,68 @@ class StdioMcpConnection implements McpConnection {
   #buffer = "";
   #nextId = 1;
   #pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: unknown) => void }>();
+  readonly #approvalHandler: NativeAppApprovalHandler | undefined;
   #era: "modern" | "legacy" | undefined;
   #protocol: string | undefined;
+  #approvalControllers = new Set<AbortController>();
 
-  constructor(configuration: McpStdioServerConfiguration) {
+  constructor(configuration: McpStdioServerConfiguration, approvalHandler?: NativeAppApprovalHandler) {
     this.configuration = configuration;
+    this.#approvalHandler = approvalHandler;
   }
 
   get era(): "modern" | "legacy" | undefined { return this.#era; }
   get protocol(): string | undefined { return this.#protocol; }
 
-  async connect(): Promise<void> {
+  async connect(signal?: AbortSignal): Promise<void> {
     if (this.#child) return;
-    const env = { ...process.env, ...(this.configuration.env ?? {}) };
-    this.#child = spawn(this.configuration.command, this.configuration.args ?? [], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env,
-      ...(this.configuration.cwd ? { cwd: this.configuration.cwd } : {}),
-    });
-    this.#child.stdout.on("data", (chunk: any) => this.#consume(String(chunk)));
-    this.#child.stderr.on("data", (_chunk: any) => undefined);
-    this.#child.on("exit", (code: number | null, signal: string | null) => {
-      const error = new McpError(`MCP server ${this.configuration.name} exited (${String(code ?? signal ?? "unknown")})`, { server: this.configuration.name });
-      for (const pending of this.#pending.values()) pending.reject(error);
-      this.#pending.clear();
-      this.#child = undefined;
-    });
+    if (signal?.aborted) throw abortReason(signal);
+    this.#spawnChild();
 
     try {
-      await this.#rawRequest("server/discover", {}, true);
+      await this.#rawRequest("server/discover", {}, true, signal);
       this.#era = "modern";
       this.#protocol = MCP_PROTOCOL_VERSION;
     } catch (error) {
+      if (signal?.aborted) {
+        await this.close();
+        throw abortReason(signal);
+      }
       const code = error instanceof McpError ? error.code : undefined;
       if (code !== -32601 && code !== -32022 && code !== undefined) {
         await this.close();
         throw error;
       }
+      // Some legacy stdio servers terminate the process when they receive an
+      // unknown pre-initialize method instead of replying with MethodNotFound.
+      // In that case the modern probe has already consumed the process, so a
+      // legacy initialize must start on a fresh stdio connection.
+      if (!this.#child) this.#spawnChild();
       const result = asObject(await this.#rawRequest("initialize", {
         protocolVersion: LEGACY_MCP_PROTOCOL_VERSION,
-        capabilities: {},
+        capabilities: CLIENT_CAPABILITIES,
         clientInfo: CLIENT_INFO,
-      }, false));
+      }, false, signal));
       this.#era = "legacy";
       this.#protocol = asString(result.protocolVersion) ?? LEGACY_MCP_PROTOCOL_VERSION;
       this.#send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
     }
   }
 
-  async request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-    await this.connect();
-    return this.#rawRequest(method, params, this.#era === "modern");
+  async request(method: string, params: Record<string, unknown> = {}, _toolSchema?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    await this.connect(signal);
+    const cancelApprovals = () => {
+      for (const controller of this.#approvalControllers) controller.abort(abortReason(signal!));
+    };
+    signal?.addEventListener("abort", cancelApprovals, { once: true });
+    try { return await this.#rawRequest(method, params, this.#era === "modern", signal); }
+    finally { signal?.removeEventListener("abort", cancelApprovals); }
   }
 
   async close(): Promise<void> {
     const child = this.#child;
     this.#child = undefined;
+    this.#abortApprovals();
     if (!child) return;
     try { child.stdin.end(); } catch { /* ignore */ }
     try { child.kill("SIGTERM"); } catch { /* ignore */ }
@@ -271,18 +317,72 @@ class StdioMcpConnection implements McpConnection {
     this.#pending.clear();
   }
 
+  #spawnChild(): void {
+    const env = { ...process.env, ...(this.configuration.env ?? {}) };
+    const child = spawn(this.configuration.command, this.configuration.args ?? [], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env,
+      ...(this.configuration.cwd ? { cwd: this.configuration.cwd } : {}),
+    });
+    this.#child = child;
+    this.#buffer = "";
+    child.stdout.on("data", (chunk: any) => this.#consume(String(chunk)));
+    child.stderr.on("data", (_chunk: any) => undefined);
+    child.on("error", (cause: Error) => {
+      if (this.#child !== child) return;
+      this.#child = undefined;
+      this.#abortApprovals();
+      const error = new McpError(`MCP server ${this.configuration.name} failed to start: ${cause.message}`, { server: this.configuration.name });
+      for (const pending of this.#pending.values()) pending.reject(error);
+      this.#pending.clear();
+    });
+    child.on("exit", (code: number | null, signal: string | null) => {
+      if (this.#child !== child) return;
+      this.#child = undefined;
+      this.#abortApprovals();
+      const error = new McpError(`MCP server ${this.configuration.name} exited (${String(code ?? signal ?? "unknown")})`, { server: this.configuration.name });
+      for (const pending of this.#pending.values()) pending.reject(error);
+      this.#pending.clear();
+    });
+  }
+
   #send(value: unknown): void {
     if (!this.#child?.stdin?.writable) throw new McpError(`MCP server ${this.configuration.name} is not writable`);
     this.#child.stdin.write(`${JSON.stringify(value)}\n`);
   }
 
-  #rawRequest(method: string, params: Record<string, unknown>, modern: boolean): Promise<unknown> {
+  #abortApprovals(): void {
+    for (const controller of this.#approvalControllers) controller.abort(new McpError("MCP approval cancelled"));
+    this.#approvalControllers.clear();
+  }
+
+  #rawRequest(method: string, params: Record<string, unknown>, modern: boolean, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) return Promise.reject(abortReason(signal));
     const id = this.#nextId++;
     const body = { jsonrpc: "2.0", id, method, params: modern ? modernParams(params) : params };
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+      const onAbort = () => {
+        if (!this.#pending.delete(id)) return;
+        cleanup();
+        try {
+          this.#send({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: modern
+              ? modernParams({ requestId: id, reason: "Cancelled by Yeet" })
+              : { requestId: id, reason: "Cancelled by Yeet" },
+          });
+        } catch { /* best effort */ }
+        reject(signal ? abortReason(signal) : new Error("MCP request cancelled"));
+      };
+      this.#pending.set(id, {
+        resolve: (value) => { cleanup(); resolve(value); },
+        reject: (error) => { cleanup(); reject(error); },
+      });
+      signal?.addEventListener("abort", onAbort, { once: true });
       try { this.#send(body); }
-      catch (error) { this.#pending.delete(id); reject(error); }
+      catch (error) { this.#pending.delete(id); cleanup(); reject(error); }
     });
   }
 
@@ -294,16 +394,83 @@ class StdioMcpConnection implements McpConnection {
       const line = this.#buffer.slice(0, newline).trim();
       this.#buffer = this.#buffer.slice(newline + 1);
       if (!line) continue;
-      let message: JsonRpcResponse;
-      try { message = JSON.parse(line) as JsonRpcResponse; }
+      let message: JsonRpcResponse | JsonRpcRequest;
+      try { message = JSON.parse(line) as JsonRpcResponse | JsonRpcRequest; }
       catch { continue; }
+      if (typeof (message as JsonRpcRequest).method === "string" && message.id !== null) {
+        void this.#handleServerRequest(message as JsonRpcRequest);
+        continue;
+      }
+      const response = message as JsonRpcResponse;
       if (message.id === null || typeof message.id !== "number") continue;
       const pending = this.#pending.get(message.id);
       if (!pending) continue;
       this.#pending.delete(message.id);
-      if (message.error) pending.reject(jsonRpcError(message.error, this.configuration.name));
-      else pending.resolve(message.result);
+      if (response.error) pending.reject(jsonRpcError(response.error, this.configuration.name));
+      else pending.resolve(response.result);
     }
+  }
+
+  async #handleServerRequest(message: JsonRpcRequest): Promise<void> {
+    if (message.method !== "elicitation/create") {
+      this.#respond(message.id, { error: { code: -32601, message: `Unsupported MCP client request: ${message.method}` } });
+      return;
+    }
+    const params = asObject(message.params);
+    const meta = asObject(params.meta);
+    const toolParams = asObject(meta.tool_params);
+    const rawApp = toolParams.app;
+    const appString = typeof rawApp === "string" ? rawApp.trim() : undefined;
+    const app = appString !== undefined
+      ? (/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$/.test(appString) ? { bundleId: appString } : { name: appString })
+      : asObject(rawApp);
+    const bundleId = asString(app.bundleId) ?? asString(app.bundle_id)
+      ?? asString(toolParams.bundleId) ?? asString(toolParams.bundle_id);
+    const appName = asString(app.name) ?? asString(app.appName) ?? asString(toolParams.appName) ?? asString(toolParams.app_name);
+    const approvalKind = asString(meta.codex_approval_kind);
+    const mode = asString(params.mode);
+    if (approvalKind !== "mcp_tool_call" || (mode !== undefined && mode !== "form") || (!bundleId && !appName)) {
+      this.#respond(message.id, { result: { action: "decline" } });
+      return;
+    }
+    const tool = asString(toolParams.tool) ?? asString(toolParams.name) ?? asString(meta.tool) ?? "unknown";
+    const operation = asString(toolParams.operation) ?? asString(meta.operation) ?? "MCP tool call";
+    const elicitationMessage = asString(params.message) ?? asString(params.reason) ?? operation;
+    let approved = false;
+    const approvalController = new AbortController();
+    this.#approvalControllers.add(approvalController);
+    try {
+      approved = this.#approvalHandler
+        ? await this.#approvalHandler({
+          requestId: String(message.id),
+          server: this.configuration.name,
+          tool,
+          ...(bundleId ? { bundleId } : {}),
+          ...(appName ? { appName } : {}),
+          operation,
+          message: elicitationMessage,
+        }, approvalController.signal)
+        : false;
+    } catch {
+      approved = false;
+    } finally {
+      this.#approvalControllers.delete(approvalController);
+    }
+    if (!approved) {
+      this.#respond(message.id, { result: { action: "decline" } });
+      return;
+    }
+    // Approval is deliberately scoped to this active session. Do not emit a
+    // persistent/global approval marker understood by other hosts.
+    this.#respond(message.id, { result: {
+      action: "accept",
+      content: { source: "yeet-computer-use-approval", scope: "session", ...(bundleId ? { bundleId } : {}), ...(appName ? { appName } : {}) },
+      scope: "session",
+    } });
+  }
+
+  #respond(id: string | number, response: Record<string, unknown>): void {
+    try { this.#send({ jsonrpc: "2.0", id, ...response }); } catch { /* connection closed */ }
   }
 }
 
@@ -376,10 +543,13 @@ class HTTPMcpConnection implements McpConnection {
 
   get era(): "modern" { return "modern"; }
   get protocol(): string { return MCP_PROTOCOL_VERSION; }
-  async connect(): Promise<void> { /* stateless modern transport */ }
+  async connect(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw abortReason(signal);
+  }
   async close(): Promise<void> { /* no persistent session */ }
 
-  async request(method: string, params: Record<string, unknown> = {}, toolSchema?: Record<string, unknown>): Promise<unknown> {
+  async request(method: string, params: Record<string, unknown> = {}, toolSchema?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) throw abortReason(signal);
     const id = this.#nextId++;
     const finalParams = modernParams(params);
     const headers: Record<string, string> = {
@@ -401,6 +571,7 @@ class HTTPMcpConnection implements McpConnection {
       method: "POST",
       headers,
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params: finalParams }),
+      ...(signal ? { signal } : {}),
     });
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.ok && !contentType.includes("application/json")) {
@@ -426,18 +597,21 @@ class HTTPMcpConnection implements McpConnection {
 export interface McpManagerOptions {
   configDir?: string;
   fetch?: FetchLike;
+  nativeAppApproval?: NativeAppApprovalHandler;
 }
 
 export class McpManager {
   readonly configDir: string;
   readonly configPath: string;
   readonly #fetch: FetchLike;
+  readonly #nativeAppApproval: NativeAppApprovalHandler | undefined;
   readonly #connections = new Map<string, McpConnection>();
 
   constructor(options: McpManagerOptions = {}) {
     this.configDir = options.configDir ?? process.env.YEET_CONFIG_DIR ?? join(homedir(), ".yeet");
     this.configPath = join(this.configDir, "mcp.json");
     this.#fetch = options.fetch ?? fetch;
+    this.#nativeAppApproval = options.nativeAppApproval;
   }
 
   async ensure(): Promise<void> {
@@ -486,14 +660,19 @@ export class McpManager {
       });
   }
 
-  async listTools(server?: string): Promise<McpTool[]> {
+  async listTools(server?: string, signal?: AbortSignal): Promise<McpTool[]> {
     const servers = await this.#targetServers(server);
     const output: McpTool[] = [];
     for (const configuration of servers) {
-      const connection = await this.#connection(configuration.name);
+      const connection = await this.#connection(configuration.name, signal);
       let cursor: string | undefined;
       do {
-        const result = asObject(await connection.request("tools/list", cursor ? { cursor } : {}));
+        const result = asObject(await withTimeout(
+          (requestSignal) => connection.request("tools/list", cursor ? { cursor } : {}, undefined, requestSignal),
+          MCP_REQUEST_TIMEOUT_MS,
+          `MCP tools/list for ${configuration.name}`,
+          signal,
+        ));
         const tools = Array.isArray(result.tools) ? result.tools : [];
         for (const raw of tools) {
           const tool = asObject(raw);
@@ -520,23 +699,24 @@ export class McpManager {
     return output;
   }
 
-  async callTool(server: string, name: string, args: Record<string, unknown> = {}): Promise<McpCallToolResult> {
-    const connection = await this.#connection(server);
-    const tool = (await this.listTools(server)).find((candidate) => candidate.name === name);
+  async callTool(server: string, name: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<McpCallToolResult> {
+    const connection = await this.#connection(server, signal);
+    const tool = (await this.listTools(server, signal)).find((candidate) => candidate.name === name);
     if (!tool) throw new McpError(`Unknown MCP tool ${server}/${name}`, { server });
-    const result = asObject(await connection.request("tools/call", { name, arguments: args }, tool.inputSchema));
+    const result = asObject(await connection.request("tools/call", { name, arguments: args }, tool.inputSchema, signal));
     return {
       content: Array.isArray(result.content) ? result.content : [],
       ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
       ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
+      ...(result.feedback !== undefined ? { feedback: result.feedback } : {}),
       ...(result._meta ? { _meta: asObject(result._meta) } : {}),
     };
   }
 
-  async callQualifiedTool(qualifiedName: string, args: Record<string, unknown> = {}): Promise<McpCallToolResult> {
+  async callQualifiedTool(qualifiedName: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<McpCallToolResult> {
     const slash = qualifiedName.indexOf("/");
     if (slash <= 0 || slash === qualifiedName.length - 1) throw new Error(`MCP tool must use server/tool form: ${qualifiedName}`);
-    return this.callTool(qualifiedName.slice(0, slash), qualifiedName.slice(slash + 1), args);
+    return this.callTool(qualifiedName.slice(0, slash), qualifiedName.slice(slash + 1), args, signal);
   }
 
   async listResources(server?: string): Promise<McpResource[]> {
@@ -643,17 +823,23 @@ export class McpManager {
     return Object.values(config.servers).sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async #connection(name: string): Promise<McpConnection> {
+  async #connection(name: string, signal?: AbortSignal): Promise<McpConnection> {
     const existing = this.#connections.get(name);
     if (existing) return existing;
+    if (signal?.aborted) throw abortReason(signal);
     await this.ensure();
     const config = await readConfig(this.configPath);
     const configuration = config.servers[name];
     if (!configuration) throw new McpError(`Unknown MCP server: ${name}`, { server: name });
     const connection: McpConnection = configuration.transport === "stdio"
-      ? new StdioMcpConnection(configuration)
+      ? new StdioMcpConnection(configuration, this.#nativeAppApproval)
       : new HTTPMcpConnection(configuration, this.#fetch);
-    await connection.connect();
+    await withTimeout(
+      (connectSignal) => connection.connect(connectSignal),
+      MCP_CONNECT_TIMEOUT_MS,
+      `MCP connection to ${name}`,
+      signal,
+    );
     this.#connections.set(name, connection);
     return connection;
   }

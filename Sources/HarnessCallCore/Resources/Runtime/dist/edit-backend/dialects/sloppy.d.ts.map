@@ -1,1 +1,0 @@
-{"version":3,"file":"sloppy.d.ts","sourceRoot":"","sources":["../../../src/edit-backend/dialects/sloppy.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,YAAY,EAAE,WAAW,EAAc,MAAM,aAAa,CAAC;AAsBzE,qBAAa,aAAc,YAAW,WAAW;IAC/C,QAAQ,CAAC,EAAE,YAAY;IAEvB,KAAK,CAAC,KAAK,EAAE,MAAM,EAAE,OAAO,EAAE;QAAE,eAAe,CAAC,MAAM,EAAE,MAAM,GAAG,MAAM,CAAA;KAAE,GAAG,YAAY;CA0CzF"}

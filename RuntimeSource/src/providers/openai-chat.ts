@@ -1,17 +1,22 @@
+import { fetchEmbeddings } from "../embeddings.js";
+import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
 import { providerFetch, readJson } from "../http.js";
+import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
 import type {
   ProviderCallRequest,
   CallResult,
   FetchLike,
+  ImageAttachment,
   Message,
+  ModelInfo,
   ProviderAdapter,
   StreamEvent,
   ToolCall,
   ToolChoice,
   ToolDefinition,
 } from "../types.js";
-import { normalizeFinishReason, normalizeModelIds, normalizeToolCall, safeJsonParse, splitSystem, usage } from "../util.js";
+import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, splitLeadingSystem, toolResultContent, usage } from "../util.js";
 
 export interface OpenAIChatProviderOptions {
   id?: string;
@@ -20,9 +25,59 @@ export interface OpenAIChatProviderOptions {
   headers?: Record<string, string>;
   requireApiKey?: boolean;
   fetch?: FetchLike;
+  apiCallLogger?: ProviderFetchLogger;
 }
 
 type ChatMessage = Record<string, unknown>;
+
+function dataUrl(image: ImageAttachment): string {
+  return `data:${image.mediaType};base64,${image.data}`;
+}
+
+function chatContent(message: Message): unknown {
+  if (!message.images?.length) return message.content ?? "";
+  return [
+    ...(message.content ? [{ type: "text", text: message.content }] : []),
+    ...message.images.map((image) => ({ type: "image_url", image_url: { url: dataUrl(image) } })),
+  ];
+}
+
+function firstString(value: any, keys: string[]): string | undefined {
+  for (const key of keys) {
+    if (typeof value?.[key] === "string" && value[key]) return value[key];
+  }
+  return undefined;
+}
+
+function reasoningDetailsText(value: any): string | undefined {
+  if (!Array.isArray(value?.reasoning_details)) return undefined;
+  const text = value.reasoning_details
+    .filter((part: any) => part && typeof part === "object" && typeof part.text === "string")
+    .map((part: any) => part.text)
+    .join("");
+  return text || undefined;
+}
+
+function reasoningText(value: any): string | undefined {
+  return firstString(value, ["reasoning_content", "reasoning", "reasoning_text", "thinking"])
+    ?? reasoningDetailsText(value);
+}
+
+function reasoningSummary(value: any): string | undefined {
+  return firstString(value, ["reasoning_summary", "reasoning_summary_text", "thinking_summary"]);
+}
+
+function reasoningTokenCount(value: any): number | undefined {
+  const candidates = [
+    value?.completion_tokens_details?.reasoning_tokens,
+    value?.completion_tokens_details?.thinking_tokens,
+    value?.output_tokens_details?.reasoning_tokens,
+    value?.output_tokens_details?.thinking_tokens,
+    value?.reasoning_tokens,
+    value?.thinking_tokens,
+  ];
+  return candidates.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0);
+}
 
 function mapToolChoice(choice: ToolChoice | undefined): unknown {
   if (!choice) return undefined;
@@ -45,7 +100,7 @@ function mapTools(tools: ToolDefinition[] | undefined): unknown[] | undefined {
 }
 
 function mapMessages(messages: Message[], explicitSystem?: string): ChatMessage[] {
-  const { system, messages: rest } = splitSystem(messages, explicitSystem);
+  const { system, messages: rest } = splitLeadingSystem(messages, explicitSystem);
   const output: ChatMessage[] = [];
   if (system) output.push({ role: "system", content: system });
 
@@ -53,8 +108,8 @@ function mapMessages(messages: Message[], explicitSystem?: string): ChatMessage[
     if (message.role === "tool") {
       output.push({
         role: "tool",
-        content: message.content ?? "",
-        tool_call_id: message.toolCallId ?? "",
+        content: toolResultContent(message),
+        tool_call_id: message.toolCallId ?? message.toolResult?.toolCallId ?? "",
         ...(message.name ? { name: message.name } : {}),
       });
       continue;
@@ -76,7 +131,7 @@ function mapMessages(messages: Message[], explicitSystem?: string): ChatMessage[
       continue;
     }
 
-    output.push({ role: message.role, content: message.content ?? "" });
+    output.push({ role: message.role, content: chatContent(message) });
   }
 
   return output;
@@ -106,6 +161,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
   readonly #headers: Record<string, string>;
   readonly #requireApiKey: boolean;
   readonly #fetch: FetchLike | undefined;
+  readonly #apiCallLogger: ProviderFetchLogger | undefined;
 
   constructor(options: OpenAIChatProviderOptions = {}) {
     this.id = options.id ?? "openai-compatible";
@@ -114,6 +170,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
     this.#headers = options.headers ?? {};
     this.#requireApiKey = options.requireApiKey ?? false;
     this.#fetch = options.fetch;
+    this.#apiCallLogger = options.apiCallLogger;
   }
 
   #requestHeaders(): Record<string, string> {
@@ -125,16 +182,27 @@ export class OpenAIChatProvider implements ProviderAdapter {
     };
   }
 
+  async embed(request: EmbeddingRequest): Promise<EmbeddingResult> {
+    return fetchEmbeddings({ provider: this.id, baseUrl: this.#baseUrl,
+      headers: this.#requestHeaders(), request, format: "openai",
+      fetch: this.#fetch, apiCallLogger: this.#apiCallLogger });
+  }
+
   async listModels(): Promise<string[]> {
+    return (await this.listModelInfo()).map((model) => model.id);
+  }
+
+  async listModelInfo(): Promise<ModelInfo[]> {
     const response = await providerFetch(
       `${this.#baseUrl}/models`,
       { method: "GET", headers: this.#requestHeaders() },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
+        ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
       },
     );
-    return normalizeModelIds(await readJson(response));
+    return normalizeModelInfo(await readJson(response));
   }
 
   async complete(request: ProviderCallRequest): Promise<CallResult> {
@@ -148,6 +216,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
+        ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
         ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
         ...(request.retry ? { retry: request.retry } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
@@ -161,12 +230,23 @@ export class OpenAIChatProvider implements ProviderAdapter {
       normalizeToolCall(tool.id, tool.function?.name, safeJsonParse(tool.function?.arguments ?? ""), index),
     );
 
-    const normalizedUsage = usage(raw.usage?.prompt_tokens, raw.usage?.completion_tokens, raw.usage?.total_tokens);
+    const normalizedUsage = usage(
+      raw.usage?.prompt_tokens,
+      raw.usage?.completion_tokens,
+      raw.usage?.total_tokens,
+      raw.usage?.prompt_tokens_details?.cached_tokens,
+      raw.usage?.prompt_tokens_details?.cache_write_tokens,
+      reasoningTokenCount(raw.usage),
+    );
+    const normalizedReasoning = reasoningText(message);
+    const normalizedReasoningSummary = reasoningSummary(message);
     return {
       provider: this.id,
       model: raw.model ?? request.model,
       ...(raw.id ? { id: raw.id } : {}),
       text: typeof message.content === "string" ? message.content : "",
+      ...(normalizedReasoning ? { reasoning: normalizedReasoning } : {}),
+      ...(normalizedReasoningSummary ? { reasoningSummary: normalizedReasoningSummary } : {}),
       toolCalls,
       finishReason: normalizeFinishReason(choice?.finish_reason),
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
@@ -185,6 +265,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
+        ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
         ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
         ...(request.retry ? { retry: request.retry } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
@@ -216,13 +297,28 @@ export class OpenAIChatProvider implements ProviderAdapter {
       }
 
       if (raw.usage) {
-        finalUsage = usage(raw.usage.prompt_tokens, raw.usage.completion_tokens, raw.usage.total_tokens);
+        finalUsage = usage(
+          raw.usage.prompt_tokens,
+          raw.usage.completion_tokens,
+          raw.usage.total_tokens,
+          raw.usage.prompt_tokens_details?.cached_tokens,
+          raw.usage.prompt_tokens_details?.cache_write_tokens,
+          reasoningTokenCount(raw.usage),
+        );
       }
 
       const choice = raw.choices?.[0];
       if (!choice) continue;
       if (choice.finish_reason != null) finishReason = normalizeFinishReason(choice.finish_reason);
       const delta = choice.delta ?? {};
+      const reasoning = reasoningText(delta);
+      if (reasoning) {
+        yield { type: "reasoning-delta", delta: reasoning };
+      }
+      const summary = reasoningSummary(delta);
+      if (summary) {
+        yield { type: "reasoning-summary-delta", delta: summary };
+      }
       if (typeof delta.content === "string" && delta.content) {
         yield { type: "text-delta", delta: delta.content };
       }

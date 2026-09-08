@@ -1,4 +1,5 @@
 import type { AuthStatus, BrowserLoginOptions } from "./auth.js";
+import type { HarnessCapabilityDescriptor } from "./capabilities.js";
 import type {
   McpCallToolResult,
   McpGetPromptResult,
@@ -10,9 +11,20 @@ import type {
   McpTool,
 } from "./mcp.js";
 import type { Skill, SkillSummary } from "./skills.js";
-import type { CallRequest, CallResult, StreamEvent } from "./types.js";
+import type { CallRequest, CallResult, EmbeddingResult, ModelInfo, StreamEvent } from "./types.js";
 
 export const BRIDGE_PROTOCOL_VERSION = 1 as const;
+
+import type { NativeAppApprovalRequest } from "./mcp.js";
+export type { NativeAppApprovalRequest } from "./mcp.js";
+
+export type NativeAppApprovalDecision = {
+  v: typeof BRIDGE_PROTOCOL_VERSION;
+  type: "native_app_approval_decision";
+  requestId: string;
+  decision: "accept" | "decline";
+  scope: "session";
+};
 
 export type BridgeRequest = Omit<CallRequest, "signal">;
 
@@ -26,14 +38,22 @@ export interface OpenAICompatibleProviderConfig {
 }
 
 export type BridgeCommand =
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "embed"; model: string; input: string[] }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "embedding-models" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "ping" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "list-providers" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "list-models"; provider: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "list-model-info"; provider: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "context-length"; model: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "list-harness-capabilities" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "config-path" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-status"; provider: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-set-api-key"; provider: string; apiKey: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-login-browser"; provider: string; options?: BrowserLoginOptions }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-logout"; provider: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "list-provider-configurations" }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "save-provider-configuration"; provider: OpenAICompatibleProviderConfig }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "remove-provider-configuration"; provider: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "register-provider"; provider: OpenAICompatibleProviderConfig }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "unregister-provider"; provider: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "complete"; request: BridgeRequest }
@@ -41,6 +61,9 @@ export type BridgeCommand =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-list" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-load"; skill: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-read"; skill: string; path: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-validate"; source: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-install"; source: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-remove"; skill: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-list-servers" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-set-server"; server: McpServerConfiguration }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-remove-server"; server: string }
@@ -63,16 +86,23 @@ export interface SerializedBridgeError {
   status?: number;
   responseBody?: string;
   requestId?: string;
-  code?: number;
+  code?: string;
   server?: string;
 }
 
 export type BridgeMessage =
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "embedding-result"; result: EmbeddingResult }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "embedding-models"; models: string[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "pong" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "providers"; providers: string[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "models"; provider: string; models: string[] }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "model-info"; provider: string; modelInfo: ModelInfo[] }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "context-length"; model: string; contextLength?: number }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "harness-capabilities"; capabilities: HarnessCapabilityDescriptor[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "config-path"; path: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "auth-status"; status: AuthStatus }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-configurations"; providerConfigurations: OpenAICompatibleProviderConfig[] }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-configuration"; providerConfiguration: OpenAICompatibleProviderConfig }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "registered"; provider: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "unregistered"; provider: string; removed: boolean }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "result"; result: CallResult }
@@ -80,6 +110,8 @@ export type BridgeMessage =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skills"; skills: SkillSummary[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill"; skill: Skill }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill-file"; content: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill-install-result"; installed: string[]; destinationRoot: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill-removed"; removed: boolean }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-servers"; servers: McpServerStatus[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-server"; server: McpServerConfiguration }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-removed"; removed: boolean }
@@ -92,3 +124,15 @@ export type BridgeMessage =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "done" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "cancelled"; target: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "error"; error: SerializedBridgeError };
+
+export type BridgeEvent = {
+  v: typeof BRIDGE_PROTOCOL_VERSION;
+  type: "native_app_approval_request";
+  requestId: string;
+  server: string;
+  tool: string;
+  bundleId?: string;
+  appName?: string;
+  operation: string;
+  message: string;
+};

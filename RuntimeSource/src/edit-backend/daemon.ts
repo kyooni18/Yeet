@@ -3,7 +3,7 @@ import readline from "node:readline";
 import process from "node:process";
 import { EditBackend } from "./backend.js";
 import { loadEditBackendConfig } from "./config.js";
-import type { ApplyRequest, ReadRequest } from "./types.js";
+import type { ApplyRequest, ListFilesRequest, ReadRequest, SearchRequest } from "./types.js";
 
 interface RpcRequest {
   id: string | number;
@@ -20,6 +20,7 @@ function rootFromArgs(): string {
 const config = await loadEditBackendConfig();
 const backend = new EditBackend({
   root: rootFromArgs(),
+  allowOutside: process.argv.includes("--allow-outside"),
   enforceSeenLines: config.enforceSeenLines,
   transactionDir: config.transactionDir,
   defaultDialect: config.defaultDialect,
@@ -33,6 +34,10 @@ async function dispatch(request: RpcRequest): Promise<unknown> {
       return { ok: true, version: "0.1.0" };
     case "read":
       return backend.read(request.params as ReadRequest);
+    case "search":
+      return backend.search(request.params as SearchRequest);
+    case "listFiles":
+      return backend.listFiles((request.params ?? {}) as ListFilesRequest);
     case "preflight":
       return backend.preflight(request.params as ApplyRequest);
     case "apply":

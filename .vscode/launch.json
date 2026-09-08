@@ -1,24 +1,21 @@
 {
-	"configurations": [
-		{
-			"type": "swift",
-			"request": "launch",
-			"args": [],
-			"cwd": "${workspaceFolder:Yeet}",
-			"name": "Release yeet",
-			"target": "yeet",
-			"configuration": "release",
-			"preLaunchTask": "swift: Build Release yeet"
-		},
-		{
-			"type": "swift",
-			"request": "launch",
-			"args": [],
-			"cwd": "${workspaceFolder:Yeet}",
-			"name": "Debug yeet",
-			"target": "yeet",
-			"configuration": "debug",
-			"preLaunchTask": "swift: Build Debug yeet"
-		}
-	]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug yeet",
+      "program": "${workspaceFolder}/target/debug/yeet",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo: build yeet"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Release yeet",
+      "program": "${workspaceFolder}/target/release/yeet",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo: build release yeet"
+    }
+  ]
 }

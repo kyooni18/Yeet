@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface TextEnvelope {
   text: string;
   bom: boolean;
@@ -41,6 +43,16 @@ export function joinAddressableLines(lines: readonly string[], keepFinalNewline:
 
 export function formatNumbered(lines: readonly string[], startLine: number): string {
   return lines.map((line, index) => `${startLine + index}:${line}`).join("\n");
+}
+
+export function lineHash(line: string): string {
+  return createHash("sha256").update(line, "utf8").digest("hex").slice(0, 4);
+}
+
+export function formatAnchored(lines: readonly string[], startLine: number): string {
+  return lines
+    .map((line, index) => `${startLine + index}:${lineHash(line)}|${line}`)
+    .join("\n");
 }
 
 

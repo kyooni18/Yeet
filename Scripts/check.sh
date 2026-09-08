@@ -9,12 +9,12 @@ cd "$ROOT"
   cd RuntimeSource
   node --test test/*.test.mjs
 )
-swift test
+cargo test
 
 TMP_YEET=$(mktemp -d)
 trap 'rm -rf "$TMP_YEET"' EXIT INT TERM
-YEET_CONFIG_DIR="$TMP_YEET" swift run yeet doctor
-YEET_CONFIG_DIR="$TMP_YEET" swift run yeet model set openai/test-model
-[ "$(YEET_CONFIG_DIR="$TMP_YEET" swift run yeet model get)" = "openai/test-model" ]
+YEET_CONFIG_DIR="$TMP_YEET" cargo run --quiet -- doctor >/dev/null
+YEET_CONFIG_DIR="$TMP_YEET" cargo run --quiet -- model set openai/test-model >/dev/null
+[ "$(YEET_CONFIG_DIR="$TMP_YEET" cargo run --quiet -- model get)" = "openai/test-model" ]
 
 echo "All checks passed."

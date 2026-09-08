@@ -10,6 +10,6 @@ rl.on('line', (line) => {
   } else if (message.method === 'tools/list') {
     send({ jsonrpc: '2.0', id: message.id, result: { tools: [{ name: 'legacy-tool', inputSchema: { type: 'object' } }] } });
   } else if (message.method === 'tools/call') {
-    send({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: 'legacy-ok' }] } });
+    send({ jsonrpc: '2.0', id: message.id, result: { content: [{ type: 'text', text: 'legacy-ok' }], feedback: { status: 'completed' } } });
   }
 });

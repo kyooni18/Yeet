@@ -1,6 +1,35 @@
 export type ProviderId = string;
 export type ModelId = `${string}/${string}`;
 
+/** Provider metadata for one provider-local model. */
+export interface ModelInfo {
+  id: string;
+  /** Maximum input context in tokens, when the provider publishes it. */
+  contextLength?: number;
+  /** Published text-token pricing in USD per one million tokens. */
+  pricing?: ModelPricing;
+}
+
+export interface ModelCostRates {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+export interface ModelCostTier extends ModelCostRates {
+  /** Tier applies to the whole request when input tokens exceed this threshold. */
+  thresholdTokens: number;
+}
+
+export interface ModelPricing extends ModelCostRates {
+  currency: "USD";
+  unit: "per1MTokens";
+  source: string;
+  tiers?: ModelCostTier[];
+  modes?: Record<string, ModelCostRates>;
+}
+
 export interface ParsedModelId {
   provider: ProviderId;
   model: string;
@@ -33,12 +62,64 @@ export interface ToolCall {
   arguments: unknown;
 }
 
+/**
+ * A lifecycle update for a tool call.
+ *
+ * Tool execution is owned by the embedding Rust host, so
+ * these values deliberately carry presentation-safe data instead of an
+ * executor callback.  Hosts can use the same shape for an initial progress
+ * update and for a validation/runtime failure without changing the model
+ * request contract.
+ */
+export type ToolCallFeedbackStatus = "started" | "in-progress" | "completed" | "failed";
+
+export interface ToolCallFeedback {
+  toolCallId: string;
+  status: ToolCallFeedbackStatus;
+  index?: number;
+  name?: string;
+  message?: string;
+  details?: unknown;
+}
+
+/** The normalized output of executing one tool call. */
+export interface ToolCallResult {
+  toolCallId: string;
+  content?: string;
+  /** Structured output when a tool does not have a text representation. */
+  result?: unknown;
+  isError?: boolean;
+  index?: number;
+  name?: string;
+  raw?: unknown;
+}
+
+/** Provider-neutral inline image carried with a chat message. */
+export interface ImageAttachment {
+  /** MIME type accepted by the supported multimodal provider adapters. */
+  mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  /** Raw image bytes encoded as base64 without a data-URL prefix. */
+  data: string;
+  /** Optional display/debug name. Providers do not receive local filesystem paths. */
+  name?: string;
+}
+
 export interface Message {
   role: MessageRole;
   content?: string;
+  /** Inline images associated with this message. Normally present only on user turns. */
+  images?: ImageAttachment[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
   name?: string;
+  /** Optional structured execution result supplied by a host. */
+  toolResult?: ToolCallResult;
+  /** Optional host feedback associated with a tool result. */
+  toolFeedback?: ToolCallFeedback[];
+  /** Request-local guidance excluded from durable compaction and cache prefixes. */
+  requestOnly?: boolean;
+  /** Runtime-internal marker for the final reusable prompt-cache content block. */
+  cacheBreakpoint?: boolean;
 }
 
 export interface ToolDefinition {
@@ -58,6 +139,8 @@ export interface RetryPolicy {
 
 interface CallRequestBase {
   messages: Message[];
+  /** Harness-local conversation identity. Providers may use it for cache bucketing but must not treat it as user metadata. */
+  contextKey?: string;
   system?: string;
   tools?: ToolDefinition[];
   toolChoice?: ToolChoice;
@@ -68,11 +151,19 @@ interface CallRequestBase {
   retry?: RetryPolicy;
   signal?: AbortSignal;
   providerOptions?: Record<string, unknown>;
+  /** Opt in to caching the replayable conversation prefix for this request. */
+  promptCache?: boolean;
 }
 
 export interface CallRequest extends CallRequestBase {
   /** Canonical model identifier. Always provider/model. */
   model: ModelId;
+  /**
+   * Optional harness-side request capabilities attached by the embedding
+   * client. `undefined` preserves the runtime defaults; an explicit empty
+   * array disables every optional request capability for this call.
+   */
+  attachedCapabilities?: string[];
 }
 
 /** Request shape delivered to a provider adapter after routing. */
@@ -85,6 +176,11 @@ export interface Usage {
   outputTokens?: number;
   totalTokens?: number;
   cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  reasoningTokens?: number;
+  modelCalls?: number;
+  /** Estimated inference cost from the live model catalog, in USD. */
+  estimatedCostUsd?: number;
 }
 
 export type FinishReason = "stop" | "length" | "tool_call" | "content_filter" | "error" | "unknown";
@@ -95,7 +191,15 @@ export interface CallResult {
   model: string;
   id?: string;
   text: string;
+  /** Full provider-emitted reasoning/thinking text, when the API exposes it. */
+  reasoning?: string;
+  /** Provider-emitted reasoning summary, when distinct from full reasoning. */
+  reasoningSummary?: string;
   toolCalls: ToolCall[];
+  /** Tool execution output supplied by an adapter/host, when available. */
+  toolResults?: ToolCallResult[];
+  /** Lifecycle/diagnostic feedback collected during the call. */
+  toolFeedback?: ToolCallFeedback[];
   finishReason: FinishReason;
   usage?: Usage;
   raw?: unknown;
@@ -103,17 +207,36 @@ export interface CallResult {
 
 export type StreamEvent =
   | { type: "start"; provider: ProviderId; model: string; id?: string }
+  /** Full provider-emitted reasoning/thinking content. Never synthesized by CallCore. */
+  | { type: "reasoning-delta"; delta: string }
+  /** Provider-emitted reasoning summary content. Never synthesized by CallCore. */
+  | { type: "reasoning-summary-delta"; delta: string }
   | { type: "text-delta"; delta: string }
   | { type: "tool-call-delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
   | { type: "tool-call"; index: number; toolCall: ToolCall }
   | { type: "finish"; finishReason: FinishReason; usage?: Usage; raw?: unknown };
 
+export interface EmbeddingRequest {
+  model: string;
+  input: string[];
+  signal?: AbortSignal;
+}
+export interface EmbeddingResult {
+  model: string;
+  resolvedModel: string;
+  source: string;
+  vectors: number[][];
+}
+
 export interface ProviderAdapter {
   readonly id: ProviderId;
+  embed?(request: EmbeddingRequest): Promise<EmbeddingResult>;
   complete(request: ProviderCallRequest): Promise<CallResult>;
   stream(request: ProviderCallRequest): AsyncIterable<StreamEvent>;
   /** Return provider-local model identifiers exposed by the provider API. */
   listModels?(): Promise<string[]>;
+  /** Return provider-local model metadata exposed by the provider API. */
+  listModelInfo?(): Promise<ModelInfo[]>;
 }
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

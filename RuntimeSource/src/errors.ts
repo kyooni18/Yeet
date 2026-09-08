@@ -12,6 +12,17 @@ export class ProviderError extends Error {
   }
 }
 
+export function isQuotaExhausted(responseBody: string | undefined): boolean {
+  try {
+    const error = JSON.parse(responseBody ?? "").error;
+    return [error?.code, error?.type].some((value) =>
+      value === "insufficient_quota" || value === "credit_balance_exhausted",
+    );
+  } catch {
+    return false;
+  }
+}
+
 export class ProviderHTTPError extends ProviderError {
   readonly status: number;
   readonly responseBody?: string;
@@ -25,9 +36,12 @@ export class ProviderHTTPError extends ProviderError {
     responseBody?: string;
     requestId?: string;
   }) {
-    super(`${options.provider} request failed with HTTP ${options.status} ${options.statusText}`, {
+    const exhausted = options.status === 429 && isQuotaExhausted(options.responseBody);
+    super(exhausted
+      ? `${options.provider} API quota or credits exhausted. Check the API account billing and usage limits before retrying.`
+      : `${options.provider} request failed with HTTP ${options.status} ${options.statusText}`, {
       provider: options.provider,
-      retryable: options.retryable,
+      retryable: exhausted ? false : options.retryable,
     });
     this.name = "ProviderHTTPError";
     this.status = options.status;

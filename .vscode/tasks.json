@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo: build yeet",
+      "type": "shell",
+      "command": "cargo build",
+      "group": "build",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "cargo: build release yeet",
+      "type": "shell",
+      "command": "cargo build --release",
+      "group": "build",
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}

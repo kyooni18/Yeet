@@ -3,7 +3,12 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SRC="$ROOT/RuntimeSource"
-DST="$ROOT/Sources/HarnessCallCore/Resources/Runtime"
+OUT=${YEET_RUNTIME_OUT_DIR:-"$SRC/dist"}
+
+case "$OUT" in
+  /*) ;;
+  *) OUT="$ROOT/$OUT" ;;
+esac
 
 cd "$SRC"
 if [ -x "node_modules/.bin/tsc" ]; then
@@ -15,13 +20,12 @@ else
   exit 1
 fi
 
-rm -rf dist
-"$TSC" -p tsconfig.json
+if [ -e "$OUT" ]; then
+  rm -rf "$OUT"
+fi
+mkdir -p "$OUT"
 
-rm -rf "$DST/dist"
-mkdir -p "$DST/dist"
-cp -R dist/. "$DST/dist/"
-printf '%s\n' '{"type":"module","name":"yeet-call-core-runtime","version":"0.1.0","private":true}' > "$DST/package.json"
-
-node --check "$DST/dist/bridge.js"
-echo "Bundled runtime rebuilt at $DST"
+"$TSC" -p tsconfig.json --outDir "$OUT"
+node --check "$OUT/bridge.js"
+node --check "$OUT/edit-backend/daemon.js"
+echo "Runtime rebuilt at $OUT"

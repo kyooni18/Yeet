@@ -1,3 +1,4 @@
+import type { ProviderFetchLogger } from "../http.js";
 import type { FetchLike } from "../types.js";
 import { OpenAIChatProvider } from "./openai-chat.js";
 
@@ -6,6 +7,7 @@ export interface OpenRouterProviderOptions {
   appUrl?: string;
   appName?: string;
   fetch?: FetchLike;
+  apiCallLogger?: ProviderFetchLogger;
 }
 
 export class OpenRouterProvider extends OpenAIChatProvider {
@@ -20,6 +22,7 @@ export class OpenRouterProvider extends OpenAIChatProvider {
       requireApiKey: true,
       ...(options.apiKey ? { apiKey: options.apiKey } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.apiCallLogger ? { apiCallLogger: options.apiCallLogger } : {}),
     });
   }
 }

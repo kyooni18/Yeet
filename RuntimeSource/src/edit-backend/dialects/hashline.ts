@@ -1,15 +1,15 @@
 import type { ApplyRequest, Edit, EditDialect, FileChange, FileOperation } from "../types.js";
 
 const SECTION = /^\[([^\]@#]+)(?:[@#]([^\]]+))?\]$/;
-const PUT_RANGE = /^PUT\s+(\d+)\.=\s*(\d+)\s*:\s*$/i;
-const PUT_BLOCK = /^PUT\s+(\d+)\*\s*:\s*$/i;
-const PUT_BEFORE = /^PUT\s+<(\d+)\s*:\s*$/i;
-const PUT_AFTER = /^PUT\s+>(\d+)\s*:\s*$/i;
-const PUT_AFTER_BLOCK = /^PUT\s+>(\d+)\*\s*:\s*$/i;
+const PUT_RANGE = /^PUT\s+(\d+)(?::([0-9a-f]{4}))?\.=\s*(\d+)(?::([0-9a-f]{4}))?\s*:\s*$/i;
+const PUT_BLOCK = /^PUT\s+(\d+)(?::([0-9a-f]{4}))?\*\s*:\s*$/i;
+const PUT_BEFORE = /^PUT\s+<(\d+)(?::([0-9a-f]{4}))?\s*:\s*$/i;
+const PUT_AFTER = /^PUT\s+>(\d+)(?::([0-9a-f]{4}))?\s*:\s*$/i;
+const PUT_AFTER_BLOCK = /^PUT\s+>(\d+)(?::([0-9a-f]{4}))?\*\s*:\s*$/i;
 const PUT_HEAD = /^PUT\s+<1\s*:\s*$/i;
 const PUT_TAIL = /^PUT\s+>\$\s*:\s*$/i;
-const CUT_RANGE = /^CUT\s+(\d+)\.=\s*(\d+)\s*$/i;
-const CUT_BLOCK = /^CUT\s+(\d+)\*\s*$/i;
+const CUT_RANGE = /^CUT\s+(\d+)(?::([0-9a-f]{4}))?\.=\s*(\d+)(?::([0-9a-f]{4}))?\s*$/i;
+const CUT_BLOCK = /^CUT\s+(\d+)(?::([0-9a-f]{4}))?\*\s*$/i;
 const MOVE = /^MV\s+(.+)$/i;
 
 function unquote(value: string): string {
@@ -70,19 +70,38 @@ export class HashlineDialect implements EditDialect {
       let match: RegExpExecArray | null;
       if ((match = PUT_RANGE.exec(line))) {
         const body = consumeBody(lines, index + 1);
-        current.edits!.push({ kind: "replace", range: { start: Number(match[1]), end: Number(match[2]) }, text: body.text });
+        current.edits!.push({
+          kind: "replace",
+          range: {
+            start: Number(match[1]),
+            end: Number(match[3]),
+            ...(match[2] ? { startHash: match[2].toLowerCase() } : {}),
+            ...(match[4] ? { endHash: match[4].toLowerCase() } : {}),
+          },
+          text: body.text,
+        });
         index = body.next;
         continue;
       }
       if ((match = PUT_AFTER_BLOCK.exec(line))) {
         const body = consumeBody(lines, index + 1);
-        current.edits!.push({ kind: "insertAfterBlock", line: Number(match[1]), text: body.text });
+        current.edits!.push({
+          kind: "insertAfterBlock",
+          line: Number(match[1]),
+          ...(match[2] ? { hash: match[2].toLowerCase() } : {}),
+          text: body.text,
+        });
         index = body.next;
         continue;
       }
       if ((match = PUT_BLOCK.exec(line))) {
         const body = consumeBody(lines, index + 1);
-        current.edits!.push({ kind: "replaceBlock", line: Number(match[1]), text: body.text });
+        current.edits!.push({
+          kind: "replaceBlock",
+          line: Number(match[1]),
+          ...(match[2] ? { hash: match[2].toLowerCase() } : {}),
+          text: body.text,
+        });
         index = body.next;
         continue;
       }
@@ -100,23 +119,51 @@ export class HashlineDialect implements EditDialect {
       }
       if ((match = PUT_BEFORE.exec(line))) {
         const body = consumeBody(lines, index + 1);
-        current.edits!.push({ kind: "insert", at: { kind: "before", line: Number(match[1]) }, text: body.text });
+        current.edits!.push({
+          kind: "insert",
+          at: {
+            kind: "before",
+            line: Number(match[1]),
+            ...(match[2] ? { hash: match[2].toLowerCase() } : {}),
+          },
+          text: body.text,
+        });
         index = body.next;
         continue;
       }
       if ((match = PUT_AFTER.exec(line))) {
         const body = consumeBody(lines, index + 1);
-        current.edits!.push({ kind: "insert", at: { kind: "after", line: Number(match[1]) }, text: body.text });
+        current.edits!.push({
+          kind: "insert",
+          at: {
+            kind: "after",
+            line: Number(match[1]),
+            ...(match[2] ? { hash: match[2].toLowerCase() } : {}),
+          },
+          text: body.text,
+        });
         index = body.next;
         continue;
       }
       if ((match = CUT_RANGE.exec(line))) {
-        current.edits!.push({ kind: "delete", range: { start: Number(match[1]), end: Number(match[2]) } });
+        current.edits!.push({
+          kind: "delete",
+          range: {
+            start: Number(match[1]),
+            end: Number(match[3]),
+            ...(match[2] ? { startHash: match[2].toLowerCase() } : {}),
+            ...(match[4] ? { endHash: match[4].toLowerCase() } : {}),
+          },
+        });
         index++;
         continue;
       }
       if ((match = CUT_BLOCK.exec(line))) {
-        current.edits!.push({ kind: "deleteBlock", line: Number(match[1]) });
+        current.edits!.push({
+          kind: "deleteBlock",
+          line: Number(match[1]),
+          ...(match[2] ? { hash: match[2].toLowerCase() } : {}),
+        });
         index++;
         continue;
       }

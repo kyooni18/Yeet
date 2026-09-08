@@ -1,31 +1,49 @@
 # Basic Execution Structure
 
-Yeet keeps the interactive surface small and moves execution behind explicit
-boundaries:
-
 ```text
-Session (presentation + slash commands)
-  -> AgentCoordinator (one history + finite direct-tool loop)
-      -> DirectToolRegistry (metadata + lazy Skill/MCP activation)
-          -> LiveHarnessRuntime (one bridge + one edit daemon)
+Ratatui TUI / Rust CLI
+  -> Rust session controller
+      -> AgentCoordinator (one history + isolated execution lanes)
+          -> Coding lane (existing coding prompt/tool/recovery behavior)
+          -> Research lane (explicit live-web queries)
+          -> General lane (documents, data, typed artifacts, lazy capabilities)
+          -> ToolRegistry
+              -> workspace edit daemon client
+              -> sandboxed shell executor
+              -> document readers + structured data analysis
+              -> typed artifact store
+              -> lazy Skill / MCP / Worker activation
+          -> BridgeClient
+              -> persistent TypeScript provider/auth/MCP sidecar
 ```
 
-`ToolCallAssembly` is the shared protocol boundary for the lead stream. It
-reconstructs calls from delta-only providers without coupling orchestration to
-provider-specific event details.
+The interactive process is a single Rust executable. It no longer launches a
+second Yeet backend process. Provider and edit JavaScript sidecars are protocol
+services rather than application-state owners.
 
-The lead always sees the base tools `find_capabilities`,
-`activate_capability`, `read_file`, and `apply_file_edits`. Activation adds only
-the selected capability's tools:
+`AgentCoordinator` reconstructs delta-only tool calls, keeps tool call/result
+pairs in one provider-neutral history, retracts provisional assistant prose when
+a response turns into a tool round, detects semantically repeated inspection,
+and forces a decision after repeated no-progress rounds. Coding requests keep
+the established coding lane unchanged; general requests do not inherit its
+source-edit/shell tool surface.
 
-- `workspace`: snapshot-safe `read_file` and `apply_file_edits`.
-- `skill:<name>`: Skill instructions and supporting files, loaded on demand.
-- `mcp:<server>`: only the selected server's tool schemas and calls.
+`ToolRegistry` starts with workspace discovery/read/search/edit, shell,
+document/data tools, typed artifacts, and lazy capability discovery. Tool
+selection hides document/data built-ins from coding turns and hides coding-only
+workspace mutation/shell built-ins from general turns. Skills, MCP servers, and
+Workers add schemas only after explicit activation.
 
-Skill instructions and MCP schemas are loaded only after explicit activation;
-activation is published atomically after loading succeeds. One model history,
-one bounded tool loop, and one runtime are the only execution state.
+Workspace reads use the transactional edit daemon and return a snapshot plus
+`line:hash|text` anchors. Read/search/list coverage is cached for the task so
+the lead can reuse established source instead of growing context with duplicates.
 
-The runtime is lazy and persistent for the lifetime of an interactive session.
-It refreshes capability metadata at turn boundaries, reuses the same bridge and
-edit daemon, and can discard a dead bridge for clean recovery on the next turn.
+`run_shell` executes under a macOS Seatbelt profile. Read-oriented commands can
+run directly with bounded output. Noisy build/test commands can be evaluated by
+a separate tool-less provider call. Commands classified as mutating require a
+one-time exact-command permit from the user.
+
+Session state and model history are persisted under `~/.yeet/sessions`.
+Project-wide Yeet preferences, including capability toggles, live at
+`./.yeet/settings.json`; sandbox requests remain separate at
+`./.yeet/sandbox.json`.

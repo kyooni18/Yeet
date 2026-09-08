@@ -1,4 +1,4 @@
-import { addressableLines, joinAddressableLines, payloadLines } from "./text.js";
+import { addressableLines, joinAddressableLines, lineHash, payloadLines } from "./text.js";
 import type { BlockResolver, ConcreteEdit, Edit, LineRange } from "./types.js";
 
 interface PlannedSplice {
@@ -20,27 +20,43 @@ function assertRange(range: LineRange, lineCount: number): void {
   if (range.end > lineCount) throw new Error(`Line range ${range.start}..${range.end} exceeds file length ${lineCount}`);
 }
 
+function assertAnchor(lines: readonly string[], line: number, expected: string | undefined, label: string): void {
+  if (!expected) return;
+  const actual = lineHash(lines[line - 1] ?? "");
+  if (actual !== expected.toLowerCase()) {
+    throw new Error(
+      `Edit anchor mismatch at ${label} line ${line}: expected ${line}:${expected}, current snapshot is ${line}:${actual}. Re-read the file before editing.`,
+    );
+  }
+}
+
 export async function concretizeEdits(
   path: string,
   snapshotText: string,
   edits: readonly Edit[],
   blockResolver?: BlockResolver,
 ): Promise<ConcreteEdit[]> {
-  const lineCount = addressableLines(snapshotText).length;
+  const lines = addressableLines(snapshotText);
+  const lineCount = lines.length;
   const concrete: ConcreteEdit[] = [];
   for (const edit of edits) {
     if (edit.kind === "replace" || edit.kind === "delete") {
       assertRange(edit.range, lineCount);
+      assertAnchor(lines, edit.range.start, edit.range.startHash, "range start");
+      assertAnchor(lines, edit.range.end, edit.range.endHash, "range end");
       concrete.push(edit);
       continue;
     }
     if (edit.kind === "insert") {
       if (edit.at.kind === "before" || edit.at.kind === "after") {
         assertRange({ start: edit.at.line, end: edit.at.line }, lineCount);
+        assertAnchor(lines, edit.at.line, edit.at.hash, "insertion");
       }
       concrete.push(edit);
       continue;
     }
+    assertRange({ start: edit.line, end: edit.line }, lineCount);
+    assertAnchor(lines, edit.line, edit.hash, "block");
     if (!blockResolver) throw new Error(`Block edit requested for ${path}, but no block resolver is configured.`);
     const span = await blockResolver({ path, text: snapshotText, line: edit.line });
     if (!span) throw new Error(`Could not resolve syntactic block beginning at line ${edit.line} in ${path}.`);

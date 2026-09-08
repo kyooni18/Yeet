@@ -1,6 +1,6 @@
 import { ProviderError, UnknownProviderError } from "./errors.js";
 import { parseModelId } from "./types.js";
-import type { CallRequest, CallResult, ProviderAdapter, ProviderId, StreamEvent } from "./types.js";
+import type { CallRequest, CallResult, EmbeddingRequest, EmbeddingResult, ModelInfo, ProviderAdapter, ProviderId, StreamEvent } from "./types.js";
 
 export class CallCore {
   readonly #providers = new Map<ProviderId, ProviderAdapter>();
@@ -35,16 +35,34 @@ export class CallCore {
    * built-in and dynamically registered OpenAI-compatible providers.
    */
   async listModels(provider: ProviderId): Promise<string[]> {
+    return (await this.listModelInfo(provider)).map((model) => model.id);
+  }
+
+  async listModelInfo(provider: ProviderId): Promise<ModelInfo[]> {
     const adapter = this.#providers.get(provider);
     if (!adapter) throw new UnknownProviderError(provider);
-    if (!adapter.listModels) {
+    if (!adapter.listModelInfo && !adapter.listModels) {
       throw new ProviderError(`Provider ${provider} does not support model discovery`, { provider });
     }
-    return adapter.listModels();
+    if (adapter.listModelInfo) return adapter.listModelInfo();
+    return (await adapter.listModels!()).map((id) => ({ id }));
   }
 
   async fetchAvailableModels(provider: ProviderId): Promise<string[]> {
     return this.listModels(provider);
+  }
+
+  async fetchAvailableModelInfo(provider: ProviderId): Promise<ModelInfo[]> {
+    return this.listModelInfo(provider);
+  }
+
+  async embed(request: EmbeddingRequest): Promise<EmbeddingResult> {
+    const parsed = parseModelId(request.model);
+    const adapter = this.#providers.get(parsed.provider);
+    if (!adapter) throw new UnknownProviderError(parsed.provider);
+    if (!adapter.embed) throw new ProviderError(`Provider ${parsed.provider} does not support embeddings`, { provider: parsed.provider });
+    const result = await adapter.embed({ ...request, model: parsed.model });
+    return { ...result, model: request.model };
   }
 
   async complete(request: CallRequest): Promise<CallResult> {

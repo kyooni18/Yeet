@@ -1,5 +1,28 @@
-import { ProviderError, ProviderHTTPError } from "./errors.js";
+import { isQuotaExhausted, ProviderError, ProviderHTTPError } from "./errors.js";
 import type { FetchLike, RetryPolicy } from "./types.js";
+
+export type ProviderFetchOutcome = "success" | "retry" | "error";
+
+/** Metadata for one provider HTTP attempt. Request bodies and credentials are never included. */
+export interface ProviderFetchLog {
+  /** ISO-8601 time at which the attempt finished. */
+  timestamp: string;
+  provider: string;
+  method: string;
+  url: string;
+  attempt: number;
+  outcome: ProviderFetchOutcome;
+  durationMs: number;
+  status?: number;
+  statusText?: string;
+  requestId?: string;
+  /** Actual backoff before the next attempt, when a retry was scheduled. */
+  retryDelayMs?: number;
+  error?: string;
+}
+
+export type ProviderFetchLogger = (entry: ProviderFetchLog) => void;
+type ProviderFetchLogEntry = Omit<ProviderFetchLog, "timestamp">;
 
 const DEFAULT_RETRY: Required<RetryPolicy> = {
   maxAttempts: 3,
@@ -11,9 +34,34 @@ const DEFAULT_RETRY: Required<RetryPolicy> = {
 export interface ProviderFetchOptions {
   provider: string;
   fetch?: FetchLike;
+  apiCallLogger?: ProviderFetchLogger;
   timeoutMs?: number;
   retry?: RetryPolicy;
   signal?: AbortSignal;
+}
+
+function redactedUrl(input: RequestInfo | URL): string {
+  try {
+    const raw = typeof Request !== "undefined" && input instanceof Request ? input.url : String(input);
+    const url = new URL(raw);
+    // Query parameters are not needed to identify the endpoint and can carry
+    // API keys or OAuth tokens on compatible providers.
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "<invalid-url>";
+  }
+}
+
+function emitLog(logger: ProviderFetchLogger | undefined, entry: ProviderFetchLogEntry): void {
+  try {
+    logger?.({ timestamp: new Date().toISOString(), ...entry });
+  } catch {
+    // Logging must never change request behavior.
+  }
+}
+
+function elapsedMs(start: number): number {
+  return Math.max(0, Math.round((Date.now() - start) * 100) / 100);
 }
 
 function isRetryableStatus(status: number): boolean {
@@ -78,24 +126,69 @@ export async function providerFetch(
 
   const policy: Required<RetryPolicy> = { ...DEFAULT_RETRY, ...options.retry };
   if (policy.maxAttempts < 1) policy.maxAttempts = 1;
+  const method = String(init.method ?? "GET").toUpperCase();
+  const url = redactedUrl(input);
 
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
     const attemptSignal = makeAttemptSignal(options.signal, options.timeoutMs);
+    const startedAt = Date.now();
     try {
       const response = await fetchImpl(input, attemptSignal ? { ...init, signal: attemptSignal } : init);
 
-      if (response.ok) return response;
+      if (response.ok) {
+        emitLog(options.apiCallLogger, {
+          provider: options.provider,
+          method,
+          url,
+          attempt,
+          outcome: "success",
+          durationMs: elapsedMs(startedAt),
+          status: response.status,
+          ...(response.headers.get("x-request-id") ? { requestId: response.headers.get("x-request-id")! } : {}),
+        });
+        return response;
+      }
 
-      const retryable = isRetryableStatus(response.status);
+      // OpenAI uses 429 for both temporary throttling and exhausted billing
+      // quota. Only the former can recover through backoff.
+      let responseBody = response.status === 429
+        ? await response.text().catch(() => undefined)
+        : undefined;
+      const retryable = isRetryableStatus(response.status)
+        && !(response.status === 429 && isQuotaExhausted(responseBody));
       if (retryable && attempt < policy.maxAttempts) {
+        const retryDelayMs = delayForAttempt(attempt, policy, response);
+        emitLog(options.apiCallLogger, {
+          provider: options.provider,
+          method,
+          url,
+          attempt,
+          outcome: "retry",
+          durationMs: elapsedMs(startedAt),
+          status: response.status,
+          ...(response.statusText ? { statusText: response.statusText } : {}),
+          ...(response.headers.get("x-request-id") ? { requestId: response.headers.get("x-request-id")! } : {}),
+          retryDelayMs,
+        });
         await response.body?.cancel().catch(() => undefined);
-        await sleep(delayForAttempt(attempt, policy, response), options.signal);
+        await sleep(retryDelayMs, options.signal);
         continue;
       }
 
-      const responseBody = await response.text().catch(() => undefined);
+      if (response.status !== 429) responseBody = await response.text().catch(() => undefined);
+      emitLog(options.apiCallLogger, {
+        provider: options.provider,
+        method,
+        url,
+        attempt,
+        outcome: "error",
+        durationMs: elapsedMs(startedAt),
+        status: response.status,
+        ...(response.statusText ? { statusText: response.statusText } : {}),
+        ...(response.headers.get("x-request-id") ? { requestId: response.headers.get("x-request-id")! } : {}),
+      });
       throw new ProviderHTTPError({
         provider: options.provider,
         status: response.status,
@@ -106,6 +199,15 @@ export async function providerFetch(
       });
     } catch (error) {
       if (error instanceof ProviderHTTPError) throw error;
+      emitLog(options.apiCallLogger, {
+        provider: options.provider,
+        method,
+        url,
+        attempt,
+        outcome: options.signal?.aborted ? "error" : (attempt >= policy.maxAttempts ? "error" : "retry"),
+        durationMs: elapsedMs(startedAt),
+        error: error instanceof Error ? error.name : "UnknownError",
+      });
       if (options.signal?.aborted) throw error;
       lastError = error;
       if (attempt >= policy.maxAttempts) break;

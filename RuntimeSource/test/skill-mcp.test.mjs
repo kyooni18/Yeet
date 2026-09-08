@@ -25,7 +25,7 @@ test('SkillRegistry progressively loads ~/.yeet/skills and blocks path escape', 
   await writeFile(path.join(root, 'SKILL.md'), `---\nname: review-code\ndescription: Review code safely\n---\nInspect the diff first.\n`);
   await writeFile(path.join(root, 'references', 'checklist.md'), '# Checklist\nRun tests.\n');
 
-  const registry = new SkillRegistry({ configDir });
+  const registry = new SkillRegistry({ configDir, includeCodexSkills: false });
   const listed = await registry.list();
   assert.equal(listed.length, 1);
   assert.equal(listed[0].name, 'review-code');
@@ -36,6 +36,45 @@ test('SkillRegistry progressively loads ~/.yeet/skills and blocks path escape', 
   assert.deepEqual(skill.files, ['SKILL.md', 'references/checklist.md']);
   assert.match(await registry.readSkillFile('review-code', 'references/checklist.md'), /Run tests/);
   await assert.rejects(() => registry.readSkillFile('review-code', '../outside.txt'), /escapes its root/);
+});
+
+test('SkillRegistry layers project over user skills and reads explicit-only agent metadata', async () => {
+  const configDir = await tempConfig();
+  const projectRoot = await tempConfig();
+  const userRoot = path.join(configDir, 'skills', 'shared');
+  const projectSkill = path.join(projectRoot, '.yeet', 'skills', 'shared');
+  await mkdir(userRoot, { recursive: true });
+  await mkdir(path.join(projectSkill, 'agents'), { recursive: true });
+  await writeFile(path.join(userRoot, 'SKILL.md'), `---\nname: shared\ndescription: User copy\n---\nuser\n`);
+  await writeFile(path.join(projectSkill, 'SKILL.md'), `---\nname: shared\ndescription: Project copy\nmetadata:\n  short-description: Project short\n---\nproject\n`);
+  await writeFile(path.join(projectSkill, 'agents', 'openai.yaml'), `interface:\n  short_description: UI short\npolicy:\n  allow_implicit_invocation: false\n`);
+
+  const registry = new SkillRegistry({ configDir, projectRoot, includeCodexSkills: false });
+  const listed = await registry.list();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].description, 'Project copy');
+  assert.equal(listed[0].shortDescription, 'UI short');
+  assert.equal(listed[0].allowImplicitInvocation, false);
+  assert.equal(listed[0].source, 'project');
+  assert.equal((await registry.load('shared')).instructions.trim(), 'project');
+});
+
+test('SkillRegistry accepts legacy lowercase skill.md repositories and can install them', async () => {
+  const configDir = await tempConfig();
+  const source = await tempConfig();
+  await mkdir(path.join(source, 'docs'), { recursive: true });
+  await mkdir(path.join(source, 'pdfs'), { recursive: true });
+  await writeFile(path.join(source, 'docs', 'skill.md'), '# DOCX workflow\nUse the document workflow.\n');
+  await writeFile(path.join(source, 'pdfs', 'skill.md'), '# PDF workflow\nUse the PDF workflow.\n');
+
+  const registry = new SkillRegistry({ configDir, projectRoot: source, includeCodexSkills: false });
+  const validated = await registry.validate(source);
+  assert.deepEqual(validated.map((item) => item.name), ['docs', 'pdfs']);
+  const installed = await registry.install(source);
+  assert.deepEqual(installed.installed, ['docs', 'pdfs']);
+  assert.match((await registry.load('docs')).instructions, /DOCX workflow/);
+  assert.equal(await registry.remove('docs'), true);
+  assert.equal(await registry.remove('docs'), false);
 });
 
 test('McpManager uses modern Streamable HTTP metadata and MCP parameter headers', async (t) => {
@@ -105,8 +144,118 @@ test('McpManager falls back to legacy initialize for stdio MCP servers', async (
   assert.equal(tools[0].qualifiedName, 'legacy/legacy-tool');
   const result = await mcp.callTool('legacy', 'legacy-tool');
   assert.equal(result.content[0].text, 'legacy-ok');
+  assert.deepEqual(result.feedback, { status: 'completed' });
   const status = (await mcp.listServers())[0];
   assert.equal(status.era, 'legacy');
   assert.equal(status.protocol, '2025-11-25');
+  await mcp.close();
+});
+
+test('McpManager restarts stdio before legacy fallback when modern discovery exits the server', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/legacy-exit-on-discover.mjs', import.meta.url).pathname;
+  const mcp = new McpManager({ configDir });
+  await mcp.setServer({ name: 'legacy-exit', transport: 'stdio', command: process.execPath, args: [fixture] });
+  const tools = await mcp.listTools('legacy-exit');
+  assert.equal(tools[0].qualifiedName, 'legacy-exit/legacy-exit-tool');
+  const result = await mcp.callTool('legacy-exit', 'legacy-exit-tool');
+  assert.equal(result.content[0].text, 'legacy-exit-ok');
+  const status = (await mcp.listServers())[0];
+  assert.equal(status.era, 'legacy');
+  assert.equal(status.protocol, '2025-11-25');
+  await mcp.close();
+});
+
+test('McpManager forwards native-app elicitation and accepts only an explicit session approval', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  let request;
+  let resolveApproval;
+  const approvalSeen = new Promise((resolve) => { resolveApproval = resolve; });
+  const mcp = new McpManager({
+    configDir,
+    nativeAppApproval: async (value) => {
+      request = value;
+      resolveApproval();
+      return new Promise((resolve) => { resolveApproval = () => resolve(true); });
+    },
+  });
+  await mcp.setServer({ name: 'native', transport: 'stdio', command: process.execPath, args: [fixture] });
+  const call = mcp.callTool('native', 'open');
+  await approvalSeen;
+  assert.equal(request.bundleId, 'org.blenderfoundation.blender');
+  assert.equal(request.appName, 'Blender');
+  assert.equal(request.server, 'native');
+  assert.equal(request.tool, 'open');
+  resolveApproval();
+  const response = await call;
+  const elicitation = JSON.parse(response.content[0].text);
+  assert.equal(elicitation.action, 'accept');
+  assert.equal(elicitation.scope, 'session');
+  assert.equal('_meta' in elicitation, false);
+  await mcp.close();
+});
+
+test('McpManager declines native-app elicitation when the host denies it', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const mcp = new McpManager({ configDir, nativeAppApproval: async () => false });
+  await mcp.setServer({ name: 'native-deny', transport: 'stdio', command: process.execPath, args: [fixture] });
+  const response = await mcp.callTool('native-deny', 'open');
+  assert.equal(JSON.parse(response.content[0].text).action, 'decline');
+  await mcp.close();
+});
+
+test('McpManager declines a native-app elicitation when the call is cancelled or the connection closes', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  let approvalSeen;
+  const seen = new Promise((resolve) => { approvalSeen = resolve; });
+  const mcp = new McpManager({
+    configDir,
+    nativeAppApproval: async (_request, signal) => new Promise((resolve) => {
+      approvalSeen();
+      signal?.addEventListener('abort', () => resolve(false), { once: true });
+    }),
+  });
+  await mcp.setServer({ name: 'native-cancel', transport: 'stdio', command: process.execPath, args: [fixture] });
+  const controller = new AbortController();
+  const call = mcp.callTool('native-cancel', 'open', {}, controller.signal);
+  await seen;
+  controller.abort(new Error('cancelled by test'));
+  await assert.rejects(call, /cancel/i);
+  await mcp.close();
+});
+
+test('McpManager declines unsupported elicitation without invoking the approval host', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const mcp = new McpManager({
+    configDir,
+    nativeAppApproval: async () => { throw new Error('approval must not be requested'); },
+  });
+  await mcp.setServer({ name: 'native-unsupported', transport: 'stdio', command: process.execPath, args: [fixture], env: { NATIVE_APPROVAL_KIND: 'unsupported' } });
+  const response = await mcp.callTool('native-unsupported', 'open');
+  assert.equal(JSON.parse(response.content[0].text).action, 'decline');
+  await mcp.close();
+});
+
+test('McpManager resolves an in-flight approval as denied when its stdio connection closes', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  let seenResolve;
+  const seen = new Promise((resolve) => { seenResolve = resolve; });
+  const mcp = new McpManager({
+    configDir,
+    nativeAppApproval: async (_request, signal) => new Promise((resolve) => {
+      seenResolve();
+      signal?.addEventListener('abort', () => resolve(false), { once: true });
+    }),
+  });
+  await mcp.setServer({ name: 'native-close', transport: 'stdio', command: process.execPath, args: [fixture] });
+  const call = mcp.callTool('native-close', 'open');
+  await seen;
+  await mcp.disconnect('native-close');
+  await assert.rejects(call, /disconnect|cancel/i);
   await mcp.close();
 });

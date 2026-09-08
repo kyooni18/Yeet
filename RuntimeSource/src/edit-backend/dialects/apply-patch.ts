@@ -1,4 +1,5 @@
-import type { ApplyRequest, Edit, EditDialect, FileChange } from "../types.js";
+import { addressableLines } from "../text.js";
+import type { ApplyRequest, DialectParseContext, Edit, EditDialect, FileChange } from "../types.js";
 
 interface Hunk {
   oldStart: number;
@@ -16,7 +17,7 @@ function stripPrefix(file: string): string {
 export class ApplyPatchDialect implements EditDialect {
   readonly id = "apply_patch";
 
-  parse(input: string, context: { snapshots: Readonly<Record<string, string>> }): ApplyRequest {
+  parse(input: string, context: DialectParseContext): ApplyRequest {
     const lines = input.replace(/\r\n/g, "\n").split("\n");
     const changes: FileChange[] = [];
     let index = 0;
@@ -51,6 +52,22 @@ export class ApplyPatchDialect implements EditDialect {
           else if (row.startsWith("+")) hunk.newLines.push(row.slice(1));
           else if (!row.startsWith("\\ No newline")) break;
           index++;
+        }
+        if (oldPath !== "/dev/null") {
+          const handle = context.snapshots[path];
+          if (!handle) throw new Error(`Unified diff requires a snapshot for existing file: ${path}`);
+          if (hunk.oldLines.length !== oldCount) {
+            throw new Error(
+              `Malformed unified diff hunk for ${path}: header expects ${oldCount} old lines but payload contains ${hunk.oldLines.length}.`,
+            );
+          }
+          const snapshotLines = addressableLines(context.getSnapshotText(handle));
+          const actual = snapshotLines.slice(oldStart - 1, oldStart - 1 + oldCount);
+          if (actual.length !== hunk.oldLines.length || actual.some((line, offset) => line !== hunk.oldLines[offset])) {
+            throw new Error(
+              `Unified diff context does not match snapshot ${handle} at ${path}:${oldStart}. Re-read the file and regenerate the patch.`,
+            );
+          }
         }
         if (oldCount === 0) {
           edits.push({
