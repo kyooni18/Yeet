@@ -1,8 +1,6 @@
 # Yeet
 
-Yeet is a Rust-native terminal AI agent with separate general-purpose and coding
-modes. It supports multiple model providers, tools, MCP servers, skills, file
-editing, sessions, and an optional browser-based remote UI.
+idd
 
 ## Requirements
 
