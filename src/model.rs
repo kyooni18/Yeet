@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use crate::core::Usage;
+pub use crate::core::{ProviderUsageStatus, ProviderUsageWindow, Usage};
 
 pub const REASONING_LEVELS: &[&str] = &["auto", "low", "medium", "high"];
 
@@ -31,6 +31,7 @@ pub struct BridgeState {
     pub active_model: String,
     pub active_reasoning_level: String,
     pub active_model_context_length: Option<u64>,
+    pub current_context_tokens: Option<u64>,
     pub token_usage: Usage,
     pub credit_usage: u64,
     pub pending_shell_permission: Option<ShellPermission>,
@@ -76,6 +77,7 @@ impl BridgeState {
             active_model: self.active_model.clone(),
             active_reasoning_level: self.active_reasoning_level.clone(),
             active_model_context_length: self.active_model_context_length,
+            current_context_tokens: self.current_context_tokens,
             token_usage: self.token_usage.clone(),
             credit_usage: self.credit_usage,
             pending_shell_permission: self.pending_shell_permission.clone(),
@@ -112,6 +114,7 @@ pub struct AuthProviderItem {
     pub authenticated: bool,
     pub method: String,
     pub expires_at: Option<String>,
+    pub usage: Option<ProviderUsageStatus>,
     pub error: Option<String>,
 }
 
@@ -135,6 +138,18 @@ pub struct SandboxSettingsState {
     pub environment: Vec<SandboxEnvironmentItem>,
     pub secret_ids: Vec<String>,
     pub limits: SandboxLimitsState,
+}
+
+impl SandboxSettingsState {
+    pub fn permission_mode(&self) -> &'static str {
+        if self.execution_mode == "unlimited" {
+            "unlimited"
+        } else if self.auto_approve {
+            "auto"
+        } else {
+            "ask"
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

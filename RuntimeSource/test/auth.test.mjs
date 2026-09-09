@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -241,6 +241,131 @@ test("Gemini browser auth stores OAuth tokens and GeminiProvider sends bearer au
   const persisted = JSON.parse(await readFile(path.join(configDir, "credentials.json"), "utf8"));
   assert.equal(persisted.oauthClients.gemini.clientId, "desktop-client-id");
   assert.equal(persisted.providers.gemini.refreshToken, "google-refresh");
+});
+
+test("OpenAI plan usage comes directly from the ChatGPT WHAM usage API", async () => {
+  const configDir = await temporaryConfig();
+  const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  await writeFile(path.join(configDir, "credentials.json"), JSON.stringify({
+    version: 1,
+    oauthClients: {},
+    providers: {
+      openai: {
+        type: "oauth",
+        source: "browser",
+        accessToken: "openai-usage-token",
+        accountId: "acct-usage",
+        expiresAt,
+        createdAt: new Date().toISOString(),
+      },
+    },
+  }));
+
+  let calls = 0;
+  const auth = new AuthManager({
+    configDir,
+    fetch: async (input, init) => {
+      calls += 1;
+      assert.equal(String(input), "https://chatgpt.com/backend-api/wham/usage");
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer openai-usage-token");
+      assert.equal(headers.get("chatgpt-account-id"), "acct-usage");
+      return new Response(JSON.stringify({
+        plan_type: "team",
+        rate_limit: {
+          primary_window: { used_percent: 82, limit_window_seconds: 604800, reset_at: 2_000_000_000 },
+          secondary_window: { used_percent: 5, limit_window_seconds: 18000, reset_at: 2_000_000_100 },
+        },
+        additional_rate_limits: [{
+          limit_name: "Code review",
+          metered_feature: "code_review",
+          rate_limit: {
+            primary_window: { used_percent: 25, limit_window_seconds: 604800, reset_at: 2_000_000_200 },
+          },
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const usage = await auth.providerUsage("openai");
+  assert.equal(calls, 1);
+  assert.equal(usage.source, "codex-usage-api");
+  assert.equal(usage.plan, "team");
+  assert.equal(usage.available, true);
+  assert.ok(usage.windows.some((window) => window.label === "1w" && window.remainingPercent === 18));
+  assert.ok(usage.windows.some((window) => window.label === "5h" && window.remainingPercent === 95));
+  assert.ok(usage.windows.some((window) => window.label === "Code review 1w" && window.remainingPercent === 75));
+});
+
+test("Claude subscription usage comes directly from the Anthropic OAuth usage API", async () => {
+  const configDir = await temporaryConfig();
+  let calls = 0;
+  const auth = new AuthManager({
+    configDir,
+    claudeOAuthToken: () => "claude-subscription-oauth",
+    fetch: async (input, init) => {
+      calls += 1;
+      assert.equal(String(input), "https://api.anthropic.com/api/oauth/usage");
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer claude-subscription-oauth");
+      assert.equal(headers.get("anthropic-beta"), "oauth-2025-04-20");
+      return new Response(JSON.stringify({
+        subscription_type: "max",
+        five_hour: { utilization: 80, resets_at: "2026-09-10T00:00:00Z" },
+        seven_day: { utilization: 35, resets_at: "2026-09-15T00:00:00Z" },
+        limits: [{
+          kind: "weekly_scoped",
+          percent: 60,
+          resets_at: "2026-09-15T00:00:00Z",
+          scope: { model: { display_name: "Fable" } },
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const usage = await auth.providerUsage("anthropic");
+  assert.equal(calls, 1);
+  assert.equal(usage.source, "anthropic-oauth-api");
+  assert.equal(usage.plan, "max");
+  assert.equal(usage.available, true);
+  assert.ok(usage.windows.some((window) => window.label === "5h" && window.remainingPercent === 20));
+  assert.ok(usage.windows.some((window) => window.label === "7d" && window.remainingPercent === 65));
+  assert.ok(usage.windows.some((window) => window.label === "Fable 7d" && window.remainingPercent === 40));
+});
+
+test("Gemini plan usage comes directly from the Code Assist quota API", async () => {
+  const configDir = await temporaryConfig();
+  await writeFile(path.join(configDir, "credentials.json"), JSON.stringify({
+    version: 1,
+    oauthClients: { gemini: { clientId: "test", projectId: "project-usage" } },
+    providers: {
+      gemini: {
+        type: "oauth",
+        source: "browser",
+        accessToken: "gemini-usage-token",
+        expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+    },
+  }));
+
+  const auth = new AuthManager({
+    configDir,
+    fetch: async (input, init) => {
+      assert.equal(String(input), "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota");
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer gemini-usage-token");
+      assert.deepEqual(JSON.parse(String(init?.body)), { project: "project-usage" });
+      return new Response(JSON.stringify({
+        buckets: [{ modelId: "models/gemini-test", remainingFraction: 0.42, resetTime: "2026-09-10T00:00:00Z" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const usage = await auth.providerUsage("gemini");
+  assert.equal(usage.source, "gemini-code-assist-api");
+  assert.equal(usage.available, true);
+  assert.equal(usage.windows[0].remainingPercent, 42);
 });
 
 test("expired OpenAI OAuth never falls back to API billing credentials", async () => {

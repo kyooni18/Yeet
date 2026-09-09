@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { FetchLike } from "./types.js";
+import { claudeUsageLabel, durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
 
 export type AuthMethod = "none" | "api-key" | "browser" | "environment";
 
@@ -15,6 +16,24 @@ export interface AuthStatus {
   method: AuthMethod;
   expiresAt?: string;
   configDir: string;
+}
+
+export interface ProviderUsageWindow {
+  id: string;
+  label: string;
+  usedPercent: number;
+  remainingPercent: number;
+  resetsAt?: string;
+}
+
+export interface ProviderUsageStatus {
+  provider: string;
+  available: boolean;
+  source: string;
+  fetchedAt: string;
+  plan?: string;
+  windows: ProviderUsageWindow[];
+  message?: string;
 }
 
 export interface OAuthClientConfiguration {
@@ -88,6 +107,7 @@ export interface AuthManagerOptions {
   configDir?: string;
   fetch?: FetchLike;
   openBrowser?: (url: string) => Promise<void> | void;
+  claudeOAuthToken?: () => Promise<string | undefined> | string | undefined;
 }
 
 const ENV_KEYS: Record<string, string> = {
@@ -127,6 +147,7 @@ const OPENAI_OAUTH_FALLBACK_PORT = 1457;
 function isoAfter(seconds: number): string {
   return new Date(Date.now() + Math.max(0, seconds) * 1_000).toISOString();
 }
+
 
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -313,6 +334,8 @@ export class AuthManager {
   readonly credentialsPath: string;
   readonly #fetch: FetchLike;
   readonly #openBrowser: (url: string) => Promise<void> | void;
+  readonly #claudeOAuthToken: () => Promise<string | undefined>;
+  readonly #usageCache = new Map<string, { expiresAt: number; usage: ProviderUsageStatus }>();
 
   constructor(options: AuthManagerOptions = {}) {
     this.configDir = options.configDir ?? process.env.YEET_CONFIG_DIR ?? join(homedir(), ".yeet");
@@ -320,6 +343,8 @@ export class AuthManager {
     this.credentialsPath = join(this.configDir, "credentials.json");
     this.#fetch = options.fetch ?? fetch;
     this.#openBrowser = options.openBrowser ?? systemOpenBrowser;
+    const claudeOAuthToken = options.claudeOAuthToken ?? resolveClaudeOAuthToken;
+    this.#claudeOAuthToken = async () => await claudeOAuthToken();
   }
 
   async ensure(): Promise<void> {
@@ -450,6 +475,245 @@ export class AuthManager {
       authenticated: Boolean(envValue),
       method: envValue ? "environment" : "none",
       configDir: this.configDir,
+    };
+  }
+
+  async providerUsage(provider: string): Promise<ProviderUsageStatus> {
+    const normalized = provider.trim().toLowerCase();
+    const now = Date.now();
+    const cached = this.#usageCache.get(normalized);
+    if (cached && cached.expiresAt > now) return cached.usage;
+
+    let usage: ProviderUsageStatus;
+    try {
+      switch (normalized) {
+        case "openai":
+          usage = await this.#openAIUsage();
+          break;
+        case "anthropic":
+          usage = await this.#claudeUsage();
+          break;
+        case "gemini":
+          usage = await this.#geminiUsage();
+          break;
+        default:
+          usage = unavailableUsage(provider, "none", "No plan-usage adapter is available for this provider.");
+          break;
+      }
+    } catch (error) {
+      const source = normalized === "openai"
+        ? "codex-usage-api"
+        : normalized === "anthropic"
+          ? "anthropic-oauth-api"
+          : normalized === "gemini"
+            ? "gemini-code-assist-api"
+            : normalized;
+      usage = unavailableUsage(provider, source, error instanceof Error ? error.message : String(error));
+    }
+
+    const ttlMs = normalized === "anthropic" ? 5 * 60_000 : 60_000;
+    this.#usageCache.set(normalized, { expiresAt: now + ttlMs, usage });
+    return usage;
+  }
+
+  async #openAIUsage(): Promise<ProviderUsageStatus> {
+    const credential = await this.resolve("openai");
+    if (!credential || credential.kind !== "oauth" || !credential.accountId) {
+      return unavailableUsage(
+        "openai",
+        "codex-usage-api",
+        "Codex plan usage requires Yeet's OpenAI browser sign-in; API-key billing has no fixed remaining plan percentage.",
+      );
+    }
+
+    const url = process.env.YEET_CODEX_USAGE_URL?.trim() || "https://chatgpt.com/backend-api/wham/usage";
+    const response = await this.#fetch(url, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${credential.accessToken}`,
+        "chatgpt-account-id": credential.accountId,
+        accept: "application/json",
+        "user-agent": "yeet/0.1.0",
+      },
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!response.ok) {
+      return unavailableUsage("openai", "codex-usage-api", `Codex server usage API returned HTTP ${response.status}.`);
+    }
+
+    const payload = asObject(await response.json());
+    const rateLimit = asObject(payload.rate_limit ?? payload.rateLimit ?? payload.rate_limits);
+    const windows: ProviderUsageWindow[] = [];
+    const appendWindow = (id: string, raw: unknown, fallbackLabel: string) => {
+      const value = asObject(raw);
+      const used = percent(value.used_percent ?? value.usedPercent);
+      if (used === undefined) return;
+      const seconds = value.limit_window_seconds ?? value.window_seconds;
+      const duration = durationLabel(seconds, fallbackLabel);
+      const label = fallbackLabel === "primary" || fallbackLabel === "secondary"
+        ? duration
+        : duration === fallbackLabel
+          ? fallbackLabel
+          : `${fallbackLabel} ${duration}`;
+      const reset = resetIso(value.reset_at ?? value.resets_at)
+        ?? (numeric(value.reset_after_seconds) !== undefined ? isoAfter(numeric(value.reset_after_seconds) ?? 0) : undefined);
+      windows.push(usageWindow(id, label, used, reset));
+    };
+    const appendRateLimit = (id: string, raw: unknown, label: string) => {
+      const value = asObject(raw);
+      appendWindow(`${id}:primary`, value.primary_window ?? value.primary, label === "codex" ? "primary" : label);
+      appendWindow(`${id}:secondary`, value.secondary_window ?? value.secondary, label === "codex" ? "secondary" : label);
+    };
+
+    appendRateLimit("codex", rateLimit, "codex");
+    const additional = payload.additional_rate_limits ?? payload.additionalRateLimits;
+    if (Array.isArray(additional)) {
+      for (const [index, raw] of additional.entries()) {
+        const item = asObject(raw);
+        const id = typeof item.metered_feature === "string"
+          ? item.metered_feature
+          : typeof item.limit_id === "string"
+            ? item.limit_id
+            : `additional-${index + 1}`;
+        const label = typeof item.limit_name === "string" && item.limit_name.trim() ? item.limit_name : id;
+        appendRateLimit(id, item.rate_limit ?? item.rateLimit, label);
+      }
+    }
+
+    windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
+    const plan = typeof payload.plan_type === "string" ? payload.plan_type : typeof payload.planType === "string" ? payload.planType : undefined;
+    return {
+      provider: "openai",
+      available: windows.length > 0,
+      source: "codex-usage-api",
+      fetchedAt: new Date().toISOString(),
+      ...(plan ? { plan } : {}),
+      windows,
+      ...(windows.length === 0 ? { message: "Codex server usage API did not report active rate-limit windows." } : {}),
+    };
+  }
+
+  async #geminiUsage(): Promise<ProviderUsageStatus> {
+    const credential = await this.resolve("gemini");
+    if (!credential || credential.kind !== "oauth") {
+      return unavailableUsage(
+        "gemini",
+        "gemini-code-assist-api",
+        "Gemini plan usage requires Google browser sign-in; API-key quota is not a single subscription headroom percentage.",
+      );
+    }
+
+    const response = await this.#fetch("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", {
+      method: "POST",
+      headers: { authorization: `Bearer ${credential.accessToken}`, "content-type": "application/json" },
+      body: JSON.stringify(credential.projectId ? { project: credential.projectId } : {}),
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!response.ok) {
+      return unavailableUsage("gemini", "gemini-code-assist-api", `Gemini quota endpoint returned HTTP ${response.status}.`);
+    }
+    const payload = asObject(await response.json());
+    const buckets = Array.isArray(payload.buckets) ? payload.buckets : [];
+    const windows = buckets.flatMap((raw, index): ProviderUsageWindow[] => {
+      const bucket = asObject(raw);
+      const remaining = percent(bucket.remainingFraction ?? bucket.remaining_fraction, true);
+      if (remaining === undefined) return [];
+      const model = typeof bucket.modelId === "string" ? bucket.modelId : typeof bucket.model_id === "string" ? bucket.model_id : `bucket-${index + 1}`;
+      const used = Math.max(0, 100 - remaining);
+      return [usageWindow(model, model.replace(/^models\//, ""), used, resetIso(bucket.resetTime ?? bucket.reset_time))];
+    });
+    windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
+    return {
+      provider: "gemini",
+      available: windows.length > 0,
+      source: "gemini-code-assist-api",
+      fetchedAt: new Date().toISOString(),
+      windows,
+      ...(windows.length === 0 ? { message: "Gemini did not report quota buckets for this account." } : {}),
+    };
+  }
+
+  async #claudeUsage(): Promise<ProviderUsageStatus> {
+    const accessToken = (await this.#claudeOAuthToken())?.trim();
+    if (!accessToken) {
+      return unavailableUsage(
+        "anthropic",
+        "anthropic-oauth-api",
+        "Claude subscription usage requires Claude OAuth authentication (CLAUDE_CODE_OAUTH_TOKEN or a Claude subscription login). API keys do not expose subscription headroom.",
+      );
+    }
+
+    const response = await this.#fetch("https://api.anthropic.com/api/oauth/usage", {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "anthropic-beta": "oauth-2025-04-20",
+        accept: "application/json",
+        "user-agent": "yeet/0.1.0",
+      },
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!response.ok) {
+      const retryAfter = response.headers.get("retry-after");
+      const retry = retryAfter ? ` Retry after ${retryAfter}s.` : "";
+      return unavailableUsage(
+        "anthropic",
+        "anthropic-oauth-api",
+        `Anthropic usage API returned HTTP ${response.status}.${retry}`,
+      );
+    }
+
+    const payload = asObject(await response.json());
+    const plan = typeof payload.subscription_type === "string" ? payload.subscription_type : undefined;
+    const windows: ProviderUsageWindow[] = [];
+    const seen = new Set<string>();
+    const append = (id: string, label: string, raw: unknown) => {
+      const value = asObject(raw);
+      const used = percent(value.utilization ?? value.used_percentage ?? value.usedPercent ?? value.percent, true);
+      if (used === undefined) return;
+      const key = `${id}:${label}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      windows.push(usageWindow(id, label, used, resetIso(value.resets_at ?? value.resetsAt)));
+    };
+
+    for (const [id, raw] of Object.entries(payload)) {
+      if (["limits", "model_scoped", "extra_usage", "spend", "subscription_type"].includes(id)) continue;
+      append(id, claudeUsageLabel(id), raw);
+    }
+    for (const rawList of [payload.limits, payload.model_scoped]) {
+      if (!Array.isArray(rawList)) continue;
+      for (const [index, raw] of rawList.entries()) {
+        const value = asObject(raw);
+        const kind = typeof value.kind === "string" ? value.kind : `model-${index + 1}`;
+        const scope = asObject(value.scope);
+        const model = asObject(scope.model);
+        const displayName = typeof model.display_name === "string"
+          ? model.display_name
+          : typeof value.display_name === "string"
+            ? value.display_name
+            : typeof value.label === "string"
+              ? value.label
+              : undefined;
+        const label = displayName ? `${displayName} 7d` : claudeUsageLabel(kind);
+        append(`${kind}:${displayName ?? index + 1}`, label, value);
+      }
+    }
+
+    const spend = asObject(payload.spend);
+    if (spend.enabled === true) append("spend", "Spend", { ...spend, utilization: spend.percent });
+    const extra = asObject(payload.extra_usage);
+    if (extra.is_enabled === true) append("extra_usage", "Extra usage", extra);
+
+    windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
+    return {
+      provider: "anthropic",
+      available: windows.length > 0,
+      source: "anthropic-oauth-api",
+      fetchedAt: new Date().toISOString(),
+      ...(plan ? { plan } : {}),
+      windows,
+      ...(windows.length === 0 ? { message: "Anthropic usage API returned no populated subscription windows." } : {}),
     };
   }
 

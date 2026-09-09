@@ -9,7 +9,7 @@ mod yeet_brand;
 use dialogs::{
     draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_help, draw_models,
     draw_permission, draw_provider_edit, draw_providers, draw_reasoning, draw_sandbox_policy,
-    draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
+    draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit, draw_status_dialog,
 };
 
 mod markdown;
@@ -86,6 +86,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             draw_sandbox_policy(frame, app);
             draw_settings_edit(frame, app);
         }
+        Mode::Status => draw_status_dialog(frame, app),
         Mode::Help => draw_help(frame),
         Mode::Chat => {}
     }
@@ -332,247 +333,104 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     if width == 0 {
         return;
     }
-
     frame.render_widget(Block::default().style(theme::surface()), area);
-
-    let secondary = secondary_status_line(app, width);
-
-    if let Some(message) = app
-        .state
-        .error_message
-        .as_deref()
-        .or(app.backend_message.as_deref())
-    {
-        let text = truncate_end(message, width.saturating_sub(3));
-        frame.render_widget(
-            Paragraph::new(Text::from(vec![
-                Line::from(vec![
-                    Span::styled(
-                        " × ",
-                        Style::default()
-                            .fg(theme::ERROR)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(text, Style::default().fg(theme::ERROR)),
-                ]),
-                secondary,
-            ])),
-            area,
-        );
-        return;
-    }
-
-    if area.height == 1 {
-        frame.render_widget(Paragraph::new(compact_status_line(app, width)), area);
-        return;
-    }
-
-    frame.render_widget(
-        Paragraph::new(Text::from(vec![primary_status_line(app, width), secondary])),
-        area,
-    );
+    frame.render_widget(Paragraph::new(status_line(app, width)), area);
 }
 
-fn compact_status_line(app: &App, width: usize) -> Line<'static> {
-    let mut spans = Vec::new();
-    let marker = if app.state.is_streaming { "◆" } else { "◇" };
-    spans.push(Span::styled(
-        format!(" {marker} "),
-        Style::default().fg(theme::pulse_color()),
-    ));
-
-    let context = if width >= 28 {
-        app.state
-            .active_model_context_length
-            .map(|value| format!(" · ctx {}", compact_number(value)))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let model = if app.state.active_model.is_empty() {
-        "select model"
-    } else {
-        app.state
-            .active_model
-            .rsplit('/')
-            .next()
-            .unwrap_or(&app.state.active_model)
-    };
-    let model_width = width.saturating_sub(3 + Span::raw(&context).width()).max(1);
-    spans.push(Span::styled(
-        truncate_middle(model, model_width),
-        Style::default()
-            .fg(theme::TEXT_DIM)
-            .add_modifier(Modifier::BOLD),
-    ));
-    if !context.is_empty() {
-        spans.push(Span::styled(context, Style::default().fg(theme::MUTED)));
-    }
-    Line::from(spans)
-}
-
-fn primary_status_line(app: &App, width: usize) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
-    if width >= 48 {
-        spans.push(Span::styled(
-            "◆ ",
-            Style::default().fg(theme::pulse_color()),
-        ));
-        spans.push(Span::styled(
-            "YEET//CORE",
-            Style::default()
-                .fg(theme::TEXT)
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(separator());
-    }
-    spans.extend(model_spans(&app.state.active_model, width));
-
-    if width >= 56 {
-        let reasoning = if app.state.active_reasoning_level.is_empty() {
-            "auto"
-        } else {
-            &app.state.active_reasoning_level
-        };
-        spans.push(separator());
-        spans.push(Span::styled("✦ think ", Style::default().fg(theme::MUTED)));
-        spans.push(Span::styled(
-            reasoning.to_owned(),
-            Style::default().fg(theme::TEXT_DIM),
-        ));
-    }
-
-    Line::from(spans)
-}
-
-fn secondary_status_line(app: &App, width: usize) -> Line<'static> {
-    let usage = &app.state.token_usage;
-    let mut spans = vec![Span::raw(" ")];
-
-    if let Some(context) = app.state.active_model_context_length {
-        push_status_metric(&mut spans, "◫ ctx", compact_number(context));
-    }
-
-    if width >= 34 {
-        let input = usage.input_tokens.unwrap_or(0);
-        let output = usage.output_tokens.unwrap_or(0);
-        if input > 0 || output > 0 {
-            push_status_metric(
-                &mut spans,
-                "⇅ tok",
-                format!(
-                    "in {} out {}",
-                    compact_number(input),
-                    compact_number(output)
-                ),
-            );
-        }
-    }
-
-    if width >= 58 {
-        let input = usage.input_tokens.unwrap_or(0);
-        if input > 0 {
-            let cached = usage.cached_input_tokens.unwrap_or(0).min(input);
-            let hit_rate = cached as f64 * 100.0 / input as f64;
-            push_status_metric(
-                &mut spans,
-                "↻ hit",
-                format!("{hit_rate:.0}% {}", compact_number(cached)),
-            );
-        }
-    }
-
-    if width >= 88
-        && let Some(cache_write) = usage.cache_write_input_tokens.filter(|value| *value > 0)
-    {
-        push_status_metric(&mut spans, "↥ cache", compact_number(cache_write));
-    }
-
-    if width >= 74
-        && let Some(reasoning) = usage.reasoning_tokens.filter(|value| *value > 0)
-    {
-        push_status_metric(&mut spans, "◌ reason", compact_number(reasoning));
-    }
-
-    if width >= 74
-        && let Some(cost) = usage.estimated_cost_usd.filter(|value| *value > 0.0)
-    {
-        let value = if cost < 0.01 {
-            format!("${cost:.4}")
-        } else {
-            format!("${cost:.2}")
-        };
-        push_status_metric(&mut spans, "$ cost", value);
-    }
-
-    if width >= 88 && app.state.credit_usage > 0 {
-        push_status_metric(&mut spans, "◆ credits", app.state.credit_usage.to_string());
-    }
-
-    if app.state.is_streaming
-        && width >= 48
-        && let Some(elapsed) = app.stream_elapsed()
-    {
-        push_status_metric(&mut spans, "◷ time", format_elapsed(elapsed.as_millis()));
-    }
-
-    Line::from(spans)
-}
-
-fn push_status_metric(spans: &mut Vec<Span<'static>>, label: &str, value: String) {
-    if spans.len() > 1 {
-        spans.push(separator());
-    }
-    spans.push(Span::styled(
-        format!("{label} "),
-        Style::default().fg(theme::MUTED),
-    ));
-    spans.push(Span::styled(value, Style::default().fg(theme::TEXT_DIM)));
-}
-
-fn separator() -> Span<'static> {
-    Span::styled(" · ", Style::default().fg(theme::MUTED))
-}
-
-fn model_spans(model: &str, width: usize) -> Vec<Span<'static>> {
-    if model.is_empty() {
-        return vec![Span::styled(
-            "◈ model  Alt+M select".to_owned(),
-            Style::default().fg(theme::ACCENT_HOT),
-        )];
-    }
-
-    let (provider, name) = model.split_once('/').unwrap_or(("", model));
-    if width < 46 || provider.is_empty() {
-        return vec![
-            Span::styled("◈ model ", Style::default().fg(theme::MUTED)),
-            Span::styled(
-                truncate_middle(
-                    name,
-                    if width < 34 {
-                        width.saturating_sub(6).max(8)
-                    } else {
-                        30
-                    },
-                ),
-                Style::default()
-                    .fg(theme::TEXT_DIM)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ];
-    }
-
-    vec![
-        Span::styled("◈ model ", Style::default().fg(theme::MUTED)),
-        Span::styled(provider.to_owned(), Style::default().fg(theme::MUTED)),
-        Span::styled("/", Style::default().fg(theme::MUTED)),
-        Span::styled(
-            truncate_middle(name, if width < 76 { 24 } else { 32 }),
-            Style::default()
-                .fg(theme::TEXT_DIM)
-                .add_modifier(Modifier::BOLD),
+fn status_line(app: &App, width: usize) -> Line<'static> {
+    let current = app.state.current_context_tokens.unwrap_or(0);
+    let (total, percent) = match app.state.active_model_context_length {
+        Some(total) if total > 0 => (
+            compact_number(total),
+            format!("{:.0}%", current as f64 * 100.0 / total as f64),
         ),
-    ]
+        Some(total) => (compact_number(total), "?%".to_owned()),
+        None => ("?".to_owned(), "?%".to_owned()),
+    };
+    let input = compact_number(app.state.token_usage.input_tokens.unwrap_or(0));
+    let output = compact_number(app.state.token_usage.output_tokens.unwrap_or(0));
+    let reasoning = if app.state.active_reasoning_level.is_empty() {
+        "auto"
+    } else {
+        app.state.active_reasoning_level.as_str()
+    };
+    let permission = app
+        .state
+        .sandbox_settings
+        .as_ref()
+        .map(|settings| settings.permission_mode())
+        .unwrap_or("ask");
+    let current = compact_number(current);
+    let prefix = if width >= 3 { " ◈ " } else { "" };
+    let available = width.saturating_sub(prefix.chars().count());
+    let model_full = if app.state.active_model.is_empty() {
+        "no model".to_owned()
+    } else {
+        truncate_middle(&app.state.active_model, 30)
+    };
+    let model_short = if app.state.active_model.is_empty() {
+        "no model".to_owned()
+    } else {
+        let short = app
+            .state
+            .active_model
+            .rsplit_once('/')
+            .map(|(_, model)| model)
+            .unwrap_or(app.state.active_model.as_str());
+        truncate_middle(short, 18)
+    };
+    let model_tiny = truncate_middle(&model_short, 11);
+    let reasoning_short = match reasoning {
+        "medium" => "med",
+        "auto" => "auto",
+        "low" => "low",
+        "high" => "high",
+        other => other,
+    };
+    let permission_short = match permission {
+        "unlimited" => "unlim",
+        other => other,
+    };
+    let reasoning_micro = match reasoning_short {
+        "high" => "hi",
+        "med" => "me",
+        "low" => "lo",
+        "auto" => "au",
+        other => other,
+    };
+    let permission_micro = match permission_short {
+        "unlim" => "un",
+        "auto" => "au",
+        "ask" => "as",
+        other => other,
+    };
+    let model_micro = truncate_middle(&model_short, 7);
+    let candidates = [
+        format!(
+            "model {model_full} │ ctx {current}/{total} {percent} │ in {input}↑ out {output}↓ │ reason {reasoning} │ perm {permission}"
+        ),
+        format!("{model_short} │ ctx {percent} │ {input}↑ {output}↓ │ {reasoning} │ {permission}"),
+        format!(
+            "{model_short} · {percent} · {input}↑{output}↓ · {reasoning_short} · {permission_short}"
+        ),
+        format!("{model_tiny} {percent} {input}↑{output}↓ {reasoning_short}/{permission_short}"),
+        format!("{model_micro} {percent} {input}↑{output}↓ {reasoning_micro}/{permission_micro}"),
+    ];
+    let text = candidates
+        .into_iter()
+        .find(|candidate| Span::raw(candidate).width() <= available)
+        .unwrap_or_else(|| {
+            task::fit(
+                &format!(
+                    "{model_micro} {percent} {input}↑{output}↓ {reasoning_micro}/{permission_micro}"
+                ),
+                available,
+            )
+        });
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(theme::ACCENT)),
+        Span::styled(text, Style::default().fg(theme::TEXT_DIM)),
+    ])
 }
 
 fn live_activity(app: &App) -> (String, Option<&str>) {
@@ -1198,6 +1056,7 @@ mod tests {
                 Mode::Sessions,
                 Mode::Reasoning,
                 Mode::Settings,
+                Mode::Status,
                 Mode::Help,
             ] {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1332,6 +1191,104 @@ mod tests {
         assert_eq!(compact_number(1_500), "1.5k");
         assert_eq!(compact_number(12_000), "12k");
         assert_eq!(compact_number(1_250_000), "1.2M");
+    }
+
+    #[test]
+    fn bottom_status_includes_model_and_keeps_detailed_usage_out() {
+        let mut app = App::default();
+        app.state.active_model = "openai/test".into();
+        app.state.active_model_context_length = Some(128_000);
+        app.state.current_context_tokens = Some(64_000);
+        app.state.token_usage.input_tokens = Some(12_000);
+        app.state.token_usage.output_tokens = Some(3_000);
+        app.state.token_usage.cached_input_tokens = Some(8_000);
+        app.state.token_usage.estimated_cost_usd = Some(1.25);
+        app.state.active_reasoning_level = "high".into();
+
+        let text = status_line(&app, 120)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("model openai/test"));
+        assert!(text.contains("ctx 64k/128k 50%"));
+        assert!(text.contains("in 12k↑ out 3k↓"));
+        assert!(text.contains("reason high"));
+        assert!(text.contains("perm ask"));
+        assert!(!text.contains("cache"));
+        assert!(!text.contains("cost"));
+    }
+
+    #[test]
+    fn bottom_status_preserves_all_live_categories_when_narrow() {
+        let mut app = App::default();
+        app.state.active_model = "openai/gpt-5.6-codex".into();
+        app.state.active_model_context_length = Some(128_000);
+        app.state.current_context_tokens = Some(64_000);
+        app.state.token_usage.input_tokens = Some(12_000);
+        app.state.token_usage.output_tokens = Some(3_000);
+        app.state.active_reasoning_level = "high".into();
+
+        let text = status_line(&app, 40)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("50%"));
+        assert!(text.contains("12k↑3k↓"));
+        assert!(text.contains("high/ask") || text.contains("hi/as"));
+        assert!(text.contains("gpt"));
+    }
+
+    #[test]
+    fn status_dialog_renders_api_usage_headroom() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(110, 30)).unwrap();
+        let mut app = App {
+            mode: Mode::Status,
+            ..App::default()
+        };
+        app.state.active_model = "openai/gpt-5.6-codex".into();
+        app.state.active_model_context_length = Some(128_000);
+        app.state.current_context_tokens = Some(32_000);
+        app.state
+            .auth_providers
+            .push(crate::model::AuthProviderItem {
+                provider: "openai".into(),
+                authenticated: true,
+                method: "oauth".into(),
+                expires_at: None,
+                usage: Some(crate::model::ProviderUsageStatus {
+                    provider: "openai".into(),
+                    available: true,
+                    source: "codex".into(),
+                    fetched_at: "2026-09-09T20:00:00+09:00".into(),
+                    plan: Some("pro".into()),
+                    windows: vec![crate::model::ProviderUsageWindow {
+                        id: "five-hour".into(),
+                        label: "5h".into(),
+                        used_percent: 25,
+                        remaining_percent: 75,
+                        resets_at: None,
+                    }],
+                    message: None,
+                }),
+                error: None,
+            });
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("Usage & provider headroom"));
+        assert!(screen.contains("openai"));
+        assert!(screen.contains("5h 75%"));
+        assert!(screen.contains("Session & permissions"));
     }
 
     #[test]

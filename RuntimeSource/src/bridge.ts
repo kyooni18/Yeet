@@ -465,6 +465,9 @@ async function handle(command: BridgeCommand): Promise<void> {
     case "auth-status":
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "auth-status", status: await auth.status(command.provider) });
       return;
+    case "provider-usage":
+      write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "provider-usage", usage: await auth.providerUsage(command.provider) });
+      return;
     case "auth-set-api-key": {
       const status = await auth.setApiKey(command.provider, command.apiKey);
       await refreshProvider(command.provider);

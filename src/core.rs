@@ -406,6 +406,28 @@ pub struct AuthStatus {
     pub config_dir: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageWindow {
+    pub id: String,
+    pub label: String,
+    pub used_percent: u8,
+    pub remaining_percent: u8,
+    pub resets_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageStatus {
+    pub provider: String,
+    pub available: bool,
+    pub source: String,
+    pub fetched_at: String,
+    pub plan: Option<String>,
+    pub windows: Vec<ProviderUsageWindow>,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenAiCompatibleProvider {
@@ -810,6 +832,9 @@ impl BridgeClient {
     }
     pub fn auth_status(&self, provider: &str) -> Result<AuthStatus> {
         self.request_typed("auth-status", field("provider", provider), "status")
+    }
+    pub fn provider_usage(&self, provider: &str) -> Result<ProviderUsageStatus> {
+        self.request_typed("provider-usage", field("provider", provider), "usage")
     }
     pub fn set_api_key(&self, provider: &str, key: &str) -> Result<AuthStatus> {
         let mut fields = field("provider", provider);

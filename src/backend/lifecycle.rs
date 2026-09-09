@@ -10,6 +10,10 @@ impl BackendService {
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
         let stored = self.store.load(id)?;
+        let sandbox_settings = SandboxStore::new(&self.workspace_root)
+            .and_then(|store| store.load())
+            .ok()
+            .map(|policy| sandbox_settings_state(&policy));
         self.invalidate_active_turn_for_replacement()?;
         self.coordinator
             .lock()
@@ -36,6 +40,8 @@ impl BackendService {
         shared.state.conversation_revision = shared.state.conversation_revision.wrapping_add(1);
         shared.state.active_model = stored.model;
         shared.state.token_usage = stored.token_usage;
+        shared.state.current_context_tokens = None;
+        shared.state.sandbox_settings = sandbox_settings;
         shared.state.credit_usage = stored.credit_usage;
         shared.state.current_session_id = Some(stored.id.clone());
         shared.meta.created_at = Some(stored.created_at);
@@ -77,6 +83,10 @@ impl BackendService {
         };
         let project = self.project_settings.load().unwrap_or_default();
         let mut session = SharedSession::new(model, reasoning_level);
+        session.state.sandbox_settings = SandboxStore::new(&self.workspace_root)
+            .and_then(|store| store.load())
+            .ok()
+            .map(|policy| sandbox_settings_state(&policy));
         session.meta.attached_capabilities = project.capabilities.attached;
         session.meta.disabled_capabilities = project.capabilities.disabled;
         *self.shared.lock().unwrap() = session;
@@ -98,6 +108,7 @@ impl BackendService {
         {
             let mut shared = self.shared.lock().unwrap();
             shared.meta.pending_compaction = false;
+            shared.state.current_context_tokens = None;
             shared.append(ConversationKind::System {
                 content: format!("New context window: {before} working messages to {after}. Original history is retrievable."),
             });

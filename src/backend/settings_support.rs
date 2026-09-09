@@ -11,21 +11,29 @@ pub(super) fn load_auth_providers(bridge: &BridgeClient) -> Result<Vec<AuthProvi
     providers.sort();
     Ok(providers
         .into_iter()
-        .map(|provider| match bridge.auth_status(&provider) {
-            Ok(status) => AuthProviderItem {
-                provider,
-                authenticated: status.authenticated,
-                method: status.method,
-                expires_at: status.expires_at,
-                error: None,
-            },
-            Err(error) => AuthProviderItem {
-                provider,
-                authenticated: false,
-                method: String::new(),
-                expires_at: None,
-                error: Some(error.to_string()),
-            },
+        .map(|provider| {
+            let usage = bridge
+                .provider_usage(&provider)
+                .ok()
+                .filter(|usage| usage.source != "none");
+            match bridge.auth_status(&provider) {
+                Ok(status) => AuthProviderItem {
+                    provider,
+                    authenticated: status.authenticated,
+                    method: status.method,
+                    expires_at: status.expires_at,
+                    usage,
+                    error: None,
+                },
+                Err(error) => AuthProviderItem {
+                    provider,
+                    authenticated: false,
+                    method: String::new(),
+                    expires_at: None,
+                    usage,
+                    error: Some(error.to_string()),
+                },
+            }
         })
         .collect())
 }

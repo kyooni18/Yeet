@@ -187,6 +187,9 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
         AgentEvent::AuxiliaryUsage(usage) => record_usage(&mut state.state, &usage, 0),
         AgentEvent::Finished { reason, usage } => {
             if let Some(usage) = usage {
+                if let Some(input_tokens) = usage.input_tokens {
+                    state.state.current_context_tokens = Some(input_tokens);
+                }
                 record_usage(&mut state.state, &usage, 1);
             }
             if reason == "tool_call" {

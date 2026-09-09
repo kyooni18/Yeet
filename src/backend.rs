@@ -181,6 +181,10 @@ impl BackendService {
             coordinator.set_session_runtime(store.clone(), None);
         }
         let mut session = SharedSession::new(model, reasoning_level);
+        session.state.sandbox_settings = SandboxStore::new(&workspace_root)
+            .and_then(|store| store.load())
+            .ok()
+            .map(|policy| sandbox_settings_state(&policy));
         session.state.openai_flex = project.openai_flex;
         session.state.foundation_memory_enabled = project.foundation_memory.enabled;
         session.state.foundation_memory_server = project.foundation_memory.server.clone();
@@ -655,7 +659,7 @@ impl BackendService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /sessions  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /attach ID  /detach ID  /allow  /deny  /clear"),
+            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /sessions  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /attach ID  /detach ID  /allow  /deny  /clear"),
             "/new" => self.new_session(),
             "/clear" => {
                 let mut shared = self.shared.lock().unwrap();
@@ -712,6 +716,7 @@ impl BackendService {
                     }
                 }
             }
+            "/status" => self.append_system(&self.status_report()),
             "/image" => {
                 let Some(argument) = arguments.first().copied() else {
                     let count = self.shared.lock().unwrap().meta.pending_images.len();
@@ -778,6 +783,117 @@ impl BackendService {
         Ok(())
     }
 
+    fn status_report(&self) -> String {
+        let state = self.shared.lock().unwrap().state.without_conversation();
+        let current_context = state.current_context_tokens.unwrap_or(0);
+        let context = match state.active_model_context_length {
+            Some(total) if total > 0 => format!(
+                "Context: {current_context}/{total} tokens ({:.1}% used)",
+                current_context as f64 * 100.0 / total as f64
+            ),
+            Some(total) => format!("Context: {current_context}/{total} tokens"),
+            None => format!("Context: {current_context} tokens / unknown limit"),
+        };
+        let usage = &state.token_usage;
+        let input = usage.input_tokens.unwrap_or(0);
+        let output = usage.output_tokens.unwrap_or(0);
+        let cached = usage.cached_input_tokens.unwrap_or(0).min(input);
+        let cache_write = usage.cache_write_input_tokens.unwrap_or(0);
+        let reasoning_tokens = usage.reasoning_tokens.unwrap_or(0);
+        let reasoning_mode = if state.active_reasoning_level.is_empty() {
+            "auto"
+        } else {
+            state.active_reasoning_level.as_str()
+        };
+        let (permission, sandbox_detail) = state
+            .sandbox_settings
+            .as_ref()
+            .map(|settings| {
+                (
+                    settings.permission_mode(),
+                    format!(
+                        "preset {} · execution {} · auto-approve {}",
+                        settings.preset, settings.execution_mode, settings.auto_approve
+                    ),
+                )
+            })
+            .unwrap_or(("unknown", "sandbox state unavailable".to_owned()));
+        let cache_line = if input > 0 {
+            format!(
+                "Cache: read {cached} tokens ({:.0}% hit) · write {cache_write} tokens",
+                cached as f64 * 100.0 / input as f64
+            )
+        } else {
+            format!("Cache: read {cached} tokens · write {cache_write} tokens")
+        };
+        let mut lines = vec![
+            format!(
+                "Model: {}",
+                if state.active_model.is_empty() {
+                    "not selected"
+                } else {
+                    &state.active_model
+                }
+            ),
+            context,
+            format!("Tokens: input {input} · output {output} · reasoning {reasoning_tokens}"),
+            cache_line,
+            format!("Reasoning mode: {reasoning_mode}"),
+            format!("Permission: {permission} · {sandbox_detail}"),
+            format!(
+                "Runtime: {}",
+                if state.is_streaming {
+                    "executing"
+                } else {
+                    "idle"
+                }
+            ),
+        ];
+        if let Some(cost) = usage.estimated_cost_usd {
+            lines.push(format!("Estimated cost: ${cost:.4}"));
+        }
+        if state.credit_usage > 0 {
+            lines.push(format!("Provider calls / credits: {}", state.credit_usage));
+        }
+        if let Some(session_id) = state.current_session_id.as_deref() {
+            lines.push(format!("Session: {session_id}"));
+        }
+        if let Some(run_id) = state.active_run_id.as_deref() {
+            lines.push(format!("Run: {run_id}"));
+        }
+        if let Some(error) = state.error_message.as_deref() {
+            lines.push(format!("Last error: {error}"));
+        }
+        if let Some((provider, _)) = state.active_model.split_once('/')
+            && let Ok(provider_usage) = self.bridge.provider_usage(provider)
+            && provider_usage.source != "none"
+        {
+            if provider_usage.windows.is_empty() {
+                lines.push(format!(
+                    "Quota: {} · {}",
+                    provider_usage.source,
+                    provider_usage.message.as_deref().unwrap_or("unavailable")
+                ));
+            } else {
+                let windows = provider_usage
+                    .windows
+                    .iter()
+                    .map(|window| {
+                        let reset = window
+                            .resets_at
+                            .as_deref()
+                            .map(|value| format!(" · resets {value}"))
+                            .unwrap_or_default();
+                        format!("{} {}% left{reset}", window.label, window.remaining_percent)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                lines.push(format!("Quota: {} · {windows}", provider_usage.source));
+            }
+        }
+        lines.join("\n")
+    }
+
     fn request_models(&self) {
         {
             let mut shared = self.shared.lock().unwrap();
@@ -840,6 +956,7 @@ impl BackendService {
             let mut shared = self.shared.lock().unwrap();
             shared.state.active_model = model.clone();
             shared.state.active_model_context_length = None;
+            shared.state.current_context_tokens = None;
             shared.append(ConversationKind::System {
                 content: format!("Model set to {model}"),
             });

@@ -37,6 +37,7 @@ Usage:
   yeet cache [latest|SESSION_ID]
   yeet run [--model provider/model] [--image path] [prompt]
   yeet auth status [provider]
+  yeet usage [codex|claude|gemini|provider]
   printf key | yeet auth set-key provider
   yeet auth login provider
   yeet auth logout provider
@@ -117,6 +118,7 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         "cache" => cache(rest),
         "run" => run_model(rest),
         "auth" => auth(rest),
+        "usage" => usage_command(rest),
         "provider" | "providers" | "endpoint" | "endpoints" => provider(rest),
         "skill" | "skills" => skill(rest),
         "mcp" => mcp(rest),
@@ -568,6 +570,60 @@ fn run_model(args: &[String]) -> Result<()> {
     println!();
     bridge.shutdown();
     Ok(())
+}
+
+fn usage_command(args: &[String]) -> Result<()> {
+    if args.len() > 1 {
+        bail!("Usage: yeet usage [codex|claude|gemini|provider]");
+    }
+    let providers = if let Some(provider) = args.first() {
+        vec![match provider.as_str() {
+            "codex" => "openai".to_owned(),
+            "claude" => "anthropic".to_owned(),
+            "google" => "gemini".to_owned(),
+            other => other.to_owned(),
+        }]
+    } else {
+        vec![
+            "openai".to_owned(),
+            "anthropic".to_owned(),
+            "gemini".to_owned(),
+        ]
+    };
+
+    let bridge = BridgeClient::start()?;
+    let result = (|| -> Result<()> {
+        for provider in providers {
+            let usage = bridge.provider_usage(&provider)?;
+            let plan = usage
+                .plan
+                .as_deref()
+                .map(|plan| format!(" · plan {plan}"))
+                .unwrap_or_default();
+            println!("{} · {}{plan}", usage.provider, usage.source);
+            if usage.windows.is_empty() {
+                println!(
+                    "  {}",
+                    usage.message.as_deref().unwrap_or("usage unavailable")
+                );
+                continue;
+            }
+            for window in &usage.windows {
+                let reset = window
+                    .resets_at
+                    .as_deref()
+                    .map(|reset| format!(" · resets {reset}"))
+                    .unwrap_or_default();
+                println!(
+                    "  {}: {}% left · {}% used{reset}",
+                    window.label, window.remaining_percent, window.used_percent
+                );
+            }
+        }
+        Ok(())
+    })();
+    bridge.shutdown();
+    result
 }
 
 fn auth(args: &[String]) -> Result<()> {

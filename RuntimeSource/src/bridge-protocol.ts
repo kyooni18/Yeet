@@ -1,4 +1,4 @@
-import type { AuthStatus, BrowserLoginOptions } from "./auth.js";
+import type { AuthStatus, BrowserLoginOptions, ProviderUsageStatus } from "./auth.js";
 import type { HarnessCapabilityDescriptor } from "./capabilities.js";
 import type {
   McpCallToolResult,
@@ -48,6 +48,7 @@ export type BridgeCommand =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "list-harness-capabilities" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "config-path" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-status"; provider: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "provider-usage"; provider: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-set-api-key"; provider: string; apiKey: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-login-browser"; provider: string; options?: BrowserLoginOptions }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "auth-logout"; provider: string }
@@ -102,6 +103,7 @@ export type BridgeMessage =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "harness-capabilities"; capabilities: HarnessCapabilityDescriptor[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "config-path"; path: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "auth-status"; status: AuthStatus }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-usage"; usage: ProviderUsageStatus }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-configurations"; providerConfigurations: OpenAICompatibleProviderConfig[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-configuration"; providerConfiguration: OpenAICompatibleProviderConfig }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "registered"; provider: string }

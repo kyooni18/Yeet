@@ -35,6 +35,7 @@ pub enum Mode {
     SandboxPresets,
     SandboxPolicy,
     SettingsEdit,
+    Status,
     Help,
 }
 
@@ -245,6 +246,14 @@ impl App {
             Mode::SandboxPresets => self.handle_sandbox_presets_key(event, backend),
             Mode::SandboxPolicy => self.handle_sandbox_policy_key(event, backend),
             Mode::SettingsEdit => self.handle_settings_edit_key(event, backend),
+            Mode::Status => match event.code {
+                KeyCode::Char('r') => backend.send(FrontendCommand::RequestAuth),
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.close_popup();
+                    Ok(())
+                }
+                _ => Ok(()),
+            },
             Mode::Help => {
                 if matches!(
                     event.code,
@@ -452,6 +461,7 @@ impl App {
                     "/sessions" => self.open_sessions(backend)?,
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
+                    "/status" => self.open_status(backend)?,
                     "/login" => self.open_auth(backend)?,
                     "/provider" | "/providers" => self.open_providers(backend)?,
                     _ => backend.send(FrontendCommand::Submit { text })?,
@@ -1164,6 +1174,13 @@ impl App {
         backend.send(FrontendCommand::RequestSettings)
     }
 
+    fn open_status(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
+        self.mode = Mode::Status;
+        self.popup_filter.clear();
+        self.popup_index = 0;
+        backend.send(FrontendCommand::RequestAuth)
+    }
+
     fn open_sandbox_presets(&mut self) {
         self.mode = Mode::SandboxPresets;
         self.popup_index = 0;
@@ -1523,6 +1540,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/image", "Queue an image for the next turn"),
     ("/compact", "Compact model context now"),
     ("/context", "Show or override model context length"),
+    ("/status", "Show detailed runtime and usage status"),
     ("/attach", "Attach an optional capability"),
     ("/detach", "Detach an optional capability"),
     ("/allow", "Allow pending shell command once"),
