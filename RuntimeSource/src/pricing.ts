@@ -48,11 +48,11 @@ export function cacheBreakEvenReuses(pricing: ModelPricing, inputTokens = 0): nu
 export function applyCacheCostPolicy(request: CallRequest, pricing: ModelPricing | undefined): CallRequest {
   if (!pricing || request.promptCache !== true) return request;
   const purpose = request.metadata?.purpose;
-  if (purpose === "session-title" || purpose === "context-compaction" || purpose === "command-evaluation") {
+  if (purpose === "session-title" || purpose === "context-compaction") {
     return { ...request, promptCache: false };
   }
   const expected = Number(request.metadata?.expectedCacheReuses ?? "0");
-  const estimatedInput = Math.ceil(JSON.stringify(request.messages).length / 3);
+  const estimatedInput = estimatedRequestTokens(request);
   const breakEven = cacheBreakEvenReuses(pricing, estimatedInput);
   if (breakEven !== undefined && expected < breakEven) return { ...request, promptCache: false };
   return request;

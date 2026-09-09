@@ -38,6 +38,11 @@ pub(super) fn agent_event_log_value(event: &AgentEvent) -> Option<Value> {
             "type":"agent-model-attempt-started",
             "cacheDiagnostics": diagnostics,
         })),
+        AgentEvent::ModelAttemptFinished(diagnostics, usage) => Some(json!({
+            "type":"agent-model-attempt-finished",
+            "cacheDiagnostics": diagnostics,
+            "usage": usage,
+        })),
         AgentEvent::Start => Some(json!({"type":"agent-response-started"})),
         AgentEvent::ReasoningDelta(_)
         | AgentEvent::ReasoningSummaryDelta(_)
@@ -77,6 +82,7 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
         AgentEvent::ModelAttemptStarted { .. } => {
             state.state.credit_usage = state.state.credit_usage.saturating_add(1)
         }
+        AgentEvent::ModelAttemptFinished(..) => {}
         AgentEvent::Start => state.set_activity("thinking", "Thinking", None),
         AgentEvent::ReasoningDelta(delta) => {
             state.set_activity("reasoning", "Reasoning", None);
@@ -239,7 +245,6 @@ pub(super) fn persist_locked(
         updated_at: Utc::now(),
         workspace_root: workspace.display().to_string(),
         model: state.state.active_model.clone(),
-        agent_mode: state.state.active_agent_mode.clone(),
         token_usage: state.state.token_usage.clone(),
         credit_usage: state.state.credit_usage,
         conversation,

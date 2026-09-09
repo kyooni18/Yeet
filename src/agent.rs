@@ -6,24 +6,22 @@ mod progress;
 mod runaway;
 mod tool_discovery;
 mod tool_protocol;
+mod turn_state;
 #[cfg(test)]
 use cache::mark_turn_cache_breakpoint;
-use cache::{insert_turn_stable_overlays, request_cache_diagnostics};
+use cache::{advance_turn_cache_breakpoints, insert_turn_stable_overlays};
 use history::{
-    compact_active_task_history, compact_completed_task_history, deduplicate_skill_instructions,
+    compact_completed_task_history, deduplicate_skill_instructions,
     trim_completed_conversation_history,
 };
 pub use policy::SYSTEM_INSTRUCTION;
 #[cfg(test)]
+use policy::{RESEARCH_SYSTEM_INSTRUCTION, is_research_evidence_tool, request_history_for_profile};
 use policy::{
-    GENERAL_SYSTEM_INSTRUCTION, RESEARCH_SYSTEM_INSTRUCTION, is_research_evidence_tool,
-    request_history_for_profile, task_profile,
-};
-use policy::{
-    TaskProfile, is_mutation_tool, looks_like_bounded_analysis, looks_like_bounded_explanation,
-    looks_like_implementation_request, looks_like_planning_or_documentation,
-    reasoning_provider_options, request_history_for_profile_at, select_tools_for_profile,
-    task_guidance, task_profile_for_mode,
+    ResearchBudget, TaskProfile, is_mutation_tool, looks_like_bounded_analysis,
+    looks_like_bounded_explanation, looks_like_coding_request, looks_like_implementation_request,
+    looks_like_planning_or_documentation, reasoning_provider_options,
+    request_history_for_profile_at, select_tools_for_profile, task_guidance, task_profile,
 };
 use progress::{
     classify_tool_error, content_fingerprint, is_inspection_tool, is_validation_tool_call,
@@ -37,6 +35,7 @@ use tool_protocol::{
     PartialToolCall, collect_tool_calls, looks_like_malformed_tool_call,
     normalize_tool_output_for_model, recover_text_tool_calls,
 };
+use turn_state::{completion_warning, rollover_handoff_message, summarize_tool_outcome};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -56,7 +55,7 @@ use crate::{
         BridgeClient, CallRequest, ImageAttachment, Message, MessageRole, StreamEvent, StreamPoll,
         ToolCall, ToolDefinition, Usage,
     },
-    tools::{ToolRegistry, is_general_builtin_tool},
+    tools::ToolRegistry,
     web_search::CAPABILITY_ID as WEB_SEARCH_CAPABILITY_ID,
 };
 
@@ -67,7 +66,6 @@ const NO_PROGRESS_CORRECTION_THRESHOLD: usize = 1;
 const NO_PROGRESS_DECISION_THRESHOLD: usize = 2;
 const BOUNDED_EXPLANATION_INSPECTION_THRESHOLD: usize = 3;
 const ANALYSIS_INSPECTION_THRESHOLD: usize = 4;
-const RESEARCH_INSPECTION_THRESHOLD: usize = 6;
 const IMPLEMENTATION_INSPECTION_CHECKPOINT: usize = 5;
 const COMPLETION_GATE_REPAIR_LIMIT: usize = 2;
 
@@ -82,6 +80,7 @@ pub enum AgentEvent {
     ModelAttemptStarted {
         diagnostics: Value,
     },
+    ModelAttemptFinished(Value, Option<Usage>),
     Start,
     ReasoningDelta(String),
     ReasoningSummaryDelta(String),
@@ -115,7 +114,6 @@ pub struct AgentRunRequest<'a> {
     pub images: Vec<ImageAttachment>,
     pub model: &'a str,
     pub reasoning_level: &'a str,
-    pub agent_mode: &'a str,
     pub attached_capabilities: Option<Vec<String>>,
     pub disabled_capabilities: Vec<String>,
     pub cancel: Arc<AtomicBool>,
@@ -126,7 +124,6 @@ struct AgentTurnRequest<'a> {
     images: Vec<ImageAttachment>,
     model: &'a str,
     reasoning_level: &'a str,
-    agent_mode: &'a str,
     attached_capabilities: Option<Vec<String>>,
     cancel: &'a AtomicBool,
 }
@@ -226,7 +223,6 @@ impl AgentCoordinator {
             images,
             model,
             reasoning_level,
-            agent_mode,
             attached_capabilities,
             disabled_capabilities,
             cancel,
@@ -250,7 +246,6 @@ impl AgentCoordinator {
                 images,
                 model,
                 reasoning_level,
-                agent_mode,
                 attached_capabilities,
                 cancel: &cancel,
             },
@@ -276,7 +271,6 @@ impl AgentCoordinator {
             images,
             model,
             reasoning_level,
-            agent_mode,
             attached_capabilities,
             cancel,
         } = request;
@@ -313,11 +307,12 @@ impl AgentCoordinator {
             .registry
             .foundation_memory_guidance()
             .map(str::to_owned);
-        let profile = task_profile_for_mode(input, web_search_enabled, agent_mode);
+        let profile = task_profile(input, web_search_enabled);
         let implementation_requested = looks_like_implementation_request(input);
         let planning_or_documentation = looks_like_planning_or_documentation(input);
         let bounded_explanation = looks_like_bounded_explanation(input);
         let bounded_analysis = bounded_explanation || looks_like_bounded_analysis(input);
+        let mut research_budget = ResearchBudget::for_input(input);
         let task_guidance = task_guidance(input);
         let mut model_attempts = 0usize;
         let mut tool_rounds = 0usize;
@@ -336,14 +331,19 @@ impl AgentCoordinator {
         let mut unresolved_failed_mutation = false;
         let mut verification_attempted = false;
         let mut verification_succeeded = false;
+        let mut last_validation_evidence: Option<String> = None;
+        let mut recent_execution_evidence = Vec::new();
         let mut call_counts: HashMap<String, usize> = HashMap::new();
         let mut workspace_generation = self.registry.workspace_generation();
         let mut workspace_write_generation = self.registry.workspace_write_generation();
         let mut tool_discovery = match profile {
-            TaskProfile::Coding => tool_discovery::ToolDiscovery::coding(),
+            TaskProfile::Agent if implementation_requested || looks_like_coding_request(input) => {
+                tool_discovery::ToolDiscovery::coding(implementation_requested)
+            }
+            TaskProfile::Agent => tool_discovery::ToolDiscovery::default(),
             TaskProfile::Research => tool_discovery::ToolDiscovery::research(),
-            TaskProfile::General => tool_discovery::ToolDiscovery::default(),
         };
+        let mut cache_continuity = cache::ContinuityTracker::default();
         let mut runaway_detector = RunawayDetector::default();
         let mut runaway_finalization = false;
         let mut runaway_finalization_repairs = 0usize;
@@ -372,7 +372,7 @@ impl AgentCoordinator {
         if let Some(guidance) = foundation_guidance.as_deref() {
             turn_stable_overlays.push(Message::system(guidance).request_only());
         }
-        if profile == TaskProfile::Coding
+        if profile == TaskProfile::Agent
             && let Some(guidance) = &task_guidance
         {
             turn_stable_overlays.push(Message::system(guidance.clone()).request_only());
@@ -384,21 +384,37 @@ impl AgentCoordinator {
             let mut tool_catalog =
                 select_tools_for_profile(self.registry.tools(web_search_enabled), profile);
             tool_catalog.extend(context::tools());
-            let selected_tools = if runaway_finalization {
+            let mut selected_tools = if runaway_finalization {
                 Vec::new()
             } else {
                 tool_discovery.attached(&tool_catalog)
             };
-            let attached_names: HashSet<_> =
-                selected_tools.iter().map(|t| t.name.clone()).collect();
             self.context_memory.sync(&self.history)?;
             if self.context_memory.rollover_requested {
-                self.context_memory
-                    .rollover(&mut self.history, Some(&current_request))?;
-                self.context_key = self.context_memory.id().to_owned();
-                call_counts.clear();
+                let handoff = rollover_handoff_message(
+                    successful_mutations,
+                    unresolved_failed_mutation,
+                    verification_attempted,
+                    verification_succeeded,
+                    last_validation_evidence.as_deref(),
+                    self.registry.working_state_summary().as_deref(),
+                    &recent_execution_evidence,
+                );
+                self.context_memory.rollover_with_handoff(
+                    &mut self.history,
+                    Some(&current_request),
+                    Some(&handoff),
+                )?;
+                tool_discovery.load(["context_history", "task_notes"]);
+                selected_tools = if runaway_finalization {
+                    Vec::new()
+                } else {
+                    tool_discovery.attached(&tool_catalog)
+                };
                 orientation_notes_dirty = true;
             }
+            let attached_names: HashSet<_> =
+                selected_tools.iter().map(|t| t.name.clone()).collect();
             // Thinning is request-only: canonical evidence is never replaced.
             let current_start = self
                 .history
@@ -415,18 +431,19 @@ impl AgentCoordinator {
                 .iter()
                 .rposition(|message| message == &current_request)
                 .unwrap_or(working.len());
-            compact_active_task_history(&mut working, working_start);
             let mut request_messages =
                 request_history_for_profile_at(&working, profile, working_start);
-            insert_turn_stable_overlays(&mut request_messages, input, &turn_stable_overlays);
             let capability_snapshot = self.registry.runtime_capability_snapshot(&selected_tools);
-            request_messages
+            let mut stable_request_overlays = turn_stable_overlays.clone();
+            stable_request_overlays
                 .push(Message::system(capability_guidance(capability_snapshot)).request_only());
+            insert_turn_stable_overlays(&mut request_messages, input, &stable_request_overlays);
+            advance_turn_cache_breakpoints(&mut request_messages, input);
             let had_retry_instruction = retry_instruction.is_some();
             if let Some(correction) = retry_instruction.take() {
                 request_messages.push(Message::user(correction).request_only());
             }
-            if profile == TaskProfile::Coding
+            if profile == TaskProfile::Agent
                 && had_retry_instruction
                 && let Some(state) = self.registry.working_state_summary()
             {
@@ -451,16 +468,29 @@ impl AgentCoordinator {
                 + ((orientation.len() + serde_json::to_vec(&selected_tools)?.len()) as u64)
                     .div_ceil(3);
             let working_budget = self.context_memory.working_budget();
-            let canonical_tokens = context::estimate_messages(&self.history)?;
-            if (self.context_memory.estimated_tokens
+            let has_rolloverable_trace = self
+                .history
+                .iter()
+                .any(|message| matches!(message.role, MessageRole::Assistant | MessageRole::Tool));
+            if self.context_memory.estimated_tokens
                 > working_budget * self.context_memory.policy.rollover_percent / 100
-                || canonical_tokens > working_budget)
-                && self.history.len() > 2
+                && has_rolloverable_trace
             {
-                self.context_memory
-                    .rollover(&mut self.history, Some(&current_request))?;
-                self.context_key = self.context_memory.id().to_owned();
-                call_counts.clear();
+                let handoff = rollover_handoff_message(
+                    successful_mutations,
+                    unresolved_failed_mutation,
+                    verification_attempted,
+                    verification_succeeded,
+                    last_validation_evidence.as_deref(),
+                    self.registry.working_state_summary().as_deref(),
+                    &recent_execution_evidence,
+                );
+                self.context_memory.rollover_with_handoff(
+                    &mut self.history,
+                    Some(&current_request),
+                    Some(&handoff),
+                )?;
+                tool_discovery.load(["context_history", "task_notes"]);
                 orientation_notes_dirty = true;
                 continue;
             }
@@ -475,9 +505,8 @@ impl AgentCoordinator {
             orientation_notes_dirty = false;
             let mut request = CallRequest::simple(model, request_messages);
             request.context_key = Some(match profile {
-                TaskProfile::Coding => self.context_key.clone(),
+                TaskProfile::Agent => self.context_key.clone(),
                 TaskProfile::Research => format!("{}:research", self.context_key),
-                TaskProfile::General => format!("{}:general", self.context_key),
             });
             request.prompt_cache = Some(true);
             configure_tool_access(&mut request, selected_tools, force_decision_without_tools);
@@ -487,11 +516,10 @@ impl AgentCoordinator {
             }
             request.metadata = Some(HashMap::from([
                 (
-                    "purpose".into(),
+                    "lane".into(),
                     match profile {
-                        TaskProfile::Coding => "lead",
+                        TaskProfile::Agent => "agent",
                         TaskProfile::Research => "research",
-                        TaskProfile::General => "general",
                     }
                     .into(),
                 ),
@@ -514,15 +542,7 @@ impl AgentCoordinator {
                 ),
                 ("modelAttempt".into(), model_attempts.to_string()),
                 ("toolRound".into(), tool_rounds.to_string()),
-                (
-                    "expectedCacheReuses".into(),
-                    match profile {
-                        TaskProfile::Coding | TaskProfile::Research => "1",
-                        TaskProfile::General if tool_rounds > 0 => "1",
-                        TaskProfile::General => "0",
-                    }
-                    .into(),
-                ),
+                ("expectedCacheReuses".into(), "1".into()),
             ]));
             request.provider_options = reasoning_provider_options(model, reasoning_level);
             request.attached_capabilities = attached_capabilities.as_ref().map(|values| {
@@ -532,8 +552,9 @@ impl AgentCoordinator {
                     .cloned()
                     .collect()
             });
+            let attempt_cache_diagnostics = cache_continuity.diagnostics(&request);
             emit(AgentEvent::ModelAttemptStarted {
-                diagnostics: request_cache_diagnostics(&request),
+                diagnostics: attempt_cache_diagnostics.clone(),
             });
 
             let mut stream = self.bridge.stream(&request)?;
@@ -621,6 +642,10 @@ impl AgentCoordinator {
                 }
             }
             check_cancel(cancel)?;
+            emit(AgentEvent::ModelAttemptFinished(
+                cache::usage_diagnostics(&attempt_cache_diagnostics, finish_usage.as_ref()),
+                finish_usage.clone(),
+            ));
             let mut calls = collect_tool_calls(decoded, partial);
             if calls.is_empty() {
                 let recovered = recover_text_tool_calls(&text);
@@ -738,7 +763,7 @@ impl AgentCoordinator {
                             emit(AgentEvent::DiscardAssistantText(emitted_text));
                         }
                         retry_instruction = Some(format!(
-                            "Internal completion gate: {blocker}. Do not claim implementation is complete yet. Resolve the failed edit if one remains, then run one focused validation command appropriate to the project (build, test, compile/check, lint, or git diff --check). Reuse existing evidence and do not restart broad inspection."
+                            "Internal completion gate: {blocker}. Do not claim implementation is complete yet. Resolve the failed edit if one remains, then run one focused validation command appropriate to the project (build, test, compile/check, or lint; use git diff --check only when the workspace is actually a Git worktree). Reuse existing evidence, do not retry a validation command already known to be invalid in this environment, and do not restart broad inspection."
                         ));
                         emit(AgentEvent::Finished {
                             reason: finish_reason,
@@ -747,7 +772,11 @@ impl AgentCoordinator {
                         continue;
                     }
 
-                    let warning = format!("Verification incomplete: {blocker}.\n\n{}", text.trim());
+                    let warning = completion_warning(
+                        &blocker,
+                        successful_mutations,
+                        last_validation_evidence.as_deref(),
+                    );
                     if !emitted_text.is_empty() {
                         emit(AgentEvent::DiscardAssistantText(emitted_text));
                     }
@@ -848,8 +877,7 @@ impl AgentCoordinator {
                 let succeeded = tool_execution_succeeded(call, &content, transport_succeeded);
                 let inspection_progress =
                     inspection_call && tool_made_progress(call, &content, succeeded);
-                if profile == TaskProfile::Coding
-                    && implementation_requested
+                if implementation_requested
                     && inspection_progress
                     && matches!(
                         call.name.as_str(),
@@ -860,13 +888,7 @@ impl AgentCoordinator {
                     // concrete source/capability evidence to edit against.
                     tool_discovery.load(["apply_file_edits"]);
                 }
-                if profile == TaskProfile::Research
-                    && inspection_progress
-                    && call.name == "web_search"
-                {
-                    // Source reading is useful only after search has produced URLs.
-                    tool_discovery.load(["web_read"]);
-                }
+                research_budget.observe_tool(&call.name, inspection_progress);
                 if succeeded && call.name == "task_notes" {
                     orientation_notes_dirty = true;
                 }
@@ -890,7 +912,7 @@ impl AgentCoordinator {
                 }
                 self.context_memory.sync(&self.history)?;
                 if workspace_mutated {
-                    if profile == TaskProfile::Coding && is_mutation_tool(&call.name) {
+                    if is_mutation_tool(&call.name) {
                         // Verification normally becomes useful only after a write.
                         // The model can still load run_shell earlier via search_tools.
                         tool_discovery.load(["run_shell"]);
@@ -902,6 +924,7 @@ impl AgentCoordinator {
                     // must be followed by a fresh focused validation.
                     verification_attempted = false;
                     verification_succeeded = false;
+                    last_validation_evidence = None;
                     if is_mutation_tool(&call.name) {
                         unresolved_failed_mutation = false;
                     }
@@ -922,10 +945,20 @@ impl AgentCoordinator {
                     round_failed_mutation = true;
                     unresolved_failed_mutation = true;
                 }
-                if is_validation_tool_call(call) {
+                let validation_call = is_validation_tool_call(call);
+                if validation_call {
                     verification_attempted = true;
+                    last_validation_evidence =
+                        Some(summarize_tool_outcome(call, &content, succeeded));
                     if succeeded {
                         verification_succeeded = true;
+                    }
+                }
+                if workspace_mutated || !succeeded || validation_call {
+                    recent_execution_evidence
+                        .push(summarize_tool_outcome(call, &content, succeeded));
+                    if recent_execution_evidence.len() > 8 {
+                        recent_execution_evidence.remove(0);
                     }
                 }
                 if !succeeded {
@@ -988,10 +1021,11 @@ impl AgentCoordinator {
                 force_decision_without_tools = true;
                 retry_instruction = Some(format!("Internal execution guard: {message}"));
             } else if profile == TaskProfile::Research
-                && progressful_inspection_rounds >= RESEARCH_INSPECTION_THRESHOLD
+                && research_budget.sufficient(progressful_inspection_rounds)
             {
                 force_decision_without_tools = true;
-                retry_instruction = Some("Internal research sufficiency checkpoint: several productive web research rounds have already collected search and source evidence. Stop expanding coverage and synthesize the answer from the evidence already in context.".into());
+                retry_instruction =
+                    Some(research_budget.checkpoint_message(progressful_inspection_rounds));
             } else if bounded_analysis
                 && successful_mutations == 0
                 && progressful_inspection_rounds >= analysis_threshold
@@ -1043,10 +1077,11 @@ impl AgentCoordinator {
 
 pub(crate) fn is_internal_coordinator_system_message(message: &Message) -> bool {
     message.role == MessageRole::System
-        && message
-            .content
-            .as_deref()
-            .is_some_and(|content| content.starts_with("You are Yeet's coding agent."))
+        && message.content.as_deref().is_some_and(|content| {
+            content.starts_with("You are Yeet's agent.")
+                || content.starts_with("You are Yeet's coding agent.")
+                || content.starts_with("You are Yeet's general agent.")
+        })
 }
 
 fn render_matching_debate_memory(
@@ -1265,6 +1300,12 @@ mod tests {
             arguments: json!({"command":"ls src"}),
         };
         assert!(!is_validation_tool_call(&listing));
+        let py_compile = ToolCall {
+            id: "py".into(),
+            name: "run_shell".into(),
+            arguments: json!({"command":"python3 -m py_compile PyQtApp/widgets.py"}),
+        };
+        assert!(is_validation_tool_call(&py_compile));
     }
 
     #[test]
@@ -1300,6 +1341,7 @@ mod tests {
         let overlays = vec![
             Message::system("project memory").request_only(),
             Message::system("stable task guidance").request_only(),
+            Message::system("stable runtime capability guidance").request_only(),
         ];
         insert_turn_stable_overlays(&mut messages, "fix it", &overlays);
         assert_eq!(messages[2].content.as_deref(), Some("project memory"));
@@ -1308,13 +1350,53 @@ mod tests {
             messages[4]
                 .content
                 .as_deref()
+                .is_some_and(|content| content.contains("stable runtime capability guidance"))
+        );
+        assert!(
+            messages[5]
+                .content
+                .as_deref()
                 .is_some_and(|content| content.contains("Long stable skill instructions."))
         );
-        assert_eq!(messages[4].cache_breakpoint, Some(true));
-        assert_eq!(messages[5].role, MessageRole::Assistant);
-        assert_eq!(messages[6].role, MessageRole::Tool);
-        assert_eq!(messages[5].cache_breakpoint, None);
+        assert_eq!(messages[5].cache_breakpoint, Some(true));
+        assert_eq!(messages[6].role, MessageRole::Assistant);
+        assert_eq!(messages[7].role, MessageRole::Tool);
         assert_eq!(messages[6].cache_breakpoint, None);
+        assert_eq!(messages[7].cache_breakpoint, None);
+    }
+
+    #[test]
+    fn rollover_handoff_keeps_mutation_and_validation_truth() {
+        let evidence = vec![
+            "apply_file_edits [src/ui.py]: succeeded=true".to_owned(),
+            "run_shell `python3 -m py_compile src/ui.py`: succeeded=true; exit=0".to_owned(),
+        ];
+        let message = rollover_handoff_message(
+            2,
+            false,
+            true,
+            true,
+            evidence.last().map(String::as_str),
+            Some("Latest workspace mutation: writeValidation=passed files=src/ui.py"),
+            &evidence,
+        );
+        let content = message.content.unwrap();
+        assert!(content.contains("successfulWorkspaceMutations=2"));
+        assert!(content.contains("verification=passed"));
+        assert!(content.contains("src/ui.py"));
+        assert!(content.contains("do not restart broad repository discovery"));
+    }
+
+    #[test]
+    fn completion_warning_never_repeats_a_contradictory_model_claim() {
+        let warning = completion_warning(
+            "workspace changes were made, but every recognized build/test/check verification failed",
+            2,
+            Some("run_shell `cargo test`: succeeded=false; exit=101"),
+        );
+        assert!(warning.contains("2 workspace mutation(s) succeeded"));
+        assert!(warning.contains("cargo test"));
+        assert!(!warning.contains("no files were changed"));
     }
 
     #[test]
@@ -1787,7 +1869,7 @@ shell command terminal
         );
         assert_eq!(
             task_profile("implement web search in Yeet", true),
-            TaskProfile::Coding
+            TaskProfile::Agent
         );
 
         let tools = vec![
@@ -1815,31 +1897,31 @@ shell command terminal
     }
 
     #[test]
-    fn general_tasks_use_general_lane_without_changing_coding_lane_tools() {
+    fn ordinary_tasks_share_one_agent_lane_and_full_tool_surface() {
         assert_eq!(
             task_profile("summarize the quarterly-report.pdf", false),
-            TaskProfile::General
+            TaskProfile::Agent
         );
         assert_eq!(
             task_profile(
                 "analyze sales.csv and find the strongest correlation",
                 false
             ),
-            TaskProfile::General
+            TaskProfile::Agent
         );
         assert_eq!(
             task_profile("explain this Rust repository", false),
-            TaskProfile::Coding
+            TaskProfile::Agent
         );
         assert_eq!(
             task_profile("fix the scrolling bug", false),
-            TaskProfile::Coding
+            TaskProfile::Agent
         );
         assert_eq!(
             task_profile("파일 수정 제대로 못하는거 해결해", false),
-            TaskProfile::Coding
+            TaskProfile::Agent
         );
-        assert_eq!(task_profile("이 코드 분석해", false), TaskProfile::Coding);
+        assert_eq!(task_profile("이 코드 분석해", false), TaskProfile::Agent);
 
         let tools = vec![
             ToolDefinition::new("read_file", "read source", json!({"type":"object"})),
@@ -1852,37 +1934,12 @@ shell command terminal
             ToolDefinition::new("find_capabilities", "lazy", json!({"type":"object"})),
         ];
 
-        let coding = select_tools_for_profile(tools.clone(), TaskProfile::Coding)
+        let agent = select_tools_for_profile(tools.clone(), TaskProfile::Agent)
             .into_iter()
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
         assert_eq!(
-            coding,
-            vec![
-                "read_file",
-                "run_shell",
-                "apply_file_edits",
-                "read_artifact",
-                "find_capabilities",
-            ]
-        );
-
-        let coding_analysis = select_tools_for_profile(tools.clone(), TaskProfile::Coding)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert!(
-            coding_analysis
-                .iter()
-                .any(|name| name == "apply_file_edits")
-        );
-
-        let general = select_tools_for_profile(tools, TaskProfile::General)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            general,
+            agent,
             vec![
                 "read_file",
                 "run_shell",
@@ -1899,31 +1956,12 @@ shell command terminal
             Message::system(SYSTEM_INSTRUCTION),
             Message::user("summarize report.pdf"),
         ];
-        let request = request_history_for_profile(&history, TaskProfile::General);
-        assert_eq!(
-            request[0].content.as_deref(),
-            Some(GENERAL_SYSTEM_INSTRUCTION)
-        );
+        let request = request_history_for_profile(&history, TaskProfile::Agent);
+        assert_eq!(request[0].content.as_deref(), Some(SYSTEM_INSTRUCTION));
     }
 
     #[test]
-    fn explicit_agent_mode_overrides_auto_routing() {
-        assert_eq!(
-            task_profile_for_mode("summarize report.pdf", false, "code"),
-            TaskProfile::Coding
-        );
-        assert_eq!(
-            task_profile_for_mode("fix the scrolling bug", false, "general"),
-            TaskProfile::General
-        );
-        assert_eq!(
-            task_profile_for_mode("summarize report.pdf", false, "auto"),
-            TaskProfile::General
-        );
-    }
-
-    #[test]
-    fn general_history_drops_old_tool_traces_but_keeps_all_current_general_evidence() {
+    fn agent_history_drops_old_tool_traces_but_keeps_all_current_evidence() {
         let history = vec![
             Message::system(SYSTEM_INSTRUCTION),
             Message::user("inspect the repo"),
@@ -1961,7 +1999,7 @@ shell command terminal
             ),
         ];
 
-        let request = request_history_for_profile(&history, TaskProfile::General);
+        let request = request_history_for_profile(&history, TaskProfile::Agent);
 
         assert!(
             request

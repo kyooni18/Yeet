@@ -922,6 +922,17 @@ impl BridgeClient {
         let frame = self.request_cancellable("mcp-call-tool", fields, cancel)?;
         Ok(frame.get("toolResult").cloned().unwrap_or(Value::Null))
     }
+    pub fn call_computer_use_cancellable(
+        &self,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        cancel: &AtomicBool,
+    ) -> Result<Value> {
+        let mut fields = field("tool", tool);
+        fields.insert("arguments".into(), Value::Object(arguments.clone()));
+        let frame = self.request_cancellable("computer-use-call", fields, cancel)?;
+        Ok(frame.get("toolResult").cloned().unwrap_or(Value::Null))
+    }
     pub fn list_mcp_resources(&self, server: Option<&str>) -> Result<Vec<McpResource>> {
         let mut fields = Map::new();
         if let Some(server) = server {

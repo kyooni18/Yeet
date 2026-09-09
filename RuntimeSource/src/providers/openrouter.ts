@@ -20,6 +20,8 @@ export class OpenRouterProvider extends OpenAIChatProvider {
       baseUrl: "https://openrouter.ai/api/v1",
       headers,
       requireApiKey: true,
+      useContextSessionId: true,
+      useContentCacheBreakpoints: true,
       ...(options.apiKey ? { apiKey: options.apiKey } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.apiCallLogger ? { apiCallLogger: options.apiCallLogger } : {}),

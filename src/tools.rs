@@ -9,20 +9,19 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    core::{BridgeClient, CallRequest, McpServerStatus, Message, ToolCall, ToolDefinition, Usage},
+    core::{BridgeClient, McpServerStatus, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
     permission::PermissionBroker,
     sandbox::{SandboxMode, SandboxStore},
     session_store::SessionStore,
-    shell::{
-        ShellExecutionRequest, restricted_operation, run_shell_cancellable_with_protected_paths,
-    },
+    shell::{ShellExecutionRequest, restricted_operation, run_shell_cancellable},
     web_search::{WebSearchBackend, WebSearchClient, WebSearchRequest},
     workers::WorkerRegistry,
 };
 
 mod artifact_output;
+mod computer_use;
 mod definitions;
 mod editing;
 mod io;
@@ -33,17 +32,17 @@ mod support;
 
 #[cfg(test)]
 use crate::edit::ReadResult;
+pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
 pub use definitions::{is_coding_builtin_tool, is_general_builtin_tool};
 pub(crate) use paths::workspace_revision_for_path;
 use paths::{canonicalize_existing_ancestor, path_outside_workspace};
+#[cfg(test)]
+use shell_runtime::shell_is_inspection;
 use shell_runtime::shell_mentions_path;
 #[cfg(test)]
-use shell_runtime::{
-    bounded_shell_evaluation_input, shell_is_inspection, shell_output_needs_model_evaluation,
-};
-#[cfg(test)]
 use std::fs;
+pub(crate) use support::canonical_web_source_key;
 #[cfg(test)]
 use support::foundation_wrapper_schema;
 use support::{
@@ -138,6 +137,12 @@ const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
         tools: &["run_shell", "shell_job", "request_shell_permission"],
     },
     BuiltinCapabilityDescriptor {
+        id: "builtin:computer-use",
+        name: "Computer Use",
+        description: "Control native macOS applications with Codex's installed Computer Use runtime. Yeet launches it directly as a built-in capability; no MCP server needs to be configured or linked.",
+        tools: &["computer_use", "computer_use_reset"],
+    },
+    BuiltinCapabilityDescriptor {
         id: "builtin:artifacts",
         name: "Artifacts",
         description: "Inspect large tool results externalized as artifacts with read_artifact/search_artifact instead of replaying the original expensive command or read.",
@@ -170,6 +175,7 @@ pub fn builtin_capabilities() -> &'static [BuiltinCapabilityDescriptor] {
 #[derive(Debug, Clone)]
 struct MutationValidation {
     error_count: usize,
+    changed_paths: Vec<String>,
 }
 
 impl MutationValidation {
@@ -735,6 +741,8 @@ impl ToolRegistry {
             }
             "run_shell" => self.run_shell_tool(&object, model, cancel),
             "shell_job" => self.shell_job_tool(&object),
+            "computer_use" => self.computer_use_tool(&object, cancel),
+            "computer_use_reset" => self.computer_use_reset_tool(&object, cancel),
             "apply_file_edits" => self.apply_file_edits(&call.arguments),
             other => {
                 if let Some(tool) = self.foundation_tool_map.get(other).cloned() {
@@ -861,8 +869,10 @@ impl ToolRegistry {
         if self.read_cache.is_empty()
             && self.listings.is_empty()
             && self.searches.is_empty()
+            && self.shell_inspections.is_empty()
             && self.web_searches.is_empty()
             && self.web_reads.is_empty()
+            && self.latest_mutation.is_none()
         {
             return None;
         }
@@ -912,6 +922,12 @@ impl ToolRegistry {
         append_bounded_state_set(&mut lines, "Searches", &self.searches, MAX_STATE_KEYS);
         append_bounded_state_set(
             &mut lines,
+            "Shell inspections",
+            &self.shell_inspections,
+            MAX_STATE_KEYS,
+        );
+        append_bounded_state_set(
+            &mut lines,
             "Web searches",
             &self.web_searches,
             MAX_STATE_KEYS,
@@ -922,6 +938,23 @@ impl ToolRegistry {
             &self.web_reads,
             MAX_STATE_KEYS,
         );
+        if let Some(mutation) = &self.latest_mutation {
+            lines.push(format!(
+                "Latest workspace mutation: writeValidation={} files={}",
+                if mutation.write_validation_passed() {
+                    "passed"
+                } else {
+                    "failed"
+                },
+                mutation
+                    .changed_paths
+                    .iter()
+                    .take(MAX_SOURCE_PATHS)
+                    .map(|path| truncate_state_value(path, 180))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
         Some(lines.join("\n"))
     }
 
@@ -1164,14 +1197,6 @@ impl ToolRegistry {
             }
         }
         None
-    }
-
-    fn accumulate_auxiliary_usage(&mut self, usage: &Usage) {
-        if let Some(existing) = &mut self.auxiliary_usage {
-            existing.accumulate(usage);
-        } else {
-            self.auxiliary_usage = Some(usage.clone());
-        }
     }
 
     fn request_approval(
@@ -1456,52 +1481,6 @@ mod tests {
             "cat RuntimeSource/src/core.ts",
             "RuntimeSource/src/core.ts"
         ));
-    }
-
-    #[test]
-    fn shell_evaluation_input_bounds_large_logs_and_keeps_diagnostics() {
-        let raw = format!(
-            "HEAD\n{}\nerror: important failure\n{}\nTAIL",
-            "x".repeat(80_000),
-            "y".repeat(80_000)
-        );
-        let bounded = bounded_shell_evaluation_input(&raw);
-
-        assert!(bounded.chars().count() < 32 * 1024);
-        assert!(bounded.starts_with("HEAD"));
-        assert!(bounded.contains("error: important failure"));
-        assert!(bounded.ends_with("TAIL"));
-        assert!(bounded.contains("full log is stored as an artifact"));
-    }
-
-    #[test]
-    fn clean_successful_shell_output_skips_model_evaluation() {
-        let clean = crate::shell::ShellResult {
-            command: "cargo test".into(),
-            working_directory: ".".into(),
-            exit_code: 0,
-            succeeded: true,
-            duration_milliseconds: 10,
-            stdout: Some("48 tests passed".into()),
-            stderr: None,
-            stdout_bytes: 15,
-            stderr_bytes: 0,
-            stdout_truncated: false,
-            stderr_truncated: false,
-        };
-        let noisy = crate::shell::ShellResult {
-            stdout: Some("warning: deprecated".into()),
-            ..clean.clone()
-        };
-        let failed = crate::shell::ShellResult {
-            succeeded: false,
-            exit_code: 1,
-            ..clean.clone()
-        };
-
-        assert!(!shell_output_needs_model_evaluation(&clean));
-        assert!(shell_output_needs_model_evaluation(&noisy));
-        assert!(shell_output_needs_model_evaluation(&failed));
     }
 
     #[test]

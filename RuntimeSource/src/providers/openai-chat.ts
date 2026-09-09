@@ -24,6 +24,10 @@ export interface OpenAIChatProviderOptions {
   baseUrl?: string;
   headers?: Record<string, string>;
   requireApiKey?: boolean;
+  /** Route repeated requests with one stable provider-side session affinity key. */
+  useContextSessionId?: boolean;
+  /** Encode caller-selected message cache boundaries as cache_control blocks. */
+  useContentCacheBreakpoints?: boolean;
   fetch?: FetchLike;
   apiCallLogger?: ProviderFetchLogger;
 }
@@ -34,12 +38,19 @@ function dataUrl(image: ImageAttachment): string {
   return `data:${image.mediaType};base64,${image.data}`;
 }
 
-function chatContent(message: Message): unknown {
-  if (!message.images?.length) return message.content ?? "";
-  return [
+function chatContent(message: Message, cacheBreakpoint = false): unknown {
+  if (!message.images?.length) {
+    if (!cacheBreakpoint) return message.content ?? "";
+    return [{ type: "text", text: message.content ?? "", cache_control: { type: "ephemeral" } }];
+  }
+  const content: Record<string, unknown>[] = [
     ...(message.content ? [{ type: "text", text: message.content }] : []),
     ...message.images.map((image) => ({ type: "image_url", image_url: { url: dataUrl(image) } })),
   ];
+  if (cacheBreakpoint && content.length > 0) {
+    content[content.length - 1] = { ...content[content.length - 1], cache_control: { type: "ephemeral" } };
+  }
+  return content;
 }
 
 function firstString(value: any, keys: string[]): string | undefined {
@@ -99,16 +110,29 @@ function mapTools(tools: ToolDefinition[] | undefined): unknown[] | undefined {
   }));
 }
 
-function mapMessages(messages: Message[], explicitSystem?: string): ChatMessage[] {
+function mapMessages(
+  messages: Message[],
+  explicitSystem?: string,
+  useContentCacheBreakpoints = false,
+): ChatMessage[] {
   const { system, messages: rest } = splitLeadingSystem(messages, explicitSystem);
   const output: ChatMessage[] = [];
   if (system) output.push({ role: "system", content: system });
+  const cacheIndexes = new Set<number>();
+  if (useContentCacheBreakpoints) {
+    for (let index = rest.length - 1; index >= 0 && cacheIndexes.size < 4; index--) {
+      if (rest[index]?.cacheBreakpoint === true) cacheIndexes.add(index);
+    }
+  }
 
-  for (const message of rest) {
+  for (const [index, message] of rest.entries()) {
     if (message.role === "tool") {
+      const content = toolResultContent(message);
       output.push({
         role: "tool",
-        content: toolResultContent(message),
+        content: cacheIndexes.has(index)
+          ? [{ type: "text", text: content, cache_control: { type: "ephemeral" } }]
+          : content,
         tool_call_id: message.toolCallId ?? message.toolResult?.toolCallId ?? "",
         ...(message.name ? { name: message.name } : {}),
       });
@@ -131,24 +155,37 @@ function mapMessages(messages: Message[], explicitSystem?: string): ChatMessage[
       continue;
     }
 
-    output.push({ role: message.role, content: chatContent(message) });
+    output.push({ role: message.role, content: chatContent(message, cacheIndexes.has(index)) });
   }
 
   return output;
 }
 
-function requestBody(request: ProviderCallRequest, stream: boolean): Record<string, unknown> {
+function requestBody(
+  request: ProviderCallRequest,
+  stream: boolean,
+  useContextSessionId = false,
+  useContentCacheBreakpoints = false,
+): Record<string, unknown> {
   const tools = mapTools(request.tools);
   const toolChoice = mapToolChoice(request.toolChoice);
+  const sessionId = useContextSessionId
+    ? (request.metadata?.sessionId ?? request.contextKey)
+    : undefined;
   return {
     ...(request.providerOptions ?? {}),
     model: request.model,
-    messages: mapMessages(request.messages, request.system),
+    messages: mapMessages(
+      request.messages,
+      request.system,
+      useContentCacheBreakpoints && request.promptCache !== false,
+    ),
     stream,
     ...(stream ? { stream_options: { include_usage: true } } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
     ...(request.metadata ? { metadata: request.metadata } : {}),
+    ...(sessionId ? { session_id: sessionId } : {}),
     ...(tools?.length ? { tools } : {}),
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
   };
@@ -160,6 +197,8 @@ export class OpenAIChatProvider implements ProviderAdapter {
   readonly #baseUrl: string;
   readonly #headers: Record<string, string>;
   readonly #requireApiKey: boolean;
+  readonly #useContextSessionId: boolean;
+  readonly #useContentCacheBreakpoints: boolean;
   readonly #fetch: FetchLike | undefined;
   readonly #apiCallLogger: ProviderFetchLogger | undefined;
 
@@ -169,6 +208,8 @@ export class OpenAIChatProvider implements ProviderAdapter {
     this.#baseUrl = (options.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
     this.#headers = options.headers ?? {};
     this.#requireApiKey = options.requireApiKey ?? false;
+    this.#useContextSessionId = options.useContextSessionId ?? false;
+    this.#useContentCacheBreakpoints = options.useContentCacheBreakpoints ?? false;
     this.#fetch = options.fetch;
     this.#apiCallLogger = options.apiCallLogger;
   }
@@ -211,7 +252,12 @@ export class OpenAIChatProvider implements ProviderAdapter {
       {
         method: "POST",
         headers: this.#requestHeaders(),
-        body: JSON.stringify(requestBody(request, false)),
+        body: JSON.stringify(requestBody(
+          request,
+          false,
+          this.#useContextSessionId,
+          this.#useContentCacheBreakpoints,
+        )),
       },
       {
         provider: this.id,
@@ -260,7 +306,12 @@ export class OpenAIChatProvider implements ProviderAdapter {
       {
         method: "POST",
         headers: this.#requestHeaders(),
-        body: JSON.stringify(requestBody(request, true)),
+        body: JSON.stringify(requestBody(
+          request,
+          true,
+          this.#useContextSessionId,
+          this.#useContentCacheBreakpoints,
+        )),
       },
       {
         provider: this.id,

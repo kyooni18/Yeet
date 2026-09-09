@@ -151,6 +151,21 @@ test('McpManager falls back to legacy initialize for stdio MCP servers', async (
   await mcp.close();
 });
 
+test('McpManager can host an in-memory runtime without persisting or listing it as user MCP', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/legacy-mcp.mjs', import.meta.url).pathname;
+  const mcp = new McpManager({ configDir });
+  await mcp.setRuntimeServer({ name: 'runtime-only', transport: 'stdio', command: process.execPath, args: [fixture] });
+  assert.deepEqual(await mcp.listServers(), []);
+  const tools = await mcp.listTools('runtime-only');
+  assert.equal(tools[0].qualifiedName, 'runtime-only/legacy-tool');
+  const result = await mcp.callTool('runtime-only', 'legacy-tool');
+  assert.equal(result.content[0].text, 'legacy-ok');
+  assert.equal(await mcp.removeRuntimeServer('runtime-only'), true);
+  await assert.rejects(() => mcp.listTools('runtime-only'), /Unknown MCP server/);
+  await mcp.close();
+});
+
 test('McpManager restarts stdio before legacy fallback when modern discovery exits the server', async () => {
   const configDir = await tempConfig();
   const fixture = new URL('./fixtures/legacy-exit-on-discover.mjs', import.meta.url).pathname;
@@ -193,6 +208,34 @@ test('McpManager forwards native-app elicitation and accepts only an explicit se
   assert.equal(elicitation.action, 'accept');
   assert.equal(elicitation.scope, 'session');
   assert.equal('_meta' in elicitation, false);
+  await mcp.close();
+});
+
+test('McpManager accepts the current Codex _meta native-app elicitation shape', async () => {
+  const configDir = await tempConfig();
+  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  let request;
+  const mcp = new McpManager({
+    configDir,
+    nativeAppApproval: async (value) => {
+      request = value;
+      return true;
+    },
+  });
+  await mcp.setServer({
+    name: 'native-modern',
+    transport: 'stdio',
+    command: process.execPath,
+    args: [fixture],
+    env: { NATIVE_APPROVAL_SHAPE: 'modern' },
+  });
+  const response = await mcp.callTool('native-modern', 'open');
+  const elicitation = JSON.parse(response.content[0].text);
+  assert.equal(request.bundleId, 'org.blenderfoundation.blender');
+  assert.equal(request.appName, 'Blender');
+  assert.equal(request.tool, 'get_app_state');
+  assert.equal(elicitation.action, 'accept');
+  assert.equal(elicitation.scope, 'session');
   await mcp.close();
 });
 

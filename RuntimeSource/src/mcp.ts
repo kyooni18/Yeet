@@ -417,7 +417,7 @@ class StdioMcpConnection implements McpConnection {
       return;
     }
     const params = asObject(message.params);
-    const meta = asObject(params.meta);
+    const meta = Object.keys(asObject(params._meta)).length > 0 ? asObject(params._meta) : asObject(params.meta);
     const toolParams = asObject(meta.tool_params);
     const rawApp = toolParams.app;
     const appString = typeof rawApp === "string" ? rawApp.trim() : undefined;
@@ -426,15 +426,23 @@ class StdioMcpConnection implements McpConnection {
       : asObject(rawApp);
     const bundleId = asString(app.bundleId) ?? asString(app.bundle_id)
       ?? asString(toolParams.bundleId) ?? asString(toolParams.bundle_id);
-    const appName = asString(app.name) ?? asString(app.appName) ?? asString(toolParams.appName) ?? asString(toolParams.app_name);
+    const displayAppName = Array.isArray(meta.tool_params_display)
+      ? meta.tool_params_display
+        .map((value) => asObject(value))
+        .find((value) => asString(value.name) === "app")
+      : undefined;
+    const appName = asString(app.name) ?? asString(app.appName) ?? asString(toolParams.appName)
+      ?? asString(toolParams.app_name) ?? asString(displayAppName?.value);
     const approvalKind = asString(meta.codex_approval_kind);
     const mode = asString(params.mode);
     if (approvalKind !== "mcp_tool_call" || (mode !== undefined && mode !== "form") || (!bundleId && !appName)) {
       this.#respond(message.id, { result: { action: "decline" } });
       return;
     }
-    const tool = asString(toolParams.tool) ?? asString(toolParams.name) ?? asString(meta.tool) ?? "unknown";
-    const operation = asString(toolParams.operation) ?? asString(meta.operation) ?? "MCP tool call";
+    const tool = asString(toolParams.tool) ?? asString(toolParams.name) ?? asString(meta.tool_name)
+      ?? asString(meta.tool) ?? "unknown";
+    const operation = asString(toolParams.operation) ?? asString(meta.operation) ?? asString(meta.tool_title)
+      ?? tool;
     const elicitationMessage = asString(params.message) ?? asString(params.reason) ?? operation;
     let approved = false;
     const approvalController = new AbortController();
@@ -606,6 +614,7 @@ export class McpManager {
   readonly #fetch: FetchLike;
   readonly #nativeAppApproval: NativeAppApprovalHandler | undefined;
   readonly #connections = new Map<string, McpConnection>();
+  readonly #runtimeServers = new Map<string, McpServerConfiguration>();
 
   constructor(options: McpManagerOptions = {}) {
     this.configDir = options.configDir ?? process.env.YEET_CONFIG_DIR ?? join(homedir(), ".yeet");
@@ -642,6 +651,24 @@ export class McpManager {
     delete config.servers[name];
     await atomicJsonWrite(this.configPath, config);
     return existed;
+  }
+
+  /**
+   * Register an in-memory MCP-compatible runtime without writing it to
+   * ~/.yeet/mcp.json or exposing it through the normal configured-server list.
+   * This is used by first-party bridges such as Codex Computer Use whose
+   * transport is an implementation detail rather than a user MCP capability.
+   */
+  async setRuntimeServer(configuration: McpServerConfiguration): Promise<McpServerConfiguration> {
+    const normalized = normalizeConfiguration(configuration);
+    await this.disconnect(normalized.name);
+    this.#runtimeServers.set(normalized.name, normalized);
+    return normalized;
+  }
+
+  async removeRuntimeServer(name: string): Promise<boolean> {
+    await this.disconnect(name);
+    return this.#runtimeServers.delete(name);
   }
 
   async listServers(): Promise<McpServerStatus[]> {
@@ -814,6 +841,10 @@ export class McpManager {
   }
 
   async #targetServers(server?: string): Promise<McpServerConfiguration[]> {
+    if (server) {
+      const runtime = this.#runtimeServers.get(server);
+      if (runtime) return [runtime];
+    }
     const config = await readConfig(this.configPath);
     if (server) {
       const found = config.servers[server];
@@ -828,8 +859,9 @@ export class McpManager {
     if (existing) return existing;
     if (signal?.aborted) throw abortReason(signal);
     await this.ensure();
-    const config = await readConfig(this.configPath);
-    const configuration = config.servers[name];
+    const runtime = this.#runtimeServers.get(name);
+    const config = runtime ? undefined : await readConfig(this.configPath);
+    const configuration = runtime ?? config?.servers[name];
     if (!configuration) throw new McpError(`Unknown MCP server: ${name}`, { server: name });
     const connection: McpConnection = configuration.transport === "stdio"
       ? new StdioMcpConnection(configuration, this.#nativeAppApproval)

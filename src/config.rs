@@ -17,8 +17,6 @@ struct ConfigDocument {
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_level: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    agent_mode: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     context_lengths: std::collections::BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -112,26 +110,6 @@ impl ConfigStore {
         Ok(level)
     }
 
-    pub fn agent_mode(&self) -> Result<Option<String>> {
-        Ok(self
-            .read()?
-            .agent_mode
-            .and_then(|value| crate::model::normalize_agent_mode(&value).map(str::to_owned)))
-    }
-
-    pub fn set_agent_mode(&self, mode: &str) -> Result<String> {
-        let mode = crate::model::normalize_agent_mode(mode)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Invalid agent mode: {mode}. Use auto, code, or general.")
-            })?
-            .to_owned();
-        let mut document = self.read()?;
-        document.version = 1;
-        document.agent_mode = Some(mode.clone());
-        self.write(&document)?;
-        Ok(mode)
-    }
-
     pub fn context_length(&self, model: &str) -> Result<Option<u64>> {
         Ok(self
             .read()?
@@ -196,6 +174,9 @@ impl ConfigStore {
         if document.version == 0 {
             document.version = 1;
         }
+        // Agent mode no longer exists. Do not carry the legacy code/general
+        // selector forward through the flattened compatibility fields.
+        document.extra.remove("agentMode");
         Ok(document)
     }
 
@@ -312,9 +293,6 @@ mod tests {
         assert_eq!(store.set_reasoning_level("HIGH").unwrap(), "high");
         assert_eq!(store.reasoning_level().unwrap().as_deref(), Some("high"));
         assert!(store.set_reasoning_level("extreme").is_err());
-        assert_eq!(store.set_agent_mode("CODE").unwrap(), "code");
-        assert_eq!(store.agent_mode().unwrap().as_deref(), Some("code"));
-        assert!(store.set_agent_mode("invalid").is_err());
     }
 
     #[test]

@@ -4,7 +4,6 @@ use serde_json::Value;
 pub use crate::core::Usage;
 
 pub const REASONING_LEVELS: &[&str] = &["auto", "low", "medium", "high"];
-pub const AGENT_MODES: &[&str] = &["auto", "code", "general"];
 
 pub fn normalize_reasoning_level(value: &str) -> Option<&'static str> {
     let normalized = value.trim().to_ascii_lowercase();
@@ -12,11 +11,6 @@ pub fn normalize_reasoning_level(value: &str) -> Option<&'static str> {
         .iter()
         .copied()
         .find(|level| *level == normalized)
-}
-
-pub fn normalize_agent_mode(value: &str) -> Option<&'static str> {
-    let normalized = value.trim().to_ascii_lowercase();
-    AGENT_MODES.iter().copied().find(|mode| *mode == normalized)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -35,7 +29,6 @@ pub struct BridgeState {
     pub is_streaming: bool,
     pub error_message: Option<String>,
     pub active_model: String,
-    pub active_agent_mode: String,
     pub active_reasoning_level: String,
     pub active_model_context_length: Option<u64>,
     pub token_usage: Usage,
@@ -81,7 +74,6 @@ impl BridgeState {
             is_streaming: self.is_streaming,
             error_message: self.error_message.clone(),
             active_model: self.active_model.clone(),
-            active_agent_mode: self.active_agent_mode.clone(),
             active_reasoning_level: self.active_reasoning_level.clone(),
             active_model_context_length: self.active_model_context_length,
             token_usage: self.token_usage.clone(),
@@ -310,9 +302,6 @@ pub enum FrontendCommand {
     },
     SelectReasoning {
         level: String,
-    },
-    SelectAgentMode {
-        mode: String,
     },
     RequestSessions,
     LoadSession {

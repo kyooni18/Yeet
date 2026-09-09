@@ -1,6 +1,13 @@
-use std::{io, io::IsTerminal, path::PathBuf, process, time::Duration};
+use std::{
+    io,
+    io::{IsTerminal, Write},
+    path::PathBuf,
+    process,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
@@ -352,6 +359,9 @@ fn event_loop(
                 Event::Resize(_, _) => {}
                 _ => {}
             }
+            if let Some(text) = app.take_clipboard_request() {
+                copy_via_osc52(&text)?;
+            }
         }
     }
 }
@@ -386,5 +396,13 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
+    Ok(())
+}
+
+fn copy_via_osc52(text: &str) -> Result<()> {
+    let payload = STANDARD.encode(text.as_bytes());
+    let mut stdout = io::stdout();
+    write!(stdout, "\x1b]52;c;{payload}\x07")?;
+    stdout.flush()?;
     Ok(())
 }

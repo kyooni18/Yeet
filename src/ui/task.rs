@@ -60,10 +60,11 @@ impl TaskStatus {
     pub(super) fn color(self) -> Color {
         match self {
             Self::Ready => theme::MUTED,
-            Self::Working => theme::ACCENT,
-            Self::Approval | Self::Interrupted => Color::Yellow,
-            Self::Complete => Color::Green,
-            Self::Failed => Color::Red,
+            Self::Working => theme::ACCENT_HOT,
+            Self::Approval => theme::ACCENT_HOT,
+            Self::Complete => theme::TEXT,
+            Self::Failed => theme::ERROR,
+            Self::Interrupted => theme::ACCENT,
         }
     }
 
@@ -132,7 +133,10 @@ pub(super) fn height(app: &App) -> u16 {
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let status = TaskStatus::for_app(app);
-    let mut spans = vec![Span::raw(" "), status.badge(app)];
+    let mut spans = vec![
+        Span::styled("▌ ", Style::default().fg(theme::pulse_color())),
+        status.badge(app),
+    ];
     let (done, failed) = tool_step_counts(app);
     let mut metrics = Vec::new();
     if done > 0 {
@@ -177,7 +181,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .map(|detail| format!("{title} · {detail}"))
                 .unwrap_or(title)
         }
-    } else if !app.follow_tail {
+    } else if !app.follow_tail && !app.conversation.is_empty() {
         "Viewing history · Ctrl+End to return to latest".to_owned()
     } else {
         String::new()
@@ -186,7 +190,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Paragraph::new(vec![
             Line::from(spans),
             Line::styled(
-                format!(" {}", fit(&detail, area.width.saturating_sub(1) as usize)),
+                format!("└─ {}", fit(&detail, area.width.saturating_sub(3) as usize)),
                 Style::default().fg(theme::MUTED),
             ),
         ]),

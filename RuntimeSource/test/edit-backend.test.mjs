@@ -215,6 +215,32 @@ test("line hashes reject misaddressed edits before touching the file", async () 
   }
 });
 
+test("line anchors accept the rendered hashline form returned by read_file", async () => {
+  const f = await fixture("one\ntwo\nthree\n");
+  try {
+    const read = await f.backend.read({ path: "a.txt", startLine: 1, endLine: 3 });
+    const second = read.anchored.split("\n")[1];
+    assert.match(second, /^2:[0-9a-f]{4}\|two$/);
+    const renderedAnchor = second.slice(2);
+
+    await f.backend.apply({
+      changes: [{
+        path: "a.txt",
+        snapshot: read.snapshot,
+        edits: [{
+          kind: "replace",
+          range: { start: 2, end: 2, startHash: renderedAnchor, endHash: renderedAnchor },
+          text: "TWO",
+        }],
+      }],
+    });
+
+    assert.equal(await readFile(f.file, "utf8"), "one\nTWO\nthree\n");
+  } finally {
+    await f.cleanup();
+  }
+});
+
 test("stale snapshots rebase one consistent offset and fail closed on changed anchors", async () => {
   const f = await fixture("one\ntwo\nthree\nfour\n");
   try {
@@ -342,6 +368,20 @@ test("hashline block edits use the configured resolver", async () => {
     assert.equal(await readFile(file, "utf8"), "before\nafter\n");
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("hashline block edits fail at parse time when no resolver is configured", async () => {
+  const f = await fixture("before\nfunction x() {\n  return 1;\n}\nafter\n");
+  try {
+    const read = await f.backend.read({ path: "a.txt", startLine: 1, endLine: 5 });
+    await assert.rejects(
+      f.backend.applyDialect(`[a.txt@${read.snapshot}]\nCUT 2*\n`, { dialect: "hashline" }),
+      /no block resolver.*explicit line ranges/i,
+    );
+    assert.equal(await readFile(f.file, "utf8"), "before\nfunction x() {\n  return 1;\n}\nafter\n");
+  } finally {
+    await f.cleanup();
   }
 });
 

@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs,
     io::{Read, Write},
 };
 
@@ -13,7 +14,9 @@ use crate::{
         OpenAiCompatibleProvider, StreamEvent, node_executable, runtime_directory,
     },
     project_settings::ProjectSettingsStore,
-    sandbox_cli, web_search,
+    sandbox_cli,
+    session_store::SessionStore,
+    web_search,
 };
 
 pub const VERSION: &str = "0.1.0";
@@ -31,6 +34,7 @@ Usage:
   yeet model get
   yeet model set provider/model
   yeet model context [get [provider/model]|set [provider/model] length|auto [provider/model]]
+  yeet cache [latest|SESSION_ID]
   yeet run [--model provider/model] [--image path] [prompt]
   yeet auth status [provider]
   printf key | yeet auth set-key provider
@@ -55,6 +59,12 @@ Usage:
   yeet mcp resource server uri
   yeet mcp prompts [server]
   yeet mcp prompt server name [json-string-arguments]
+  yeet mcpserver start [--port PORT] [--bind HOST] [--workspace PATH] [--public-url URL] [--auth key|oauth|none]
+  yeet mcpserver status [--port PORT]
+  yeet mcpserver stop [--port PORT]
+  yeet mcpserver restart [--port PORT] [...]
+  yeet mcpserver auth [status|mode|key] ...
+  yeet mcpserver stdio [WORKSPACE|--workspace PATH]
   yeet memory status
   yeet memory recall <query>
   yeet memory on|off
@@ -104,11 +114,19 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         }
         "doctor" => doctor(),
         "model" => model(rest),
+        "cache" => cache(rest),
         "run" => run_model(rest),
         "auth" => auth(rest),
         "provider" | "providers" | "endpoint" | "endpoints" => provider(rest),
         "skill" | "skills" => skill(rest),
         "mcp" => mcp(rest),
+        "mcpserver" => {
+            let output = crate::mcp_server::run_cli(rest)?;
+            if !output.is_empty() {
+                println!("{output}");
+            }
+            Ok(())
+        }
         "foundation" | "memory" => foundation(rest),
         "search" => {
             let output = web_search::run_cli(rest)?;
@@ -136,6 +154,195 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             Ok(1)
         }
     }
+}
+
+fn cache(args: &[String]) -> Result<()> {
+    if args.len() > 1 {
+        bail!("Usage: yeet cache [latest|SESSION_ID]");
+    }
+    let config = ConfigStore::default();
+    let store = SessionStore::new(&config.directory);
+    let workspace = std::env::current_dir()?
+        .canonicalize()
+        .unwrap_or(std::env::current_dir()?);
+    let sessions = store.list(&workspace)?;
+    let requested = args.first().map(String::as_str).unwrap_or("latest");
+    let session = if requested == "latest" {
+        sessions.first()
+    } else {
+        sessions.iter().find(|session| session.id == requested)
+    }
+    .ok_or_else(|| anyhow!("No matching Yeet session for this workspace"))?;
+
+    let path = store
+        .directory
+        .join(&session.id)
+        .join("tasks")
+        .join("events.jsonl");
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+
+    let mut attempts = 0u64;
+    let mut turns = 0u64;
+    let mut measured_attempts = 0u64;
+    let mut unreported_attempts = 0u64;
+    let mut hits = 0u64;
+    let mut misses = 0u64;
+    let mut input_tokens = 0u64;
+    let mut measured_input_tokens = 0u64;
+    let mut cached_input_tokens = 0u64;
+    let mut cache_write_input_tokens = 0u64;
+    let mut ordinary_input_tokens = 0u64;
+    let mut cache_surface_tokens = 0u64;
+    let mut min_cache_surface_tokens: Option<u64> = None;
+    let mut max_cache_surface_tokens = 0u64;
+    let mut stable_prefix_changes = 0u64;
+    let mut tool_schema_changes = 0u64;
+    let mut cache_surface_changes = 0u64;
+    let mut history_prefix_rewrites = 0u64;
+    let mut continuity_measured_attempts = 0u64;
+    let mut previous_stable_prefix: Option<String> = None;
+    let mut previous_tool_schema: Option<String> = None;
+    let mut previous_cache_surface: Option<String> = None;
+    let mut previous_run_id: Option<String> = None;
+
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("agent-model-attempt-finished") {
+            continue;
+        }
+        let Some(diagnostics) = record
+            .get("payload")
+            .and_then(|payload| payload.get("cacheDiagnostics"))
+        else {
+            continue;
+        };
+        let run_id = record
+            .get("runId")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        if previous_run_id.as_deref() != Some(run_id) {
+            turns += 1;
+            previous_run_id = Some(run_id.to_owned());
+            previous_stable_prefix = None;
+            previous_tool_schema = None;
+            previous_cache_surface = None;
+        }
+        attempts += 1;
+        let input = diagnostics
+            .get("inputTokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let cached = diagnostics.get("cachedInputTokens").and_then(Value::as_u64);
+        let cache_write = diagnostics
+            .get("cacheWriteInputTokens")
+            .and_then(Value::as_u64);
+        let ordinary = diagnostics
+            .get("ordinaryInputTokens")
+            .and_then(Value::as_u64);
+        match diagnostics.get("cacheStatus").and_then(Value::as_str) {
+            Some("hit") => {
+                hits += 1;
+                measured_attempts += 1;
+                measured_input_tokens = measured_input_tokens.saturating_add(input);
+            }
+            Some("miss") => {
+                misses += 1;
+                measured_attempts += 1;
+                measured_input_tokens = measured_input_tokens.saturating_add(input);
+            }
+            Some("unreported") => unreported_attempts += 1,
+            _ => {}
+        }
+        input_tokens = input_tokens.saturating_add(input);
+        cached_input_tokens = cached_input_tokens.saturating_add(cached.unwrap_or(0));
+        cache_write_input_tokens =
+            cache_write_input_tokens.saturating_add(cache_write.unwrap_or(0));
+        ordinary_input_tokens = ordinary_input_tokens.saturating_add(ordinary.unwrap_or(0));
+        if let Some(surface_tokens) = diagnostics
+            .get("estimatedCacheSurfaceTokens")
+            .and_then(Value::as_u64)
+        {
+            cache_surface_tokens = cache_surface_tokens.saturating_add(surface_tokens);
+            min_cache_surface_tokens = Some(
+                min_cache_surface_tokens
+                    .map_or(surface_tokens, |current| current.min(surface_tokens)),
+            );
+            max_cache_surface_tokens = max_cache_surface_tokens.max(surface_tokens);
+        }
+
+        stable_prefix_changes += hash_changed(
+            &mut previous_stable_prefix,
+            diagnostics.get("stablePrefixHash").and_then(Value::as_str),
+        ) as u64;
+        tool_schema_changes += hash_changed(
+            &mut previous_tool_schema,
+            diagnostics.get("toolSchemaHash").and_then(Value::as_str),
+        ) as u64;
+        cache_surface_changes += hash_changed(
+            &mut previous_cache_surface,
+            diagnostics.get("cacheSurfaceHash").and_then(Value::as_str),
+        ) as u64;
+        if let Some(continues) = diagnostics
+            .get("historyPrefixContinues")
+            .and_then(Value::as_bool)
+        {
+            continuity_measured_attempts += 1;
+            history_prefix_rewrites += (!continues) as u64;
+        }
+    }
+
+    let hit_rate = (measured_input_tokens > 0)
+        .then(|| cached_input_tokens as f64 / measured_input_tokens as f64);
+    let average_cache_surface_tokens =
+        (attempts > 0).then(|| cache_surface_tokens as f64 / attempts as f64);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "sessionId": session.id,
+            "title": session.title,
+            "model": session.model,
+            "telemetryAvailable": attempts > 0,
+            "turns": turns,
+            "attempts": attempts,
+            "measuredAttempts": measured_attempts,
+            "unreportedAttempts": unreported_attempts,
+            "hitAttempts": hits,
+            "missAttempts": misses,
+            "inputTokens": input_tokens,
+            "cacheMeasuredInputTokens": measured_input_tokens,
+            "cachedInputTokens": cached_input_tokens,
+            "cacheWriteInputTokens": cache_write_input_tokens,
+            "ordinaryInputTokens": ordinary_input_tokens,
+            "cacheHitRate": hit_rate,
+            "averageEstimatedCacheSurfaceTokens": average_cache_surface_tokens,
+            "minimumEstimatedCacheSurfaceTokens": min_cache_surface_tokens,
+            "maximumEstimatedCacheSurfaceTokens": (attempts > 0).then_some(max_cache_surface_tokens),
+            "intraTurnStablePrefixChanges": stable_prefix_changes,
+            "intraTurnToolSchemaChanges": tool_schema_changes,
+            "intraTurnCacheSurfaceChanges": cache_surface_changes,
+            "historyPrefixContinuityMeasuredAttempts": continuity_measured_attempts,
+            "historyPrefixRewrites": history_prefix_rewrites,
+            "note": (attempts == 0).then_some("No per-attempt cache telemetry exists in this session; run a new turn with the current Yeet build."),
+        }))?
+    );
+    Ok(())
+}
+
+fn hash_changed(previous: &mut Option<String>, current: Option<&str>) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
+    let changed = previous
+        .as_deref()
+        .is_some_and(|previous| previous != current);
+    *previous = Some(current.to_owned());
+    changed
 }
 
 fn foundation(args: &[String]) -> Result<()> {

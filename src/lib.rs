@@ -8,6 +8,7 @@ pub mod core;
 pub mod debate;
 pub mod edit;
 pub mod general;
+pub mod mcp_server;
 pub mod memory;
 pub mod model;
 pub mod permission;

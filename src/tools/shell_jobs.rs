@@ -36,7 +36,6 @@ impl ShellJobs {
         timeout: u64,
         allow_write: bool,
         unrestricted: bool,
-        protected: Vec<PathBuf>,
     ) -> Result<String> {
         if self.jobs.len() >= 32 {
             bail!("Shell job limit reached (32); forget completed jobs before starting more");
@@ -51,19 +50,16 @@ impl ShellJobs {
             .name(format!("shell-{id}"))
             .spawn(move || {
                 let outcome = std::panic::catch_unwind(|| {
-                    run_shell_cancellable_with_protected_paths(
-                        ShellExecutionRequest {
-                            command: &worker_command,
-                            workspace_root: &root,
-                            working_directory: directory.as_deref(),
-                            timeout_seconds: timeout,
-                            capture_bytes: 64 * 1024,
-                            allow_write,
-                            unrestricted,
-                            cancel: Some(&worker_cancel),
-                        },
-                        &protected,
-                    )
+                    run_shell_cancellable(ShellExecutionRequest {
+                        command: &worker_command,
+                        workspace_root: &root,
+                        working_directory: directory.as_deref(),
+                        timeout_seconds: timeout,
+                        capture_bytes: 64 * 1024,
+                        allow_write,
+                        unrestricted,
+                        cancel: Some(&worker_cancel),
+                    })
                     .map_err(|error| error.to_string())
                 })
                 .unwrap_or_else(|_| Err("Shell worker panicked".into()));
@@ -194,7 +190,6 @@ mod tests {
                 5,
                 false,
                 true,
-                vec![],
             )
             .unwrap();
         assert!(start.elapsed() < Duration::from_millis(250));
@@ -219,7 +214,6 @@ mod tests {
                 900,
                 false,
                 true,
-                vec![],
             )
             .unwrap();
         thread::sleep(Duration::from_millis(100));
@@ -239,7 +233,6 @@ mod tests {
                 900,
                 false,
                 true,
-                vec![],
             )
             .unwrap();
         jobs.jobs[&id].cancel.store(true, Ordering::Release);
@@ -252,7 +245,6 @@ mod tests {
                 900,
                 false,
                 true,
-                vec![],
             )
             .unwrap();
         let flag = jobs.jobs[&id].cancel.clone();

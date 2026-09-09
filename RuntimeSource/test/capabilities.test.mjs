@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { HarnessCapabilityRegistry } from "../dist/capabilities.js";
 import { createVisionCapability } from "../dist/vision.js";
+import { createLeadCapability } from "../dist/lead.js";
 
 function request(attachedCapabilities) {
   return {
@@ -82,4 +83,21 @@ test("vision capability is default-attached and validates supported inline image
   const invalid = request();
   invalid.messages[0].images = [{ mediaType: "image/tiff", data: "aGVsbG8=" }];
   await assert.rejects(() => registry.prepare(invalid), /Unsupported vision image media type/);
+});
+
+test("lead capability is opt-in and owns the lead purpose marker", async () => {
+  const registry = new HarnessCapabilityRegistry([createLeadCapability()]);
+  assert.deepEqual(registry.defaultAttached(), []);
+
+  const ordinary = await registry.prepare(request());
+  assert.equal(ordinary.metadata, undefined);
+
+  const lead = await registry.prepare(request(["lead"]));
+  assert.equal(lead.metadata?.purpose, "lead");
+
+  const explicitPurpose = await registry.prepare({
+    ...request(["lead"]),
+    metadata: { purpose: "research" },
+  });
+  assert.equal(explicitPurpose.metadata?.purpose, "research");
 });

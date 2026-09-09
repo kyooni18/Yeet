@@ -3,12 +3,12 @@ use super::theme;
 use super::{centered_rect, truncate_end, truncate_middle};
 use crate::{
     app::{App, SettingsEditKind, SettingsSection},
-    model::{AGENT_MODES, REASONING_LEVELS},
+    model::REASONING_LEVELS,
 };
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Position, Rect},
-    prelude::{Color, Line, Modifier, Span, Style, Stylize, Text},
+    prelude::{Line, Modifier, Span, Style, Stylize, Text},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
@@ -28,18 +28,21 @@ pub(super) fn draw_models(frame: &mut Frame<'_>, app: &App) {
     };
     let block = theme::modal_block(title)
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
     frame.render_widget(
         Paragraph::new(format!("Filter: {}", app.popup_filter))
-            .style(Style::default().fg(Color::Gray)),
+            .style(Style::default().fg(theme::TEXT_DIM)),
         chunks[0],
     );
 
     if app.state.is_loading_models && app.state.available_models.is_empty() {
-        frame.render_widget(Paragraph::new("Loading models…").fg(Color::Gray), chunks[1]);
+        frame.render_widget(
+            Paragraph::new("Loading models…").fg(theme::TEXT_DIM),
+            chunks[1],
+        );
         return;
     }
     let models = app.filtered_models();
@@ -75,7 +78,7 @@ pub(super) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     theme::modal_backdrop(frame, area);
     let block = theme::modal_block(" Sessions · Enter open · n new · Esc close ")
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if app.sessions().is_empty() {
@@ -112,12 +115,12 @@ pub(super) fn draw_reasoning(frame: &mut Frame<'_>, app: &App) {
     theme::modal_backdrop(frame, area);
     let block = theme::modal_block(" Reasoning · arrows navigate · Enter select · Esc close ")
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let descriptions = [
-        "Yeet default: low lead, lowest supported auxiliary",
+        "Yeet default: low primary-request reasoning; Lead is an opt-in capability",
         "Faster, lighter reasoning",
         "Balanced reasoning depth",
         "Maximum supported reasoning depth",
@@ -147,45 +150,6 @@ pub(super) fn draw_reasoning(frame: &mut Frame<'_>, app: &App) {
     frame.render_stateful_widget(list, inner, &mut state);
 }
 
-pub(super) fn draw_agent_mode(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(66, 42, frame.area());
-    theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Agent mode · arrows navigate · Enter select · Esc close ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let descriptions = [
-        "Automatically route each task",
-        "Force the existing coding-agent lane",
-        "Force document, data, and general-purpose work",
-    ];
-    let items = AGENT_MODES
-        .iter()
-        .zip(descriptions)
-        .map(|(mode, description)| {
-            let marker = if *mode == app.state.active_agent_mode {
-                "●"
-            } else {
-                " "
-            };
-            ListItem::new(Line::from(vec![
-                Span::raw(format!("{marker} {mode:<8}")),
-                Span::styled(description, Style::default().fg(theme::MUTED)),
-            ]))
-        });
-    let list = List::new(items)
-        .highlight_style(
-            Style::default()
-                .bg(theme::SELECTED)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("› ");
-    let mut state = ListState::default().with_selected(Some(app.popup_index));
-    frame.render_stateful_widget(list, inner, &mut state);
-}
-
 pub(super) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(82, 76, frame.area());
     theme::modal_backdrop(frame, area);
@@ -193,19 +157,19 @@ pub(super) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
         " Capabilities · type to filter · Space toggle · Enter details · Esc close ",
     )
     .borders(Borders::ALL)
-    .border_type(BorderType::Rounded);
+    .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
     frame.render_widget(
         Paragraph::new(format!("Filter: {}", app.popup_filter))
-            .style(Style::default().fg(Color::Gray)),
+            .style(Style::default().fg(theme::TEXT_DIM)),
         chunks[0],
     );
 
     if app.state.is_loading_capabilities && app.state.available_capabilities.is_empty() {
         frame.render_widget(
-            Paragraph::new("Loading capabilities…").fg(Color::Gray),
+            Paragraph::new("Loading capabilities…").fg(theme::TEXT_DIM),
             chunks[1],
         );
         return;
@@ -240,7 +204,7 @@ pub(super) fn draw_capability_detail(frame: &mut Frame<'_>, app: &App) {
     theme::modal_backdrop(frame, area);
     let block = theme::modal_block(" Capability detail · Space toggle · Enter/Esc back ")
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -289,14 +253,14 @@ pub(super) fn draw_auth(frame: &mut Frame<'_>, app: &App) {
     };
     let block = theme::modal_block(title)
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
 
     if app.state.auth_working && app.state.auth_providers.is_empty() {
         frame.render_widget(
-            Paragraph::new("Loading providers…").fg(Color::Gray),
+            Paragraph::new("Loading providers…").fg(theme::TEXT_DIM),
             chunks[0],
         );
     } else if app.state.auth_providers.is_empty() {
@@ -341,7 +305,7 @@ pub(super) fn draw_auth_key(frame: &mut Frame<'_>, app: &App) {
     let provider = app.active_auth_provider.as_deref().unwrap_or("provider");
     let block = theme::modal_block(format!(" API key · {provider} · Enter save · Esc cancel "))
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let key = app
@@ -362,7 +326,7 @@ pub(super) fn draw_auth_key(frame: &mut Frame<'_>, app: &App) {
     );
     let field_block = theme::modal_block(" API key ")
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let field_inner = field_block.inner(field);
     frame.render_widget(field_block, field);
     frame.render_widget(Paragraph::new(masked.clone()), field_inner);
@@ -379,13 +343,13 @@ pub(super) fn draw_providers(frame: &mut Frame<'_>, app: &App) {
     let block =
         theme::modal_block(" Providers · n new · Enter edit · d delete · r refresh · Esc close ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
+            .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
     if app.state.providers_working && app.state.provider_configurations.is_empty() {
         frame.render_widget(
-            Paragraph::new("Loading custom providers…").fg(Color::Gray),
+            Paragraph::new("Loading custom providers…").fg(theme::TEXT_DIM),
             chunks[0],
         );
     } else if app.state.provider_configurations.is_empty() {
@@ -409,7 +373,7 @@ pub(super) fn draw_providers(frame: &mut Frame<'_>, app: &App) {
                 Span::raw(format!("{:<18} ", provider.id)),
                 Span::styled(
                     truncate_middle(&provider.base_url, 42),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::TEXT_DIM),
                 ),
                 Span::styled(
                     format!("  {auth}{headers}"),
@@ -447,7 +411,7 @@ pub(super) fn draw_provider_edit(frame: &mut Frame<'_>, app: &App) {
         "{title}· Tab fields · Space toggle · Enter save · Esc cancel "
     ))
     .borders(Borders::ALL)
-    .border_type(BorderType::Rounded);
+    .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let id = app.editor_fields.first().cloned().unwrap_or_default();
@@ -491,7 +455,7 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
     };
     let block = theme::modal_block(title)
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
@@ -512,7 +476,7 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
                 } else {
                     "off"
                 },
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::TEXT_DIM),
             ),
             Span::styled(
                 if flex_available {
@@ -535,7 +499,7 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
             } else {
                 "off"
             },
-            Style::default().fg(Color::Gray),
+            Style::default().fg(theme::TEXT_DIM),
         ),
         Span::styled(
             format!(
@@ -561,7 +525,7 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
             "Sandbox                ",
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(sandbox_value, Style::default().fg(Color::Gray)),
+        Span::styled(sandbox_value, Style::default().fg(theme::TEXT_DIM)),
     ])));
 
     let list = List::new(rows)
@@ -598,13 +562,13 @@ pub(super) fn draw_sandbox_presets(frame: &mut Frame<'_>, app: &App) {
     };
     let block = theme::modal_block(title)
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
     let Some(settings) = app.state.sandbox_settings.as_ref() else {
         frame.render_widget(
-            Paragraph::new("Loading project settings…").fg(Color::Gray),
+            Paragraph::new("Loading project settings…").fg(theme::TEXT_DIM),
             chunks[0],
         );
         return;
@@ -639,7 +603,7 @@ pub(super) fn draw_sandbox_presets(frame: &mut Frame<'_>, app: &App) {
                 format!("{marker} {name:<25}"),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::styled(value, Style::default().fg(Color::Gray)),
+            Span::styled(value, Style::default().fg(theme::TEXT_DIM)),
         ]))
     });
     let list = List::new(items)
@@ -671,11 +635,14 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
         " Sandbox policy · Tab/←/→ section · Enter/Space edit · n add · d remove · Esc back ",
     )
     .borders(Borders::ALL)
-    .border_type(BorderType::Rounded);
+    .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let Some(settings) = app.state.sandbox_settings.as_ref() else {
-        frame.render_widget(Paragraph::new("Loading settings…").fg(Color::Gray), inner);
+        frame.render_widget(
+            Paragraph::new("Loading settings…").fg(theme::TEXT_DIM),
+            inner,
+        );
         return;
     };
     let chunks = Layout::vertical([
@@ -714,14 +681,14 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
                 Span::raw("Execution mode         "),
                 Span::styled(
                     settings.execution_mode.clone(),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::TEXT_DIM),
                 ),
             ])),
             ListItem::new(Line::from(vec![
                 Span::raw("Auto approval          "),
                 Span::styled(
                     if settings.auto_approve { "on" } else { "off" },
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::TEXT_DIM),
                 ),
             ])),
             ListItem::new(Line::from(vec![
@@ -732,12 +699,15 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
                     } else {
                         "off"
                     },
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::TEXT_DIM),
                 ),
             ])),
             ListItem::new(Line::from(vec![
                 Span::raw("Reset policy           "),
-                Span::styled("restore Safe defaults", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    "restore Safe defaults",
+                    Style::default().fg(theme::TEXT_DIM),
+                ),
             ])),
         ],
         Some(SettingsSection::Workspace) => {
@@ -745,13 +715,13 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
                 Span::raw("Workspace read mode  "),
                 Span::styled(
                     settings.workspace_mode.clone(),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::TEXT_DIM),
                 ),
             ]))];
             rows.extend(settings.workspace_paths.iter().map(|path| {
                 ListItem::new(Line::from(vec![
                     Span::raw("Path                 "),
-                    Span::styled(path.clone(), Style::default().fg(Color::Gray)),
+                    Span::styled(path.clone(), Style::default().fg(theme::TEXT_DIM)),
                 ]))
             }));
             rows
@@ -775,7 +745,7 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
                     Span::raw(format!("{:<24}", item.key)),
                     Span::styled(
                         truncate_end(&item.value, 44),
-                        Style::default().fg(Color::Gray),
+                        Style::default().fg(theme::TEXT_DIM),
                     ),
                 ]))
             })
@@ -816,7 +786,7 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
             Some(SettingsSection::Secrets) => "No secret IDs. Press n to add one.",
             _ => "No entries.",
         };
-        frame.render_widget(Paragraph::new(empty).fg(Color::Gray), chunks[1]);
+        frame.render_widget(Paragraph::new(empty).fg(theme::TEXT_DIM), chunks[1]);
     } else {
         let list = List::new(rows)
             .highlight_style(
@@ -855,7 +825,7 @@ pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
     };
     let block = theme::modal_block(format!(" {title} · Tab fields · Enter save · Esc cancel "))
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
+        .border_type(BorderType::Double);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let rows = labels
@@ -926,8 +896,6 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
         Line::from("Alt+S          sessions"),
         Line::from("Alt+R          reasoning level"),
         Line::from("Alt+K          skills / capabilities / MCP"),
-        Line::from("Alt+A          Auto / Code / General mode"),
-        Line::from("/mode          select Auto / Code / General mode"),
         Line::from("/capabilities  toggle skills / capabilities / MCP"),
         Line::from("/login         authentication"),
         Line::from("/settings      runtime and sandbox settings"),
@@ -943,7 +911,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
         Paragraph::new(text).block(
             theme::modal_block(" Help · Esc close ")
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
+                .border_type(BorderType::Double),
         ),
         area,
     );
@@ -959,6 +927,11 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
             (None, Some(bundle_id)) => bundle_id.clone(),
             (None, None) => "Unknown native application".into(),
         };
+        let source = if permission.server == "codex-computer-use" {
+            format!("Computer Use: Codex / {}", permission.tool)
+        } else {
+            format!("MCP: {}/{}", permission.server, permission.tool)
+        };
         let text = Text::from(vec![
             Line::from(vec![
                 Span::styled(
@@ -967,12 +940,12 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
                 ),
                 Span::raw(identity),
             ]),
-            Line::from(format!("Operation: {}", permission.operation)).fg(Color::Yellow),
-            Line::from(format!("MCP: {}/{}", permission.server, permission.tool)).fg(theme::MUTED),
+            Line::from(format!("Operation: {}", permission.operation)).fg(theme::ACCENT_HOT),
+            Line::from(source).fg(theme::MUTED),
             Line::from("Session-only access; no persistent approval will be saved.")
-                .fg(Color::Cyan),
+                .fg(theme::ACCENT),
             Line::from(""),
-            Line::from(permission.reason.clone()).fg(Color::Gray),
+            Line::from(permission.reason.clone()).fg(theme::TEXT_DIM),
             Line::from(""),
             Line::from("Enter / y allow once    n / Esc deny").fg(theme::MUTED),
         ]);
@@ -981,7 +954,7 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
                 Block::default()
                     .title(" Native app permission ")
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded),
+                    .border_type(BorderType::Double),
             ),
             area,
         );
@@ -1004,10 +977,10 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             permission.command.clone(),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme::ACCENT_HOT),
         )),
         Line::from(""),
-        Line::from(permission.reason.clone()).fg(Color::Gray),
+        Line::from(permission.reason.clone()).fg(theme::TEXT_DIM),
         Line::from(""),
         Line::from("Enter / y allow once    n / Esc deny").fg(theme::MUTED),
     ]);
@@ -1015,7 +988,7 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
         Paragraph::new(text).wrap(Wrap { trim: false }).block(
             theme::modal_block(" Permission ")
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
+                .border_type(BorderType::Double),
         ),
         area,
     );
@@ -1037,8 +1010,8 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
     theme::modal_backdrop(frame, area);
     let block = theme::modal_block(" DEBATE · Pro / Con / Jury ")
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(theme::ACCENT_HOT))
         .style(Style::default().bg(theme::SURFACE));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1052,14 +1025,14 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
         Paragraph::new(
             "Frame → Research → Opening → Rebuttal → Research / Strengthening ↻ → Checkpoint → Closing → Jury",
         )
-        .style(Style::default().fg(Color::Cyan)),
+        .style(Style::default().fg(theme::ACCENT)),
         rows[0],
     );
     let mut lines = Vec::new();
     if let Some(d) = &app.state.debate {
         lines.push(Line::from(Span::styled(
             &d.topic,
-            Style::default().bold().fg(Color::White),
+            Style::default().bold().fg(theme::TEXT),
         )));
         lines.push(Line::from(format!(
             "{} · {} speeches · Ballots {} (adaptive {}–{}) · Jury attempts {}",
@@ -1078,7 +1051,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
         if let Some(contract) = &d.contract {
             lines.push(Line::from(Span::styled(
                 "Debate contract",
-                Style::default().fg(Color::Yellow).bold(),
+                Style::default().fg(theme::ACCENT_HOT).bold(),
             )));
             lines.extend(
                 contract
@@ -1096,7 +1069,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
                     d.stage_label(research.stage),
                     research.successful_reads
                 ),
-                Style::default().fg(Color::Cyan).bold(),
+                Style::default().fg(theme::ACCENT).bold(),
             )));
             lines.extend(
                 research
@@ -1115,9 +1088,9 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
                     d.stage_label(speech.stage)
                 ),
                 Style::default().bold().fg(if speech.pro {
-                    Color::Green
+                    theme::ACCENT_HOT
                 } else {
-                    Color::Magenta
+                    theme::ACCENT
                 }),
             )));
             lines.extend(speech.text.lines().map(|s| Line::from(s.to_owned())));
@@ -1126,7 +1099,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 format!("Progress checkpoint · {}", d.stage_label(checkpoint.stage)),
-                Style::default().fg(Color::Yellow).bold(),
+                Style::default().fg(theme::ACCENT_HOT).bold(),
             )));
             lines.extend(
                 checkpoint
@@ -1138,7 +1111,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
         if let Some(reason) = &d.closing_reason {
             lines.push(Line::from(Span::styled(
                 format!("Closing reason · {reason}"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme::ACCENT),
             )));
         }
         for (index, ballot) in d.ballots.iter().enumerate() {
@@ -1162,7 +1135,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
                     index + 1,
                     attempt.error.as_deref().unwrap_or("invalid ballot")
                 ),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme::ERROR),
             )));
         }
         if let Some(verdict) = &d.verdict {
@@ -1170,7 +1143,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
             lines.extend(verdict.lines().map(|s| {
                 Line::from(Span::styled(
                     s.to_owned(),
-                    Style::default().fg(Color::Yellow).bold(),
+                    Style::default().fg(theme::ACCENT_HOT).bold(),
                 ))
             }));
         }
@@ -1178,7 +1151,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Learned context retained for later chat",
-                Style::default().fg(Color::Cyan).bold(),
+                Style::default().fg(theme::ACCENT).bold(),
             )));
             lines.extend(
                 summary
@@ -1207,7 +1180,7 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
     if let Some(error) = &app.state.error_message {
         lines.push(Line::from(Span::styled(
             error,
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme::ERROR),
         )));
     }
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
@@ -1228,10 +1201,10 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
         &app.debate_models
     };
     let fields = [
-        ("Topic", app.popup_filter.as_str(), Color::White),
-        ("Pro model", models.pro.as_str(), Color::Green),
-        ("Con model", models.con.as_str(), Color::Magenta),
-        ("Jury model", models.jury.as_str(), Color::Cyan),
+        ("Topic", app.popup_filter.as_str(), theme::TEXT),
+        ("Pro model", models.pro.as_str(), theme::ACCENT_HOT),
+        ("Con model", models.con.as_str(), theme::ACCENT),
+        ("Jury model", models.jury.as_str(), theme::TEXT_DIM),
     ];
     let mut form = Vec::new();
     for (index, (label, value, color)) in fields.into_iter().enumerate() {
@@ -1248,9 +1221,9 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
             Span::styled(
                 value,
                 if selected {
-                    Style::default().fg(Color::White).bg(theme::SELECTED)
+                    Style::default().fg(theme::TEXT).bg(theme::SELECTED)
                 } else {
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(theme::TEXT_DIM)
                 },
             ),
         ]));

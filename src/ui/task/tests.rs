@@ -128,7 +128,7 @@ fn live_progress_remains_visible_while_reading_history() {
         assert!(footer.contains("Working"));
         assert!(footer.contains("Read file"));
         assert!(footer.contains("src/ui.rs"));
-        assert!(footer.contains("Draft next message"));
+        assert!(footer.contains("BUFFERED DIRECTIVE"));
         assert!(!footer.contains("Enter send"));
         assert!(rows.join("\n").contains("Ctrl+End"));
         assert_eq!(rows.join("\n").contains("Current · Working"), width >= 110);

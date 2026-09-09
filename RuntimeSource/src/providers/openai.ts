@@ -109,6 +109,7 @@ function mapInput(messages: Message[], promptCacheSupported: boolean, cacheHisto
 function bodyFor(request: ProviderCallRequest, stream: boolean, codex = false): Record<string, unknown> {
   const split = splitLeadingSystem(request.messages, request.system);
   const toolChoice = mapToolChoice(request.toolChoice);
+  const promptCacheKey = request.metadata?.sessionId ?? request.contextKey;
   const promptCacheSupported = !codex && request.promptCache !== false && supportsPromptCacheOptions(request.model);
   const cacheOptions = promptCacheSupported
     ? { prompt_cache_options: { mode: "explicit", ttl: "30m" } }
@@ -136,7 +137,7 @@ function bodyFor(request: ProviderCallRequest, stream: boolean, codex = false): 
       : {}),
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
     ...(request.metadata ? { metadata: request.metadata } : {}),
-    ...(request.contextKey ? { prompt_cache_key: request.contextKey } : {}),
+    ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...cacheOptions,
   };
   if (codex) {
@@ -229,18 +230,26 @@ export class OpenAIProvider implements ProviderAdapter {
     this.#clientVersion = options.clientVersion ?? "0.151.0";
   }
 
-  #headers(): Record<string, string> {
+  #headers(request?: ProviderCallRequest): Record<string, string> {
     const token = this.#accessToken ?? this.#apiKey;
     if (!token) throw new Error(`Missing API key or OAuth token for ${this.id}`);
     if (this.#accessToken && !this.#accountId) {
       throw new Error(`Missing ChatGPT account id for ${this.id} OAuth credentials`);
     }
+    const sessionId = this.#accessToken
+      ? (request?.metadata?.sessionId ?? request?.contextKey)
+      : undefined;
+    const threadId = this.#accessToken
+      ? (request?.metadata?.threadId ?? request?.metadata?.contextWindowId ?? request?.contextKey)
+      : undefined;
     return {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
       ...(this.#accessToken ? {
         ...(this.#accountId ? { "ChatGPT-Account-ID": this.#accountId } : {}),
         originator: "codex_cli_rs",
+        ...(sessionId ? { "session-id": sessionId } : {}),
+        ...(threadId ? { "thread-id": threadId, "x-client-request-id": threadId } : {}),
       } : {}),
       ...(this.#organization ? { "OpenAI-Organization": this.#organization } : {}),
       ...(this.#project ? { "OpenAI-Project": this.#project } : {}),
@@ -292,7 +301,7 @@ export class OpenAIProvider implements ProviderAdapter {
     } else {
       const response = await providerFetch(
         `${this.#baseUrl}/responses`,
-        { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, false)) },
+        { method: "POST", headers: this.#headers(request), body: JSON.stringify(bodyFor(request, false)) },
         {
           provider: this.id,
           ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -337,7 +346,7 @@ export class OpenAIProvider implements ProviderAdapter {
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
     const response = await providerFetch(
       `${this.#baseUrl}/responses`,
-      { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, true, Boolean(this.#accessToken))) },
+      { method: "POST", headers: this.#headers(request), body: JSON.stringify(bodyFor(request, true, Boolean(this.#accessToken))) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),

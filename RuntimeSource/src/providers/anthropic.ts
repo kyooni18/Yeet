@@ -29,15 +29,52 @@ function mapToolChoice(choice: ToolChoice | undefined): unknown {
   return { type: "tool", name: choice.name };
 }
 
-function mapMessages(messages: Message[]): unknown[] {
+const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
+
+function blockCacheControl(requested: unknown): Record<string, unknown> {
+  if (!requested || typeof requested !== "object" || Array.isArray(requested)) {
+    return EPHEMERAL_CACHE_CONTROL;
+  }
+  const value = requested as Record<string, unknown>;
+  return {
+    type: "ephemeral",
+    ...(value.ttl === "1h" ? { ttl: "1h" } : {}),
+  };
+}
+
+function markLastCacheableBlock(
+  content: any[],
+  enabled: boolean,
+  cacheControl: Record<string, unknown>,
+): any[] {
+  if (!enabled || content.length === 0) return content;
+  const last = content.length - 1;
+  content[last] = { ...content[last], cache_control: cacheControl };
+  return content;
+}
+
+function mapMessages(
+  messages: Message[],
+  promptCacheEnabled: boolean,
+  cacheControl: Record<string, unknown>,
+  maxExplicitBreakpoints: number,
+): unknown[] {
+  const explicitBreakpoints = new Set<number>();
+  if (promptCacheEnabled && maxExplicitBreakpoints > 0) {
+    for (let index = messages.length - 1; index >= 0 && explicitBreakpoints.size < maxExplicitBreakpoints; index--) {
+      if (messages[index]?.cacheBreakpoint === true) explicitBreakpoints.add(index);
+    }
+  }
   const output: any[] = [];
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
+    const cacheBreakpoint = explicitBreakpoints.has(index);
     if (message.role === "tool") {
       const block = {
         type: "tool_result",
         tool_use_id: message.toolCallId ?? message.toolResult?.toolCallId ?? "",
         content: toolResultContent(message),
         ...(message.toolResult?.isError !== undefined ? { is_error: message.toolResult.isError } : {}),
+        ...(cacheBreakpoint ? { cache_control: cacheControl } : {}),
       };
       const last = output.at(-1);
       if (last?.role === "user" && Array.isArray(last.content)) last.content.push(block);
@@ -51,20 +88,26 @@ function mapMessages(messages: Message[]): unknown[] {
       for (const tool of message.toolCalls ?? []) {
         content.push({ type: "tool_use", id: tool.id, name: tool.name, input: tool.arguments });
       }
-      output.push({ role: "assistant", content });
+      output.push({ role: "assistant", content: markLastCacheableBlock(content, cacheBreakpoint, cacheControl) });
       continue;
     }
 
     if (message.images?.length) {
+      const content = [
+        ...(message.content ? [{ type: "text", text: message.content }] : []),
+        ...message.images.map((image) => ({
+          type: "image",
+          source: { type: "base64", media_type: image.mediaType, data: image.data },
+        })),
+      ];
       output.push({
         role: "user",
-        content: [
-          ...(message.content ? [{ type: "text", text: message.content }] : []),
-          ...message.images.map((image) => ({
-            type: "image",
-            source: { type: "base64", media_type: image.mediaType, data: image.data },
-          })),
-        ],
+        content: markLastCacheableBlock(content, cacheBreakpoint, cacheControl),
+      });
+    } else if (cacheBreakpoint) {
+      output.push({
+        role: "user",
+        content: [{ type: "text", text: message.content ?? "", cache_control: cacheControl }],
       });
     } else {
       output.push({ role: "user", content: message.content ?? "" });
@@ -80,12 +123,28 @@ function requestBody(request: ProviderCallRequest, stream: boolean): Record<stri
   // those volatile overlays invalidates the provider prompt prefix every
   // agent round.
   const split = splitLeadingSystem(request.messages, request.system);
+  const promptCacheEnabled = request.promptCache !== false;
   const requestedCacheControl = request.providerOptions?.cache_control;
+  const { cache_control: _cacheControl, ...providerOptions } = request.providerOptions ?? {};
+  const explicitBreakpointCount = split.messages.filter((message) => message.cacheBreakpoint === true).length;
+  // A coordinator-selected explicit marker already identifies the reusable
+  // prefix. Do not also cache the volatile request tail automatically: Yeet's
+  // orientation/retry overlays intentionally change every round and a paid
+  // automatic cache write there cannot be reused. Callers without an explicit
+  // boundary retain Anthropic's normal automatic caching behavior.
+  const automaticCacheEnabled = promptCacheEnabled && explicitBreakpointCount === 0;
+  const maxExplicitBreakpoints = automaticCacheEnabled ? 0 : 4;
+  const explicitCacheControl = blockCacheControl(requestedCacheControl);
   return {
-    ...(request.providerOptions ?? {}),
+    ...providerOptions,
     model: request.model,
     max_tokens: request.maxTokens ?? 4_096,
-    messages: mapMessages(split.messages),
+    messages: mapMessages(
+      split.messages,
+      promptCacheEnabled,
+      explicitCacheControl,
+      maxExplicitBreakpoints,
+    ),
     stream,
     ...(split.system ? { system: split.system } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
@@ -100,7 +159,9 @@ function requestBody(request: ProviderCallRequest, stream: boolean): Record<stri
       : {}),
     ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice) } : {}),
     ...(request.metadata ? { metadata: request.metadata } : {}),
-    cache_control: requestedCacheControl ?? { type: "ephemeral" },
+    ...(automaticCacheEnabled
+      ? { cache_control: requestedCacheControl ?? EPHEMERAL_CACHE_CONTROL }
+      : {}),
   };
 }
 
@@ -111,6 +172,15 @@ function cacheCreationTokens(value: any): number | undefined {
   const fiveMinute = typeof creation.ephemeral_5m_input_tokens === "number" ? creation.ephemeral_5m_input_tokens : 0;
   const oneHour = typeof creation.ephemeral_1h_input_tokens === "number" ? creation.ephemeral_1h_input_tokens : 0;
   return fiveMinute + oneHour || undefined;
+}
+
+function inclusiveAnthropicInputTokens(
+  ordinary: number | undefined,
+  cached: number | undefined,
+  cacheWrite: number | undefined,
+): number | undefined {
+  if (ordinary === undefined && cached === undefined && cacheWrite === undefined) return undefined;
+  return (ordinary ?? 0) + (cached ?? 0) + (cacheWrite ?? 0);
 }
 
 export class AnthropicProvider implements ProviderAdapter {
@@ -201,12 +271,20 @@ export class AnthropicProvider implements ProviderAdapter {
     const toolCalls = (raw.content ?? [])
       .filter((b: any) => b.type === "tool_use")
       .map((b: any, index: number) => normalizeToolCall(b.id, b.name, b.input, index));
-    const normalizedUsage = usage(
+    const cachedInputTokens = raw.usage?.cache_read_input_tokens;
+    const cacheWriteInputTokens = cacheCreationTokens(raw.usage);
+    const inputTokens = inclusiveAnthropicInputTokens(
       raw.usage?.input_tokens,
+      cachedInputTokens,
+      cacheWriteInputTokens,
+    );
+    const outputTokens = raw.usage?.output_tokens;
+    const normalizedUsage = usage(
+      inputTokens,
       raw.usage?.output_tokens,
-      undefined,
-      raw.usage?.cache_read_input_tokens,
-      cacheCreationTokens(raw.usage),
+      inputTokens !== undefined && outputTokens !== undefined ? inputTokens + outputTokens : undefined,
+      cachedInputTokens,
+      cacheWriteInputTokens,
       raw.usage?.output_tokens_details?.thinking_tokens,
     );
 
@@ -320,10 +398,17 @@ export class AnthropicProvider implements ProviderAdapter {
       };
     }
 
-    const normalizedUsage = usage(
+    const inclusiveInputTokens = inclusiveAnthropicInputTokens(
       inputTokens,
+      cachedInputTokens,
+      cacheWriteInputTokens,
+    );
+    const normalizedUsage = usage(
+      inclusiveInputTokens,
       outputTokens,
-      undefined,
+      inclusiveInputTokens !== undefined && outputTokens !== undefined
+        ? inclusiveInputTokens + outputTokens
+        : undefined,
       cachedInputTokens,
       cacheWriteInputTokens,
       reasoningTokens,

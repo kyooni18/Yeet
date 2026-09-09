@@ -41,8 +41,6 @@ pub struct StoredSession {
     pub updated_at: DateTime<Utc>,
     pub workspace_root: String,
     pub model: String,
-    #[serde(default = "default_agent_mode")]
-    pub agent_mode: String,
     pub token_usage: Usage,
     pub credit_usage: u64,
     pub conversation: Vec<ConversationEntry>,
@@ -121,10 +119,6 @@ struct SessionListRecord {
 struct SemanticManifest {
     version: u64,
     components: BTreeMap<String, Option<String>>,
-}
-
-fn default_agent_mode() -> String {
-    "auto".into()
 }
 
 #[derive(Debug, Clone)]
@@ -1143,7 +1137,6 @@ mod tests {
                 updated_at: now + chrono::Duration::seconds(index as i64),
                 workspace_root: workspace.path().display().to_string(),
                 model: "openai/test".into(),
-                agent_mode: "auto".into(),
                 token_usage: Usage::default(),
                 credit_usage: 0,
                 conversation: vec![ConversationEntry {
@@ -1288,7 +1281,6 @@ mod tests {
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
             model: "openai/test".into(),
-            agent_mode: "auto".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
             conversation: vec![ConversationEntry {
@@ -1349,7 +1341,6 @@ mod tests {
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
             model: "openai/test".into(),
-            agent_mode: "auto".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
             conversation: vec![],
@@ -1438,7 +1429,6 @@ mod tests {
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
             model: "openai/test".into(),
-            agent_mode: "auto".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
             conversation: vec![],
@@ -1475,7 +1465,6 @@ mod tests {
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
             model: "openai/test".into(),
-            agent_mode: "auto".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
             conversation: vec![ConversationEntry {
@@ -1541,7 +1530,6 @@ mod tests {
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
             model: "openai/test".into(),
-            agent_mode: "auto".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
             conversation: vec![],
@@ -1609,7 +1597,6 @@ mod tests {
             updated_at: now,
             workspace_root: "/tmp/project".into(),
             model: "openai/test".into(),
-            agent_mode: "auto".into(),
             token_usage: Usage {
                 input_tokens: Some(1),
                 ..Usage::default()
@@ -1656,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_session_without_agent_mode_defaults_to_auto() {
+    fn legacy_agent_mode_field_is_ignored() {
         let raw = r#"{
           "version": 1,
           "id": "legacy-mode",
@@ -1665,12 +1652,13 @@ mod tests {
           "updatedAt": "2026-01-01T00:00:00Z",
           "workspaceRoot": "/tmp/example",
           "model": "openai/test",
+          "agentMode": "code",
           "tokenUsage": {},
           "creditUsage": 0,
           "conversation": [],
           "modelHistory": []
         }"#;
         let session: StoredSession = serde_json::from_str(raw).unwrap();
-        assert_eq!(session.agent_mode, "auto");
+        assert_eq!(session.model, "openai/test");
     }
 }

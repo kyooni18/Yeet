@@ -1,9 +1,10 @@
 //! Multi-step read-only evidence collection using the normal agent tool registry.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::{DebateState, EvidenceItem, ResearchRecord};
 use crate::core::{BridgeClient, CallRequest, CallResult, Message, ToolCall, ToolDefinition};
@@ -739,6 +740,8 @@ fn run_with(
         serde_json::to_string(&earlier_research)?
     )));
     let base_history = history.clone();
+    let stable_cache_boundary = base_history.len().checked_sub(1);
+    let research_cache_key = format!("debate-research-{}", Uuid::new_v4());
     let mut successful_reads: HashSet<String> = HashSet::new();
     let mut seen_source_ids: HashSet<String> = side_research
         .iter()
@@ -771,7 +774,19 @@ fn run_with(
         if round >= max_rounds {
             force_synthesis = true;
         }
-        let mut request = CallRequest::simple(model, history.clone());
+        let mut request_messages = history.clone();
+        if let Some(index) = stable_cache_boundary
+            && let Some(message) = request_messages.get_mut(index)
+        {
+            message.cache_breakpoint = Some(true);
+        }
+        let mut request = CallRequest::simple(model, request_messages);
+        request.context_key = Some(research_cache_key.clone());
+        request.prompt_cache = Some(true);
+        request.metadata = Some(HashMap::from([
+            ("purpose".into(), "debate-research".into()),
+            ("expectedCacheReuses".into(), "1".into()),
+        ]));
         request.attached_capabilities = Some(vec![]);
         request.tools = Some(if force_synthesis {
             vec![]

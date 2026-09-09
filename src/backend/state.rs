@@ -33,7 +33,6 @@ impl SharedSession {
     pub(super) fn new(model: String, reasoning_level: String) -> Self {
         let state = BridgeState {
             active_model: model,
-            active_agent_mode: "auto".into(),
             active_reasoning_level: reasoning_level,
             conversation: Some(Vec::new()),
             ..BridgeState::default()

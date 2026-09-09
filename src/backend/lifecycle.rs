@@ -35,7 +35,6 @@ impl BackendService {
         shared.state.conversation = Some(stored.conversation);
         shared.state.conversation_revision = shared.state.conversation_revision.wrapping_add(1);
         shared.state.active_model = stored.model;
-        shared.state.active_agent_mode = stored.agent_mode;
         shared.state.token_usage = stored.token_usage;
         shared.state.credit_usage = stored.credit_usage;
         shared.state.current_session_id = Some(stored.id.clone());
@@ -69,17 +68,15 @@ impl BackendService {
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.replace_model_history(Vec::new());
         }
-        let (model, reasoning_level, agent_mode) = {
+        let (model, reasoning_level) = {
             let shared = self.shared.lock().unwrap();
             (
                 shared.state.active_model.clone(),
                 shared.state.active_reasoning_level.clone(),
-                shared.state.active_agent_mode.clone(),
             )
         };
         let project = self.project_settings.load().unwrap_or_default();
         let mut session = SharedSession::new(model, reasoning_level);
-        session.state.active_agent_mode = agent_mode;
         session.meta.attached_capabilities = project.capabilities.attached;
         session.meta.disabled_capabilities = project.capabilities.disabled;
         *self.shared.lock().unwrap() = session;
@@ -164,6 +161,58 @@ impl BackendService {
         {
             self.permission.resolve(false);
         }
+    }
+
+    /// Marks an unresponsive interrupted run terminal without waiting on the
+    /// coordinator mutex. The background daemon uses this before discarding a
+    /// runtime whose worker did not settle after cancellation.
+    pub(crate) fn abandon_stuck_run(&self, reason: &str) -> Result<()> {
+        self.interrupt();
+        let session_id = {
+            let mut shared = self.shared.lock().unwrap();
+            if shared.meta.current_turn.is_none() {
+                shared.state.is_streaming = false;
+                None
+            } else {
+                shared.set_activity(
+                    "interrupted",
+                    "Interrupted · Runtime recovered",
+                    Some(reason.to_owned()),
+                );
+                shared.seal_assistant();
+                shared.settle_pending_tool_calls(ToolCallStatus::Failed);
+                shared.finish_run(RunStatus::Interrupted, Some(reason.to_owned()));
+                shared.meta.current_turn = None;
+                shared.state.is_streaming = false;
+                shared.state.active_assistant_entry_id = None;
+                shared.state.active_assistant_text.clear();
+                shared.state.active_reasoning_entry_id = None;
+                shared.state.active_reasoning_text.clear();
+                shared.state.active_reasoning_summary.clear();
+                shared.state.pending_shell_permission = None;
+                shared.state.pending_native_app_permission = None;
+                shared.append(ConversationKind::System {
+                    content: reason.to_owned(),
+                });
+                shared.state.current_session_id.clone()
+            }
+        };
+        *self.active_cancel.lock().unwrap() = None;
+
+        if let Some(session_id) = session_id {
+            let history = if let Ok(coordinator) = self.coordinator.try_lock() {
+                coordinator.model_history()
+            } else {
+                self.store
+                    .load(&session_id)
+                    .map(|session| session.model_history)
+                    .unwrap_or_default()
+            };
+            let mut shared = self.shared.lock().unwrap();
+            persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
+        }
+        self.publish_state();
+        Ok(())
     }
 
     /// Appends a system notice to the active transcript.

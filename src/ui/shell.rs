@@ -1,7 +1,8 @@
 //! Responsive application shell around the conversation.
 use super::{
+    responsive,
     task::{self, TaskStatus},
-    theme, truncate_end, truncate_middle,
+    theme, truncate_end, truncate_middle, yeet_brand,
 };
 use crate::app::App;
 use ratatui::{
@@ -13,16 +14,17 @@ use ratatui::{
 
 pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
     let bounds = frame.area();
-    let body = if bounds.width >= 110 && bounds.height >= 20 {
-        let columns =
-            Layout::horizontal([Constraint::Length(30), Constraint::Min(1)]).split(bounds);
+    let adaptive = responsive::metrics(bounds);
+    let body = if let Some(sidebar_width) = adaptive.sidebar_width {
+        let columns = Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(1)])
+            .split(bounds);
         sidebar(frame, app, columns[0]);
         columns[1]
     } else {
         bounds
     };
     let rows = Layout::vertical([
-        Constraint::Length(if bounds.height >= 16 { 3 } else { 1 }),
+        Constraint::Length(adaptive.header_height),
         Constraint::Min(1),
     ])
     .split(body);
@@ -32,7 +34,7 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
     } else {
         Block::default()
     }
-    .border_style(Style::default().fg(theme::BORDER))
+    .border_style(Style::default().fg(theme::pulse_color()))
     .padding(Padding::horizontal(2));
     let inner = header.inner(rows[0]);
     frame.render_widget(header, rows[0]);
@@ -42,8 +44,13 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
     let title_width = inner
         .width
         .saturating_sub(if show_badge { badge_width + 2 } else { 0 });
+    let branded_title = if title == "New conversation" {
+        "YEET // NEW DIRECTIVE".to_owned()
+    } else {
+        format!("YEET // {title}")
+    };
     frame.render_widget(
-        Paragraph::new(task::fit(title, title_width as usize)).style(Style::default().bold()),
+        Paragraph::new(task::fit(&branded_title, title_width as usize)).style(theme::brand()),
         Rect::new(inner.x, inner.y, title_width, inner.height.min(1)),
     );
     if show_badge {
@@ -58,7 +65,7 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
             .iter()
             .filter(|entry| matches!(entry.kind, crate::model::ConversationKind::User { .. }))
             .count();
-        let location = if app.follow_tail {
+        let location = if app.follow_tail || app.conversation.is_empty() {
             "Latest messages"
         } else {
             "History · Ctrl+End for latest"
@@ -67,17 +74,33 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
             "{turns} {} · {location}",
             if turns == 1 { "turn" } else { "turns" }
         );
+        let core = if app.state.is_streaming {
+            "◆ CORE//EXECUTING"
+        } else {
+            "◇ CORE//STANDBY"
+        };
+        let core_width = Span::raw(core).width() as u16;
+        let show_core = inner.width >= core_width + 28;
+        let context_width = inner
+            .width
+            .saturating_sub(if show_core { core_width + 2 } else { 0 });
         frame.render_widget(
-            Paragraph::new(task::fit(&context, inner.width as usize))
+            Paragraph::new(task::fit(&context, context_width as usize))
                 .style(Style::default().fg(theme::MUTED)),
-            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+            Rect::new(inner.x, inner.y + 1, context_width, 1),
         );
+        if show_core {
+            frame.render_widget(
+                Paragraph::new(core).style(Style::default().fg(theme::pulse_color()).bold()),
+                Rect::new(inner.right() - core_width, inner.y + 1, core_width, 1),
+            );
+        }
     }
     let available = rows[1].inner(Margin {
-        horizontal: u16::from(body.width >= 50) * 2,
+        horizontal: adaptive.horizontal_margin.min(rows[1].width / 2),
         vertical: 0,
     });
-    let width = available.width.min(108);
+    let width = available.width.min(adaptive.content_max_width);
     Rect::new(
         available.x + (available.width - width) / 2,
         available.y,
@@ -95,7 +118,7 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let rows = Layout::vertical([
-        Constraint::Length(7),
+        Constraint::Length(9),
         Constraint::Min(1),
         Constraint::Length(5),
     ])
@@ -106,15 +129,24 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .unwrap_or_else(|| "Workspace".into());
     frame.render_widget(
         Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("◆ ", Style::default().fg(theme::pulse_color())),
+                Span::styled("YEET", theme::brand()),
+                Span::styled(" // NODE", Style::default().fg(theme::MUTED)),
+            ]),
+            Line::styled(
+                "AGENTIC EXECUTION TERMINAL",
+                Style::default().fg(theme::MUTED),
+            ),
+            signal_line(inner.width),
             Line::styled(
                 truncate_middle(&workspace, inner.width as usize),
-                Style::default().bold(),
+                Style::default().fg(theme::TEXT).bold(),
             ),
-            Line::styled("Workspace", Style::default().fg(theme::MUTED)),
             Line::raw(""),
             shortcut("+ New session", "Ctrl+N", inner.width),
             shortcut("All sessions", "Alt+S", inner.width),
-            Line::raw(""),
+            Line::styled("CORE LINK // ONLINE", Style::default().fg(theme::ACCENT)),
             shortcut("RECENT", &app.sessions().len().to_string(), inner.width)
                 .style(Style::default().fg(theme::MUTED)),
         ]),
@@ -159,7 +191,6 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(
         Paragraph::new(vec![
             shortcut("Models", "Alt+M", inner.width),
-            shortcut("Agent mode", "Alt+A", inner.width),
             shortcut("Settings", "/settings", inner.width),
             shortcut("Help", "?", inner.width),
         ])
@@ -236,33 +267,26 @@ fn shortcut(label: &str, key: &str, width: u16) -> Line<'static> {
     ])
 }
 
-pub(super) fn draw_welcome(frame: &mut Frame<'_>, area: Rect) {
-    if area.height < 6 {
-        return;
+fn signal_line(width: u16) -> Line<'static> {
+    let usable = width.saturating_sub(2).clamp(6, 20) as usize;
+    let tick = theme::animation_tick();
+    let hot = (tick / 2) % usable;
+    let mut spans = Vec::with_capacity(usable + 2);
+    spans.push(Span::styled("╟", Style::default().fg(theme::BORDER)));
+    for index in 0..usable {
+        let (symbol, color) = if index == hot {
+            ("◆", theme::ACCENT_HOT)
+        } else if index.abs_diff(hot) == 1 {
+            ("━", theme::ACCENT)
+        } else {
+            ("─", theme::BORDER)
+        };
+        spans.push(Span::styled(symbol, Style::default().fg(color)));
     }
-    let height = 7.min(area.height);
-    let center = Rect::new(
-        area.x,
-        area.y + area.height.saturating_sub(height) / 2,
-        area.width,
-        height,
-    );
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled("◆", Style::default().fg(theme::ACCENT).bold()),
-            Line::raw(""),
-            Line::styled("What would you like to build?", Style::default().bold()),
-            Line::styled(
-                "Ask a question or describe a change.",
-                Style::default().fg(theme::MUTED),
-            ),
-            Line::raw(""),
-            Line::styled(
-                "Alt+M Models   ·   Alt+S Sessions   ·   / Commands",
-                Style::default().fg(theme::MUTED),
-            ),
-        ])
-        .alignment(Alignment::Center),
-        center,
-    );
+    spans.push(Span::styled("╢", Style::default().fg(theme::BORDER)));
+    Line::from(spans)
+}
+
+pub(super) fn draw_welcome(frame: &mut Frame<'_>, area: Rect, viewport_shape: responsive::Shape) {
+    yeet_brand::draw(frame, area, viewport_shape);
 }

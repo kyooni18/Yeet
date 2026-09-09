@@ -12,7 +12,6 @@ const CHECKPOINT_TURN_CHARS: usize = 900;
 const VERBATIM_RECENT_USER_TURNS: usize = 2;
 const AGED_USER_MESSAGE_CHARS: usize = 2_400;
 const AGED_ASSISTANT_MESSAGE_CHARS: usize = 1_800;
-const VERBATIM_ACTIVE_TOOL_ROUNDS: usize = 2;
 
 pub(super) fn compact_completed_task_history(history: &mut [Message]) {
     for message in history {
@@ -27,68 +26,6 @@ pub(super) fn compact_completed_task_history(history: &mut [Message]) {
             && let Some(calls) = message.tool_calls.as_mut()
         {
             for call in calls {
-                let compact = compact_completed_tool_arguments(&call.name, &call.arguments);
-                if compact.to_string().len() < call.arguments.to_string().len() {
-                    call.arguments = compact;
-                }
-            }
-        }
-    }
-}
-
-/// Bounds the request-only trace for the active user turn while leaving the
-/// canonical session history untouched. The newest tool rounds stay verbatim
-/// so the model can act on fresh evidence; older results keep only compact
-/// recovery metadata and compact call arguments.
-pub(super) fn compact_active_task_history(history: &mut [Message], current_user_index: usize) {
-    let start = current_user_index.saturating_add(1).min(history.len());
-    let mut recent_tool_ids = std::collections::HashSet::new();
-    let mut rounds = 0usize;
-    for message in history[start..].iter().rev() {
-        if message.role != MessageRole::Assistant {
-            continue;
-        }
-        let Some(calls) = message
-            .tool_calls
-            .as_ref()
-            .filter(|calls| !calls.is_empty())
-        else {
-            continue;
-        };
-        if rounds >= VERBATIM_ACTIVE_TOOL_ROUNDS {
-            break;
-        }
-        recent_tool_ids.extend(calls.iter().map(|call| call.id.clone()));
-        rounds += 1;
-    }
-    if rounds < VERBATIM_ACTIVE_TOOL_ROUNDS {
-        return;
-    }
-
-    for message in &mut history[start..] {
-        if message.role == MessageRole::Tool {
-            if message
-                .tool_call_id
-                .as_deref()
-                .is_some_and(|id| recent_tool_ids.contains(id))
-            {
-                continue;
-            }
-            if let Some(content) = message.content.as_deref() {
-                let compact = compact_completed_tool_result(message.name.as_deref(), content);
-                if compact.len() < content.len() {
-                    message.content = Some(compact);
-                }
-            }
-            continue;
-        }
-        if message.role == MessageRole::Assistant
-            && let Some(calls) = message.tool_calls.as_mut()
-        {
-            for call in calls {
-                if recent_tool_ids.contains(&call.id) {
-                    continue;
-                }
                 let compact = compact_completed_tool_arguments(&call.name, &call.arguments);
                 if compact.to_string().len() < call.arguments.to_string().len() {
                     call.arguments = compact;
@@ -785,64 +722,6 @@ mod tests {
     }
 
     #[test]
-    fn active_turn_keeps_only_two_latest_tool_rounds_verbatim() {
-        let call = |id: &str, path: &str| ToolCall {
-            id: id.into(),
-            name: "read_file".into(),
-            arguments: json!({"path":path,"startLine":1,"endLine":200,"refresh":true}),
-        };
-        let result = |id: &str, path: &str, marker: &str| {
-            Message::tool(
-                json!({
-                    "path":path,
-                    "snapshot":format!("snapshot-{id}"),
-                    "startLine":1,
-                    "endLine":200,
-                    "totalLines":500,
-                    "lines":format!("{marker}{}", "x".repeat(12_000)),
-                })
-                .to_string(),
-                id,
-                Some("read_file".into()),
-            )
-        };
-        let mut history = vec![
-            Message::system(SYSTEM_INSTRUCTION),
-            Message::user("fix it"),
-            Message::assistant("", Some(vec![call("r1", "src/a.rs")])),
-            result("r1", "src/a.rs", "old-round"),
-            Message::assistant("", Some(vec![call("r2", "src/b.rs")])),
-            result("r2", "src/b.rs", "recent-round-1"),
-            Message::assistant("", Some(vec![call("r3", "src/c.rs")])),
-            result("r3", "src/c.rs", "recent-round-2"),
-        ];
-
-        compact_active_task_history(&mut history, 1);
-
-        let old = history[3].content.as_deref().unwrap();
-        assert!(!old.contains("old-round"));
-        assert!(old.contains("contentOmitted"));
-        assert_eq!(
-            history[2].tool_calls.as_ref().unwrap()[0].arguments,
-            json!({"path":"src/a.rs","startLine":1,"endLine":200})
-        );
-        assert!(
-            history[5]
-                .content
-                .as_deref()
-                .unwrap()
-                .contains("recent-round-1")
-        );
-        assert!(
-            history[7]
-                .content
-                .as_deref()
-                .unwrap()
-                .contains("recent-round-2")
-        );
-    }
-
-    #[test]
     fn completed_conversation_history_is_bounded_by_user_turns() {
         let mut history = vec![Message::system(SYSTEM_INSTRUCTION)];
         for index in 0..12 {
@@ -994,7 +873,6 @@ mod tests {
 #[cfg(test)]
 mod size_tests {
     use super::*;
-    use crate::core::ToolCall;
 
     #[test]
     fn repeated_skills_keep_latest_copy_and_distinct_versions() {
@@ -1069,42 +947,5 @@ mod size_tests {
         compact_completed_task_history(&mut working);
         assert!(working[0].content.as_ref().unwrap().len() < content.len());
         assert_eq!(original[0].content.as_deref(), Some("{}"));
-    }
-
-    #[test]
-    fn active_tool_trace_size_stays_bounded_as_rounds_accumulate() {
-        let mut history = vec![Message::system(SYSTEM_INSTRUCTION), Message::user("fix it")];
-        for index in 0..10 {
-            let id = format!("read-{index}");
-            history.push(Message::assistant(
-                "",
-                Some(vec![ToolCall {
-                    id: id.clone(),
-                    name: "read_file".into(),
-                    arguments: json!({"path":format!("src/{index}.rs"),"startLine":1,"endLine":200}),
-                }]),
-            ));
-            history.push(Message::tool(
-                json!({
-                    "path":format!("src/{index}.rs"),
-                    "snapshot":format!("snapshot-{index}"),
-                    "startLine":1,
-                    "endLine":200,
-                    "totalLines":200,
-                    "lines":"x".repeat(20_000),
-                })
-                .to_string(),
-                id,
-                Some("read_file".into()),
-            ));
-        }
-        let raw_bytes = serde_json::to_vec(&history).unwrap().len();
-        let mut working = history.clone();
-
-        compact_active_task_history(&mut working, 1);
-
-        let compact_bytes = serde_json::to_vec(&working).unwrap().len();
-        assert!(compact_bytes * 3 < raw_bytes);
-        assert_eq!(history.last().unwrap(), working.last().unwrap());
     }
 }

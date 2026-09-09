@@ -128,25 +128,60 @@ impl ArtifactStore {
 }
 
 pub(super) fn collect_web_source_urls(value: &Value, output: &mut HashSet<String>) {
-    match value {
-        Value::Object(object) => {
-            if let Some(url) = object.get("url").and_then(Value::as_str) {
-                let url = url.trim();
-                if url.starts_with("https://") || url.starts_with("http://") {
-                    output.insert(url.to_owned());
+    // Tool responses are external input. Walk them iteratively so a malicious or
+    // unexpectedly deep JSON tree cannot overflow the MCP HTTP worker stack.
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Object(object) => {
+                if let Some(url) = object.get("url").and_then(Value::as_str) {
+                    let url = url.trim();
+                    if url.starts_with("https://") || url.starts_with("http://") {
+                        output.insert(canonical_web_source_key(url));
+                    }
                 }
+                pending.extend(object.values());
             }
-            for child in object.values() {
-                collect_web_source_urls(child, output);
-            }
+            Value::Array(values) => pending.extend(values),
+            _ => {}
         }
-        Value::Array(values) => {
-            for child in values {
-                collect_web_source_urls(child, output);
-            }
-        }
-        _ => {}
     }
+}
+
+#[cfg(test)]
+mod web_source_url_tests {
+    use super::*;
+
+    #[test]
+    fn deeply_nested_web_results_do_not_recurse_on_the_worker_stack() {
+        let worker = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut value = json!({"url":"https://example.com/source"});
+                for _ in 0..2_000 {
+                    value = Value::Array(vec![value]);
+                }
+                let mut urls = HashSet::new();
+                collect_web_source_urls(&value, &mut urls);
+                assert!(urls.contains("https://example.com/source"));
+
+                // serde_json::Value itself drops recursively. Leak this synthetic
+                // adversarial value so the test measures our walker rather than
+                // serde_json's destructor on the deliberately tiny stack.
+                std::mem::forget(value);
+            })
+            .expect("spawn tiny-stack worker");
+        worker.join().expect("deep JSON walk should not overflow");
+    }
+}
+
+pub(crate) fn canonical_web_source_key(value: &str) -> String {
+    let value = value.trim();
+    let Ok(mut parsed) = url::Url::parse(value) else {
+        return value.to_owned();
+    };
+    parsed.set_fragment(None);
+    parsed.to_string()
 }
 
 pub(super) fn web_search_queries(object: &Map<String, Value>) -> Result<Vec<String>> {

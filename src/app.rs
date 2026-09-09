@@ -3,12 +3,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+mod selection;
+pub use selection::TranscriptContextMenu;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+#[cfg(test)]
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::{
     backend::Backend,
     model::{
-        AGENT_MODES, BridgeState, CapabilityToggleItem, ConversationEntry, FrontendCommand,
+        BridgeState, CapabilityToggleItem, ConversationEntry, FrontendCommand,
         ProviderConfigurationItem, REASONING_LEVELS, SandboxAction, SessionSummary,
     },
 };
@@ -19,7 +24,6 @@ pub enum Mode {
     Debate,
     Models,
     Reasoning,
-    AgentMode,
     Sessions,
     Capabilities,
     CapabilityDetail,
@@ -77,6 +81,13 @@ pub struct App {
     pub follow_tail: bool,
     pub scroll_y: u16,
     pub max_scroll: u16,
+    pub transcript_area: (u16, u16, u16, u16),
+    pub transcript_cells: Vec<Vec<String>>,
+    pub selection_start: Option<(u16, u16)>,
+    pub selection_end: Option<(u16, u16)>,
+    pub transcript_context_menu: Option<TranscriptContextMenu>,
+    pub transcript_context_menu_area: (u16, u16, u16, u16),
+    pub(crate) clipboard_request: Option<String>,
     pub quit: bool,
     pub backend_message: Option<String>,
     pub stream_started_at: Option<Instant>,
@@ -109,6 +120,13 @@ impl Default for App {
             follow_tail: true,
             scroll_y: 0,
             max_scroll: 0,
+            transcript_area: (0, 0, 0, 0),
+            transcript_cells: Vec::new(),
+            selection_start: None,
+            selection_end: None,
+            transcript_context_menu: None,
+            transcript_context_menu_area: (0, 0, 0, 0),
+            clipboard_request: None,
             quit: false,
             backend_message: None,
             stream_started_at: None,
@@ -123,6 +141,7 @@ impl App {
         let is_streaming = next.is_streaming;
         if let Some(conversation) = next.conversation.take() {
             self.conversation = conversation;
+            self.clear_transcript_selection();
         }
         self.state = next;
         match (was_streaming, is_streaming) {
@@ -215,7 +234,6 @@ impl App {
             Mode::Chat => self.handle_chat_key(event, backend),
             Mode::Models => self.handle_model_key(event, backend),
             Mode::Reasoning => self.handle_reasoning_key(event, backend),
-            Mode::AgentMode => self.handle_agent_mode_key(event, backend),
             Mode::Sessions => self.handle_session_key(event, backend),
             Mode::Capabilities => self.handle_capability_key(event, backend),
             Mode::CapabilityDetail => self.handle_capability_detail_key(event, backend),
@@ -236,17 +254,6 @@ impl App {
                 }
                 Ok(())
             }
-        }
-    }
-
-    pub fn handle_mouse(&mut self, event: MouseEvent) {
-        if self.mode != Mode::Chat {
-            return;
-        }
-        match event.kind {
-            MouseEventKind::ScrollUp => self.scroll_up(3),
-            MouseEventKind::ScrollDown => self.scroll_down(3),
-            _ => {}
         }
     }
 
@@ -303,7 +310,6 @@ impl App {
         match self.mode {
             Mode::Models | Mode::Capabilities => self.popup_filter.is_empty(),
             Mode::Reasoning
-            | Mode::AgentMode
             | Mode::Sessions
             | Mode::Providers
             | Mode::Settings
@@ -314,9 +320,16 @@ impl App {
     }
 
     fn handle_chat_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        if event.code == KeyCode::Esc && self.transcript_context_menu.is_some() {
+            self.transcript_context_menu = None;
+            return Ok(());
+        }
         if event.modifiers.contains(KeyModifiers::CONTROL) {
             match event.code {
                 KeyCode::Char('c') => {
+                    if self.copy_transcript_selection() {
+                        return Ok(());
+                    }
                     if self.state.is_streaming {
                         backend.send(FrontendCommand::Interrupt)?;
                     } else {
@@ -370,11 +383,6 @@ impl App {
                 if event.code == KeyCode::F(5) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
                 self.open_capabilities(backend)?;
-            }
-            KeyCode::F(6) | KeyCode::Char('a')
-                if event.code == KeyCode::F(6) || event.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.open_agent_mode();
             }
             KeyCode::Char('?') if self.input.is_empty() => {
                 self.mode = Mode::Help;
@@ -441,16 +449,6 @@ impl App {
                     }
                     "/model" => self.open_models(backend)?,
                     "/reasoning" => self.open_reasoning(),
-                    "/mode" => self.open_agent_mode(),
-                    value if value.starts_with("/mode ") => {
-                        let requested = value[6..].trim().to_ascii_lowercase();
-                        if AGENT_MODES.iter().any(|mode| *mode == requested) {
-                            backend.send(FrontendCommand::SelectAgentMode { mode: requested })?;
-                        } else {
-                            self.backend_message =
-                                Some("Mode must be auto, code, or general".into());
-                        }
-                    }
                     "/sessions" => self.open_sessions(backend)?,
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
@@ -571,31 +569,6 @@ impl App {
                 if let Some(level) = REASONING_LEVELS.get(self.popup_index) {
                     backend.send(FrontendCommand::SelectReasoning {
                         level: (*level).to_owned(),
-                    })?;
-                    self.close_popup();
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_agent_mode_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        match event.code {
-            KeyCode::Esc | KeyCode::F(6) => self.close_popup(),
-            KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down | KeyCode::Right => {
-                self.popup_index =
-                    cmp::min(self.popup_index + 1, AGENT_MODES.len().saturating_sub(1));
-            }
-            KeyCode::Enter => {
-                if let Some(mode) = AGENT_MODES.get(self.popup_index) {
-                    backend.send(FrontendCommand::SelectAgentMode {
-                        mode: (*mode).to_owned(),
                     })?;
                     self.close_popup();
                 }
@@ -1137,15 +1110,6 @@ impl App {
             .unwrap_or(0);
     }
 
-    fn open_agent_mode(&mut self) {
-        self.mode = Mode::AgentMode;
-        self.popup_filter.clear();
-        self.popup_index = AGENT_MODES
-            .iter()
-            .position(|mode| *mode == self.state.active_agent_mode)
-            .unwrap_or(0);
-    }
-
     fn open_capabilities(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         self.mode = Mode::Capabilities;
         self.popup_filter.clear();
@@ -1487,7 +1451,6 @@ impl App {
         let count = match self.mode {
             Mode::Models => self.filtered_models().len(),
             Mode::Reasoning => REASONING_LEVELS.len(),
-            Mode::AgentMode => AGENT_MODES.len(),
             Mode::Sessions => self.state.saved_sessions.len(),
             Mode::Capabilities => self.filtered_capabilities().len(),
             Mode::Auth => self.state.auth_providers.len(),
@@ -1501,6 +1464,7 @@ impl App {
     }
 
     fn scroll_up(&mut self, amount: u16) {
+        self.clear_transcript_selection();
         if self.follow_tail {
             self.scroll_y = self.max_scroll;
         }
@@ -1509,6 +1473,7 @@ impl App {
     }
 
     fn scroll_down(&mut self, amount: u16) {
+        self.clear_transcript_selection();
         self.scroll_y = cmp::min(self.scroll_y.saturating_add(amount), self.max_scroll);
         self.follow_tail = self.scroll_y >= self.max_scroll;
     }
@@ -1549,7 +1514,6 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/new", "Start a new session"),
     ("/model", "Select model"),
     ("/reasoning", "Select reasoning level"),
-    ("/mode", "Select Auto, Code, or General mode"),
     ("/login", "Manage provider authentication"),
     ("/provider", "Manage custom API endpoints"),
     ("/providers", "Manage custom API endpoints"),
@@ -1658,6 +1622,7 @@ mod tests {
             max_scroll: 30,
             follow_tail: true,
             scroll_y: 30,
+            transcript_area: (0, 0, 80, 20),
             ..App::default()
         };
 
@@ -1678,5 +1643,110 @@ mod tests {
         });
         assert_eq!(app.scroll_y, 30);
         assert!(app.follow_tail);
+    }
+
+    #[test]
+    fn transcript_selection_is_scoped_clamped_and_direction_independent() {
+        let mut app = App {
+            transcript_area: (10, 4, 8, 3),
+            transcript_cells: vec![
+                "abcdefgh".chars().map(|ch| ch.to_string()).collect(),
+                "ijklmnop".chars().map(|ch| ch.to_string()).collect(),
+                "qrstuvwx".chars().map(|ch| ch.to_string()).collect(),
+            ],
+            ..App::default()
+        };
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 12,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            app.selected_transcript_text().as_deref(),
+            Some("cdefgh\nijklmn")
+        );
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 15,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 12,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            app.selected_transcript_text().as_deref(),
+            Some("cdefgh\nijklmn")
+        );
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 40,
+            row: 40,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.selection_end, Some((17, 6)));
+    }
+
+    #[test]
+    fn sidebar_clicks_do_not_start_selection_and_context_menu_copies_selection() {
+        let mut app = App {
+            transcript_area: (20, 5, 6, 2),
+            transcript_cells: vec![
+                "hello!".chars().map(|ch| ch.to_string()).collect(),
+                "world!".chars().map(|ch| ch.to_string()).collect(),
+            ],
+            ..App::default()
+        };
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.selection_start.is_none());
+
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 20,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 24,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 22,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.transcript_context_menu.is_some());
+
+        app.transcript_context_menu_area = (22, 5, 22, 4);
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 23,
+            row: 6,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.take_clipboard_request().as_deref(), Some("hello"));
+        assert!(app.transcript_context_menu.is_none());
     }
 }

@@ -30,7 +30,6 @@ use crate::{
         ConversationKind, ConversationToolCall, FrontendCommand, ModelActivity,
         NativeAppPermission, ProviderConfigurationItem, SandboxAction, SandboxEnvironmentItem,
         SandboxLimitsState, SandboxNetworkItem, SandboxSettingsState, ToolCallStatus,
-        normalize_agent_mode,
     },
     permission::PermissionBroker,
     project_settings::ProjectSettingsStore,
@@ -156,7 +155,6 @@ impl BackendService {
         config.ensure()?;
         let model = config.model()?.unwrap_or_default();
         let reasoning_level = config.reasoning_level()?.unwrap_or_else(|| "auto".into());
-        let agent_mode = config.agent_mode()?.unwrap_or_else(|| "auto".into());
         let project_settings = ProjectSettingsStore::new(&workspace_root)?;
         project_settings.ensure()?;
         let project = project_settings.load()?;
@@ -183,7 +181,6 @@ impl BackendService {
             coordinator.set_session_runtime(store.clone(), None);
         }
         let mut session = SharedSession::new(model, reasoning_level);
-        session.state.active_agent_mode = agent_mode;
         session.state.openai_flex = project.openai_flex;
         session.state.foundation_memory_enabled = project.foundation_memory.enabled;
         session.state.foundation_memory_server = project.foundation_memory.server.clone();
@@ -258,7 +255,6 @@ impl BackendService {
             }
             FrontendCommand::SelectModel { model } => self.select_model(model),
             FrontendCommand::SelectReasoning { level } => self.select_reasoning(level),
-            FrontendCommand::SelectAgentMode { mode } => self.select_agent_mode(mode),
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
                 Ok(())
@@ -467,7 +463,6 @@ impl BackendService {
             .state
             .active_reasoning_level
             .clone();
-        let agent_mode = self.shared.lock().unwrap().state.active_agent_mode.clone();
         if model.is_empty() {
             let mut shared = self.shared.lock().unwrap();
             shared.set_activity("failed", "Failed", Some("No model selected".into()));
@@ -532,7 +527,6 @@ impl BackendService {
                             images,
                             model: &model,
                             reasoning_level: &reasoning_level,
-                            agent_mode: &agent_mode,
                             attached_capabilities: attached,
                             disabled_capabilities,
                             cancel: cancel.clone(),
@@ -544,6 +538,7 @@ impl BackendService {
                                 }
                                 let omit_conversation = match &event {
                                     AgentEvent::ModelAttemptStarted { .. }
+                                    | AgentEvent::ModelAttemptFinished(..)
                                     | AgentEvent::AuxiliaryUsage(_) => true,
                                     AgentEvent::TextDelta(_) => {
                                         state.state.active_assistant_entry_id.is_some()
@@ -861,16 +856,6 @@ impl BackendService {
         Ok(())
     }
 
-    fn select_agent_mode(&self, mode: String) -> Result<()> {
-        let mode = normalize_agent_mode(&mode).ok_or_else(|| {
-            anyhow!("Unknown agent mode {mode:?}; expected auto, code, or general")
-        })?;
-        let mode = self.config.set_agent_mode(mode)?;
-        self.shared.lock().unwrap().state.active_agent_mode = mode;
-        self.publish_state();
-        Ok(())
-    }
-
     fn refresh_context_length(&self) {
         let model = self.shared.lock().unwrap().state.active_model.clone();
         if model.is_empty() {
@@ -1124,17 +1109,26 @@ mod tests {
 
     #[test]
     fn web_search_is_part_of_default_attached_harness() {
-        let harness = vec![HarnessCapabilityDescriptor {
-            id: "vision".into(),
-            name: "Vision".into(),
-            description: "images".into(),
-            default_attached: true,
-        }];
+        let harness = vec![
+            HarnessCapabilityDescriptor {
+                id: "vision".into(),
+                name: "Vision".into(),
+                description: "images".into(),
+                default_attached: true,
+            },
+            HarnessCapabilityDescriptor {
+                id: "lead".into(),
+                name: "Lead Agent".into(),
+                description: "primary agent marker".into(),
+                default_attached: false,
+            },
+        ];
 
         let attached = default_attached_harness(&harness);
 
         assert!(attached.iter().any(|value| value == "vision"));
         assert!(attached.iter().any(|value| value == "web-search"));
+        assert!(!attached.iter().any(|value| value == "lead"));
     }
 
     #[test]
@@ -1216,7 +1210,7 @@ mod tests {
         assert!(
             !serde_json::to_string(&stored)
                 .unwrap()
-                .contains("Yeet's coding agent")
+                .contains("You are Yeet's agent")
         );
 
         let custom = storage_model_history(vec![

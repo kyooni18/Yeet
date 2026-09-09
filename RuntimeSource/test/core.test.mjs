@@ -215,11 +215,93 @@ test("provider-native prompt caching is enabled and cache telemetry is normalize
       });
     },
   });
-  const anthropicResult = await anthropic.complete({ model: "claude-test", messages: [{ role: "user", content: "hello" }] });
-  assert.deepEqual(anthropicRequest.cache_control, { type: "ephemeral" });
+  const anthropicResult = await anthropic.complete({
+    model: "claude-test",
+    promptCache: true,
+    messages: [
+      { role: "user", content: "hello", cacheBreakpoint: true },
+      { role: "system", content: "volatile request overlay", requestOnly: true },
+    ],
+  });
+  assert.equal(anthropicRequest.cache_control, undefined);
+  assert.deepEqual(anthropicRequest.messages[0].content[0].cache_control, { type: "ephemeral" });
+  assert.equal(anthropicRequest.messages[1].content, "volatile request overlay");
+  assert.equal(anthropicResult.usage.inputTokens, 60);
+  assert.equal(anthropicResult.usage.totalTokens, 65);
   assert.equal(anthropicResult.usage.cachedInputTokens, 20);
   assert.equal(anthropicResult.usage.cacheWriteInputTokens, 10);
   assert.equal(anthropicResult.usage.reasoningTokens, 3);
+
+  await anthropic.complete({
+    model: "claude-test",
+    promptCache: false,
+    messages: [{ role: "user", content: "one shot", cacheBreakpoint: true }],
+  });
+  assert.equal(anthropicRequest.cache_control, undefined);
+  assert.equal(JSON.stringify(anthropicRequest).includes("cache_control"), false);
+
+  await anthropic.complete({
+    model: "claude-test",
+    promptCache: true,
+    providerOptions: { cache_control: { type: "ephemeral", ttl: "1h" } },
+    messages: [{ role: "user", content: "long lived", cacheBreakpoint: true }],
+  });
+  assert.equal(anthropicRequest.cache_control, undefined);
+  assert.deepEqual(anthropicRequest.messages[0].content[0].cache_control, { type: "ephemeral", ttl: "1h" });
+
+  await anthropic.complete({
+    model: "claude-test",
+    promptCache: true,
+    providerOptions: { cache_control: { type: "ephemeral", ttl: "1h" } },
+    messages: [{ role: "user", content: "automatic only" }],
+  });
+  assert.deepEqual(anthropicRequest.cache_control, { type: "ephemeral", ttl: "1h" });
+  assert.equal(JSON.stringify(anthropicRequest.messages).includes("cache_control"), false);
+
+  await anthropic.complete({
+    model: "claude-test",
+    promptCache: true,
+    messages: Array.from({ length: 5 }, (_, index) => ({
+      role: "user",
+      content: `part-${index}`,
+      cacheBreakpoint: true,
+    })),
+  });
+  assert.equal(anthropicRequest.cache_control, undefined);
+  assert.equal(
+    anthropicRequest.messages
+      .flatMap((message) => Array.isArray(message.content) ? message.content : [])
+      .filter((part) => part.cache_control).length,
+    4,
+  );
+  assert.equal(Array.isArray(anthropicRequest.messages[0].content), false);
+});
+
+test("OpenRouter can advance an explicit cache boundary through tool results", async () => {
+  let sent;
+  const provider = new OpenRouterProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
+    },
+  });
+
+  await provider.complete({
+    model: "google/gemini-3.8-flash",
+    promptCache: true,
+    contextKey: "cache-session",
+    messages: [
+      { role: "user", content: "research it", cacheBreakpoint: true },
+      { role: "assistant", toolCalls: [{ id: "call-1", name: "web_read", arguments: { url: "https://example.com" } }] },
+      { role: "tool", toolCallId: "call-1", content: "large source evidence", cacheBreakpoint: true },
+    ],
+  });
+
+  assert.equal(sent.session_id, "cache-session");
+  assert.deepEqual(sent.messages[0].content[0].cache_control, { type: "ephemeral" });
+  assert.deepEqual(sent.messages[2].content[0].cache_control, { type: "ephemeral" });
+  assert.equal(sent.messages[2].content[0].text, "large source evidence");
 });
 
 test("Anthropic and Gemini keep volatile coordinator overlays behind the stable system prefix", async () => {
@@ -926,23 +1008,37 @@ test("Gemini derives reasoning tokens from total usage when thoughtsTokenCount i
   assert.equal(result.usage.reasoningTokens, 4);
 });
 
-test("OpenRouter sets attribution headers and uses chat completions", async () => {
+test("OpenRouter keeps stable session affinity and forwards explicit cache breakpoints", async () => {
   let seen;
   const provider = new OpenRouterProvider({
     apiKey: "test",
     appUrl: "https://example.test",
     appName: "Harness",
     fetch: async (url, init) => {
-      seen = { url: String(url), headers: init.headers };
+      seen = { url: String(url), headers: init.headers, body: JSON.parse(init.body) };
       return jsonResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
     },
   });
 
-  const result = await provider.complete({ model: "openai/test", messages: [{ role: "user", content: "hi" }] });
+  const result = await provider.complete({
+    model: "openai/test",
+    contextKey: "window-id",
+    metadata: { sessionId: "stable-agent-session" },
+    promptCache: true,
+    messages: [
+      { role: "system", content: "stable system" },
+      { role: "user", content: "hi" },
+      { role: "system", content: "stable turn overlay", cacheBreakpoint: true },
+      { role: "system", content: "volatile orientation", requestOnly: true },
+    ],
+  });
   assert.equal(result.text, "ok");
   assert.equal(seen.url, "https://openrouter.ai/api/v1/chat/completions");
   assert.equal(seen.headers["HTTP-Referer"], "https://example.test");
   assert.equal(seen.headers["X-Title"], "Harness");
+  assert.equal(seen.body.session_id, "stable-agent-session");
+  assert.deepEqual(seen.body.messages[2].content[0].cache_control, { type: "ephemeral" });
+  assert.equal(seen.body.messages[3].content, "volatile orientation");
 });
 
 test("OpenCode Zen discovers models and routes provider-native protocols", async () => {
@@ -1329,7 +1425,7 @@ test("Codex OAuth sends subscription-compatible bodies for complete and stream",
     fetch: async (url, init) => {
       assert.equal(String(url), "https://chatgpt.com/backend-api/codex/responses");
       assert.equal(init.headers.authorization, "Bearer oauth-token");
-      requests.push(JSON.parse(init.body));
+      requests.push({ headers: init.headers, body: JSON.parse(init.body) });
       return sseResponse([{ type: "response.completed", response: {
         id: "oauth-response", model: "gpt-5.6-sol", status: "completed",
         output: [
@@ -1341,7 +1437,9 @@ test("Codex OAuth sends subscription-compatible bodies for complete and stream",
   });
   const request = {
     model: "gpt-5.6-sol", temperature: 0.5, maxTokens: 100,
-    metadata: { label: "test" }, messages: [{ role: "user", content: "hi", cacheBreakpoint: true }],
+    contextKey: "window-cache-key",
+    metadata: { label: "test", sessionId: "stable-session-id", contextWindowId: "context-window-id" },
+    messages: [{ role: "user", content: "hi", cacheBreakpoint: true }],
     providerOptions: { store: true, top_p: 0.9, service_tier: "flex", reasoning: { effort: "low" } },
   };
   const result = await provider.complete(request);
@@ -1351,7 +1449,11 @@ test("Codex OAuth sends subscription-compatible bodies for complete and stream",
   assert.equal(result.usage.totalTokens, 5);
   for await (const _event of provider.stream(request)) {}
   assert.equal(requests.length, 2);
-  for (const body of requests) {
+  for (const { headers, body } of requests) {
+    assert.equal(headers["session-id"], "stable-session-id");
+    assert.equal(headers["thread-id"], "context-window-id");
+    assert.equal(headers["x-client-request-id"], "context-window-id");
+    assert.equal(body.prompt_cache_key, "stable-session-id");
     assert.equal(body.store, false);
     assert.equal(body.stream, true);
     assert.equal(body.instructions, "");

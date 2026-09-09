@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import process from "node:process";
 import { AuthManager, type ResolvedCredential } from "./auth.js";
 import { createDefaultCore } from "./defaults.js";
+import { CodexComputerUse } from "./codex-computer-use.js";
 import type { ProviderFetchLog } from "./http.js";
 import { McpManager } from "./mcp.js";
 import { ModelMetadataCatalog } from "./model-metadata.js";
@@ -55,6 +56,7 @@ function denyPendingNativeApprovals(): void {
 }
 const mcp = new McpManager({ configDir: auth.configDir, nativeAppApproval: requestNativeAppApproval });
 await mcp.ensure();
+const computerUse = new CodexComputerUse(mcp);
 const modelMetadata = new ModelMetadataCatalog();
 function writeApiCallLog(entry: ProviderFetchLog): void {
   process.stderr.write(`api-call ${JSON.stringify(entry)}\n`);
@@ -87,7 +89,7 @@ async function enrichedModelInfo(provider: string): Promise<import("./types.js")
 }
 
 function auxiliaryPurpose(request: import("./types.js").CallRequest): boolean {
-  return ["session-title", "context-compaction", "command-evaluation"].includes(request.metadata?.purpose ?? "");
+  return ["session-title", "context-compaction"].includes(request.metadata?.purpose ?? "");
 }
 
 async function costAwareRequest(request: import("./types.js").CallRequest): Promise<import("./types.js").CallRequest> {
@@ -297,9 +299,10 @@ async function runComplete(command: Extract<BridgeCommand, { op: "complete" }>):
     await refreshProvider(parseModelId(command.request.model).provider);
     ensureVisionAttached(command.request);
     const costAware = await costAwareRequest(command.request);
-    const preparation = await harnessCapabilities.prepareWithUsage(withReasoningPolicy(costAware));
-    const result = await core.complete({ ...preparation.request, signal: controller.signal });
-    const primaryUsage = await usageWithEstimatedCost(preparation.request, result.usage);
+    const preparation = await harnessCapabilities.prepareWithUsage(costAware);
+    const preparedRequest = withReasoningPolicy(preparation.request);
+    const result = await core.complete({ ...preparedRequest, signal: controller.signal });
+    const primaryUsage = await usageWithEstimatedCost(preparedRequest, result.usage);
     write({
       v: BRIDGE_PROTOCOL_VERSION,
       id: command.id,
@@ -320,11 +323,12 @@ async function runStream(command: Extract<BridgeCommand, { op: "stream" }>): Pro
     await refreshProvider(parseModelId(command.request.model).provider);
     ensureVisionAttached(command.request);
     const costAware = await costAwareRequest(command.request);
-    const preparation = await harnessCapabilities.prepareWithUsage(withReasoningPolicy(costAware));
-    for await (const event of core.stream({ ...preparation.request, signal: controller.signal })) {
+    const preparation = await harnessCapabilities.prepareWithUsage(costAware);
+    const preparedRequest = withReasoningPolicy(preparation.request);
+    for await (const event of core.stream({ ...preparedRequest, signal: controller.signal })) {
       const preparedEvent = event.type === "finish"
         ? { ...event, usage: mergeUsageWithModelCall(
-          await usageWithEstimatedCost(preparation.request, event.usage),
+          await usageWithEstimatedCost(preparedRequest, event.usage),
           preparation.auxiliaryUsage,
         ) }
         : event;
@@ -352,6 +356,19 @@ async function runMcpCallTool(command: Extract<BridgeCommand, { op: "mcp-call-to
   try {
     const toolResult = await mcp.callTool(command.server, command.tool, command.arguments ?? {}, controller.signal);
     write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-tool-result", toolResult });
+  } catch (error) {
+    write(errorMessage(command.id, error));
+  } finally {
+    active.delete(command.id);
+  }
+}
+
+async function runComputerUseCall(command: Extract<BridgeCommand, { op: "computer-use-call" }>): Promise<void> {
+  const controller = new AbortController();
+  active.set(command.id, controller);
+  try {
+    const toolResult = await computerUse.call(command.tool, command.arguments ?? {}, controller.signal);
+    write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "computer-use-result", toolResult });
   } catch (error) {
     write(errorMessage(command.id, error));
   } finally {
@@ -578,6 +595,10 @@ async function handle(command: BridgeCommand): Promise<void> {
       if (command.server) await mcp.disconnect(command.server);
       else await mcp.close();
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "done" });
+      return;
+
+    case "computer-use-call":
+      void runComputerUseCall(command);
       return;
 
     case "cancel":

@@ -1,6 +1,6 @@
 //! Recoverable session memory. Window files retain exact model messages; notes
 //! and the active window are committed atomically in one manifest.
-use crate::core::{Message, ToolCall, ToolDefinition};
+use crate::core::{Message, MessageRole, ToolCall, ToolDefinition};
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -111,6 +111,31 @@ impl ContextMemory {
         history: &mut Vec<Message>,
         objective: Option<&Message>,
     ) -> Result<()> {
+        self.rollover_with_handoff(history, objective, None)
+    }
+
+    pub fn rollover_with_handoff(
+        &mut self,
+        history: &mut Vec<Message>,
+        objective: Option<&Message>,
+        handoff: Option<&Message>,
+    ) -> Result<()> {
+        let active_skill_instructions = objective
+            .and_then(|objective| history.iter().rposition(|message| message == objective))
+            .map(|index| {
+                history[index + 1..]
+                    .iter()
+                    .filter(|message| {
+                        message.role == MessageRole::System
+                            && message
+                                .content
+                                .as_deref()
+                                .is_some_and(|content| content.starts_with("User-invoked Skill:"))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         // Persist the backing store before discarding any working context.
         self.sync(history)?;
         self.flush()?;
@@ -133,6 +158,10 @@ impl ContextMemory {
         let mut next = vec![Message::system(super::SYSTEM_INSTRUCTION)];
         if let Some(objective) = objective {
             next.push(objective.clone());
+        }
+        next.extend(active_skill_instructions);
+        if let Some(handoff) = handoff {
+            next.push(handoff.clone());
         }
         self.state.active = next.clone();
         if let Err(error) = self.persist() {
@@ -195,7 +224,7 @@ impl ContextMemory {
             "new_context" => {
                 ensure!(self.root.is_some(), "Save a session before rollover");
                 self.rollover_requested = true;
-                json!({"scheduled":true,"after":"current tool batch","hint":"Save notes before this batch finishes."})
+                json!({"scheduled":true,"after":"current tool batch","hint":"Execution state is carried into the next window automatically. Save task_notes before this batch finishes when exact constraints or long evidence must remain easy to recover."})
             }
             "task_notes" => {
                 let op = arg(a, "operation")?;
@@ -501,6 +530,54 @@ mod tests {
         assert_eq!(history, old);
         assert_eq!(memory.id(), id);
         assert_eq!(memory.number(), 1);
+    }
+    #[test]
+    fn rollover_handoff_is_persisted_in_the_new_active_window() {
+        let (dir, mut memory, mut history) = memory();
+        let handoff = Message::system(
+            "Internal context rollover handoff. successfulWorkspaceMutations=2; verification=passed.",
+        );
+        memory
+            .rollover_with_handoff(
+                &mut history,
+                Some(&Message::user("objective")),
+                Some(&handoff),
+            )
+            .unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[2], handoff);
+
+        let mut restored = ContextMemory::default();
+        restored.bind(Some(dir.path().join("context")));
+        let mut restored_history = Vec::new();
+        restored.load(&mut restored_history).unwrap();
+        assert_eq!(restored_history.len(), 3);
+        assert_eq!(restored_history[2], handoff);
+    }
+    #[test]
+    fn rollover_keeps_current_turn_skill_instructions_without_old_skill_history() {
+        let (_, mut memory, mut history) = memory();
+        history.push(Message::user("old turn"));
+        history.push(Message::system("User-invoked Skill: old\nOLD"));
+        history.push(Message::assistant("done", None));
+        let objective = Message::user("current turn");
+        let skill = Message::system("User-invoked Skill: current\nCURRENT");
+        history.push(objective.clone());
+        history.push(skill.clone());
+
+        memory
+            .rollover_with_handoff(&mut history, Some(&objective), None)
+            .unwrap();
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[1], objective);
+        assert_eq!(history[2], skill);
+        assert!(!history.iter().any(|message| {
+            message
+                .content
+                .as_deref()
+                .is_some_and(|content| content.contains("OLD"))
+        }));
     }
     #[test]
     fn note_names_are_not_paths_and_reads_are_bounded() {

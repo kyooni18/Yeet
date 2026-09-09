@@ -160,7 +160,7 @@ export class EditBackend {
     this.#blockResolver = options.blockResolver;
     this.#enforceSeenLines = options.enforceSeenLines ?? true;
     this.#allowOutside = options.allowOutside ?? false;
-    this.registerDialect(new HashlineDialect());
+    this.registerDialect(new HashlineDialect(options.blockResolver !== undefined));
     this.registerDialect(new ApplyPatchDialect());
     this.registerDialect(new SloppyDialect());
   }

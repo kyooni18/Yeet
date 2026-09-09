@@ -125,8 +125,27 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
             json!({"type":"object","properties":{"command":{"type":"string"},"reason":{"type":"string"}},"required":["command","reason"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
+            "computer_use",
+            "Control native macOS apps through the installed Codex Computer Use runtime. The JavaScript session persists across calls. On the first call after start/reset, execute exactly one entry-point call such as `await cua.getState()` or `let app = await cua.getApp(\"App Name\")`, then read the returned runtime documentation before using further APIs. Prefer purpose-built APIs/connectors when available.",
+            json!({
+                "type":"object",
+                "properties":{
+                    "code":{"type":"string","description":"JavaScript to execute using Codex's initialized Computer Use runtime."},
+                    "timeout_ms":{"type":"integer","minimum":1,"description":"Optional execution timeout in milliseconds. Codex defaults to 30000 when omitted."},
+                    "title":{"type":"string","minLength":1,"maxLength":80,"description":"Short user-facing description of what the Computer Use action does."}
+                },
+                "required":["code"],
+                "additionalProperties":false
+            }),
+        ),
+        ToolDefinition::new(
+            "computer_use_reset",
+            "Reset Yeet's persistent Codex Computer Use JavaScript session. This discards JavaScript bindings but does not close apps or erase their state.",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        ToolDefinition::new(
             "apply_file_edits",
-            "Apply atomic structured file edits. Use JSON edit objects, never patch strings. replace/delete use range:{start,end,startHash?,endHash?}; never top-level start/end. Sandboxed existing files require a read_file snapshot; creates do not. Outside-project access follows approval rules; unlimited mode may edit without a snapshot.",
+            "Apply atomic structured file edits. Use JSON edit objects, never patch strings. replace/delete use range:{start,end,startHash?,endHash?}; never top-level start/end. Hash fields are the 4-character token from read_file's `line:hash|text` anchor (for example `9b12`, not the source text). Sandboxed existing files require a read_file snapshot; creates do not. Outside-project access follows approval rules; unlimited mode may edit without a snapshot.",
             json!({
                 "type":"object",
                 "properties":{
@@ -143,10 +162,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                                         "oneOf":[
                                             {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1},"startHash":{"type":"string"},"endHash":{"type":"string"}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
                                             {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1},"startHash":{"type":"string"},"endHash":{"type":"string"}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"replaceBlock"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"},"text":{"type":"string"}},"required":["kind","line","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insertAfterBlock"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"},"text":{"type":"string"}},"required":["kind","line","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"deleteBlock"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"}},"required":["kind","line"],"additionalProperties":false}
+                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false}
                                         ]
                                     }
                                 },
@@ -194,13 +210,13 @@ pub fn is_coding_builtin_tool(name: &str) -> bool {
 pub(super) fn web_search_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "web_search",
-        "Search the live web. Batch complementary searches with queries and reuse sources. Use backend=searxng for language/category/time filters or pagination.",
+        "Search the live web. Keep result sets small, batch only complementary queries, and reuse returned sources. Use another search only to resolve a concrete gap. Use backend=searxng for language/category/time filters or pagination.",
         json!({
             "type":"object",
             "properties":{
                 "query":{"type":"string"},
                 "queries":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":4},
-                "maxResults":{"type":"integer","minimum":1,"maximum":20},
+                "maxResults":{"type":"integer","minimum":1,"maximum":8},
                 "backend":{"type":"string","enum":["auto","agent-reach","searxng"]},
                 "language":{"type":"string"},
                 "category":{"type":"string"},
@@ -214,21 +230,58 @@ pub(super) fn web_search_tool_definition() -> ToolDefinition {
     )
 }
 
-/// Returns the full-source web reader schema.
+/// Returns the bounded web-source reader schema.
 pub(super) fn web_read_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "web_read",
-        "Read one URL returned by web_search. Use original-source text, not snippets, for material source-grounded claims. Duplicate reads are skipped.",
+        "Read one URL returned by web_search. Use original-source text for material claims. Reads return a bounded preview and preserve larger fetched text as an artifact for targeted follow-up. Duplicate URLs are skipped regardless of maxChars.",
         json!({
             "type":"object",
             "properties":{
                 "url":{"type":"string","minLength":1},
-                "maxChars":{"type":"integer","minimum":2000,"maximum":48000}
+                "maxChars":{"type":"integer","minimum":2000,"maximum":12000}
             },
             "required":["url"],
             "additionalProperties":false
         }),
     )
+}
+
+/// Native Yeet tools exported directly over MCP, excluding lazy extensions.
+pub(crate) fn direct_mcp_tool_definitions() -> Vec<ToolDefinition> {
+    let mut tools = base_tool_definitions()
+        .into_iter()
+        .filter(|tool| {
+            !matches!(
+                tool.name.as_str(),
+                "find_capabilities" | "activate_capability" | "request_shell_permission"
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut aliases = Vec::new();
+    if let Some(tool) = tools
+        .iter()
+        .find(|tool| tool.name == "computer_use")
+        .cloned()
+    {
+        let mut alias = tool;
+        alias.name = "desktop_control".into();
+        aliases.push(alias);
+    }
+    if let Some(tool) = tools
+        .iter()
+        .find(|tool| tool.name == "computer_use_reset")
+        .cloned()
+    {
+        let mut alias = tool;
+        alias.name = "desktop_control_reset".into();
+        aliases.push(alias);
+    }
+    tools.extend(aliases);
+    tools.push(web_search_tool_definition());
+    tools.push(web_read_tool_definition());
+    tools.extend(crate::memory::tool_definitions());
+    tools
 }
 
 #[cfg(test)]
@@ -245,5 +298,60 @@ mod tests {
         assert!(properties.contains_key("path"));
         assert!(properties.contains_key("requests"));
         assert_eq!(properties["requests"]["maxItems"].as_u64(), Some(8));
+    }
+
+    #[test]
+    fn structured_edit_schema_only_advertises_runtime_supported_operations() {
+        let tools = base_tool_definitions();
+        let edit = tools
+            .iter()
+            .find(|tool| tool.name == "apply_file_edits")
+            .unwrap();
+        let rendered = serde_json::to_string(&edit.input_schema).unwrap();
+        assert!(!rendered.contains("replaceBlock"));
+        assert!(!rendered.contains("insertAfterBlock"));
+        assert!(!rendered.contains("deleteBlock"));
+        assert!(rendered.contains("replace"));
+        assert!(rendered.contains("insert"));
+        assert!(rendered.contains("delete"));
+    }
+
+    #[test]
+    fn web_research_schemas_keep_evidence_bounded() {
+        let search = web_search_tool_definition();
+        let read = web_read_tool_definition();
+
+        assert_eq!(
+            search.input_schema["properties"]["maxResults"]["maximum"].as_u64(),
+            Some(8)
+        );
+        assert_eq!(
+            read.input_schema["properties"]["maxChars"]["maximum"].as_u64(),
+            Some(12_000)
+        );
+    }
+
+    #[test]
+    fn computer_use_matches_codex_runtime_surface_and_is_mcp_exported() {
+        let tools = base_tool_definitions();
+        let computer = tools
+            .iter()
+            .find(|tool| tool.name == "computer_use")
+            .unwrap();
+        let properties = computer.input_schema["properties"].as_object().unwrap();
+        assert!(properties.contains_key("code"));
+        assert!(properties.contains_key("timeout_ms"));
+        assert!(properties.contains_key("title"));
+        assert_eq!(computer.input_schema["required"], json!(["code"]));
+
+        let direct = direct_mcp_tool_definitions();
+        assert!(direct.iter().any(|tool| tool.name == "computer_use"));
+        assert!(direct.iter().any(|tool| tool.name == "computer_use_reset"));
+        assert!(direct.iter().any(|tool| tool.name == "desktop_control"));
+        assert!(
+            direct
+                .iter()
+                .any(|tool| tool.name == "desktop_control_reset")
+        );
     }
 }

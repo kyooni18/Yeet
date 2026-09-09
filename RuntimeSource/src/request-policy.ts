@@ -24,7 +24,7 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
   const existing = request.providerOptions ?? {};
   if (existing.reasoning !== undefined) return request;
   const purpose = request.metadata?.purpose;
-  const effort = purpose === "session-title" || purpose === "context-compaction" || purpose === "command-evaluation"
+  const effort = purpose === "session-title" || purpose === "context-compaction"
     ? auxiliaryReasoningEffort(parsed.model)
     : "low";
   return {

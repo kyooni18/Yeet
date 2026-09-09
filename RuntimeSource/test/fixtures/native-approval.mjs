@@ -12,20 +12,35 @@ rl.on('line', (line) => {
     send({ jsonrpc: '2.0', id: message.id, result: { tools: [{ name: 'open', inputSchema: { type: 'object', properties: {} } }] } });
   } else if (message.method === 'tools/call') {
     pendingToolCall = message;
-    send({
-      jsonrpc: '2.0',
-      id: 9001,
-      method: 'elicitation/create',
-      params: {
-        message: 'Open Blender for this MCP operation',
-        meta: {
+    const modern = process.env.NATIVE_APPROVAL_SHAPE === 'modern';
+    const approvalMeta = modern
+      ? {
+          codex_approval_kind: process.env.NATIVE_APPROVAL_KIND ?? 'mcp_tool_call',
+          connector_id: 'computer-use',
+          connector_name: 'Computer Use',
+          persist: ['session', 'always'],
+          riskLevel: 'low',
+          tool_name: 'get_app_state',
+          tool_params: { app: 'org.blenderfoundation.blender' },
+          tool_params_display: [{ name: 'app', display_name: 'App', value: 'Blender' }],
+        }
+      : {
           codex_approval_kind: process.env.NATIVE_APPROVAL_KIND ?? 'mcp_tool_call',
           tool_params: {
             app: { bundleId: 'org.blenderfoundation.blender', name: 'Blender' },
             tool: 'open',
             operation: 'Open Blender',
           },
-        },
+        };
+    send({
+      jsonrpc: '2.0',
+      id: 9001,
+      method: 'elicitation/create',
+      params: {
+        message: 'Open Blender for this MCP operation',
+        ...(modern
+          ? { _meta: approvalMeta, mode: 'form', requestedSchema: { type: 'object', properties: {} } }
+          : { meta: approvalMeta }),
       },
     });
   } else if (message.id === 9001 && pendingToolCall) {

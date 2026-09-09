@@ -91,9 +91,15 @@ impl ToolRegistry {
                 changed_paths.insert(destination.clone());
             }
         }
-        self.latest_mutation = Some(MutationValidation { error_count });
+        let changed_path_set = changed_paths;
+        let mut changed_paths = changed_path_set.iter().cloned().collect::<Vec<_>>();
+        changed_paths.sort();
+        self.invalidate_workspace_cache_for_paths(&changed_path_set);
+        self.latest_mutation = Some(MutationValidation {
+            error_count,
+            changed_paths,
+        });
         self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
-        self.invalidate_workspace_cache_for_paths(&changed_paths);
         self.externalize_if_large(serde_json::to_value(result)?, 48 * 1024, None)
     }
 

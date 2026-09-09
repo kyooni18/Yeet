@@ -1,5 +1,6 @@
 //! Markdown parsing into styled terminal lines, independent of application state.
-use ratatui::prelude::{Color, Line, Modifier, Span, Style};
+use super::theme;
+use ratatui::prelude::{Line, Modifier, Span, Style};
 
 pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
     let source: Vec<&str> = content.lines().collect();
@@ -18,7 +19,9 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
                 // keep the whole fenced block together as a selectable code panel.
                 lines.push(Line::from(Span::styled(
                     format!("  {line}"),
-                    Style::default().fg(Color::Gray).bg(Color::Rgb(30, 34, 42)),
+                    Style::default()
+                        .fg(theme::TEXT_DIM)
+                        .bg(theme::CODE_BACKGROUND),
                 )));
             }
             index += 1;
@@ -59,7 +62,7 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
         if is_horizontal_rule(line) {
             lines.push(Line::from(Span::styled(
                 "────────────────────────",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::BORDER),
             )));
             index += 1;
             continue;
@@ -68,9 +71,9 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
         if let Some((depth, quote)) = block_quote(line) {
             let mut spans = vec![Span::styled(
                 "│ ".repeat(depth),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::BORDER),
             )];
-            spans.extend(inline_spans(quote, Style::default().fg(Color::Gray)));
+            spans.extend(inline_spans(quote, Style::default().fg(theme::TEXT_DIM)));
             lines.push(Line::from(spans));
             index += 1;
             continue;
@@ -79,7 +82,7 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
         if let Some((indent, marker, body)) = list_item(line) {
             let mut spans = vec![Span::styled(
                 format!("{}{marker} ", " ".repeat(indent)),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::BORDER),
             )];
             spans.extend(inline_spans(body, Style::default()));
             lines.push(Line::from(spans));
@@ -137,7 +140,7 @@ fn setext_heading_level(line: &str) -> Option<usize> {
 fn heading_style(level: usize) -> Style {
     if level <= 2 {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(theme::ACCENT_HOT)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().add_modifier(Modifier::BOLD)
@@ -244,7 +247,7 @@ fn table_line(line: &str, header: bool) -> Line<'static> {
     };
     for (index, cell) in cells.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(" │ ", Style::default().fg(theme::BORDER)));
         }
         spans.extend(inline_spans(cell.trim(), base));
     }
@@ -279,7 +282,7 @@ fn inline_spans(content: &str, base: Style) -> Vec<Span<'static>> {
                 let body_end = body_start + relative_end;
                 spans.push(Span::styled(
                     content[body_start..body_end].to_owned(),
-                    base.fg(Color::Yellow),
+                    base.fg(theme::ACCENT_HOT),
                 ));
                 cursor = body_end + ticks;
                 plain_start = cursor;
@@ -350,11 +353,11 @@ fn inline_spans(content: &str, base: Style) -> Vec<Span<'static>> {
                 flush_inline_text(&mut spans, &content[plain_start..cursor], base);
                 spans.extend(inline_spans(
                     &content[cursor + 1..label_end],
-                    base.fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
+                    base.fg(theme::ACCENT).add_modifier(Modifier::UNDERLINED),
                 ));
                 let url = &content[url_start..url_end];
                 if !url.is_empty() {
-                    spans.push(Span::styled(format!(" ({url})"), base.fg(Color::DarkGray)));
+                    spans.push(Span::styled(format!(" ({url})"), base.fg(theme::MUTED)));
                 }
                 cursor = url_end + 1;
                 plain_start = cursor;
@@ -371,7 +374,7 @@ fn inline_spans(content: &str, base: Style) -> Vec<Span<'static>> {
                 flush_inline_text(&mut spans, &content[plain_start..cursor], base);
                 spans.push(Span::styled(
                     target.to_owned(),
-                    base.fg(Color::Blue).add_modifier(Modifier::UNDERLINED),
+                    base.fg(theme::ACCENT).add_modifier(Modifier::UNDERLINED),
                 ));
                 cursor = end + 1;
                 plain_start = cursor;

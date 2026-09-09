@@ -74,6 +74,7 @@ export type BridgeCommand =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-list-prompts"; server?: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-get-prompt"; server: string; prompt: string; arguments?: Record<string, string> }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-disconnect"; server?: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "computer-use-call"; tool: "js" | "js_reset"; arguments?: Record<string, unknown> }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "cancel"; target: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "shutdown" };
 
@@ -121,6 +122,7 @@ export type BridgeMessage =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-resource-result"; resourceResult: McpReadResourceResult }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-prompts"; prompts: McpPrompt[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-prompt-result"; promptResult: McpGetPromptResult }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "computer-use-result"; toolResult: McpCallToolResult }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "done" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "cancelled"; target: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "error"; error: SerializedBridgeError };

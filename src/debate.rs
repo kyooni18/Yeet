@@ -1667,6 +1667,9 @@ impl DebateState {
 }
 fn request(model: &str, system: String, input: String) -> CallRequest {
     let mut r = CallRequest::simple(model, vec![Message::system(system), Message::user(input)]);
+    // Contract/advocate/jury/synthesis calls are one-shot requests. Avoid a
+    // provider cache write that has no planned reuse.
+    r.prompt_cache = Some(false);
     r.attached_capabilities = Some(vec![]);
     r.tools = Some(vec![]);
     r.timeout_ms = Some(120_000);

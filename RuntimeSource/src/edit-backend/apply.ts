@@ -20,12 +20,23 @@ function assertRange(range: LineRange, lineCount: number): void {
   if (range.end > lineCount) throw new Error(`Line range ${range.start}..${range.end} exceeds file length ${lineCount}`);
 }
 
+function normalizedAnchor(expected: string): string {
+  const value = expected.trim();
+  // read_file renders anchors as `line:hash|source`. Models occasionally copy
+  // the visible suffix into a hash field instead of extracting the four hex
+  // characters. Accept both the canonical token and the rendered form so a
+  // harmless formatting mistake does not look like stale source.
+  const rendered = /^(?:\d+:)?([0-9a-f]{4})(?:\|.*)?$/i.exec(value);
+  return (rendered?.[1] ?? value).toLowerCase();
+}
+
 function assertAnchor(lines: readonly string[], line: number, expected: string | undefined, label: string): void {
   if (!expected) return;
   const actual = lineHash(lines[line - 1] ?? "");
-  if (actual !== expected.toLowerCase()) {
+  const normalized = normalizedAnchor(expected);
+  if (actual !== normalized) {
     throw new Error(
-      `Edit anchor mismatch at ${label} line ${line}: expected ${line}:${expected}, current snapshot is ${line}:${actual}. Re-read the file before editing.`,
+      `Edit anchor mismatch at ${label} line ${line}: expected ${line}:${normalized}, current snapshot is ${line}:${actual}. Re-read the file before editing.`,
     );
   }
 }

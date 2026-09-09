@@ -89,6 +89,9 @@ pub(super) fn generate_session_title(
         ],
     );
     request.context_key = Some(format!("session-title-{}", title.session_id));
+    // Title generation is deliberately one-shot; never pay a cache-write
+    // premium for a prefix that will not be reused.
+    request.prompt_cache = Some(false);
     request.temperature = Some(0.2);
     request.max_tokens = Some(64);
     request.timeout_ms = Some(15_000);

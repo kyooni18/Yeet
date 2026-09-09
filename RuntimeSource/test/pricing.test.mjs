@@ -69,13 +69,38 @@ test("cache policy pays a cache-write premium only when reuse can amortize it", 
     model: "openai/gpt-6-astra",
     messages: [{ role: "user", content: "hello" }],
     promptCache: true,
-    metadata: { purpose: "general", expectedCacheReuses: "0" },
+    metadata: { lane: "general", expectedCacheReuses: "0" },
   };
   assert.equal(applyCacheCostPolicy(base, astra).promptCache, false);
   assert.equal(
-    applyCacheCostPolicy({ ...base, metadata: { purpose: "lead", expectedCacheReuses: "1" } }, astra).promptCache,
+    applyCacheCostPolicy({ ...base, metadata: { lane: "coding", expectedCacheReuses: "1" } }, astra).promptCache,
     true,
   );
+});
+
+test("cache policy includes tool schemas when selecting cache pricing tiers", () => {
+  const pricing = {
+    input: 10,
+    output: 50,
+    cacheRead: 1,
+    cacheWrite: 12.5,
+    currency: "USD",
+    unit: "per1MTokens",
+    source: "test",
+    tiers: [{ input: 20, output: 50, cacheRead: 15, cacheWrite: 30, thresholdTokens: 100 }],
+  };
+  const request = {
+    model: "example/model",
+    messages: [{ role: "user", content: "edit" }],
+    tools: [{
+      name: "large_tool",
+      description: "x".repeat(400),
+      inputSchema: { type: "object", properties: { value: { type: "string" } } },
+    }],
+    promptCache: true,
+    metadata: { lane: "coding", expectedCacheReuses: "1" },
+  };
+  assert.equal(applyCacheCostPolicy(request, pricing).promptCache, false);
 });
 
 test("auxiliary routing chooses the lowest estimated price that fits the request", () => {

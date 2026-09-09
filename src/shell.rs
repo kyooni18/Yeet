@@ -269,13 +269,6 @@ pub struct ShellExecutionRequest<'a> {
 }
 
 pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<ShellResult> {
-    run_shell_cancellable_with_protected_paths(request, &[])
-}
-
-pub fn run_shell_cancellable_with_protected_paths(
-    request: ShellExecutionRequest<'_>,
-    protected_paths: &[PathBuf],
-) -> Result<ShellResult> {
     let ShellExecutionRequest {
         command,
         workspace_root,
@@ -316,11 +309,6 @@ pub fn run_shell_cancellable_with_protected_paths(
             .wall_time_seconds
             .min(timeout_seconds.clamp(1, 900));
     }
-    let protected_paths = protected_paths
-        .iter()
-        .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
-        .collect::<Vec<_>>();
-
     if !unrestricted {
         if !effective.network_allow.is_empty() {
             bail!(
@@ -342,7 +330,7 @@ pub fn run_shell_cancellable_with_protected_paths(
 
     let mut scratch = None;
     let mut launch = if unrestricted {
-        unrestricted_shell_command(command, &protected_paths)?
+        unrestricted_shell_command(command)?
     } else {
         let directory = tempfile::Builder::new()
             .prefix("yeet-model-sandbox-")
@@ -443,65 +431,23 @@ pub fn run_shell_cancellable_with_protected_paths(
 }
 
 #[allow(clippy::needless_return)]
-fn unrestricted_shell_command(command: &str, protected_paths: &[PathBuf]) -> Result<Command> {
+fn unrestricted_shell_command(command: &str) -> Result<Command> {
     #[cfg(target_os = "macos")]
     {
-        if protected_paths.is_empty() {
-            let mut value = Command::new("/bin/zsh");
-            value.arg("-f").arg("-c").arg(command);
-            return Ok(value);
-        }
-        if !Path::new("/usr/bin/sandbox-exec").exists() {
-            bail!(
-                "Cannot safely run unrestricted shell while an active session path is protected: macOS sandbox-exec is unavailable"
-            );
-        }
-        let profile = protected_path_profile(protected_paths);
-        let mut value = Command::new("/usr/bin/sandbox-exec");
-        value
-            .arg("-p")
-            .arg(profile)
-            .arg("/bin/zsh")
-            .arg("-f")
-            .arg("-c")
-            .arg(command);
+        let mut value = Command::new("/bin/zsh");
+        value.arg("-f").arg("-c").arg(command);
         return Ok(value);
     }
 
     #[cfg(target_os = "linux")]
     {
-        if protected_paths.is_empty() || !command_is_on_path("bwrap") {
-            let mut value = Command::new("/bin/sh");
-            value.arg("-c").arg(command);
-            return Ok(value);
-        }
-
-        // Unlimited mode intentionally keeps host access, but the active Yeet
-        // session is still protected from writes. Bubblewrap gives Linux the
-        // same narrow exception that Seatbelt provides on macOS: bind the host
-        // tree read/write, then overlay the runtime-owned paths read-only.
-        let mut value = Command::new("bwrap");
-        value
-            .arg("--die-with-parent")
-            .arg("--bind")
-            .arg("/")
-            .arg("/");
-        for path in protected_paths {
-            if path.exists() {
-                value.arg("--ro-bind").arg(path).arg(path);
-            }
-        }
-        value.arg("--").arg("/bin/sh").arg("-c").arg(command);
+        let mut value = Command::new("/bin/sh");
+        value.arg("-c").arg(command);
         return Ok(value);
     }
 
     #[cfg(target_os = "windows")]
     {
-        // Unlimited means exactly that on Windows. Sandboxed mode uses an
-        // AppContainer below; unrestricted mode deliberately keeps the user's
-        // normal host token and environment. Runtime files are never handed to
-        // the model as writable paths, and session persistence itself is locked.
-        let _ = protected_paths;
         let mut value = Command::new("cmd.exe");
         value.arg("/D").arg("/S").arg("/C").arg(command);
         return Ok(value);
@@ -509,13 +455,6 @@ fn unrestricted_shell_command(command: &str, protected_paths: &[PathBuf]) -> Res
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     bail!("Shell execution is not implemented on this platform")
-}
-
-#[cfg(target_os = "linux")]
-fn command_is_on_path(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|directory| directory.join(name).is_file())
-    })
 }
 
 #[allow(clippy::needless_return)]
@@ -895,14 +834,22 @@ fn resolve_working_directory(
     if value.is_empty() || value == "." {
         return Ok(root.to_path_buf());
     }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        let candidate = path
+            .canonicalize()
+            .context("Invalid shell working directory")?;
+        if !candidate.is_dir() {
+            bail!("Invalid shell working directory: {value}");
+        }
+        if !allow_outside && candidate != root && !candidate.starts_with(root) {
+            bail!("Shell working directory is outside the current workspace: {value}");
+        }
+        return Ok(candidate);
+    }
     if allow_outside {
-        let path = Path::new(value);
-        let candidate = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            root.join(path)
-        };
-        let candidate = candidate
+        let candidate = root
+            .join(path)
             .canonicalize()
             .context("Invalid shell working directory")?;
         if !candidate.is_dir() {
@@ -923,7 +870,10 @@ fn resolve_working_directory(
 
 fn working_directory_allowed(scope: &WorkspaceRead, root: &Path, cwd: &Path) -> bool {
     if cwd == root {
-        return matches!(scope, WorkspaceRead::All);
+        // Choosing the workspace root as cwd does not itself grant access to
+        // its contents; the OS sandbox still enforces WorkspaceRead below.
+        // Rejecting `.` here made otherwise-valid commands fail before launch.
+        return true;
     }
     let Ok(relative) = cwd.strip_prefix(root) else {
         return false;
@@ -982,21 +932,6 @@ fn sandbox_profile(policy: &SandboxPolicy, root: &Path, scratch: &Path) -> Resul
         }
     }
     Ok(rules.join("\n"))
-}
-
-#[cfg(target_os = "macos")]
-fn protected_path_profile(paths: &[PathBuf]) -> String {
-    let mut rules = vec!["(version 1)".to_owned(), "(allow default)".to_owned()];
-    for path in paths {
-        let escaped = escape_path(path);
-        // `literal` protects the directory entry itself while `subpath`
-        // protects every child. This catches unlink/rename operations even
-        // when the shell reaches the path through variables or a subprocess.
-        rules.push(format!(
-            "(deny file-write* (literal \"{escaped}\") (subpath \"{escaped}\"))"
-        ));
-    }
-    rules.join("\n")
 }
 
 #[cfg(target_os = "macos")]
@@ -1545,6 +1480,63 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn sandboxed_shell_accepts_absolute_workspace_working_directory() {
+        if !Path::new("/usr/bin/sandbox-exec").exists() {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let store = SandboxStore::new(workspace.path()).unwrap();
+        let policy = SandboxPolicy {
+            workspace_read: WorkspaceRead::All,
+            ..SandboxPolicy::default()
+        };
+        store.save(&policy).unwrap();
+        let absolute = workspace.path().canonicalize().unwrap();
+
+        let result = run_shell(
+            "pwd",
+            workspace.path(),
+            absolute.to_str(),
+            5,
+            16 * 1024,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert!(result.succeeded);
+        assert_eq!(
+            result.stdout.unwrap().trim(),
+            absolute.display().to_string()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandboxed_shell_can_use_workspace_root_as_cwd_without_read_grant() {
+        if !Path::new("/usr/bin/sandbox-exec").exists() {
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let store = SandboxStore::new(workspace.path()).unwrap();
+        store.save(&SandboxPolicy::default()).unwrap();
+
+        let result = run_shell(
+            "pwd",
+            workspace.path(),
+            Some("."),
+            5,
+            16 * 1024,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert!(result.succeeded);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn unlimited_shell_can_leave_the_project_without_workspace_grants() {
         let parent = tempfile::tempdir().unwrap();
         let workspace = parent.path().join("project");
@@ -1566,34 +1558,32 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn unlimited_shell_cannot_mutate_a_protected_runtime_path() {
+    fn unrestricted_shell_allows_nested_sandbox() {
         if !Path::new("/usr/bin/sandbox-exec").exists() {
             return;
         }
         let workspace = tempfile::tempdir().unwrap();
-        let protected = tempfile::tempdir().unwrap();
-        let victim = protected.path().join("active-session.json");
-        std::fs::write(&victim, b"keep").unwrap();
-        let escaped = victim.display().to_string().replace('\'', "'\\''");
-        let command = format!("rm -f '{escaped}'");
+        let store = SandboxStore::new(workspace.path()).unwrap();
+        store
+            .save(&SandboxPolicy {
+                mode: SandboxMode::Unlimited,
+                ..SandboxPolicy::default()
+            })
+            .unwrap();
 
-        let result = run_shell_cancellable_with_protected_paths(
-            ShellExecutionRequest {
-                command: &command,
-                workspace_root: workspace.path(),
-                working_directory: None,
-                timeout_seconds: 5,
-                capture_bytes: 16 * 1024,
-                allow_write: true,
-                unrestricted: true,
-                cancel: None,
-            },
-            &[protected.path().to_path_buf()],
-        )
+        let result = run_shell_cancellable(ShellExecutionRequest {
+            command: "/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true",
+            workspace_root: workspace.path(),
+            working_directory: None,
+            timeout_seconds: 5,
+            capture_bytes: 16 * 1024,
+            allow_write: true,
+            unrestricted: true,
+            cancel: None,
+        })
         .unwrap();
 
-        assert!(!result.succeeded);
-        assert!(victim.is_file());
+        assert!(result.succeeded);
     }
 
     #[cfg(unix)]

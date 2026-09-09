@@ -15,21 +15,29 @@ pub(super) struct ToolDiscovery {
 }
 
 impl ToolDiscovery {
-    /// Keep only small, high-frequency inspection schemas on the first coding request.
-    /// Expensive mutation/shell/artifact schemas are promoted as the turn needs them.
-    pub fn coding() -> Self {
+    /// Keep one stable tool prefix for the common edit/verify loop. For
+    /// analysis-only coding turns, retain the smaller inspection-only prefix.
+    /// Mid-turn schema promotion invalidates provider prompt prefixes, which
+    /// costs substantially more than the extra schemas on implementation turns.
+    pub fn coding(implementation_requested: bool) -> Self {
         let mut discovery = Self::default();
         // Keep this deliberately ordered. Existing entries should not be
         // reshuffled when the preferred coding surface evolves; append new
         // preloaded tools instead so old cache prefixes stay reusable.
         discovery.load(["read_file", "list_files", "search_workspace"]);
+        if implementation_requested {
+            discovery.load(["apply_file_edits", "run_shell"]);
+        }
         discovery
     }
 
-    /// Research almost always starts with search, so avoid a discovery-only round.
+    /// Research normally searches and then reads primary sources. Preload both
+    /// plus artifact search so an externalized source can be queried without a
+    /// separate schema-discovery model round. Keep the order stable for prompt
+    /// cache continuity.
     pub fn research() -> Self {
         let mut discovery = Self::default();
-        discovery.load(["web_search"]);
+        discovery.load(["web_search", "web_read", "search_artifact"]);
         discovery
     }
 
@@ -180,7 +188,7 @@ mod tests {
             tool("mcp_browser", "Browse"),
             tool("read_file", "Read"),
         ];
-        let mut discovery = ToolDiscovery::coding();
+        let mut discovery = ToolDiscovery::coding(false);
         let initial = discovery.attached(&catalog);
         assert_eq!(initial.len(), 2);
         assert_eq!(initial[1].name, "read_file");
@@ -202,7 +210,7 @@ mod tests {
             tool("read_file", "Read"),
             tool("search_workspace", "Search"),
         ];
-        let discovery = ToolDiscovery::coding();
+        let discovery = ToolDiscovery::coding(false);
         let names = |catalog: &[ToolDefinition]| {
             discovery
                 .attached(catalog)
@@ -251,7 +259,7 @@ mod tests {
             tool("apply_file_edits", "Edit"),
             tool("run_shell", "Shell"),
         ];
-        let mut discovery = ToolDiscovery::coding();
+        let mut discovery = ToolDiscovery::coding(false);
         assert_eq!(discovery.attached(&catalog).len(), 2);
         discovery.load(["apply_file_edits"]);
         assert_eq!(discovery.attached(&catalog).len(), 3);
@@ -260,18 +268,48 @@ mod tests {
     }
 
     #[test]
-    fn research_preloads_search_only() {
+    fn coding_implementation_preloads_the_common_edit_verify_bundle() {
+        let catalog = vec![
+            tool("run_shell", "Shell"),
+            tool("read_file", "Read"),
+            tool("apply_file_edits", "Edit"),
+            tool("search_workspace", "Search"),
+            tool("list_files", "List"),
+        ];
+        let discovery = ToolDiscovery::coding(true);
+        assert_eq!(
+            discovery
+                .attached(&catalog)
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "search_tools",
+                "read_file",
+                "list_files",
+                "search_workspace",
+                "apply_file_edits",
+                "run_shell",
+            ]
+        );
+    }
+
+    #[test]
+    fn research_preloads_search_source_reading_and_artifact_search() {
         let catalog = vec![
             tool("web_search", "Search"),
             tool("web_read", "Read source"),
             tool("read_artifact", "Read artifact"),
+            tool("search_artifact", "Search artifact"),
         ];
         let mut discovery = ToolDiscovery::research();
         let attached = discovery.attached(&catalog);
-        assert_eq!(attached.len(), 2);
+        assert_eq!(attached.len(), 4);
         assert_eq!(attached[1].name, "web_search");
+        assert_eq!(attached[2].name, "web_read");
+        assert_eq!(attached[3].name, "search_artifact");
         discovery.load(["web_read"]);
-        assert_eq!(discovery.attached(&catalog).len(), 3);
+        assert_eq!(discovery.attached(&catalog).len(), 4);
     }
 
     fn tool(name: &str, description: &str) -> ToolDefinition {

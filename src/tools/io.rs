@@ -224,7 +224,11 @@ impl ToolRegistry {
         cancel: &AtomicBool,
     ) -> Result<String> {
         let queries = web_search_queries(object)?;
-        let max_results = usize_arg(object, "maxResults").unwrap_or(8).clamp(1, 20);
+        let requested_max_results = usize_arg(object, "maxResults").unwrap_or(6);
+        // Keep a batched search bounded by total evidence, not by each query.
+        // Three 10-result searches previously injected ~30 snippets into every
+        // later model request. Deep research can issue another targeted batch.
+        let max_results = effective_web_search_max_results(requested_max_results, queries.len());
         let language = object.get("language").and_then(Value::as_str);
         let category = object.get("category").and_then(Value::as_str);
         let time_range = object.get("timeRange").and_then(Value::as_str);
@@ -322,21 +326,63 @@ impl ToolRegistry {
         if url.is_empty() {
             bail!("web_read requires a non-empty URL");
         }
-        if !self.web_sources.contains(url) {
+        let source_key = canonical_web_source_key(url);
+        if !self.web_sources.contains(&source_key) {
             bail!(
                 "web_read may only open URLs returned by web_search in the current research task; search for this source first"
             );
         }
-        if self.web_reads.contains(url) {
-            return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the prior full-source evidence instead of reopening it."}).to_string());
+        if self.web_reads.contains(&source_key) {
+            return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse its prior preview/artifact evidence instead of reopening it."}).to_string());
         }
         let max_chars = usize_arg(object, "maxChars")
-            .unwrap_or(20_000)
-            .clamp(2_000, 48_000);
-        let result = self.web_search.read_url(url, max_chars, cancel)?;
-        let rendered = self.externalize_if_large(result, 48 * 1024, None)?;
-        self.web_reads.insert(url.to_owned());
+            .unwrap_or(8_000)
+            .clamp(2_000, 12_000);
+        // Fetch enough source text to preserve useful follow-up evidence, but
+        // expose only a bounded preview to the model. Larger fetched text is
+        // stored once as a session artifact instead of being replayed verbatim
+        // through every subsequent agent round.
+        let result = self.web_search.read_url(url, 48_000, cancel)?;
+        let rendered = self.bound_web_read_evidence(url, result, max_chars)?;
+        self.web_reads.insert(source_key);
         Ok(rendered)
+    }
+
+    fn bound_web_read_evidence(
+        &mut self,
+        url: &str,
+        mut result: Value,
+        max_chars: usize,
+    ) -> Result<String> {
+        let Some(object) = result.as_object_mut() else {
+            return Ok(serde_json::to_string(&result)?);
+        };
+        let Some(content) = object
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return Ok(serde_json::to_string(&result)?);
+        };
+        let total_chars = content.chars().count();
+        if total_chars <= max_chars {
+            return Ok(serde_json::to_string(&result)?);
+        }
+
+        let artifact = self.artifacts.store(&content)?;
+        let preview = content.chars().take(max_chars).collect::<String>();
+        object.insert("content".into(), json!(preview));
+        object.insert("artifactId".into(), json!(artifact));
+        object.insert("externalized".into(), json!(true));
+        object.insert("characters".into(), json!(total_chars));
+        object.insert("previewChars".into(), json!(max_chars));
+        object.insert("previewTruncated".into(), json!(true));
+        object.insert(
+            "hint".into(),
+            json!("The fetched source text is stored as an artifact. Reuse this preview; use search_artifact and then a narrow read_artifact range only if a specific missing section is needed."),
+        );
+        object.entry("url").or_insert_with(|| json!(url));
+        Ok(serde_json::to_string(&result)?)
     }
 
     /// Extracts a supported document and stores the full text as a typed artifact.
@@ -452,5 +498,24 @@ impl ToolRegistry {
             shell_object.insert("timeoutSeconds".into(), timeout.clone());
         }
         self.run_shell_tool(&shell_object, model, cancel)
+    }
+}
+
+fn effective_web_search_max_results(requested: usize, query_count: usize) -> usize {
+    let requested = requested.clamp(1, 8);
+    let per_query_budget = (12 / query_count.max(1)).max(1);
+    requested.min(per_query_budget)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batched_web_search_budget_caps_total_result_volume() {
+        assert_eq!(effective_web_search_max_results(8, 1), 8);
+        assert_eq!(effective_web_search_max_results(8, 2), 6);
+        assert_eq!(effective_web_search_max_results(10, 3), 4);
+        assert_eq!(effective_web_search_max_results(8, 4), 3);
     }
 }

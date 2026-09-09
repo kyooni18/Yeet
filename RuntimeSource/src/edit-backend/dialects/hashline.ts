@@ -37,6 +37,14 @@ function consumeBody(lines: string[], start: number): { text: string; next: numb
 export class HashlineDialect implements EditDialect {
   readonly id = "hashline";
 
+  constructor(private readonly allowBlockEdits = false) {}
+
+  #requireBlockResolver(): void {
+    if (!this.allowBlockEdits) {
+      throw new Error("Hashline block edits are unavailable because this edit backend has no block resolver. Use explicit line ranges instead.");
+    }
+  }
+
   parse(input: string): ApplyRequest {
     const lines = input.replace(/\r\n/g, "\n").split("\n");
     const changes: FileChange[] = [];
@@ -84,6 +92,7 @@ export class HashlineDialect implements EditDialect {
         continue;
       }
       if ((match = PUT_AFTER_BLOCK.exec(line))) {
+        this.#requireBlockResolver();
         const body = consumeBody(lines, index + 1);
         current.edits!.push({
           kind: "insertAfterBlock",
@@ -95,6 +104,7 @@ export class HashlineDialect implements EditDialect {
         continue;
       }
       if ((match = PUT_BLOCK.exec(line))) {
+        this.#requireBlockResolver();
         const body = consumeBody(lines, index + 1);
         current.edits!.push({
           kind: "replaceBlock",
@@ -159,6 +169,7 @@ export class HashlineDialect implements EditDialect {
         continue;
       }
       if ((match = CUT_BLOCK.exec(line))) {
+        this.#requireBlockResolver();
         current.edits!.push({
           kind: "deleteBlock",
           line: Number(match[1]),

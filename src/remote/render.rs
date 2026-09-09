@@ -70,7 +70,7 @@ pub(super) fn render_buffer(buffer: &Buffer) -> String {
 }
 
 fn is_code_style(style: CellStyle) -> bool {
-    style.bg == Color::Rgb(30, 34, 42)
+    style.bg == Color::Rgb(27, 8, 10)
 }
 
 fn append_run(output: &mut String, style: CellStyle, text: &str) {
@@ -109,14 +109,14 @@ fn style_css(mut style: CellStyle) -> String {
 
     let mut css = String::new();
     if reversed && style.fg == Color::Reset {
-        css.push_str("color:#101218;");
+        css.push_str("color:#080303;");
     } else if let Some(color) = color_css(style.fg) {
         css.push_str("color:");
         css.push_str(&color);
         css.push(';');
     }
     if reversed && style.bg == Color::Reset {
-        css.push_str("background:#d8dee9;");
+        css.push_str("background:#f1ece7;");
     } else if let Some(color) = color_css(style.bg) {
         css.push_str("background:");
         css.push_str(&color);
@@ -148,22 +148,22 @@ fn style_css(mut style: CellStyle) -> String {
 fn color_css(color: Color) -> Option<String> {
     let value = match color {
         Color::Reset => return None,
-        Color::Black => "#1b1d23".into(),
-        Color::Red => "#e06c75".into(),
-        Color::Green => "#98c379".into(),
-        Color::Yellow => "#e5c07b".into(),
-        Color::Blue => "#61afef".into(),
-        Color::Magenta => "#c678dd".into(),
-        Color::Cyan => "#56b6c2".into(),
-        Color::Gray => "#abb2bf".into(),
-        Color::DarkGray => "#5c6370".into(),
-        Color::LightRed => "#ff7a85".into(),
-        Color::LightGreen => "#b3df90".into(),
-        Color::LightYellow => "#f2d08c".into(),
-        Color::LightBlue => "#78bdf8".into(),
-        Color::LightMagenta => "#d38ee8".into(),
-        Color::LightCyan => "#6fd1dc".into(),
-        Color::White => "#e6e9ef".into(),
+        Color::Black => "#080303".into(),
+        Color::Red => "#ff4a41".into(),
+        Color::Green => "#f1ece7".into(),
+        Color::Yellow => "#da161b".into(),
+        Color::Blue => "#da161b".into(),
+        Color::Magenta => "#a90f16".into(),
+        Color::Cyan => "#ff4a41".into(),
+        Color::Gray => "#bcabab".into(),
+        Color::DarkGray => "#68353a".into(),
+        Color::LightRed => "#ff6a61".into(),
+        Color::LightGreen => "#f1ece7".into(),
+        Color::LightYellow => "#ed3539".into(),
+        Color::LightBlue => "#ed3539".into(),
+        Color::LightMagenta => "#d91b25".into(),
+        Color::LightCyan => "#ff6a61".into(),
+        Color::White => "#f1ece7".into(),
         Color::Rgb(red, green, blue) => format!("rgb({red},{green},{blue})"),
         Color::Indexed(index) => indexed_color(index),
     };

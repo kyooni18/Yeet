@@ -1,12 +1,15 @@
+mod chrome;
 mod composer;
 mod dialogs;
+mod responsive;
 mod shell;
 mod task;
 mod theme;
+mod yeet_brand;
 use dialogs::{
-    draw_agent_mode, draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail,
-    draw_help, draw_models, draw_permission, draw_provider_edit, draw_providers, draw_reasoning,
-    draw_sandbox_policy, draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
+    draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_help, draw_models,
+    draw_permission, draw_provider_edit, draw_providers, draw_reasoning, draw_sandbox_policy,
+    draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
 };
 
 mod markdown;
@@ -15,10 +18,10 @@ use markdown::markdown_lines;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin, Position, Rect},
-    prelude::{Color, Line, Modifier, Span, Style, Text},
+    prelude::{Line, Modifier, Span, Style, Text},
     widgets::{
-        Block, BorderType, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Wrap,
+        Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
 use serde_json::Value;
@@ -30,39 +33,45 @@ use crate::{
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     frame.render_widget(Block::default().style(theme::base()), frame.area());
+    let adaptive = responsive::metrics(frame.area());
     let area = shell::draw_shell(frame, app);
     let suggestions = app.command_suggestions();
     let suggestion_height = if suggestions.is_empty() {
         0
     } else {
-        (suggestions.len() as u16 + 2).min(8).min(area.height / 3)
+        (suggestions.len() as u16 + 2)
+            .min(adaptive.suggestion_height)
+            .min(area.height / 3)
     };
     let input_rows = composer::layout(&app.input, app.cursor, area.width.saturating_sub(4));
-    let input_height = (input_rows.lines.len() as u16).clamp(3, 7) + 2;
+    let input_height = (input_rows.lines.len() as u16)
+        .clamp(adaptive.input_min_lines, adaptive.input_max_lines)
+        + 2;
+    let task_height = task::height(app).min(adaptive.task_height);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(task::height(app)),
+            Constraint::Length(task_height),
             Constraint::Length(suggestion_height),
             Constraint::Length(input_height),
-            Constraint::Length(2),
+            Constraint::Length(adaptive.status_height),
         ])
         .split(area);
 
-    draw_transcript(frame, app, chunks[0]);
+    draw_transcript(frame, app, chunks[0], adaptive.shape);
     if suggestion_height > 0 {
         draw_suggestions(frame, app, chunks[2], &suggestions);
     }
     task::draw(frame, app, chunks[1]);
     draw_input(frame, app, chunks[3]);
     draw_status(frame, app, chunks[4]);
+    draw_transcript_context_menu(frame, app);
 
     match app.mode {
         Mode::Debate => dialogs::draw_debate(frame, app),
         Mode::Models => draw_models(frame, app),
         Mode::Reasoning => draw_reasoning(frame, app),
-        Mode::AgentMode => draw_agent_mode(frame, app),
         Mode::Sessions => draw_sessions(frame, app),
         Mode::Capabilities => draw_capabilities(frame, app),
         Mode::CapabilityDetail => draw_capability_detail(frame, app),
@@ -86,17 +95,25 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     {
         draw_permission(frame, app);
     }
+
+    chrome::draw(frame, app);
 }
 
-fn draw_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_transcript(
+    frame: &mut Frame<'_>,
+    app: &mut App,
+    area: Rect,
+    viewport_shape: responsive::Shape,
+) {
     let area = area.inner(Margin {
         horizontal: 1,
         vertical: u16::from(area.height > 4),
     });
+    app.transcript_area = (area.x, area.y, area.width, area.height);
     if app.conversation.is_empty() {
         app.max_scroll = 0;
         app.scroll_y = 0;
-        shell::draw_welcome(frame, area);
+        shell::draw_welcome(frame, area, viewport_shape);
         return;
     }
     let text = transcript_text(app, area.width);
@@ -109,6 +126,8 @@ fn draw_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         app.scroll_y = app.scroll_y.min(app.max_scroll);
     }
     frame.render_widget(paragraph.scroll((app.scroll_y, 0)), area);
+    capture_transcript_cells(frame, app, area);
+    draw_selection(frame, app, area);
     if app.max_scroll > 0 && area.width > 1 {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
@@ -124,6 +143,88 @@ fn draw_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             &mut state,
         );
     }
+}
+
+fn draw_selection(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let (Some(start), Some(end)) = (app.selection_start, app.selection_end) else {
+        return;
+    };
+    let start_point = (start.1, start.0);
+    let end_point = (end.1, end.0);
+    let start = start_point.min(end_point);
+    let end = start_point.max(end_point);
+    let buffer = frame.buffer_mut();
+    for row in start.0..=end.0 {
+        if row < area.y || row >= area.bottom() {
+            continue;
+        }
+        let from = if row == start.0 { start.1 } else { area.x };
+        let to = if row == end.0 {
+            end.1
+        } else {
+            area.right().saturating_sub(1)
+        };
+        for column in from.max(area.x)..=to.min(area.right().saturating_sub(1)) {
+            let cell = &mut buffer[(column, row)];
+            cell.set_style(Style::default().bg(theme::ACCENT).fg(theme::BACKGROUND));
+        }
+    }
+}
+
+fn capture_transcript_cells(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let buffer = frame.buffer_mut();
+    app.transcript_cells = (area.y..area.bottom())
+        .map(|row| {
+            (area.x..area.right())
+                .map(|column| buffer[(column, row)].symbol().to_owned())
+                .collect()
+        })
+        .collect();
+}
+
+fn draw_transcript_context_menu(frame: &mut Frame<'_>, app: &mut App) {
+    let Some(menu) = app.transcript_context_menu else {
+        app.transcript_context_menu_area = (0, 0, 0, 0);
+        return;
+    };
+    let screen = frame.area();
+    if screen.width < 18 || screen.height < 4 {
+        return;
+    }
+    let width = 22u16.min(screen.width);
+    let height = 4u16.min(screen.height);
+    let x = menu
+        .x
+        .min(screen.right().saturating_sub(width))
+        .max(screen.x);
+    let y = menu
+        .y
+        .min(screen.bottom().saturating_sub(height))
+        .max(screen.y);
+    let area = Rect::new(x, y, width, height);
+    app.transcript_context_menu_area = (area.x, area.y, area.width, area.height);
+
+    let copy_style = if app.selected_transcript_text().is_some() {
+        theme::surface()
+    } else {
+        theme::surface().fg(theme::MUTED)
+    };
+    let items = vec![
+        ListItem::new(Line::styled(" Copy", copy_style)),
+        ListItem::new(Line::styled(" Clear selection", theme::surface())),
+    ];
+    frame.render_widget(Clear, area);
+    frame.render_widget(Block::default().style(theme::surface()), area);
+    frame.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(theme::BORDER))
+                .style(theme::surface()),
+        ),
+        area,
+    );
 }
 
 fn draw_suggestions(
@@ -145,7 +246,7 @@ fn draw_suggestions(
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {name:<14}"), style),
-                Span::styled(*description, style.fg(Color::Gray)),
+                Span::styled(*description, style.fg(theme::TEXT_DIM)),
             ]))
         });
     let list = List::new(items).block(theme::modal_block("Commands · ↑/↓ choose · Tab complete"));
@@ -155,23 +256,34 @@ fn draw_suggestions(
 
 fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let border_style = if app.state.is_streaming {
-        Style::default().fg(theme::ACCENT)
+        Style::default().fg(theme::ACCENT_HOT)
     } else {
-        Style::default().fg(theme::BORDER)
+        Style::default().fg(theme::pulse_color())
     };
-    let title = if app.state.is_streaming {
-        " ❯  Draft next message ".to_owned()
+    let roomy = area.width >= 54;
+    let title = if app.state.is_streaming && roomy {
+        " ◈  BUFFERED DIRECTIVE UPLINK  ".to_owned()
+    } else if app.state.is_streaming {
+        " ◈  BUFFERED UPLINK  ".to_owned()
+    } else if roomy {
+        " ◈  DIRECTIVE UPLINK  ".to_owned()
     } else {
-        " ❯  Message ".to_owned()
+        " ◈  UPLINK  ".to_owned()
     };
-    let hint = if app.state.is_streaming {
-        " Esc interrupts · Send when task finishes "
+    let hint = if area.width < 34 {
+        " ENTER//TX "
+    } else if app.state.is_streaming && area.width < 60 {
+        " ESC//ABORT · ENTER//QUEUE "
+    } else if !app.state.is_streaming && area.width < 60 {
+        " ENTER//TX · / CMD "
+    } else if app.state.is_streaming {
+        " ESC//ABORT  ·  ENTER//QUEUE  ·  / COMMAND MATRIX "
     } else {
-        " Enter send · / commands "
+        " ENTER//TRANSMIT  ·  / COMMAND MATRIX "
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(BorderType::Double)
         .border_style(border_style)
         .style(theme::surface())
         .padding(ratatui::widgets::Padding::horizontal(1))
@@ -191,7 +303,7 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll = layout.row.saturating_sub(inner.height as usize - 1);
     let lines = if app.input.is_empty() {
         vec![Line::styled(
-            "Ask anything…",
+            "▸ awaiting directive_",
             Style::default().fg(theme::MUTED),
         )]
     } else {
@@ -221,6 +333,8 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     }
 
+    frame.render_widget(Block::default().style(theme::surface()), area);
+
     let secondary = secondary_status_line(app, width);
 
     if let Some(message) = app
@@ -235,14 +349,21 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 Line::from(vec![
                     Span::styled(
                         " × ",
-                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme::ERROR)
+                            .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(text, Style::default().fg(Color::Red)),
+                    Span::styled(text, Style::default().fg(theme::ERROR)),
                 ]),
                 secondary,
             ])),
             area,
         );
+        return;
+    }
+
+    if area.height == 1 {
+        frame.render_widget(Paragraph::new(compact_status_line(app, width)), area);
         return;
     }
 
@@ -252,23 +373,60 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
+fn compact_status_line(app: &App, width: usize) -> Line<'static> {
+    let mut spans = Vec::new();
+    let marker = if app.state.is_streaming { "◆" } else { "◇" };
+    spans.push(Span::styled(
+        format!(" {marker} "),
+        Style::default().fg(theme::pulse_color()),
+    ));
+
+    let context = if width >= 28 {
+        app.state
+            .active_model_context_length
+            .map(|value| format!(" · ctx {}", compact_number(value)))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let model = if app.state.active_model.is_empty() {
+        "select model"
+    } else {
+        app.state
+            .active_model
+            .rsplit('/')
+            .next()
+            .unwrap_or(&app.state.active_model)
+    };
+    let model_width = width.saturating_sub(3 + Span::raw(&context).width()).max(1);
+    spans.push(Span::styled(
+        truncate_middle(model, model_width),
+        Style::default()
+            .fg(theme::TEXT_DIM)
+            .add_modifier(Modifier::BOLD),
+    ));
+    if !context.is_empty() {
+        spans.push(Span::styled(context, Style::default().fg(theme::MUTED)));
+    }
+    Line::from(spans)
+}
+
 fn primary_status_line(app: &App, width: usize) -> Line<'static> {
     let mut spans = vec![Span::raw(" ")];
-    spans.extend(model_spans(&app.state.active_model, width));
-
-    if width >= 42 {
-        let mode = if app.state.active_agent_mode.is_empty() {
-            "auto"
-        } else {
-            &app.state.active_agent_mode
-        };
-        spans.push(separator());
-        spans.push(Span::styled("⌘ mode ", Style::default().fg(theme::MUTED)));
+    if width >= 48 {
         spans.push(Span::styled(
-            mode.to_owned(),
-            Style::default().fg(Color::Gray),
+            "◆ ",
+            Style::default().fg(theme::pulse_color()),
         ));
+        spans.push(Span::styled(
+            "YEET//CORE",
+            Style::default()
+                .fg(theme::TEXT)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(separator());
     }
+    spans.extend(model_spans(&app.state.active_model, width));
 
     if width >= 56 {
         let reasoning = if app.state.active_reasoning_level.is_empty() {
@@ -280,7 +438,7 @@ fn primary_status_line(app: &App, width: usize) -> Line<'static> {
         spans.push(Span::styled("✦ think ", Style::default().fg(theme::MUTED)));
         spans.push(Span::styled(
             reasoning.to_owned(),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(theme::TEXT_DIM),
         ));
     }
 
@@ -311,10 +469,23 @@ fn secondary_status_line(app: &App, width: usize) -> Line<'static> {
         }
     }
 
-    if width >= 58
-        && let Some(cached) = usage.cached_input_tokens.filter(|value| *value > 0)
+    if width >= 58 {
+        let input = usage.input_tokens.unwrap_or(0);
+        if input > 0 {
+            let cached = usage.cached_input_tokens.unwrap_or(0).min(input);
+            let hit_rate = cached as f64 * 100.0 / input as f64;
+            push_status_metric(
+                &mut spans,
+                "↻ hit",
+                format!("{hit_rate:.0}% {}", compact_number(cached)),
+            );
+        }
+    }
+
+    if width >= 88
+        && let Some(cache_write) = usage.cache_write_input_tokens.filter(|value| *value > 0)
     {
-        push_status_metric(&mut spans, "↻ cache", compact_number(cached));
+        push_status_metric(&mut spans, "↥ cache", compact_number(cache_write));
     }
 
     if width >= 74
@@ -356,7 +527,7 @@ fn push_status_metric(spans: &mut Vec<Span<'static>>, label: &str, value: String
         format!("{label} "),
         Style::default().fg(theme::MUTED),
     ));
-    spans.push(Span::styled(value, Style::default().fg(Color::Gray)));
+    spans.push(Span::styled(value, Style::default().fg(theme::TEXT_DIM)));
 }
 
 fn separator() -> Span<'static> {
@@ -367,7 +538,7 @@ fn model_spans(model: &str, width: usize) -> Vec<Span<'static>> {
     if model.is_empty() {
         return vec![Span::styled(
             "◈ model  Alt+M select".to_owned(),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme::ACCENT_HOT),
         )];
     }
 
@@ -385,7 +556,7 @@ fn model_spans(model: &str, width: usize) -> Vec<Span<'static>> {
                     },
                 ),
                 Style::default()
-                    .fg(Color::Gray)
+                    .fg(theme::TEXT_DIM)
                     .add_modifier(Modifier::BOLD),
             ),
         ];
@@ -398,7 +569,7 @@ fn model_spans(model: &str, width: usize) -> Vec<Span<'static>> {
         Span::styled(
             truncate_middle(name, if width < 76 { 24 } else { 32 }),
             Style::default()
-                .fg(Color::Gray)
+                .fg(theme::TEXT_DIM)
                 .add_modifier(Modifier::BOLD),
         ),
     ]
@@ -605,10 +776,25 @@ fn terminal_activity(activity: &crate::model::ModelActivity) -> bool {
 
 fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'static>> {
     match &entry.kind {
-        ConversationKind::User { content } => content
-            .lines()
-            .map(|line| Line::styled(format!(" {line} "), theme::surface()))
-            .collect(),
+        ConversationKind::User { content } => {
+            let mut lines = vec![Line::from(vec![
+                Span::styled("╾ ", Style::default().fg(theme::BORDER)),
+                Span::styled(
+                    "USER//DIRECTIVE",
+                    Style::default()
+                        .fg(theme::ACCENT_HOT)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ╼", Style::default().fg(theme::BORDER)),
+            ])];
+            lines.extend(content.lines().map(|line| {
+                Line::from(vec![
+                    Span::styled("┃ ", Style::default().fg(theme::ACCENT)),
+                    Span::styled(format!("{line} "), theme::surface()),
+                ])
+            }));
+            lines
+        }
         ConversationKind::Assistant {
             content,
             tool_calls,
@@ -620,7 +806,12 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                     content
                 };
             let elapsed_ms = app.stream_elapsed().unwrap_or_default().as_millis();
-            let mut lines = markdown_lines(content);
+            let mut lines = vec![Line::from(vec![
+                Span::styled("╾ ", Style::default().fg(theme::BORDER)),
+                Span::styled("YEET//RESPONSE", theme::brand()),
+                Span::styled(" ╼", Style::default().fg(theme::BORDER)),
+            ])];
+            lines.extend(markdown_lines(content));
             for call in tool_calls {
                 lines.extend(tool_lines(elapsed_ms, call, width));
             }
@@ -638,7 +829,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                     (content.as_str(), summary.as_deref())
                 };
             let mut lines = vec![Line::from(vec![
-                Span::styled("◌ reasoning", Style::default().fg(theme::MUTED)),
+                Span::styled("◇ COGNITION//", Style::default().fg(theme::ACCENT)),
                 Span::styled(
                     summary
                         .map(|value| format!(" · {value}"))
@@ -669,7 +860,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             status,
         } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled("skill ", Style::default().fg(Color::Magenta)),
+                Span::styled("skill ", Style::default().fg(theme::ACCENT)),
                 Span::styled(name.clone(), Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     status
@@ -688,7 +879,11 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             content,
             is_error,
         } => {
-            let color = if *is_error { Color::Red } else { Color::Blue };
+            let color = if *is_error {
+                theme::ERROR
+            } else {
+                theme::ACCENT
+            };
             let mut lines = vec![Line::from(Span::styled(
                 format!("MCP {server}/{name}"),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -701,7 +896,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             .map(|line| {
                 Line::from(Span::styled(
                     line.to_owned(),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(theme::TEXT_DIM),
                 ))
             })
             .collect(),
@@ -721,28 +916,30 @@ fn activity_line(
         (
             spinner_frame(elapsed.as_millis()),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT_HOT)
                 .add_modifier(Modifier::BOLD),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT_HOT)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
         match phase {
             "done" => (
                 "✓",
-                Style::default().fg(Color::Green),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::TEXT),
+                Style::default().fg(theme::TEXT_DIM),
             ),
             "failed" => (
                 "×",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                Style::default().fg(Color::Red),
+                Style::default()
+                    .fg(theme::ERROR)
+                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::ERROR),
             ),
             "interrupted" => (
                 "■",
-                Style::default().fg(Color::Yellow),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::ACCENT),
+                Style::default().fg(theme::TEXT_DIM),
             ),
             _ => (
                 "·",
@@ -801,23 +998,27 @@ fn tool_lines(
         ToolCallStatus::Streaming => (
             spinner_frame(elapsed_ms),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT_HOT)
                 .add_modifier(Modifier::BOLD),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT_HOT)
                 .add_modifier(Modifier::BOLD),
         ),
         ToolCallStatus::Completed => (
             "✓",
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme::TEXT),
             Style::default()
-                .fg(Color::Gray)
+                .fg(theme::TEXT_DIM)
                 .add_modifier(Modifier::BOLD),
         ),
         ToolCallStatus::Failed => (
             "×",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::ERROR)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::ERROR)
+                .add_modifier(Modifier::BOLD),
         ),
     };
 
@@ -980,19 +1181,7 @@ fn compact_scaled(value: u64, divisor: u64, suffix: &str) -> String {
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let width = (area.width.saturating_mul(percent_x) / 100)
-        .max(area.width.min(64))
-        .min(112)
-        .min(area.width);
-    let height = (area.height.saturating_mul(percent_y) / 100)
-        .max(area.height.min(12))
-        .min(area.height);
-    Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    )
+    responsive::modal_rect(area, percent_x, percent_y)
 }
 
 #[cfg(test)]
@@ -1008,7 +1197,6 @@ mod tests {
                 Mode::Models,
                 Mode::Sessions,
                 Mode::Reasoning,
-                Mode::AgentMode,
                 Mode::Settings,
                 Mode::Help,
             ] {
@@ -1023,7 +1211,7 @@ mod tests {
                 if mode == Mode::Models {
                     let buffer = terminal.backend().buffer();
                     assert_eq!(buffer[(popup.x, popup.y)].bg, theme::SURFACE);
-                    assert_eq!(buffer[(popup.x, popup.y)].symbol(), "╭");
+                    assert_eq!(buffer[(popup.x, popup.y)].symbol(), "╔");
                 }
             }
         }
@@ -1039,10 +1227,73 @@ mod tests {
             let buffer = terminal.backend().buffer();
             let screen: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
             assert_eq!(screen.contains("RECENT"), width >= 110);
-            assert!(screen.contains("New conversation"));
-            assert!(screen.contains("What would you like to build?"));
-            assert!(screen.contains("Enter send"));
+            assert!(screen.contains("NEW DIRECTIVE"));
+            assert!(screen.contains("YEET"));
+            assert!(screen.contains("AWAITING DIRECTIVE"));
+            assert!(screen.contains("ENTER//TRANSMIT"));
         }
+    }
+
+    #[test]
+    fn adaptive_window_ratios_render_without_starving_core_surfaces() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        for (width, height) in [(32, 8), (48, 42), (80, 24), (120, 12), (160, 30), (220, 32)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut app = App::default();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(screen.contains("YEET"), "missing brand at {width}x{height}");
+            assert!(
+                app.transcript_area.2 > 0 && app.transcript_area.3 > 0,
+                "transcript collapsed at {width}x{height}"
+            );
+
+            app.mode = Mode::Models;
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            let popup = centered_rect(72, 72, Rect::new(0, 0, width, height));
+            assert!(popup.right() <= width && popup.bottom() <= height);
+        }
+    }
+
+    #[test]
+    fn portrait_welcome_uses_mobile_density() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let (width, height) = (88, 52);
+        assert_eq!(
+            responsive::shape(Rect::new(0, 0, width, height)),
+            responsive::Shape::Portrait
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut app = App::default();
+        app.follow_tail = false;
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(
+            !screen.contains("██"),
+            "portrait welcome should avoid the desktop title"
+        );
+        assert!(!screen.contains("AGENTIC SYSTEMS CORE"));
+        assert!(
+            !screen.contains("History"),
+            "empty mobile sessions should stay at latest"
+        );
+        assert!(screen.contains("AWAITING DIRECTIVE"));
     }
 
     #[test]
@@ -1177,5 +1428,44 @@ mod tests {
         assert!(summary.contains("src/ui.rs"));
         assert!(summary.contains("src/backend.rs"));
         assert!(summary.contains("+1"));
+    }
+
+    #[test]
+    fn transcript_context_menu_renders_only_for_chat_selection() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut app = App::default();
+        app.conversation.push(crate::model::ConversationEntry {
+            id: "assistant".into(),
+            kind: ConversationKind::Assistant {
+                content: "selectable conversation text".into(),
+                tool_calls: Vec::new(),
+            },
+        });
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let (x, y, _, _) = app.transcript_area;
+        app.selection_start = Some((x, y));
+        app.selection_end = Some((x.saturating_add(5), y));
+        app.transcript_context_menu = Some(crate::app::TranscriptContextMenu {
+            x: x.saturating_add(2),
+            y,
+        });
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("Copy"));
+        assert!(screen.contains("Clear selection"));
+        assert!(app.transcript_context_menu_area.2 > 0);
+        let (menu_x, menu_y, _, _) = app.transcript_context_menu_area;
+        assert_eq!(
+            terminal.backend().buffer()[(menu_x.saturating_add(1), menu_y.saturating_add(1))].bg,
+            theme::SURFACE
+        );
     }
 }

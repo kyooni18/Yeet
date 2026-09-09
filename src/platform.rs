@@ -99,3 +99,135 @@ pub(crate) fn configure_detached(command: &mut Command) {
         command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 }
+
+pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
+    if pid == 0 || pid == std::process::id() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to terminate the current process",
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        // Capture descendants before signalling the daemon. Once the parent
+        // exits, launchd/init may immediately re-parent the Node bridge and MCP
+        // children, making later PPID-based cleanup impossible.
+        let mut tree = unix_process_tree(pid).unwrap_or_else(|_| vec![pid]);
+        if !tree.contains(&pid) {
+            tree.push(pid);
+        }
+        for target in tree.iter().rev().copied() {
+            signal_process(target, libc::SIGTERM)?;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        for target in tree.iter().rev().copied() {
+            let _ = signal_process(target, libc::SIGKILL);
+        }
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()?;
+        if status.success() {
+            return Ok(());
+        }
+        // taskkill returns a failure code when the process already exited.
+        // Treat that as an idempotent success; endpoint probing decides
+        // whether stale-daemon recovery actually completed.
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unix_process_tree(root: u32) -> io::Result<Vec<u32>> {
+    let output = Command::new("ps").args(["-axo", "pid=,ppid="]).output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(
+            "ps failed while discovering daemon children",
+        ));
+    }
+    let pairs = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let ppid = fields.next()?.parse::<u32>().ok()?;
+            Some((pid, ppid))
+        })
+        .collect::<Vec<_>>();
+    let mut tree = vec![root];
+    let mut cursor = 0usize;
+    while cursor < tree.len() {
+        let parent = tree[cursor];
+        for (child, ppid) in &pairs {
+            if *ppid == parent && !tree.contains(child) {
+                tree.push(*child);
+            }
+        }
+        cursor += 1;
+    }
+    Ok(tree)
+}
+
+#[cfg(unix)]
+fn signal_process(pid: u32, signal: i32) -> io::Result<()> {
+    let result = unsafe { libc::kill(pid as i32, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(error)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::{process::Stdio, time::Instant};
+
+    #[test]
+    fn forced_tree_termination_reaps_a_process_with_a_child() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 30 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+
+        let discovery_started = Instant::now();
+        loop {
+            if unix_process_tree(pid).is_ok_and(|tree| tree.len() >= 2) {
+                break;
+            }
+            assert!(
+                discovery_started.elapsed() < std::time::Duration::from_secs(2),
+                "child process never appeared in the process tree"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        force_terminate_process_tree(pid).unwrap();
+        let exit_started = Instant::now();
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if exit_started.elapsed() >= std::time::Duration::from_secs(2) {
+                let _ = child.kill();
+                panic!("forced process-tree termination did not stop the root process");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}

@@ -81,7 +81,10 @@ pub(super) fn is_validation_tool_call(call: &ToolCall) -> bool {
         "bun test",
         "tsc --noemit",
         "ruff check",
+        "python -m py_compile",
+        "python3 -m py_compile",
         "python -m compileall",
+        "python3 -m compileall",
         "cmake --build",
         "make test",
     ]
@@ -198,6 +201,14 @@ fn payload_made_progress(value: &Value) -> bool {
 
 /// Produces an exact call signature for duplicate-call detection.
 pub(super) fn tool_signature(call: &ToolCall) -> String {
+    if call.name == "web_read"
+        && let Some(url) = call.arguments.get("url").and_then(Value::as_str)
+    {
+        // maxChars only changes how much of the already-fetched source is
+        // previewed. The source identity is the URL, so a second read with a
+        // different preview size is still a duplicate inspection.
+        return format!("web_read\0{}", crate::tools::canonical_web_source_key(url));
+    }
     format!("{}\0{}", call.name, call.arguments)
 }
 
@@ -237,7 +248,15 @@ fn semantic_tool_family(call: &ToolCall) -> String {
         }
         "list_files" => format!("list_files:{}", path.unwrap_or_else(|| ".".into())),
         "web_search" => "web_search".into(),
-        "web_read" => "web_read".into(),
+        "web_read" => format!(
+            "web_read:{}",
+            call.arguments
+                .get("url")
+                .and_then(Value::as_str)
+                .map(crate::tools::canonical_web_source_key)
+                .as_deref()
+                .unwrap_or("?")
+        ),
         "run_shell" => "run_shell".into(),
         "apply_file_edits" => {
             let mut paths = call
@@ -291,4 +310,35 @@ fn normalize_loop_text(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn web_read_duplicate_signature_ignores_preview_size() {
+        let first = ToolCall {
+            id: "first".into(),
+            name: "web_read".into(),
+            arguments: json!({"url":"https://example.com/source","maxChars":8000}),
+        };
+        let second = ToolCall {
+            id: "second".into(),
+            name: "web_read".into(),
+            arguments: json!({"url":"https://EXAMPLE.com/source#details","maxChars":12000}),
+        };
+
+        assert_eq!(tool_signature(&first), tool_signature(&second));
+        let other = ToolCall {
+            id: "other".into(),
+            name: "web_read".into(),
+            arguments: json!({"url":"https://example.com/other","maxChars":8000}),
+        };
+        assert_ne!(
+            round_semantic_fingerprint(&[first]),
+            round_semantic_fingerprint(&[other])
+        );
+    }
 }

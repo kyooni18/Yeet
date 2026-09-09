@@ -1,6 +1,7 @@
 export * from "./auth.js";
 export * from "./capabilities.js";
 export * from "./vision.js";
+export * from "./lead.js";
 export * from "./core.js";
 export * from "./defaults.js";
 export * from "./errors.js";
@@ -8,6 +9,7 @@ export * from "./http.js";
 export * from "./types.js";
 export * from "./skills.js";
 export * from "./mcp.js";
+export * from "./codex-computer-use.js";
 export * from "./model-metadata.js";
 export * from "./compact/index.js";
 export * from "./providers/index.js";
