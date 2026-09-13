@@ -2,8 +2,9 @@
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::PathBuf,
 };
@@ -11,7 +12,41 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::{BUILTIN_CAPABILITIES, BuiltinCapabilityDescriptor, artifact_output};
-use crate::edit::ReadResult;
+use crate::{
+    core::McpServerStatus,
+    edit::ReadResult,
+    platform::{set_private_directory, set_private_file},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct McpServerIdentity {
+    pub(super) transport: String,
+    pub(super) command: Option<String>,
+    pub(super) args: Option<Vec<String>>,
+    pub(super) env: BTreeMap<String, String>,
+    pub(super) cwd: Option<String>,
+    pub(super) url: Option<String>,
+    pub(super) headers: BTreeMap<String, String>,
+}
+
+impl From<&McpServerStatus> for McpServerIdentity {
+    fn from(server: &McpServerStatus) -> Self {
+        Self {
+            transport: server.transport.clone(),
+            command: server.command.clone(),
+            args: server.args.clone(),
+            env: server.env.clone().unwrap_or_default().into_iter().collect(),
+            cwd: server.cwd.clone(),
+            url: server.url.clone(),
+            headers: server
+                .headers
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct ReadCacheEntry {
@@ -53,15 +88,14 @@ impl ArtifactStore {
         metadata: Value,
     ) -> Result<String> {
         fs::create_dir_all(&self.root)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&self.root, fs::Permissions::from_mode(0o700))?;
-        }
+        set_private_directory(&self.root)?;
         let id = Uuid::new_v4().to_string();
-        fs::write(self.root.join(format!("{id}.txt")), content)?;
+        let content_path = self.root.join(format!("{id}.txt"));
+        let metadata_path = self.root.join(format!("{id}.meta.json"));
+        fs::write(&content_path, content)?;
+        set_private_file(&content_path)?;
         fs::write(
-            self.root.join(format!("{id}.meta.json")),
+            &metadata_path,
             serde_json::to_vec(&json!({
                 "id": id,
                 "kind": kind,
@@ -72,6 +106,7 @@ impl ArtifactStore {
                 "metadata": metadata,
             }))?,
         )?;
+        set_private_file(&metadata_path)?;
         Ok(id)
     }
 
@@ -97,13 +132,17 @@ impl ArtifactStore {
         let text = fs::read_to_string(self.path(id))?;
         let lines: Vec<_> = text.lines().collect();
         let start = start.unwrap_or(1);
-        let end = end.unwrap_or_else(|| (start + 159).min(lines.len()));
-        if start == 0 || start > lines.len() || end < start || end > lines.len() {
+        let requested_end = end.unwrap_or_else(|| start.saturating_add(159));
+        if start == 0 || start > lines.len() || requested_end < start {
             bail!(
-                "artifact range {start}-{end} is out of bounds (1-{})",
+                "artifact range {start}-{requested_end} is out of bounds (1-{})",
                 lines.len()
             );
         }
+        // Treat an oversized end bound as a request for "through EOF". This keeps
+        // model-generated source ranges robust when the artifact is shorter than
+        // the source read that produced it, while still rejecting invalid starts.
+        let end = requested_end.min(lines.len());
         Ok(lines[start - 1..end].join("\n"))
     }
 
@@ -145,33 +184,6 @@ pub(super) fn collect_web_source_urls(value: &Value, output: &mut HashSet<String
             Value::Array(values) => pending.extend(values),
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-mod web_source_url_tests {
-    use super::*;
-
-    #[test]
-    fn deeply_nested_web_results_do_not_recurse_on_the_worker_stack() {
-        let worker = std::thread::Builder::new()
-            .stack_size(64 * 1024)
-            .spawn(|| {
-                let mut value = json!({"url":"https://example.com/source"});
-                for _ in 0..2_000 {
-                    value = Value::Array(vec![value]);
-                }
-                let mut urls = HashSet::new();
-                collect_web_source_urls(&value, &mut urls);
-                assert!(urls.contains("https://example.com/source"));
-
-                // serde_json::Value itself drops recursively. Leak this synthetic
-                // adversarial value so the test measures our walker rather than
-                // serde_json's destructor on the deliberately tiny stack.
-                std::mem::forget(value);
-            })
-            .expect("spawn tiny-stack worker");
-        worker.join().expect("deep JSON walk should not overflow");
     }
 }
 
@@ -435,46 +447,87 @@ pub(super) fn next_uncovered(total: usize, entries: &[ReadCacheEntry]) -> Option
     (next <= total).then_some(next)
 }
 
-pub(super) fn allocate_tool_name<'a>(
+pub(super) fn tool_name_base(prefix: &str, parts: &[&str]) -> String {
+    let mut values = parts
+        .iter()
+        .map(|part| sanitize_tool_name_part(part))
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        values.push("tool".into());
+    }
+    format!("{}_{}", sanitize_tool_name_part(prefix), values.join("_"))
+}
+
+pub(super) fn allocate_stable_tool_name<'a>(
     prefix: &str,
     parts: &[&str],
+    stable_identity: &str,
     occupied: impl Iterator<Item = &'a String>,
 ) -> String {
     let occupied: HashSet<String> = occupied.cloned().collect();
-    let sanitize = |value: &str| {
-        let mut result = value
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() {
-                    ch.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        while result.contains("__") {
-            result = result.replace("__", "_");
-        }
-        result.trim_matches('_').to_owned()
-    };
-    let base = format!(
-        "{}_{}",
-        prefix,
-        parts
+    let base = tool_name_base(prefix, parts);
+
+    let digest = Sha256::digest(stable_identity.as_bytes());
+    for bytes in [4usize, 6, 8, 12, 16] {
+        let suffix = digest[..bytes]
             .iter()
-            .map(|part| sanitize(part))
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join("_")
-    );
-    if !occupied.contains(&base) {
-        return base;
-    }
-    for index in 2..1000 {
-        let candidate = format!("{base}_{index}");
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let candidate = format!("{base}_{suffix}");
         if !occupied.contains(&candidate) {
             return candidate;
         }
     }
-    format!("{base}_{}", Uuid::new_v4().simple())
+    format!(
+        "{base}_{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn sanitize_tool_name_part(value: &str) -> String {
+    let mut result = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    while result.contains("__") {
+        result = result.replace("__", "_");
+    }
+    result.trim_matches('_').to_owned()
+}
+
+#[cfg(test)]
+mod web_source_url_tests {
+    use super::*;
+
+    #[test]
+    fn deeply_nested_web_results_do_not_recurse_on_the_worker_stack() {
+        let worker = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut value = json!({"url":"https://example.com/source"});
+                for _ in 0..2_000 {
+                    value = Value::Array(vec![value]);
+                }
+                let mut urls = HashSet::new();
+                collect_web_source_urls(&value, &mut urls);
+                assert!(urls.contains("https://example.com/source"));
+
+                // serde_json::Value itself drops recursively. Leak this synthetic
+                // adversarial value so the test measures our walker rather than
+                // serde_json's destructor on the deliberately tiny stack.
+                std::mem::forget(value);
+            })
+            .expect("spawn tiny-stack worker");
+        worker.join().expect("deep JSON walk should not overflow");
+    }
 }

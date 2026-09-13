@@ -1,6 +1,6 @@
-import os from "node:os";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
+import { defaultConfigDirectory } from "../platform.js";
 import type { ModelDialectRule } from "./types.js";
 
 export interface EditBackendConfig {
@@ -11,7 +11,7 @@ export interface EditBackendConfig {
 }
 
 export function configDirectory(): string {
-  return process.env.YEET_CONFIG_DIR ?? path.join(os.homedir(), ".yeet");
+  return defaultConfigDirectory();
 }
 
 export async function loadEditBackendConfig(): Promise<EditBackendConfig> {

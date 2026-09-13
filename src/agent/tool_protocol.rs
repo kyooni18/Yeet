@@ -47,12 +47,20 @@ impl PartialToolCall {
         }
     }
 
-    /// Finalizes streamed JSON arguments into a canonical tool call.
+    /// Finalizes streamed JSON arguments without fabricating an empty object when
+    /// the provider stopped mid-call. Invalid raw arguments are preserved so the
+    /// coordinator can repair the model turn instead of executing the wrong call.
     fn finish(self) -> ToolCall {
+        let raw = self.arguments.trim();
+        let arguments = if raw.is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(raw).unwrap_or(Value::String(self.arguments))
+        };
         ToolCall {
             id: self.id,
             name: self.name,
-            arguments: serde_json::from_str(&self.arguments).unwrap_or_else(|_| json!({})),
+            arguments,
         }
     }
 }
@@ -180,20 +188,31 @@ fn is_supported_image_media_type(value: &str) -> bool {
 }
 
 /// Merges decoded and streamed calls while preserving provider call order.
+/// Calls whose arguments are not JSON objects are returned separately so the
+/// coordinator can retry them without sending a malformed invocation to tools.
 pub(super) fn collect_tool_calls(
     decoded: HashMap<usize, ToolCall>,
     partial: HashMap<usize, PartialToolCall>,
-) -> Vec<ToolCall> {
+) -> (Vec<ToolCall>, Vec<ToolCall>) {
     let mut all = decoded;
     for (index, partial) in partial {
         all.entry(index).or_insert_with(|| partial.finish());
     }
     let mut indexes: Vec<_> = all.keys().copied().collect();
     indexes.sort_unstable();
-    indexes
-        .into_iter()
-        .filter_map(|index| all.remove(&index))
-        .collect()
+    let mut valid = Vec::new();
+    let mut malformed = Vec::new();
+    for index in indexes {
+        let Some(call) = all.remove(&index) else {
+            continue;
+        };
+        if call.arguments.is_object() {
+            valid.push(call);
+        } else {
+            malformed.push(call);
+        }
+    }
+    (valid, malformed)
 }
 
 /// Recovers structured calls from providers that emitted textual tool-call markup.
@@ -289,8 +308,12 @@ fn tool_call_from_json(value: &Value) -> Option<ToolCall> {
         .cloned()
         .unwrap_or_else(|| json!({}));
     let arguments = match raw_arguments {
-        Value::String(raw) => serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| json!({})),
-        other => other,
+        Value::String(raw) => {
+            let parsed = serde_json::from_str::<Value>(&raw).ok()?;
+            parsed.is_object().then_some(parsed)?
+        }
+        other if other.is_object() => other,
+        _ => return None,
     };
     Some(ToolCall {
         id: object

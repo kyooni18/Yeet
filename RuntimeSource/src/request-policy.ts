@@ -18,7 +18,7 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
   // These model families are routed through the Responses protocol in the
   // built-in/OpenCode adapters. Other providers reject an OpenAI `reasoning`
   // field, so leave them untouched.
-  if (!["openai", "opencode", "opencode-go"].includes(parsed.provider)) return request;
+  if (!["openai", "codex-cli", "opencode", "opencode-go"].includes(parsed.provider)) return request;
   if (!/^(?:gpt-|o\d|muse-spark-|grok-)/.test(parsed.model)) return request;
 
   const existing = request.providerOptions ?? {};

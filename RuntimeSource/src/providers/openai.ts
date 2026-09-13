@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { fetchEmbeddings } from "../embeddings.js";
 import { ProviderError } from "../errors.js";
 import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
-import { providerFetch, readJson } from "../http.js";
+import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
 import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
+import { promptCacheCapabilities, supportsOpenAIHostedToolSearch } from "../cache-capabilities.js";
 import type {
   ProviderCallRequest,
   CallResult,
@@ -11,11 +13,12 @@ import type {
   ImageAttachment,
   Message,
   ModelInfo,
+  PromptCacheDiagnostics,
   ProviderAdapter,
   StreamEvent,
   ToolChoice,
 } from "../types.js";
-import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, splitLeadingSystem, toolResultContent, usage } from "../util.js";
+import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, selectStableAndRecentIndexes, splitLeadingSystem, toolResultContent, usage } from "../util.js";
 
 export interface OpenAIProviderOptions {
   id?: string;
@@ -56,23 +59,39 @@ function responseContent(message: Message, promptCacheSupported: boolean): unkno
   return content;
 }
 
-function mapInput(messages: Message[], promptCacheSupported: boolean, cacheHistory = false): unknown[] {
+function stableSystemCacheInput(system: string): Record<string, unknown> {
+  return {
+    role: "system",
+    content: [{
+      type: "input_text",
+      text: system,
+      prompt_cache_breakpoint: { mode: "explicit" },
+    }],
+  };
+}
+
+function mapInput(
+  messages: Message[],
+  promptCacheSupported: boolean,
+  cacheHistory = false,
+  maxLookupBreakpoints = 80,
+): unknown[] {
   // A coordinator-selected breakpoint is the immutable prefix for the turn.
   // Do not synthesize newer tool-result breakpoints when one already exists:
   // doing so rewrites the growing tool trace into the prompt cache every round.
   // Auto-boundaries remain a fallback for callers that only enable caching.
   const hasStableBreakpoint = messages.some((message) => message.cacheBreakpoint === true);
   const synthesizeHistoryBreakpoints = cacheHistory && !hasStableBreakpoint;
-  const cacheIndices = new Set<number>();
+  const candidates: number[] = [];
   if (promptCacheSupported) {
-    for (let index = messages.length - 1; index >= 0 && cacheIndices.size < 50; index--) {
-      const message = messages[index]!;
+    for (const [index, message] of messages.entries()) {
       if (message.cacheBreakpoint || (synthesizeHistoryBreakpoints && !message.requestOnly &&
           (message.role === "user" || message.role === "tool"))) {
-        cacheIndices.add(index);
+        candidates.push(index);
       }
     }
   }
+  const cacheIndices = selectStableAndRecentIndexes(candidates, maxLookupBreakpoints);
   const input: any[] = [];
   for (const [index, original] of messages.entries()) {
     const message = { ...original, cacheBreakpoint: cacheIndices.has(index) };
@@ -106,35 +125,92 @@ function mapInput(messages: Message[], promptCacheSupported: boolean, cacheHisto
   return input;
 }
 
-function bodyFor(request: ProviderCallRequest, stream: boolean, codex = false): Record<string, unknown> {
+function promptCacheAffinity(request: ProviderCallRequest): string | undefined {
+  if (request.promptCache === false) return undefined;
+  // prompt_cache_key is routing affinity, not a fingerprint of every transient
+  // request option. Keep one family for the lifetime of a recoverable context
+  // window so tool promotion/finalization does not send related prefixes to a
+  // different cache bucket. Exact provider prefix matching still decides hits.
+  const family = request.metadata?.cacheFamily ?? request.contextKey ?? request.metadata?.sessionId;
+  if (!family) return undefined;
+  const stableIdentity = JSON.stringify({ version: 2, model: request.model, family });
+  const digest = createHash("sha256").update(stableIdentity).digest("hex").slice(0, 48);
+  return `yeet-v2-${digest}`;
+}
+
+function bodyFor(
+  request: ProviderCallRequest,
+  stream: boolean,
+  codex = false,
+  comparisonResponseId?: string,
+): Record<string, unknown> {
   const split = splitLeadingSystem(request.messages, request.system);
   const toolChoice = mapToolChoice(request.toolChoice);
-  const promptCacheKey = request.metadata?.sessionId ?? request.contextKey;
-  const promptCacheSupported = !codex && request.promptCache !== false && supportsPromptCacheOptions(request.model);
+  const cacheCapabilities = promptCacheCapabilities("openai", request.model);
+  const promptCacheSupported = !codex
+    && request.promptCache !== false
+    && cacheCapabilities.modes.includes("explicit");
   const cacheOptions = promptCacheSupported
-    ? { prompt_cache_options: { mode: "explicit", ttl: "30m" } }
+    ? {
+        prompt_cache_options: {
+          mode: "explicit",
+          ttl: "30m",
+          ...(comparisonResponseId ? { comparison_response_id: comparisonResponseId } : {}),
+        },
+      }
     : {};
+  const deferredTools = !codex
+    && supportsOpenAIHostedToolSearch(request.model)
+    ? (request.deferredTools ?? [])
+    : [];
+  const promptCacheKey = promptCacheAffinity(request);
+  const stableSystemBreakpoint = promptCacheSupported
+    && request.metadata?.contextManagement === "recoverable-windows"
+    && Boolean(split.system);
+  // GPT-5.6 distinguishes lookup candidates from writes: a request may create
+  // at most four new cache entries, while matching considers up to the latest
+  // 80 explicit breakpoints. Do not clip the coordinator's oldest stable turn
+  // boundary merely because newer rolling boundaries are also present.
+  const lookupBreakpoints = Math.min(
+    cacheCapabilities.maxLookupBreakpoints ?? 80,
+    cacheCapabilities.maxExplicitBreakpoints ?? cacheCapabilities.maxLookupBreakpoints ?? 80,
+  );
+  const maxMessageBreakpoints = Math.max(0, lookupBreakpoints - Number(stableSystemBreakpoint));
+  const mappedTools = [
+    ...(request.tools ?? []).map((tool) => ({
+      type: "function",
+      name: tool.name,
+      ...(tool.description ? { description: tool.description } : {}),
+      parameters: tool.inputSchema,
+      strict: false,
+    })),
+    ...deferredTools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      ...(tool.description ? { description: tool.description } : {}),
+      parameters: tool.inputSchema,
+      strict: false,
+      defer_loading: true,
+    })),
+    ...(deferredTools.length > 0 ? [{ type: "tool_search" }] : []),
+  ];
   const body: Record<string, unknown> = {
     ...(request.providerOptions ?? {}),
     model: request.model,
-    input: mapInput(split.messages, promptCacheSupported, request.promptCache === true),
+    input: [
+      ...(stableSystemBreakpoint ? [stableSystemCacheInput(split.system!)] : []),
+      ...mapInput(
+        split.messages,
+        promptCacheSupported,
+        request.promptCache === true,
+        maxMessageBreakpoints,
+      ),
+    ],
     stream,
-    ...(split.system ? { instructions: split.system } : {}),
+    ...(split.system && !stableSystemBreakpoint ? { instructions: split.system } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.maxTokens !== undefined ? { max_output_tokens: request.maxTokens } : {}),
-    ...(request.tools?.length
-      ? {
-          tools: request.tools.map((tool) => ({
-            type: "function",
-            name: tool.name,
-            ...(tool.description ? { description: tool.description } : {}),
-            parameters: tool.inputSchema,
-            // These are provider-neutral schemas with optional fields and
-            // operation unions, not strict Structured Outputs schemas.
-            strict: false,
-          })),
-        }
-      : {}),
+    ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
     ...(request.metadata ? { metadata: request.metadata } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
@@ -151,14 +227,6 @@ function bodyFor(request: ProviderCallRequest, stream: boolean, codex = false): 
     }
   }
   return body;
-}
-
-function supportsPromptCacheOptions(model: string): boolean {
-  const match = /^gpt-(\d+)(?:\.(\d+))?/.exec(model);
-  if (!match) return false;
-  const major = Number(match[1]);
-  const minor = Number(match[2] ?? 0);
-  return major > 5 || (major === 5 && minor >= 6);
 }
 
 function finishReason(raw: any): ReturnType<typeof normalizeFinishReason> {
@@ -203,6 +271,42 @@ function reasoningText(raw: any): string | undefined {
   return text || undefined;
 }
 
+function promptCacheDiagnostics(raw: any): PromptCacheDiagnostics | undefined {
+  const value = raw?.prompt_cache_diagnostics;
+  if (!value || typeof value !== "object") return undefined;
+  if (!["cache_hit", "cache_miss", "comparison_response_not_found", "unavailable"].includes(value.type)) {
+    return undefined;
+  }
+  return {
+    type: value.type,
+    ...(typeof value.cache_missed_tokens === "number" && Number.isFinite(value.cache_missed_tokens)
+      ? { cacheMissedTokens: Math.max(0, value.cache_missed_tokens) }
+      : {}),
+    ...(typeof value.reason === "string" && value.reason ? { reason: value.reason } : {}),
+    ...(typeof value.comparison_reusable_tokens === "number" && Number.isFinite(value.comparison_reusable_tokens)
+      ? { comparisonReusableTokens: Math.max(0, value.comparison_reusable_tokens) }
+      : {}),
+  };
+}
+
+function usageWithPromptCacheDiagnostics(
+  value: CallResult["usage"],
+  diagnostics: PromptCacheDiagnostics | undefined,
+): CallResult["usage"] {
+  if (!value || !diagnostics) return value;
+  return {
+    ...value,
+    providerCacheDiagnosticType: diagnostics.type,
+    ...(diagnostics.reason ? { providerCacheMissReason: diagnostics.reason } : {}),
+    ...(diagnostics.cacheMissedTokens !== undefined
+      ? { providerCacheMissedTokens: diagnostics.cacheMissedTokens }
+      : {}),
+    ...(diagnostics.comparisonReusableTokens !== undefined
+      ? { providerComparisonReusableTokens: diagnostics.comparisonReusableTokens }
+      : {}),
+  };
+}
+
 export class OpenAIProvider implements ProviderAdapter {
   readonly id: string;
   readonly #apiKey: string | undefined;
@@ -214,6 +318,7 @@ export class OpenAIProvider implements ProviderAdapter {
   readonly #fetch: FetchLike | undefined;
   readonly #apiCallLogger: ProviderFetchLogger | undefined;
   readonly #clientVersion: string;
+  readonly #promptCacheComparisonIds = new Map<string, string>();
 
   constructor(options: OpenAIProviderOptions = {}) {
     this.id = options.id ?? "openai";
@@ -236,9 +341,13 @@ export class OpenAIProvider implements ProviderAdapter {
     if (this.#accessToken && !this.#accountId) {
       throw new Error(`Missing ChatGPT account id for ${this.id} OAuth credentials`);
     }
-    const sessionId = this.#accessToken
+    const realSessionId = this.#accessToken
       ? (request?.metadata?.sessionId ?? request?.contextKey)
       : undefined;
+    // ChatGPT's Codex transport keeps conversation/session identity separate
+    // from prompt-cache affinity. Keep the real session in session-id and the
+    // recoverable context/window in thread-id; bodyFor() independently sends
+    // prompt_cache_key when Yeet has a stable cache family.
     const threadId = this.#accessToken
       ? (request?.metadata?.threadId ?? request?.metadata?.contextWindowId ?? request?.contextKey)
       : undefined;
@@ -248,7 +357,7 @@ export class OpenAIProvider implements ProviderAdapter {
       ...(this.#accessToken ? {
         ...(this.#accountId ? { "ChatGPT-Account-ID": this.#accountId } : {}),
         originator: "codex_cli_rs",
-        ...(sessionId ? { "session-id": sessionId } : {}),
+        ...(realSessionId ? { "session-id": realSessionId } : {}),
         ...(threadId ? { "thread-id": threadId, "x-client-request-id": threadId } : {}),
       } : {}),
       ...(this.#organization ? { "OpenAI-Organization": this.#organization } : {}),
@@ -286,22 +395,37 @@ export class OpenAIProvider implements ProviderAdapter {
 
   async complete(request: ProviderCallRequest): Promise<CallResult> {
     let raw: any;
+    let transportAttempts: number | undefined;
+    let streamedUsage: CallResult["usage"];
+    let streamedPromptCacheDiagnostics: PromptCacheDiagnostics | undefined;
     let streamedText = "";
     let streamedReasoning = "";
     let streamedSummary = "";
     const streamedTools: CallResult["toolCalls"] = [];
+    const promptCacheKey = promptCacheAffinity(request);
     if (this.#accessToken) {
       for await (const event of this.stream(request)) {
-        if (event.type === "finish") raw = event.raw;
+        if (event.type === "finish") {
+          raw = event.raw;
+          streamedUsage = event.usage;
+          streamedPromptCacheDiagnostics = event.promptCacheDiagnostics;
+        }
         else if (event.type === "text-delta") streamedText += event.delta;
         else if (event.type === "reasoning-delta") streamedReasoning += event.delta;
         else if (event.type === "reasoning-summary-delta") streamedSummary += event.delta;
         else if (event.type === "tool-call") streamedTools.push(event.toolCall);
       }
     } else {
+      const comparisonResponseId = promptCacheKey
+        ? this.#promptCacheComparisonIds.get(promptCacheKey)
+        : undefined;
       const response = await providerFetch(
         `${this.#baseUrl}/responses`,
-        { method: "POST", headers: this.#headers(request), body: JSON.stringify(bodyFor(request, false)) },
+        {
+          method: "POST",
+          headers: this.#headers(request),
+          body: JSON.stringify(bodyFor(request, false, false, comparisonResponseId)),
+        },
         {
           provider: this.id,
           ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -311,23 +435,33 @@ export class OpenAIProvider implements ProviderAdapter {
           ...(request.signal ? { signal: request.signal } : {}),
         },
       );
+      transportAttempts = providerFetchAttempts(response);
       raw = await readJson<any>(response);
+      if (promptCacheKey && typeof raw?.id === "string" && raw.id) {
+        this.#promptCacheComparisonIds.set(promptCacheKey, raw.id);
+      }
     }
     const toolCalls = streamedTools.length ? streamedTools : (raw.output ?? [])
       .filter((item: any) => item.type === "function_call")
       .map((item: any, index: number) =>
         normalizeToolCall(item.call_id ?? item.id, item.name, safeJsonParse(item.arguments ?? ""), index),
       );
-    const normalizedUsage = usage(
+    const normalizedUsage = streamedUsage ?? usage(
       raw.usage?.input_tokens,
       raw.usage?.output_tokens,
       raw.usage?.total_tokens,
       raw.usage?.input_tokens_details?.cached_tokens,
       raw.usage?.input_tokens_details?.cache_write_tokens,
       raw.usage?.output_tokens_details?.reasoning_tokens,
+      transportAttempts,
     );
     const normalizedReasoning = streamedReasoning || reasoningText(raw);
     const normalizedReasoningSummary = streamedSummary || reasoningSummary(raw);
+    const normalizedPromptCacheDiagnostics = streamedPromptCacheDiagnostics ?? promptCacheDiagnostics(raw);
+    const normalizedUsageWithDiagnostics = usageWithPromptCacheDiagnostics(
+      normalizedUsage,
+      normalizedPromptCacheDiagnostics,
+    );
 
     return {
       provider: this.id,
@@ -338,15 +472,25 @@ export class OpenAIProvider implements ProviderAdapter {
       ...(normalizedReasoningSummary ? { reasoningSummary: normalizedReasoningSummary } : {}),
       toolCalls,
       finishReason: toolCalls.length ? "tool_call" : finishReason(raw),
-      ...(normalizedUsage ? { usage: normalizedUsage } : {}),
+      ...(normalizedUsageWithDiagnostics ? { usage: normalizedUsageWithDiagnostics } : {}),
+      ...(normalizedPromptCacheDiagnostics ? { promptCacheDiagnostics: normalizedPromptCacheDiagnostics } : {}),
       raw,
     };
   }
 
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
+    const codex = Boolean(this.#accessToken);
+    const promptCacheKey = promptCacheAffinity(request);
+    const comparisonResponseId = !codex && promptCacheKey
+      ? this.#promptCacheComparisonIds.get(promptCacheKey)
+      : undefined;
     const response = await providerFetch(
       `${this.#baseUrl}/responses`,
-      { method: "POST", headers: this.#headers(request), body: JSON.stringify(bodyFor(request, true, Boolean(this.#accessToken))) },
+      {
+        method: "POST",
+        headers: this.#headers(request),
+        body: JSON.stringify(bodyFor(request, true, codex, comparisonResponseId)),
+      },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -356,6 +500,7 @@ export class OpenAIProvider implements ProviderAdapter {
         ...(request.signal ? { signal: request.signal } : {}),
       },
     );
+    const transportAttempts = providerFetchAttempts(response);
 
     let started = false;
     let completedRaw: any;
@@ -436,6 +581,9 @@ export class OpenAIProvider implements ProviderAdapter {
     if (!completedRaw) {
       throw new ProviderError("OpenAI stream ended before a completed response", { provider: this.id, retryable: true });
     }
+    if (!codex && promptCacheKey && typeof completedRaw?.id === "string" && completedRaw.id) {
+      this.#promptCacheComparisonIds.set(promptCacheKey, completedRaw.id);
+    }
 
     for (const [index, tool] of [...tools.entries()].sort(([a], [b]) => a - b)) {
       yield {
@@ -453,12 +601,21 @@ export class OpenAIProvider implements ProviderAdapter {
           completedRaw.usage?.input_tokens_details?.cached_tokens,
           completedRaw.usage?.input_tokens_details?.cache_write_tokens,
           completedRaw.usage?.output_tokens_details?.reasoning_tokens,
+          transportAttempts,
         )
       : undefined;
+    const normalizedPromptCacheDiagnostics = promptCacheDiagnostics(completedRaw);
+    const normalizedUsageWithDiagnostics = usageWithPromptCacheDiagnostics(
+      normalizedUsage,
+      normalizedPromptCacheDiagnostics,
+    );
     yield {
       type: "finish",
       finishReason: tools.size > 0 ? "tool_call" : finishReason(completedRaw),
-      ...(normalizedUsage ? { usage: normalizedUsage } : {}),
+      ...(normalizedUsageWithDiagnostics ? { usage: normalizedUsageWithDiagnostics } : {}),
+      ...(normalizedPromptCacheDiagnostics
+        ? { promptCacheDiagnostics: normalizedPromptCacheDiagnostics }
+        : {}),
       ...(completedRaw ? { raw: completedRaw } : {}),
     };
   }

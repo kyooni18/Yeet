@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use crate::{
-    core::ToolCall,
+    core::{ToolCall, Usage},
     model::{BridgeEnvelope, BridgeState},
 };
 
@@ -31,6 +31,41 @@ pub(super) fn state_envelope_without_conversation(state: &BridgeState) -> Bridge
 /// Renders JSON arguments for transcript-visible tool calls.
 pub(super) fn pretty_json(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+/// Formats cache usage without treating unreported provider telemetry as misses.
+pub(super) fn cache_status_line(usage: &Usage) -> String {
+    let cache = usage.cache_measurement();
+    if let Some(hit_rate) = cache.hit_rate {
+        let coverage = cache.measurement_coverage_rate.unwrap_or(0.0) * 100.0;
+        format!(
+            "Cache: read {}/{} measured tokens ({:.0}% hit) · write {} tokens · {:.0}% input measured",
+            cache.cached_input_tokens,
+            cache.measured_input_tokens,
+            hit_rate * 100.0,
+            cache.cache_write_input_tokens,
+            coverage,
+        )
+    } else if cache.unclassified_input_tokens > 0 {
+        format!(
+            "Cache: read {} tokens · write {} tokens · hit rate unavailable ({} legacy/unclassified input tokens)",
+            cache.cached_input_tokens,
+            cache.cache_write_input_tokens,
+            cache.unclassified_input_tokens,
+        )
+    } else if cache.unreported_input_tokens > 0 {
+        format!(
+            "Cache: read {} tokens · write {} tokens · hit rate unavailable (cache telemetry unreported for {} input tokens)",
+            cache.cached_input_tokens,
+            cache.cache_write_input_tokens,
+            cache.unreported_input_tokens,
+        )
+    } else {
+        format!(
+            "Cache: read {} tokens · write {} tokens",
+            cache.cached_input_tokens, cache.cache_write_input_tokens
+        )
+    }
 }
 
 /// Maps a tool name to the short activity title shown while it runs.

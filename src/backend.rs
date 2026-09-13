@@ -27,7 +27,7 @@ use crate::{
     },
     model::{
         AuthProviderItem, BridgeEnvelope, BridgeState, CapabilityToggleItem, ConversationEntry,
-        ConversationKind, ConversationToolCall, FrontendCommand, ModelActivity,
+        ConversationKind, ConversationToolCall, FrontendCommand, ModelActivity, ModelCatalogItem,
         NativeAppPermission, ProviderConfigurationItem, SandboxAction, SandboxEnvironmentItem,
         SandboxLimitsState, SandboxNetworkItem, SandboxSettingsState, ToolCallStatus,
     },
@@ -72,11 +72,12 @@ use titles::{
 };
 use titles::{fallback_title, generate_session_title, prepare_title_request};
 use transport::{
-    pretty_json, state_envelope, state_envelope_without_conversation, tool_activity_title,
-    tool_detail,
+    cache_status_line, pretty_json, state_envelope, state_envelope_without_conversation,
+    tool_activity_title, tool_detail,
 };
 
 use crate::background::BackgroundConnection;
+const INFINITY_RESUME_PROMPT: &str = "Continue the current task from the existing working state. Do not restart completed work. Keep making useful forward progress.";
 
 fn default_attached_harness(capabilities: &[HarnessCapabilityDescriptor]) -> Vec<String> {
     let mut values = capabilities
@@ -92,6 +93,28 @@ fn default_attached_harness(capabilities: &[HarnessCapabilityDescriptor]) -> Vec
     values
 }
 
+fn native_app_approval_is_automatic(policy: &SandboxPolicy) -> bool {
+    policy.mode == SandboxMode::Unlimited || policy.auto_approve
+}
+
+#[cfg(test)]
+mod native_approval_policy_tests {
+    use super::*;
+
+    #[test]
+    fn native_app_approval_respects_auto_approve_and_unlimited() {
+        let mut policy = SandboxPolicy::default();
+        assert!(!native_app_approval_is_automatic(&policy));
+
+        policy.auto_approve = true;
+        assert!(native_app_approval_is_automatic(&policy));
+
+        policy.auto_approve = false;
+        policy.mode = SandboxMode::Unlimited;
+        assert!(native_app_approval_is_automatic(&policy));
+    }
+}
+
 pub enum BackendEvent {
     Envelope(BridgeEnvelope),
 }
@@ -99,6 +122,8 @@ pub enum BackendEvent {
 pub struct Backend {
     connection: BackgroundConnection,
 }
+
+type LoadedModelCatalog = (Vec<String>, Vec<ModelCatalogItem>, HashMap<String, u64>);
 
 impl Backend {
     pub fn spawn() -> Result<Self> {
@@ -138,6 +163,7 @@ pub(crate) struct BackendService {
     workspace_root: PathBuf,
     permission: PermissionBroker,
     active_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    infinity_mode: Arc<AtomicBool>,
     events: Receiver<BackendEvent>,
     tx: Sender<BackendEvent>,
     closed: bool,
@@ -181,6 +207,11 @@ impl BackendService {
             coordinator.set_session_runtime(store.clone(), None);
         }
         let mut session = SharedSession::new(model, reasoning_level);
+        session.state.saved_sessions = store.list(&workspace_root).unwrap_or_default();
+        if let Ok((workspaces, session_groups)) = store.list_workspace_catalog(&workspace_root) {
+            session.state.known_workspaces = workspaces;
+            session.state.workspace_session_groups = session_groups;
+        }
         session.state.sandbox_settings = SandboxStore::new(&workspace_root)
             .and_then(|store| store.load())
             .ok()
@@ -188,8 +219,18 @@ impl BackendService {
         session.state.openai_flex = project.openai_flex;
         session.state.foundation_memory_enabled = project.foundation_memory.enabled;
         session.state.foundation_memory_server = project.foundation_memory.server.clone();
-        session.meta.attached_capabilities = project.capabilities.attached;
-        session.meta.disabled_capabilities = project.capabilities.disabled;
+        session.meta.attached_capabilities = project.capabilities.attached.map(|values| {
+            values
+                .into_iter()
+                .filter(|value| !value.starts_with("skill:"))
+                .collect()
+        });
+        session.meta.disabled_capabilities = project
+            .capabilities
+            .disabled
+            .into_iter()
+            .filter(|value| !value.starts_with("skill:"))
+            .collect();
         let shared = Arc::new(Mutex::new(session));
         let (tx, events) = mpsc::channel();
         {
@@ -216,6 +257,7 @@ impl BackendService {
             workspace_root,
             permission,
             active_cancel: Arc::new(Mutex::new(None)),
+            infinity_mode: Arc::new(AtomicBool::new(false)),
             events,
             tx,
             closed: false,
@@ -230,6 +272,7 @@ impl BackendService {
             FrontendCommand::Submit { text } => self.submit(text),
             FrontendCommand::StartDebate { topic, models } => self.start_debate(topic, models),
             FrontendCommand::Interrupt => {
+                self.set_infinity_enabled(false)?;
                 self.interrupt();
                 Ok(())
             }
@@ -259,6 +302,7 @@ impl BackendService {
             }
             FrontendCommand::SelectModel { model } => self.select_model(model),
             FrontendCommand::SelectReasoning { level } => self.select_reasoning(level),
+            FrontendCommand::SetInfinity { enabled } => self.set_infinity_enabled(enabled),
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
                 Ok(())
@@ -346,6 +390,22 @@ impl BackendService {
             }
             return;
         };
+
+        // Native Computer Use elicitations must respect the same workspace
+        // approval policy as shell/file operations. In auto-approve or unlimited
+        // mode, surfacing every low-level click/type/scroll as a modal defeats
+        // the policy and makes Computer Use effectively unusable.
+        let auto_approve = SandboxStore::new(&self.workspace_root)
+            .and_then(|store| store.load())
+            .map(|policy| native_app_approval_is_automatic(&policy))
+            .unwrap_or(false);
+        if auto_approve {
+            let _ = self
+                .bridge
+                .send_native_app_approval_decision(&request.request_id, true);
+            return;
+        }
+
         let permission = self.permission.clone();
         let bridge = self.bridge.clone();
         let shared = self.shared.clone();
@@ -387,12 +447,36 @@ impl BackendService {
         self.closed
     }
 
+    pub(super) fn set_infinity_enabled(&self, enabled: bool) -> Result<()> {
+        self.infinity_mode.store(enabled, Ordering::Release);
+        let session_id = {
+            let mut shared = self.shared.lock().unwrap();
+            shared.state.infinity_mode = enabled;
+            shared.state.current_session_id.clone()
+        };
+        if let Some(session_id) = session_id {
+            self.store.set_infinity_mode(&session_id, enabled)?;
+        }
+        self.publish_state();
+        Ok(())
+    }
+
     fn submit(&mut self, text: String) -> Result<()> {
+        self.submit_agent(text, true, "agent", false)
+    }
+
+    pub(super) fn submit_agent(
+        &mut self,
+        text: String,
+        visible_user: bool,
+        run_kind: &str,
+        continuation: bool,
+    ) -> Result<()> {
         let input = text.trim().to_owned();
         if input.is_empty() {
             return Ok(());
         }
-        if input.starts_with('/') {
+        if visible_user && input.starts_with('/') {
             return self.run_command(&input);
         }
         self.reload_project_capabilities()?;
@@ -402,19 +486,23 @@ impl BackendService {
             if shared.state.is_streaming {
                 return Ok(());
             }
-            if !shared.meta.pending_images.is_empty()
-                && shared
-                    .meta
-                    .attached_capabilities
-                    .as_ref()
-                    .is_some_and(|values| !values.iter().any(|value| value == "vision"))
-            {
-                shared.state.error_message = Some("Vision is detached. Enable it in /capabilities or run /attach vision before sending images.".into());
-                drop(shared);
-                self.publish_state();
-                return Ok(());
+            if !visible_user {
+                Vec::new()
+            } else {
+                if !shared.meta.pending_images.is_empty()
+                    && shared
+                        .meta
+                        .attached_capabilities
+                        .as_ref()
+                        .is_some_and(|values| !values.iter().any(|value| value == "vision"))
+                {
+                    shared.state.error_message = Some("Vision is detached. Enable it in /capabilities or run /attach vision before sending images.".into());
+                    drop(shared);
+                    self.publish_state();
+                    return Ok(());
+                }
+                std::mem::take(&mut shared.meta.pending_images)
             }
-            std::mem::take(&mut shared.meta.pending_images)
         };
         {
             let mut shared = self.shared.lock().unwrap();
@@ -425,30 +513,40 @@ impl BackendService {
             shared.state.active_activity_entry_id = None;
             shared.meta.pending_tool_calls.clear();
             let run_model = shared.state.active_model.clone();
-            shared.start_run(turn_id.clone(), "agent", run_model);
-            let visible_input = if images.is_empty() {
-                input.clone()
-            } else {
-                let names = images
-                    .iter()
-                    .filter_map(|image| image.name.as_deref())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!(
-                    "{input}\n[{} image{}{}]",
-                    images.len(),
-                    if images.len() == 1 { "" } else { "s" },
-                    if names.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {names}")
-                    }
-                )
-            };
-            shared.append(ConversationKind::User {
-                content: visible_input,
-            });
-            shared.set_activity("thinking", "Thinking", None);
+            shared.start_run(turn_id.clone(), run_kind, run_model);
+            if visible_user {
+                let visible_input = if images.is_empty() {
+                    input.clone()
+                } else {
+                    let names = images
+                        .iter()
+                        .filter_map(|image| image.name.as_deref())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "{input}\n[{} image{}{}]",
+                        images.len(),
+                        if images.len() == 1 { "" } else { "s" },
+                        if names.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {names}")
+                        }
+                    )
+                };
+                shared.append(ConversationKind::User {
+                    content: visible_input,
+                });
+            }
+            shared.set_activity(
+                "thinking",
+                if continuation {
+                    "Infinity · resuming"
+                } else {
+                    "Thinking"
+                },
+                continuation.then(|| "Resuming persisted Infinity execution".to_owned()),
+            );
         }
         self.publish_state();
 
@@ -509,6 +607,7 @@ impl BackendService {
         let store = self.store.clone();
         let workspace = self.workspace_root.clone();
         let active_cancel = self.active_cancel.clone();
+        let infinity_mode = self.infinity_mode.clone();
         let permission = self.permission.clone();
         let bridge = self.bridge.clone();
         thread::spawn(move || {
@@ -534,6 +633,8 @@ impl BackendService {
                             attached_capabilities: attached,
                             disabled_capabilities,
                             cancel: cancel.clone(),
+                            infinity_mode: infinity_mode.clone(),
+                            continuation,
                         },
                         |event| {
                             if let Ok(mut state) = shared.lock() {
@@ -543,7 +644,9 @@ impl BackendService {
                                 let omit_conversation = match &event {
                                     AgentEvent::ModelAttemptStarted { .. }
                                     | AgentEvent::ModelAttemptFinished(..)
-                                    | AgentEvent::AuxiliaryUsage(_) => true,
+                                    | AgentEvent::AuxiliaryUsage(_)
+                                    | AgentEvent::InfinityCheckpoint { .. }
+                                    | AgentEvent::InfinityRetry { .. } => true,
                                     AgentEvent::TextDelta(_) => {
                                         state.state.active_assistant_entry_id.is_some()
                                     }
@@ -579,6 +682,7 @@ impl BackendService {
             if let Ok(mut state) = shared.lock()
                 && state.meta.current_turn.as_deref() == Some(&turn_id)
             {
+                state.state.infinity_mode = infinity_mode.load(Ordering::Acquire);
                 let (run_status, run_error) = match result {
                     Err(error) if cancel.load(Ordering::Acquire) => {
                         state.set_activity("interrupted", "Interrupted", None);
@@ -608,7 +712,13 @@ impl BackendService {
                 state.state.active_reasoning_entry_id = None;
                 state.state.active_reasoning_text.clear();
                 state.state.active_reasoning_summary.clear();
-                state.settle_pending_tool_calls(ToolCallStatus::Failed);
+                let pending_tool_status = match run_status {
+                    RunStatus::Completed
+                    | RunStatus::CompletedUnverified
+                    | RunStatus::Interrupted => ToolCallStatus::Suppressed,
+                    RunStatus::Running | RunStatus::Failed => ToolCallStatus::Failed,
+                };
+                state.settle_pending_tool_calls(pending_tool_status);
                 state.state.pending_shell_permission = None;
                 state.state.pending_native_app_permission = None;
                 state.state.is_streaming = false;
@@ -659,7 +769,7 @@ impl BackendService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /sessions  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /attach ID  /detach ID  /allow  /deny  /clear"),
+            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /sessions  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /infinity  /attach ID  /detach ID  /allow  /deny  /clear"),
             "/new" => self.new_session(),
             "/clear" => {
                 let mut shared = self.shared.lock().unwrap();
@@ -717,6 +827,7 @@ impl BackendService {
                 }
             }
             "/status" => self.append_system(&self.status_report()),
+            "/infinity" => self.append_system("Open /infinity in the interactive TUI."),
             "/image" => {
                 let Some(argument) = arguments.first().copied() else {
                     let count = self.shared.lock().unwrap().meta.pending_images.len();
@@ -795,10 +906,9 @@ impl BackendService {
             None => format!("Context: {current_context} tokens / unknown limit"),
         };
         let usage = &state.token_usage;
-        let input = usage.input_tokens.unwrap_or(0);
+        let cache = usage.cache_measurement();
+        let input = cache.input_tokens;
         let output = usage.output_tokens.unwrap_or(0);
-        let cached = usage.cached_input_tokens.unwrap_or(0).min(input);
-        let cache_write = usage.cache_write_input_tokens.unwrap_or(0);
         let reasoning_tokens = usage.reasoning_tokens.unwrap_or(0);
         let reasoning_mode = if state.active_reasoning_level.is_empty() {
             "auto"
@@ -818,14 +928,7 @@ impl BackendService {
                 )
             })
             .unwrap_or(("unknown", "sandbox state unavailable".to_owned()));
-        let cache_line = if input > 0 {
-            format!(
-                "Cache: read {cached} tokens ({:.0}% hit) · write {cache_write} tokens",
-                cached as f64 * 100.0 / input as f64
-            )
-        } else {
-            format!("Cache: read {cached} tokens · write {cache_write} tokens")
-        };
+        let cache_line = cache_status_line(usage);
         let mut lines = vec![
             format!(
                 "Model: {}",
@@ -839,6 +942,10 @@ impl BackendService {
             format!("Tokens: input {input} · output {output} · reasoning {reasoning_tokens}"),
             cache_line,
             format!("Reasoning mode: {reasoning_mode}"),
+            format!(
+                "Infinity: {}",
+                if state.infinity_mode { "ON" } else { "OFF" }
+            ),
             format!("Permission: {permission} · {sandbox_detail}"),
             format!(
                 "Runtime: {}",
@@ -897,6 +1004,9 @@ impl BackendService {
     fn request_models(&self) {
         {
             let mut shared = self.shared.lock().unwrap();
+            if shared.state.is_loading_models {
+                return;
+            }
             shared.state.is_loading_models = true;
             shared.state.error_message = None;
         }
@@ -906,10 +1016,10 @@ impl BackendService {
         let tx = self.tx.clone();
         let config = self.config.clone();
         thread::spawn(move || {
-            let result = (|| -> Result<(Vec<String>, HashMap<String, u64>)> {
+            let result = (|| -> Result<LoadedModelCatalog> {
                 let mut providers = bridge.list_providers()?;
                 providers.sort();
-                let mut models = Vec::new();
+                let mut catalog = Vec::new();
                 let mut lengths = HashMap::new();
                 for provider in providers {
                     if let Ok(info) = bridge.list_model_info(&provider) {
@@ -918,21 +1028,28 @@ impl BackendService {
                             if let Some(length) = model.context_length {
                                 lengths.insert(full.clone(), length);
                             }
-                            models.push(full);
+                            catalog.push(ModelCatalogItem {
+                                id: full,
+                                provider: provider.clone(),
+                                model: model.id,
+                                context_length: model.context_length,
+                            });
                         }
                     }
                 }
-                models.sort_by_key(|value| value.to_ascii_lowercase());
-                models.dedup();
-                Ok((models, lengths))
+                catalog.sort_by_key(|value| value.id.to_ascii_lowercase());
+                catalog.dedup_by(|lhs, rhs| lhs.id == rhs.id);
+                let models = catalog.iter().map(|value| value.id.clone()).collect();
+                Ok((models, catalog, lengths))
             })();
             if let Ok(mut state) = shared.lock() {
                 match result {
-                    Ok((models, lengths)) => {
+                    Ok((models, catalog, lengths)) => {
                         for (model, length) in lengths {
                             let _ = config.set_context_length(&model, Some(length));
                         }
                         state.state.available_models = models;
+                        state.state.model_catalog = catalog;
                         if state.state.available_models.is_empty() {
                             state.state.error_message = Some(
                                 "No available models could be loaded. Check provider credentials."
@@ -999,12 +1116,22 @@ impl BackendService {
     }
 
     fn request_sessions(&self) {
-        let result = self.store.list(&self.workspace_root);
+        let sessions = self.store.list(&self.workspace_root);
+        let workspace_catalog = self.store.list_workspace_catalog(&self.workspace_root);
         let mut shared = self.shared.lock().unwrap();
-        match result {
+        match sessions {
             Ok(sessions) => shared.state.saved_sessions = sessions,
             Err(error) => {
                 shared.state.error_message = Some(format!("Unable to list sessions: {error}"))
+            }
+        }
+        match workspace_catalog {
+            Ok((workspaces, session_groups)) => {
+                shared.state.known_workspaces = workspaces;
+                shared.state.workspace_session_groups = session_groups;
+            }
+            Err(error) => {
+                shared.state.error_message = Some(format!("Unable to list workspaces: {error}"))
             }
         }
         drop(shared);
@@ -1076,7 +1203,7 @@ impl BackendService {
                 items.extend(skills.into_iter().map(|skill| {
                     let id = format!("skill:{}", skill.name);
                     CapabilityToggleItem {
-                        enabled: !disabled.contains(&id),
+                        enabled: effective_harness.contains(&id),
                         id,
                         kind: "skill".into(),
                         name: skill.name,
@@ -1129,14 +1256,20 @@ impl BackendService {
         self.reload_project_capabilities()?;
         let harness = self.bridge.list_harness_capabilities()?;
         let is_harness = id == "web-search" || harness.iter().any(|capability| capability.id == id);
-        let is_lazy = id.starts_with("skill:") || id.starts_with("mcp:");
+        let is_skill = id.strip_prefix("skill:").is_some_and(|name| {
+            self.bridge
+                .list_skills()
+                .is_ok_and(|skills| skills.iter().any(|skill| skill.name == name))
+        });
+        let is_mcp = id.starts_with("mcp:");
         let is_builtin = crate::tools::builtin_capabilities()
             .iter()
             .any(|capability| capability.id == id);
-        if !is_harness && !is_lazy && !is_builtin {
+        if !is_harness && !is_skill && !is_mcp && !is_builtin {
             return Err(anyhow!("Unknown capability: {id}"));
         }
 
+        let mut skill_transition: Option<(String, bool)> = None;
         {
             let mut shared = self.shared.lock().unwrap();
             if shared.state.is_streaming {
@@ -1146,13 +1279,14 @@ impl BackendService {
                 self.publish_state();
                 return Ok(());
             }
-            if is_harness {
+            if is_harness || is_skill {
                 let mut values = shared
                     .meta
                     .attached_capabilities
                     .clone()
                     .unwrap_or_else(|| default_attached_harness(&harness));
-                if values.iter().any(|value| value == id) {
+                let was_attached = values.iter().any(|value| value == id);
+                if was_attached {
                     values.retain(|value| value != id);
                 } else {
                     values.push(id.to_owned());
@@ -1160,42 +1294,106 @@ impl BackendService {
                     values.dedup();
                 }
                 shared.meta.attached_capabilities = Some(values);
-            } else {
-                if shared
-                    .meta
-                    .disabled_capabilities
-                    .iter()
-                    .any(|value| value == id)
-                {
+                if let Some(name) = id.strip_prefix("skill:") {
                     shared
                         .meta
                         .disabled_capabilities
                         .retain(|value| value != id);
-                } else {
-                    shared.meta.disabled_capabilities.push(id.to_owned());
-                    shared.meta.disabled_capabilities.sort();
-                    shared.meta.disabled_capabilities.dedup();
+                    skill_transition = Some((name.to_owned(), !was_attached));
                 }
+            } else if shared
+                .meta
+                .disabled_capabilities
+                .iter()
+                .any(|value| value == id)
+            {
+                shared
+                    .meta
+                    .disabled_capabilities
+                    .retain(|value| value != id);
+            } else {
+                shared.meta.disabled_capabilities.push(id.to_owned());
+                shared.meta.disabled_capabilities.sort();
+                shared.meta.disabled_capabilities.dedup();
+            }
+        }
+        if let Some((name, attached)) = skill_transition.as_ref() {
+            let mut coordinator = self
+                .coordinator
+                .lock()
+                .map_err(|_| anyhow!("agent coordinator lock poisoned"))?;
+            if *attached {
+                coordinator.attach_skill_to_session(name)?;
+            } else {
+                coordinator.detach_skill_from_session(name);
             }
         }
         self.save_project_capabilities()?;
+        if skill_transition.is_some() {
+            let history = self
+                .coordinator
+                .lock()
+                .map_err(|_| anyhow!("agent coordinator lock poisoned"))?
+                .model_history();
+            let mut shared = self.shared.lock().unwrap();
+            if shared.state.current_session_id.is_some() {
+                persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
+            }
+        }
         self.request_capabilities();
         Ok(())
     }
 
     fn save_project_capabilities(&self) -> Result<()> {
         let shared = self.shared.lock().unwrap();
-        self.project_settings.save_capabilities(
-            shared.meta.attached_capabilities.clone(),
-            shared.meta.disabled_capabilities.clone(),
-        )
+        let attached = shared.meta.attached_capabilities.clone().map(|values| {
+            values
+                .into_iter()
+                .filter(|value| !value.starts_with("skill:"))
+                .collect::<Vec<_>>()
+        });
+        let disabled = shared
+            .meta
+            .disabled_capabilities
+            .iter()
+            .filter(|value| !value.starts_with("skill:"))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.project_settings.save_capabilities(attached, disabled)
     }
 
     fn reload_project_capabilities(&self) -> Result<()> {
         let project = self.project_settings.load()?;
+        let harness = self.bridge.list_harness_capabilities()?;
         let mut shared = self.shared.lock().unwrap();
-        shared.meta.attached_capabilities = project.capabilities.attached;
-        shared.meta.disabled_capabilities = project.capabilities.disabled;
+        let attached_skills = shared
+            .meta
+            .attached_capabilities
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|value| value.starts_with("skill:"))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut attached = project.capabilities.attached.map(|values| {
+            values
+                .into_iter()
+                .filter(|value| !value.starts_with("skill:"))
+                .collect::<Vec<_>>()
+        });
+        if !attached_skills.is_empty() {
+            let values = attached.get_or_insert_with(|| default_attached_harness(&harness));
+            values.extend(attached_skills);
+            values.sort();
+            values.dedup();
+        }
+        shared.meta.attached_capabilities = attached;
+        shared.meta.disabled_capabilities = project
+            .capabilities
+            .disabled
+            .into_iter()
+            .filter(|value| !value.starts_with("skill:"))
+            .collect();
         Ok(())
     }
 }
@@ -1471,6 +1669,47 @@ mod tests {
         assert_eq!(activities[1].phase.as_str(), Some("failed"));
         assert_eq!(state.meta.runs[0].status, RunStatus::Completed);
         assert_eq!(state.meta.runs[1].status, RunStatus::Failed);
+    }
+
+    #[test]
+    fn starting_new_run_reconciles_orphaned_running_record_and_activity() {
+        let mut state = SharedSession::new("test/model".into(), "medium".into());
+        state.start_run("run-a".into(), "agent", "test/model".into());
+        state.set_activity("thinking", "Thinking", None);
+        state.state.active_activity_entry_id = None;
+
+        state.start_run("run-b".into(), "agent", "test/model".into());
+
+        assert_eq!(state.meta.runs.len(), 2);
+        assert_eq!(state.meta.runs[0].status, RunStatus::Interrupted);
+        assert!(state.meta.runs[0].finished_at.is_some());
+        assert!(
+            state.meta.runs[0]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("newer run"))
+        );
+        assert_eq!(state.meta.runs[1].status, RunStatus::Running);
+        assert_eq!(state.meta.current_turn.as_deref(), Some("run-b"));
+        assert_eq!(state.state.active_run_id.as_deref(), Some("run-b"));
+
+        let old_activity = state
+            .state
+            .conversation
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find_map(|entry| match &entry.kind {
+                ConversationKind::Activity { activity }
+                    if activity.run_id.as_deref() == Some("run-a") =>
+                {
+                    Some(activity)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(old_activity.phase.as_str(), Some("interrupted"));
+        assert_eq!(old_activity.title, "Interrupted · Recovered stale run");
     }
 
     #[test]

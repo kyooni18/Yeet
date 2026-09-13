@@ -10,6 +10,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(unix)]
+use std::sync::mpsc;
+
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -31,6 +34,7 @@ use crate::{
 mod auth;
 mod daemon;
 mod http;
+mod trace;
 
 pub fn run_cli(args: &[String]) -> Result<String> {
     daemon::run_cli(args)
@@ -39,6 +43,9 @@ pub fn run_cli(args: &[String]) -> Result<String> {
 const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 const LEGACY_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const TOOL_LIST_TTL_MS: u64 = 300_000;
+const MAX_MCP_JSON_NESTING: usize = 64;
+#[cfg(unix)]
+const STDIO_ORPHAN_STARTUP_GRACE: Duration = Duration::from_secs(3);
 
 pub fn serve_stdio(args: &[String]) -> Result<()> {
     let launch_workspace = current_workspace()?;
@@ -47,7 +54,92 @@ pub fn serve_stdio(args: &[String]) -> Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut server = McpServer::new(default_workspace);
-    serve_io(&mut server, stdin.lock(), stdout.lock())
+    let result = serve_stdio_guarded(&mut server, stdin, stdout);
+    if result.as_ref().is_err_and(is_stdio_disconnect) {
+        return Ok(());
+    }
+    result
+}
+
+#[cfg(unix)]
+fn serve_stdio_guarded(
+    server: &mut McpServer,
+    stdin: std::io::Stdin,
+    stdout: std::io::Stdout,
+) -> Result<()> {
+    enum ReadEvent {
+        Line(String),
+        Eof,
+        Error(std::io::Error),
+    }
+
+    let launch_parent = unsafe { libc::getppid() };
+    let started = std::time::Instant::now();
+    let mut saw_input = false;
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("yeet-mcp-stdio-reader".into())
+        .spawn(move || {
+            let mut reader = stdin.lock();
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = sender.send(ReadEvent::Eof);
+                        return;
+                    }
+                    Ok(_) => {
+                        if sender.send(ReadEvent::Line(line)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(ReadEvent::Error(error));
+                        return;
+                    }
+                }
+            }
+        })?;
+
+    let mut writer = stdout.lock();
+    loop {
+        match receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(ReadEvent::Line(line)) => {
+                saw_input = true;
+                handle_io_line(server, &mut writer, &line)?;
+            }
+            Ok(ReadEvent::Eof) => return Ok(()),
+            Ok(ReadEvent::Error(error)) => return Err(error.into()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let current_parent = unsafe { libc::getppid() };
+                if stdio_parent_is_gone(launch_parent, current_parent, saw_input, started.elapsed())
+                {
+                    return Ok(());
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn stdio_parent_is_gone(
+    launch_parent: libc::pid_t,
+    current_parent: libc::pid_t,
+    saw_input: bool,
+    elapsed: Duration,
+) -> bool {
+    (launch_parent > 1 && current_parent != launch_parent)
+        || (launch_parent == 1 && !saw_input && elapsed >= STDIO_ORPHAN_STARTUP_GRACE)
+}
+
+#[cfg(not(unix))]
+fn serve_stdio_guarded(
+    server: &mut McpServer,
+    stdin: std::io::Stdin,
+    stdout: std::io::Stdout,
+) -> Result<()> {
+    serve_io(server, stdin.lock(), stdout.lock())
 }
 
 pub fn print_stdio_config(args: &[String]) -> Result<()> {
@@ -116,6 +208,7 @@ pub(super) fn resolve_workspace_path(base: &Path, value: &str) -> Result<PathBuf
     Ok(path)
 }
 
+#[cfg(any(test, not(unix)))]
 fn serve_io<R: BufRead, W: Write>(
     server: &mut McpServer,
     mut reader: R,
@@ -127,34 +220,90 @@ fn serve_io<R: BufRead, W: Write>(
         if reader.read_line(&mut line)? == 0 {
             return Ok(());
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+        handle_io_line(server, &mut writer, &line)?;
+    }
+}
+
+fn handle_io_line(server: &mut McpServer, writer: &mut impl Write, line: &str) -> Result<()> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let request = match serde_json::from_str::<Value>(trimmed) {
+        Ok(value) => value,
+        Err(error) => {
+            write_json(
+                writer,
+                &jsonrpc_error(Value::Null, -32700, format!("Parse error: {error}")),
+            )?;
+            return Ok(());
         }
-        let request = match serde_json::from_str::<Value>(trimmed) {
-            Ok(value) => value,
-            Err(error) => {
-                write_json(
-                    &mut writer,
-                    &jsonrpc_error(Value::Null, -32700, format!("Parse error: {error}")),
-                )?;
-                continue;
-            }
-        };
-        if let Some(items) = request.as_array() {
-            let responses = items
-                .iter()
-                .filter_map(|item| server.handle(item.clone()))
-                .collect::<Vec<_>>();
-            if !responses.is_empty() {
-                write_json(&mut writer, &Value::Array(responses))?;
-            }
-            continue;
+    };
+    if !mcp_json_nesting_within_limit(&request) {
+        let id = request
+            .as_object()
+            .and_then(|object| object.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        write_json(
+            writer,
+            &jsonrpc_error(
+                id,
+                -32600,
+                format!("MCP request nesting exceeds {MAX_MCP_JSON_NESTING} levels"),
+            ),
+        )?;
+        return Ok(());
+    }
+    if let Some(items) = request.as_array() {
+        let responses = items
+            .iter()
+            .filter_map(|item| server.handle(item.clone()))
+            .collect::<Vec<_>>();
+        if !responses.is_empty() {
+            write_json(writer, &Value::Array(responses))?;
         }
-        if let Some(response) = server.handle(request) {
-            write_json(&mut writer, &response)?;
+        return Ok(());
+    }
+    if let Some(response) = server.handle(request) {
+        write_json(writer, &response)?;
+    }
+    Ok(())
+}
+
+pub(super) fn mcp_json_nesting_within_limit(value: &Value) -> bool {
+    let mut pending = vec![(value, 0_usize)];
+    while let Some((value, depth)) = pending.pop() {
+        match value {
+            Value::Array(items) => {
+                if depth >= MAX_MCP_JSON_NESTING && !items.is_empty() {
+                    return false;
+                }
+                pending.extend(items.iter().map(|item| (item, depth + 1)));
+            }
+            Value::Object(object) => {
+                if depth >= MAX_MCP_JSON_NESTING && !object.is_empty() {
+                    return false;
+                }
+                pending.extend(object.values().map(|item| (item, depth + 1)));
+            }
+            _ => {}
         }
     }
+    true
+}
+
+fn is_stdio_disconnect(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+            )
+        })
+    })
 }
 
 fn write_json(writer: &mut impl Write, value: &Value) -> Result<()> {
@@ -326,9 +475,7 @@ impl McpServer {
             Some(value) => value,
             None => return id.map(|id| jsonrpc_error(id, -32600, "Invalid Request")),
         };
-        if id.is_none() {
-            return None;
-        }
+        id.as_ref()?;
         let id = id.unwrap_or(Value::Null);
         let requested_protocol = request_protocol(object.get("params"));
         if method != "initialize"
@@ -727,7 +874,9 @@ fn initialize_result(params: Option<&Value>) -> Value {
         .and_then(|value| value.get("protocolVersion"))
         .and_then(Value::as_str);
     let protocol = requested
-        .filter(|value| LEGACY_PROTOCOL_VERSIONS.contains(value))
+        .filter(|value| {
+            *value == MODERN_PROTOCOL_VERSION || LEGACY_PROTOCOL_VERSIONS.contains(value)
+        })
         .unwrap_or(LEGACY_PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": protocol,
@@ -897,6 +1046,8 @@ fn tool_annotations(name: &str) -> Value {
             | "web_search"
             | "web_read"
             | "project_memory_recall"
+            | "project_memory_get"
+            | "project_memory_connections"
     );
     let destructive = matches!(
         name,
@@ -909,6 +1060,7 @@ fn tool_annotations(name: &str) -> Value {
             | "project_memory_replace"
             | "project_memory_forget"
             | "project_memory_restore"
+            | "project_memory_relate"
             | "computer_use"
             | "desktop_control"
     );
@@ -975,6 +1127,58 @@ mod tests {
         assert_eq!(result["protocolVersion"], "2025-06-18");
         let fallback = initialize_result(Some(&json!({"protocolVersion":"2099-01-01"})));
         assert_eq!(fallback["protocolVersion"], "2025-11-25");
+    }
+
+    #[test]
+    fn modern_initialize_preserves_modern_requested_version() {
+        let result = initialize_result(Some(&json!({
+            "protocolVersion": MODERN_PROTOCOL_VERSION
+        })));
+        assert_eq!(result["protocolVersion"], MODERN_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn stdio_peer_disconnect_is_a_clean_shutdown_condition() {
+        let error = anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "client disconnected",
+        ));
+        assert!(is_stdio_disconnect(&error));
+    }
+
+    #[test]
+    fn mcp_json_nesting_guard_rejects_pathological_depth() {
+        let mut value = json!("leaf");
+        for _ in 0..MAX_MCP_JSON_NESTING {
+            value = json!({"nested":value});
+        }
+        assert!(mcp_json_nesting_within_limit(&value));
+        value = json!({"nested":value});
+        assert!(!mcp_json_nesting_within_limit(&value));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdio_parent_guard_handles_reparenting_and_startup_race() {
+        assert!(stdio_parent_is_gone(42, 1, false, Duration::ZERO));
+        assert!(!stdio_parent_is_gone(
+            1,
+            1,
+            false,
+            STDIO_ORPHAN_STARTUP_GRACE - Duration::from_millis(1)
+        ));
+        assert!(stdio_parent_is_gone(
+            1,
+            1,
+            false,
+            STDIO_ORPHAN_STARTUP_GRACE
+        ));
+        assert!(!stdio_parent_is_gone(
+            1,
+            1,
+            true,
+            STDIO_ORPHAN_STARTUP_GRACE
+        ));
     }
 
     #[test]
@@ -1088,8 +1292,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let root_path = root.path().canonicalize().unwrap();
         let store = SandboxStore::new(&root_path).unwrap();
-        let mut policy = SandboxPolicy::default();
-        policy.auto_approve = true;
+        let policy = SandboxPolicy {
+            auto_approve: true,
+            ..SandboxPolicy::default()
+        };
         store.save(&policy).unwrap();
         let mut server = McpServer::new(root_path.clone());
         let response = server

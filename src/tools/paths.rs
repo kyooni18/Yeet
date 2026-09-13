@@ -29,6 +29,39 @@ pub(super) fn path_outside_workspace(root: &Path, input: &str) -> Result<bool> {
     Ok(!(resolved == root || resolved.starts_with(root)))
 }
 
+/// Returns a stable display/cache key for a workspace path.
+///
+/// Paths inside the workspace are canonicalized to the same forward-slash relative
+/// form returned by the edit backend, so absolute and lexical aliases share cache
+/// state. Paths outside the workspace remain canonical absolute paths for identity.
+pub(super) fn stable_workspace_path_key(root: &Path, input: &str) -> Result<String> {
+    if input.trim().is_empty() || input.contains('\0') {
+        bail!("invalid file path");
+    }
+    let input_path = Path::new(input);
+    let joined = if input_path.is_absolute() {
+        input_path.to_path_buf()
+    } else {
+        root.join(input_path)
+    };
+    let resolved = canonicalize_existing_ancestor(&joined)?;
+    let resolved_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if resolved == resolved_root {
+        return Ok(".".into());
+    }
+    if let Ok(relative) = resolved.strip_prefix(&resolved_root) {
+        let display = relative
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        return Ok(if display.is_empty() {
+            ".".into()
+        } else {
+            display
+        });
+    }
+    Ok(resolved.to_string_lossy().into_owned())
+}
+
 /// Computes the committed revision plus a bounded fingerprint of local worktree changes.
 pub(crate) fn workspace_revision_for_path(root: &Path) -> Option<String> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -140,4 +173,29 @@ fn normalize_absolute_path(path: &Path) -> Result<PathBuf> {
         }
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_workspace_path_key_unifies_internal_aliases() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/ui")).unwrap();
+        fs::write(root.join("src/ui/theme.rs"), "theme\n").unwrap();
+        let absolute = root.join("src/ui/theme.rs");
+
+        assert_eq!(stable_workspace_path_key(&root, ".").unwrap(), ".");
+        assert_eq!(
+            stable_workspace_path_key(&root, "src/./ui/../ui/theme.rs").unwrap(),
+            "src/ui/theme.rs"
+        );
+        assert_eq!(
+            stable_workspace_path_key(&root, absolute.to_str().unwrap()).unwrap(),
+            "src/ui/theme.rs"
+        );
+        assert!(stable_workspace_path_key(&root, "").is_err());
+    }
 }

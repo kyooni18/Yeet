@@ -58,6 +58,8 @@ fn a_new_turn_does_not_inherit_old_progress_or_operations() {
     assert!(live_operation(&app).is_none());
     app.conversation.push(tool(ToolCallStatus::Completed));
     assert_eq!(tool_step_counts(&app), (1, 0));
+    app.conversation.push(tool(ToolCallStatus::Suppressed));
+    assert_eq!(tool_step_counts(&app), (1, 0));
 }
 
 #[test]
@@ -95,6 +97,42 @@ fn status_uses_actual_outcome_and_approval_overrides_streaming() {
     assert!(screen.contains("Approval needed"));
     assert!(screen.contains("Enter allow"));
     assert!(!screen.contains("Working"));
+}
+
+#[test]
+fn failed_turn_keeps_the_failure_reason_visible() {
+    let mut app = App {
+        conversation: vec![user(), tool(ToolCallStatus::Failed), activity("failed")],
+        ..App::default()
+    };
+    assert_eq!(height(&app), 2);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 2)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, frame.area()))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(screen.contains("Failed"));
+    assert!(screen.contains("1 tool step failed"));
+
+    app.state.error_message = Some("Provider connection failed".into());
+    terminal
+        .draw(|frame| draw(frame, &app, frame.area()))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(screen.contains("Provider connection failed"));
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::Shutdown,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -15,7 +15,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use fs2::FileExt;
 
 use crate::{
-    backend::{BackendEvent, BackendService},
+    backend::BackendEvent,
     config::ConfigStore,
     model::{BridgeEnvelope, FrontendCommand},
     platform::{
@@ -23,6 +23,9 @@ use crate::{
         set_private_directory, set_private_file,
     },
 };
+
+mod runtime_process;
+use runtime_process::RuntimeProcess;
 
 enum ClientEvent {
     Command {
@@ -40,7 +43,7 @@ struct ClientConnection {
 
 struct SessionRuntime {
     id: u64,
-    service: BackendService,
+    service: RuntimeProcess,
     idle_since: Option<Instant>,
     interrupt_requested_at: Option<Instant>,
 }
@@ -56,6 +59,10 @@ const IDLE_EXIT_AFTER: Duration = Duration::from_secs(60);
 const STALE_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 const FORCED_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_BACKGROUND_LOG_BYTES: u64 = 8 * 1024 * 1024;
+
+pub fn run_runtime_worker(workspace: PathBuf) -> Result<()> {
+    runtime_process::run_worker(&workspace)
+}
 
 pub struct BackgroundConnection {
     workspace: PathBuf,
@@ -132,18 +139,11 @@ impl BackgroundConnection {
 
     fn connect_existing(socket: &Path) -> Result<(LocalStream, mpsc::Receiver<BridgeEnvelope>)> {
         let stream = connect_local(socket)?;
-        let reader_stream = stream.try_clone()?;
-        reader_stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
-        let mut reader = BufReader::new(reader_stream);
-        let mut first_line = String::new();
-        match reader.read_line(&mut first_line) {
-            Ok(0) => bail!("background service closed during handshake"),
-            Ok(_) => {}
-            Err(error) => return Err(error.into()),
-        }
-        let first_envelope = serde_json::from_str::<BridgeEnvelope>(first_line.trim_end())
+        let mut reader_stream = stream.try_clone()?;
+        let first_line = Self::read_handshake_line(&mut reader_stream)?;
+        let first_envelope = serde_json::from_slice::<BridgeEnvelope>(&first_line)
             .context("invalid background service handshake")?;
-        reader.get_mut().set_read_timeout(None)?;
+        let mut reader = BufReader::new(reader_stream);
         let (tx, events) = mpsc::channel();
         tx.send(first_envelope)
             .map_err(|_| anyhow!("background event channel closed"))?;
@@ -166,6 +166,37 @@ impl BackgroundConnection {
             }
         });
         Ok((stream, events))
+    }
+
+    fn read_handshake_line(stream: &mut LocalStream) -> Result<Vec<u8>> {
+        stream.set_nonblocking(true)?;
+        let result = Self::read_handshake_line_nonblocking(stream);
+        let restore = stream.set_nonblocking(false);
+        if let Err(error) = restore {
+            return Err(error.into());
+        }
+        result
+    }
+
+    fn read_handshake_line_nonblocking(stream: &mut LocalStream) -> Result<Vec<u8>> {
+        let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+        let mut line = Vec::new();
+        let mut byte = [0_u8; 1];
+        loop {
+            match stream.read(&mut byte) {
+                Ok(0) => bail!("background service closed during handshake"),
+                Ok(_) if byte[0] == b'\n' => return Ok(line),
+                Ok(_) => line.push(byte[0]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        bail!("background service handshake timed out");
+                    }
+                    thread::sleep(Duration::from_millis(4));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     pub fn send(&mut self, command: &FrontendCommand) -> Result<()> {
@@ -685,13 +716,18 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    // On macOS, an accepted Unix-domain socket can inherit the
-                    // listener's nonblocking status. Client readers are meant
-                    // to block until the TUI sends a command; otherwise the
-                    // initial WouldBlock is mistaken for a disconnect and the
-                    // daemon closes the client immediately after handshake.
+                    // Accepted Unix-domain sockets can share listener flags on some
+                    // platforms. Client readers are blocking, while a best-effort
+                    // write timeout prevents an unresponsive local client from
+                    // stalling the daemon. Darwin rejects SO_SNDTIMEO on AF_UNIX
+                    // with EINVAL, so treat that specific unsupported option as
+                    // non-fatal rather than killing the whole background service.
                     stream.set_nonblocking(false)?;
-                    stream.set_write_timeout(Some(CLIENT_WRITE_TIMEOUT))?;
+                    if let Err(error) = stream.set_write_timeout(Some(CLIENT_WRITE_TIMEOUT))
+                        && error.kind() != std::io::ErrorKind::InvalidInput
+                    {
+                        return Err(error.into());
+                    }
                     let reader = stream.try_clone()?;
                     let client_id = next_client_id;
                     next_client_id = next_client_id.wrapping_add(1).max(1);
@@ -749,7 +785,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
             .map(|runtime| runtime.id)
             .collect::<Vec<_>>();
         for runtime_id in stuck_runtime_ids {
-            if let Some(runtime) = take_runtime(&mut runtimes, runtime_id) {
+            if let Some(mut runtime) = take_runtime(&mut runtimes, runtime_id) {
                 let _ = runtime.service.abandon_stuck_run(
                     "Run did not stop after interrupt; Yeet recycled the stuck background runtime.",
                 );
@@ -842,7 +878,7 @@ fn allocate_runtime_id(next_runtime_id: &mut u64) -> u64 {
 fn spawn_runtime(workspace: &Path, id: u64) -> Result<SessionRuntime> {
     Ok(SessionRuntime {
         id,
-        service: BackendService::spawn(workspace.to_path_buf())?,
+        service: RuntimeProcess::spawn(workspace)?,
         idle_since: None,
         interrupt_requested_at: None,
     })
@@ -1058,11 +1094,22 @@ mod tests {
                 },
             )
             .unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_millis(500)))
-                .unwrap();
+            stream.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(500);
             let mut byte = [0u8; 1];
-            stream.read(&mut byte)
+            loop {
+                match stream.read(&mut byte) {
+                    Ok(read) => break Ok(read),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            break Err(error);
+                        }
+                        thread::sleep(Duration::from_millis(4));
+                    }
+                    Err(error) => break Err(error),
+                }
+            }
         });
 
         let (stream, events) = BackgroundConnection::connect_existing(&socket).unwrap();

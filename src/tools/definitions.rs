@@ -7,6 +7,73 @@ use serde_json::json;
 
 use crate::core::ToolDefinition;
 
+use super::BuiltinCapabilityDescriptor;
+
+pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
+    BuiltinCapabilityDescriptor {
+        id: "builtin:file-read",
+        name: "File Read",
+        description: "Read one or several UTF-8 files with read_file. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Reads return snapshot-safe line anchors for later edits.",
+        // read_files is a hidden legacy alias so old restored calls inherit
+        // the same disable/approval policy without re-exposing a second schema.
+        tools: &["read_file", "read_files"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:file-write",
+        name: "File Write",
+        description: "Create, modify, move, or delete files with snapshot-safe apply_file_edits. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Existing files require a snapshot from File Read.",
+        tools: &["apply_file_edits"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:file-list",
+        name: "File Listing",
+        description: "List workspace files and directories with list_files. Use it for structure discovery without reading file contents.",
+        tools: &["list_files"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:workspace-search",
+        name: "Workspace Search",
+        description: "Search workspace source with search_workspace. Matching is literal by default; narrow the path and use regex only when needed.",
+        tools: &["search_workspace"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:shell",
+        name: "Shell",
+        description: "Run commands with run_shell. In sandboxed mode, mutating or outside-project execution asks for approval; unlimited mode runs without sandbox restrictions. Builds/tests/noisy commands can use actor mode. Use run_shell background=true to detach and shell_job to check, list, stop, or forget jobs.",
+        tools: &["run_shell", "shell_job", "request_shell_permission"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:computer-use",
+        name: "Computer Use",
+        description: "Control native macOS applications with Codex's installed Computer Use runtime. Yeet launches it directly as a built-in capability; no MCP server needs to be configured or linked.",
+        tools: &["computer_use", "computer_use_reset"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:artifacts",
+        name: "Artifacts",
+        description: "Inspect large tool results externalized as artifacts with read_artifact/search_artifact instead of replaying the original expensive command or read.",
+        tools: &["artifact_info", "read_artifact", "search_artifact"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:document-read",
+        name: "Document Read",
+        description: "Extract readable content from documents without treating them as source code. Supports PDF, DOCX, spreadsheets, CSV/TSV, JSON, Markdown, and UTF-8 text, with large content stored as typed artifacts.",
+        tools: &["read_document"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:data-analysis",
+        name: "Data Analysis",
+        description: "Analyze structured local data directly. Supports CSV, TSV, JSON arrays of objects, Excel workbooks, and ODS with summaries, value counts, grouped aggregates, and Pearson correlation.",
+        tools: &["analyze_data"],
+    },
+    BuiltinCapabilityDescriptor {
+        id: "builtin:sessions",
+        name: "Session Management",
+        description: "List Yeet sessions structurally and export a verified session archive without shell-based session discovery or deleting the active runtime state.",
+        tools: &["list_sessions", "export_session"],
+    },
+];
+
 /// Returns the built-in tool definitions that exist independently of optional web search.
 pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
     vec![
@@ -91,7 +158,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "read_artifact",
-            "Read artifact lines (default 160, max 8192 chars). If truncated, repeat the same range with offset=nextOffset.",
+            "Read artifact lines (default 160, max 8192 chars). endLine past EOF is clamped safely. For source-read artifacts, line ranges address the directly readable anchored source view; exactArtifactId in the externalization envelope preserves raw JSON. If truncated by characters, repeat the same line range with offset=nextOffset.",
             json!({"type":"object","properties":{"id":{"type":"string"},"startLine":{"type":"integer","minimum":1},"endLine":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"maxChars":{"type":"integer","minimum":1,"maximum":8192}},"required":["id"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
@@ -210,12 +277,12 @@ pub fn is_coding_builtin_tool(name: &str) -> bool {
 pub(super) fn web_search_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "web_search",
-        "Search the live web. Keep result sets small, batch only complementary queries, and reuse returned sources. Use another search only to resolve a concrete gap. Use backend=searxng for language/category/time filters or pagination.",
+        "Search the live web. Plan the search step before calling: when 2-4 complementary queries are already foreseeable, put them in one queries batch instead of spending later search-only model rounds. Keep result sets small, reuse returned sources, and search again only for a concrete new gap. Use backend=searxng for language/category/time filters or pagination.",
         json!({
             "type":"object",
             "properties":{
-                "query":{"type":"string"},
-                "queries":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":4},
+                "query":{"type":"string","description":"One narrow search query. Prefer queries when multiple complementary searches are already foreseeable."},
+                "queries":{"type":"array","description":"Batch 2-4 complementary searches that are already inferable from the request or current evidence in one tool call; use later searches only for concrete new gaps.","items":{"type":"string"},"minItems":1,"maxItems":4},
                 "maxResults":{"type":"integer","minimum":1,"maximum":8},
                 "backend":{"type":"string","enum":["auto","agent-reach","searxng"]},
                 "language":{"type":"string"},
@@ -234,12 +301,12 @@ pub(super) fn web_search_tool_definition() -> ToolDefinition {
 pub(super) fn web_read_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "web_read",
-        "Read one URL returned by web_search. Use original-source text for material claims. Reads return a bounded preview and preserve larger fetched text as an artifact for targeted follow-up. Duplicate URLs are skipped regardless of maxChars.",
+        "Read one URL returned by web_search. Use original-source text for material claims. Reads return a cache-friendly preview of at most 4,000 characters and preserve larger fetched text as an artifact for targeted search/read follow-up. Duplicate URLs are skipped regardless of maxChars.",
         json!({
             "type":"object",
             "properties":{
                 "url":{"type":"string","minLength":1},
-                "maxChars":{"type":"integer","minimum":2000,"maximum":12000}
+                "maxChars":{"type":"integer","minimum":2000,"maximum":4000}
             },
             "required":["url"],
             "additionalProperties":false
@@ -326,8 +393,18 @@ mod tests {
             Some(8)
         );
         assert_eq!(
+            search.input_schema["properties"]["queries"]["maxItems"].as_u64(),
+            Some(4)
+        );
+        assert!(
+            search
+                .description
+                .as_deref()
+                .is_some_and(|description| description.contains("search-only model rounds"))
+        );
+        assert_eq!(
             read.input_schema["properties"]["maxChars"]["maximum"].as_u64(),
-            Some(12_000)
+            Some(4_000)
         );
     }
 

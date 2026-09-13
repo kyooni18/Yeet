@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { defaultConfigDirectory } from "./platform.js";
 
 import { parseSSE } from "./sse.js";
 import type { FetchLike } from "./types.js";
@@ -617,7 +617,7 @@ export class McpManager {
   readonly #runtimeServers = new Map<string, McpServerConfiguration>();
 
   constructor(options: McpManagerOptions = {}) {
-    this.configDir = options.configDir ?? process.env.YEET_CONFIG_DIR ?? join(homedir(), ".yeet");
+    this.configDir = options.configDir ?? defaultConfigDirectory();
     this.configPath = join(this.configDir, "mcp.json");
     this.#fetch = options.fetch ?? fetch;
     this.#nativeAppApproval = options.nativeAppApproval;
@@ -723,7 +723,7 @@ export class McpManager {
         cursor = asString(result.nextCursor);
       } while (cursor);
     }
-    return output;
+    return output.sort((left, right) => left.qualifiedName.localeCompare(right.qualifiedName));
   }
 
   async callTool(server: string, name: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<McpCallToolResult> {

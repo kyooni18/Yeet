@@ -67,9 +67,29 @@ pub(super) fn agent_event_log_value(event: &AgentEvent) -> Option<Value> {
             "succeeded":succeeded,
             "result":bounded_event_result(result),
         })),
+        AgentEvent::ToolExecutionSuppressed { call, reason } => Some(json!({
+            "type":"agent-tool-suppressed",
+            "call":call,
+            "reason":reason,
+        })),
         AgentEvent::AuxiliaryUsage(usage) => {
             Some(json!({"type":"agent-auxiliary-usage", "usage":usage}))
         }
+        AgentEvent::InfinityCheckpoint { epoch, reason } => Some(json!({
+            "type":"agent-infinity-checkpoint",
+            "epoch":epoch,
+            "reason":reason,
+        })),
+        AgentEvent::InfinityRetry {
+            attempt,
+            delay_ms,
+            error,
+        } => Some(json!({
+            "type":"agent-infinity-retry",
+            "attempt":attempt,
+            "delayMs":delay_ms,
+            "error":error,
+        })),
         AgentEvent::Finished { reason, usage } => {
             Some(json!({"type":"agent-response-finished", "reason":reason, "usage":usage}))
         }
@@ -184,7 +204,32 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                 tool_detail(&call),
             );
         }
+        AgentEvent::ToolExecutionSuppressed { call, reason } => {
+            state.set_tool_call_execution_status(&call, ToolCallStatus::Suppressed);
+            state.set_activity("tool-suppressed", "Suppressed", Some(reason));
+        }
         AgentEvent::AuxiliaryUsage(usage) => record_usage(&mut state.state, &usage, 0),
+        AgentEvent::InfinityCheckpoint { epoch, reason } => {
+            state.set_activity(
+                "infinity",
+                "Infinity · continuing",
+                Some(format!("Epoch {epoch} · {reason}")),
+            );
+        }
+        AgentEvent::InfinityRetry {
+            attempt,
+            delay_ms,
+            error,
+        } => {
+            state.set_activity(
+                "retrying",
+                "Infinity · retrying",
+                Some(format!(
+                    "Attempt {attempt} · retry in {:.1}s · {error}",
+                    delay_ms as f64 / 1000.0
+                )),
+            );
+        }
         AgentEvent::Finished { reason, usage } => {
             if let Some(usage) = usage {
                 if let Some(input_tokens) = usage.input_tokens {
@@ -242,7 +287,7 @@ pub(super) fn persist_locked(
     store.save(&StoredSession {
         version: 4,
         debate: state.state.debate.clone(),
-        id,
+        id: id.clone(),
         title,
         created_at,
         updated_at: Utc::now(),
@@ -256,7 +301,8 @@ pub(super) fn persist_locked(
         retained_debate_knowledge: state.meta.retained_debate_knowledge.clone(),
         attached_harness_capabilities: state.meta.attached_capabilities.clone(),
         disabled_capabilities: state.meta.disabled_capabilities.clone(),
-    })
+    })?;
+    store.set_infinity_mode(&id, state.state.infinity_mode)
 }
 
 /// Removes the coordinator's internal coding prompt before session persistence.

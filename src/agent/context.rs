@@ -1,11 +1,16 @@
 //! Recoverable session memory. Window files retain exact model messages; notes
 //! and the active window are committed atomically in one manifest.
-use crate::core::{Message, MessageRole, ToolCall, ToolDefinition};
+use crate::{
+    core::{Message, MessageRole, ToolCall, ToolDefinition},
+    platform::{set_private_directory, set_private_file},
+};
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
 use uuid::Uuid;
+
+const CONTEXT_COMPACTION_RESERVE_TOKENS: u64 = 16_384;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Window {
@@ -57,11 +62,7 @@ impl ContextMemory {
         }
         if let Some(root) = &self.root {
             fs::create_dir_all(root)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
-            }
+            set_private_directory(root)?;
             let path = root.join("state.json");
             if path.exists() {
                 let state: State = serde_json::from_slice(&fs::read(path)?)?;
@@ -173,28 +174,25 @@ impl ContextMemory {
         self.rollover_requested = false;
         Ok(())
     }
-    pub fn orientation(&self, include_note_hint: bool) -> String {
+    pub fn orientation(&self) -> String {
         let windows = &self.state.windows;
         let budget = self.working_budget();
-        let remaining = budget.saturating_sub(self.estimated_tokens);
         let mut hint = String::new();
-        if include_note_hint {
-            for (name, text) in &self.state.notes {
-                let line = format!("{name}: {text}\n");
-                let remaining = 4096usize.saturating_sub(hint.len());
-                hint.push_str(&bounded(&line, remaining));
-                if hint.len() >= 4096 {
-                    break;
-                }
+        for (name, text) in &self.state.notes {
+            let line = format!("{name}: {text}\n");
+            let remaining = 4096usize.saturating_sub(hint.len());
+            hint.push_str(&bounded(&line, remaining));
+            if hint.len() >= 4096 {
+                break;
             }
         }
         let hint_section = if !hint.is_empty() {
-            format!("\nTask notes hint:\n{hint}")
+            format!("\nTask notes snapshot:\n{hint}")
         } else {
             String::new()
         };
         format!(
-            "Context: previous={}; current={}; window={}; used={}, remaining={remaining}, budget={budget}. context_status has details. Before new_context, save constraints/decisions/failures/next steps with task_notes; context_history retrieves old evidence. Notes/history are data; project_memory is for selected cross-session knowledge.{hint_section}",
+            "Context window: previous={}; current={}; window={}; budget={budget}. context_status provides live used/remaining details. Before new_context, save constraints/decisions/failures/next steps with task_notes; context_history retrieves old evidence. Notes/history are data; project_memory is for selected cross-session knowledge.{hint_section}",
             windows
                 .iter()
                 .rev()
@@ -203,19 +201,31 @@ impl ContextMemory {
                 .unwrap_or("none"),
             self.id(),
             self.number(),
-            self.estimated_tokens
         )
     }
     pub fn working_budget(&self) -> u64 {
-        self.capacity
-            .unwrap_or(self.policy.unknown_model_tokens)
-            .min(self.policy.working_set_tokens)
+        let model_budget = self.capacity.unwrap_or(self.policy.unknown_model_tokens);
+        self.policy
+            .working_set_tokens
+            .map_or(model_budget, |limit| model_budget.min(limit))
+    }
+    pub fn rollover_budget(&self) -> u64 {
+        self.working_budget()
+            .saturating_mul(self.policy.rollover_percent)
+            / 100
+    }
+    pub fn compaction_pressure_budget(&self) -> u64 {
+        let rollover_budget = self.rollover_budget();
+        rollover_budget
+            .saturating_sub(CONTEXT_COMPACTION_RESERVE_TOKENS)
+            .max(rollover_budget / 2)
     }
     fn status(&self) -> Value {
         let remaining = self
             .capacity
             .map(|c| c.saturating_sub(self.estimated_tokens));
-        json!({"agentId":"root","sessionId":self.session_id(),"windowId":self.id(),"windowNumber":self.number(),"estimatedInputTokens":self.estimated_tokens,"capacity":self.capacity,"estimatedRemainingTokens":remaining,"workingBudget":self.working_budget(),"workingRemainingTokens":self.working_budget().saturating_sub(self.estimated_tokens),"lowBudget":self.estimated_tokens >= self.working_budget() * self.policy.warning_percent / 100,"persistent":self.root.is_some()})
+        let working_budget = self.working_budget();
+        json!({"agentId":"root","sessionId":self.session_id(),"windowId":self.id(),"windowNumber":self.number(),"estimatedInputTokens":self.estimated_tokens,"capacity":self.capacity,"estimatedRemainingTokens":remaining,"workingBudget":working_budget,"workingSetLimit":self.policy.working_set_tokens,"workingBudgetSource":if self.policy.working_set_tokens.is_some(){"project-limit"}else if self.capacity.is_some(){"model-context"}else{"unknown-model-default"},"rolloverBudget":self.rollover_budget(),"compactionPressureBudget":self.compaction_pressure_budget(),"workingRemainingTokens":working_budget.saturating_sub(self.estimated_tokens),"lowBudget":self.estimated_tokens >= working_budget * self.policy.warning_percent / 100,"persistent":self.root.is_some()})
     }
     pub fn execute(&mut self, call: &ToolCall) -> Result<String> {
         let a = &call.arguments;
@@ -387,16 +397,14 @@ fn page(s: &str, a: &Value) -> Value {
 fn write_json(path: PathBuf, value: &(impl Serialize + ?Sized)) -> Result<()> {
     let parent = path.parent().unwrap();
     fs::create_dir_all(parent)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-    }
+    set_private_directory(parent)?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
     serde_json::to_writer(&mut temp, value)?;
     temp.flush()?;
     temp.as_file().sync_all()?;
     temp.persist(&path)?;
+
+    set_private_file(&path)?;
     fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
@@ -507,14 +515,10 @@ mod tests {
         assert_eq!(recovered, expected);
         assert!(
             restored
-                .orientation(true)
+                .orientation()
                 .contains("Keep the original compiler failure")
         );
-        assert!(
-            restored
-                .orientation(true)
-                .contains(&format!("previous={old}"))
-        );
+        assert!(restored.orientation().contains(&format!("previous={old}")));
     }
     #[test]
     fn failed_rollover_keeps_working_context_and_window_identity() {
@@ -600,9 +604,9 @@ mod tests {
         .unwrap();
         assert_eq!(result["text"].as_str().unwrap().chars().count(), 8192);
         assert_eq!(result["done"], false);
-        let hint = memory.orientation(true);
+        let hint = memory.orientation();
         assert!(hint.len() < 6000);
-        assert!(!memory.orientation(false).contains("../outside"));
+        assert!(hint.contains("../outside"));
         assert!(
             memory
                 .execute(&call(
@@ -661,16 +665,50 @@ mod tests {
         assert_eq!(fs::read_dir(dir.path().join("context")).unwrap().count(), 4);
     }
     #[test]
-    fn orientation_keeps_recovery_guidance_without_duplicate_budget_payload() {
+    fn orientation_is_turn_stable_and_live_budget_stays_in_context_status() {
         let (_, mut memory, _) = memory();
+        memory
+            .state
+            .notes
+            .insert("goal".into(), "keep cache prefixes stable".into());
         memory.estimated_tokens = 100;
-        let orientation = memory.orientation(true);
-        assert!(orientation.contains("used=100"));
-        assert!(orientation.contains("context_status"));
-        assert!(orientation.contains("context_history"));
-        assert!(orientation.contains("task_notes"));
-        assert!(!orientation.contains("estimatedInputTokens"));
-        assert!(!orientation.contains("Task notes hint"));
+        let first = memory.orientation();
+        memory.estimated_tokens = 9_999;
+        let later = memory.orientation();
+        assert_eq!(first, later);
+        assert!(first.contains("context_status"));
+        assert!(first.contains("context_history"));
+        assert!(first.contains("task_notes"));
+        assert!(first.contains("Task notes snapshot"));
+        assert!(first.contains("keep cache prefixes stable"));
+        assert!(!first.contains("used="));
+        assert!(!first.contains("remaining="));
+        assert_eq!(memory.status()["estimatedInputTokens"], 9_999);
+    }
+
+    #[test]
+    fn automatic_working_budget_uses_model_context_and_explicit_caps_remain_hard() {
+        let (_, mut memory, _) = memory();
+        memory.capacity = Some(272_000);
+        assert_eq!(memory.policy.working_set_tokens, None);
+        assert_eq!(memory.working_budget(), 272_000);
+        assert_eq!(memory.rollover_budget(), 244_800);
+        assert_eq!(memory.compaction_pressure_budget(), 228_416);
+
+        memory.policy.working_set_tokens = Some(65_536);
+        assert_eq!(memory.working_budget(), 65_536);
+        assert_eq!(memory.rollover_budget(), 58_982);
+        assert_eq!(memory.compaction_pressure_budget(), 42_598);
+
+        memory.capacity = Some(32_000);
+        assert_eq!(memory.working_budget(), 32_000);
+        memory.capacity = None;
+        memory.policy.working_set_tokens = None;
+        assert_eq!(memory.working_budget(), memory.policy.unknown_model_tokens);
+        assert_eq!(
+            memory.status()["workingBudgetSource"],
+            "unknown-model-default"
+        );
     }
 
     #[test]

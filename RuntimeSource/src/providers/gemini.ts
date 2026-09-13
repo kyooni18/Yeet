@@ -1,6 +1,6 @@
 import { fetchEmbeddings } from "../embeddings.js";
 import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
-import { providerFetch, readJson } from "../http.js";
+import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
 import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
 import type {
@@ -429,6 +429,7 @@ export class GeminiProvider implements ProviderAdapter {
         ...(request.signal ? { signal: request.signal } : {}),
       },
     );
+    const transportAttempts = providerFetchAttempts(response);
     const raw = await readJson<any>(response);
     const candidate = raw.candidates?.[0] ?? {};
     const parts = candidate.content?.parts ?? [];
@@ -450,6 +451,7 @@ export class GeminiProvider implements ProviderAdapter {
       raw.usageMetadata?.cachedContentTokenCount,
       undefined,
       geminiReasoningTokens(raw.usageMetadata),
+      transportAttempts,
     );
 
     return {
@@ -477,6 +479,7 @@ export class GeminiProvider implements ProviderAdapter {
         ...(request.signal ? { signal: request.signal } : {}),
       },
     );
+    const transportAttempts = providerFetchAttempts(response);
 
     yield { type: "start", provider: this.id, model: request.model };
     let finish = "unknown" as ReturnType<typeof normalizeFinishReason>;
@@ -499,6 +502,7 @@ export class GeminiProvider implements ProviderAdapter {
           raw.usageMetadata.cachedContentTokenCount,
           undefined,
           geminiReasoningTokens(raw.usageMetadata),
+          transportAttempts,
         );
       }
       if (!candidate) continue;

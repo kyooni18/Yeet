@@ -4,6 +4,13 @@ target/
 RuntimeSource/node_modules/
 RuntimeSource/dist/
 RuntimeSource/dist.root-owned-backup/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+web/playwright-report/
+web/test-results/
+web/.e2e-workspace/
+web/.e2e-config/
 __pycache__/
 *.py[cod]
 .DS_Store

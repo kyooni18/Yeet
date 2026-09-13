@@ -1,8 +1,10 @@
 import { fetchEmbeddings } from "../embeddings.js";
 import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
-import { providerFetch, readJson } from "../http.js";
+import { createHash } from "node:crypto";
+import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
 import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
+import { promptCacheCapabilities } from "../cache-capabilities.js";
 import type {
   ProviderCallRequest,
   CallResult,
@@ -16,7 +18,7 @@ import type {
   ToolChoice,
   ToolDefinition,
 } from "../types.js";
-import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, splitLeadingSystem, toolResultContent, usage } from "../util.js";
+import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, selectStableAndRecentIndexes, splitLeadingSystem, toolResultContent, usage } from "../util.js";
 
 export interface OpenAIChatProviderOptions {
   id?: string;
@@ -110,20 +112,28 @@ function mapTools(tools: ToolDefinition[] | undefined): unknown[] | undefined {
   }));
 }
 
+function stableSessionId(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (value.length <= 256) return value;
+  return `yeet-${createHash("sha256").update(value).digest("hex")}`;
+}
+
+
 function mapMessages(
   messages: Message[],
   explicitSystem?: string,
   useContentCacheBreakpoints = false,
+  maxContentCacheBreakpoints = 4,
 ): ChatMessage[] {
   const { system, messages: rest } = splitLeadingSystem(messages, explicitSystem);
   const output: ChatMessage[] = [];
   if (system) output.push({ role: "system", content: system });
-  const cacheIndexes = new Set<number>();
-  if (useContentCacheBreakpoints) {
-    for (let index = rest.length - 1; index >= 0 && cacheIndexes.size < 4; index--) {
-      if (rest[index]?.cacheBreakpoint === true) cacheIndexes.add(index);
-    }
-  }
+  const candidates = useContentCacheBreakpoints
+    ? rest
+      .map((message, index) => message.cacheBreakpoint === true ? index : -1)
+      .filter((index) => index >= 0)
+    : [];
+  const cacheIndexes = selectStableAndRecentIndexes(candidates, maxContentCacheBreakpoints);
 
   for (const [index, message] of rest.entries()) {
     if (message.role === "tool") {
@@ -164,13 +174,15 @@ function mapMessages(
 function requestBody(
   request: ProviderCallRequest,
   stream: boolean,
+  providerId: string,
   useContextSessionId = false,
   useContentCacheBreakpoints = false,
 ): Record<string, unknown> {
+  const cacheCapabilities = promptCacheCapabilities(providerId, request.model);
   const tools = mapTools(request.tools);
   const toolChoice = mapToolChoice(request.toolChoice);
-  const sessionId = useContextSessionId
-    ? (request.metadata?.sessionId ?? request.contextKey)
+  const sessionId = useContextSessionId && cacheCapabilities.sessionAffinity !== false
+    ? stableSessionId(request.metadata?.sessionId ?? request.contextKey)
     : undefined;
   return {
     ...(request.providerOptions ?? {}),
@@ -179,6 +191,7 @@ function requestBody(
       request.messages,
       request.system,
       useContentCacheBreakpoints && request.promptCache !== false,
+      cacheCapabilities.maxExplicitBreakpoints ?? 4,
     ),
     stream,
     ...(stream ? { stream_options: { include_usage: true } } : {}),
@@ -255,6 +268,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
         body: JSON.stringify(requestBody(
           request,
           false,
+          this.id,
           this.#useContextSessionId,
           this.#useContentCacheBreakpoints,
         )),
@@ -268,6 +282,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
         ...(request.signal ? { signal: request.signal } : {}),
       },
     );
+    const transportAttempts = providerFetchAttempts(response);
 
     const raw = await readJson<any>(response);
     const choice = raw.choices?.[0];
@@ -283,6 +298,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
       raw.usage?.prompt_tokens_details?.cached_tokens,
       raw.usage?.prompt_tokens_details?.cache_write_tokens,
       reasoningTokenCount(raw.usage),
+      transportAttempts,
     );
     const normalizedReasoning = reasoningText(message);
     const normalizedReasoningSummary = reasoningSummary(message);
@@ -309,6 +325,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
         body: JSON.stringify(requestBody(
           request,
           true,
+          this.id,
           this.#useContextSessionId,
           this.#useContentCacheBreakpoints,
         )),
@@ -322,6 +339,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
         ...(request.signal ? { signal: request.signal } : {}),
       },
     );
+    const transportAttempts = providerFetchAttempts(response);
 
     let started = false;
     let finishReason = normalizeFinishReason(undefined);
@@ -355,6 +373,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
           raw.usage.prompt_tokens_details?.cached_tokens,
           raw.usage.prompt_tokens_details?.cache_write_tokens,
           reasoningTokenCount(raw.usage),
+          transportAttempts,
         );
       }
 

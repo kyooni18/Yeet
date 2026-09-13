@@ -73,11 +73,13 @@ impl Default for AuthDocument {
 pub(super) struct AuthStatus {
     pub mode: AuthMode,
     pub key_enabled: bool,
+    pub oauth_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct AuthStore {
     path: PathBuf,
+    oauth_path: PathBuf,
 }
 
 impl AuthStore {
@@ -89,6 +91,7 @@ impl AuthStore {
         set_private_directory(&directory)?;
         Ok(Self {
             path: directory.join(format!("auth-{port}.json")),
+            oauth_path: directory.join(format!("oauth-{port}.enabled")),
         })
     }
 
@@ -143,6 +146,7 @@ impl AuthStore {
         Ok(AuthStatus {
             mode: document.mode,
             key_enabled: document.key_hash.is_some(),
+            oauth_enabled: document.mode == AuthMode::Oauth || self.oauth_marker_enabled()?,
         })
     }
 
@@ -153,6 +157,56 @@ impl AuthStore {
         }
         document.mode = mode;
         self.save(&document)
+    }
+
+    pub(super) fn set_oauth_enabled(&self, enabled: bool) -> Result<()> {
+        let document = self.load()?;
+        if enabled && document.key_hash.is_none() {
+            bail!("OAuth requires an MCP access key; generate or set one first");
+        }
+        if !enabled && document.mode == AuthMode::Oauth {
+            bail!(
+                "OAuth is the primary legacy auth mode; switch primary auth mode before disabling the additive OAuth path"
+            );
+        }
+        if enabled {
+            self.write_oauth_marker()
+        } else {
+            self.clear_oauth_marker()
+        }
+    }
+
+    fn oauth_marker_enabled(&self) -> Result<bool> {
+        match fs::metadata(&self.oauth_path) {
+            Ok(metadata) => Ok(metadata.is_file()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn write_oauth_marker(&self) -> Result<()> {
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&self.oauth_path)
+            .with_context(|| format!("write OAuth marker {}", self.oauth_path.display()))?;
+        file.write_all(b"enabled\n")?;
+        file.sync_all()?;
+        set_private_file(&self.oauth_path)?;
+        Ok(())
+    }
+
+    fn clear_oauth_marker(&self) -> Result<()> {
+        match fs::remove_file(&self.oauth_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub(super) fn generate_key(&self) -> Result<String> {
@@ -181,7 +235,8 @@ impl AuthStore {
         let mut document = self.load()?;
         document.key_hash = None;
         document.mode = AuthMode::None;
-        self.save(&document)
+        self.save(&document)?;
+        self.clear_oauth_marker()
     }
 
     pub(super) fn verify_key(&self, key: &str) -> Result<bool> {
@@ -323,7 +378,7 @@ impl OAuthRuntime {
         request: AuthorizationRequest,
         key: &str,
     ) -> Result<Url> {
-        if self.store.status()?.mode != AuthMode::Oauth {
+        if !self.store.status()?.oauth_enabled {
             bail!("OAuth authentication is not enabled for this MCP daemon");
         }
         if !self.store.verify_key(key)? {
@@ -351,7 +406,7 @@ impl OAuthRuntime {
     }
 
     pub(super) fn exchange_token(&self, params: &HashMap<String, String>) -> Result<Value> {
-        if self.store.status()?.mode != AuthMode::Oauth {
+        if !self.store.status()?.oauth_enabled {
             bail!("OAuth authentication is not enabled for this MCP daemon");
         }
         if params.get("grant_type").map(String::as_str) != Some("authorization_code") {
@@ -399,7 +454,7 @@ impl OAuthRuntime {
     }
 
     pub(super) fn verify_oauth_token(&self, token: &str) -> Result<bool> {
-        if self.store.status()?.mode != AuthMode::Oauth {
+        if !self.store.status()?.oauth_enabled {
             return Ok(false);
         }
         let now = unix_time();
@@ -560,7 +615,8 @@ mod tests {
     use argon2::{Algorithm, Params, Version};
 
     fn test_store(path: PathBuf, key: &str, mode: AuthMode) -> AuthStore {
-        let store = AuthStore { path };
+        let oauth_path = path.with_extension("oauth-enabled");
+        let store = AuthStore { path, oauth_path };
         let salt = SaltString::encode_b64(b"mcp-test-salt-01").unwrap();
         let argon = Argon2::new(
             Algorithm::Argon2id,
@@ -592,7 +648,34 @@ mod tests {
         assert!(store.verify_key("0123456789abcdef").unwrap());
         assert!(!store.verify_key("wrong-wrong-wrong").unwrap());
         store.clear_key().unwrap();
-        assert_eq!(store.status().unwrap().mode, AuthMode::None);
+        let status = store.status().unwrap();
+        assert_eq!(status.mode, AuthMode::None);
+        assert!(!status.oauth_enabled);
+    }
+
+    #[test]
+    fn oauth_enablement_preserves_primary_key_auth() {
+        let root = tempfile::tempdir().unwrap();
+        let store = test_store(
+            root.path().join("auth.json"),
+            "0123456789abcdef",
+            AuthMode::Key,
+        );
+        let auth_before = fs::read(&store.path).unwrap();
+
+        store.set_oauth_enabled(true).unwrap();
+        let status = store.status().unwrap();
+        assert_eq!(status.mode, AuthMode::Key);
+        assert!(status.key_enabled);
+        assert!(status.oauth_enabled);
+        assert!(store.verify_key("0123456789abcdef").unwrap());
+        assert_eq!(fs::read(&store.path).unwrap(), auth_before);
+
+        store.set_oauth_enabled(false).unwrap();
+        let status = store.status().unwrap();
+        assert_eq!(status.mode, AuthMode::Key);
+        assert!(!status.oauth_enabled);
+        assert_eq!(fs::read(&store.path).unwrap(), auth_before);
     }
 
     #[test]

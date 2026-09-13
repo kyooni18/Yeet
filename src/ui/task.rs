@@ -61,8 +61,8 @@ impl TaskStatus {
         match self {
             Self::Ready => theme::MUTED,
             Self::Working => theme::ACCENT_HOT,
-            Self::Approval => theme::ACCENT_HOT,
-            Self::Complete => theme::TEXT,
+            Self::Approval => theme::ACCENT_WARM,
+            Self::Complete => theme::SUCCESS,
             Self::Failed => theme::ERROR,
             Self::Interrupted => theme::ACCENT,
         }
@@ -81,8 +81,11 @@ impl TaskStatus {
 
     pub(super) fn badge(self, app: &App) -> Span<'static> {
         Span::styled(
-            format!("{} {}", self.marker(app), self.label()),
-            Style::default().fg(self.color()).bold(),
+            format!(" {} {} ", self.marker(app), self.label()),
+            Style::default()
+                .fg(self.color())
+                .bg(theme::SURFACE_RAISED)
+                .bold(),
         )
     }
 }
@@ -121,8 +124,12 @@ pub(super) fn fit(value: &str, width: usize) -> String {
 }
 
 pub(super) fn height(app: &App) -> u16 {
+    let status = TaskStatus::for_app(app);
     if app.state.is_streaming
-        || TaskStatus::for_app(app) == TaskStatus::Approval
+        || matches!(
+            status,
+            TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted
+        )
         || !app.follow_tail
     {
         2
@@ -133,17 +140,22 @@ pub(super) fn height(app: &App) -> u16 {
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let status = TaskStatus::for_app(app);
+    let rail_color = if status == TaskStatus::Working {
+        theme::pulse_color()
+    } else {
+        status.color()
+    };
     let mut spans = vec![
-        Span::styled("▌ ", Style::default().fg(theme::pulse_color())),
+        Span::styled("╸ ", Style::default().fg(rail_color)),
         status.badge(app),
     ];
     let (done, failed) = tool_step_counts(app);
     let mut metrics = Vec::new();
     if done > 0 {
-        metrics.push(format!("{done} steps done"));
+        metrics.push(format!("{done} OK"));
     }
     if failed > 0 {
-        metrics.push(format!("{failed} failed"));
+        metrics.push(format!("{failed} ERR"));
     }
     let elapsed = if app.state.is_streaming {
         app.stream_elapsed()
@@ -159,7 +171,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let suffix = if metrics.is_empty() {
         String::new()
     } else {
-        format!(" · {}", metrics.join(" · "))
+        format!("  //  {}", metrics.join("  ·  "))
     };
     let remaining = (area.width as usize).saturating_sub(Line::from(spans.clone()).width());
     spans.push(Span::styled(
@@ -181,6 +193,19 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .map(|detail| format!("{title} · {detail}"))
                 .unwrap_or(title)
         }
+    } else if status == TaskStatus::Failed {
+        app.state.error_message.clone().unwrap_or_else(|| {
+            if failed > 0 {
+                format!(
+                    "{failed} tool step{} failed in the current turn",
+                    if failed == 1 { "" } else { "s" }
+                )
+            } else {
+                "Current turn failed".to_owned()
+            }
+        })
+    } else if status == TaskStatus::Interrupted {
+        "Current turn interrupted".to_owned()
     } else if !app.follow_tail && !app.conversation.is_empty() {
         "Viewing history · Ctrl+End to return to latest".to_owned()
     } else {
@@ -190,7 +215,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Paragraph::new(vec![
             Line::from(spans),
             Line::styled(
-                format!("└─ {}", fit(&detail, area.width.saturating_sub(3) as usize)),
+                format!("╰─ {}", fit(&detail, area.width.saturating_sub(3) as usize)),
                 Style::default().fg(theme::MUTED),
             ),
         ]),

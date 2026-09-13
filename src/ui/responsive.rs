@@ -90,9 +90,9 @@ pub(super) fn metrics(area: Rect) -> Metrics {
             suggestion_height: 8,
             input_min_lines: 3,
             input_max_lines: 7,
-            horizontal_margin: 2,
-            content_max_width: 108,
-            sidebar_width: sidebar_width(area, 28),
+            horizontal_margin: 1,
+            content_max_width: 112,
+            sidebar_width: sidebar_width(area, 24),
         },
         Shape::Wide => Metrics {
             shape,
@@ -102,9 +102,9 @@ pub(super) fn metrics(area: Rect) -> Metrics {
             suggestion_height: 8,
             input_min_lines: 3,
             input_max_lines: 7,
-            horizontal_margin: 3,
-            content_max_width: 124,
-            sidebar_width: sidebar_width(area, 30),
+            horizontal_margin: 2,
+            content_max_width: 120,
+            sidebar_width: sidebar_width(area, 28),
         },
         Shape::UltraWide => Metrics {
             shape,
@@ -114,9 +114,9 @@ pub(super) fn metrics(area: Rect) -> Metrics {
             suggestion_height: 9,
             input_min_lines: 3,
             input_max_lines: if area.height >= 36 { 8 } else { 6 },
-            horizontal_margin: 4,
-            content_max_width: 144,
-            sidebar_width: sidebar_width(area, 34),
+            horizontal_margin: 3,
+            content_max_width: 132,
+            sidebar_width: sidebar_width(area, 30),
         },
     }
 }
@@ -202,11 +202,11 @@ fn corrected_aspect(area: Rect) -> u16 {
 }
 
 fn sidebar_width(area: Rect, preferred: u16) -> Option<u16> {
-    if area.height < 20 || area.width < 112 {
+    if area.height < 20 || area.width < 108 {
         return None;
     }
     let remaining = area.width.saturating_sub(preferred);
-    (remaining >= 78).then_some(preferred.min(area.width / 4).max(26))
+    (remaining >= 82).then_some(preferred.min(area.width / 4).max(24))
 }
 
 #[cfg(test)]
@@ -238,5 +238,32 @@ mod tests {
             assert!(rect.right() <= area.right());
             assert!(rect.bottom() <= area.bottom());
         }
+    }
+
+    #[test]
+    fn shell_metrics_preserve_conversation_width_at_common_sizes() {
+        let compact = metrics(Rect::new(0, 0, 80, 24));
+        assert_eq!(compact.shape, Shape::Compact);
+        assert_eq!(compact.sidebar_width, None);
+        assert_eq!(compact.horizontal_margin, 1);
+
+        let standard = metrics(Rect::new(0, 0, 120, 32));
+        assert_eq!(standard.shape, Shape::Standard);
+        assert_eq!(standard.sidebar_width, Some(24));
+        assert_eq!(standard.content_max_width, 112);
+
+        let wide = metrics(Rect::new(0, 0, 160, 30));
+        assert_eq!(wide.shape, Shape::Wide);
+        assert_eq!(wide.sidebar_width, Some(28));
+        assert_eq!(wide.content_max_width, 120);
+
+        let ultrawide = metrics(Rect::new(0, 0, 220, 32));
+        assert_eq!(ultrawide.shape, Shape::UltraWide);
+        assert_eq!(ultrawide.sidebar_width, Some(30));
+        assert_eq!(ultrawide.content_max_width, 132);
+
+        let portrait = metrics(Rect::new(0, 0, 64, 40));
+        assert_eq!(portrait.shape, Shape::Portrait);
+        assert_eq!(portrait.sidebar_width, None);
     }
 }

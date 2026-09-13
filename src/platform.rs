@@ -1,4 +1,17 @@
-use std::{fs, io, path::Path, process::Command};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+#[cfg(windows)]
+use std::{
+    collections::HashSet,
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener},
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 
 #[cfg(unix)]
 pub(crate) type LocalListener = std::os::unix::net::UnixListener;
@@ -6,10 +19,88 @@ pub(crate) type LocalListener = std::os::unix::net::UnixListener;
 pub(crate) type LocalStream = std::os::unix::net::UnixStream;
 
 #[cfg(windows)]
-pub(crate) type LocalListener = std::net::TcpListener;
+#[derive(Debug)]
+pub(crate) struct LocalListener {
+    inner: TcpListener,
+    token: String,
+}
+
+#[cfg(windows)]
+impl LocalListener {
+    pub(crate) fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        self.inner.set_nonblocking(nonblocking)
+    }
+
+    pub(crate) fn accept(&self) -> io::Result<(LocalStream, SocketAddr)> {
+        let (mut stream, address) = self.inner.accept()?;
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+        let expected = format!("YEET_LOCAL_V1 {}", self.token);
+        let mut line = Vec::with_capacity(96);
+        let mut byte = [0_u8; 1];
+        loop {
+            if line.len() >= 256 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Yeet local authentication frame is too long",
+                ));
+            }
+            match stream.read(&mut byte) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Yeet local connection closed before authentication",
+                    ));
+                }
+                Ok(_) if byte[0] == b'\n' => break,
+                Ok(_) => line.push(byte[0]),
+                Err(error) => return Err(error),
+            }
+        }
+        stream.set_read_timeout(None)?;
+        let authenticated = std::str::from_utf8(&line)
+            .ok()
+            .map(str::trim_end)
+            .is_some_and(|value| value == expected);
+        if !authenticated {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Yeet local connection authentication failed",
+            ));
+        }
+        Ok((stream, address))
+    }
+}
+
 #[cfg(windows)]
 pub(crate) type LocalStream = std::net::TcpStream;
 
+pub(crate) fn default_config_directory() -> PathBuf {
+    if let Some(explicit) = std::env::var_os("YEET_CONFIG_DIR").filter(|value| !value.is_empty()) {
+        return PathBuf::from(explicit);
+    }
+
+    let home = dirs::home_dir();
+    if let Some(legacy) = home.as_ref().map(|home| home.join(".yeet"))
+        && (legacy.exists() || cfg!(target_os = "macos"))
+    {
+        return legacy;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(config) = dirs::config_dir() {
+        return config.join("Yeet");
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(config) = dirs::config_dir() {
+        return config.join("yeet");
+    }
+
+    home.map(|home| home.join(".yeet"))
+        .unwrap_or_else(|| PathBuf::from(".yeet"))
+}
 #[cfg(unix)]
 pub(crate) fn bind_local(endpoint: &Path) -> io::Result<LocalListener> {
     LocalListener::bind(endpoint)
@@ -17,10 +108,12 @@ pub(crate) fn bind_local(endpoint: &Path) -> io::Result<LocalListener> {
 
 #[cfg(windows)]
 pub(crate) fn bind_local(endpoint: &Path) -> io::Result<LocalListener> {
-    let listener = LocalListener::bind(("127.0.0.1", 0))?;
-    let address = listener.local_addr()?;
-    fs::write(endpoint, format!("{address}\n"))?;
-    Ok(listener)
+    let inner = TcpListener::bind(("127.0.0.1", 0))?;
+    let address = inner.local_addr()?;
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    fs::write(endpoint, format!("yeet-local-v1\n{address}\n{token}\n"))?;
+    set_private_file(endpoint)?;
+    Ok(LocalListener { inner, token })
 }
 
 #[cfg(unix)]
@@ -31,19 +124,38 @@ pub(crate) fn connect_local(endpoint: &Path) -> io::Result<LocalStream> {
 #[cfg(windows)]
 pub(crate) fn connect_local(endpoint: &Path) -> io::Result<LocalStream> {
     let value = fs::read_to_string(endpoint)?;
-    let address = value
-        .trim()
-        .parse::<std::net::SocketAddr>()
-        .map_err(|error| {
-            io::Error::new(
+    let mut lines = value.lines();
+    let first = lines.next().unwrap_or_default().trim();
+    let (address_text, token) = if first == "yeet-local-v1" {
+        let address = lines.next().unwrap_or_default().trim();
+        let token = lines.next().unwrap_or_default().trim();
+        if address.is_empty() || token.len() < 16 {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "invalid Yeet local endpoint {}: {error}",
-                    endpoint.display()
-                ),
-            )
-        })?;
-    LocalStream::connect(address)
+                format!("invalid Yeet local endpoint {}", endpoint.display()),
+            ));
+        }
+        (address, Some(token))
+    } else {
+        // Accept the pre-auth endpoint format during rolling upgrades so the
+        // new client can retire an older daemon cleanly.
+        (first, None)
+    };
+    let address = address_text.parse::<SocketAddr>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "invalid Yeet local endpoint {}: {error}",
+                endpoint.display()
+            ),
+        )
+    })?;
+    let mut stream = LocalStream::connect(address)?;
+    if let Some(token) = token {
+        stream.write_all(format!("YEET_LOCAL_V1 {token}\n").as_bytes())?;
+        stream.flush()?;
+    }
+    Ok(stream)
 }
 
 pub(crate) fn set_private_directory(path: &Path) -> io::Result<()> {
@@ -52,8 +164,8 @@ pub(crate) fn set_private_directory(path: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    #[cfg(windows)]
+    set_windows_private_acl(path, true)?;
     Ok(())
 }
 
@@ -63,8 +175,57 @@ pub(crate) fn set_private_file(path: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    #[cfg(windows)]
+    set_windows_private_acl(path, false)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_windows_private_acl(path: &Path, directory: bool) -> io::Result<()> {
+    static HARDENED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let key = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let hardened = HARDENED.get_or_init(|| Mutex::new(HashSet::new()));
+    if hardened
+        .lock()
+        .map_err(|_| io::Error::other("Windows ACL cache lock poisoned"))?
+        .contains(&key)
+    {
+        return Ok(());
+    }
+
+    let identity = Command::new("whoami").output()?;
+    if !identity.status.success() {
+        return Err(io::Error::other("whoami failed while hardening Yeet state"));
+    }
+    let identity = String::from_utf8_lossy(&identity.stdout).trim().to_owned();
+    if identity.is_empty() {
+        return Err(io::Error::other(
+            "whoami returned an empty Windows identity",
+        ));
+    }
+    let rights = if directory { "(OI)(CI)F" } else { "F" };
+    let grants = [
+        format!("{identity}:{rights}"),
+        format!("*S-1-5-18:{rights}"),
+        format!("*S-1-5-32-544:{rights}"),
+    ];
+    let status = Command::new("icacls")
+        .arg(path)
+        .arg("/inheritancelevel:r")
+        .arg("/grant:r")
+        .args(&grants)
+        .arg("/Q")
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "icacls failed while hardening {}",
+            path.display()
+        )));
+    }
+    hardened
+        .lock()
+        .map_err(|_| io::Error::other("Windows ACL cache lock poisoned"))?
+        .insert(key);
     Ok(())
 }
 
@@ -129,12 +290,25 @@ pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
 
     #[cfg(windows)]
     {
-        let status = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
+        // Give the process tree a non-forced termination attempt first. This
+        // preserves the opportunity for console/GUI processes to run normal
+        // shutdown handling instead of making every Windows recycle abrupt.
+        let pid_text = pid.to_string();
+        let graceful = Command::new("taskkill")
+            .args(["/PID", &pid_text, "/T"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()?;
-        if status.success() {
+        if graceful.success() {
             return Ok(());
         }
+
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid_text, "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
         // taskkill returns a failure code when the process already exited.
         // Treat that as an idempotent success; endpoint probing decides
         // whether stale-daemon recovery actually completed.
@@ -229,5 +403,28 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn authenticated_local_endpoint_preserves_application_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let endpoint = root.path().join("local.endpoint");
+        let listener = bind_local(&endpoint).unwrap();
+        listener.set_nonblocking(false).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut payload = [0_u8; 4];
+            stream.read_exact(&mut payload).unwrap();
+            assert_eq!(&payload, b"ping");
+        });
+
+        let mut client = connect_local(&endpoint).unwrap();
+        client.write_all(b"ping").unwrap();
+        server.join().unwrap();
     }
 }

@@ -1,6 +1,6 @@
 use std::{
     io::{BufRead, BufReader, BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 };
 
@@ -86,9 +86,12 @@ pub struct ApplyResult {
 }
 
 pub struct EditClient {
+    root: PathBuf,
     child: Child,
     stdin: BufWriter<ChildStdin>,
     stdout: BufReader<ChildStdout>,
+    broken: bool,
+    generation: u64,
 }
 
 impl EditClient {
@@ -114,12 +117,47 @@ impl EditClient {
             .take()
             .context("edit daemon stdout unavailable")?;
         let mut client = Self {
+            root: root.to_path_buf(),
             child,
             stdin: BufWriter::new(stdin),
             stdout: BufReader::new(stdout),
+            broken: false,
+            generation: 0,
         };
         let _: Value = client.call("health", json!({}))?;
         Ok(client)
+    }
+
+    /// Replaces a dead or protocol-corrupted daemon without reusing its
+    /// snapshot state. Callers must discard cached snapshots after recovery.
+    fn restart(&mut self) -> Result<()> {
+        // Terminate the old daemon before starting its replacement. The
+        // transaction journal records the daemon PID, so leaving it alive
+        // during startup could make recovery mistake a hung daemon for a
+        // live transaction owner.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let mut replacement = Self::start(&self.root)?;
+        replacement.generation = self.generation.wrapping_add(1);
+        let old = std::mem::replace(self, replacement);
+        drop(old);
+        Ok(())
+    }
+
+    fn ensure_healthy(&mut self) -> Result<()> {
+        if self.broken {
+            self.restart()
+                .context("failed to restart the Yeet edit daemon")?;
+        }
+        Ok(())
+    }
+
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn read(
@@ -140,7 +178,7 @@ impl EditClient {
         if unsafe_access {
             params.insert("unsafe".into(), json!(true));
         }
-        self.call("read", Value::Object(params))
+        self.call_recoverable("read", Value::Object(params))
     }
 
     pub fn search(
@@ -159,7 +197,7 @@ impl EditClient {
         params.insert("maxResults".into(), json!(max_results));
         params.insert("caseSensitive".into(), json!(case_sensitive));
         params.insert("regex".into(), json!(regex));
-        self.call("search", Value::Object(params))
+        self.call_recoverable("search", Value::Object(params))
     }
 
     pub fn list_files(
@@ -174,7 +212,7 @@ impl EditClient {
         }
         params.insert("maxResults".into(), json!(max_results));
         params.insert("maxDepth".into(), json!(max_depth));
-        self.call("listFiles", Value::Object(params))
+        self.call_recoverable("listFiles", Value::Object(params))
     }
 
     pub fn apply(&mut self, request: &Value, unsafe_access: bool) -> Result<ApplyResult> {
@@ -185,35 +223,78 @@ impl EditClient {
                 .ok_or_else(|| anyhow!("apply request must be an object"))?
                 .insert("unsafe".into(), json!(true));
         }
+        self.ensure_healthy()?;
         self.call("apply", request)
     }
 
     pub fn call<T: DeserializeOwned>(&mut self, method: &str, params: Value) -> Result<T> {
+        self.ensure_healthy()?;
+        self.call_once(method, params)
+    }
+
+    fn call_recoverable<T: DeserializeOwned>(&mut self, method: &str, params: Value) -> Result<T> {
+        self.ensure_healthy()?;
+        match self.call_once(method, params.clone()) {
+            Ok(value) => Ok(value),
+            Err(_error) if self.broken => {
+                self.restart()
+                    .context("failed to restart the Yeet edit daemon after a transport failure")?;
+                self.call_once(method, params)
+                    .with_context(|| format!("edit daemon request {method} failed after restart"))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn call_once<T: DeserializeOwned>(&mut self, method: &str, params: Value) -> Result<T> {
         let id = Uuid::new_v4().to_string();
-        serde_json::to_writer(
+        if let Err(error) = serde_json::to_writer(
             &mut self.stdin,
             &json!({ "id": id, "method": method, "params": params }),
-        )?;
-        self.stdin.write_all(b"\n")?;
-        self.stdin.flush()?;
+        ) {
+            self.broken = true;
+            return Err(error.into());
+        }
+        if let Err(error) = self.stdin.write_all(b"\n").and_then(|_| self.stdin.flush()) {
+            self.broken = true;
+            return Err(error.into());
+        }
         let mut line = String::new();
         loop {
             line.clear();
-            let count = self.stdout.read_line(&mut line)?;
+            let count = match self.stdout.read_line(&mut line) {
+                Ok(count) => count,
+                Err(error) => {
+                    self.broken = true;
+                    return Err(error.into());
+                }
+            };
             if count == 0 {
-                let status = self
-                    .child
-                    .try_wait()?
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "unknown".into());
+                let status = match self.child.try_wait() {
+                    Ok(status) => status
+                        .map(|status| status.to_string())
+                        .unwrap_or_else(|| "unknown".into()),
+                    Err(error) => {
+                        self.broken = true;
+                        return Err(error.into());
+                    }
+                };
+                self.broken = true;
                 bail!("edit daemon closed stdout (status {status})");
             }
             if line.trim().is_empty() {
                 continue;
             }
-            let value: Value = serde_json::from_str(&line).context("invalid edit daemon JSON")?;
+            let value: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.broken = true;
+                    return Err(error).context("invalid edit daemon JSON");
+                }
+            };
             if value.get("id").and_then(Value::as_str) != Some(&id) {
-                continue;
+                self.broken = true;
+                bail!("edit daemon returned a response for an unexpected request");
             }
             if let Some(error) = value.get("error") {
                 return Err(anyhow!(
@@ -224,8 +305,14 @@ impl EditClient {
                         .unwrap_or("edit daemon error")
                 ));
             }
-            return serde_json::from_value(value.get("result").cloned().unwrap_or(Value::Null))
-                .context("invalid edit daemon result");
+            return match serde_json::from_value(value.get("result").cloned().unwrap_or(Value::Null))
+            {
+                Ok(result) => Ok(result),
+                Err(error) => {
+                    self.broken = true;
+                    Err(error).context("invalid edit daemon result")
+                }
+            };
         }
     }
 }

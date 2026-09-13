@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { FetchLike } from "./types.js";
+import { defaultConfigDirectory } from "./platform.js";
 import { claudeUsageLabel, durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
 
 export type AuthMethod = "none" | "api-key" | "browser" | "environment";
@@ -108,6 +109,8 @@ export interface AuthManagerOptions {
   fetch?: FetchLike;
   openBrowser?: (url: string) => Promise<void> | void;
   claudeOAuthToken?: () => Promise<string | undefined> | string | undefined;
+  claudeLogin?: () => Promise<void>;
+  claudeLogout?: () => Promise<void>;
 }
 
 const ENV_KEYS: Record<string, string> = {
@@ -126,8 +129,11 @@ const CREDENTIAL_ALIASES: Record<string, readonly string[]> = {
 
 const RESERVED_PROVIDER_IDS = new Set([
   "openai",
+  "codex-cli",
   "anthropic",
   "gemini",
+  "gemini-web",
+  "claude",
   "openrouter",
   "opencode",
   "opencode-go",
@@ -237,13 +243,45 @@ function pkceChallenge(verifier: string): string {
 }
 
 async function systemOpenBrowser(url: string): Promise<void> {
-  const platform = process.platform;
-  const child = platform === "darwin"
-    ? spawn("open", [url], { detached: true, stdio: "ignore" })
-    : platform === "win32"
-      ? spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" })
-      : spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
-  child.unref();
+  const candidates: Array<[string, string[]]> = process.platform === "darwin"
+    ? [["open", [url]]]
+    : process.platform === "win32"
+      ? [["explorer.exe", [url]], ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Start-Process -FilePath $args[0]", url]]]
+      : Boolean(process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME)
+        ? [["wslview", [url]], ["explorer.exe", [url]], ["xdg-open", [url]]]
+        : [["xdg-open", [url]], ["gio", ["open", url]]];
+
+  for (const [command, args] of candidates) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(command, args, { detached: true, stdio: "ignore" });
+        child.once("error", reject);
+        child.once("spawn", () => {
+          child.unref();
+          resolve();
+        });
+      });
+      return;
+    } catch {
+      // Try the next platform opener. If none are available, the loopback
+      // callback remains live and the URL is printed for manual completion.
+    }
+  }
+
+  process.stderr.write(`Unable to open a browser automatically. Open this URL manually:\n${url}\n`);
+}
+
+async function runClaudeAuthCommand(action: "login" | "logout"): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.env.CLAUDE_CODE_BIN?.trim() || "claude", ["auth", action], {
+      stdio: "ignore",
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Claude Code auth ${action} failed${signal ? ` (${signal})` : ` (exit ${code ?? "unknown"})`}`));
+    });
+  });
 }
 
 interface LoopbackResult {
@@ -335,16 +373,20 @@ export class AuthManager {
   readonly #fetch: FetchLike;
   readonly #openBrowser: (url: string) => Promise<void> | void;
   readonly #claudeOAuthToken: () => Promise<string | undefined>;
+  readonly #claudeLogin: () => Promise<void>;
+  readonly #claudeLogout: () => Promise<void>;
   readonly #usageCache = new Map<string, { expiresAt: number; usage: ProviderUsageStatus }>();
 
   constructor(options: AuthManagerOptions = {}) {
-    this.configDir = options.configDir ?? process.env.YEET_CONFIG_DIR ?? join(homedir(), ".yeet");
+    this.configDir = options.configDir ?? defaultConfigDirectory();
     this.configPath = join(this.configDir, "config.json");
     this.credentialsPath = join(this.configDir, "credentials.json");
     this.#fetch = options.fetch ?? fetch;
     this.#openBrowser = options.openBrowser ?? systemOpenBrowser;
     const claudeOAuthToken = options.claudeOAuthToken ?? resolveClaudeOAuthToken;
     this.#claudeOAuthToken = async () => await claudeOAuthToken();
+    this.#claudeLogin = options.claudeLogin ?? (() => runClaudeAuthCommand("login"));
+    this.#claudeLogout = options.claudeLogout ?? (() => runClaudeAuthCommand("logout"));
   }
 
   async ensure(): Promise<void> {
@@ -448,6 +490,7 @@ export class AuthManager {
   }
 
   async logout(provider: string): Promise<AuthStatus> {
+    if (provider === "claude") await this.#claudeLogout();
     const data = await this.#readCredentials();
     delete data.providers[provider];
     await this.#writeCredentials(data);
@@ -464,6 +507,16 @@ export class AuthManager {
         authenticated: stored.type === "api-key" || Boolean(stored.refreshToken) || !this.#expired(stored.expiresAt),
         method: stored.source === "browser" ? "browser" : "api-key",
         ...(stored.type === "oauth" && stored.expiresAt ? { expiresAt: stored.expiresAt } : {}),
+        configDir: this.configDir,
+      };
+    }
+
+    if (provider === "claude") {
+      const accessToken = (await this.#claudeOAuthToken())?.trim();
+      return {
+        provider,
+        authenticated: Boolean(accessToken),
+        method: accessToken ? "browser" : "none",
         configDir: this.configDir,
       };
     }
@@ -488,41 +541,42 @@ export class AuthManager {
     try {
       switch (normalized) {
         case "openai":
-          usage = await this.#openAIUsage();
+        case "codex-cli":
+          usage = await this.#openAIUsage(normalized);
           break;
-        case "anthropic":
+        case "claude":
           usage = await this.#claudeUsage();
           break;
-        case "gemini":
-          usage = await this.#geminiUsage();
+        case "gemini-web":
+          usage = await this.#geminiUsage("gemini-web");
           break;
         default:
           usage = unavailableUsage(provider, "none", "No plan-usage adapter is available for this provider.");
           break;
       }
     } catch (error) {
-      const source = normalized === "openai"
+      const source = normalized === "openai" || normalized === "codex-cli"
         ? "codex-usage-api"
-        : normalized === "anthropic"
+        : normalized === "claude"
           ? "anthropic-oauth-api"
-          : normalized === "gemini"
+          : normalized === "gemini-web"
             ? "gemini-code-assist-api"
             : normalized;
       usage = unavailableUsage(provider, source, error instanceof Error ? error.message : String(error));
     }
 
-    const ttlMs = normalized === "anthropic" ? 5 * 60_000 : 60_000;
+    const ttlMs = normalized === "claude" ? 5 * 60_000 : 60_000;
     this.#usageCache.set(normalized, { expiresAt: now + ttlMs, usage });
     return usage;
   }
 
-  async #openAIUsage(): Promise<ProviderUsageStatus> {
-    const credential = await this.resolve("openai");
+  async #openAIUsage(provider = "codex-cli"): Promise<ProviderUsageStatus> {
+    const credential = await this.resolve(provider);
     if (!credential || credential.kind !== "oauth" || !credential.accountId) {
       return unavailableUsage(
-        "openai",
+        provider,
         "codex-usage-api",
-        "Codex plan usage requires Yeet's OpenAI browser sign-in; API-key billing has no fixed remaining plan percentage.",
+        "Codex plan usage requires Yeet's Codex CLI sign-in; API-key billing has no fixed remaining plan percentage.",
       );
     }
 
@@ -538,7 +592,7 @@ export class AuthManager {
       signal: AbortSignal.timeout(4_000),
     });
     if (!response.ok) {
-      return unavailableUsage("openai", "codex-usage-api", `Codex server usage API returned HTTP ${response.status}.`);
+      return unavailableUsage(provider, "codex-usage-api", `Codex server usage API returned HTTP ${response.status}.`);
     }
 
     const payload = asObject(await response.json());
@@ -583,7 +637,7 @@ export class AuthManager {
     windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
     const plan = typeof payload.plan_type === "string" ? payload.plan_type : typeof payload.planType === "string" ? payload.planType : undefined;
     return {
-      provider: "openai",
+      provider,
       available: windows.length > 0,
       source: "codex-usage-api",
       fetchedAt: new Date().toISOString(),
@@ -593,11 +647,11 @@ export class AuthManager {
     };
   }
 
-  async #geminiUsage(): Promise<ProviderUsageStatus> {
-    const credential = await this.resolve("gemini");
+  async #geminiUsage(provider = "gemini-web"): Promise<ProviderUsageStatus> {
+    const credential = await this.resolve(provider);
     if (!credential || credential.kind !== "oauth") {
       return unavailableUsage(
-        "gemini",
+        provider,
         "gemini-code-assist-api",
         "Gemini plan usage requires Google browser sign-in; API-key quota is not a single subscription headroom percentage.",
       );
@@ -610,7 +664,7 @@ export class AuthManager {
       signal: AbortSignal.timeout(4_000),
     });
     if (!response.ok) {
-      return unavailableUsage("gemini", "gemini-code-assist-api", `Gemini quota endpoint returned HTTP ${response.status}.`);
+      return unavailableUsage(provider, "gemini-code-assist-api", `Gemini quota endpoint returned HTTP ${response.status}.`);
     }
     const payload = asObject(await response.json());
     const buckets = Array.isArray(payload.buckets) ? payload.buckets : [];
@@ -624,7 +678,7 @@ export class AuthManager {
     });
     windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
     return {
-      provider: "gemini",
+      provider,
       available: windows.length > 0,
       source: "gemini-code-assist-api",
       fetchedAt: new Date().toISOString(),
@@ -637,7 +691,7 @@ export class AuthManager {
     const accessToken = (await this.#claudeOAuthToken())?.trim();
     if (!accessToken) {
       return unavailableUsage(
-        "anthropic",
+        "claude",
         "anthropic-oauth-api",
         "Claude subscription usage requires Claude OAuth authentication (CLAUDE_CODE_OAUTH_TOKEN or a Claude subscription login). API keys do not expose subscription headroom.",
       );
@@ -657,7 +711,7 @@ export class AuthManager {
       const retryAfter = response.headers.get("retry-after");
       const retry = retryAfter ? ` Retry after ${retryAfter}s.` : "";
       return unavailableUsage(
-        "anthropic",
+        "claude",
         "anthropic-oauth-api",
         `Anthropic usage API returned HTTP ${response.status}.${retry}`,
       );
@@ -707,7 +761,7 @@ export class AuthManager {
 
     windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
     return {
-      provider: "anthropic",
+      provider: "claude",
       available: windows.length > 0,
       source: "anthropic-oauth-api",
       fetchedAt: new Date().toISOString(),
@@ -723,13 +777,13 @@ export class AuthManager {
     let stored = this.#storedCredential(data, provider);
 
     if (stored?.type === "oauth" && this.#expiresSoon(stored.expiresAt)) {
-      if (provider === "openai" && stored.refreshToken) {
+      if ((provider === "openai" || provider === "codex-cli") && stored.refreshToken) {
         stored = await this.#refreshOpenAI(stored);
-        data.providers.openai = stored;
+        data.providers[provider] = stored;
         await this.#writeCredentials(data);
-      } else if (provider === "gemini" && stored.refreshToken) {
-        stored = await this.#refreshGemini(stored, data.oauthClients.gemini);
-        data.providers.gemini = stored;
+      } else if (provider === "gemini-web" && stored.refreshToken) {
+        stored = await this.#refreshGemini(stored, data.oauthClients["gemini-web"]);
+        data.providers["gemini-web"] = stored;
         await this.#writeCredentials(data);
       }
     }
@@ -756,6 +810,10 @@ export class AuthManager {
     if (stored?.type === "oauth") {
       throw new Error(`${provider} OAuth session expired. Sign in again to continue using your subscription.`);
     }
+    if (provider === "claude") {
+      const accessToken = (await this.#claudeOAuthToken())?.trim();
+      if (accessToken) return { kind: "oauth", accessToken, source: "browser" };
+    }
     const envName = ENV_KEYS[provider];
     const envValue = envName ? process.env[envName] : undefined;
     if (envValue) return { kind: "api-key", value: envValue, source: "environment" };
@@ -769,13 +827,20 @@ export class AuthManager {
         await this.#loginOpenRouter(options);
         return this.status(provider);
       case "openai":
-        await this.#loginOpenAI(options);
+        // Keep the old command/provider alias working, but persist the
+        // subscription credential in the dedicated Codex CLI slot.
+        await this.#loginOpenAI("codex-cli", options);
+        return this.status("codex-cli");
+      case "codex-cli":
+        await this.#loginOpenAI("codex-cli", options);
         return this.status(provider);
       case "gemini":
-        await this.#loginGemini(options);
+      case "gemini-web":
+        await this.#loginGemini("gemini-web", options);
+        return this.status("gemini-web");
+      case "claude":
+        await this.#claudeLogin();
         return this.status(provider);
-      case "anthropic":
-        throw new Error("Browser auth for the direct Anthropic API is not exposed as a reusable public client flow; use an API key for the call core");
       default:
         throw new Error(`Browser authentication is not configured for provider ${provider}`);
     }
@@ -808,6 +873,23 @@ export class AuthManager {
     });
     data.providers ??= {};
     data.oauthClients ??= {};
+    // Migrate the legacy single OpenAI OAuth slot so direct API-key
+    // credentials and the Codex CLI login can coexist.
+    if (data.providers.openai?.type === "oauth" && !data.providers["codex-cli"]) {
+      data.providers["codex-cli"] = data.providers.openai;
+      delete data.providers.openai;
+      await this.#writeCredentials(data);
+    }
+    // Keep Gemini's API-key slot independent from its Google browser login.
+    if (data.providers.gemini?.type === "oauth" && !data.providers["gemini-web"]) {
+      data.providers["gemini-web"] = data.providers.gemini;
+      delete data.providers.gemini;
+      if (data.oauthClients.gemini && !data.oauthClients["gemini-web"]) {
+        data.oauthClients["gemini-web"] = data.oauthClients.gemini;
+        delete data.oauthClients.gemini;
+      }
+      await this.#writeCredentials(data);
+    }
     return data;
   }
 
@@ -873,7 +955,7 @@ export class AuthManager {
     }
   }
 
-  async #loginOpenAI(options: BrowserLoginOptions): Promise<void> {
+  async #loginOpenAI(provider: string, options: BrowserLoginOptions): Promise<void> {
     const timeoutMs = options.timeoutMs ?? 180_000;
     const clientId = options.clientId
       ?? process.env.CODEX_APP_SERVER_LOGIN_CLIENT_ID
@@ -931,7 +1013,7 @@ export class AuthManager {
       if (!accountId) throw new Error("OpenAI OAuth exchange did not include a ChatGPT account id");
       const expiresAt = jwtExpiresAt(accessToken);
       const latest = await this.#readCredentials();
-      latest.providers.openai = {
+      latest.providers[provider] = {
         type: "oauth",
         accessToken,
         refreshToken,
@@ -949,9 +1031,9 @@ export class AuthManager {
     }
   }
 
-  async #loginGemini(options: BrowserLoginOptions): Promise<void> {
+  async #loginGemini(provider: string, options: BrowserLoginOptions): Promise<void> {
     const data = await this.#readCredentials();
-    const existing = data.oauthClients.gemini;
+    const existing = data.oauthClients[provider];
     const clientSecret = options.clientSecret ?? existing?.clientSecret;
     const projectId = options.projectId ?? existing?.projectId;
     const client: OAuthClientConfiguration = {
@@ -963,7 +1045,7 @@ export class AuthManager {
     if (!client.clientId) {
       throw new Error("Gemini browser auth requires a Google OAuth Desktop clientId on first login");
     }
-    data.oauthClients.gemini = client;
+    data.oauthClients[provider] = client;
     await this.#writeCredentials(data);
 
     const timeoutMs = options.timeoutMs ?? 180_000;
@@ -1015,7 +1097,7 @@ export class AuthManager {
       const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
 
       const latest = await this.#readCredentials();
-      latest.providers.gemini = {
+      latest.providers[provider] = {
         type: "oauth",
         accessToken,
         ...(typeof payload.refresh_token === "string" ? { refreshToken: payload.refresh_token } : {}),

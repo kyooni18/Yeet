@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { AuthManager, GeminiProvider } from "../dist/index.js";
+import { AnthropicProvider, AuthManager, GeminiProvider } from "../dist/index.js";
 
 async function temporaryConfig() {
   return mkdtemp(path.join(os.tmpdir(), "yeet-auth-"));
@@ -34,6 +34,30 @@ test("AuthManager stores API keys under the yeet config directory with restricti
   assert.equal((await stat(configDir)).mode & 0o777, 0o700);
   assert.equal((await stat(path.join(configDir, "credentials.json"))).mode & 0o777, 0o600);
   assert.equal((await stat(path.join(configDir, "config.json"))).mode & 0o777, 0o600);
+});
+
+test("OpenAI API-key and Codex CLI OAuth credentials remain separate", async () => {
+  const configDir = await temporaryConfig();
+  const auth = new AuthManager({ configDir });
+  await auth.setApiKey("openai", "sk-api-key");
+
+  const credentialsPath = path.join(configDir, "credentials.json");
+  const credentials = JSON.parse(await readFile(credentialsPath, "utf8"));
+  credentials.providers["codex-cli"] = {
+    type: "oauth",
+    accessToken: "codex-access-token",
+    refreshToken: "codex-refresh-token",
+    accountId: "acct-codex",
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    source: "browser",
+    createdAt: new Date().toISOString(),
+  };
+  await writeFile(credentialsPath, `${JSON.stringify(credentials)}\n`);
+
+  assert.equal((await auth.status("openai")).method, "api-key");
+  assert.equal((await auth.status("codex-cli")).method, "browser");
+  assert.equal((await auth.resolve("openai")).value, "sk-api-key");
+  assert.equal((await auth.resolve("codex-cli")).accessToken, "codex-access-token");
 });
 
 test("AuthManager persists custom OpenAI-compatible endpoints without storing API keys in config.json", async () => {
@@ -172,12 +196,12 @@ test("OpenAI browser auth performs Codex OAuth PKCE and stores ChatGPT tokens", 
     },
   });
 
-  const status = await auth.loginInBrowser("openai", { timeoutMs: 5_000 });
+  const status = await auth.loginInBrowser("codex-cli", { timeoutMs: 5_000 });
   assert.equal(status.method, "browser");
   assert.match(tokenExchangeBody, /grant_type=authorization_code/);
   assert.match(tokenExchangeBody, /code=openai-code/);
   assert.match(tokenExchangeBody, /code_verifier=/);
-  const credential = await auth.resolve("openai");
+  const credential = await auth.resolve("codex-cli");
   assert.equal(credential.kind, "oauth");
   assert.equal(credential.source, "browser");
   assert.equal(credential.accountId, "acct-browser");
@@ -209,7 +233,7 @@ test("Gemini browser auth stores OAuth tokens and GeminiProvider sends bearer au
     },
   });
 
-  const status = await auth.loginInBrowser("gemini", {
+  const status = await auth.loginInBrowser("gemini-web", {
     clientId: "desktop-client-id",
     clientSecret: "desktop-secret",
     projectId: "project-123",
@@ -217,7 +241,7 @@ test("Gemini browser auth stores OAuth tokens and GeminiProvider sends bearer au
   });
   assert.equal(status.method, "browser");
   assert.match(tokenExchangeBody, /code=google-code/);
-  const credential = await auth.resolve("gemini");
+  const credential = await auth.resolve("gemini-web");
   assert.equal(credential.kind, "oauth");
   assert.equal(credential.accessToken, "google-access");
   assert.equal(credential.projectId, "project-123");
@@ -239,8 +263,56 @@ test("Gemini browser auth stores OAuth tokens and GeminiProvider sends bearer au
   assert.equal(headers["x-goog-user-project"], "project-123");
 
   const persisted = JSON.parse(await readFile(path.join(configDir, "credentials.json"), "utf8"));
-  assert.equal(persisted.oauthClients.gemini.clientId, "desktop-client-id");
-  assert.equal(persisted.providers.gemini.refreshToken, "google-refresh");
+  assert.equal(persisted.oauthClients["gemini-web"].clientId, "desktop-client-id");
+  assert.equal(persisted.providers["gemini-web"].refreshToken, "google-refresh");
+});
+
+test("Gemini API-key and web-login credentials remain separate", async () => {
+  const configDir = await temporaryConfig();
+  const auth = new AuthManager({
+    configDir,
+    openBrowser: callbackOpener((authorize) => {
+      const callback = new URL(authorize.searchParams.get("redirect_uri"));
+      callback.searchParams.set("code", "google-code");
+      callback.searchParams.set("state", authorize.searchParams.get("state"));
+      return callback.toString();
+    }),
+    fetch: async () => new Response(JSON.stringify({ access_token: "google-access", refresh_token: "google-refresh", expires_in: 3600 }), { status: 200 }),
+  });
+  await auth.setApiKey("gemini", "gemini-api-key");
+  await auth.loginInBrowser("gemini-web", { clientId: "desktop-client-id", timeoutMs: 5_000 });
+  assert.deepEqual(await auth.resolve("gemini"), { kind: "api-key", value: "gemini-api-key", source: "stored" });
+  assert.equal((await auth.resolve("gemini-web")).accessToken, "google-access");
+});
+
+test("Claude web login uses Claude Code auth and stays separate from the Anthropic API key", async () => {
+  const configDir = await temporaryConfig();
+  let loginCalls = 0;
+  const auth = new AuthManager({
+    configDir,
+    claudeLogin: async () => { loginCalls += 1; },
+    claudeOAuthToken: () => "claude-oauth-token",
+  });
+  await auth.setApiKey("anthropic", "anthropic-api-key");
+  const status = await auth.loginInBrowser("claude");
+  assert.equal(loginCalls, 1);
+  assert.equal(status.method, "browser");
+  assert.deepEqual(await auth.resolve("anthropic"), { kind: "api-key", value: "anthropic-api-key", source: "stored" });
+  const credential = await auth.resolve("claude");
+  assert.deepEqual(credential, { kind: "oauth", accessToken: "claude-oauth-token", source: "browser" });
+
+  let requestHeaders;
+  const provider = new AnthropicProvider({
+    id: "claude",
+    accessToken: credential.accessToken,
+    fetch: async (_input, init) => {
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify({ data: [{ id: "claude-test" }] }), { status: 200 });
+    },
+  });
+  assert.deepEqual(await provider.listModels(), ["claude-test"]);
+  assert.equal(requestHeaders.get("authorization"), "Bearer claude-oauth-token");
+  assert.equal(requestHeaders.get("anthropic-beta"), "oauth-2025-04-20");
 });
 
 test("OpenAI plan usage comes directly from the ChatGPT WHAM usage API", async () => {
@@ -250,7 +322,7 @@ test("OpenAI plan usage comes directly from the ChatGPT WHAM usage API", async (
     version: 1,
     oauthClients: {},
     providers: {
-      openai: {
+      "codex-cli": {
         type: "oauth",
         source: "browser",
         accessToken: "openai-usage-token",
@@ -287,7 +359,7 @@ test("OpenAI plan usage comes directly from the ChatGPT WHAM usage API", async (
     },
   });
 
-  const usage = await auth.providerUsage("openai");
+  const usage = await auth.providerUsage("codex-cli");
   assert.equal(calls, 1);
   assert.equal(usage.source, "codex-usage-api");
   assert.equal(usage.plan, "team");
@@ -323,7 +395,7 @@ test("Claude subscription usage comes directly from the Anthropic OAuth usage AP
     },
   });
 
-  const usage = await auth.providerUsage("anthropic");
+  const usage = await auth.providerUsage("claude");
   assert.equal(calls, 1);
   assert.equal(usage.source, "anthropic-oauth-api");
   assert.equal(usage.plan, "max");
@@ -337,9 +409,9 @@ test("Gemini plan usage comes directly from the Code Assist quota API", async ()
   const configDir = await temporaryConfig();
   await writeFile(path.join(configDir, "credentials.json"), JSON.stringify({
     version: 1,
-    oauthClients: { gemini: { clientId: "test", projectId: "project-usage" } },
+    oauthClients: { "gemini-web": { clientId: "test", projectId: "project-usage" } },
     providers: {
-      gemini: {
+      "gemini-web": {
         type: "oauth",
         source: "browser",
         accessToken: "gemini-usage-token",
@@ -362,7 +434,7 @@ test("Gemini plan usage comes directly from the Code Assist quota API", async ()
     },
   });
 
-  const usage = await auth.providerUsage("gemini");
+  const usage = await auth.providerUsage("gemini-web");
   assert.equal(usage.source, "gemini-code-assist-api");
   assert.equal(usage.available, true);
   assert.equal(usage.windows[0].remainingPercent, 42);
@@ -374,7 +446,7 @@ test("expired OpenAI OAuth never falls back to API billing credentials", async (
   await auth.ensure();
   const { writeFile } = await import("node:fs/promises");
   await writeFile(path.join(configDir, "credentials.json"), JSON.stringify({
-    version: 1, oauthClients: {}, providers: { openai: {
+    version: 1, oauthClients: {}, providers: { "codex-cli": {
       type: "oauth", source: "browser", accessToken: "expired", accountId: "account",
       expiresAt: "2000-01-01T00:00:00.000Z",
     } },
@@ -382,7 +454,7 @@ test("expired OpenAI OAuth never falls back to API billing credentials", async (
   const previous = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = "must-not-use";
   try {
-    await assert.rejects(() => auth.resolve("openai"), /OAuth session expired/);
+    await assert.rejects(() => auth.resolve("codex-cli"), /OAuth session expired/);
   } finally {
     if (previous === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previous;

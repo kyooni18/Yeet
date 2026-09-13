@@ -37,6 +37,19 @@ export function splitLeadingSystem(messages: Message[], explicit?: string): { sy
   };
 }
 
+/** Preserve the oldest explicit cache boundary as the immutable base, then use
+ * remaining provider capacity for the newest rolling boundaries. Callers pass
+ * candidate indexes in ascending transcript order. */
+export function selectStableAndRecentIndexes(indexes: number[], limit: number): Set<number> {
+  const selected = new Set<number>();
+  if (limit <= 0 || indexes.length === 0) return selected;
+  selected.add(indexes[0]!);
+  for (let position = indexes.length - 1; position > 0 && selected.size < limit; position--) {
+    selected.add(indexes[position]!);
+  }
+  return selected;
+}
+
 export function safeJsonParse(value: string): unknown {
   if (!value) return {};
   try {
@@ -76,15 +89,19 @@ export function usage(
   cached?: number,
   cacheWrite?: number,
   reasoning?: number,
+  transportAttempts?: number,
 ): Usage | undefined {
-  if ([input, output, total, cached, cacheWrite, reasoning].every((value) => value === undefined)) return undefined;
+  if ([input, output, total, cached, cacheWrite, reasoning, transportAttempts].every((value) => value === undefined)) return undefined;
   return {
     ...(input !== undefined ? { inputTokens: input } : {}),
     ...(output !== undefined ? { outputTokens: output } : {}),
     ...(total !== undefined ? { totalTokens: total } : {}),
     ...(cached !== undefined ? { cachedInputTokens: cached } : {}),
+    ...(input !== undefined && cached !== undefined ? { cacheMeasuredInputTokens: input } : {}),
+    ...(input !== undefined && cached === undefined ? { cacheUnreportedInputTokens: input } : {}),
     ...(cacheWrite !== undefined ? { cacheWriteInputTokens: cacheWrite } : {}),
     ...(reasoning !== undefined ? { reasoningTokens: reasoning } : {}),
+    ...(transportAttempts !== undefined ? { transportAttempts } : {}),
   };
 }
 

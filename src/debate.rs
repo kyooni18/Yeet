@@ -1900,6 +1900,7 @@ mod tests {
             }],
             finish_reason: "stop".into(),
             usage: None,
+
             raw: None,
         };
         let checkpoint = DebateCheckpoint::parse_response(2, &response).unwrap();
@@ -2170,6 +2171,7 @@ mod tests {
             }],
             finish_reason: "stop".into(),
             usage: None,
+
             raw: None,
         };
         let contract = DebateContract::parse_response(&response).unwrap();
@@ -2265,6 +2267,7 @@ mod tests {
             }],
             finish_reason: "stop".into(),
             usage: None,
+
             raw: None,
         };
         assert!(d.record_jury_response(false, &response));
@@ -2313,6 +2316,7 @@ mod tests {
             tool_calls: vec![ballot_call()],
             finish_reason: "length".into(),
             usage: None,
+
             raw: None,
         };
         assert!(Ballot::parse_response(&truncated, false).is_err());
@@ -2365,6 +2369,7 @@ mod tests {
             }],
             finish_reason: "stop".into(),
             usage: None,
+
             raw: None,
         };
         let summary = DebateKnowledgeSummary::parse_response(&response).unwrap();
@@ -2653,6 +2658,7 @@ mod tests {
             tool_calls: vec![],
             finish_reason: "stop".into(),
             usage: None,
+
             raw: None,
         };
         assert!(!d.record_jury_response(false, &invalid));

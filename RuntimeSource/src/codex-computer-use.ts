@@ -1,6 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import type { McpCallToolResult, McpServerConfiguration, McpTool } from "./mcp.js";
 import { McpManager } from "./mcp.js";
@@ -88,9 +88,9 @@ export async function discoverCodexComputerUse(
     if (!raw || typeof raw.command !== "string" || !raw.command.trim()) continue;
     const args = stringArray(raw.args);
     if (!(await executable(raw.command))) continue;
-    if (args[0]?.startsWith("/") && !(await executable(args[0]))) {
-      // Launcher scripts only need to be readable, not executable. access()
-      // still gives us a cheap stale-plugin-path check.
+    if (args[0] && isAbsolute(args[0]) && !(await executable(args[0]))) {
+      // Launcher scripts only need to be readable. Use path.isAbsolute so
+      // native Windows drive/UNC paths receive the same stale-path check.
       continue;
     }
     const env = {

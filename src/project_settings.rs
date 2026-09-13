@@ -8,10 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::platform::replace_file;
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use crate::platform::{replace_file, set_private_directory, set_private_file};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +40,8 @@ impl Default for FoundationMemorySettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ContextSettings {
-    pub working_set_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_set_tokens: Option<u64>,
     pub unknown_model_tokens: u64,
     pub warning_percent: u64,
     pub rollover_percent: u64,
@@ -52,23 +50,25 @@ pub struct ContextSettings {
 impl Default for ContextSettings {
     fn default() -> Self {
         Self {
-            working_set_tokens: 65_536,
+            working_set_tokens: None,
             unknown_model_tokens: 32_768,
             warning_percent: 70,
-            rollover_percent: 85,
+            rollover_percent: 90,
         }
     }
 }
 
 impl ContextSettings {
     pub fn validate(&self) -> Result<()> {
-        if !(4096..=2_000_000).contains(&self.working_set_tokens)
+        if self
+            .working_set_tokens
+            .is_some_and(|tokens| !(4096..=2_000_000).contains(&tokens))
             || !(4096..=2_000_000).contains(&self.unknown_model_tokens)
             || !(1..self.rollover_percent).contains(&self.warning_percent)
             || !(2..=90).contains(&self.rollover_percent)
         {
             bail!(
-                "Invalid context settings: token budgets must be 4096..2000000 and 0 < warningPercent < rolloverPercent <= 90"
+                "Invalid context settings: explicit working-set caps and unknown-model budgets must be 4096..2000000 and 0 < warningPercent < rolloverPercent <= 90"
             );
         }
         Ok(())
@@ -162,14 +162,12 @@ impl ProjectSettingsStore {
             reject_symlink(&directory)?;
         }
         fs::create_dir_all(&directory)?;
-        #[cfg(unix)]
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+        set_private_directory(&directory)?;
         if !self.path().exists() {
             self.save(&ProjectSettings::default())?;
         } else {
             reject_symlink(&self.path())?;
-            #[cfg(unix)]
-            fs::set_permissions(self.path(), fs::Permissions::from_mode(0o600))?;
+            set_private_file(&self.path())?;
         }
         Ok(())
     }
@@ -212,11 +210,9 @@ impl ProjectSettingsStore {
         let mut data = serde_json::to_vec_pretty(&normalized)?;
         data.push(b'\n');
         fs::write(&tmp, data)?;
-        #[cfg(unix)]
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        set_private_file(&tmp)?;
         replace_file(&tmp, &path)?;
-        #[cfg(unix)]
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        set_private_file(&path)?;
         Ok(())
     }
 
@@ -268,8 +264,7 @@ impl ProjectSettingsStore {
             reject_symlink(&directory)?;
         }
         fs::create_dir_all(&directory)?;
-        #[cfg(unix)]
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+        set_private_directory(&directory)?;
         Ok(())
     }
 }
@@ -437,12 +432,20 @@ mod context_settings_tests {
     fn context_policy_defaults_merges_and_rejects_unsafe_thresholds() {
         let dir = tempfile::tempdir().unwrap();
         let store = ProjectSettingsStore::new(dir.path()).unwrap();
+        let defaults = ProjectSettings::default();
+        assert_eq!(defaults.context.working_set_tokens, None);
+        assert_eq!(defaults.context.warning_percent, 70);
+        assert_eq!(defaults.context.rollover_percent, 90);
         let mut settings: ProjectSettings =
             serde_json::from_value(serde_json::json!({"context":{"workingSetTokens":12000}}))
                 .unwrap();
+        assert_eq!(settings.context.working_set_tokens, Some(12000));
         assert_eq!(settings.context.warning_percent, 70);
         store.save(&settings).unwrap();
-        assert_eq!(store.load().unwrap().context.working_set_tokens, 12000);
+        assert_eq!(
+            store.load().unwrap().context.working_set_tokens,
+            Some(12000)
+        );
         settings.context.warning_percent = 90;
         assert!(store.save(&settings).is_err());
         assert_eq!(store.load().unwrap().context.warning_percent, 70);

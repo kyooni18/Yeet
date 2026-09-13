@@ -8,8 +8,23 @@ use super::*;
 use crate::edit::ReadResult;
 
 impl ToolRegistry {
+    /// Drops Rust-side evidence when the edit daemon has been replaced.
+    /// Snapshot handles are daemon-local and must never survive a restart.
+    pub(super) fn sync_edit_state(&mut self) {
+        let Some(edit) = self.edit.as_ref() else {
+            return;
+        };
+        let generation = edit.generation();
+        if generation == self.edit_generation {
+            return;
+        }
+        self.edit_generation = generation;
+        self.invalidate_workspace_cache();
+    }
+
     /// Applies validated structured file changes and records mutation diagnostics.
     pub(super) fn apply_file_edits(&mut self, arguments: &Value) -> Result<String> {
+        self.sync_edit_state();
         let mut request = arguments.clone();
         normalize_legacy_edit_shapes(&mut request);
         let unlimited =
@@ -78,7 +93,21 @@ impl ToolRegistry {
             }
             paths
         };
-        let result: ApplyResult = self.edit.apply(&request, unlimited)?;
+        let result: ApplyResult = match self.edit_mut()?.apply(&request, unlimited) {
+            Ok(result) => result,
+            Err(error) => {
+                // A transport failure can happen after the daemon has
+                // committed the transaction but before the response reaches
+                // Rust. Drop all evidence in that ambiguous case; the next
+                // read will restart the daemon if needed and obtain a fresh
+                // snapshot instead of editing from stale cache state.
+                if self.edit.as_ref().is_some_and(|edit| edit.is_broken()) {
+                    self.invalidate_workspace_cache();
+                }
+                return Err(error);
+            }
+        };
+        self.sync_edit_state();
         let error_count = result
             .diagnostics
             .iter()
@@ -177,11 +206,15 @@ impl ToolRegistry {
             .map(|read| read.anchored.as_str())
             .unwrap_or(encoded.as_str());
         let artifact = self.artifacts.store(content)?;
+        let preview = artifact_output::bounded_utf8_bytes(content, 4 * 1024);
+        let preview_bytes = preview.len();
         let mut metadata = Map::new();
         metadata.insert("artifactId".into(), json!(artifact));
         metadata.insert("externalized".into(), json!(true));
         metadata.insert("bytes".into(), json!(content.len()));
-        metadata.insert("hint".into(), json!("Large output was externalized. Use search_artifact first, then a narrow read_artifact range."));
+        metadata.insert("preview".into(), json!(preview));
+        metadata.insert("previewBytes".into(), json!(preview_bytes));
+        metadata.insert("hint".into(), json!("Large output was externalized. Reuse this bounded preview; use search_artifact first, then a narrow read_artifact range only for specific missing evidence."));
         if let Some(read) = read {
             metadata.insert("path".into(), json!(read.path));
             metadata.insert("snapshot".into(), json!(read.snapshot));

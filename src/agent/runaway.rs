@@ -49,6 +49,7 @@ impl RunawayDetector {
         &mut self,
         round: RunawayRound,
         implementation_requested: bool,
+        implementation_incomplete: bool,
     ) -> RunawayDecision {
         if round.mutated {
             self.score = 0;
@@ -160,10 +161,26 @@ impl RunawayDetector {
             self.recent.pop_front();
         }
 
-        let mutation_recovery_grace =
-            implementation_requested && round.failed_mutation && !repeated_failure;
-        if self.score >= RUNAWAY_FINALIZE_SCORE && signal_families >= 2 && !mutation_recovery_grace
-        {
+        let repeated_mutation_failure =
+            implementation_requested && round.failed_mutation && repeated_failure;
+        let implementation_recovery_required =
+            implementation_incomplete && !repeated_mutation_failure;
+        if self.score >= RUNAWAY_FINALIZE_SCORE && signal_families >= 2 {
+            if implementation_recovery_required {
+                return RunawayDecision::Warn(format!(
+                    "Runaway pattern detected from multiple independent signals (score={}): {}. Implementation work is still unresolved, so tool access remains available. Stop broad inspection and either perform the smallest justified mutation/verification action now or state a concrete blocker without more inspection.",
+                    self.score,
+                    signal_summary(
+                        !round.progressed,
+                        round.duplicate_inspection || low_novelty,
+                        repeated_pattern,
+                        repeated_failure,
+                        repeated_output,
+                        context_blowup,
+                        inspection_spiral,
+                    )
+                ));
+            }
             return RunawayDecision::Finalize(format!(
                 "Runaway pattern detected from multiple independent signals (score={}): {}. Stop tool execution and answer from already collected evidence.",
                 self.score,
@@ -233,5 +250,60 @@ fn signal_summary(
         "weak anomaly signal".into()
     } else {
         signals.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inspection_round() -> RunawayRound {
+        RunawayRound {
+            progressed: false,
+            mutated: false,
+            failed_mutation: false,
+            duplicate_inspection: true,
+            inspection_only: true,
+            semantic_fingerprint: "read_file:src/ui".into(),
+            failure_fingerprints: Vec::new(),
+            output_fingerprints: vec![7],
+            request_context_chars: RUNAWAY_CONTEXT_CHARS,
+            fresh_calls: 0,
+            repeated_calls: 1,
+        }
+    }
+
+    #[test]
+    fn unresolved_implementation_keeps_tools_after_inspection_runaway() {
+        let mut detector = RunawayDetector::default();
+        let mut decision = RunawayDecision::Continue;
+        for _ in 0..6 {
+            decision = detector.observe(inspection_round(), true, true);
+        }
+        assert!(detector.score >= RUNAWAY_FINALIZE_SCORE);
+        assert!(matches!(decision, RunawayDecision::Warn(_)));
+    }
+
+    #[test]
+    fn repeated_real_mutation_failure_can_still_hard_stop() {
+        let mut detector = RunawayDetector::default();
+        let failed_edit = || RunawayRound {
+            progressed: false,
+            mutated: false,
+            failed_mutation: true,
+            duplicate_inspection: false,
+            inspection_only: false,
+            semantic_fingerprint: "apply_file_edits:src/ui.rs".into(),
+            failure_fingerprints: vec!["apply_file_edits:stale_anchor".into()],
+            output_fingerprints: Vec::new(),
+            request_context_chars: 1_000,
+            fresh_calls: 1,
+            repeated_calls: 0,
+        };
+        let mut decision = RunawayDecision::Continue;
+        for _ in 0..4 {
+            decision = detector.observe(failed_edit(), true, true);
+        }
+        assert!(matches!(decision, RunawayDecision::Finalize(_)));
     }
 }

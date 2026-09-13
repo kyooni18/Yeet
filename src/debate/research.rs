@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
-use uuid::Uuid;
+use sha2::{Digest, Sha256};
 
 use super::{DebateState, EvidenceItem, ResearchRecord};
 use crate::core::{BridgeClient, CallRequest, CallResult, Message, ToolCall, ToolDefinition};
@@ -78,8 +78,20 @@ mod tests {
             tool_calls: tools,
             finish_reason: "stop".into(),
             usage: None,
+
             raw: None,
         }
+    }
+
+    #[test]
+    fn debate_research_cache_key_is_stable_per_side() {
+        let debate = DebateState::default();
+        let first = debate_research_cache_key(&debate, true, &debate.models.pro).unwrap();
+        let second = debate_research_cache_key(&debate, true, &debate.models.pro).unwrap();
+        let opposing = debate_research_cache_key(&debate, false, &debate.models.con).unwrap();
+        assert_eq!(first, second);
+        assert_ne!(first, opposing);
+        assert!(first.starts_with("debate-research-v1-"));
     }
 
     #[test]
@@ -643,6 +655,17 @@ impl ResearchTools for ToolRegistry {
     }
 }
 
+fn debate_research_cache_key(debate: &DebateState, pro: bool, model: &str) -> Result<String> {
+    let contract = serde_json::to_string(&debate.effective_contract())?;
+    let identity = format!(
+        "v1\0{model}\0{pro}\0{}\0{}\0{contract}",
+        debate.topic,
+        debate.subject.render(),
+    );
+    let digest = Sha256::digest(identity.as_bytes());
+    Ok(format!("debate-research-v1-{digest:x}"))
+}
+
 fn run_with(
     debate: &DebateState,
     stage: usize,
@@ -741,7 +764,7 @@ fn run_with(
     )));
     let base_history = history.clone();
     let stable_cache_boundary = base_history.len().checked_sub(1);
-    let research_cache_key = format!("debate-research-{}", Uuid::new_v4());
+    let research_cache_key = debate_research_cache_key(debate, pro, model)?;
     let mut successful_reads: HashSet<String> = HashSet::new();
     let mut seen_source_ids: HashSet<String> = side_research
         .iter()

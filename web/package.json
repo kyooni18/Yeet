@@ -1,0 +1,33 @@
+{
+  "name": "yeet-webui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vue-tsc -b && vite build",
+    "typecheck": "vue-tsc -b",
+    "test:e2e": "pnpm test:e2e:mock && pnpm test:e2e:real",
+    "test:e2e:mock": "playwright test",
+    "test:e2e:real": "playwright test --config playwright.real.config.ts",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.6",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.41",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^26.5.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.1",
+    "vue-tsc": "^3.0.6"
+  },
+  "packageManager": "pnpm@11.22.0"
+}

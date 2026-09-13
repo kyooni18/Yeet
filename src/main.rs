@@ -25,8 +25,8 @@ use yeet::{
     remote::{
         RemoteDaemonControl, RemoteInput, RemoteOptions, RemoteServer, clear_remote_access_key,
         clear_remote_passkeys, generate_remote_access_key, launch_remote_daemon,
-        remote_auth_status, remote_daemon_status, request_remote_passkey_enrollment,
-        set_remote_access_key, stop_remote_daemon,
+        remote_auth_status, remote_daemon_browser_url, remote_daemon_status,
+        request_remote_passkey_enrollment, set_remote_access_key, stop_remote_daemon,
     },
     ui,
 };
@@ -57,6 +57,13 @@ fn main() -> Result<()> {
             environment,
         )?);
     }
+    if arguments.first().map(String::as_str) == Some("__background-runtime") {
+        let workspace = arguments
+            .get(1)
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("missing background runtime workspace"))?;
+        return yeet::background::run_runtime_worker(workspace);
+    }
     if arguments.first().map(String::as_str) == Some("__background-daemon") {
         let workspace = arguments
             .get(1)
@@ -76,7 +83,11 @@ fn main() -> Result<()> {
         remote_arguments.extend(arguments.iter().skip(2).cloned());
         let options = RemoteOptions::parse(&remote_arguments)?
             .ok_or_else(|| anyhow::anyhow!("invalid remote daemon arguments"))?;
-        return run_remote_tui(options, workspace);
+        return if options.legacy_tui {
+            run_remote_tui(options, workspace)
+        } else {
+            run_remote_web(options, workspace)
+        };
     }
     if matches!(
         arguments.first().map(String::as_str),
@@ -94,9 +105,10 @@ fn main() -> Result<()> {
             Some("status") => {
                 let workspace = parse_remote_workspace(&arguments[2..])?;
                 if let Some(status) = remote_daemon_status(&workspace)? {
+                    let browser_url = remote_daemon_browser_url(&workspace, &status)?;
                     println!(
                         "Yeet remote UI: {}\nWorkspace: {}",
-                        status.address,
+                        browser_url,
                         workspace.display()
                     );
                 } else {
@@ -123,16 +135,17 @@ fn main() -> Result<()> {
     if let Some(options) = RemoteOptions::parse(&arguments)? {
         let workspace = resolve_remote_workspace(options.workspace.clone())?;
         let result = launch_remote_daemon(&workspace, &options)?;
+        let browser_url = remote_daemon_browser_url(&workspace, &result.status)?;
         if result.already_running {
             println!(
                 "Yeet remote UI already running: {}\nWorkspace: {}",
-                result.status.address,
+                browser_url,
                 workspace.display()
             );
         } else {
             println!(
                 "Yeet remote UI: {}\nWorkspace: {}",
-                result.status.address,
+                browser_url,
                 workspace.display()
             );
         }
@@ -149,7 +162,8 @@ fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Resu
     let mut backend = Backend::spawn_remote()?;
     let mut app = App::default();
     let remote = RemoteServer::start_for_workspace(&options, &workspace)?;
-    let control = RemoteDaemonControl::start(&workspace, remote.address(), remote.auth_handle())?;
+    let control =
+        RemoteDaemonControl::start(&workspace, remote.address(), remote.auth_handle(), true)?;
     let mut width = options.cols;
     let mut height = options.rows;
     let mut terminal = Terminal::new(TestBackend::new(width, height))
@@ -198,6 +212,16 @@ fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Resu
     }
 }
 
+fn run_remote_web(options: RemoteOptions, workspace: std::path::PathBuf) -> Result<()> {
+    let remote = RemoteServer::start_for_workspace(&options, &workspace)?;
+    let control =
+        RemoteDaemonControl::start(&workspace, remote.address(), remote.auth_handle(), false)?;
+    while !control.should_stop() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 fn run_remote_auth_command(arguments: &[String]) -> Result<()> {
     let Some(category) = arguments.first().map(String::as_str) else {
         anyhow::bail!("Usage: yeet remote auth [status|key|passkey] ...");
@@ -207,8 +231,7 @@ fn run_remote_auth_command(arguments: &[String]) -> Result<()> {
             let workspace = parse_remote_workspace(&arguments[1..])?;
             let status = remote_auth_status(&workspace)?;
             println!(
-                "Workspace: {}\nAccess key: {}\nPasskeys: {}",
-                workspace.display(),
+                "Remote authentication\nAccess key: {}\nPasskeys: {}",
                 if status.key_enabled {
                     "enabled"
                 } else {
@@ -228,19 +251,18 @@ fn run_remote_auth_command(arguments: &[String]) -> Result<()> {
                 "generate" => {
                     let key = generate_remote_access_key(&workspace)?;
                     println!(
-                        "Remote access key for {}:\n{}\nStore this key now; Yeet only keeps its Argon2 hash.",
-                        workspace.display(),
+                        "Remote access key:\n{}\nStore this key now; Yeet only keeps its Argon2 hash.",
                         key
                     );
                 }
                 "set" => {
                     let key = read_remote_access_key()?;
                     set_remote_access_key(&workspace, &key)?;
-                    println!("Remote access key updated for {}", workspace.display());
+                    println!("Remote access key updated");
                 }
                 "clear" => {
                     clear_remote_access_key(&workspace)?;
-                    println!("Remote access key removed for {}", workspace.display());
+                    println!("Remote access key removed");
                 }
                 _ => anyhow::bail!(
                     "Usage: yeet remote auth key [generate|set|clear] [--workspace PATH]"
@@ -261,7 +283,7 @@ fn run_remote_auth_command(arguments: &[String]) -> Result<()> {
                 }
                 "clear" => {
                     clear_remote_passkeys(&workspace)?;
-                    println!("Removed all remote passkeys for {}", workspace.display());
+                    println!("Removed all Remote passkeys");
                 }
                 _ => {
                     anyhow::bail!("Usage: yeet remote auth passkey [add|clear] [--workspace PATH]")

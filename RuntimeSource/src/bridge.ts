@@ -8,7 +8,7 @@ import { CodexComputerUse } from "./codex-computer-use.js";
 import type { ProviderFetchLog } from "./http.js";
 import { McpManager } from "./mcp.js";
 import { ModelMetadataCatalog } from "./model-metadata.js";
-import { applyCacheCostPolicy, applyOpenAIFlexAuthPolicy, cheapestModel, estimateUsageCostUsd, estimatedRequestTokens } from "./pricing.js";
+import { applyCacheCostPolicy, applyOpenAIFlexAuthPolicy, cheapestModel, estimateUsageCostUsd, estimatedRequestTokens, inputCostEquivalentTokens } from "./pricing.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { GeminiProvider } from "./providers/gemini.js";
 import { OpenAIChatProvider } from "./providers/openai-chat.js";
@@ -138,7 +138,14 @@ async function usageWithEstimatedCost(
   if (!usage) return undefined;
   const pricing = await modelMetadata.pricing(request.model).catch(() => undefined);
   const estimatedCostUsd = pricing ? estimateUsageCostUsd(pricing, usage, request) : undefined;
-  return estimatedCostUsd === undefined ? usage : { ...usage, estimatedCostUsd };
+  const costEquivalentInputTokens = pricing ? inputCostEquivalentTokens(pricing, usage, request) : undefined;
+  return estimatedCostUsd === undefined && costEquivalentInputTokens === undefined
+    ? usage
+    : {
+        ...usage,
+        ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
+        ...(costEquivalentInputTokens !== undefined ? { costEquivalentInputTokens } : {}),
+      };
 }
 
 async function compactionContextLength(model: string): Promise<number | undefined> {
@@ -252,17 +259,33 @@ async function refreshProvider(providerId: string): Promise<void> {
   const credential = await auth.resolve(providerId);
   switch (providerId) {
     case "openai":
-      core.register(new OpenAIProvider({ ...openAIProviderOptions(credential), apiCallLogger: writeApiCallLog }));
+    case "codex-cli":
+      core.register(new OpenAIProvider({ id: providerId, ...openAIProviderOptions(credential), apiCallLogger: writeApiCallLog }));
       return;
     case "anthropic":
       core.register(new AnthropicProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
       return;
+    case "claude":
+      core.register(new AnthropicProvider({
+        id: "claude",
+        ...(credential?.kind === "oauth" ? { accessToken: credential.accessToken } : {}),
+        apiCallLogger: writeApiCallLog,
+      }));
+      return;
     case "gemini":
       core.register(new GeminiProvider(
         credential?.kind === "oauth"
-          ? { accessToken: credential.accessToken, ...(credential.projectId ? { projectId: credential.projectId } : {}), apiCallLogger: writeApiCallLog }
+          ? { id: "gemini", accessToken: credential.accessToken, ...(credential.projectId ? { projectId: credential.projectId } : {}), apiCallLogger: writeApiCallLog }
           : { ...apiKeyOption(credential), apiCallLogger: writeApiCallLog },
       ));
+      return;
+    case "gemini-web":
+      core.register(new GeminiProvider({
+        id: "gemini-web",
+        ...(credential?.kind === "oauth" ? { accessToken: credential.accessToken } : {}),
+        ...(credential?.kind === "oauth" && credential.projectId ? { projectId: credential.projectId } : {}),
+        apiCallLogger: writeApiCallLog,
+      }));
       return;
     case "openrouter":
       core.register(new OpenRouterProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
@@ -286,7 +309,7 @@ async function refreshProvider(providerId: string): Promise<void> {
   }));
 }
 
-for (const provider of ["openai", "anthropic", "gemini", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
+for (const provider of ["openai", "codex-cli", "anthropic", "claude", "gemini", "gemini-web", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
 for (const provider of await auth.listCustomProviders()) {
   customProviders.set(provider.id, { kind: "openai-compatible", ...provider });
   await refreshProvider(provider.id);
@@ -384,7 +407,10 @@ function mergeUsageWithModelCall(primary: import("./types.js").Usage | undefined
     ["outputTokens", add(primary?.outputTokens, auxiliary?.outputTokens)],
     ["totalTokens", add(primary?.totalTokens, auxiliary?.totalTokens)],
     ["cachedInputTokens", add(primary?.cachedInputTokens, auxiliary?.cachedInputTokens)],
+    ["cacheMeasuredInputTokens", add(primary?.cacheMeasuredInputTokens, auxiliary?.cacheMeasuredInputTokens)],
+    ["cacheUnreportedInputTokens", add(primary?.cacheUnreportedInputTokens, auxiliary?.cacheUnreportedInputTokens)],
     ["cacheWriteInputTokens", add(primary?.cacheWriteInputTokens, auxiliary?.cacheWriteInputTokens)],
+    ["costEquivalentInputTokens", add(primary?.costEquivalentInputTokens, auxiliary?.costEquivalentInputTokens)],
     ["reasoningTokens", add(primary?.reasoningTokens, auxiliary?.reasoningTokens)],
     ["modelCalls", (primary?.modelCalls ?? 1) + (auxiliary?.modelCalls ?? 0)],
     ["estimatedCostUsd", add(primary?.estimatedCostUsd, auxiliary?.estimatedCostUsd)],

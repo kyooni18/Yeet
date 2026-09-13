@@ -143,6 +143,8 @@ interface CallRequestBase {
   contextKey?: string;
   system?: string;
   tools?: ToolDefinition[];
+  /** Candidate tools that capable providers may expose through native tool search. */
+  deferredTools?: ToolDefinition[];
   toolChoice?: ToolChoice;
   temperature?: number;
   maxTokens?: number;
@@ -176,14 +178,46 @@ export interface Usage {
   outputTokens?: number;
   totalTokens?: number;
   cachedInputTokens?: number;
+  /** Input tokens for calls where the provider explicitly reported cache-read telemetry. */
+  cacheMeasuredInputTokens?: number;
+  /** Input tokens for calls where cache-read telemetry was absent. */
+  cacheUnreportedInputTokens?: number;
   cacheWriteInputTokens?: number;
+  /** Input tokens normalized to the selected model's ordinary-input price. */
+  costEquivalentInputTokens?: number;
   reasoningTokens?: number;
   modelCalls?: number;
+  /** Provider HTTP attempts, including retries, used by the logical model call. */
+  transportAttempts?: number;
   /** Estimated inference cost from the live model catalog, in USD. */
   estimatedCostUsd?: number;
+  /** Provider-reported prompt-cache comparison outcome, when available. */
+  providerCacheDiagnosticType?: PromptCacheDiagnostics["type"];
+  providerCacheMissReason?: string;
+  providerCacheMissedTokens?: number;
+  providerComparisonReusableTokens?: number;
 }
 
 export type FinishReason = "stop" | "length" | "tool_call" | "content_filter" | "error" | "unknown";
+
+export type PromptCacheMissReason =
+  | "model_changed"
+  | "prompt_cache_key_changed"
+  | "tools_changed"
+  | "text_format_changed"
+  | "reasoning_effort_changed"
+  | "verbosity_changed"
+  | "context_compacted"
+  | "input_changed"
+  | "service_tier_changed";
+
+/** Provider-reported comparison diagnostics from the OpenAI Responses API. */
+export interface PromptCacheDiagnostics {
+  type: "cache_hit" | "cache_miss" | "comparison_response_not_found" | "unavailable";
+  cacheMissedTokens?: number;
+  reason?: string;
+  comparisonReusableTokens?: number;
+}
 
 export interface CallResult {
   provider: ProviderId;
@@ -202,6 +236,8 @@ export interface CallResult {
   toolFeedback?: ToolCallFeedback[];
   finishReason: FinishReason;
   usage?: Usage;
+  /** Provider-reported prompt-cache comparison result, when explicitly available. */
+  promptCacheDiagnostics?: PromptCacheDiagnostics;
   raw?: unknown;
 }
 
@@ -214,7 +250,7 @@ export type StreamEvent =
   | { type: "text-delta"; delta: string }
   | { type: "tool-call-delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
   | { type: "tool-call"; index: number; toolCall: ToolCall }
-  | { type: "finish"; finishReason: FinishReason; usage?: Usage; raw?: unknown };
+  | { type: "finish"; finishReason: FinishReason; usage?: Usage; promptCacheDiagnostics?: PromptCacheDiagnostics; raw?: unknown };
 
 export interface EmbeddingRequest {
   model: string;

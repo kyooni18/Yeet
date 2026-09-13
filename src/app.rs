@@ -13,7 +13,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use crate::{
     backend::Backend,
     model::{
-        BridgeState, CapabilityToggleItem, ConversationEntry, FrontendCommand,
+        BridgeState, CapabilityToggleItem, ConversationEntry, FrontendCommand, ModelCatalogItem,
         ProviderConfigurationItem, REASONING_LEVELS, SandboxAction, SessionSummary,
     },
 };
@@ -24,6 +24,7 @@ pub enum Mode {
     Debate,
     Models,
     Reasoning,
+    Infinity,
     Sessions,
     Capabilities,
     CapabilityDetail,
@@ -79,6 +80,9 @@ pub struct App {
     pub settings_section: Option<SettingsSection>,
     pub settings_edit_kind: Option<SettingsEditKind>,
     pub command_index: usize,
+    pub input_history: Vec<String>,
+    pub history_index: Option<usize>,
+    pub history_draft: String,
     pub follow_tail: bool,
     pub scroll_y: u16,
     pub max_scroll: u16,
@@ -118,6 +122,9 @@ impl Default for App {
             settings_section: None,
             settings_edit_kind: None,
             command_index: 0,
+            input_history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
             follow_tail: true,
             scroll_y: 0,
             max_scroll: 0,
@@ -235,6 +242,7 @@ impl App {
             Mode::Chat => self.handle_chat_key(event, backend),
             Mode::Models => self.handle_model_key(event, backend),
             Mode::Reasoning => self.handle_reasoning_key(event, backend),
+            Mode::Infinity => self.handle_infinity_key(event, backend),
             Mode::Sessions => self.handle_session_key(event, backend),
             Mode::Capabilities => self.handle_capability_key(event, backend),
             Mode::CapabilityDetail => self.handle_capability_detail_key(event, backend),
@@ -281,12 +289,35 @@ impl App {
 
     pub fn filtered_models(&self) -> Vec<&str> {
         let query = self.popup_filter.to_ascii_lowercase();
-        self.state
-            .available_models
-            .iter()
-            .filter(|model| query.is_empty() || model.to_ascii_lowercase().contains(&query))
-            .map(String::as_str)
+        let source = if !self.state.model_catalog.is_empty() {
+            self.state
+                .model_catalog
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>()
+        } else {
+            self.state
+                .available_models
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        };
+        source
+            .into_iter()
+            .filter(|id| {
+                if query.is_empty() || id.to_ascii_lowercase().contains(&query) {
+                    return true;
+                }
+                self.model_catalog_item(id).is_some_and(|item| {
+                    item.provider.to_ascii_lowercase().contains(&query)
+                        || item.model.to_ascii_lowercase().contains(&query)
+                })
+            })
             .collect()
+    }
+
+    pub fn model_catalog_item(&self, id: &str) -> Option<&ModelCatalogItem> {
+        self.state.model_catalog.iter().find(|item| item.id == id)
     }
 
     pub fn sessions(&self) -> &[SessionSummary] {
@@ -319,6 +350,7 @@ impl App {
         match self.mode {
             Mode::Models | Mode::Capabilities => self.popup_filter.is_empty(),
             Mode::Reasoning
+            | Mode::Infinity
             | Mode::Sessions
             | Mode::Providers
             | Mode::Settings
@@ -363,6 +395,10 @@ impl App {
                     self.scroll_down(10);
                     return Ok(());
                 }
+                KeyCode::Char('p') => {
+                    self.history_up();
+                    return Ok(());
+                }
                 _ => {}
             }
         }
@@ -373,6 +409,8 @@ impl App {
                     backend.send(FrontendCommand::Interrupt)?;
                 }
             }
+            KeyCode::Up if event.modifiers.contains(KeyModifiers::ALT) => self.history_up(),
+            KeyCode::Down if event.modifiers.contains(KeyModifiers::ALT) => self.history_down(),
             KeyCode::F(2) | KeyCode::Char('m')
                 if event.code == KeyCode::F(2) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
@@ -431,6 +469,7 @@ impl App {
                 self.input = format!("{} ", suggestions[index].0);
                 self.cursor = self.input.chars().count();
                 self.command_index = 0;
+                self.reset_history_navigation();
             }
             KeyCode::Enter if event.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.insert_char('\n');
@@ -441,6 +480,7 @@ impl App {
                     return Ok(());
                 }
                 if text == "/new" {
+                    self.record_input_history(&text);
                     backend.send(FrontendCommand::NewSession)?;
                     self.input.clear();
                     self.cursor = 0;
@@ -458,6 +498,7 @@ impl App {
                     }
                     "/model" => self.open_models(backend)?,
                     "/reasoning" => self.open_reasoning(),
+                    "/infinity" => self.open_infinity(),
                     "/sessions" => self.open_sessions(backend)?,
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
@@ -466,6 +507,8 @@ impl App {
                     "/provider" | "/providers" => self.open_providers(backend)?,
                     _ => backend.send(FrontendCommand::Submit { text })?,
                 }
+                let submitted = self.input.clone();
+                self.record_input_history(&submitted);
                 self.input.clear();
                 self.cursor = 0;
                 self.command_index = 0;
@@ -582,6 +625,28 @@ impl App {
                     })?;
                     self.close_popup();
                 }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_infinity_key(
+        &mut self,
+        event: KeyEvent,
+        backend: &mut Backend,
+    ) -> anyhow::Result<()> {
+        match event.code {
+            KeyCode::Esc => self.close_popup(),
+            KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                backend.send(FrontendCommand::Interrupt)?;
+            }
+            KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
+            KeyCode::Down | KeyCode::Right => self.popup_index = cmp::min(self.popup_index + 1, 1),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                backend.send(FrontendCommand::SetInfinity {
+                    enabled: self.popup_index == 0,
+                })?;
             }
             _ => {}
         }
@@ -1104,6 +1169,12 @@ impl App {
         backend.send(FrontendCommand::RequestModels)
     }
 
+    fn open_infinity(&mut self) {
+        self.mode = Mode::Infinity;
+        self.popup_filter.clear();
+        self.popup_index = if self.state.infinity_mode { 0 } else { 1 };
+    }
+
     fn open_sessions(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         self.mode = Mode::Sessions;
         self.popup_filter.clear();
@@ -1468,6 +1539,7 @@ impl App {
         let count = match self.mode {
             Mode::Models => self.filtered_models().len(),
             Mode::Reasoning => REASONING_LEVELS.len(),
+            Mode::Infinity => 2,
             Mode::Sessions => self.state.saved_sessions.len(),
             Mode::Capabilities => self.filtered_capabilities().len(),
             Mode::Auth => self.state.auth_providers.len(),
@@ -1496,6 +1568,7 @@ impl App {
     }
 
     fn insert_char(&mut self, character: char) {
+        self.reset_history_navigation();
         let byte = byte_index(&self.input, self.cursor);
         self.input.insert(byte, character);
         self.cursor += 1;
@@ -1505,6 +1578,7 @@ impl App {
         if self.cursor == 0 {
             return;
         }
+        self.reset_history_navigation();
         let start = byte_index(&self.input, self.cursor - 1);
         let end = byte_index(&self.input, self.cursor);
         self.input.replace_range(start..end, "");
@@ -1515,9 +1589,69 @@ impl App {
         if self.cursor >= self.input.chars().count() {
             return;
         }
+        self.reset_history_navigation();
         let start = byte_index(&self.input, self.cursor);
         let end = byte_index(&self.input, self.cursor + 1);
         self.input.replace_range(start..end, "");
+    }
+
+    fn record_input_history(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        if self
+            .input_history
+            .last()
+            .is_some_and(|previous| previous == text)
+        {
+            self.reset_history_navigation();
+            return;
+        }
+        self.input_history.push(text.to_owned());
+        const MAX_INPUT_HISTORY: usize = 100;
+        if self.input_history.len() > MAX_INPUT_HISTORY {
+            let excess = self.input_history.len() - MAX_INPUT_HISTORY;
+            self.input_history.drain(..excess);
+        }
+        self.reset_history_navigation();
+    }
+
+    fn history_up(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        if self.history_index.is_none() {
+            self.history_draft = self.input.clone();
+            self.history_index = Some(self.input_history.len() - 1);
+        } else if let Some(index) = self.history_index {
+            self.history_index = Some(index.saturating_sub(1));
+        }
+        if let Some(index) = self.history_index {
+            self.input = self.input_history[index].clone();
+            self.cursor = self.input.chars().count();
+        }
+    }
+
+    fn history_down(&mut self) {
+        let Some(index) = self.history_index else {
+            return;
+        };
+        if index + 1 < self.input_history.len() {
+            self.history_index = Some(index + 1);
+            self.input = self.input_history[index + 1].clone();
+            self.cursor = self.input.chars().count();
+        } else {
+            let draft = std::mem::take(&mut self.history_draft);
+            self.reset_history_navigation();
+            self.input = draft;
+            self.cursor = self.input.chars().count();
+        }
+    }
+
+    fn reset_history_navigation(&mut self) {
+        self.history_index = None;
+        self.history_draft.clear();
     }
 }
 
@@ -1541,6 +1675,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/compact", "Compact model context now"),
     ("/context", "Show or override model context length"),
     ("/status", "Show detailed runtime and usage status"),
+    ("/infinity", "Continuous model execution"),
     ("/attach", "Attach an optional capability"),
     ("/detach", "Detach an optional capability"),
     ("/allow", "Allow pending shell command once"),
@@ -1600,6 +1735,35 @@ mod tests {
     }
 
     #[test]
+    fn model_filter_uses_structured_catalog_and_catalog_fallback() {
+        let mut app = App::default();
+        app.state.model_catalog = vec![
+            ModelCatalogItem {
+                id: "openai/gpt-5.6-sol".into(),
+                provider: "OpenAI Platform".into(),
+                model: "gpt-5.6-sol".into(),
+                context_length: Some(128_000),
+            },
+            ModelCatalogItem {
+                id: "anthropic/claude-sonnet".into(),
+                provider: "Anthropic".into(),
+                model: "Claude Sonnet".into(),
+                context_length: Some(200_000),
+            },
+        ];
+        app.state.available_models = vec!["legacy/unstructured-model".into()];
+
+        app.popup_filter = "platform".into();
+        assert_eq!(app.filtered_models(), vec!["openai/gpt-5.6-sol"]);
+        app.popup_filter = "sonnet".into();
+        assert_eq!(app.filtered_models(), vec!["anthropic/claude-sonnet"]);
+
+        app.state.model_catalog.clear();
+        app.popup_filter = "legacy".into();
+        assert_eq!(app.filtered_models(), vec!["legacy/unstructured-model"]);
+    }
+
+    #[test]
     fn streaming_clock_follows_state_transitions() {
         let mut app = App::default();
         app.merge_state(BridgeState {
@@ -1632,6 +1796,41 @@ mod tests {
                 .iter()
                 .any(|(name, _)| *name == "/new")
         );
+    }
+
+    #[test]
+    fn infinity_command_is_suggested() {
+        let app = App {
+            input: "/inf".into(),
+            ..App::default()
+        };
+
+        assert!(
+            app.command_suggestions()
+                .iter()
+                .any(|(name, _)| *name == "/infinity")
+        );
+    }
+
+    #[test]
+    fn input_history_restores_a_draft_and_deduplicates_adjacent_entries() {
+        let mut app = App::default();
+        app.record_input_history("first");
+        app.record_input_history("second");
+        app.record_input_history("second");
+        app.input = "unfinished draft".into();
+        app.cursor = app.input.chars().count();
+
+        app.history_up();
+        assert_eq!(app.input, "second");
+        app.history_up();
+        assert_eq!(app.input, "first");
+        app.history_down();
+        assert_eq!(app.input, "second");
+        app.history_down();
+        assert_eq!(app.input, "unfinished draft");
+        assert_eq!(app.cursor, app.input.chars().count());
+        assert_eq!(app.input_history, ["first", "second"]);
     }
 
     #[test]

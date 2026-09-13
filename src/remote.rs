@@ -1,4 +1,8 @@
+mod assets;
+pub mod protocol;
 mod render;
+mod server;
+mod websocket;
 use render::render_buffer;
 
 use std::{
@@ -6,13 +10,13 @@ use std::{
     fs::{self, OpenOptions},
     hash::{Hash, Hasher},
     io::{self, BufRead, BufReader, Read, Write},
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{Shutdown, SocketAddr, TcpListener},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender, TryRecvError},
+        mpsc::{self, Receiver, TryRecvError},
     },
     thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -44,7 +48,6 @@ const MIN_COLS: u16 = 40;
 const MIN_ROWS: u16 = 12;
 const MAX_COLS: u16 = 300;
 const MAX_ROWS: u16 = 120;
-const MAX_REQUEST_BYTES: usize = 256 * 1024;
 const DAEMON_START_RETRIES: usize = 80;
 const DAEMON_START_DELAY: Duration = Duration::from_millis(50);
 const DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_millis(600);
@@ -59,6 +62,7 @@ pub struct RemoteOptions {
     pub rows: u16,
     pub origin: Option<String>,
     pub workspace: Option<PathBuf>,
+    pub legacy_tui: bool,
 }
 
 impl Default for RemoteOptions {
@@ -69,6 +73,7 @@ impl Default for RemoteOptions {
             rows: DEFAULT_ROWS,
             origin: None,
             workspace: None,
+            legacy_tui: false,
         }
     }
 }
@@ -111,6 +116,9 @@ impl RemoteOptions {
                             .ok_or_else(|| anyhow!("remote mode requires a URL after --origin"))?,
                     );
                 }
+                "--legacy-tui" => {
+                    options.legacy_tui = true;
+                }
                 "--workspace" => {
                     index += 1;
                     let path =
@@ -134,7 +142,7 @@ impl RemoteOptions {
 }
 
 pub fn remote_help() -> &'static str {
-    "Yeet remote mode\n\n  yeet remote [WORKSPACE] [--workspace PATH] [--bind ADDRESS] [--size COLSxROWS] [--origin URL]\n  yeet remote status [WORKSPACE|--workspace PATH]\n  yeet remote stop [WORKSPACE|--workspace PATH]\n  yeet remote auth status [WORKSPACE|--workspace PATH]\n  yeet remote auth key generate|set|clear [WORKSPACE|--workspace PATH]\n  yeet remote auth passkey add|clear [WORKSPACE|--workspace PATH]\n  yeet --remote [WORKSPACE] [--bind ADDRESS] [--size COLSxROWS]\n\nDefaults:\n  workspace: current directory\n  --bind 0.0.0.0:7331\n  --size 120x40\n\nRemote mode runs as a detached background daemon and serves the existing Yeet TUI as a browser UI. Access-key and WebAuthn passkey authentication are optional. Network tunneling and port forwarding are intentionally outside Yeet."
+    "Yeet remote mode\n\n  yeet remote [WORKSPACE] [--workspace PATH] [--bind ADDRESS] [--origin URL] [--legacy-tui]\n  yeet remote status [WORKSPACE|--workspace PATH]\n  yeet remote stop [WORKSPACE|--workspace PATH]\n  yeet remote auth status [WORKSPACE|--workspace PATH]\n  yeet remote auth key generate|set|clear [WORKSPACE|--workspace PATH]\n  yeet remote auth passkey add|clear [WORKSPACE|--workspace PATH]\n  yeet --remote [WORKSPACE] [--bind ADDRESS] [--origin URL]\n\nDefaults:\n  initial workspace: current directory (semantic WebUI clients may switch it)\n  --bind 0.0.0.0:7331\n  frontend: semantic Vue WebUI\n\nOptions:\n  --legacy-tui       serve the previous browser-rendered Ratatui frontend\n  --size COLSxROWS   terminal size for --legacy-tui (default 120x40)\n\nRemote mode runs as a detached background daemon. The production WebUI is served directly by Yeet and does not require a Node development server. Authentication is Remote-wide rather than workspace-bound; WebAuthn credentials remain scoped to the configured relying-party origin as required by WebAuthn. Network tunneling and port forwarding are intentionally outside Yeet."
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +159,7 @@ pub struct RemoteLaunchResult {
 struct RemoteDaemonPaths {
     socket: PathBuf,
     log: PathBuf,
-    auth: PathBuf,
+    legacy_auth: PathBuf,
 }
 
 impl RemoteDaemonPaths {
@@ -165,9 +173,18 @@ impl RemoteDaemonPaths {
         Ok(Self {
             socket: directory.join(format!("{key}.sock")),
             log: directory.join(format!("{key}.log")),
-            auth: directory.join(format!("{key}.auth.json")),
+            legacy_auth: directory.join(format!("{key}.auth.json")),
         })
     }
+}
+
+fn remote_auth_path() -> Result<PathBuf> {
+    let config = ConfigStore::default();
+    config.ensure()?;
+    let directory = config.directory.join("remote");
+    fs::create_dir_all(&directory)?;
+    set_private_directory(&directory)?;
+    Ok(directory.join("auth.json"))
 }
 
 fn remote_workspace_key(workspace: &Path) -> String {
@@ -206,25 +223,45 @@ pub struct RemoteAuthStatus {
 }
 
 fn load_remote_auth_document(workspace: &Path) -> Result<RemoteAuthDocument> {
-    let paths = RemoteDaemonPaths::new(workspace)?;
-    match fs::read_to_string(&paths.auth) {
+    let auth_path = remote_auth_path()?;
+    match fs::read_to_string(&auth_path) {
         Ok(contents) => serde_json::from_str(&contents)
-            .with_context(|| format!("decode remote authentication file {}", paths.auth.display())),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(RemoteAuthDocument::default()),
+            .with_context(|| format!("decode remote authentication file {}", auth_path.display())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // Remote authentication used to be scoped to the daemon's startup
+            // workspace. Migrate that document once so existing access keys and
+            // passkeys keep working while authentication becomes Remote-wide.
+            let legacy_path = RemoteDaemonPaths::new(workspace)?.legacy_auth;
+            match fs::read_to_string(&legacy_path) {
+                Ok(contents) => {
+                    let document: RemoteAuthDocument = serde_json::from_str(&contents)
+                        .with_context(|| {
+                            format!(
+                                "decode legacy remote authentication file {}",
+                                legacy_path.display()
+                            )
+                        })?;
+                    save_remote_auth_document(workspace, &document)?;
+                    Ok(document)
+                }
+                Err(legacy_error) if legacy_error.kind() == io::ErrorKind::NotFound => {
+                    Ok(RemoteAuthDocument::default())
+                }
+                Err(legacy_error) => Err(legacy_error.into()),
+            }
+        }
         Err(error) => Err(error.into()),
     }
 }
 
-fn save_remote_auth_document(workspace: &Path, document: &RemoteAuthDocument) -> Result<()> {
-    let paths = RemoteDaemonPaths::new(workspace)?;
-    let parent = paths
-        .auth
+fn save_remote_auth_document(_workspace: &Path, document: &RemoteAuthDocument) -> Result<()> {
+    let auth_path = remote_auth_path()?;
+    let parent = auth_path
         .parent()
         .ok_or_else(|| anyhow!("remote authentication path has no parent"))?;
     let temporary = parent.join(format!(
         ".{}.{}.tmp",
-        paths
-            .auth
+        auth_path
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("auth"),
@@ -242,8 +279,8 @@ fn save_remote_auth_document(workspace: &Path, document: &RemoteAuthDocument) ->
     file.write_all(&bytes)?;
     file.write_all(b"\n")?;
     file.sync_all()?;
-    replace_file(&temporary, &paths.auth)?;
-    set_private_file(&paths.auth)?;
+    replace_file(&temporary, &auth_path)?;
+    set_private_file(&auth_path)?;
     Ok(())
 }
 
@@ -368,15 +405,13 @@ impl RemoteAuthRuntime {
         };
         if !document.passkeys.is_empty() && webauthn.is_none() {
             bail!(
-                "this workspace has passkeys configured; restart remote mode with --origin https://host when not using localhost"
+                "Remote has passkeys configured; restart remote mode with --origin https://host when not using localhost"
             );
         }
         Ok(Self {
-            cookie_name: if workspace.as_os_str().is_empty() {
-                "yeet_remote_session".into()
-            } else {
-                format!("yeet_remote_session_{}", remote_workspace_key(&workspace))
-            },
+            // Authentication belongs to the Remote service, not to whichever
+            // workspace a client selects after it connects.
+            cookie_name: "yeet_remote_session".into(),
             workspace: if workspace.as_os_str().is_empty() {
                 workspace
             } else {
@@ -411,13 +446,23 @@ impl RemoteAuthRuntime {
     }
 
     fn reload_document(&self) -> Result<()> {
+        self.reload_document_inner(false)
+    }
+
+    fn refresh_document(&self) -> Result<()> {
+        self.reload_document_inner(true)
+    }
+
+    fn reload_document_inner(&self, preserve_sessions: bool) -> Result<()> {
         if self.workspace.as_os_str().is_empty() {
             return Ok(());
         }
         let document = load_remote_auth_document(&self.workspace)?;
         let mut state = self.state.lock().unwrap();
         state.document = document;
-        state.sessions.clear();
+        if !preserve_sessions {
+            state.sessions.clear();
+        }
         state.authentications.clear();
         Ok(())
     }
@@ -439,7 +484,15 @@ impl RemoteAuthRuntime {
         )
     }
 
-    fn is_authorized(&self, request: &HttpRequest) -> bool {
+    fn is_authorized_headers(&self, headers: &axum::http::HeaderMap) -> bool {
+        self.is_authorized_cookie_header(
+            headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|value| value.to_str().ok()),
+        )
+    }
+
+    fn is_authorized_cookie_header(&self, cookie_header: Option<&str>) -> bool {
         let now = unix_time();
         let mut state = self.state.lock().unwrap();
         state.enrollments.retain(|_, expires_at| *expires_at > now);
@@ -450,13 +503,68 @@ impl RemoteAuthRuntime {
             return true;
         }
         state.sessions.retain(|_, expires_at| *expires_at > now);
-        let Some(token) = request_cookie(request, &self.cookie_name) else {
+        let Some(token) = cookie_header.and_then(|header| {
+            header.split(';').find_map(|pair| {
+                let (candidate, value) = pair.trim().split_once('=')?;
+                (candidate == self.cookie_name).then_some(value)
+            })
+        }) else {
             return false;
         };
         state
             .sessions
             .get(token)
             .is_some_and(|expires_at| *expires_at > now)
+    }
+
+    fn websocket_origin_allowed(&self, headers: &axum::http::HeaderMap) -> bool {
+        self.browser_origin_allowed(headers, true)
+    }
+
+    fn http_auth_origin_allowed(&self, headers: &axum::http::HeaderMap) -> bool {
+        self.browser_origin_allowed(headers, false)
+    }
+
+    fn browser_origin_allowed(
+        &self,
+        headers: &axum::http::HeaderMap,
+        require_origin: bool,
+    ) -> bool {
+        let Some(origin) = headers
+            .get(axum::http::header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return !require_origin;
+        };
+        let Ok(origin) = Url::parse(origin) else {
+            return false;
+        };
+        if !matches!(origin.scheme(), "http" | "https")
+            || origin.path() != "/"
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+            || !origin.username().is_empty()
+            || origin.password().is_some()
+        {
+            return false;
+        }
+        if let Some(expected) = self.public_origin.as_ref() {
+            return origin == *expected;
+        }
+        let Some(host) = headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return false;
+        };
+        let Some(origin_host) = origin.host_str() else {
+            return false;
+        };
+        let authority = match origin.port() {
+            Some(port) => format!("{origin_host}:{port}"),
+            None => origin_host.to_owned(),
+        };
+        authority.eq_ignore_ascii_case(host)
     }
 
     fn verify_access_key(&self, key: &str) -> Result<Option<String>> {
@@ -603,6 +711,7 @@ impl RemoteAuthRuntime {
             state.enrollments.remove(&pending.enrollment_token);
             save_remote_auth_document(&self.workspace, &state.document)?;
         }
+        notify_other_remote_auth_refresh(&self.workspace);
         Ok(self.issue_session())
     }
 
@@ -633,6 +742,7 @@ impl RemoteAuthRuntime {
         &self,
         transaction: &str,
         credential: &PublicKeyCredential,
+        enrollment_token: Option<&str>,
     ) -> Result<String> {
         let pending = self
             .state
@@ -651,8 +761,15 @@ impl RemoteAuthRuntime {
         let result = webauthn
             .finish_passkey_authentication(credential, &pending.state)
             .map_err(|error| anyhow!("finish passkey authentication: {error}"))?;
-        {
+        let changed = {
             let mut state = self.state.lock().unwrap();
+            if let Some(token) = enrollment_token {
+                let now = unix_time();
+                state.enrollments.retain(|_, expires_at| *expires_at > now);
+                if !state.enrollments.contains_key(token) {
+                    bail!("passkey enrollment token is invalid or expired");
+                }
+            }
             let mut matched = false;
             let mut changed = false;
             for passkey in &mut state.document.passkeys {
@@ -662,11 +779,18 @@ impl RemoteAuthRuntime {
                 }
             }
             if !matched {
-                bail!("authenticated passkey is not registered for this remote workspace");
+                bail!("authenticated passkey is not registered for this Remote service");
+            }
+            if let Some(token) = enrollment_token {
+                state.enrollments.remove(token);
             }
             if changed {
                 save_remote_auth_document(&self.workspace, &state.document)?;
             }
+            changed
+        };
+        if changed {
+            notify_other_remote_auth_refresh(&self.workspace);
         }
         Ok(self.issue_session())
     }
@@ -729,6 +853,23 @@ pub fn launch_remote_daemon(
     options: &RemoteOptions,
 ) -> Result<RemoteLaunchResult> {
     if let Some(status) = remote_daemon_status(workspace)? {
+        if let Some(running_legacy_tui) = remote_daemon_legacy_tui(workspace)?
+            && running_legacy_tui != options.legacy_tui
+        {
+            bail!(
+                "Yeet remote is already running with the {} frontend; stop it before switching to {}",
+                if running_legacy_tui {
+                    "legacy TUI"
+                } else {
+                    "WebUI"
+                },
+                if options.legacy_tui {
+                    "legacy TUI"
+                } else {
+                    "WebUI"
+                }
+            );
+        }
         let requested = normalize_requested_address(&options.bind);
         if requested
             .as_deref()
@@ -778,6 +919,9 @@ pub fn launch_remote_daemon(
         .arg(&options.bind)
         .arg("--size")
         .arg(format!("{}x{}", options.cols, options.rows));
+    if options.legacy_tui {
+        command.arg("--legacy-tui");
+    }
     if let Some(origin) = &options.origin {
         command.arg("--origin").arg(origin);
     }
@@ -823,6 +967,10 @@ pub fn remote_daemon_status(workspace: &Path) -> Result<Option<RemoteDaemonStatu
     }))
 }
 
+pub fn remote_daemon_browser_url(workspace: &Path, status: &RemoteDaemonStatus) -> Result<String> {
+    Ok(remote_daemon_origin(workspace)?.unwrap_or_else(|| status.address.clone()))
+}
+
 fn remote_control_request(workspace: &Path, command: &str) -> Result<Option<String>> {
     let paths = RemoteDaemonPaths::new(workspace)?;
     let mut stream = match connect_local(&paths.socket) {
@@ -861,8 +1009,60 @@ fn remote_daemon_origin(workspace: &Path) -> Result<Option<String>> {
     Ok(Some(value.to_owned()))
 }
 
+fn remote_daemon_legacy_tui(workspace: &Path) -> Result<Option<bool>> {
+    let Some(response) = remote_control_request(workspace, "frontend")? else {
+        return Ok(None);
+    };
+    match response.trim() {
+        "webui" => Ok(Some(false)),
+        "legacy-tui" => Ok(Some(true)),
+        _ => Ok(None),
+    }
+}
+
 fn notify_remote_auth_reload(workspace: &Path) {
     let _ = remote_control_request(workspace, "auth-reload");
+    let exclude = RemoteDaemonPaths::new(workspace)
+        .ok()
+        .map(|paths| paths.socket);
+    notify_remote_auth_command("auth-reload", exclude.as_deref());
+}
+
+fn notify_other_remote_auth_refresh(workspace: &Path) {
+    let exclude = RemoteDaemonPaths::new(workspace)
+        .ok()
+        .map(|paths| paths.socket);
+    notify_remote_auth_command("auth-refresh", exclude.as_deref());
+}
+
+fn notify_remote_auth_command(command: &str, exclude: Option<&Path>) {
+    let Ok(config) = (|| -> Result<ConfigStore> {
+        let config = ConfigStore::default();
+        config.ensure()?;
+        Ok(config)
+    })() else {
+        return;
+    };
+    let directory = config.directory.join("remote");
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("sock") {
+            continue;
+        }
+        if exclude.is_some_and(|excluded| excluded == path) {
+            continue;
+        }
+        let Ok(mut stream) = connect_local(&path) else {
+            continue;
+        };
+        let _ = stream.set_write_timeout(Some(DAEMON_CONTROL_TIMEOUT));
+        let _ = stream.write_all(command.as_bytes());
+        let _ = stream.write_all(b"\n");
+        let _ = stream.flush();
+    }
 }
 
 pub fn request_remote_passkey_enrollment(workspace: &Path) -> Result<String> {
@@ -925,6 +1125,7 @@ impl RemoteDaemonControl {
         workspace: &Path,
         address: SocketAddr,
         auth: Arc<RemoteAuthRuntime>,
+        legacy_tui: bool,
     ) -> Result<Self> {
         let paths = RemoteDaemonPaths::new(workspace)?;
         if paths.socket.exists() {
@@ -966,6 +1167,14 @@ impl RemoteDaemonControl {
                                     let _ = writeln!(stream, "{value}");
                                     let _ = stream.flush();
                                 }
+                                "frontend" => {
+                                    let _ = writeln!(
+                                        stream,
+                                        "{}",
+                                        if legacy_tui { "legacy-tui" } else { "webui" }
+                                    );
+                                    let _ = stream.flush();
+                                }
                                 "stop" => {
                                     thread_stop.store(true, Ordering::Release);
                                     let _ = stream.write_all(b"stopping\n");
@@ -973,6 +1182,17 @@ impl RemoteDaemonControl {
                                 }
                                 "auth-reload" => {
                                     match auth.reload_document() {
+                                        Ok(()) => {
+                                            let _ = stream.write_all(b"ok\n");
+                                        }
+                                        Err(error) => {
+                                            let _ = writeln!(stream, "error:{error}");
+                                        }
+                                    }
+                                    let _ = stream.flush();
+                                }
+                                "auth-refresh" => {
+                                    match auth.refresh_document() {
                                         Ok(()) => {
                                             let _ = stream.write_all(b"ok\n");
                                         }
@@ -1135,20 +1355,26 @@ impl RemoteServer {
             (None, None) => RemoteAuthRuntime::disabled(),
             (Some(_), Some(_)) => unreachable!("workspace and test auth document are exclusive"),
         });
+        let semantic_workspace = workspace
+            .map(Path::to_path_buf)
+            .unwrap_or(std::env::current_dir()?);
         let (input_tx, input_rx) = mpsc::channel();
         let frame = Arc::new(Mutex::new(FrameSnapshot::new(options.cols, options.rows)));
         let running = Arc::new(AtomicBool::new(true));
         let server_frame = Arc::clone(&frame);
         let server_running = Arc::clone(&running);
         let server_auth = Arc::clone(&auth);
+        let legacy_tui = options.legacy_tui;
         let thread = thread::Builder::new()
             .name("yeet-remote-http".into())
             .spawn(move || {
-                serve(
+                server::serve(
                     listener,
                     input_tx,
                     server_frame,
                     server_auth,
+                    semantic_workspace,
+                    legacy_tui,
                     server_running,
                 )
             })
@@ -1205,52 +1431,6 @@ impl Drop for RemoteServer {
     }
 }
 
-fn serve(
-    listener: TcpListener,
-    input_tx: Sender<RemoteInput>,
-    frame: Arc<Mutex<FrameSnapshot>>,
-    auth: Arc<RemoteAuthRuntime>,
-    running: Arc<AtomicBool>,
-) {
-    while running.load(Ordering::Acquire) {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                let _ = handle_connection(&mut stream, &input_tx, &frame, &auth);
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(8));
-            }
-            Err(_) => thread::sleep(Duration::from_millis(20)),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct HttpRequest {
-    method: String,
-    target: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
-impl HttpRequest {
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-    }
-}
-
-fn request_cookie<'a>(request: &'a HttpRequest, name: &str) -> Option<&'a str> {
-    request.header("cookie")?.split(';').find_map(|pair| {
-        let (candidate, value) = pair.trim().split_once('=')?;
-        (candidate == name).then_some(value)
-    })
-}
-
 #[derive(Debug, Deserialize)]
 struct KeyLoginRequest {
     key: String,
@@ -1271,306 +1451,8 @@ struct RegistrationFinishRequest {
 struct AuthenticationFinishRequest {
     transaction: String,
     credential: PublicKeyCredential,
-}
-
-fn handle_connection(
-    stream: &mut TcpStream,
-    input_tx: &Sender<RemoteInput>,
-    frame: &Arc<Mutex<FrameSnapshot>>,
-    auth: &RemoteAuthRuntime,
-) -> io::Result<()> {
-    let request = match read_request(stream) {
-        Ok(request) => request,
-        Err(error) => {
-            let _ = respond(
-                stream,
-                400,
-                "text/plain; charset=utf-8",
-                error.to_string().as_bytes(),
-            );
-            return Ok(());
-        }
-    };
-    let path = request.target.split('?').next().unwrap_or(&request.target);
-
-    match (request.method.as_str(), path) {
-        ("GET", "/") | ("GET", "/index.html") | ("GET", "/enroll") => respond(
-            stream,
-            200,
-            "text/html; charset=utf-8",
-            REMOTE_PAGE.as_bytes(),
-        ),
-        ("GET", "/favicon.ico") => respond(stream, 204, "image/x-icon", &[]),
-        ("GET", "/api/auth/status") => {
-            let (key_enabled, passkey_enabled) = auth.methods();
-            let enrollment_valid = query_value(&request.target, "enroll")
-                .is_some_and(|token| auth.enrollment_valid(token));
-            respond_json(
-                stream,
-                200,
-                &json!({
-                    "required": auth.required(),
-                    "authenticated": auth.is_authorized(&request),
-                    "key": key_enabled,
-                    "passkey": passkey_enabled,
-                    "enrollmentValid": enrollment_valid,
-                }),
-                &[],
-            )
-        }
-        ("POST", "/api/auth/key") => {
-            let body: KeyLoginRequest = match serde_json::from_slice(&request.body) {
-                Ok(value) => value,
-                Err(error) => return respond_json_error(stream, 400, &error.to_string()),
-            };
-            match auth.verify_access_key(&body.key) {
-                Ok(Some(session)) => respond_json(
-                    stream,
-                    200,
-                    &json!({"ok": true}),
-                    &[("Set-Cookie", auth.session_cookie(&session))],
-                ),
-                Ok(None) => respond_json_error(stream, 401, "invalid access key"),
-                Err(error) => respond_json_error(stream, 500, &error.to_string()),
-            }
-        }
-        ("POST", "/api/auth/passkey/begin") => match auth.begin_passkey_authentication() {
-            Ok(challenge) => respond_json(stream, 200, &challenge, &[]),
-            Err(error) => respond_json_error(stream, 400, &error.to_string()),
-        },
-        ("POST", "/api/auth/passkey/finish") => {
-            let body: AuthenticationFinishRequest = match serde_json::from_slice(&request.body) {
-                Ok(value) => value,
-                Err(error) => return respond_json_error(stream, 400, &error.to_string()),
-            };
-            match auth.finish_passkey_authentication(&body.transaction, &body.credential) {
-                Ok(session) => respond_json(
-                    stream,
-                    200,
-                    &json!({"ok": true}),
-                    &[("Set-Cookie", auth.session_cookie(&session))],
-                ),
-                Err(error) => respond_json_error(stream, 401, &error.to_string()),
-            }
-        }
-        ("POST", "/api/auth/passkey/register/begin") => {
-            let body: EnrollmentBeginRequest = match serde_json::from_slice(&request.body) {
-                Ok(value) => value,
-                Err(error) => return respond_json_error(stream, 400, &error.to_string()),
-            };
-            match auth.begin_passkey_registration(&body.token) {
-                Ok(challenge) => respond_json(stream, 200, &challenge, &[]),
-                Err(error) => respond_json_error(stream, 401, &error.to_string()),
-            }
-        }
-        ("POST", "/api/auth/passkey/register/finish") => {
-            let body: RegistrationFinishRequest = match serde_json::from_slice(&request.body) {
-                Ok(value) => value,
-                Err(error) => return respond_json_error(stream, 400, &error.to_string()),
-            };
-            match auth.finish_passkey_registration(&body.transaction, &body.credential) {
-                Ok(session) => respond_json(
-                    stream,
-                    200,
-                    &json!({"ok": true}),
-                    &[("Set-Cookie", auth.session_cookie(&session))],
-                ),
-                Err(error) => respond_json_error(stream, 401, &error.to_string()),
-            }
-        }
-        ("GET", "/api/frame") => {
-            if !auth.is_authorized(&request) {
-                return respond_json_error(stream, 401, "authentication required");
-            }
-            let after = query_value(&request.target, "after").and_then(|value| value.parse().ok());
-            let snapshot = frame.lock().ok().map(|value| value.clone());
-            let Some(snapshot) = snapshot else {
-                return respond(
-                    stream,
-                    503,
-                    "text/plain; charset=utf-8",
-                    b"frame unavailable",
-                );
-            };
-            if after == Some(snapshot.sequence) {
-                return respond(stream, 204, "application/json", &[]);
-            }
-            let body = serde_json::to_vec(&json!({
-                "sequence": snapshot.sequence,
-                "width": snapshot.width,
-                "height": snapshot.height,
-                "html": snapshot.html,
-            }))
-            .unwrap_or_default();
-            respond(stream, 200, "application/json; charset=utf-8", &body)
-        }
-        ("POST", "/api/input") => {
-            if !auth.is_authorized(&request) {
-                return respond_json_error(stream, 401, "authentication required");
-            }
-            if request.header("x-yeet-remote") != Some("1") {
-                return respond(stream, 403, "text/plain; charset=utf-8", b"forbidden");
-            }
-            let wire: WireInput = match serde_json::from_slice(&request.body) {
-                Ok(value) => value,
-                Err(error) => {
-                    return respond(
-                        stream,
-                        400,
-                        "text/plain; charset=utf-8",
-                        error.to_string().as_bytes(),
-                    );
-                }
-            };
-            if let Some(input) = wire.into_remote_input() {
-                let _ = input_tx.send(input);
-            }
-            respond(stream, 204, "application/json", &[])
-        }
-        _ => respond(stream, 404, "text/plain; charset=utf-8", b"not found"),
-    }
-}
-
-fn read_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
-    let mut bytes = Vec::with_capacity(4096);
-    let mut chunk = [0_u8; 4096];
-    let header_end = loop {
-        if bytes.len() > MAX_REQUEST_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "request too large",
-            ));
-        }
-        if let Some(position) = find_bytes(&bytes, b"\r\n\r\n") {
-            break position + 4;
-        }
-        let read = stream.read(&mut chunk)?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "incomplete HTTP request",
-            ));
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-    };
-
-    let header_text = std::str::from_utf8(&bytes[..header_end - 4])
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid HTTP headers"))?;
-    let mut lines = header_text.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request line"))?;
-    let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next().unwrap_or_default().to_owned();
-    let target = request_parts.next().unwrap_or_default().to_owned();
-    if method.is_empty() || target.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid request line",
-        ));
-    }
-
-    let headers = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
-        .collect::<Vec<_>>();
-    let content_length = headers
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, value)| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    if header_end + content_length > MAX_REQUEST_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "request too large",
-        ));
-    }
-    while bytes.len() < header_end + content_length {
-        let read = stream.read(&mut chunk)?;
-        if read == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "incomplete HTTP body",
-            ));
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-    }
-    let body = bytes[header_end..header_end + content_length].to_vec();
-
-    Ok(HttpRequest {
-        method,
-        target,
-        headers,
-        body,
-    })
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-fn query_value<'a>(target: &'a str, key: &str) -> Option<&'a str> {
-    target.split_once('?')?.1.split('&').find_map(|pair| {
-        let (candidate, value) = pair.split_once('=')?;
-        (candidate == key).then_some(value)
-    })
-}
-
-fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) -> io::Result<()> {
-    respond_with_headers(stream, status, content_type, body, &[])
-}
-
-fn respond_json(
-    stream: &mut TcpStream,
-    status: u16,
-    value: &serde_json::Value,
-    headers: &[(&str, String)],
-) -> io::Result<()> {
-    let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
-    respond_with_headers(
-        stream,
-        status,
-        "application/json; charset=utf-8",
-        &body,
-        headers,
-    )
-}
-
-fn respond_json_error(stream: &mut TcpStream, status: u16, message: &str) -> io::Result<()> {
-    respond_json(stream, status, &json!({"error": message}), &[])
-}
-
-fn respond_with_headers(
-    stream: &mut TcpStream,
-    status: u16,
-    content_type: &str,
-    body: &[u8],
-    extra_headers: &[(&str, String)],
-) -> io::Result<()> {
-    let reason = match status {
-        200 => "OK",
-        204 => "No Content",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        503 => "Service Unavailable",
-        _ => "OK",
-    };
-    write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; connect-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'\r\n",
-        body.len()
-    )?;
-    for (name, value) in extra_headers {
-        write!(stream, "{name}: {value}\r\n")?;
-    }
-    stream.write_all(b"Connection: close\r\n\r\n")?;
-    stream.write_all(body)?;
-    stream.flush()
+    #[serde(default)]
+    enrollment_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1671,8 +1553,6 @@ fn browser_key_code(key: &str, shift: bool) -> Option<KeyCode> {
     Some(code)
 }
 
-const REMOTE_PAGE: &str = include_str!("remote/page.html");
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1681,6 +1561,7 @@ mod tests {
         layout::Rect,
         style::{Color, Style},
     };
+    use std::net::TcpStream;
 
     #[test]
     fn parses_remote_invocation_and_clamps_size() {
@@ -1694,6 +1575,14 @@ mod tests {
         let options = RemoteOptions::parse(&arguments).unwrap().unwrap();
         assert_eq!(options.bind, "127.0.0.1:9000");
         assert_eq!((options.cols, options.rows), (MAX_COLS, MIN_ROWS));
+        assert!(!options.legacy_tui);
+    }
+
+    #[test]
+    fn parses_legacy_remote_fallback_flag() {
+        let arguments = vec!["remote".into(), "--legacy-tui".into()];
+        let options = RemoteOptions::parse(&arguments).unwrap().unwrap();
+        assert!(options.legacy_tui);
     }
 
     #[test]
@@ -1719,6 +1608,7 @@ mod tests {
             rows: 24,
             origin: None,
             workspace: None,
+            legacy_tui: true,
         };
         let server = RemoteServer::start(&options).unwrap();
         let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
@@ -1782,6 +1672,7 @@ mod tests {
             rows: 24,
             origin: None,
             workspace: None,
+            legacy_tui: true,
         };
         let server = RemoteServer::start_with_auth_document(&options, document).unwrap();
         let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 24));
@@ -1806,7 +1697,10 @@ mod tests {
         assert!(login.starts_with("HTTP/1.1 200 OK"), "{login:?}");
         let cookie = login
             .lines()
-            .find_map(|line| line.strip_prefix("Set-Cookie: "))
+            .find_map(|line| {
+                let (name, value) = line.split_once(": ")?;
+                name.eq_ignore_ascii_case("set-cookie").then_some(value)
+            })
             .and_then(|value| value.split(';').next())
             .unwrap();
         let allowed = http_request(
@@ -1820,6 +1714,255 @@ mod tests {
     }
 
     #[test]
+    fn websocket_upgrade_rejects_unauthenticated_browser() {
+        let hash = hash_remote_access_key("secret").unwrap();
+        let document = RemoteAuthDocument {
+            key_hash: Some(hash),
+            ..RemoteAuthDocument::default()
+        };
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let server = RemoteServer::start_with_auth_document(&options, document).unwrap();
+        let response = http_request(
+            server.address(),
+            "GET /api/ws HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 401 Unauthorized"),
+            "{response:?}"
+        );
+    }
+
+    #[test]
+    fn websocket_upgrade_rejects_wrong_origin_after_authentication() {
+        let hash = hash_remote_access_key("secret").unwrap();
+        let document = RemoteAuthDocument {
+            key_hash: Some(hash),
+            ..RemoteAuthDocument::default()
+        };
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let server = RemoteServer::start_with_auth_document(&options, document).unwrap();
+        let body = r#"{"key":"secret"}"#;
+        let login = http_request(
+            server.address(),
+            &format!(
+                "POST /api/auth/key HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+        let cookie = login
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(": ")?;
+                name.eq_ignore_ascii_case("set-cookie").then_some(value)
+            })
+            .and_then(|value| value.split(';').next())
+            .unwrap();
+        let response = http_request(
+            server.address(),
+            &format!(
+                "GET /api/ws HTTP/1.1\r\nHost: localhost\r\nOrigin: https://evil.example\r\nCookie: {cookie}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403 Forbidden"),
+            "{response:?}"
+        );
+    }
+
+    #[test]
+    fn browser_auth_post_rejects_cross_origin_request() {
+        let hash = hash_remote_access_key("secret").unwrap();
+        let document = RemoteAuthDocument {
+            key_hash: Some(hash),
+            ..RemoteAuthDocument::default()
+        };
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let server = RemoteServer::start_with_auth_document(&options, document).unwrap();
+        let body = r#"{"key":"secret"}"#;
+        let response = http_request(
+            server.address(),
+            &format!(
+                "POST /api/auth/key HTTP/1.1\r\nHost: localhost\r\nOrigin: https://evil.example\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 403 Forbidden"),
+            "{response:?}"
+        );
+    }
+
+    #[test]
+    fn https_auth_cookie_is_http_only_strict_and_secure() {
+        let hash = hash_remote_access_key("correct horse battery").unwrap();
+        let document = RemoteAuthDocument {
+            key_hash: Some(hash),
+            ..RemoteAuthDocument::default()
+        };
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: Some("https://remote.example.test".into()),
+            workspace: None,
+            legacy_tui: false,
+        };
+        let auth = RemoteAuthRuntime::from_document(
+            PathBuf::new(),
+            document,
+            &options,
+            "127.0.0.1:17331".parse().unwrap(),
+        )
+        .unwrap();
+        let session = auth
+            .verify_access_key("correct horse battery")
+            .unwrap()
+            .unwrap();
+        let cookie = auth.session_cookie(&session);
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+        assert!(cookie.contains("Secure"));
+        assert!(cookie.contains("Path=/"));
+    }
+
+    #[test]
+    fn remote_auth_cookie_is_not_workspace_scoped() {
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: Some("https://remote.example.test".into()),
+            workspace: None,
+            legacy_tui: false,
+        };
+        let left = RemoteAuthRuntime::from_document(
+            PathBuf::from("/tmp/remote-workspace-a"),
+            RemoteAuthDocument::default(),
+            &options,
+            "127.0.0.1:17331".parse().unwrap(),
+        )
+        .unwrap();
+        let right = RemoteAuthRuntime::from_document(
+            PathBuf::from("/tmp/remote-workspace-b"),
+            RemoteAuthDocument::default(),
+            &options,
+            "127.0.0.1:17332".parse().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(left.cookie_name, "yeet_remote_session");
+        assert_eq!(right.cookie_name, left.cookie_name);
+    }
+
+    #[test]
+    fn expired_auth_session_is_rejected() {
+        let hash = hash_remote_access_key("expiry-test-key").unwrap();
+        let document = RemoteAuthDocument {
+            key_hash: Some(hash),
+            ..RemoteAuthDocument::default()
+        };
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let auth = RemoteAuthRuntime::from_document(
+            PathBuf::new(),
+            document,
+            &options,
+            "127.0.0.1:17331".parse().unwrap(),
+        )
+        .unwrap();
+        let session = auth.verify_access_key("expiry-test-key").unwrap().unwrap();
+        auth.state
+            .lock()
+            .unwrap()
+            .sessions
+            .insert(session.clone(), unix_time());
+        let cookie = format!("{}={session}", auth.cookie_name);
+        assert!(!auth.is_authorized_cookie_header(Some(&cookie)));
+        assert!(!auth.state.lock().unwrap().sessions.contains_key(&session));
+    }
+
+    #[test]
+    fn remote_server_shutdown_does_not_wait_for_open_websocket() {
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let server = RemoteServer::start(&options).unwrap();
+        let address = server.address();
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let request = format!(
+            "GET /api/ws HTTP/1.1\r\nHost: localhost:{}\r\nOrigin: http://localhost:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: yeet.remote.v1\r\n\r\n",
+            address.port(),
+            address.port()
+        );
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        while !String::from_utf8_lossy(&response).contains("\r\n\r\n") {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => response.extend_from_slice(&chunk[..count]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("read WebSocket upgrade response: {error}"),
+            }
+        }
+        let response = String::from_utf8_lossy(&response);
+        assert!(
+            response.starts_with("HTTP/1.1 101 Switching Protocols"),
+            "{response}"
+        );
+
+        let started = std::time::Instant::now();
+        drop(server);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "RemoteServer shutdown waited for an upgraded browser socket"
+        );
+    }
+
+    #[test]
     fn passkey_enrollment_issues_real_webauthn_challenge() {
         let options = RemoteOptions {
             bind: "127.0.0.1:0".into(),
@@ -1827,6 +1970,7 @@ mod tests {
             rows: 24,
             origin: None,
             workspace: None,
+            legacy_tui: false,
         };
         let auth = RemoteAuthRuntime::from_document(
             PathBuf::new(),
@@ -1837,13 +1981,8 @@ mod tests {
         .unwrap();
         let url = auth.issue_enrollment().unwrap();
         assert!(auth.required());
-        let unauthenticated = HttpRequest {
-            method: "GET".into(),
-            target: "/api/frame".into(),
-            headers: Vec::new(),
-            body: Vec::new(),
-        };
-        assert!(!auth.is_authorized(&unauthenticated));
+        let unauthenticated = axum::http::HeaderMap::new();
+        assert!(!auth.is_authorized_headers(&unauthenticated));
         let token = url.split("token=").nth(1).unwrap();
         let challenge = auth.begin_passkey_registration(token).unwrap();
         assert!(challenge["transaction"].as_str().is_some());
@@ -1856,6 +1995,37 @@ mod tests {
     }
 
     #[test]
+    fn expired_passkey_enrollment_is_rejected_and_pruned() {
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let auth = RemoteAuthRuntime::from_document(
+            PathBuf::new(),
+            RemoteAuthDocument::default(),
+            &options,
+            "127.0.0.1:17331".parse().unwrap(),
+        )
+        .unwrap();
+        let url = auth.issue_enrollment().unwrap();
+        let token = url.split("token=").nth(1).unwrap().to_owned();
+        auth.state
+            .lock()
+            .unwrap()
+            .enrollments
+            .insert(token.clone(), unix_time());
+
+        assert!(!auth.enrollment_valid(&token));
+        assert!(auth.begin_passkey_registration(&token).is_err());
+        assert!(!auth.required());
+        assert!(!auth.state.lock().unwrap().enrollments.contains_key(&token));
+    }
+
+    #[test]
     fn passkey_origin_supports_https_reverse_proxy_host() {
         let options = RemoteOptions {
             bind: "127.0.0.1:0".into(),
@@ -1863,6 +2033,7 @@ mod tests {
             rows: 24,
             origin: Some("https://remote.example.test".into()),
             workspace: None,
+            legacy_tui: false,
         };
         let auth = RemoteAuthRuntime::from_document(
             PathBuf::new(),
@@ -1889,6 +2060,7 @@ mod tests {
             rows: 24,
             origin: Some("http://remote.example.test".into()),
             workspace: None,
+            legacy_tui: false,
         };
         assert!(
             RemoteAuthRuntime::from_document(
@@ -1903,8 +2075,14 @@ mod tests {
 
     fn http_request(address: SocketAddr, request: &str) -> String {
         let mut stream = TcpStream::connect(address).unwrap();
+        // Access-key tests exercise production Argon2 parameters. Under a full
+        // parallel test run that can legitimately take longer than one second,
+        // so the client timeout must not turn CPU contention into an empty HTTP
+        // response and a false server failure.
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         stream.write_all(request.as_bytes()).unwrap();
-        stream.shutdown(std::net::Shutdown::Write).unwrap();
         let mut response = Vec::new();
         let mut chunk = [0_u8; 4096];
         loop {
@@ -1912,6 +2090,14 @@ mod tests {
                 Ok(0) => break,
                 Ok(count) => response.extend_from_slice(&chunk[..count]),
                 Err(error) if error.kind() == io::ErrorKind::ConnectionReset => break,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
                 Err(error) => panic!("read test HTTP response: {error}"),
             }
         }

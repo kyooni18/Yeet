@@ -8,6 +8,7 @@ use super::*;
 impl ToolRegistry {
     /// Reads one bounded file range or dispatches a small batch of independent reads.
     pub(super) fn read_file(&mut self, object: &Map<String, Value>) -> Result<String> {
+        self.sync_edit_state();
         if object.contains_key("requests") {
             if object.contains_key("path")
                 || object.contains_key("startLine")
@@ -21,6 +22,7 @@ impl ToolRegistry {
 
         let path = string_arg(object, "path")?.to_owned();
         self.ensure_file_scope(&path, false)?;
+        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
         let unsafe_access =
             SandboxStore::new(&self.workspace_root)?.load()?.mode == SandboxMode::Unlimited;
         let requested_start = usize_arg(object, "startLine").unwrap_or(1).max(1);
@@ -44,27 +46,54 @@ impl ToolRegistry {
         } else {
             DEFAULT_INLINE_BYTES
         };
-        let cached_before = self.read_cache.get(&path).cloned().unwrap_or_default();
+        let cached_before = self
+            .read_cache
+            .get(&cache_path)
+            .cloned()
+            .unwrap_or_default();
         let cached_total = cached_before.first().map(|entry| entry.total);
         let bounded_end = cached_total.map_or(requested_end, |total| requested_end.min(total));
         let covered_before = covered_ranges_within(&cached_before, requested_start, bounded_end);
 
         if refresh {
-            let read = self.edit.read(
+            let mut read = self.edit_mut()?.read(
                 &path,
                 Some(requested_start),
                 Some(requested_end),
                 unsafe_access,
             )?;
+            self.sync_edit_state();
+            read.path = cache_path.clone();
+            let refreshed_snapshot = read.snapshot.clone();
+            let refreshed_total = read.total_lines;
+            let actual_end = requested_end.min(refreshed_total);
+            let unchanged_and_covered = refresh_matches_cached_coverage(
+                &cached_before,
+                &refreshed_snapshot,
+                requested_start,
+                actual_end,
+            );
             let entry = cache_read_result(&mut self.read_cache, read.clone());
             let payload = self.read_payload(&entry, true)?;
+            if unchanged_and_covered {
+                let avoided_bytes = payload.to_string().len();
+                let mut duplicate =
+                    self.duplicate_read_payload(&cache_path, requested_start, actual_end);
+                if let Value::Object(object) = &mut duplicate {
+                    object.insert("refreshVerified".into(), json!(true));
+                    object.insert("snapshot".into(), json!(refreshed_snapshot));
+                    object.insert("duplicateReadBytesAvoided".into(), json!(avoided_bytes));
+                    object.insert("hint".into(), json!("Refresh verified the file snapshot is unchanged and this range was already returned. Reuse the earlier anchored source; no source text is repeated."));
+                }
+                return Ok(duplicate.to_string());
+            }
             return self.externalize_if_large(payload, threshold, Some(&read));
         }
 
         let missing = uncovered_ranges(requested_start, bounded_end, &covered_before);
         if missing.is_empty() {
             return Ok(self
-                .duplicate_read_payload(&path, requested_start, bounded_end)
+                .duplicate_read_payload(&cache_path, requested_start, bounded_end)
                 .to_string());
         }
 
@@ -77,15 +106,17 @@ impl ToolRegistry {
                 }
                 end = end.min(total);
             }
-            let read = self
-                .edit
+            let mut read = self
+                .edit_mut()?
                 .read(&path, Some(start), Some(end), unsafe_access)?;
+            self.sync_edit_state();
+            read.path = cache_path.clone();
             total = Some(read.total_lines);
             new_entries.push(cache_read_result(&mut self.read_cache, read));
         }
         if new_entries.is_empty() {
             return Ok(self
-                .duplicate_read_payload(&path, requested_start, bounded_end)
+                .duplicate_read_payload(&cache_path, requested_start, bounded_end)
                 .to_string());
         }
 
@@ -108,7 +139,11 @@ impl ToolRegistry {
             return self.externalize_if_large(payload, threshold, None);
         }
 
-        let entries = self.read_cache.get(&path).map(Vec::as_slice).unwrap_or(&[]);
+        let entries = self
+            .read_cache
+            .get(&cache_path)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let segments = new_entries
             .iter()
             .map(
@@ -116,7 +151,7 @@ impl ToolRegistry {
             )
             .collect::<Vec<_>>();
         let payload = json!({
-            "path": path,
+            "path": cache_path,
             "snapshot": new_entries.last().map(|entry| entry.snapshot.as_str()),
             "requestedStartLine": requested_start,
             "requestedEndLine": actual_requested_end,
@@ -164,18 +199,20 @@ impl ToolRegistry {
 
     /// Lists a bounded workspace subtree and suppresses exact replay requests.
     pub(super) fn list_files(&mut self, object: &Map<String, Value>) -> Result<String> {
-        let path = object.get("path").and_then(Value::as_str).unwrap_or(".");
+        let path = root_capable_workspace_path(object.get("path").and_then(Value::as_str));
         self.ensure_file_scope(path, false)?;
+        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, path)?;
         let max_results = usize_arg(object, "maxResults").unwrap_or(50).clamp(1, 500);
         let max_depth = usize_arg(object, "maxDepth").unwrap_or(2).min(12);
-        let key = format!("{path}:{max_results}:{max_depth}");
+        let key = format!("{cache_path}:{max_results}:{max_depth}");
         if !self.listings.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This directory listing was already returned. Reuse it or expand a different subtree."}).to_string());
         }
-        let result = self
-            .edit
-            .list_files((path != ".").then_some(path), max_results, max_depth)?;
-        self.externalize_if_large(serde_json::to_value(result)?, 24 * 1024, None)
+        let result =
+            self.edit_mut()?
+                .list_files((path != ".").then_some(path), max_results, max_depth)?;
+        self.sync_edit_state();
+        self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
     /// Searches workspace text with bounded results and duplicate-query suppression.
@@ -184,10 +221,9 @@ impl ToolRegistry {
         if query.is_empty() {
             bail!("search_workspace requires query");
         }
-        let path = object.get("path").and_then(Value::as_str);
-        if let Some(path) = path {
-            self.ensure_file_scope(path, false)?;
-        }
+        let path = root_capable_workspace_path(object.get("path").and_then(Value::as_str));
+        self.ensure_file_scope(path, false)?;
+        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, path)?;
         let max_results = usize_arg(object, "maxResults").unwrap_or(20).clamp(1, 100);
         let case_sensitive = object
             .get("caseSensitive")
@@ -199,7 +235,7 @@ impl ToolRegistry {
             .unwrap_or(false);
         let key = format!(
             "{}:{}:{}:{}",
-            path.unwrap_or("."),
+            cache_path,
             case_sensitive,
             regex,
             if case_sensitive {
@@ -211,10 +247,15 @@ impl ToolRegistry {
         if !self.searches.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This search was already returned. Reuse it or change query/path."}).to_string());
         }
-        let result = self
-            .edit
-            .search(query, path, max_results, case_sensitive, regex)?;
-        self.externalize_if_large(serde_json::to_value(result)?, 24 * 1024, None)
+        let result = self.edit_mut()?.search(
+            query,
+            (path != ".").then_some(path),
+            max_results,
+            case_sensitive,
+            regex,
+        )?;
+        self.sync_edit_state();
+        self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
     /// Executes one or more web searches concurrently and records discovered source URLs.
@@ -224,10 +265,10 @@ impl ToolRegistry {
         cancel: &AtomicBool,
     ) -> Result<String> {
         let queries = web_search_queries(object)?;
-        let requested_max_results = usize_arg(object, "maxResults").unwrap_or(6);
-        // Keep a batched search bounded by total evidence, not by each query.
-        // Three 10-result searches previously injected ~30 snippets into every
-        // later model request. Deep research can issue another targeted batch.
+        let requested_max_results = usize_arg(object, "maxResults").unwrap_or(4);
+        // Discovery snippets are only a source-selection surface. Bound the total
+        // result volume aggressively so each follow-up can reuse most of the prior
+        // prompt; primary evidence belongs in web_read artifacts.
         let max_results = effective_web_search_max_results(requested_max_results, queries.len());
         let language = object.get("language").and_then(Value::as_str);
         let category = object.get("category").and_then(Value::as_str);
@@ -313,7 +354,7 @@ impl ToolRegistry {
             json!({"searches":results})
         };
         collect_web_source_urls(&result, &mut self.web_sources);
-        self.externalize_if_large(result, 32 * 1024, None)
+        self.externalize_if_large(result, 16 * 1024, None)
     }
 
     /// Reads a full source page only when it was discovered by the current web search task.
@@ -336,8 +377,8 @@ impl ToolRegistry {
             return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse its prior preview/artifact evidence instead of reopening it."}).to_string());
         }
         let max_chars = usize_arg(object, "maxChars")
-            .unwrap_or(8_000)
-            .clamp(2_000, 12_000);
+            .unwrap_or(3_000)
+            .clamp(2_000, 4_000);
         // Fetch enough source text to preserve useful follow-up evidence, but
         // expose only a bounded preview to the model. Larger fetched text is
         // stored once as a session artifact instead of being replayed verbatim
@@ -399,7 +440,7 @@ impl ToolRegistry {
             document.metadata.clone(),
         )?;
         let max_chars = usize_arg(object, "maxChars")
-            .unwrap_or(16_000)
+            .unwrap_or(8_000)
             .clamp(1_000, 64_000);
         let total_chars = document.text.chars().count();
         let truncated = total_chars > max_chars;
@@ -429,7 +470,7 @@ impl ToolRegistry {
         payload.insert("path".into(), json!(path));
         payload.insert("artifactId".into(), json!(artifact));
         payload.insert("artifactKind".into(), json!("data-analysis"));
-        Ok(Value::Object(payload).to_string())
+        self.externalize_if_large(Value::Object(payload), 12 * 1024, None)
     }
 
     /// Resolves a user path relative to the active workspace when needed.
@@ -468,6 +509,10 @@ impl ToolRegistry {
         }
         let script = Path::new(&skill.root).join(relative);
         let mut command_parts = Vec::new();
+        command_parts.push(format!(
+            "YEET_WORKSPACE_ROOT={}",
+            shell_quote(self.workspace_root.to_string_lossy().as_ref())
+        ));
         match script
             .extension()
             .and_then(|value| value.to_str())
@@ -501,9 +546,29 @@ impl ToolRegistry {
     }
 }
 
+fn root_capable_workspace_path(path: Option<&str>) -> &str {
+    match path {
+        Some(path) if !path.trim().is_empty() => path,
+        _ => ".",
+    }
+}
+
+fn refresh_matches_cached_coverage(
+    entries: &[ReadCacheEntry],
+    snapshot: &str,
+    start: usize,
+    end: usize,
+) -> bool {
+    if !entries.iter().any(|entry| entry.snapshot == snapshot) {
+        return false;
+    }
+    let covered = covered_ranges_within(entries, start, end);
+    uncovered_ranges(start, end, &covered).is_empty()
+}
+
 fn effective_web_search_max_results(requested: usize, query_count: usize) -> usize {
     let requested = requested.clamp(1, 8);
-    let per_query_budget = (12 / query_count.max(1)).max(1);
+    let per_query_budget = (8 / query_count.max(1)).max(1);
     requested.min(per_query_budget)
 }
 
@@ -514,8 +579,48 @@ mod tests {
     #[test]
     fn batched_web_search_budget_caps_total_result_volume() {
         assert_eq!(effective_web_search_max_results(8, 1), 8);
-        assert_eq!(effective_web_search_max_results(8, 2), 6);
-        assert_eq!(effective_web_search_max_results(10, 3), 4);
-        assert_eq!(effective_web_search_max_results(8, 4), 3);
+        assert_eq!(effective_web_search_max_results(8, 2), 4);
+        assert_eq!(effective_web_search_max_results(10, 3), 2);
+        assert_eq!(effective_web_search_max_results(8, 4), 2);
+    }
+
+    #[test]
+    fn refresh_reuses_fully_covered_unchanged_snapshot_only() {
+        let entries = vec![
+            ReadCacheEntry {
+                path: "src/lib.rs".into(),
+                snapshot: "same".into(),
+                start: 1,
+                end: 80,
+                total: 120,
+                anchored: String::new(),
+            },
+            ReadCacheEntry {
+                path: "src/lib.rs".into(),
+                snapshot: "same".into(),
+                start: 81,
+                end: 120,
+                total: 120,
+                anchored: String::new(),
+            },
+        ];
+        assert!(refresh_matches_cached_coverage(&entries, "same", 20, 100));
+        assert!(!refresh_matches_cached_coverage(
+            &entries, "changed", 20, 100
+        ));
+        assert!(!refresh_matches_cached_coverage(
+            &entries[..1],
+            "same",
+            20,
+            100
+        ));
+    }
+
+    #[test]
+    fn root_capable_workspace_paths_normalize_empty_root_intent() {
+        assert_eq!(root_capable_workspace_path(None), ".");
+        assert_eq!(root_capable_workspace_path(Some("")), ".");
+        assert_eq!(root_capable_workspace_path(Some("   ")), ".");
+        assert_eq!(root_capable_workspace_path(Some("src")), "src");
     }
 }

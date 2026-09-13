@@ -1,8 +1,8 @@
-//! Ambient YEET frame rails layered over the main chat surface.
+//! Minimal terminal-native framing layered around the conversation surface.
 //!
-//! These are intentionally terminal-native rather than image effects.  The
-//! moving nodes make the entire app feel electrically alive while leaving the
-//! transcript and dialogs readable.
+//! The shell already carries navigation and task state, so chrome stays static
+//! and intentionally quiet.  This avoids repaint-only animation competing with
+//! transcript readability or input responsiveness.
 
 use super::{responsive, theme};
 use crate::app::{App, Mode};
@@ -21,70 +21,20 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         return;
     }
     let adaptive = responsive::metrics(area);
-    if matches!(
+    if !matches!(
         adaptive.shape,
-        responsive::Shape::Portrait | responsive::Shape::Tiny
+        responsive::Shape::Wide | responsive::Shape::UltraWide
     ) {
         return;
     }
 
-    let tick = theme::animation_tick();
-    let left = area.x;
-    let right = area.right().saturating_sub(1);
-    let top = area.y + 1;
-    let bottom = area.bottom().saturating_sub(2);
-    let travel = bottom.saturating_sub(top).max(1);
-    let hot_left = top + ((tick as u16 / 2) % travel);
-    let hot_right = bottom.saturating_sub((tick as u16 / 3) % travel);
-    let buffer = frame.buffer_mut();
-
-    for y in top..=bottom {
-        let phase = ((y - top) as usize + tick / 7) % 4;
-        let rail = match phase {
-            0 => "╎",
-            1 => "┊",
-            2 => "╏",
-            _ => "┊",
-        };
-        paint(buffer, left, y, rail, theme::BORDER);
-        paint(buffer, right, y, rail, theme::BORDER);
-    }
-
-    paint(buffer, left, hot_left, "◆", theme::ACCENT_HOT);
-    paint(buffer, right, hot_right, "◆", theme::ACCENT_HOT);
-
-    let upper = if tick % 12 < 6 { "╥" } else { "╫" };
-    let lower = if tick % 12 < 6 { "╨" } else { "╫" };
-    paint(buffer, left, area.y, upper, theme::ACCENT);
-    paint(buffer, right, area.y, upper, theme::ACCENT);
-    paint(
-        buffer,
-        left,
-        area.bottom().saturating_sub(1),
-        lower,
-        theme::ACCENT,
-    );
-    paint(
-        buffer,
-        right,
-        area.bottom().saturating_sub(1),
-        lower,
-        theme::ACCENT,
-    );
-
-    if matches!(
-        adaptive.shape,
-        responsive::Shape::Wide | responsive::Shape::UltraWide
-    ) {
-        draw_inner_bus(buffer, area, adaptive, tick);
-    }
+    draw_content_guides(frame.buffer_mut(), area, adaptive);
 }
 
-fn draw_inner_bus(
+fn draw_content_guides(
     buffer: &mut ratatui::buffer::Buffer,
     area: ratatui::layout::Rect,
     adaptive: responsive::Metrics,
-    tick: usize,
 ) {
     let sidebar = adaptive.sidebar_width.unwrap_or(0);
     let body_x = area.x.saturating_add(sidebar);
@@ -111,21 +61,40 @@ fn draw_inner_bus(
     if bottom <= top {
         return;
     }
-    let travel = bottom.saturating_sub(top).max(1);
-    let hot = top + ((tick as u16 / 4) % travel);
     for y in top..bottom {
-        let symbol = if (usize::from(y - top) + tick / 8) % 5 == 0 {
-            "┇"
-        } else {
-            "╎"
-        };
-        paint(buffer, left, y, symbol, theme::BORDER_DIM);
-        paint(buffer, right, y, symbol, theme::BORDER_DIM);
+        paint(buffer, left, y, "│", theme::BORDER_DIM);
+        paint(buffer, right, y, "│", theme::BORDER_DIM);
     }
-    paint(buffer, left, hot, "◈", theme::ACCENT);
-    paint(buffer, right, hot, "◈", theme::ACCENT);
 }
 
 fn paint(buffer: &mut ratatui::buffer::Buffer, x: u16, y: u16, symbol: &str, color: Color) {
     buffer[(x, y)].set_symbol(symbol).set_fg(color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    #[test]
+    fn content_guides_are_static_and_stay_outside_content() {
+        let area = Rect::new(0, 0, 160, 30);
+        let metrics = responsive::metrics(area);
+        let mut buffer = Buffer::empty(area);
+
+        draw_content_guides(&mut buffer, area, metrics);
+
+        let sidebar = metrics.sidebar_width.unwrap_or(0);
+        let body_width = area.width - sidebar;
+        let available_width = body_width - metrics.horizontal_margin * 2;
+        let content_width = available_width.min(metrics.content_max_width);
+        let content_x = sidebar + metrics.horizontal_margin + (available_width - content_width) / 2;
+        let left = content_x - 2;
+        let right = content_x + content_width + 1;
+        let y = metrics.header_height + 1;
+
+        assert_eq!(buffer[(left, y)].symbol(), "│");
+        assert_eq!(buffer[(right, y)].symbol(), "│");
+        assert_eq!(buffer[(content_x, y)].symbol(), " ");
+    }
 }

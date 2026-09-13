@@ -78,6 +78,8 @@ function mergeUsage(lhs: Usage | undefined, rhs: Usage | undefined): Usage | und
     ["outputTokens", add(lhs.outputTokens, rhs.outputTokens)],
     ["totalTokens", add(lhs.totalTokens, rhs.totalTokens)],
     ["cachedInputTokens", add(lhs.cachedInputTokens, rhs.cachedInputTokens)],
+    ["cacheMeasuredInputTokens", add(lhs.cacheMeasuredInputTokens, rhs.cacheMeasuredInputTokens)],
+    ["cacheUnreportedInputTokens", add(lhs.cacheUnreportedInputTokens, rhs.cacheUnreportedInputTokens)],
     ["cacheWriteInputTokens", add(lhs.cacheWriteInputTokens, rhs.cacheWriteInputTokens)],
     ["reasoningTokens", add(lhs.reasoningTokens, rhs.reasoningTokens)],
     ["modelCalls", add(lhs.modelCalls, rhs.modelCalls)],

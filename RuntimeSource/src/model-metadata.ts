@@ -3,7 +3,10 @@ import { parseModelId, type FetchLike, type ModelInfo, type ModelPricing } from 
 const DEFAULT_MODELS_DEV_URL = "https://models.dev/api.json";
 
 const providerAliases: Readonly<Record<string, readonly string[]>> = {
+  "codex-cli": ["openai"],
   gemini: ["google"],
+  "gemini-web": ["gemini", "google"],
+  claude: ["anthropic"],
 };
 
 interface CatalogModel {

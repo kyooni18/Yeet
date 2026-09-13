@@ -1,19 +1,34 @@
+mod api;
 mod cache;
 mod context;
+mod coordinator_support;
 mod history;
+mod loop_budget;
 mod policy;
 mod progress;
 mod runaway;
+mod session;
 mod tool_discovery;
 mod tool_protocol;
 mod turn_state;
+use api::AgentTurnRequest;
+pub use api::{AgentEvent, AgentRunOutcome, AgentRunRequest};
 #[cfg(test)]
 use cache::mark_turn_cache_breakpoint;
 use cache::{advance_turn_cache_breakpoints, insert_turn_stable_overlays};
-use history::{
-    compact_completed_task_history, deduplicate_skill_instructions,
-    trim_completed_conversation_history,
+pub(crate) use coordinator_support::is_internal_coordinator_system_message;
+use coordinator_support::{
+    append_dynamic_turn_checkpoints, attached_harness_flags, attached_web_search_capability_result,
+    capability_guidance, check_cancel, configure_tool_access, explicit_skill_name,
+    render_matching_debate_memory, settle_interrupted_context_batch,
+    should_inherit_implementation_turn, supports_anthropic_deferred_tool_references,
+    supports_native_deferred_tools,
 };
+use history::{
+    compact_older_current_turn_tool_history, deduplicate_skill_instructions,
+    trim_completed_conversation_history_for_budget,
+};
+use loop_budget::{LoopBudget, LoopBudgetDecision};
 pub use policy::SYSTEM_INSTRUCTION;
 #[cfg(test)]
 use policy::{RESEARCH_SYSTEM_INSTRUCTION, is_research_evidence_tool, request_history_for_profile};
@@ -21,7 +36,8 @@ use policy::{
     ResearchBudget, TaskProfile, is_mutation_tool, looks_like_bounded_analysis,
     looks_like_bounded_explanation, looks_like_coding_request, looks_like_implementation_request,
     looks_like_planning_or_documentation, reasoning_provider_options,
-    request_history_for_profile_at, select_tools_for_profile, task_guidance, task_profile,
+    request_history_for_profile_at, select_tools_for_profile, should_preserve_web_tool_surface,
+    task_guidance, task_profile_with_history,
 };
 use progress::{
     classify_tool_error, content_fingerprint, is_inspection_tool, is_validation_tool_call,
@@ -35,25 +51,25 @@ use tool_protocol::{
     PartialToolCall, collect_tool_calls, looks_like_malformed_tool_call,
     normalize_tool_output_for_model, recover_text_tool_calls,
 };
-use turn_state::{completion_warning, rollover_handoff_message, summarize_tool_outcome};
+use turn_state::{
+    SessionExecutionProvenance, completion_warning, rollover_handoff_message,
+    summarize_tool_outcome,
+};
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
     core::{
-        BridgeClient, CallRequest, ImageAttachment, Message, MessageRole, StreamEvent, StreamPoll,
-        ToolCall, ToolDefinition, Usage,
+        BridgeClient, CallRequest, Message, MessageRole, StreamEvent, StreamPoll, ToolCall,
+        ToolDefinition,
     },
     tools::ToolRegistry,
     web_search::CAPABILITY_ID as WEB_SEARCH_CAPABILITY_ID,
@@ -64,69 +80,13 @@ const EMPTY_RESPONSE_REPAIR_LIMIT: usize = 1;
 const IMPLEMENTATION_REPAIR_LIMIT: usize = 1;
 const NO_PROGRESS_CORRECTION_THRESHOLD: usize = 1;
 const NO_PROGRESS_DECISION_THRESHOLD: usize = 2;
-const BOUNDED_EXPLANATION_INSPECTION_THRESHOLD: usize = 3;
-const ANALYSIS_INSPECTION_THRESHOLD: usize = 4;
-const IMPLEMENTATION_INSPECTION_CHECKPOINT: usize = 5;
+const IMPLEMENTATION_INSPECTION_CHECKPOINT: usize = 3;
 const COMPLETION_GATE_REPAIR_LIMIT: usize = 2;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentRunOutcome {
-    Completed,
-    CompletedUnverified { reason: String },
-}
-
-#[derive(Debug, Clone)]
-pub enum AgentEvent {
-    ModelAttemptStarted {
-        diagnostics: Value,
-    },
-    ModelAttemptFinished(Value, Option<Usage>),
-    Start,
-    ReasoningDelta(String),
-    ReasoningSummaryDelta(String),
-    TextDelta(String),
-    DiscardAssistantText(String),
-    ToolCallDelta {
-        index: usize,
-        id: Option<String>,
-        name: Option<String>,
-        arguments_delta: Option<String>,
-    },
-    ToolCall {
-        index: usize,
-        call: ToolCall,
-    },
-    ToolExecutionStarted(ToolCall),
-    ToolExecutionFinished {
-        call: ToolCall,
-        succeeded: bool,
-        result: String,
-    },
-    AuxiliaryUsage(Usage),
-    Finished {
-        reason: String,
-        usage: Option<Usage>,
-    },
-}
-
-pub struct AgentRunRequest<'a> {
-    pub input: &'a str,
-    pub images: Vec<ImageAttachment>,
-    pub model: &'a str,
-    pub reasoning_level: &'a str,
-    pub attached_capabilities: Option<Vec<String>>,
-    pub disabled_capabilities: Vec<String>,
-    pub cancel: Arc<AtomicBool>,
-}
-
-struct AgentTurnRequest<'a> {
-    input: &'a str,
-    images: Vec<ImageAttachment>,
-    model: &'a str,
-    reasoning_level: &'a str,
-    attached_capabilities: Option<Vec<String>>,
-    cancel: &'a AtomicBool,
-}
+const FORCED_FINALIZATION_REPAIR_LIMIT: usize = 1;
+const MODEL_ATTEMPT_TIMEOUT_MS: u64 = 15 * 60 * 1_000;
+const INFINITY_CONTINUATION_DELAY: Duration = Duration::from_secs(1);
+const INFINITY_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+const INFINITY_CONTINUATION_PROMPT: &str = "Continue the current task from the existing working state. Do not restart completed work. Keep making useful forward progress.";
 
 pub struct AgentCoordinator {
     bridge: BridgeClient,
@@ -135,6 +95,10 @@ pub struct AgentCoordinator {
     retained_debate_knowledge: Vec<crate::debate::RetainedDebateKnowledge>,
     context_key: String,
     context_memory: context::ContextMemory,
+    cache_continuity: cache::ContinuityTracker,
+    previous_turn_working_state: Option<String>,
+    attached_skills: HashSet<String>,
+    skill_instruction_history: HashSet<String>,
 }
 
 impl AgentCoordinator {
@@ -146,6 +110,10 @@ impl AgentCoordinator {
             retained_debate_knowledge: Vec::new(),
             context_key: Uuid::new_v4().to_string(),
             context_memory: context::ContextMemory::default(),
+            cache_continuity: cache::ContinuityTracker::default(),
+            previous_turn_working_state: None,
+            attached_skills: HashSet::new(),
+            skill_instruction_history: HashSet::new(),
         }
     }
 
@@ -163,9 +131,79 @@ impl AgentCoordinator {
             restored
         };
         self.context_memory = context::ContextMemory::default();
+        self.cache_continuity = cache::ContinuityTracker::default();
+        self.previous_turn_working_state = None;
+        let attached_skills = self.attached_skills.drain().collect::<Vec<_>>();
+        for skill in attached_skills {
+            self.registry.deactivate_skill(&skill);
+        }
         self.history = vec![Message::system(SYSTEM_INSTRUCTION)];
         self.history.extend(body);
+        self.skill_instruction_history = self
+            .history
+            .iter()
+            .filter_map(|message| message.content.as_deref())
+            .filter_map(|content| content.strip_prefix("Attached Skill: "))
+            .filter_map(|rest| rest.lines().next())
+            .map(str::to_owned)
+            .collect();
         self.context_key = Uuid::new_v4().to_string();
+    }
+
+    // Prompt-cache invariant: skill attachment history is append-only. Never edit or
+    // delete an earlier skill instruction; later state changes are appended as markers.
+    pub fn attach_skill_to_session(&mut self, name: &str) -> Result<()> {
+        if self.attached_skills.contains(name) {
+            return Ok(());
+        }
+        self.registry.enable_skill_attachment(name);
+        let activation = self.registry.activate_explicit_skill(name)?;
+        let parsed: Value = serde_json::from_str(&activation)?;
+        if self.skill_instruction_history.contains(name) {
+            self.history.push(Message::system(format!(
+                "Skill attachment state: {name} reattached. Resume following the previously attached Skill instruction for {name} from this session history. Keep all earlier history unchanged for prompt-cache continuity."
+            )));
+        } else if let Some(instructions) = parsed.get("instructions").and_then(Value::as_str) {
+            self.history.push(Message::system(format!(
+                "Attached Skill: {name}\n{instructions}\nThis Skill is attached to the current session. Follow it when relevant and use its support tools only as needed; normal sandbox/approval rules apply."
+            )));
+            self.skill_instruction_history.insert(name.to_owned());
+        }
+        self.attached_skills.insert(name.to_owned());
+        Ok(())
+    }
+
+    pub fn detach_skill_from_session(&mut self, name: &str) {
+        self.attached_skills.remove(name);
+        self.registry.deactivate_skill(name);
+        if self.skill_instruction_history.contains(name) {
+            self.history.push(Message::system(format!(
+                "Skill attachment state: {name} detached. From this point onward, do not treat the earlier attached Skill instruction for {name} as active unless the user explicitly invokes or reattaches it. Preserve and do not reinterpret any earlier history."
+            )));
+        }
+    }
+
+    fn sync_attached_skills(&mut self, attached: Option<&[String]>) -> Result<()> {
+        let requested = attached
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|value| value.strip_prefix("skill:"))
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect::<HashSet<_>>();
+        let stale = self
+            .attached_skills
+            .difference(&requested)
+            .cloned()
+            .collect::<Vec<_>>();
+        for skill in stale {
+            self.registry.deactivate_skill(&skill);
+        }
+        for skill in requested.difference(&self.attached_skills) {
+            let _ = self.registry.activate_explicit_skill(skill)?;
+        }
+        self.attached_skills = requested;
+        Ok(())
     }
 
     pub fn compact_model_history(&mut self) -> Result<(usize, usize)> {
@@ -173,6 +211,7 @@ impl AgentCoordinator {
         let before = self.history.len();
         self.context_memory.rollover(&mut self.history, None)?;
         self.context_key = self.context_memory.id().to_owned();
+        self.cache_continuity = cache::ContinuityTracker::default();
         Ok((before, self.history.len()))
     }
 
@@ -182,20 +221,6 @@ impl AgentCoordinator {
     ) {
         self.registry.set_protected_write_paths(paths);
     }
-
-    pub fn set_session_runtime(
-        &mut self,
-        store: crate::session_store::SessionStore,
-        active_session_id: Option<String>,
-    ) {
-        self.context_memory.bind(
-            active_session_id
-                .as_ref()
-                .map(|id| store.directory.join(id).join("context")),
-        );
-        self.registry.set_session_runtime(store, active_session_id);
-    }
-
     pub fn configure_foundation_memory(
         &mut self,
         enabled: bool,
@@ -212,6 +237,7 @@ impl AgentCoordinator {
     ) {
         self.retained_debate_knowledge = knowledge;
         self.context_key = Uuid::new_v4().to_string();
+        self.cache_continuity = cache::ContinuityTracker::default();
     }
 
     pub fn run<F>(&mut self, request: AgentRunRequest<'_>, mut emit: F) -> Result<AgentRunOutcome>
@@ -225,7 +251,9 @@ impl AgentCoordinator {
             reasoning_level,
             attached_capabilities,
             disabled_capabilities,
+            infinity_mode,
             cancel,
+            continuation: initial_continuation,
         } = request;
         self.context_memory.load(&mut self.history)?;
         settle_interrupted_context_batch(&mut self.history);
@@ -239,18 +267,99 @@ impl AgentCoordinator {
         let task_id = Uuid::new_v4().to_string();
         self.registry
             .set_disabled_capabilities(disabled_capabilities);
+        self.sync_attached_skills(attached_capabilities.as_deref())?;
         self.registry.attach_enabled_mcp_servers()?;
-        let result = self.run_turn(
-            AgentTurnRequest {
-                input,
-                images,
-                model,
-                reasoning_level,
-                attached_capabilities,
-                cancel: &cancel,
-            },
-            &mut emit,
-        );
+
+        let mut continuation = initial_continuation;
+        let mut infinity_epoch = 0u64;
+        let mut retry_attempt = 0u32;
+        let result = loop {
+            let attempt = self.run_turn(
+                AgentTurnRequest {
+                    input,
+                    images: if continuation {
+                        Vec::new()
+                    } else {
+                        images.clone()
+                    },
+                    model,
+                    reasoning_level,
+                    attached_capabilities: attached_capabilities.clone(),
+                    cancel: &cancel,
+                    continuation,
+                },
+                &mut emit,
+            );
+
+            match attempt {
+                Ok(outcome) => {
+                    if !infinity_mode.load(Ordering::Acquire) || cancel.load(Ordering::Acquire) {
+                        break Ok(outcome);
+                    }
+                    infinity_epoch = infinity_epoch.saturating_add(1);
+                    retry_attempt = 0;
+                    let reason = match &outcome {
+                        AgentRunOutcome::Completed => {
+                            "model completed the current Infinity epoch".to_owned()
+                        }
+                        AgentRunOutcome::CompletedUnverified { reason } => {
+                            format!(
+                                "current Infinity epoch completed without verification: {reason}"
+                            )
+                        }
+                    };
+                    emit(AgentEvent::InfinityCheckpoint {
+                        epoch: infinity_epoch,
+                        reason,
+                    });
+                    let _ = self.context_memory.sync(&self.history);
+                    let _ = self.context_memory.flush();
+                    continuation = true;
+                    if !wait_for_infinity(&cancel, &infinity_mode, INFINITY_CONTINUATION_DELAY) {
+                        if cancel.load(Ordering::Acquire) {
+                            break Err(anyhow!("cancelled"));
+                        }
+                        break Ok(outcome);
+                    }
+                }
+                Err(error) => {
+                    if cancel.load(Ordering::Acquire) {
+                        break Err(error);
+                    }
+                    if !infinity_mode.load(Ordering::Acquire) {
+                        break Err(error);
+                    }
+                    let message = error.to_string();
+                    if !retryable_infinity_error(&message) {
+                        infinity_mode.store(false, Ordering::Release);
+                        break Err(error);
+                    }
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    if bridge_transport_error(&message) {
+                        let _ = self
+                            .bridge
+                            .restart()
+                            .and_then(|_| self.registry.attach_enabled_mcp_servers());
+                    }
+                    let delay = infinity_retry_delay(retry_attempt);
+                    emit(AgentEvent::InfinityRetry {
+                        attempt: retry_attempt,
+                        delay_ms: delay.as_millis().min(u128::from(u64::MAX)) as u64,
+                        error: message,
+                    });
+                    let _ = self.context_memory.sync(&self.history);
+                    let _ = self.context_memory.flush();
+                    continuation = true;
+                    if !wait_for_infinity(&cancel, &infinity_mode, delay) {
+                        if cancel.load(Ordering::Acquire) {
+                            break Err(anyhow!("cancelled"));
+                        }
+                        break Err(error);
+                    }
+                }
+            }
+        };
+        self.previous_turn_working_state = self.registry.working_state_summary();
         self.registry.finish_task(&task_id);
         settle_interrupted_context_batch(&mut self.history);
         self.context_memory.sync(&self.history)?;
@@ -273,9 +382,21 @@ impl AgentCoordinator {
             reasoning_level,
             attached_capabilities,
             cancel,
+            continuation,
         } = request;
-        let current_request = Message::user_with_images(input, images);
+        self.history
+            .retain(|message| message.request_only != Some(true));
+        let current_request = if continuation {
+            Message::user(INFINITY_CONTINUATION_PROMPT).request_only()
+        } else {
+            Message::user_with_images(input, images)
+        };
+        let request_input = current_request
+            .content
+            .clone()
+            .unwrap_or_else(|| input.to_owned());
         self.history.push(current_request.clone());
+        let mut explicitly_activated_tools = self.registry.skill_tools_for(&self.attached_skills);
         if let Some(skill_name) = explicit_skill_name(input) {
             let activation = self.registry.activate_explicit_skill(skill_name)?;
             let parsed: Value = serde_json::from_str(&activation)?;
@@ -284,13 +405,20 @@ impl AgentCoordinator {
                     "User-invoked Skill: {skill_name}\n{instructions}\nUse its attached support tools only as needed; normal sandbox/approval rules apply."
                 )));
             }
+            explicitly_activated_tools.extend(
+                parsed
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned),
+            );
         }
-        let vision_enabled = attached_capabilities
-            .as_ref()
-            .is_none_or(|values| values.iter().any(|value| value == "vision"));
-        let web_search_enabled = attached_capabilities
-            .as_ref()
-            .is_none_or(|values| values.iter().any(|value| value == WEB_SEARCH_CAPABILITY_ID));
+        explicitly_activated_tools.sort();
+        explicitly_activated_tools.dedup();
+        let (vision_enabled, web_search_enabled, web_search_explicitly_attached) =
+            attached_harness_flags(attached_capabilities.as_deref());
         let (foundation_memory, memory_error) = match self
             .registry
             .recall_foundation_memory(input, cancel)
@@ -307,11 +435,22 @@ impl AgentCoordinator {
             .registry
             .foundation_memory_guidance()
             .map(str::to_owned);
-        let profile = task_profile(input, web_search_enabled);
-        let implementation_requested = looks_like_implementation_request(input);
+        let profile = task_profile_with_history(input, web_search_enabled, &self.history);
+        let inherited_implementation = should_inherit_implementation_turn(input, &self.history);
+        let mut implementation_requested =
+            looks_like_implementation_request(input) || inherited_implementation;
         let planning_or_documentation = looks_like_planning_or_documentation(input);
         let bounded_explanation = looks_like_bounded_explanation(input);
         let bounded_analysis = bounded_explanation || looks_like_bounded_analysis(input);
+        let native_deferred_tools_supported = if model.starts_with("openai/") {
+            supports_native_deferred_tools(model)
+                && self.bridge.auth_status("openai").is_ok_and(|status| {
+                    status.authenticated
+                        && matches!(status.method.as_str(), "api-key" | "environment")
+                })
+        } else {
+            supports_native_deferred_tools(model)
+        };
         let mut research_budget = ResearchBudget::for_input(input);
         let task_guidance = task_guidance(input);
         let mut model_attempts = 0usize;
@@ -333,6 +472,7 @@ impl AgentCoordinator {
         let mut verification_succeeded = false;
         let mut last_validation_evidence: Option<String> = None;
         let mut recent_execution_evidence = Vec::new();
+        let mut session_provenance = SessionExecutionProvenance::default();
         let mut call_counts: HashMap<String, usize> = HashMap::new();
         let mut workspace_generation = self.registry.workspace_generation();
         let mut workspace_write_generation = self.registry.workspace_write_generation();
@@ -340,20 +480,57 @@ impl AgentCoordinator {
             TaskProfile::Agent if implementation_requested || looks_like_coding_request(input) => {
                 tool_discovery::ToolDiscovery::coding(implementation_requested)
             }
-            TaskProfile::Agent => tool_discovery::ToolDiscovery::default(),
+            TaskProfile::Agent => tool_discovery::ToolDiscovery::agent(),
             TaskProfile::Research => tool_discovery::ToolDiscovery::research(),
         };
-        let mut cache_continuity = cache::ContinuityTracker::default();
+        if profile == TaskProfile::Agent
+            && (web_search_explicitly_attached
+                || should_preserve_web_tool_surface(input, &self.history))
+        {
+            tool_discovery.carry_web_research_surface();
+        }
+        if !explicitly_activated_tools.is_empty() {
+            tool_discovery.load(explicitly_activated_tools.iter().map(String::as_str));
+        }
+        let mut loop_budget = LoopBudget::default();
+        let mut research_stop_grace_used = false;
+        let mut analysis_stop_grace_used = false;
+        let mut forced_finalization_repairs = 0usize;
         let mut runaway_detector = RunawayDetector::default();
         let mut runaway_finalization = false;
         let mut runaway_finalization_repairs = 0usize;
+        let mut last_provenance_checkpoint: Option<String> = None;
         let (workspace_root, workspace_revision) = self.registry.workspace_identity();
         self.context_memory.policy =
             crate::project_settings::ProjectSettingsStore::new(&workspace_root)?
                 .load()?
                 .context;
         let mut turn_stable_overlays = Vec::new();
-        let mut orientation_notes_dirty = true;
+        let mut turn_context_orientation = self.context_memory.orientation();
+        let mut current_turn_compaction_end = None;
+        let padded_input = format!(" {} ", input.trim().to_ascii_lowercase());
+        let refers_to_previous_turn = inherited_implementation
+            || [
+                " it ",
+                " this ",
+                " that ",
+                " them ",
+                " those ",
+                " same ",
+                " again ",
+                " previous ",
+                " earlier ",
+            ]
+            .iter()
+            .any(|needle| padded_input.contains(needle));
+        if profile == TaskProfile::Agent
+            && refers_to_previous_turn
+            && let Some(state) = self.previous_turn_working_state.as_deref()
+        {
+            turn_stable_overlays.push(Message::system(format!(
+                "Internal previous-turn workspace evidence. This is historical data from the immediately preceding user turn, captured before task-local caches were cleared. Reuse it when this request continues that work; do not repeat listed searches, listings, source coverage, or shell inspections merely to rediscover the same state. Refresh only the exact item whose freshness is material.\n{state}"
+            )).request_only());
+        }
         if let Some(memory) = render_matching_debate_memory(
             &self.retained_debate_knowledge,
             &workspace_root,
@@ -380,15 +557,26 @@ impl AgentCoordinator {
 
         loop {
             check_cancel(cancel)?;
+            let working_state = (profile == TaskProfile::Agent && retry_instruction.is_some())
+                .then(|| self.registry.working_state_summary())
+                .flatten();
+            append_dynamic_turn_checkpoints(
+                &mut self.history,
+                session_provenance.request_overlay(),
+                &mut last_provenance_checkpoint,
+                &mut retry_instruction,
+                working_state,
+                &mut final_consistency_pending,
+            );
             model_attempts += 1;
-            let mut tool_catalog =
-                select_tools_for_profile(self.registry.tools(web_search_enabled), profile);
-            tool_catalog.extend(context::tools());
-            let mut selected_tools = if runaway_finalization {
-                Vec::new()
-            } else {
-                tool_discovery.attached(&tool_catalog)
+            let mut tool_catalog = match profile {
+                TaskProfile::Research => self.registry.research_tools(),
+                TaskProfile::Agent => {
+                    select_tools_for_profile(self.registry.tools(web_search_enabled), profile)
+                }
             };
+            tool_catalog.extend(context::tools());
+            let mut selected_tools = tool_discovery.attached(&tool_catalog);
             self.context_memory.sync(&self.history)?;
             if self.context_memory.rollover_requested {
                 let handoff = rollover_handoff_message(
@@ -405,27 +593,62 @@ impl AgentCoordinator {
                     Some(&current_request),
                     Some(&handoff),
                 )?;
+                self.context_key = self.context_memory.id().to_owned();
+                turn_context_orientation = self.context_memory.orientation();
+                current_turn_compaction_end = None;
                 tool_discovery.load(["context_history", "task_notes"]);
-                selected_tools = if runaway_finalization {
-                    Vec::new()
-                } else {
-                    tool_discovery.attached(&tool_catalog)
-                };
-                orientation_notes_dirty = true;
+                selected_tools = tool_discovery.attached(&tool_catalog);
             }
-            let attached_names: HashSet<_> =
-                selected_tools.iter().map(|t| t.name.clone()).collect();
             // Thinning is request-only: canonical evidence is never replaced.
             let current_start = self
                 .history
                 .iter()
-                .rposition(|m| m.role == MessageRole::User && m.content.as_deref() == Some(input))
+                .rposition(|m| {
+                    m.role == MessageRole::User
+                        && m.content.as_deref() == Some(request_input.as_str())
+                })
                 .unwrap_or(1)
                 .min(self.history.len());
+            let working_budget = self.context_memory.working_budget();
+            let pressure_budget = self.context_memory.compaction_pressure_budget();
             let mut working = self.history[..current_start].to_vec();
-            compact_completed_task_history(&mut working);
-            trim_completed_conversation_history(&mut working);
+            trim_completed_conversation_history_for_budget(&mut working, pressure_budget);
+            let working_current_start = working.len();
             working.extend_from_slice(&self.history[current_start..]);
+            if compact_older_current_turn_tool_history(
+                &mut working,
+                working_current_start,
+                working_budget,
+                pressure_budget,
+                &mut current_turn_compaction_end,
+            ) {
+                // Same-turn compaction keeps canonical evidence while recovery schemas stay stable.
+                tool_discovery.load(["context_history"]);
+                selected_tools = tool_discovery.attached(&tool_catalog);
+            }
+            let attached_names: HashSet<_> =
+                selected_tools.iter().map(|t| t.name.clone()).collect();
+            let deferred_tools = if native_deferred_tools_supported {
+                tool_catalog
+                    .iter()
+                    .filter(|tool| {
+                        !attached_names.contains(&tool.name)
+                            && self.registry.is_provider_defer_candidate(&tool.name)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let deferred_names: HashSet<_> = deferred_tools
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect();
+            let callable_names: HashSet<_> = attached_names
+                .iter()
+                .chain(deferred_names.iter())
+                .cloned()
+                .collect();
             deduplicate_skill_instructions(&mut working);
             let working_start = working
                 .iter()
@@ -436,23 +659,15 @@ impl AgentCoordinator {
             let capability_snapshot = self.registry.runtime_capability_snapshot(&selected_tools);
             let mut stable_request_overlays = turn_stable_overlays.clone();
             stable_request_overlays
+                .push(Message::system(turn_context_orientation.clone()).request_only());
+            stable_request_overlays
                 .push(Message::system(capability_guidance(capability_snapshot)).request_only());
-            insert_turn_stable_overlays(&mut request_messages, input, &stable_request_overlays);
-            advance_turn_cache_breakpoints(&mut request_messages, input);
-            let had_retry_instruction = retry_instruction.is_some();
-            if let Some(correction) = retry_instruction.take() {
-                request_messages.push(Message::user(correction).request_only());
-            }
-            if profile == TaskProfile::Agent
-                && had_retry_instruction
-                && let Some(state) = self.registry.working_state_summary()
-            {
-                request_messages.push(Message::system(format!("Internal working evidence state:\n{state}\nReuse covered evidence. Re-read only genuinely missing source; use refresh only when exact earlier text is required again.")).request_only());
-            }
-            if final_consistency_pending {
-                request_messages.push(Message::system("Internal final consistency pass: the requested workspace write succeeded and write validation passed. Do not inspect unrelated repository state. Check the produced deliverable against the request and evidence already collected. If a correction is required, use only apply_file_edits; otherwise provide the final answer now.").request_only());
-                final_consistency_pending = false;
-            }
+            insert_turn_stable_overlays(
+                &mut request_messages,
+                &request_input,
+                &stable_request_overlays,
+            );
+            advance_turn_cache_breakpoints(&mut request_messages, &request_input);
             let request_context_chars = serde_json::to_string(&request_messages)
                 .map(|serialized| serialized.len())
                 .unwrap_or_else(|_| {
@@ -462,20 +677,15 @@ impl AgentCoordinator {
                         .map(str::len)
                         .sum::<usize>()
                 });
-            // Include schemas and request-only guidance in the working-set estimate.
-            let orientation = self.context_memory.orientation(orientation_notes_dirty);
+            // Count schemas too; stable context guidance is already in request_messages.
             self.context_memory.estimated_tokens = context::estimate_messages(&request_messages)?
-                + ((orientation.len() + serde_json::to_vec(&selected_tools)?.len()) as u64)
-                    .div_ceil(3);
-            let working_budget = self.context_memory.working_budget();
+                + (serde_json::to_vec(&selected_tools)?.len() as u64).div_ceil(3);
+            let rollover_budget = self.context_memory.rollover_budget();
             let has_rolloverable_trace = self
                 .history
                 .iter()
                 .any(|message| matches!(message.role, MessageRole::Assistant | MessageRole::Tool));
-            if self.context_memory.estimated_tokens
-                > working_budget * self.context_memory.policy.rollover_percent / 100
-                && has_rolloverable_trace
-            {
+            if self.context_memory.estimated_tokens > rollover_budget && has_rolloverable_trace {
                 let handoff = rollover_handoff_message(
                     successful_mutations,
                     unresolved_failed_mutation,
@@ -490,31 +700,28 @@ impl AgentCoordinator {
                     Some(&current_request),
                     Some(&handoff),
                 )?;
+                self.context_key = self.context_memory.id().to_owned();
+                turn_context_orientation = self.context_memory.orientation();
+                current_turn_compaction_end = None;
                 tool_discovery.load(["context_history", "task_notes"]);
-                orientation_notes_dirty = true;
                 continue;
             }
-            if self.context_memory.estimated_tokens
-                > working_budget * self.context_memory.policy.rollover_percent / 100
-            {
+            if self.context_memory.estimated_tokens > rollover_budget {
                 bail!(
                     "The task input and tool schemas exceed the fresh working-context budget; reduce the input or attached capabilities."
                 );
             }
-            request_messages.push(Message::system(orientation).request_only());
-            orientation_notes_dirty = false;
+            loop_budget.observe_request(request_context_chars);
             let mut request = CallRequest::simple(model, request_messages);
             request.context_key = Some(match profile {
                 TaskProfile::Agent => self.context_key.clone(),
                 TaskProfile::Research => format!("{}:research", self.context_key),
             });
             request.prompt_cache = Some(true);
+            request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
+            request.deferred_tools = (!deferred_tools.is_empty()).then_some(deferred_tools);
             configure_tool_access(&mut request, selected_tools, force_decision_without_tools);
-            if runaway_finalization {
-                request.tools = Some(Vec::new());
-                request.tool_choice = Some(json!("none"));
-            }
-            request.metadata = Some(HashMap::from([
+            let mut request_metadata = HashMap::from([
                 (
                     "lane".into(),
                     match profile {
@@ -524,6 +731,10 @@ impl AgentCoordinator {
                     .into(),
                 ),
                 ("contextManagement".into(), "recoverable-windows".into()),
+                (
+                    "cacheFamily".into(),
+                    request.context_key.clone().unwrap_or_default(),
+                ),
                 ("agentId".into(), "root".into()),
                 (
                     "sessionId".into(),
@@ -543,16 +754,63 @@ impl AgentCoordinator {
                 ("modelAttempt".into(), model_attempts.to_string()),
                 ("toolRound".into(), tool_rounds.to_string()),
                 ("expectedCacheReuses".into(), "1".into()),
-            ]));
+                (
+                    "turnCumulativeInputTokens".into(),
+                    loop_budget.cumulative_input_tokens().to_string(),
+                ),
+                (
+                    "turnCostEquivalentInputTokens".into(),
+                    loop_budget
+                        .cumulative_cost_equivalent_input_tokens()
+                        .to_string(),
+                ),
+                (
+                    "turnEstimatedCostUsd".into(),
+                    format!("{:.6}", loop_budget.estimated_cost_usd()),
+                ),
+                (
+                    "peakRequestChars".into(),
+                    loop_budget.peak_request_chars().to_string(),
+                ),
+                (
+                    "contextEstimatedTokens".into(),
+                    self.context_memory.estimated_tokens.to_string(),
+                ),
+                ("contextWorkingBudget".into(), working_budget.to_string()),
+                (
+                    "deferredToolCount".into(),
+                    request
+                        .deferred_tools
+                        .as_ref()
+                        .map(Vec::len)
+                        .unwrap_or(0)
+                        .to_string(),
+                ),
+                (
+                    "nativeDeferredToolsSupported".into(),
+                    native_deferred_tools_supported.to_string(),
+                ),
+                (
+                    "searchLoadedToolCount".into(),
+                    tool_discovery.loaded_count().to_string(),
+                ),
+                ("yeetVersion".into(), env!("CARGO_PKG_VERSION").to_owned()),
+            ]);
+            if let Some(revision) = workspace_revision.as_deref() {
+                request_metadata.insert("workspaceRevision".into(), revision.to_owned());
+            }
+            request.metadata = Some(request_metadata);
             request.provider_options = reasoning_provider_options(model, reasoning_level);
             request.attached_capabilities = attached_capabilities.as_ref().map(|values| {
                 values
                     .iter()
-                    .filter(|value| value.as_str() != WEB_SEARCH_CAPABILITY_ID)
+                    .filter(|value| {
+                        value.as_str() != WEB_SEARCH_CAPABILITY_ID && !value.starts_with("skill:")
+                    })
                     .cloned()
                     .collect()
             });
-            let attempt_cache_diagnostics = cache_continuity.diagnostics(&request);
+            let attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
             emit(AgentEvent::ModelAttemptStarted {
                 diagnostics: attempt_cache_diagnostics.clone(),
             });
@@ -565,6 +823,7 @@ impl AgentCoordinator {
             let mut partial: HashMap<usize, PartialToolCall> = HashMap::new();
             let mut finish_reason = "stop".to_owned();
             let mut finish_usage = None;
+
             loop {
                 if cancel.load(Ordering::Acquire) {
                     stream.cancel();
@@ -643,10 +902,35 @@ impl AgentCoordinator {
             }
             check_cancel(cancel)?;
             emit(AgentEvent::ModelAttemptFinished(
-                cache::usage_diagnostics(&attempt_cache_diagnostics, finish_usage.as_ref()),
+                turn_state::usage_diagnostics(&attempt_cache_diagnostics, finish_usage.as_ref()),
                 finish_usage.clone(),
             ));
-            let mut calls = collect_tool_calls(decoded, partial);
+            loop_budget.observe_usage(finish_usage.as_ref());
+            let (mut calls, malformed_calls) = collect_tool_calls(decoded, partial);
+            if !malformed_calls.is_empty() {
+                for call in &malformed_calls {
+                    emit(AgentEvent::ToolExecutionFinished {
+                        call: call.clone(),
+                        succeeded: false,
+                        result: "Malformed or incomplete structured tool arguments; Yeet is retrying the model turn instead of executing this call.".into(),
+                    });
+                }
+                if malformed_repairs < MALFORMED_TOOL_REPAIR_LIMIT {
+                    malformed_repairs += 1;
+                    if !emitted_text.is_empty() {
+                        emit(AgentEvent::DiscardAssistantText(std::mem::take(
+                            &mut emitted_text,
+                        )));
+                    }
+                    retry_instruction = Some("Internal execution correction: the previous structured tool call had malformed or incomplete JSON arguments. Reissue the needed tool call with one complete JSON object matching the attached schema. Do not repeat or continue the truncated argument fragment.".into());
+                    emit(AgentEvent::Finished {
+                        reason: finish_reason,
+                        usage: finish_usage,
+                    });
+                    continue;
+                }
+                bail!("model repeatedly emitted malformed structured tool-call arguments");
+            }
             if calls.is_empty() {
                 let recovered = recover_text_tool_calls(&text);
                 if !recovered.is_empty() {
@@ -662,14 +946,29 @@ impl AgentCoordinator {
                     calls = recovered;
                 }
             }
+            if turn_state::is_initial_mutation_attempt(
+                implementation_requested,
+                successful_mutations,
+                unresolved_failed_mutation,
+                &calls,
+            ) {
+                runaway_finalization = false;
+                force_decision_without_tools = false;
+            }
             if runaway_finalization && !calls.is_empty() {
+                for event in turn_state::suppressed_tool_events(
+                    &calls,
+                    "Runaway guard required tool-free finalization",
+                ) {
+                    emit(event);
+                }
                 if runaway_finalization_repairs < RUNAWAY_FINALIZATION_RETRY_LIMIT {
                     runaway_finalization_repairs += 1;
                     if !emitted_text.is_empty() {
                         emit(AgentEvent::DiscardAssistantText(emitted_text));
                     }
                     retry_instruction = Some(
-                        "Internal runaway-guard correction: tool execution has been stopped because multiple loop signals were confirmed. Do not request tools. Return the best final answer from the evidence already present and identify any unresolved blocker.".into(),
+                        "Internal runaway-guard correction: multiple loop signals were confirmed. Do not request more tools. Return the best final answer from the evidence already present and identify any unresolved blocker.".into(),
                     );
                     emit(AgentEvent::Finished {
                         reason: finish_reason,
@@ -677,7 +976,35 @@ impl AgentCoordinator {
                     });
                     continue;
                 }
-                bail!("Runaway guard finalization was ignored after tool access was withdrawn");
+                bail!(
+                    "Runaway guard finalization was ignored after a tool-free answer was required"
+                );
+            }
+            if force_decision_without_tools && !calls.is_empty() {
+                for event in turn_state::suppressed_tool_events(
+                    &calls,
+                    "Cost/sufficiency guard required tool-free finalization",
+                ) {
+                    emit(event);
+                }
+                if forced_finalization_repairs < FORCED_FINALIZATION_REPAIR_LIMIT {
+                    forced_finalization_repairs += 1;
+                    if !emitted_text.is_empty() {
+                        emit(AgentEvent::DiscardAssistantText(std::mem::take(
+                            &mut emitted_text,
+                        )));
+                    }
+                    retry_instruction = Some(
+                        "Internal finalization correction: the cost/sufficiency guard requires an answer without additional tool calls. Return the best final answer from evidence already present and state any remaining uncertainty."
+                            .into(),
+                    );
+                    emit(AgentEvent::Finished {
+                        reason: finish_reason,
+                        usage: finish_usage,
+                    });
+                    continue;
+                }
+                bail!("Finalization guard was ignored after a tool-free answer was required");
             }
             if finish_reason == "error" {
                 if !text.is_empty() {
@@ -734,25 +1061,14 @@ impl AgentCoordinator {
                     continue;
                 }
 
-                let needs_code_verification = implementation_requested
-                    && successful_mutations > 0
-                    && !planning_or_documentation;
-                let completion_blocker = if unresolved_failed_mutation {
-                    Some(
-                        "the most recent workspace mutation failure was never resolved by a later successful edit"
-                            .to_owned(),
-                    )
-                } else if needs_code_verification && !verification_succeeded {
-                    Some(if verification_attempted {
-                        "workspace changes were made, but every recognized build/test/check verification failed"
-                            .to_owned()
-                    } else {
-                        "workspace changes were made, but no build/test/check verification completed successfully"
-                            .to_owned()
-                    })
-                } else {
-                    None
-                };
+                let completion_blocker = turn_state::implementation_completion_blocker(
+                    implementation_requested,
+                    successful_mutations,
+                    unresolved_failed_mutation,
+                    planning_or_documentation,
+                    verification_attempted,
+                    verification_succeeded,
+                );
                 if let Some(blocker) = completion_blocker {
                     if completion_gate_repairs < COMPLETION_GATE_REPAIR_LIMIT
                         && !force_decision_without_tools
@@ -763,7 +1079,7 @@ impl AgentCoordinator {
                             emit(AgentEvent::DiscardAssistantText(emitted_text));
                         }
                         retry_instruction = Some(format!(
-                            "Internal completion gate: {blocker}. Do not claim implementation is complete yet. Resolve the failed edit if one remains, then run one focused validation command appropriate to the project (build, test, compile/check, or lint; use git diff --check only when the workspace is actually a Git worktree). Reuse existing evidence, do not retry a validation command already known to be invalid in this environment, and do not restart broad inspection."
+                            "Internal completion gate: {blocker}. Do not claim implementation is complete yet. If no mutation has succeeded, either make the smallest justified workspace change now or state the concrete blocker. If a mutation succeeded, resolve any failed edit and run one focused validation command appropriate to the project (build, test, compile/check, or lint; use git diff --check only when the workspace is actually a Git worktree). Reuse existing evidence and do not restart broad inspection."
                         ));
                         emit(AgentEvent::Finished {
                             reason: finish_reason,
@@ -812,13 +1128,12 @@ impl AgentCoordinator {
             let mut round_failure_fingerprints = Vec::new();
             let mut round_output_fingerprints = Vec::new();
             let semantic_fingerprint = round_semantic_fingerprint(&calls);
+            let mut round_output_budget = ToolRegistry::round_output_budget(calls.len());
             for call in &calls {
                 check_cancel(cancel)?;
                 let current_generation = self.registry.workspace_generation();
                 if current_generation != workspace_generation {
-                    // A shell/worker/MCP/edit action may have invalidated the
-                    // structured source cache. Exact call signatures from the
-                    // old generation must not suppress legitimate re-reads.
+                    // Workspace writes invalidate structured source-cache replay identity.
                     call_counts.clear();
                     workspace_generation = current_generation;
                 }
@@ -834,10 +1149,34 @@ impl AgentCoordinator {
                 emit(AgentEvent::ToolExecutionStarted(call.clone()));
                 let inspection_call = is_inspection_tool(&call.name)
                     || self.registry.is_read_only_extension_tool(&call.name);
-                let (content, transport_succeeded) = if !attached_names.contains(&call.name) {
+                let (content, transport_succeeded) = if !callable_names.contains(&call.name) {
                     (json!({"error":"Tool schema is not attached. Call search_tools to load it, then call it on the next request."}).to_string(), false)
                 } else if call.name == tool_discovery::SEARCH_TOOL {
-                    (tool_discovery.search(&call.arguments, &tool_catalog), true)
+                    let content = if supports_anthropic_deferred_tool_references(model) {
+                        tool_discovery.search_with_deferred(
+                            &call.arguments,
+                            &tool_catalog,
+                            &deferred_names,
+                        )
+                    } else {
+                        tool_discovery.search(&call.arguments, &tool_catalog)
+                    };
+                    (content, true)
+                } else if profile == TaskProfile::Research
+                    && call.name == "web_read"
+                    && !research_budget.allows_source_read()
+                {
+                    (
+                        json!({
+                            "duplicate": true,
+                            "budgetSuppressed": true,
+                            "contentAlreadySufficient": true,
+                            "remainingSourceReads": research_budget.remaining_source_reads(),
+                            "hint": "The configured full-source evidence target is already satisfied. Reuse the source evidence already returned and synthesize unless a concrete conflict requires another search round."
+                        })
+                        .to_string(),
+                        true,
+                    )
                 } else if repeated_call && inspection_call {
                     duplicate_inspection = true;
                     (json!({
@@ -855,6 +1194,8 @@ impl AgentCoordinator {
                     let execution = if context::is_context_tool(&call.name) {
                         self.context_memory.sync(&self.history)?;
                         self.context_memory.execute(call)
+                    } else if profile == TaskProfile::Research {
+                        self.registry.execute_research(call, model, cancel)
                     } else {
                         self.registry.execute(call, model, cancel)
                     };
@@ -875,6 +1216,21 @@ impl AgentCoordinator {
                     }
                 };
                 let succeeded = tool_execution_succeeded(call, &content, transport_succeeded);
+                if tool_call_indicates_implementation_intent(call, &content, succeeded) {
+                    implementation_requested = true;
+                }
+                if succeeded && call.name == "activate_capability" {
+                    let activated = serde_json::from_str::<Value>(&content)
+                        .ok()
+                        .and_then(|value| value.get("tools").and_then(Value::as_array).cloned())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|value| value.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>();
+                    if !activated.is_empty() && activated.len() <= 5 {
+                        tool_discovery.load(activated.iter().map(String::as_str));
+                    }
+                }
                 let inspection_progress =
                     inspection_call && tool_made_progress(call, &content, succeeded);
                 if implementation_requested
@@ -884,20 +1240,23 @@ impl AgentCoordinator {
                         "read_file" | "list_files" | "search_workspace"
                     )
                 {
-                    // The edit schema is large. Pay for it only after the model has
-                    // concrete source/capability evidence to edit against.
+                    // Defer the large edit schema until source/capability evidence exists.
                     tool_discovery.load(["apply_file_edits"]);
                 }
                 research_budget.observe_tool(&call.name, inspection_progress);
-                if succeeded && call.name == "task_notes" {
-                    orientation_notes_dirty = true;
-                }
                 let current_write_generation = self.registry.workspace_write_generation();
                 let workspace_mutated =
                     succeeded && current_write_generation != workspace_write_generation;
                 workspace_write_generation = current_write_generation;
-                let (model_content, output_images) =
+                let (normalized, output_images) =
                     normalize_tool_output_for_model(&content, vision_enabled);
+                let (model_content, externally_bounded) =
+                    self.registry
+                        .bound_round_output(call, normalized, &mut round_output_budget)?;
+                if externally_bounded {
+                    // Artifact results already include exact locators; attach bounded recovery tools.
+                    tool_discovery.load(["artifact_info", "read_artifact", "search_artifact"]);
+                }
                 let recorded_content = model_content.clone();
                 self.history.push(Message::tool(
                     model_content,
@@ -913,15 +1272,12 @@ impl AgentCoordinator {
                 self.context_memory.sync(&self.history)?;
                 if workspace_mutated {
                     if is_mutation_tool(&call.name) {
-                        // Verification normally becomes useful only after a write.
-                        // The model can still load run_shell earlier via search_tools.
+                        // Verification is normally needed only after a write.
                         tool_discovery.load(["run_shell"]);
                     }
                     round_mutated = true;
                     successful_mutations += 1;
-                    // Verification only covers the workspace generation it
-                    // observed. Any later edit invalidates that evidence and
-                    // must be followed by a fresh focused validation.
+                    // Later writes invalidate validation for the previous workspace generation.
                     verification_attempted = false;
                     verification_succeeded = false;
                     last_validation_evidence = None;
@@ -940,12 +1296,18 @@ impl AgentCoordinator {
                         final_consistency_used = true;
                     }
                 } else if !succeeded && is_mutation_tool(&call.name) {
-                    // A failed edit often means the model needs one more source read
-                    // to refresh anchors/snapshots or correct the edit shape.
+                    // Failed edits may need one focused source refresh before retrying.
                     round_failed_mutation = true;
                     unresolved_failed_mutation = true;
                 }
                 let validation_call = is_validation_tool_call(call);
+                session_provenance.observe_tool(
+                    call,
+                    &content,
+                    succeeded,
+                    workspace_mutated,
+                    validation_call,
+                );
                 if validation_call {
                     verification_attempted = true;
                     last_validation_evidence =
@@ -995,6 +1357,10 @@ impl AgentCoordinator {
                 is_inspection_tool(&call.name)
                     || self.registry.is_read_only_extension_tool(&call.name)
             });
+            let implementation_incomplete = implementation_requested
+                && (successful_mutations == 0
+                    || unresolved_failed_mutation
+                    || (!planning_or_documentation && !verification_succeeded));
             let runaway_decision = runaway_detector.observe(
                 RunawayRound {
                     progressed: round_progress,
@@ -1010,28 +1376,48 @@ impl AgentCoordinator {
                     repeated_calls: round_repeated_calls,
                 },
                 implementation_requested,
+                implementation_incomplete,
             );
-            let analysis_threshold = if bounded_explanation {
-                BOUNDED_EXPLANATION_INSPECTION_THRESHOLD
-            } else {
-                ANALYSIS_INSPECTION_THRESHOLD
-            };
+            let analysis_threshold = turn_state::analysis_inspection_threshold(bounded_explanation);
+            let loop_budget_decision = loop_budget.decide(
+                model_attempts,
+                implementation_requested,
+                unresolved_failed_mutation,
+                successful_mutations,
+                verification_succeeded,
+            );
             if let RunawayDecision::Finalize(message) = runaway_decision {
                 runaway_finalization = true;
                 force_decision_without_tools = true;
                 retry_instruction = Some(format!("Internal execution guard: {message}"));
+            } else if let LoopBudgetDecision::Finalize(message) = &loop_budget_decision {
+                force_decision_without_tools = true;
+                retry_instruction = Some(message.clone());
             } else if profile == TaskProfile::Research
                 && research_budget.sufficient(progressful_inspection_rounds)
             {
-                force_decision_without_tools = true;
-                retry_instruction =
-                    Some(research_budget.checkpoint_message(progressful_inspection_rounds));
+                if research_stop_grace_used {
+                    force_decision_without_tools = true;
+                    retry_instruction = Some(format!(
+                        "{} One synthesis grace call was already used; do not request more tools and return the final answer now.",
+                        research_budget.checkpoint_message(progressful_inspection_rounds)
+                    ));
+                } else {
+                    research_stop_grace_used = true;
+                    retry_instruction =
+                        Some(research_budget.checkpoint_message(progressful_inspection_rounds));
+                }
             } else if bounded_analysis
                 && successful_mutations == 0
                 && progressful_inspection_rounds >= analysis_threshold
             {
-                force_decision_without_tools = true;
-                retry_instruction = Some("Internal sufficiency checkpoint: several focused inspection rounds have already produced evidence. Stop expanding source coverage and answer from the evidence already collected now.".into());
+                if analysis_stop_grace_used {
+                    force_decision_without_tools = true;
+                    retry_instruction = Some("Internal sufficiency checkpoint: the bounded analysis already received one grace call after sufficient evidence was collected. Do not request more tools; answer from the evidence already present.".into());
+                } else {
+                    analysis_stop_grace_used = true;
+                    retry_instruction = Some("Internal sufficiency checkpoint: several focused inspection rounds have already produced evidence. Stop expanding source coverage and answer from the evidence already collected now. One final tool call is still available only for a concrete missing fact.".into());
+                }
             } else if round_failed_mutation {
                 force_decision_without_tools = false;
                 retry_instruction = Some("Internal execution correction: the previous file edit failed. This is not automatically a sandbox denial. Retry the mutation after only the focused source refresh actually needed. For apply_file_edits, use changes:[{path, snapshot?, edits:[{kind:\"replace\", range:{start,end,startHash?,endHash?}, text:\"...\"}]}]; start/end belong inside range, not at the edit object's top level. Do not replay unrelated inspection.".into());
@@ -1064,181 +1450,122 @@ impl AgentCoordinator {
                         "Internal execution correction: the last tool round produced no new evidence. Reuse existing results. Either choose one materially different action or finish the task."
                     }
                 }.into());
+            } else if let LoopBudgetDecision::Checkpoint(message) = &loop_budget_decision {
+                retry_instruction = Some(message.clone());
             } else if let RunawayDecision::Warn(message) = runaway_decision {
                 retry_instruction = Some(format!("Internal execution guard: {message}"));
             }
         }
     }
-
     pub fn shutdown(&self) {
         self.registry.shutdown();
     }
 }
 
-pub(crate) fn is_internal_coordinator_system_message(message: &Message) -> bool {
-    message.role == MessageRole::System
-        && message.content.as_deref().is_some_and(|content| {
-            content.starts_with("You are Yeet's agent.")
-                || content.starts_with("You are Yeet's coding agent.")
-                || content.starts_with("You are Yeet's general agent.")
-        })
+fn infinity_retry_delay(attempt: u32) -> Duration {
+    let shift = attempt.saturating_sub(1).min(5);
+    Duration::from_secs((1u64 << shift).min(INFINITY_RETRY_MAX_DELAY.as_secs()))
 }
 
-fn render_matching_debate_memory(
-    knowledge: &[crate::debate::RetainedDebateKnowledge],
-    workspace_root: &str,
-    workspace_revision: Option<&str>,
-) -> Option<String> {
-    let matching = knowledge
-        .iter()
-        .filter(|memory| {
-            let subject = &memory.subject_ref;
-            if !subject.workspace_bound || subject.workspace_root != workspace_root {
-                return false;
-            }
-            // Implementation-specific memory is deliberately strict: a
-            // missing or changed revision makes old implementation claims
-            // stale until the current source is read again.
-            match (subject.revision.as_deref(), workspace_revision) {
-                (Some(expected), Some(current)) => expected == current,
-                _ => false,
-            }
-        })
-        .map(|memory| {
-            json!({
-                "sourceDebateRunId": memory.source_debate_run_id,
-                "subject": memory.subject_ref,
-                "confidence": memory.confidence,
-                "supportedClaims": memory.supported_claims,
-                "strongInferences": memory.strong_inferences,
-                "unresolved": memory.unresolved,
+fn wait_for_infinity(cancel: &AtomicBool, enabled: &AtomicBool, delay: Duration) -> bool {
+    let deadline = Instant::now() + delay;
+    while Instant::now() < deadline {
+        if cancel.load(Ordering::Acquire) || !enabled.load(Ordering::Acquire) {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+    !cancel.load(Ordering::Acquire) && enabled.load(Ordering::Acquire)
+}
+
+fn retryable_infinity_error(message: &str) -> bool {
+    let value = message.to_ascii_lowercase();
+    ![
+        "cancelled",
+        "canceled",
+        "authentication",
+        "not authenticated",
+        "unauthorized",
+        "forbidden",
+        "api key",
+        "no model is configured",
+        "no model selected",
+        "unknown provider",
+        "unsupported provider",
+        "vision capability is not attached",
+        "exceed the fresh working-context budget",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
+}
+
+fn bridge_transport_error(message: &str) -> bool {
+    let value = message.to_ascii_lowercase();
+    [
+        "provider bridge closed",
+        "provider bridge stream ended unexpectedly",
+        "broken pipe",
+        "connection reset",
+        "connection aborted",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
+}
+
+fn tool_call_indicates_implementation_intent(
+    call: &ToolCall,
+    content: &str,
+    succeeded: bool,
+) -> bool {
+    if call.name == "apply_file_edits" {
+        return true;
+    }
+    if !succeeded || call.name != tool_discovery::SEARCH_TOOL {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(content) else {
+        return false;
+    };
+    ["loaded", "alreadyLoaded", "deferred"].iter().any(|field| {
+        value
+            .get(*field)
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool.as_str() == Some("apply_file_edits"))
             })
-        })
-        .collect::<Vec<_>>();
-    if matching.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "Typed retained debate knowledge for this exact workspace revision: {}. Supported claims are provenance-scoped to their evidence IDs. Strong inferences and unresolved items are not facts. If fresh source evidence conflicts with this memory, prefer the fresh source evidence.",
-        serde_json::to_string(&matching).unwrap_or_else(|_| "[]".into()),
-    ))
+    })
 }
-
-fn explicit_skill_name(input: &str) -> Option<&str> {
-    let token = input.split_whitespace().next()?;
-    let name = token.strip_prefix('$')?;
-    if name.is_empty() || name.len() > 64 || name.chars().next()?.is_ascii_digit() {
-        return None;
-    }
-    if name.split('-').all(|part| {
-        !part.is_empty()
-            && part
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    }) {
-        Some(name)
-    } else {
-        None
-    }
-}
-
-fn capability_guidance(mut snapshot: Value) -> String {
-    // Tool names already appear in schemas, and session ids are irrelevant to
-    // tool selection. Keep only runtime facts the model can act on every round.
-    if let Some(object) = snapshot.as_object_mut() {
-        object.remove("visibleTools");
-        object.remove("activeSessionId");
-    }
-    format!(
-        "Runtime: {snapshot}. Missing schema? use search_tools. Current tool results and sandbox/approval state override stale assumptions."
-    )
-}
-
-// Complete only the latest batch. Tool IDs can repeat in older turns.
-fn settle_interrupted_context_batch(history: &mut Vec<Message>) {
-    let Some(index) = history
-        .iter()
-        .rposition(|m| m.role == MessageRole::Assistant)
-    else {
-        return;
-    };
-    let Some(calls) = history[index].tool_calls.clone() else {
-        return;
-    };
-    let answered: HashSet<String> = history[index + 1..]
-        .iter()
-        .filter_map(|m| m.tool_call_id.clone())
-        .collect();
-    for call in calls.into_iter().filter(|c| !answered.contains(&c.id)) {
-        history.push(Message::tool(
-            json!({"error":"Tool batch interrupted before a result was recorded; effects may have occurred. Inspect current state before retrying."}).to_string(),
-            call.id, Some(call.name),
-        ));
-    }
-}
-
-fn check_cancel(cancel: &AtomicBool) -> Result<()> {
-    if cancel.load(Ordering::Acquire) {
-        bail!("cancelled")
-    } else {
-        Ok(())
-    }
-}
-fn configure_tool_access(
-    request: &mut CallRequest,
-    tools: Vec<ToolDefinition>,
-    _decision_requested: bool,
-) {
-    request.tools = (!tools.is_empty()).then_some(tools);
-    // No-progress handling is advisory, never a global capability lock. Exact
-    // duplicate inspections are already blocked per call; keeping the schema
-    // available lets the model recover with a genuinely new read/edit instead
-    // of getting trapped after an imperfect checkpoint decision.
-    request.tool_choice = None;
-}
-
-fn attached_web_search_capability_result(call: &ToolCall, enabled: bool) -> Option<String> {
-    if !enabled {
-        return None;
-    }
-    match call.name.as_str() {
-        "find_capabilities" => {
-            let query = call
-                .arguments
-                .get("query")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if query.contains("web") || query.contains("search") {
-                return Some(json!([{
-                    "id":"web-search",
-                    "kind":"attached-local",
-                    "description":"Web search is enabled. Use search_tools with query web_search to attach its schema; capability activation is not required."
-                }]).to_string());
-            }
-        }
-        "activate_capability"
-            if call.arguments.get("capability").and_then(Value::as_str)
-                == Some(WEB_SEARCH_CAPABILITY_ID) =>
-        {
-            return Some(
-                json!({
-                    "activated":"web-search",
-                    "alreadyActive":true,
-                    "tools":["web_search"],
-                    "hint":"Use search_tools with query web_search to attach its schema, then call web_search."
-                })
-                .to_string(),
-            );
-        }
-        _ => {}
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn infinity_retry_policy_retries_guards_and_transient_provider_failures() {
+        assert_eq!(infinity_retry_delay(1), Duration::from_secs(1));
+        assert_eq!(infinity_retry_delay(2), Duration::from_secs(2));
+        assert_eq!(infinity_retry_delay(6), Duration::from_secs(30));
+        assert_eq!(infinity_retry_delay(99), Duration::from_secs(30));
+
+        assert!(retryable_infinity_error(
+            "Runaway guard finalization was ignored after a tool-free answer was required"
+        ));
+        assert!(retryable_infinity_error(
+            "provider bridge stream ended unexpectedly"
+        ));
+        assert!(bridge_transport_error(
+            "provider bridge closed before response"
+        ));
+        assert!(!retryable_infinity_error("cancelled"));
+        assert!(!retryable_infinity_error(
+            "401 unauthorized: invalid API key"
+        ));
+        assert!(!retryable_infinity_error(
+            "The task input and tool schemas exceed the fresh working-context budget"
+        ));
+    }
 
     #[test]
     fn classifies_implementation_requests() {
@@ -1258,8 +1585,32 @@ mod tests {
         ));
         assert!(looks_like_implementation_request("이 코드 고쳐줘"));
         assert!(looks_like_implementation_request("테스트를 추가해"));
+        assert!(looks_like_implementation_request(
+            "make /status panel more pretty"
+        ));
+        assert!(!looks_like_implementation_request(
+            "make sense of this repository"
+        ));
     }
 
+    #[test]
+    fn discovering_the_edit_tool_promotes_implementation_intent() {
+        let search = ToolCall {
+            id: "search".into(),
+            name: tool_discovery::SEARCH_TOOL.into(),
+            arguments: json!({"query":"apply_file_edits"}),
+        };
+        assert!(tool_call_indicates_implementation_intent(
+            &search,
+            r#"{"loaded":["apply_file_edits"],"alreadyLoaded":[]}"#,
+            true,
+        ));
+        assert!(!tool_call_indicates_implementation_intent(
+            &search,
+            r#"{"loaded":["read_file"]}"#,
+            true,
+        ));
+    }
     #[test]
     fn structured_shell_exit_status_controls_tool_success() {
         let call = ToolCall {
@@ -1416,9 +1767,32 @@ mod tests {
     fn assembles_delta_only_tool_calls() {
         let mut partial = PartialToolCall::new(0, Some("id".into()), Some("read_file".into()));
         partial.apply(None, None, Some("{\"path\":\"Cargo.toml\"}".into()));
-        let calls = collect_tool_calls(HashMap::new(), HashMap::from([(0, partial)]));
+        let (calls, malformed) = collect_tool_calls(HashMap::new(), HashMap::from([(0, partial)]));
+        assert!(malformed.is_empty());
         assert_eq!(calls[0].name, "read_file");
         assert_eq!(calls[0].arguments["path"], "Cargo.toml");
+    }
+
+    #[test]
+    fn truncated_delta_only_tool_calls_are_repaired_instead_of_executed() {
+        let mut partial = PartialToolCall::new(0, Some("id".into()), Some("run_shell".into()));
+        partial.apply(None, None, Some("{\"command\":\"git push".into()));
+        let (calls, malformed) = collect_tool_calls(HashMap::new(), HashMap::from([(0, partial)]));
+        assert!(calls.is_empty());
+        assert_eq!(malformed.len(), 1);
+        assert_eq!(malformed[0].name, "run_shell");
+        assert_eq!(
+            malformed[0].arguments,
+            Value::String("{\"command\":\"git push".into())
+        );
+    }
+
+    #[test]
+    fn malformed_string_arguments_in_text_tool_calls_are_not_recovered_as_empty_objects() {
+        let text =
+            r#"<tool_call>{"name":"run_shell","arguments":"{\"command\":\"git push"}</tool_call>"#;
+        assert!(recover_text_tool_calls(text).is_empty());
+        assert!(looks_like_malformed_tool_call(text));
     }
 
     #[test]
@@ -1453,6 +1827,20 @@ shell command terminal
         assert!(reasoning_provider_options("openai/gpt-5.6", "auto").is_none());
         assert!(reasoning_provider_options("anthropic/claude-sonnet", "high").is_none());
         assert!(reasoning_provider_options("openai/gpt-4.1", "high").is_some());
+    }
+
+    #[test]
+    fn native_deferred_tool_support_is_provider_and_model_scoped() {
+        assert!(supports_native_deferred_tools("openai/gpt-5.6-luna"));
+        assert!(supports_native_deferred_tools("openai/gpt-5.4"));
+        assert!(!supports_native_deferred_tools("openai/gpt-5.4-nano"));
+        assert!(supports_native_deferred_tools(
+            "anthropic/claude-sonnet-4-6"
+        ));
+        assert!(!supports_native_deferred_tools("anthropic/claude-opus-4-1"));
+        assert!(!supports_native_deferred_tools(
+            "openrouter/openai/gpt-5.6-luna"
+        ));
     }
 
     #[test]
@@ -1525,7 +1913,7 @@ shell command terminal
     }
 
     #[test]
-    fn no_progress_decision_keeps_tools_available_for_recovery() {
+    fn finalization_decision_preserves_tool_envelope_for_cache_reuse() {
         let mut request = CallRequest::simple(
             "opencode-go/muse-spark-1.2-contributor",
             vec![Message::user("answer now")],
@@ -1586,6 +1974,7 @@ shell command terminal
                     repeated_calls: 0,
                 },
                 true,
+                false,
             );
             assert!(!matches!(decision, RunawayDecision::Finalize(_)));
         }
@@ -1612,6 +2001,7 @@ shell command terminal
                 repeated_calls: 0,
             },
             true,
+            false,
         );
         assert!(!matches!(decision, RunawayDecision::Finalize(_)));
     }
@@ -1635,6 +2025,7 @@ shell command terminal
                     repeated_calls: 0,
                 },
                 true,
+                false,
             );
         }
         let decision = detector.observe(
@@ -1652,6 +2043,7 @@ shell command terminal
                 repeated_calls: 0,
             },
             true,
+            false,
         );
         assert!(matches!(decision, RunawayDecision::Finalize(_)));
     }
@@ -1678,6 +2070,7 @@ shell command terminal
                     repeated_calls: 0,
                 },
                 true,
+                false,
             );
             if matches!(final_decision, RunawayDecision::Finalize(_)) {
                 break;
@@ -1864,11 +2257,29 @@ shell command terminal
     #[test]
     fn explicit_web_research_uses_lightweight_profile_and_research_web_tools() {
         assert_eq!(
-            task_profile("search about OpenAI Astra pricing", true),
+            task_profile_with_history("search about OpenAI Astra pricing", true, &[]),
             TaskProfile::Research
         );
         assert_eq!(
-            task_profile("implement web search in Yeet", true),
+            task_profile_with_history("then search for rumors", true, &[]),
+            TaskProfile::Research
+        );
+        assert_eq!(
+            task_profile_with_history("search for cacheSurfaceHash in the repository", true, &[]),
+            TaskProfile::Agent
+        );
+        let followup_history = vec![
+            Message::system(SYSTEM_INSTRUCTION),
+            Message::user("search about lower GPT-6 series models"),
+            Message::assistant("primary-source result", None),
+            Message::user("yeah its definitely rumors"),
+        ];
+        assert_eq!(
+            task_profile_with_history("yeah its definitely rumors", true, &followup_history),
+            TaskProfile::Research
+        );
+        assert_eq!(
+            task_profile_with_history("implement web search in Yeet", true, &[]),
             TaskProfile::Agent
         );
 
@@ -1899,29 +2310,33 @@ shell command terminal
     #[test]
     fn ordinary_tasks_share_one_agent_lane_and_full_tool_surface() {
         assert_eq!(
-            task_profile("summarize the quarterly-report.pdf", false),
+            task_profile_with_history("summarize the quarterly-report.pdf", false, &[]),
             TaskProfile::Agent
         );
         assert_eq!(
-            task_profile(
+            task_profile_with_history(
                 "analyze sales.csv and find the strongest correlation",
-                false
+                false,
+                &[],
             ),
             TaskProfile::Agent
         );
         assert_eq!(
-            task_profile("explain this Rust repository", false),
+            task_profile_with_history("explain this Rust repository", false, &[]),
             TaskProfile::Agent
         );
         assert_eq!(
-            task_profile("fix the scrolling bug", false),
+            task_profile_with_history("fix the scrolling bug", false, &[]),
             TaskProfile::Agent
         );
         assert_eq!(
-            task_profile("파일 수정 제대로 못하는거 해결해", false),
+            task_profile_with_history("파일 수정 제대로 못하는거 해결해", false, &[]),
             TaskProfile::Agent
         );
-        assert_eq!(task_profile("이 코드 분석해", false), TaskProfile::Agent);
+        assert_eq!(
+            task_profile_with_history("이 코드 분석해", false, &[]),
+            TaskProfile::Agent
+        );
 
         let tools = vec![
             ToolDefinition::new("read_file", "read source", json!({"type":"object"})),

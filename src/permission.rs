@@ -99,7 +99,7 @@ impl PermissionBroker {
         let Ok(mut state) = lock.lock() else {
             return false;
         };
-        if !state.pending.as_ref().is_some_and(accepts) {
+        if state.decision.is_some() || !state.pending.as_ref().is_some_and(accepts) {
             return false;
         }
         state.decision = Some(granted);
@@ -190,6 +190,37 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         panic!("native permission did not become pending");
+    }
+
+    #[test]
+    fn notifier_can_resolve_once_without_recursive_reentry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let broker = PermissionBroker::default();
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let notifier_broker = broker.clone();
+        let notifier_count = notifications.clone();
+        broker.set_notifier(Arc::new(move || {
+            notifier_count.fetch_add(1, Ordering::SeqCst);
+            if notifier_broker.pending_shell().is_some() {
+                let _ = notifier_broker.resolve_shell(false);
+            }
+        }));
+
+        let (tx, rx) = mpsc::channel();
+        let worker = broker.clone();
+        thread::spawn(move || {
+            tx.send(worker.request(
+                "shell".into(),
+                "git push".into(),
+                "networked shell operation".into(),
+                "test direct-MCP rejection path".into(),
+            ))
+            .unwrap();
+        });
+
+        assert!(!rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert!(notifications.load(Ordering::SeqCst) <= 3);
     }
 
     #[test]

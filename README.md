@@ -16,7 +16,7 @@ runtime.
 ### macOS / Linux
 
 ```sh
-git clone https://github.com/Yeet-AI/Yeet.git
+git clone https://github.com/kyooni18/Yeet.git
 cd Yeet
 npm --prefix RuntimeSource install
 ./Scripts/install-local.sh
@@ -25,24 +25,34 @@ npm --prefix RuntimeSource install
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/Yeet-AI/Yeet.git
+git clone https://github.com/kyooni18/Yeet.git
 Set-Location Yeet
 npm --prefix RuntimeSource install
 .\Scripts\install-local.ps1
 ```
 
-The installer builds Yeet and installs it to a local executable directory. Add
-that directory to your `PATH` if needed. To build without installing:
+The source installers build Yeet and install it to a local executable directory. Add
+that directory to your `PATH` if needed. Tagged releases also publish prebuilt
+macOS/Linux archives, Debian packages, and Windows ZIP bundles with SHA-256
+checksums and build-provenance attestations; extracted bundles include a toolchain-
+free `install.sh` or `install.ps1`.
+
+To build without installing:
 
 ```sh
 npm --prefix RuntimeSource install
 ./Scripts/rebuild-runtime.sh
+./Scripts/build-remote-web.sh
 cargo build --release
 ```
 
-On Windows, use `.\Scripts\rebuild-runtime.ps1` in place of the shell script.
-`serve.sh` and `serve.ps1` provide the matching local development setup for
-POSIX shells and PowerShell respectively.
+On Windows, use the matching `.ps1` build scripts. See
+[`docs/PLATFORM_SUPPORT.md`](docs/PLATFORM_SUPPORT.md) for the native Linux/Windows
+CI matrix, state paths, sandbox/IPC guarantees, ARM64 coverage, and release policy.
+
+Installed release bundles can update themselves with `yeet update`; use
+`yeet update check` to check without installing. The updater selects the native
+OS/architecture asset and verifies its published SHA-256 before installation.
 
 Run `yeet` to start the TUI, or `yeet doctor` to check the setup. Configure a
 model provider and credentials from the app or your environment before sending
@@ -52,15 +62,25 @@ active-turn history that would break an otherwise reusable provider prefix
 in the current workspace. Use `yeet remote` only when you want to expose the UI
 in a browser.
 
+OpenAI credentials are shown as separate catalog providers: `openai/*` uses
+direct API-key billing, while `codex-cli/*` uses the ChatGPT/Codex subscription
+login. Existing OpenAI browser-login credentials are migrated to `codex-cli`
+when the runtime next starts.
+
+Gemini and Anthropic credentials use the same separation: `gemini/*` and
+`anthropic/*` are direct API-key providers, while `gemini-web/*` uses Google
+browser OAuth and `claude/*` uses the installed Claude Code web login. Use
+`yeet auth login gemini-web` or `yeet auth login claude` to sign in.
+
 ### Codex Computer Use
 
-On macOS, Yeet can use the Computer Use runtime bundled with the installed
-ChatGPT/Codex app directly. It appears as the built-in `Computer Use`
-capability (`computer_use` / `computer_use_reset`) and does not require adding
-or linking an MCP server. Yeet discovers the newest installed
-`unified-computer-use` Codex plugin at runtime, launches Codex's own CUA node
-runtime lazily on the first call, keeps the JavaScript session persistent, and
-routes native-app permission requests through Yeet's normal approval UI.
+Yeet can directly use the `unified-computer-use` runtime supplied by an installed
+Codex distribution. Discovery is platform-neutral: Yeet scans `CODEX_HOME`, accepts
+native executable/script paths on macOS, Linux, and Windows, launches the newest
+usable runtime lazily, keeps its JavaScript session persistent, and routes native-
+app permission requests through Yeet's normal approval UI. Availability of desktop
+control still depends on the Codex distribution actually providing that plugin for
+the host OS; Yeet reports a clear unavailable-runtime error when it does not.
 
 The older `Scripts/link-codex-computer-use.sh` path remains only for backwards
 compatibility with existing setups; new installations should use the built-in
@@ -83,6 +103,25 @@ yeet mcpserver restart --port 8443
 yeet mcpserver stop --port 8443
 yeet mcpserver list
 ```
+
+The HTTP transport is session-aware. A successful `initialize` response returns
+`Mcp-Session-Id`; clients should send that header on later requests and may
+terminate the session with `DELETE /mcp`. Each session owns an isolated tool
+runtime, so independent clients and agent sessions can execute concurrently
+without sharing file snapshots, artifacts, shell jobs, or Computer Use state.
+Calls within one session stay ordered to preserve that state. If a second call
+overlaps a busy session for too long, Yeet returns an explicit retryable 503
+instead of tying up an HTTP worker indefinitely.
+
+Clients that do not send `Mcp-Session-Id` use a bounded legacy runtime pool
+instead of one global process. Independent/stateless calls are distributed
+across lanes, while snapshot edits, background-job handles, artifact handles,
+and Computer Use state retain the affinity needed for follow-up calls.
+
+`GET /health` reports process/runtime liveness and `GET /ready` reports whether
+at least one runtime lane is immediately available. Runtime responses are also
+bounded by tool-aware timeouts; an unresponsive isolated runtime is restarted
+before later requests are accepted.
 
 Different ports are independent managed daemons, including separate auth and
 daemon state. `--bind HOST` selects the listen interface. For a reverse proxy

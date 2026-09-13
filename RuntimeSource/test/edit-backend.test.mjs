@@ -5,6 +5,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   realpath,
   rm,
   symlink,
@@ -473,6 +474,85 @@ test("transaction writer rolls back when the live digest differs", async () => {
       /changed after preflight/,
     );
     assert.equal(await readFile(file, "utf8"), "original\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("transaction recovery does not touch a live writer's journal", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-live-journal-"));
+  try {
+    const journalDir = path.join(root, ".transactions");
+    const target = path.join(root, "created.txt");
+    await mkdir(journalDir);
+    await writeFile(target, "created by another writer\n", "utf8");
+    await writeFile(
+      path.join(journalDir, "live.json"),
+      JSON.stringify({
+        id: "live",
+        state: "prepared",
+        ownerPid: process.pid,
+        records: [{
+          target,
+          stage: path.join(root, ".created.txt.yeet-stage-live"),
+          backup: path.join(root, ".created.txt.yeet-backup-live"),
+          hadOriginal: false,
+          expectMissing: true,
+        }],
+      }),
+      "utf8",
+    );
+
+    const writer = new TransactionalWriter(journalDir);
+    await writer.initialize();
+    assert.equal(await readFile(target, "utf8"), "created by another writer\n");
+    assert.deepEqual(await readdir(journalDir), ["live.json"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("stale create journals never remove a target that appeared after preflight", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-stale-create-"));
+  try {
+    const journalDir = path.join(root, ".transactions");
+    const target = path.join(root, "created.txt");
+    await mkdir(journalDir);
+    await writeFile(target, "created concurrently\n", "utf8");
+    await writeFile(
+      path.join(journalDir, "stale.json"),
+      JSON.stringify({
+        id: "stale",
+        state: "prepared",
+        records: [{
+          target,
+          stage: path.join(root, ".created.txt.yeet-stage-stale"),
+          backup: path.join(root, ".created.txt.yeet-backup-stale"),
+          hadOriginal: false,
+          expectMissing: true,
+        }],
+      }),
+      "utf8",
+    );
+
+    const writer = new TransactionalWriter(journalDir);
+    await writer.initialize();
+    assert.equal(await readFile(target, "utf8"), "created concurrently\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("corrupt transaction journals do not prevent daemon startup", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-corrupt-journal-"));
+  try {
+    const journalDir = path.join(root, ".transactions");
+    await mkdir(journalDir);
+    await writeFile(path.join(journalDir, "corrupt.json"), "{\"state\":\"prepared\"}", "utf8");
+
+    const writer = new TransactionalWriter(journalDir);
+    await writer.initialize();
+    assert.deepEqual(await readdir(journalDir), ["corrupt.json"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

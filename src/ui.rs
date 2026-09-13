@@ -7,9 +7,10 @@ mod task;
 mod theme;
 mod yeet_brand;
 use dialogs::{
-    draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_help, draw_models,
-    draw_permission, draw_provider_edit, draw_providers, draw_reasoning, draw_sandbox_policy,
-    draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit, draw_status_dialog,
+    draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_help, draw_infinity,
+    draw_models, draw_permission, draw_provider_edit, draw_providers, draw_reasoning,
+    draw_sandbox_policy, draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
+    draw_status_dialog,
 };
 
 mod markdown;
@@ -72,6 +73,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Mode::Debate => dialogs::draw_debate(frame, app),
         Mode::Models => draw_models(frame, app),
         Mode::Reasoning => draw_reasoning(frame, app),
+        Mode::Infinity => draw_infinity(frame, app),
         Mode::Sessions => draw_sessions(frame, app),
         Mode::Capabilities => draw_capabilities(frame, app),
         Mode::CapabilityDetail => draw_capability_detail(frame, app),
@@ -220,7 +222,7 @@ fn draw_transcript_context_menu(frame: &mut Frame<'_>, app: &mut App) {
         List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Double)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme::BORDER))
                 .style(theme::surface()),
         ),
@@ -257,34 +259,34 @@ fn draw_suggestions(
 
 fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let border_style = if app.state.is_streaming {
-        Style::default().fg(theme::ACCENT_HOT)
-    } else {
         Style::default().fg(theme::pulse_color())
+    } else {
+        Style::default().fg(theme::BORDER)
     };
     let roomy = area.width >= 54;
     let title = if app.state.is_streaming && roomy {
-        " ◈  BUFFERED DIRECTIVE UPLINK  ".to_owned()
+        " ◈  BUFFERED DIRECTIVE // UPLINK  ".to_owned()
     } else if app.state.is_streaming {
-        " ◈  BUFFERED UPLINK  ".to_owned()
+        " ◈  UPLINK // BUF  ".to_owned()
     } else if roomy {
-        " ◈  DIRECTIVE UPLINK  ".to_owned()
+        " ◈  DIRECTIVE // UPLINK  ·  READY  ".to_owned()
     } else {
-        " ◈  UPLINK  ".to_owned()
+        " ◈  UPLINK // READY  ".to_owned()
     };
     let hint = if area.width < 34 {
         " ENTER//TX "
     } else if app.state.is_streaming && area.width < 60 {
         " ESC//ABORT · ENTER//QUEUE "
     } else if !app.state.is_streaming && area.width < 60 {
-        " ENTER//TX · / CMD "
+        " ENTER//TX · / //CMDS "
     } else if app.state.is_streaming {
-        " ESC//ABORT  ·  ENTER//QUEUE  ·  / COMMAND MATRIX "
+        " ESC//ABORT  ·  ENTER//QUEUE  ·  ALT+↑/↓//HISTORY  ·  / //COMMANDS "
     } else {
-        " ENTER//TRANSMIT  ·  / COMMAND MATRIX "
+        " ENTER//TRANSMIT  ·  ALT+↑/↓//HISTORY  ·  / //COMMANDS "
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Double)
+        .border_type(BorderType::Rounded)
         .border_style(border_style)
         .style(theme::surface())
         .padding(ratatui::widgets::Padding::horizontal(1))
@@ -292,7 +294,11 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .title_bottom(Line::from(hint).style(Style::default().fg(theme::MUTED)))
         .title_style(
             Style::default()
-                .fg(theme::ACCENT)
+                .fg(if app.state.is_streaming {
+                    theme::ACCENT_HOT
+                } else {
+                    theme::ACCENT_WARM
+                })
                 .add_modifier(Modifier::BOLD),
         );
     let inner = block.inner(area);
@@ -304,8 +310,10 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll = layout.row.saturating_sub(inner.height as usize - 1);
     let lines = if app.input.is_empty() {
         vec![Line::styled(
-            "▸ awaiting directive_",
-            Style::default().fg(theme::MUTED),
+            "› awaiting directive_",
+            Style::default()
+                .fg(theme::MUTED)
+                .add_modifier(Modifier::ITALIC),
         )]
     } else {
         layout
@@ -338,17 +346,17 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn status_line(app: &App, width: usize) -> Line<'static> {
-    let current = app.state.current_context_tokens.unwrap_or(0);
-    let (total, percent) = match app.state.active_model_context_length {
+    let current_tokens = app.state.current_context_tokens.unwrap_or(0);
+    let total_tokens = app.state.active_model_context_length;
+    let (total, percent) = match total_tokens {
         Some(total) if total > 0 => (
             compact_number(total),
-            format!("{:.0}%", current as f64 * 100.0 / total as f64),
+            format!("{:.0}%", current_tokens as f64 * 100.0 / total as f64),
         ),
         Some(total) => (compact_number(total), "?%".to_owned()),
         None => ("?".to_owned(), "?%".to_owned()),
     };
-    let input = compact_number(app.state.token_usage.input_tokens.unwrap_or(0));
-    let output = compact_number(app.state.token_usage.output_tokens.unwrap_or(0));
+
     let reasoning = if app.state.active_reasoning_level.is_empty() {
         "auto"
     } else {
@@ -360,7 +368,7 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         .as_ref()
         .map(|settings| settings.permission_mode())
         .unwrap_or("ask");
-    let current = compact_number(current);
+    let current = compact_number(current_tokens);
     let prefix = if width >= 3 { " ◈ " } else { "" };
     let available = width.saturating_sub(prefix.chars().count());
     let model_full = if app.state.active_model.is_empty() {
@@ -405,32 +413,47 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         other => other,
     };
     let model_micro = truncate_middle(&model_short, 7);
+    let meter = context_meter(current_tokens, total_tokens, 7);
     let candidates = [
         format!(
-            "model {model_full} │ ctx {current}/{total} {percent} │ in {input}↑ out {output}↓ │ reason {reasoning} │ perm {permission}"
+            "model {model_full} │ ctx {current}/{total} {percent} {meter} │ reason {reasoning} │ perm {permission}"
         ),
-        format!("{model_short} │ ctx {percent} │ {input}↑ {output}↓ │ {reasoning} │ {permission}"),
-        format!(
-            "{model_short} · {percent} · {input}↑{output}↓ · {reasoning_short} · {permission_short}"
-        ),
-        format!("{model_tiny} {percent} {input}↑{output}↓ {reasoning_short}/{permission_short}"),
-        format!("{model_micro} {percent} {input}↑{output}↓ {reasoning_micro}/{permission_micro}"),
+        format!("{model_short} │ ctx {percent} {meter} │ {reasoning} │ {permission}"),
+        format!("{model_short} · {percent} · {reasoning_short}/{permission_short}"),
+        format!("{model_tiny} {percent} {reasoning_short}/{permission_short}"),
+        format!("{model_micro} {percent} {reasoning_micro}/{permission_micro}"),
     ];
     let text = candidates
         .into_iter()
         .find(|candidate| Span::raw(candidate).width() <= available)
         .unwrap_or_else(|| {
             task::fit(
-                &format!(
-                    "{model_micro} {percent} {input}↑{output}↓ {reasoning_micro}/{permission_micro}"
-                ),
+                &format!("{model_micro} {percent} {reasoning_micro}/{permission_micro}"),
                 available,
             )
         });
     Line::from(vec![
-        Span::styled(prefix, Style::default().fg(theme::ACCENT)),
+        Span::styled(
+            prefix,
+            Style::default()
+                .fg(theme::ACCENT_WARM)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(text, Style::default().fg(theme::TEXT_DIM)),
     ])
+}
+
+fn context_meter(current: u64, total: Option<u64>, cells: usize) -> String {
+    let Some(total) = total.filter(|total| *total > 0) else {
+        return "·".repeat(cells);
+    };
+    let filled =
+        ((current.saturating_mul(cells as u64) + total / 2) / total).min(cells as u64) as usize;
+    format!(
+        "{}{}",
+        "▰".repeat(filled),
+        "▱".repeat(cells.saturating_sub(filled))
+    )
 }
 
 fn live_activity(app: &App) -> (String, Option<&str>) {
@@ -465,7 +488,7 @@ fn tool_step_counts(app: &App) -> (usize, usize) {
             match call.status {
                 ToolCallStatus::Completed => counts.0 += 1,
                 ToolCallStatus::Failed => counts.1 += 1,
-                ToolCallStatus::Streaming => {}
+                ToolCallStatus::Streaming | ToolCallStatus::Suppressed => {}
             }
         }
     }
@@ -638,7 +661,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             let mut lines = vec![Line::from(vec![
                 Span::styled("╾ ", Style::default().fg(theme::BORDER)),
                 Span::styled(
-                    "USER//DIRECTIVE",
+                    "USER // DIRECTIVE",
                     Style::default()
                         .fg(theme::ACCENT_HOT)
                         .add_modifier(Modifier::BOLD),
@@ -666,10 +689,15 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             let elapsed_ms = app.stream_elapsed().unwrap_or_default().as_millis();
             let mut lines = vec![Line::from(vec![
                 Span::styled("╾ ", Style::default().fg(theme::BORDER)),
-                Span::styled("YEET//RESPONSE", theme::brand()),
+                Span::styled("YEET // RESPONSE", theme::brand()),
                 Span::styled(" ╼", Style::default().fg(theme::BORDER)),
             ])];
-            lines.extend(markdown_lines(content));
+            for line in markdown_lines(content) {
+                let mut spans = Vec::with_capacity(line.spans.len() + 1);
+                spans.push(Span::styled("┃ ", Style::default().fg(theme::BORDER)));
+                spans.extend(line.spans);
+                lines.push(Line::from(spans));
+            }
             for call in tool_calls {
                 lines.extend(tool_lines(elapsed_ms, call, width));
             }
@@ -687,7 +715,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                     (content.as_str(), summary.as_deref())
                 };
             let mut lines = vec![Line::from(vec![
-                Span::styled("◇ COGNITION//", Style::default().fg(theme::ACCENT)),
+                Span::styled("◇ COGNITION //", Style::default().fg(theme::ACCENT)),
                 Span::styled(
                     summary
                         .map(|value| format!(" · {value}"))
@@ -696,10 +724,10 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                 ),
             ])];
             for line in content.lines() {
-                lines.push(Line::from(Span::styled(
-                    format!("  {line}"),
-                    Style::default().fg(theme::MUTED),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled("┊ ", Style::default().fg(theme::BORDER_DIM)),
+                    Span::styled(line.to_owned(), Style::default().fg(theme::MUTED)),
+                ]));
             }
             lines
         }
@@ -864,7 +892,9 @@ fn tool_lines(
         ),
         ToolCallStatus::Completed => (
             "✓",
-            Style::default().fg(theme::TEXT),
+            Style::default()
+                .fg(theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
             Style::default()
                 .fg(theme::TEXT_DIM)
                 .add_modifier(Modifier::BOLD),
@@ -878,6 +908,11 @@ fn tool_lines(
                 .fg(theme::ERROR)
                 .add_modifier(Modifier::BOLD),
         ),
+        ToolCallStatus::Suppressed => (
+            "⊘",
+            Style::default().fg(theme::MUTED),
+            Style::default().fg(theme::TEXT_DIM),
+        ),
     };
 
     let mut primary = vec![
@@ -888,25 +923,57 @@ fn tool_lines(
         ),
         Span::styled(tool_title(&call.name), title_style),
     ];
-    if width >= 48 {
-        primary.push(Span::styled("  ·  ", Style::default().fg(theme::MUTED)));
+    if width >= 42 {
+        primary.push(Span::styled("  [", Style::default().fg(theme::BORDER)));
         primary.push(Span::styled(
-            truncate_middle(&call.name, (width as usize).saturating_sub(28).min(34)),
-            Style::default().fg(theme::MUTED),
+            tool_class(&call.name),
+            Style::default()
+                .fg(theme::ACCENT_WARM)
+                .add_modifier(Modifier::BOLD),
         ));
+        primary.push(Span::styled("]", Style::default().fg(theme::BORDER)));
+    }
+    if width >= 64 {
+        let used = Line::from(primary.clone()).width();
+        let budget = (width as usize).saturating_sub(used + 5).min(34);
+        if budget >= 4 {
+            primary.push(Span::styled(
+                "  ·  ",
+                Style::default().fg(theme::BORDER_DIM),
+            ));
+            primary.push(Span::styled(
+                truncate_middle(&call.name, budget),
+                Style::default().fg(theme::MUTED),
+            ));
+        }
     }
 
     let mut lines = vec![Line::from(primary)];
     if width >= 32
         && let Some(summary) =
-            tool_argument_summary(&call.arguments, (width as usize).saturating_sub(5))
+            tool_argument_summary(&call.arguments, (width as usize).saturating_sub(7))
     {
         lines.push(Line::from(vec![
-            Span::styled("  └ ", Style::default().fg(theme::MUTED)),
+            Span::styled("  ╰─ ", Style::default().fg(theme::BORDER_DIM)),
             Span::styled(summary, Style::default().fg(theme::MUTED)),
         ]));
     }
     lines
+}
+
+fn tool_class(name: &str) -> &'static str {
+    match name {
+        "read_file" | "read_files" | "read_document" | "read_artifact" | "list_files" => "IO",
+        "search_workspace" | "search_artifact" | "find_capabilities" => "FIND",
+        "apply_file_edits" => "EDIT",
+        "run_shell" | "shell_job" => "EXEC",
+        "web_search" | "web_read" => "NET",
+        "analyze_data" => "DATA",
+        "computer_use" | "desktop_control" => "DESK",
+        "artifact_info" => "META",
+        "activate_capability" => "CAP",
+        _ => "TOOL",
+    }
 }
 
 fn tool_glyph(name: &str) -> &'static str {
@@ -1065,11 +1132,11 @@ mod tests {
                     ..App::default()
                 };
                 terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-                let popup = centered_rect(72, 72, Rect::new(0, 0, width, height));
+                let popup = centered_rect(76, 74, Rect::new(0, 0, width, height));
                 assert!(popup.right() <= width && popup.bottom() <= height);
                 if mode == Mode::Models {
                     let buffer = terminal.backend().buffer();
-                    assert_eq!(buffer[(popup.x, popup.y)].bg, theme::SURFACE);
+                    assert_eq!(buffer[(popup.x, popup.y)].bg, theme::SURFACE_RAISED);
                     assert_eq!(buffer[(popup.x, popup.y)].symbol(), "╔");
                 }
             }
@@ -1091,6 +1158,39 @@ mod tests {
             assert!(screen.contains("AWAITING DIRECTIVE"));
             assert!(screen.contains("ENTER//TRANSMIT"));
         }
+    }
+
+    #[test]
+    fn visual_hierarchy_uses_surface_layers_and_command_modals() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let (width, height) = (140, 32);
+        let bounds = Rect::new(0, 0, width, height);
+        let metrics = responsive::metrics(bounds);
+        let content_x = metrics
+            .sidebar_width
+            .expect("wide layout should expose sidebar");
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut app = App::default();
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(content_x, 0)].bg, theme::SURFACE);
+        assert_eq!(
+            buffer[(content_x, metrics.header_height.saturating_sub(1))].fg,
+            theme::BORDER_DIM
+        );
+
+        app.mode = Mode::Models;
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let popup = centered_rect(76, 74, bounds);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(popup.x, popup.y)].symbol(), "╔");
+        assert_eq!(buffer[(popup.x, popup.y)].bg, theme::SURFACE_RAISED);
+        let title_x = (popup.x..popup.right())
+            .find(|&x| buffer[(x, popup.y)].symbol() == "M")
+            .expect("model modal should render a title");
+        assert_eq!(buffer[(title_x, popup.y)].bg, theme::SURFACE_RAISED);
     }
 
     #[test]
@@ -1116,7 +1216,7 @@ mod tests {
 
             app.mode = Mode::Models;
             terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-            let popup = centered_rect(72, 72, Rect::new(0, 0, width, height));
+            let popup = centered_rect(76, 74, Rect::new(0, 0, width, height));
             assert!(popup.right() <= width && popup.bottom() <= height);
         }
     }
@@ -1132,8 +1232,10 @@ mod tests {
         );
 
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut app = App::default();
-        app.follow_tail = false;
+        let mut app = App {
+            follow_tail: false,
+            ..App::default()
+        };
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let screen: String = terminal
             .backend()
@@ -1194,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn bottom_status_includes_model_and_keeps_detailed_usage_out() {
+    fn bottom_status_keeps_runtime_controls_and_detailed_usage_out() {
         let mut app = App::default();
         app.state.active_model = "openai/test".into();
         app.state.active_model_context_length = Some(128_000);
@@ -1212,15 +1314,16 @@ mod tests {
             .collect::<String>();
         assert!(text.contains("model openai/test"));
         assert!(text.contains("ctx 64k/128k 50%"));
-        assert!(text.contains("in 12k↑ out 3k↓"));
         assert!(text.contains("reason high"));
         assert!(text.contains("perm ask"));
+        assert!(!text.contains("12k"));
+        assert!(!text.contains("3k"));
         assert!(!text.contains("cache"));
         assert!(!text.contains("cost"));
     }
 
     #[test]
-    fn bottom_status_preserves_all_live_categories_when_narrow() {
+    fn bottom_status_preserves_runtime_controls_when_narrow() {
         let mut app = App::default();
         app.state.active_model = "openai/gpt-5.6-codex".into();
         app.state.active_model_context_length = Some(128_000);
@@ -1235,9 +1338,23 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.contains("50%"));
-        assert!(text.contains("12k↑3k↓"));
-        assert!(text.contains("high/ask") || text.contains("hi/as"));
+        assert!(text.contains("high") || text.contains("hi"));
+        assert!(text.contains("ask") || text.contains("as"));
         assert!(text.contains("gpt"));
+        assert!(!text.contains("12k"));
+    }
+
+    #[test]
+    fn bottom_status_never_exceeds_terminal_width() {
+        let mut app = App::default();
+        app.state.active_model = "provider/a-very-long-model-identifier".into();
+        app.state.active_model_context_length = Some(200_000);
+        app.state.current_context_tokens = Some(123_456);
+        app.state.active_reasoning_level = "medium".into();
+
+        for width in 1..=120 {
+            assert!(status_line(&app, width).width() <= width);
+        }
     }
 
     #[test]

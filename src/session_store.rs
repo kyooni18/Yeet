@@ -18,7 +18,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::{
     core::{Message, Usage},
-    model::{ConversationEntry, SessionSummary},
+    model::{ConversationEntry, SessionSummary, WorkspaceSessionGroup, WorkspaceSummary},
+    platform::{set_private_directory, set_private_file},
 };
 
 const SESSION_LAYOUT_VERSION: u64 = 4;
@@ -28,6 +29,7 @@ const RUNS_DIR: &str = "runs";
 const EVENT_SEQUENCE_FILE: &str = ".event-seq";
 const OBJECTS_DIR: &str = ".objects";
 const MANIFEST_FILE: &str = ".current.json";
+const INFINITY_STATE_FILE: &str = ".infinity.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,17 +147,39 @@ impl SessionStore {
         operation()
     }
 
+    fn serialized_session<T>(
+        &self,
+        id: &str,
+        exclusive: bool,
+        operation: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        validate_id(id)?;
+        let _process_guard = self
+            .io_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session store lock poisoned"))?;
+        self.ensure()?;
+        // Session operations take the store lock in shared mode so unrelated
+        // sessions can proceed concurrently while store-wide maintenance still
+        // has an exclusive barrier against every active session operation.
+        let _store_guard = StoreFileLock::acquire(&self.directory.join(".store.lock"), false)?;
+        let lock_path = self.directory.join(format!(".session-{id}.lock"));
+        let _session_guard = StoreFileLock::acquire(&lock_path, exclusive)?;
+        operation()
+    }
+
     /// Prepare the on-disk store and collapse older revision-based sessions
     /// into the current semantic layout. Migration is intentionally done once
     /// at backend startup rather than on every save.
     pub fn prepare(&self) -> Result<()> {
-        self.ensure()?;
-        self.migrate_legacy_layouts();
-        Ok(())
+        self.serialized(true, || {
+            self.migrate_legacy_layouts();
+            cleanup_stale_materialization_links_in_store(&self.directory)
+        })
     }
 
     pub fn save(&self, session: &StoredSession) -> Result<()> {
-        self.serialized(true, || self.save_unlocked(session))
+        self.serialized_session(&session.id, true, || self.save_unlocked(session))
     }
 
     fn save_unlocked(&self, session: &StoredSession) -> Result<()> {
@@ -254,6 +278,7 @@ impl SessionStore {
         // snapshots from the old layout.
         self.migrate_legacy_runtime_log(&root)?;
         cleanup_legacy_layout(&root)?;
+        cleanup_stale_materialization_links(&root)?;
         Ok(())
     }
 
@@ -263,7 +288,7 @@ impl SessionStore {
         run_id: Option<&str>,
         event: &serde_json::Value,
     ) -> Result<()> {
-        self.serialized(true, || self.append_event_unlocked(id, run_id, event))
+        self.serialized_session(id, true, || self.append_event_unlocked(id, run_id, event))
     }
 
     fn append_event_unlocked(
@@ -348,7 +373,7 @@ impl SessionStore {
     }
 
     pub fn load(&self, id: &str) -> Result<StoredSession> {
-        self.serialized(false, || self.load_unlocked(id))
+        self.serialized_session(id, false, || self.load_unlocked(id))
     }
 
     fn load_unlocked(&self, id: &str) -> Result<StoredSession> {
@@ -464,8 +489,121 @@ impl SessionStore {
         Ok(result)
     }
 
+    pub fn list_workspaces(&self, current_workspace: &Path) -> Result<Vec<WorkspaceSummary>> {
+        self.serialized(false, || self.list_workspaces_unlocked(current_workspace))
+    }
+
+    fn list_workspaces_unlocked(&self, current_workspace: &Path) -> Result<Vec<WorkspaceSummary>> {
+        self.ensure()?;
+        let current = current_workspace
+            .canonicalize()
+            .unwrap_or_else(|_| current_workspace.to_path_buf());
+        let mut grouped: BTreeMap<PathBuf, (Option<DateTime<Utc>>, usize)> = BTreeMap::new();
+        grouped.insert(current.clone(), (None, 0));
+        let mut seen_ids = HashSet::new();
+
+        for entry in fs::read_dir(&self.directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let id = if path.is_dir() {
+                path.file_name()
+            } else if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                path.file_stem()
+            } else {
+                None
+            };
+            let Some(id) = id.and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !seen_ids.insert(id.to_owned()) {
+                continue;
+            }
+
+            let workspace = if path.is_dir()
+                && (path.join(MANIFEST_FILE).is_file() || path.join("metadata.json").is_file())
+            {
+                let manifest = fs::read(path.join(MANIFEST_FILE))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<SemanticManifest>(&bytes).ok());
+                let metadata = if let Some(manifest) = manifest.as_ref() {
+                    read_manifest_component(&path, manifest, "metadata.json")
+                        .ok()
+                        .flatten()
+                } else {
+                    fs::read(path.join("metadata.json")).ok()
+                };
+                let Some(metadata) = metadata
+                    .and_then(|bytes| serde_json::from_slice::<SessionListMetadata>(&bytes).ok())
+                else {
+                    continue;
+                };
+                (metadata.workspace_root, metadata.updated_at)
+            } else {
+                let Ok(session) = self.load_unlocked(id) else {
+                    continue;
+                };
+                (session.workspace_root, session.updated_at)
+            };
+
+            let (workspace_root, updated_at) = workspace;
+            let raw_root = PathBuf::from(workspace_root);
+            let root = raw_root.canonicalize().unwrap_or(raw_root);
+            if !root.is_dir() {
+                continue;
+            }
+            let (latest, count) = grouped.entry(root).or_insert((None, 0));
+            *count += 1;
+            match latest {
+                Some(existing) if *existing >= updated_at => {}
+                _ => *latest = Some(updated_at),
+            }
+        }
+
+        let mut result = grouped
+            .into_iter()
+            .map(|(path, (updated_at, session_count))| {
+                let path_string = path.to_string_lossy().into_owned();
+                WorkspaceSummary {
+                    id: path_string.clone(),
+                    path: path_string,
+                    display_name: workspace_display_name(&path),
+                    updated_at: updated_at.map(|value| value.to_rfc3339()),
+                    session_count,
+                    is_current: path == current,
+                }
+            })
+            .collect::<Vec<_>>();
+        result.sort_by(|lhs, rhs| {
+            rhs.is_current
+                .cmp(&lhs.is_current)
+                .then_with(|| rhs.updated_at.cmp(&lhs.updated_at))
+                .then_with(|| lhs.display_name.cmp(&rhs.display_name))
+                .then_with(|| lhs.path.cmp(&rhs.path))
+        });
+        Ok(result)
+    }
+
+    pub fn list_workspace_catalog(
+        &self,
+        current_workspace: &Path,
+    ) -> Result<(Vec<WorkspaceSummary>, Vec<WorkspaceSessionGroup>)> {
+        self.serialized(false, || {
+            let workspaces = self.list_workspaces_unlocked(current_workspace)?;
+            let session_groups = workspaces
+                .iter()
+                .map(|workspace| {
+                    Ok(WorkspaceSessionGroup {
+                        workspace_id: workspace.id.clone(),
+                        sessions: self.list_unlocked(Path::new(&workspace.path))?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((workspaces, session_groups))
+        })
+    }
+
     pub fn is_debate_session(&self, id: &str) -> bool {
-        self.serialized(false, || Ok(self.is_debate_session_unlocked(id)))
+        self.serialized_session(id, false, || Ok(self.is_debate_session_unlocked(id)))
             .unwrap_or(false)
     }
 
@@ -498,7 +636,7 @@ impl SessionStore {
         delete_source: bool,
         active_session_id: Option<&str>,
     ) -> Result<SessionExportResult> {
-        self.serialized(true, || {
+        self.serialized_session(id, true, || {
             self.export_session_unlocked(id, destination, delete_source, active_session_id)
         })
     }
@@ -638,6 +776,29 @@ impl SessionStore {
         })
     }
 
+    pub fn set_infinity_mode(&self, id: &str, enabled: bool) -> Result<()> {
+        self.serialized_session(id, true, || {
+            let root = self.directory.join(id);
+            create_private_dir(&root)?;
+            let data = serde_json::to_vec_pretty(&serde_json::json!({ "enabled": enabled }))?;
+            write_private_replace(&root.join(INFINITY_STATE_FILE), &data)
+        })
+    }
+
+    pub fn infinity_mode(&self, id: &str) -> Result<bool> {
+        self.serialized_session(id, false, || {
+            let path = self.directory.join(id).join(INFINITY_STATE_FILE);
+            if !path.is_file() {
+                return Ok(false);
+            }
+            let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+            Ok(value
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false))
+        })
+    }
+
     pub fn new_id() -> String {
         Uuid::new_v4().to_string()
     }
@@ -735,7 +896,7 @@ impl SessionStore {
                         let _ = gc_semantic_objects(root, &manifest);
                     }
                 } else if let Ok(session) = self.load_semantic_layout_legacy(root) {
-                    let _ = self.save(&session);
+                    let _ = self.save_unlocked(&session);
                 }
                 let _ = self.migrate_legacy_runtime_log(root);
                 let _ = cleanup_legacy_layout(root);
@@ -747,7 +908,7 @@ impl SessionStore {
             let Ok(session) = self.load_revision_layout(root) else {
                 continue;
             };
-            if self.save(&session).is_err() {
+            if self.save_unlocked(&session).is_err() {
                 continue;
             }
         }
@@ -772,7 +933,7 @@ impl SessionStore {
                 continue;
             }
             let root = self.directory.join(id);
-            if !root.join("metadata.json").exists() && self.save(&session).is_err() {
+            if !root.join("metadata.json").exists() && self.save_unlocked(&session).is_err() {
                 continue;
             }
             let _ = fs::remove_file(path);
@@ -805,8 +966,7 @@ impl SessionStore {
 
     fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.directory)?;
-        #[cfg(unix)]
-        fs::set_permissions(&self.directory, fs::Permissions::from_mode(0o700))?;
+        set_private_directory(&self.directory)?;
         Ok(())
     }
 }
@@ -950,10 +1110,63 @@ fn cleanup_legacy_layout(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn cleanup_stale_materialization_links_in_store(directory: &Path) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            cleanup_stale_materialization_links(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_stale_materialization_links(root: &Path) -> Result<()> {
+    for directory in [
+        root.to_path_buf(),
+        root.join(RUNS_DIR),
+        root.join(DEBATES_DIR),
+    ] {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if is_stale_materialization_link(name) {
+                remove_file_if_exists(&entry.path())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_stale_materialization_link(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".link") else {
+        return false;
+    };
+    let Some((base, id)) = stem.rsplit_once('.') else {
+        return false;
+    };
+    matches!(
+        base,
+        ".metadata.json"
+            | ".conversation.json"
+            | ".model-history.json"
+            | ".index.json"
+            | ".knowledge.json"
+            | ".state.json"
+    ) && Uuid::parse_str(id).is_ok()
+}
+
 fn create_private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)?;
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    set_private_directory(path)?;
     Ok(())
 }
 
@@ -1089,6 +1302,8 @@ fn write_private_replace(path: &Path, data: &[u8]) -> Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(&tmp)?;
+
+    set_private_file(&tmp)?;
     file.write_all(data)?;
     file.sync_all()?;
     drop(file);
@@ -1101,10 +1316,20 @@ fn write_private_replace(path: &Path, data: &[u8]) -> Result<()> {
             return Err(error.into());
         }
     }
+
+    set_private_file(path)?;
     if let Some(parent) = path.parent() {
         fs::File::open(parent)?.sync_all()?;
     }
     Ok(())
+}
+
+fn workspace_display_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -1114,6 +1339,21 @@ mod tests {
         core::{Message, Usage},
         model::{ConversationEntry, ConversationKind},
     };
+
+    #[test]
+    fn infinity_mode_state_is_durable_and_defaults_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        let id = "session-infinity";
+
+        assert!(!store.infinity_mode(id).unwrap());
+        store.set_infinity_mode(id, true).unwrap();
+        assert!(store.infinity_mode(id).unwrap());
+        assert!(store.directory.join(id).join(INFINITY_STATE_FILE).is_file());
+
+        store.set_infinity_mode(id, false).unwrap();
+        assert!(!store.infinity_mode(id).unwrap());
+    }
 
     #[test]
     fn session_store_round_trips_and_lists_newest_first() {
@@ -1263,6 +1503,79 @@ mod tests {
                 .map(|value| value.title.as_str())
                 .collect::<Vec<_>>(),
             vec!["newer", "older"]
+        );
+    }
+
+    #[test]
+    fn workspace_catalog_groups_saved_roots_and_keeps_current_first() {
+        let temp = tempfile::tempdir().unwrap();
+        let current_workspace = tempfile::tempdir().unwrap();
+        let other_workspace = tempfile::tempdir().unwrap();
+        let stale_workspace = temp.path().join("missing-workspace");
+        let store = SessionStore::new(temp.path());
+        let now = Utc::now();
+
+        for (id, root, offset) in [
+            ("current-old", current_workspace.path(), 1_i64),
+            ("current-new", current_workspace.path(), 3_i64),
+            ("other", other_workspace.path(), 2_i64),
+            ("stale", stale_workspace.as_path(), 4_i64),
+        ] {
+            store
+                .save(&StoredSession {
+                    version: SESSION_LAYOUT_VERSION,
+                    debate: None,
+                    id: id.into(),
+                    title: id.into(),
+                    created_at: now,
+                    updated_at: now + chrono::Duration::seconds(offset),
+                    workspace_root: root.display().to_string(),
+                    model: "openai/test".into(),
+                    token_usage: Usage::default(),
+                    credit_usage: 0,
+                    conversation: vec![],
+                    model_history: vec![],
+                    runs: vec![],
+                    retained_debate_knowledge: vec![],
+                    attached_harness_capabilities: None,
+                    disabled_capabilities: vec![],
+                })
+                .unwrap();
+        }
+
+        let (catalog, session_groups) = store
+            .list_workspace_catalog(current_workspace.path())
+            .unwrap();
+        assert_eq!(catalog.len(), 2);
+        let current_path = current_workspace.path().canonicalize().unwrap();
+        let other_path = other_workspace.path().canonicalize().unwrap();
+        assert!(catalog[0].is_current);
+        assert_eq!(catalog[0].path, current_path.display().to_string());
+        assert_eq!(catalog[0].session_count, 2);
+        assert!(catalog[0].updated_at.is_some());
+        let current_sessions = session_groups
+            .iter()
+            .find(|group| group.workspace_id == current_path.display().to_string())
+            .unwrap();
+        assert_eq!(current_sessions.sessions.len(), 2);
+        assert_eq!(current_sessions.sessions[0].id, "current-new");
+        assert_eq!(current_sessions.sessions[1].id, "current-old");
+        let other = catalog
+            .iter()
+            .find(|workspace| workspace.path == other_path.display().to_string())
+            .unwrap();
+        assert!(!other.is_current);
+        assert_eq!(other.session_count, 1);
+        let other_sessions = session_groups
+            .iter()
+            .find(|group| group.workspace_id == other_path.display().to_string())
+            .unwrap();
+        assert_eq!(other_sessions.sessions.len(), 1);
+        assert_eq!(other_sessions.sessions[0].id, "other");
+        assert!(
+            catalog
+                .iter()
+                .all(|workspace| workspace.path != stale_workspace.display().to_string())
         );
     }
 
@@ -1583,6 +1896,43 @@ mod tests {
         );
         assert!(!store.file_path("single-session").exists());
         assert_eq!(store.load("single-session").unwrap().title, "single");
+    }
+
+    #[test]
+    fn prepare_removes_orphaned_materialization_links_without_broad_link_deletion() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        fs::create_dir_all(&store.directory).unwrap();
+        let root = store.directory.join("orphaned-links");
+        fs::create_dir_all(root.join(RUNS_DIR)).unwrap();
+        fs::create_dir_all(root.join(DEBATES_DIR)).unwrap();
+
+        let root_link = root.join(format!(".metadata.json.{}.link", Uuid::new_v4()));
+        let run_link = root
+            .join(RUNS_DIR)
+            .join(format!(".index.json.{}.link", Uuid::new_v4()));
+        let debate_link = root
+            .join(DEBATES_DIR)
+            .join(format!(".state.json.{}.link", Uuid::new_v4()));
+        let unrelated_link = root.join("keep.link");
+        let malformed_temp = root.join(".metadata.json.not-a-uuid.link");
+        for path in [
+            &root_link,
+            &run_link,
+            &debate_link,
+            &unrelated_link,
+            &malformed_temp,
+        ] {
+            fs::write(path, b"stale").unwrap();
+        }
+
+        store.prepare().unwrap();
+
+        assert!(!root_link.exists());
+        assert!(!run_link.exists());
+        assert!(!debate_link.exists());
+        assert!(unrelated_link.exists());
+        assert!(malformed_temp.exists());
     }
 
     #[test]

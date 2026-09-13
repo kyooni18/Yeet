@@ -40,7 +40,7 @@ pub(super) fn load_auth_providers(bridge: &BridgeClient) -> Result<Vec<AuthProvi
 
 /// Builds provider-specific browser-login options from environment variables.
 pub(super) fn auth_login_options(provider: &str) -> Option<Value> {
-    if provider != "gemini" {
+    if provider != "gemini" && provider != "gemini-web" {
         return None;
     }
     let client_id = std::env::var("GEMINI_OAUTH_CLIENT_ID")

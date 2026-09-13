@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,10 +8,8 @@ import { CODEX_COMPUTER_USE_RUNTIME, discoverCodexComputerUse } from '../dist/in
 
 test('discoverCodexComputerUse uses the newest bundled plugin and narrows it to the computer surface', async () => {
   const codexHome = await mkdtemp(path.join(os.tmpdir(), 'yeet-codex-home-'));
-  const executable = path.join(codexHome, 'cua-node');
+  const executable = process.execPath;
   const launcher = path.join(codexHome, 'launch.mjs');
-  await writeFile(executable, '#!/bin/sh\nexit 0\n');
-  await chmod(executable, 0o755);
   await writeFile(launcher, '// launcher\n');
 
   const base = path.join(codexHome, 'plugins', 'cache', 'openai-bundled', 'unified-computer-use');

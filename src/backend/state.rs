@@ -173,8 +173,68 @@ impl SharedSession {
         self.state.active_activity_entry_id = Some(id);
     }
 
+    /// Marks persisted running records terminal when no live runtime owns them.
+    pub(super) fn reconcile_orphaned_runs(&mut self, reason: &str) -> bool {
+        let now = Utc::now();
+        let orphaned = self
+            .meta
+            .runs
+            .iter_mut()
+            .filter_map(|run| {
+                if run.status != RunStatus::Running {
+                    return None;
+                }
+                run.status = RunStatus::Interrupted;
+                run.finished_at = Some(now);
+                run.error = Some(reason.to_owned());
+                Some(run.id.clone())
+            })
+            .collect::<Vec<_>>();
+        if orphaned.is_empty() {
+            return false;
+        }
+
+        let is_orphaned = |id: &str| orphaned.iter().any(|candidate| candidate == id);
+        let mut transcript_changed = false;
+        if let Some(entries) = self.state.conversation.as_mut() {
+            for entry in entries {
+                let ConversationKind::Activity { activity } = &mut entry.kind else {
+                    continue;
+                };
+                let Some(run_id) = activity.run_id.as_deref() else {
+                    continue;
+                };
+                if !is_orphaned(run_id)
+                    || matches!(
+                        activity.phase.as_str(),
+                        Some("done" | "failed" | "interrupted")
+                    )
+                {
+                    continue;
+                }
+                activity.phase = json!("interrupted");
+                activity.title = "Interrupted · Recovered stale run".into();
+                activity.detail = Some(reason.to_owned());
+                transcript_changed = true;
+            }
+        }
+        if transcript_changed {
+            self.state.conversation_revision = self.state.conversation_revision.wrapping_add(1);
+        }
+        if self.meta.current_turn.as_deref().is_some_and(&is_orphaned) {
+            self.meta.current_turn = None;
+        }
+        if self.state.active_run_id.as_deref().is_some_and(is_orphaned) {
+            self.state.active_run_id = None;
+        }
+        true
+    }
+
     /// Registers a new persisted run and marks it active in the UI state.
     pub(super) fn start_run(&mut self, id: String, kind: &str, model: String) {
+        self.reconcile_orphaned_runs(
+            "A newer run started before the previous persisted run reached a terminal state.",
+        );
         self.meta.current_turn = Some(id.clone());
         self.state.active_run_id = Some(id.clone());
         self.meta.runs.push(StoredRun {

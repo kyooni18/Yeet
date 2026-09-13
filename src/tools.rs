@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    core::{BridgeClient, McpServerStatus, ToolCall, ToolDefinition, Usage},
+    core::{BridgeClient, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
     permission::PermissionBroker,
@@ -29,9 +29,11 @@ mod paths;
 mod shell_jobs;
 mod shell_runtime;
 mod support;
+mod token_efficiency;
 
 #[cfg(test)]
 use crate::edit::ReadResult;
+use definitions::BUILTIN_CAPABILITIES;
 pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
 pub use definitions::{is_coding_builtin_tool, is_general_builtin_tool};
@@ -46,53 +48,24 @@ pub(crate) use support::canonical_web_source_key;
 #[cfg(test)]
 use support::foundation_wrapper_schema;
 use support::{
-    ArtifactStore, ReadCacheEntry, allocate_tool_name, append_bounded_state_set,
-    builtin_capability_for_tool, cache_read_result, collect_web_source_urls, coverage_complete,
-    covered_ranges_within, foundation_context_from_tool_result, foundation_tool_result_text,
-    merged_ranges, next_uncovered, shell_quote, string_arg, truncate_state_value, uncovered_ranges,
-    usize_arg, web_search_queries,
+    ArtifactStore, McpServerIdentity, ReadCacheEntry, allocate_stable_tool_name,
+    append_bounded_state_set, builtin_capability_for_tool, cache_read_result,
+    collect_web_source_urls, coverage_complete, covered_ranges_within,
+    foundation_context_from_tool_result, foundation_tool_result_text, merged_ranges,
+    next_uncovered, shell_quote, string_arg, truncate_state_value, uncovered_ranges, usize_arg,
+    web_search_queries,
 };
 
 const DEFAULT_READ_LINES: usize = 160;
 const EXPLICIT_READ_LINES: usize = 480;
 const DEFAULT_INLINE_BYTES: usize = 12 * 1024;
-const EXPLICIT_INLINE_BYTES: usize = 64 * 1024;
+const EXPLICIT_INLINE_BYTES: usize = 16 * 1024;
 const FOUNDATION_RECALL_TOOL: &str = "project_memory_recall";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityDescriptor {
     pub id: String,
     pub kind: String,
     pub description: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct McpServerIdentity {
-    transport: String,
-    command: Option<String>,
-    args: Option<Vec<String>>,
-    env: BTreeMap<String, String>,
-    cwd: Option<String>,
-    url: Option<String>,
-    headers: BTreeMap<String, String>,
-}
-
-impl From<&McpServerStatus> for McpServerIdentity {
-    fn from(server: &McpServerStatus) -> Self {
-        Self {
-            transport: server.transport.clone(),
-            command: server.command.clone(),
-            args: server.args.clone(),
-            env: server.env.clone().unwrap_or_default().into_iter().collect(),
-            cwd: server.cwd.clone(),
-            url: server.url.clone(),
-            headers: server
-                .headers
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,71 +75,6 @@ pub struct BuiltinCapabilityDescriptor {
     pub description: &'static str,
     tools: &'static [&'static str],
 }
-
-const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
-    BuiltinCapabilityDescriptor {
-        id: "builtin:file-read",
-        name: "File Read",
-        description: "Read one or several UTF-8 files with read_file. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Reads return snapshot-safe line anchors for later edits.",
-        // read_files is a hidden legacy alias so old restored calls inherit
-        // the same disable/approval policy without re-exposing a second schema.
-        tools: &["read_file", "read_files"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:file-write",
-        name: "File Write",
-        description: "Create, modify, move, or delete files with snapshot-safe apply_file_edits. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Existing files require a snapshot from File Read.",
-        tools: &["apply_file_edits"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:file-list",
-        name: "File Listing",
-        description: "List workspace files and directories with list_files. Use it for structure discovery without reading file contents.",
-        tools: &["list_files"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:workspace-search",
-        name: "Workspace Search",
-        description: "Search workspace source with search_workspace. Matching is literal by default; narrow the path and use regex only when needed.",
-        tools: &["search_workspace"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:shell",
-        name: "Shell",
-        description: "Run commands with run_shell. In sandboxed mode, mutating or outside-project execution asks for approval; unlimited mode runs without sandbox restrictions. Builds/tests/noisy commands can use actor mode. Use run_shell background=true to detach and shell_job to check, list, stop, or forget jobs.",
-        tools: &["run_shell", "shell_job", "request_shell_permission"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:computer-use",
-        name: "Computer Use",
-        description: "Control native macOS applications with Codex's installed Computer Use runtime. Yeet launches it directly as a built-in capability; no MCP server needs to be configured or linked.",
-        tools: &["computer_use", "computer_use_reset"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:artifacts",
-        name: "Artifacts",
-        description: "Inspect large tool results externalized as artifacts with read_artifact/search_artifact instead of replaying the original expensive command or read.",
-        tools: &["artifact_info", "read_artifact", "search_artifact"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:document-read",
-        name: "Document Read",
-        description: "Extract readable content from documents without treating them as source code. Supports PDF, DOCX, spreadsheets, CSV/TSV, JSON, Markdown, and UTF-8 text, with large content stored as typed artifacts.",
-        tools: &["read_document"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:data-analysis",
-        name: "Data Analysis",
-        description: "Analyze structured local data directly. Supports CSV, TSV, JSON arrays of objects, Excel workbooks, and ODS with summaries, value counts, grouped aggregates, and Pearson correlation.",
-        tools: &["analyze_data"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:sessions",
-        name: "Session Management",
-        description: "List Yeet sessions structurally and export a verified session archive without shell-based session discovery or deleting the active runtime state.",
-        tools: &["list_sessions", "export_session"],
-    },
-];
 
 pub fn builtin_capabilities() -> &'static [BuiltinCapabilityDescriptor] {
     BUILTIN_CAPABILITIES
@@ -186,7 +94,8 @@ impl MutationValidation {
 
 pub struct ToolRegistry {
     bridge: BridgeClient,
-    edit: EditClient,
+    edit: Option<EditClient>,
+    edit_generation: u64,
     workspace_root: PathBuf,
     workers: WorkerRegistry,
     permission: PermissionBroker,
@@ -234,14 +143,17 @@ impl ToolRegistry {
         workers: WorkerRegistry,
         permission: PermissionBroker,
     ) -> Result<Self> {
-        let edit = EditClient::start(&workspace_root)?;
+        // The structured edit daemon is started lazily. Most MCP calls do not
+        // need file I/O, and eagerly spawning one per workspace runtime caused
+        // every HTTP lane to accumulate idle Node edit daemons.
         let mut active_tools = BTreeMap::new();
         for tool in base_tool_definitions() {
             active_tools.insert(tool.name.clone(), tool);
         }
         Ok(Self {
             bridge,
-            edit,
+            edit: None,
+            edit_generation: 0,
             workspace_root,
             workers,
             permission,
@@ -281,6 +193,15 @@ impl ToolRegistry {
             session_store: None,
             active_session_id: None,
         })
+    }
+
+    fn edit_mut(&mut self) -> Result<&mut EditClient> {
+        if self.edit.is_none() {
+            let edit = EditClient::start(&self.workspace_root)?;
+            self.edit_generation = edit.generation();
+            self.edit = Some(edit);
+        }
+        Ok(self.edit.as_mut().expect("edit client initialized"))
     }
 
     pub fn set_protected_write_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
@@ -329,7 +250,7 @@ impl ToolRegistry {
 
     pub fn foundation_memory_guidance(&self) -> Option<&'static str> {
         self.foundation_memory_active().then_some(
-            "Yeet project memory is available alongside session-local task_notes and context_history. Keep task progress and exact evidence in those local stores; promote only durable project knowledge to Yeet project memory. Relevant memory is recalled automatically at task start. Use project_memory_remember only for durable project knowledge that will help later sessions. Give mutable current-state facts a stable key so newer values supersede older ones while preserving history. Do not store secrets, credentials, raw transcripts, transient progress chatter, build output, or facts that are cheap to rediscover from the repository. Fresh source evidence overrides stale memory.",
+            "Yeet project memory is backed by Foundation v2 alongside session-local task_notes and context_history. Keep task progress and exact evidence in those local stores; promote only durable knowledge to Foundation memory. Recall is compact and token-budgeted by default; use project_memory_get to hydrate exact content only when needed. Use structured kind/subject/summary/confidence/importance/provenance/validity metadata when it improves later retrieval, and project_memory_relate for meaningful durable relationships. Project scope is the default; global scope is only for genuinely cross-project user knowledge. Give mutable current-state facts a stable key so newer values supersede older ones while preserving history. Do not store secrets, credentials, raw transcripts, transient progress chatter, build output, or facts that are cheap to rediscover from the repository. Fresh source evidence overrides stale memory.",
         )
     }
 
@@ -449,6 +370,8 @@ impl ToolRegistry {
                 | "read_artifact"
                 | "search_artifact"
                 | FOUNDATION_RECALL_TOOL
+                | "project_memory_get"
+                | "project_memory_connections"
         ) || self.skill_tool_map.contains_key(name)
             || self.read_only_mcp_tools.contains(name)
     }
@@ -557,10 +480,12 @@ impl ToolRegistry {
                 ),
             }
         }));
+        descriptors.sort_by(|left, right| left.id.cmp(&right.id));
         self.descriptors = descriptors;
     }
 
     pub fn execute(&mut self, call: &ToolCall, model: &str, cancel: &AtomicBool) -> Result<String> {
+        self.sync_edit_state();
         if self.shell_jobs.has_jobs() {
             // Refresh evidence without treating every poll/read as agent progress.
             let generation = self.workspace_generation;
@@ -827,6 +752,45 @@ impl ToolRegistry {
         self.activate_skill(name, true)
     }
 
+    pub fn enable_skill_attachment(&mut self, name: &str) {
+        self.disabled_capabilities.remove(&format!("skill:{name}"));
+    }
+
+    pub fn deactivate_skill(&mut self, name: &str) {
+        let tool_names = self
+            .skill_tool_map
+            .iter()
+            .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone()))
+            .chain(
+                self.skill_script_tool_map
+                    .iter()
+                    .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone())),
+            )
+            .collect::<Vec<_>>();
+        for tool_name in tool_names {
+            self.skill_tool_map.remove(&tool_name);
+            self.skill_script_tool_map.remove(&tool_name);
+            self.active_tools.remove(&tool_name);
+        }
+        self.active_skills.remove(name);
+    }
+
+    pub fn skill_tools_for(&self, skills: &HashSet<String>) -> Vec<String> {
+        let mut tools = self
+            .skill_tool_map
+            .iter()
+            .filter_map(|(tool, skill)| skills.contains(skill).then_some(tool.clone()))
+            .chain(
+                self.skill_script_tool_map
+                    .iter()
+                    .filter_map(|(tool, skill)| skills.contains(skill).then_some(tool.clone())),
+            )
+            .collect::<Vec<_>>();
+        tools.sort();
+        tools.dedup();
+        tools
+    }
+
     pub fn finish_task(&mut self, task_id: &str) {
         self.read_cache.clear();
         self.searches.clear();
@@ -857,12 +821,6 @@ impl ToolRegistry {
 
     pub fn workspace_write_generation(&self) -> u64 {
         self.workspace_write_generation
-    }
-
-    pub fn is_read_only_extension_tool(&self, name: &str) -> bool {
-        self.skill_tool_map.contains_key(name)
-            || self.read_only_mcp_tools.contains(name)
-            || name == FOUNDATION_RECALL_TOOL
     }
 
     pub fn working_state_summary(&self) -> Option<String> {
@@ -995,12 +953,18 @@ impl ToolRegistry {
             if self.active_mcp.contains(server) {
                 return Ok(json!({"activated":id,"alreadyActive":true}).to_string());
             }
-            let tools = self.bridge.list_mcp_tools(Some(server))?;
+            let mut tools = self.bridge.list_mcp_tools(Some(server))?;
+            // Provider-facing MCP names must not depend on tools/list order.
+            // Sort by logical identity before allocating names so an unrelated
+            // upstream reorder cannot churn the schema/order cache surface.
+            tools.sort_by(|left, right| left.name.cmp(&right.name));
             let mut names = Vec::new();
-            for (index, tool) in tools.into_iter().enumerate() {
-                let safe = allocate_tool_name(
+            for tool in tools {
+                let stable_identity = format!("mcp:{server}:{}", tool.name);
+                let safe = allocate_stable_tool_name(
                     "mcp",
-                    &[server, &index.to_string(), &tool.name],
+                    &[server, &tool.name],
+                    &stable_identity,
                     self.active_tools.keys(),
                 );
                 let definition = ToolDefinition {
@@ -1031,12 +995,15 @@ impl ToolRegistry {
             if self.active_workers.contains(worker) {
                 return Ok(json!({"activated":id,"alreadyActive":true}).to_string());
             }
-            let definitions = self.workers.activate(worker)?;
+            let mut definitions = self.workers.activate(worker)?;
+            definitions.sort_by(|left, right| left.name.cmp(&right.name));
             let mut names = Vec::new();
             for definition in definitions {
-                let safe = allocate_tool_name(
+                let stable_identity = format!("worker:{worker}:{}", definition.name);
+                let safe = allocate_stable_tool_name(
                     "worker",
                     &[worker, &definition.name],
+                    &stable_identity,
                     self.active_tools.keys(),
                 );
                 self.worker_tool_map
@@ -1068,13 +1035,40 @@ impl ToolRegistry {
     fn activate_skill(&mut self, name: &str, explicit: bool) -> Result<String> {
         let id = format!("skill:{name}");
         if self.active_skills.contains(name) {
-            return Ok(json!({"activated":id,"alreadyActive":true}).to_string());
+            let mut tools = self
+                .skill_tool_map
+                .iter()
+                .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone()))
+                .chain(
+                    self.skill_script_tool_map
+                        .iter()
+                        .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone())),
+                )
+                .collect::<Vec<_>>();
+            tools.sort();
+            if explicit {
+                let skill = self.bridge.load_skill(name)?;
+                return Ok(json!({
+                    "activated":id,
+                    "alreadyActive":true,
+                    "instructions":skill.instructions,
+                    "tools":tools
+                })
+                .to_string());
+            }
+            return Ok(json!({"activated":id,"alreadyActive":true,"tools":tools}).to_string());
         }
         let skill = self.bridge.load_skill(name)?;
         if !explicit && skill.allow_implicit_invocation == Some(false) {
             bail!("Skill {name} requires explicit user invocation with ${name}");
         }
-        let tool_name = allocate_tool_name("skill", &[name, "read_file"], self.active_tools.keys());
+        let read_identity = format!("skill:{name}:read_file");
+        let tool_name = allocate_stable_tool_name(
+            "skill",
+            &[name, "read_file"],
+            &read_identity,
+            self.active_tools.keys(),
+        );
         let definition = ToolDefinition::new(
             &tool_name,
             format!("Read a supporting file from Skill {name}."),
@@ -1084,8 +1078,13 @@ impl ToolRegistry {
         self.skill_tool_map
             .insert(tool_name.clone(), name.to_owned());
         let script_tool_name = if skill.files.iter().any(|path| path.starts_with("scripts/")) {
-            let script_tool_name =
-                allocate_tool_name("skill", &[name, "run_script"], self.active_tools.keys());
+            let script_identity = format!("skill:{name}:run_script");
+            let script_tool_name = allocate_stable_tool_name(
+                "skill",
+                &[name, "run_script"],
+                &script_identity,
+                self.active_tools.keys(),
+            );
             let script_definition = ToolDefinition::new(
                 &script_tool_name,
                 format!(
@@ -1111,11 +1110,16 @@ impl ToolRegistry {
             None
         };
         self.active_skills.insert(name.to_owned());
+        let mut tools = vec![tool_name.clone()];
+        if let Some(script) = script_tool_name.as_ref() {
+            tools.push(script.clone());
+        }
         Ok(json!({
             "activated":id,
             "instructions":skill.instructions,
             "readTool":tool_name,
-            "scriptTool":script_tool_name
+            "scriptTool":script_tool_name,
+            "tools":tools
         })
         .to_string())
     }
@@ -1323,12 +1327,42 @@ mod tests {
     }
 
     #[test]
-    fn tool_names_are_ascii_and_collision_safe() {
-        let existing = ["mcp_server_0_read".to_owned()];
-        assert_eq!(
-            allocate_tool_name("mcp", &["Server", "0", "Read"], existing.iter()),
-            "mcp_server_0_read_2"
+    fn stable_tool_names_do_not_depend_on_enumeration_indexes() {
+        let existing = ["mcp_server_read".to_owned()];
+        let first = allocate_stable_tool_name(
+            "mcp",
+            &["Server", "Read"],
+            "mcp:Server:Read",
+            existing.iter(),
         );
+        let second = allocate_stable_tool_name(
+            "mcp",
+            &["Server", "Read"],
+            "mcp:Server:Read",
+            existing.iter(),
+        );
+        assert_eq!(first, second);
+        assert!(first.starts_with("mcp_server_read_"));
+        assert!(!first.contains("_0_"));
+    }
+
+    #[test]
+    fn stable_extension_names_do_not_depend_on_current_occupancy() {
+        let empty: Vec<String> = Vec::new();
+        let unrelated = ["unrelated_tool".to_owned()];
+        for (prefix, parts, identity) in [
+            ("mcp", ["Server", "Read"], "mcp:Server:Read"),
+            (
+                "skill",
+                ["review-code", "read_file"],
+                "skill:review-code:read_file",
+            ),
+        ] {
+            let first = allocate_stable_tool_name(prefix, &parts, identity, empty.iter());
+            let second = allocate_stable_tool_name(prefix, &parts, identity, unrelated.iter());
+            assert_eq!(first, second);
+            assert_ne!(first, crate::tools::support::tool_name_base(prefix, &parts));
+        }
     }
 
     #[test]
@@ -1509,6 +1543,26 @@ mod tests {
 #[cfg(test)]
 mod durable_artifact_tests {
     use super::*;
+
+    #[test]
+    fn oversized_model_visible_tool_output_is_externalized_and_recoverable() {
+        let store = ArtifactStore::new().unwrap();
+        let source = format!("header\n{}\nfooter", "x".repeat(24 * 1024));
+        let (bounded, externalized) = artifact_output::externalize_model_visible_tool_output(
+            &store,
+            "mcp_big_result",
+            source.clone(),
+        )
+        .unwrap();
+        assert!(externalized);
+        assert!(bounded.len() < source.len());
+        let payload: Value = serde_json::from_str(&bounded).unwrap();
+        assert_eq!(payload["externalized"], true);
+        assert_eq!(payload["tool"], "mcp_big_result");
+        let id = payload["artifactId"].as_str().unwrap();
+        assert_eq!(store.read(id, Some(1), Some(3)).unwrap(), source);
+    }
+
     #[test]
     fn externalized_evidence_survives_registry_restart_and_is_session_scoped() {
         let session = tempfile::tempdir().unwrap();

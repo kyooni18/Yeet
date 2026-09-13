@@ -1,12 +1,12 @@
-use std::{env, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{model::normalize_reasoning_level, platform::replace_file};
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use crate::{
+    model::normalize_reasoning_level,
+    platform::{default_config_directory, replace_file, set_private_directory, set_private_file},
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,11 +39,7 @@ pub struct ConfigStore {
 
 impl Default for ConfigStore {
     fn default() -> Self {
-        let directory = env::var_os("YEET_CONFIG_DIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|home| home.join(".yeet")))
-            .unwrap_or_else(|| PathBuf::from(".yeet"));
+        let directory = default_config_directory();
         Self { directory }
     }
 }
@@ -63,16 +59,14 @@ impl ConfigStore {
     pub fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.directory)
             .with_context(|| format!("create {}", self.directory.display()))?;
-        #[cfg(unix)]
-        fs::set_permissions(&self.directory, fs::Permissions::from_mode(0o700))?;
+        set_private_directory(&self.directory)?;
         if !self.config_path().exists() {
             self.write(&ConfigDocument {
                 version: 1,
                 ..Default::default()
             })?;
         } else {
-            #[cfg(unix)]
-            fs::set_permissions(self.config_path(), fs::Permissions::from_mode(0o600))?;
+            set_private_file(&self.config_path())?;
         }
         Ok(())
     }
@@ -182,8 +176,7 @@ impl ConfigStore {
 
     fn ensure_no_recurse(&self) -> Result<()> {
         fs::create_dir_all(&self.directory)?;
-        #[cfg(unix)]
-        fs::set_permissions(&self.directory, fs::Permissions::from_mode(0o700))?;
+        set_private_directory(&self.directory)?;
         Ok(())
     }
 
@@ -196,11 +189,9 @@ impl ConfigStore {
         let mut data = serde_json::to_vec_pretty(document)?;
         data.push(b'\n');
         fs::write(&tmp, data)?;
-        #[cfg(unix)]
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        set_private_file(&tmp)?;
         replace_file(&tmp, &path)?;
-        #[cfg(unix)]
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        set_private_file(&path)?;
         Ok(())
     }
 }

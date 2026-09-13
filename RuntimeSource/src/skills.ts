@@ -3,6 +3,7 @@ import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promise
 import { homedir, tmpdir } from "node:os";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { defaultConfigDirectory } from "./platform.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -218,7 +219,7 @@ export class SkillRegistry {
   readonly userRoot: string;
 
   constructor(options: SkillRegistryOptions = {}) {
-    this.configDir = options.configDir ?? process.env.YEET_CONFIG_DIR ?? join(homedir(), ".yeet");
+    this.configDir = options.configDir ?? defaultConfigDirectory();
     this.userRoot = join(this.configDir, "skills");
     if (options.roots?.length) {
       this.roots = options.roots.map((root) => resolve(root));

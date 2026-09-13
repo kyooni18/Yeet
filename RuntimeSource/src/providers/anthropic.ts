@@ -1,6 +1,7 @@
-import { providerFetch, readJson } from "../http.js";
+import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
 import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
+import { promptCacheCapabilities, supportsAnthropicDeferredToolReferences } from "../cache-capabilities.js";
 import type {
   ProviderCallRequest,
   CallResult,
@@ -11,11 +12,12 @@ import type {
   StreamEvent,
   ToolChoice,
 } from "../types.js";
-import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, splitLeadingSystem, toolResultContent, usage } from "../util.js";
+import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, selectStableAndRecentIndexes, splitLeadingSystem, toolResultContent, usage } from "../util.js";
 
 export interface AnthropicProviderOptions {
   id?: string;
   apiKey?: string;
+  accessToken?: string;
   baseUrl?: string;
   version?: string;
   fetch?: FetchLike;
@@ -30,6 +32,23 @@ function mapToolChoice(choice: ToolChoice | undefined): unknown {
 }
 
 const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
+const CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
+
+function contextManagementForRequest(request: ProviderCallRequest): unknown | undefined {
+  if (request.providerOptions && Object.prototype.hasOwnProperty.call(request.providerOptions, "context_management")) {
+    return request.providerOptions.context_management;
+  }
+  if (request.metadata?.contextManagement !== "recoverable-windows") return undefined;
+  if (!request.messages.some((message) => message.role === "tool")) return undefined;
+  return {
+    edits: [{
+      type: "clear_tool_uses_20250919",
+      trigger: { type: "input_tokens", value: 40_000 },
+      keep: { type: "tool_uses", value: 6 },
+      clear_at_least: { type: "input_tokens", value: 8_000 },
+    }],
+  };
+}
 
 function blockCacheControl(requested: unknown): Record<string, unknown> {
   if (!requested || typeof requested !== "object" || Array.isArray(requested)) {
@@ -53,18 +72,84 @@ function markLastCacheableBlock(
   return content;
 }
 
+function mapSystem(
+  system: string | undefined,
+  promptCacheEnabled: boolean,
+  cacheControl: Record<string, unknown>,
+): unknown | undefined {
+  if (!system) return undefined;
+  if (!promptCacheEnabled) return system;
+  return [{ type: "text", text: system, cache_control: cacheControl }];
+}
+
+function mapTools(
+  tools: ProviderCallRequest["tools"],
+  deferredTools: NonNullable<ProviderCallRequest["deferredTools"]>,
+  promptCacheEnabled: boolean,
+  cacheControl: Record<string, unknown>,
+): any[] {
+  const loaded = (tools ?? []).map((tool) => ({
+    name: tool.name,
+    ...(tool.description ? { description: tool.description } : {}),
+    input_schema: tool.inputSchema,
+  }));
+  const deferred = deferredTools.map((tool) => ({
+    name: tool.name,
+    ...(tool.description ? { description: tool.description } : {}),
+    input_schema: tool.inputSchema,
+    defer_loading: true,
+  }));
+  const mapped: any[] = [...loaded, ...deferred];
+  if (!promptCacheEnabled || mapped.length === 0) return mapped;
+
+  // Anthropic's cache hierarchy starts with tools. Keep one breakpoint on the
+  // last eagerly-loaded schema so this usually-large, highly stable prefix can
+  // survive message-cache churn. Deferred definitions are intentionally kept
+  // outside that eagerly-loaded prefix by the provider.
+  const index = loaded.length > 0 ? loaded.length - 1 : mapped.length - 1;
+  mapped[index] = { ...mapped[index], cache_control: cacheControl };
+  return mapped;
+}
+
+function toolResultWithDeferredReferences(
+  message: Message,
+  deferredToolNames: Set<string>,
+): unknown {
+  const plain = toolResultContent(message);
+  if (message.name !== "search_tools" || deferredToolNames.size === 0) return plain;
+  const parsed = safeJsonParse(plain) as any;
+  const deferred = Array.isArray(parsed?.deferred)
+    ? parsed.deferred.filter((name: unknown) => typeof name === "string" && deferredToolNames.has(name))
+    : [];
+  if (deferred.length === 0) return plain;
+
+  const remainder: Record<string, unknown> = {};
+  if (Array.isArray(parsed?.loaded) && parsed.loaded.length > 0) remainder.loaded = parsed.loaded;
+  if (parsed?.moreMatches !== undefined) remainder.moreMatches = parsed.moreMatches;
+  return [
+    ...deferred.map((toolName: string) => ({ type: "tool_reference", tool_name: toolName })),
+    ...(Object.keys(remainder).length > 0
+      ? [{ type: "text", text: JSON.stringify(remainder) }]
+      : []),
+  ];
+}
+
 function mapMessages(
   messages: Message[],
   promptCacheEnabled: boolean,
   cacheControl: Record<string, unknown>,
   maxExplicitBreakpoints: number,
+  deferredToolNames: Set<string>,
 ): unknown[] {
-  const explicitBreakpoints = new Set<number>();
-  if (promptCacheEnabled && maxExplicitBreakpoints > 0) {
-    for (let index = messages.length - 1; index >= 0 && explicitBreakpoints.size < maxExplicitBreakpoints; index--) {
-      if (messages[index]?.cacheBreakpoint === true) explicitBreakpoints.add(index);
-    }
-  }
+  const breakpointCandidates = promptCacheEnabled
+    ? messages
+      .map((message, index) => message.cacheBreakpoint === true ? index : -1)
+      .filter((index) => index >= 0)
+    : [];
+  const explicitBreakpoints = selectStableAndRecentIndexes(
+    breakpointCandidates,
+    maxExplicitBreakpoints,
+  );
   const output: any[] = [];
   for (const [index, message] of messages.entries()) {
     const cacheBreakpoint = explicitBreakpoints.has(index);
@@ -72,7 +157,7 @@ function mapMessages(
       const block = {
         type: "tool_result",
         tool_use_id: message.toolCallId ?? message.toolResult?.toolCallId ?? "",
-        content: toolResultContent(message),
+        content: toolResultWithDeferredReferences(message, deferredToolNames),
         ...(message.toolResult?.isError !== undefined ? { is_error: message.toolResult.isError } : {}),
         ...(cacheBreakpoint ? { cache_control: cacheControl } : {}),
       };
@@ -125,16 +210,35 @@ function requestBody(request: ProviderCallRequest, stream: boolean): Record<stri
   const split = splitLeadingSystem(request.messages, request.system);
   const promptCacheEnabled = request.promptCache !== false;
   const requestedCacheControl = request.providerOptions?.cache_control;
-  const { cache_control: _cacheControl, ...providerOptions } = request.providerOptions ?? {};
+  const contextManagement = contextManagementForRequest(request);
+  const {
+    cache_control: _cacheControl,
+    context_management: _contextManagement,
+    ...providerOptions
+  } = request.providerOptions ?? {};
+  const cacheCapabilities = promptCacheCapabilities("anthropic", request.model);
+  const deferredTools = request.toolChoice !== "none"
+    && supportsAnthropicDeferredToolReferences(request.model)
+    && request.tools?.some((tool) => tool.name === "search_tools")
+    ? (request.deferredTools ?? []).filter((tool) => !request.tools?.some((loaded) => loaded.name === tool.name))
+    : [];
+  const deferredToolNames = new Set(deferredTools.map((tool) => tool.name));
   const explicitBreakpointCount = split.messages.filter((message) => message.cacheBreakpoint === true).length;
+  const explicitCacheControl = blockCacheControl(requestedCacheControl);
+  const mappedTools = mapTools(request.tools, deferredTools, promptCacheEnabled, explicitCacheControl);
+  const reservedPrefixBreakpoints = Number(promptCacheEnabled && mappedTools.length > 0)
+    + Number(promptCacheEnabled && Boolean(split.system));
   // A coordinator-selected explicit marker already identifies the reusable
   // prefix. Do not also cache the volatile request tail automatically: Yeet's
   // orientation/retry overlays intentionally change every round and a paid
   // automatic cache write there cannot be reused. Callers without an explicit
-  // boundary retain Anthropic's normal automatic caching behavior.
+  // boundary retain Anthropic's normal automatic caching behavior. Prefix
+  // breakpoints for tools/system are reserved first because they are reusable
+  // across more turns than message-level cache writes.
   const automaticCacheEnabled = promptCacheEnabled && explicitBreakpointCount === 0;
-  const maxExplicitBreakpoints = automaticCacheEnabled ? 0 : 4;
-  const explicitCacheControl = blockCacheControl(requestedCacheControl);
+  const maxMessageBreakpoints = automaticCacheEnabled
+    ? 0
+    : Math.max(0, (cacheCapabilities.maxExplicitBreakpoints ?? 0) - reservedPrefixBreakpoints);
   return {
     ...providerOptions,
     model: request.model,
@@ -143,24 +247,18 @@ function requestBody(request: ProviderCallRequest, stream: boolean): Record<stri
       split.messages,
       promptCacheEnabled,
       explicitCacheControl,
-      maxExplicitBreakpoints,
+      maxMessageBreakpoints,
+      deferredToolNames,
     ),
     stream,
-    ...(split.system ? { system: split.system } : {}),
+    ...(split.system ? { system: mapSystem(split.system, promptCacheEnabled, explicitCacheControl) } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-    ...(request.tools?.length
-      ? {
-          tools: request.tools.map((tool) => ({
-            name: tool.name,
-            ...(tool.description ? { description: tool.description } : {}),
-            input_schema: tool.inputSchema,
-          })),
-        }
-      : {}),
+    ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
     ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice) } : {}),
     ...(request.metadata ? { metadata: request.metadata } : {}),
+    ...(contextManagement !== undefined ? { context_management: contextManagement } : {}),
     ...(automaticCacheEnabled
-      ? { cache_control: requestedCacheControl ?? EPHEMERAL_CACHE_CONTROL }
+      ? { cache_control: blockCacheControl(requestedCacheControl) }
       : {}),
   };
 }
@@ -186,6 +284,7 @@ function inclusiveAnthropicInputTokens(
 export class AnthropicProvider implements ProviderAdapter {
   readonly id: string;
   readonly #apiKey: string | undefined;
+  readonly #accessToken: string | undefined;
   readonly #baseUrl: string;
   readonly #version: string;
   readonly #fetch: FetchLike | undefined;
@@ -194,16 +293,24 @@ export class AnthropicProvider implements ProviderAdapter {
   constructor(options: AnthropicProviderOptions = {}) {
     this.id = options.id ?? "anthropic";
     this.#apiKey = options.apiKey;
+    this.#accessToken = options.accessToken;
     this.#baseUrl = (options.baseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
     this.#version = options.version ?? "2023-06-01";
     this.#fetch = options.fetch;
     this.#apiCallLogger = options.apiCallLogger;
   }
 
-  #headers(): Record<string, string> {
-    if (!this.#apiKey) throw new Error(`Missing API key for ${this.id}`);
+  #headers(request?: ProviderCallRequest): Record<string, string> {
+    if (!this.#apiKey && !this.#accessToken) throw new Error(`Missing API key or OAuth token for ${this.id}`);
+    const betas = [
+      ...(this.#accessToken ? ["oauth-2025-04-20"] : []),
+      ...(request && contextManagementForRequest(request) !== undefined ? [CONTEXT_MANAGEMENT_BETA] : []),
+    ];
     return {
-      "x-api-key": this.#apiKey,
+      ...(this.#accessToken
+        ? { authorization: `Bearer ${this.#accessToken}` }
+        : { "x-api-key": this.#apiKey! }),
+      ...(betas.length > 0 ? { "anthropic-beta": betas.join(",") } : {}),
       "anthropic-version": this.#version,
       "content-type": "application/json",
     };
@@ -248,7 +355,7 @@ export class AnthropicProvider implements ProviderAdapter {
   async complete(request: ProviderCallRequest): Promise<CallResult> {
     const response = await providerFetch(
       `${this.#baseUrl}/v1/messages`,
-      { method: "POST", headers: this.#headers(), body: JSON.stringify(requestBody(request, false)) },
+      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, false)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -258,6 +365,7 @@ export class AnthropicProvider implements ProviderAdapter {
         ...(request.signal ? { signal: request.signal } : {}),
       },
     );
+    const transportAttempts = providerFetchAttempts(response);
     const raw = await readJson<any>(response);
     const text = (raw.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
     const reasoning = (raw.content ?? [])
@@ -286,6 +394,7 @@ export class AnthropicProvider implements ProviderAdapter {
       cachedInputTokens,
       cacheWriteInputTokens,
       raw.usage?.output_tokens_details?.thinking_tokens,
+      transportAttempts,
     );
 
     return {
@@ -305,7 +414,7 @@ export class AnthropicProvider implements ProviderAdapter {
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
     const response = await providerFetch(
       `${this.#baseUrl}/v1/messages`,
-      { method: "POST", headers: this.#headers(), body: JSON.stringify(requestBody(request, true)) },
+      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, true)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -315,6 +424,7 @@ export class AnthropicProvider implements ProviderAdapter {
         ...(request.signal ? { signal: request.signal } : {}),
       },
     );
+    const transportAttempts = providerFetchAttempts(response);
 
     let started = false;
     let model = request.model;
@@ -412,6 +522,7 @@ export class AnthropicProvider implements ProviderAdapter {
       cachedInputTokens,
       cacheWriteInputTokens,
       reasoningTokens,
+      transportAttempts,
     );
     yield {
       type: "finish",

@@ -149,7 +149,7 @@ fn stripe_style(row: usize, scan: usize, tick: usize) -> Style {
         0 => RED_HOT,
         1 => RED,
         2 => RED_DIM,
-        _ if (tick / 8 + row) % 4 == 0 => RED,
+        _ if (tick / 8 + row).is_multiple_of(4) => RED,
         _ => RED_DIM,
     };
     Style::default().fg(color).add_modifier(Modifier::BOLD)
@@ -159,8 +159,8 @@ fn glitch_stripe(art: &'static str, row: usize, tick: usize) -> String {
     // A very short, sparse horizontal phase slip.  It reads as CRT/neural
     // instability without making the mark jitter constantly.
     match tick % 79 {
-        0 if row % 3 == 0 => format!(" {art}"),
-        1 if row % 4 == 0 => art.trim_start_matches(' ').to_owned(),
+        0 if row.is_multiple_of(3) => format!(" {art}"),
+        1 if row.is_multiple_of(4) => art.trim_start_matches(' ').to_owned(),
         _ => art.to_owned(),
     }
 }

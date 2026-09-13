@@ -36,7 +36,19 @@ pub struct ShellResult {
     pub stderr: Option<String>,
 }
 
+const MAX_NESTED_SHELL_POLICY_DEPTH: usize = 32;
+
 pub fn restricted_operation(command: &str) -> Option<String> {
+    restricted_operation_inner(command, 0)
+}
+
+fn restricted_operation_inner(command: &str, depth: usize) -> Option<String> {
+    if depth >= MAX_NESTED_SHELL_POLICY_DEPTH {
+        // Treat excessively nested shell wrappers conservatively instead of
+        // recursively walking an attacker- or model-controlled command until
+        // the MCP stdio process exhausts its main-thread stack.
+        return Some("nested shell command".into());
+    }
     let write_executables: HashSet<&str> = [
         "rm",
         "mv",
@@ -173,6 +185,12 @@ pub fn restricted_operation(command: &str) -> Option<String> {
             return Some("sed -i".into());
         }
         if executable == "git" {
+            if rest.len() == 2
+                && rest[0].eq_ignore_ascii_case("branch")
+                && rest[1].eq_ignore_ascii_case("--show-current")
+            {
+                continue;
+            }
             let mut skip_next = false;
             for word in rest {
                 if skip_next {
@@ -205,7 +223,7 @@ pub fn restricted_operation(command: &str) -> Option<String> {
             for pair in rest.windows(2) {
                 if pair[0].starts_with('-')
                     && pair[0].contains('c')
-                    && let Some(value) = restricted_operation(&pair[1])
+                    && let Some(value) = restricted_operation_inner(&pair[1], depth + 1)
                 {
                     return Some(value);
                 }
@@ -214,7 +232,7 @@ pub fn restricted_operation(command: &str) -> Option<String> {
         if matches!(executable.as_str(), "cmd" | "cmd.exe") {
             for pair in rest.windows(2) {
                 if matches!(pair[0].to_ascii_lowercase().as_str(), "/c" | "/k")
-                    && let Some(value) = restricted_operation(&pair[1])
+                    && let Some(value) = restricted_operation_inner(&pair[1], depth + 1)
                 {
                     return Some(value);
                 }
@@ -226,7 +244,7 @@ pub fn restricted_operation(command: &str) -> Option<String> {
         ) {
             for pair in rest.windows(2) {
                 if matches!(pair[0].to_ascii_lowercase().as_str(), "-c" | "-command")
-                    && let Some(value) = restricted_operation(&pair[1])
+                    && let Some(value) = restricted_operation_inner(&pair[1], depth + 1)
                 {
                     return Some(value);
                 }
@@ -369,7 +387,16 @@ pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<Shell
     let stdout_thread = thread::spawn(move || read_bounded(stdout, stdout_limit));
     let stderr_thread = thread::spawn(move || read_bounded(stderr, stderr_limit));
     let start = Instant::now();
-    let timeout = (!unrestricted).then(|| Duration::from_secs(effective.limits.wall_time_seconds));
+    // `unrestricted` controls filesystem/network policy, not execution lifetime.
+    // Always honor the caller's deadline so an unlimited workspace cannot pin an
+    // MCP stdio runtime forever. In sandboxed mode `effective` already applies
+    // the tighter policy wall-time cap above.
+    let timeout_seconds = if unrestricted {
+        timeout_seconds.clamp(1, 900)
+    } else {
+        effective.limits.wall_time_seconds
+    };
+    let timeout = Duration::from_secs(timeout_seconds);
     let status = loop {
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
             kill_process_group(&mut child);
@@ -379,13 +406,10 @@ pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<Shell
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if timeout.is_some_and(|limit| start.elapsed() >= limit) {
+        if start.elapsed() >= timeout {
             kill_process_group(&mut child);
             let _ = child.wait();
-            bail!(
-                "Shell command timed out after {} seconds",
-                effective.limits.wall_time_seconds
-            );
+            bail!("Shell command timed out after {timeout_seconds} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -396,12 +420,10 @@ pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<Shell
             kill_process_group(&mut child);
             bail!("cancelled");
         }
-        if timeout.is_some_and(|limit| start.elapsed() >= limit) {
+        if start.elapsed() >= timeout {
             kill_process_group(&mut child);
-            bail!(
-                "Shell command timed out after {} seconds",
-                effective.limits.wall_time_seconds
-            );
+            let _ = child.wait();
+            bail!("Shell command timed out after {timeout_seconds} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -1300,7 +1322,6 @@ fn is_assignment(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os = "macos")]
     use crate::sandbox::SandboxStore;
     #[cfg(unix)]
     use std::sync::Arc;
@@ -1396,6 +1417,7 @@ mod tests {
             Some("sed -i")
         );
         assert_eq!(restricted_operation("git status"), None);
+        assert_eq!(restricted_operation("git branch --show-current"), None);
         assert_eq!(
             restricted_operation("git checkout main").as_deref(),
             Some("git checkout")
@@ -1416,6 +1438,73 @@ mod tests {
         assert_eq!(
             restricted_operation("powershell -Command \"Remove-Item build.log\"").as_deref(),
             Some("remove-item")
+        );
+    }
+
+    #[test]
+    fn shell_policy_bounds_nested_command_wrappers() {
+        assert_eq!(
+            restricted_operation_inner("cat Cargo.toml", MAX_NESTED_SHELL_POLICY_DEPTH).as_deref(),
+            Some("nested shell command")
+        );
+        assert_eq!(
+            restricted_operation_inner("sh -c 'rm build.log'", 0).as_deref(),
+            Some("rm")
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn native_sandbox_executes_a_basic_command() {
+        let workspace = tempfile::tempdir().unwrap();
+        let store = SandboxStore::new(workspace.path()).unwrap();
+        store.save(&SandboxPolicy::default()).unwrap();
+
+        let result = run_shell(
+            "echo yeet-native-sandbox",
+            workspace.path(),
+            None,
+            10,
+            16 * 1024,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert!(result.succeeded, "sandbox stderr: {:?}", result.stderr);
+        assert!(
+            result
+                .stdout
+                .as_deref()
+                .is_some_and(|text| text.contains("yeet-native-sandbox"))
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn native_sandbox_reads_an_explicitly_granted_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(workspace.path().join("probe.txt"), "portable-sandbox-read").unwrap();
+        let store = SandboxStore::new(workspace.path()).unwrap();
+        let policy = SandboxPolicy {
+            workspace_read: WorkspaceRead::All,
+            ..SandboxPolicy::default()
+        };
+        store.save(&policy).unwrap();
+
+        #[cfg(target_os = "windows")]
+        let command = "type probe.txt";
+        #[cfg(target_os = "linux")]
+        let command = "cat probe.txt";
+        let result =
+            run_shell(command, workspace.path(), None, 10, 16 * 1024, false, false).unwrap();
+
+        assert!(result.succeeded, "sandbox stderr: {:?}", result.stderr);
+        assert!(
+            result
+                .stdout
+                .as_deref()
+                .is_some_and(|text| text.contains("portable-sandbox-read"))
         );
     }
 
@@ -1584,6 +1673,29 @@ mod tests {
         .unwrap();
 
         assert!(result.succeeded);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unrestricted_shell_still_honors_explicit_timeout() {
+        let workspace = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+
+        let error = run_shell_cancellable(ShellExecutionRequest {
+            command: "sleep 2",
+            workspace_root: workspace.path(),
+            working_directory: None,
+            timeout_seconds: 1,
+            capture_bytes: 16 * 1024,
+            allow_write: false,
+            unrestricted: true,
+            cancel: None,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(error, "Shell command timed out after 1 seconds");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[cfg(unix)]

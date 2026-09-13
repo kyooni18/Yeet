@@ -12,8 +12,41 @@ import {
   OpenRouterProvider,
   ProviderHTTPError,
   providerFetch,
+  promptCacheCapabilities,
+  supportsAnthropicDeferredToolReferences,
   UnknownProviderError,
 } from "../dist/index.js";
+
+test("prompt cache capabilities separate lookup candidates from write slots", () => {
+  const modern = promptCacheCapabilities("openai", "gpt-5.6-luna");
+  assert.equal(modern.maxLookupBreakpoints, 80);
+  assert.equal(modern.maxExplicitBreakpoints, 80);
+  assert.equal(modern.maxNewWritesPerRequest, 4);
+  assert.deepEqual(modern.ttlValues, ["30m"]);
+  assert.equal(modern.modes.includes("explicit"), true);
+
+  const legacy = promptCacheCapabilities("openai", "gpt-5.5");
+  assert.equal(legacy.modes.includes("explicit"), false);
+
+  const anthropic = promptCacheCapabilities("anthropic", "claude-test");
+  assert.equal(anthropic.maxExplicitBreakpoints, 4);
+  assert.deepEqual(anthropic.ttlValues, ["5m", "1h"]);
+
+  const openrouter = promptCacheCapabilities("openrouter", "anthropic/claude-test");
+  assert.equal(openrouter.maxExplicitBreakpoints, 4);
+  assert.equal(openrouter.sessionAffinity, true);
+  const fable = promptCacheCapabilities("anthropic", "claude-fable-5.1");
+  assert.equal(fable.minCacheablePrefixTokens, 512);
+  assert.equal(fable.cacheReadMultiplier, 0.025);
+  const opus = promptCacheCapabilities("anthropic", "claude-opus-4-6");
+  assert.equal(opus.minCacheablePrefixTokens, 4096);
+  assert.equal(opus.cacheReadMultiplier, 0.1);
+  assert.equal(promptCacheCapabilities("gemini", "gemini-3.8-flash").minCacheablePrefixTokens, 4096);
+  assert.equal(promptCacheCapabilities("gemini", "gemini-2.5-pro").minCacheablePrefixTokens, 2048);
+  assert.equal(supportsAnthropicDeferredToolReferences("claude-sonnet-4-6"), true);
+  assert.equal(supportsAnthropicDeferredToolReferences("claude-opus-5"), true);
+  assert.equal(supportsAnthropicDeferredToolReferences("claude-opus-4-1"), false);
+});
 
 function jsonResponse(body, init = {}) {
   return new Response(JSON.stringify(body), {
@@ -102,6 +135,89 @@ test("OpenAI ChatGPT OAuth uses the Codex backend and account-scoped headers", a
   assert.equal(requestHeaders.originator, "codex_cli_rs");
 });
 
+test("OpenAI cache affinity stays stable within a context family and changes across windows", async () => {
+  const requests = [];
+  const headers = [];
+  const provider = new OpenAIProvider({
+    accessToken: "chatgpt-access-token",
+    accountId: "acct-123",
+    fetch: async (_input, init) => {
+      requests.push(JSON.parse(init.body));
+      headers.push(init.headers);
+      return sseResponse([{ type: "response.completed", response: {
+        model: "gpt-5.6",
+        status: "completed",
+        output: [],
+      } }]);
+    },
+  });
+  const base = {
+    model: "gpt-5.6",
+    system: "stable system",
+    tools: [{ name: "read_file", inputSchema: { type: "object" } }],
+    messages: [{ role: "user", content: "hello" }],
+    promptCache: true,
+  };
+  const windowA = { sessionId: "session-a", contextWindowId: "window-a", cacheFamily: "window-a" };
+  await provider.complete({ ...base, contextKey: "window-a", metadata: windowA });
+  await provider.complete({
+    ...base,
+    tools: [...base.tools, { name: "run_shell", inputSchema: { type: "object" } }],
+    contextKey: "window-a",
+    metadata: windowA,
+  });
+  await provider.complete({
+    ...base,
+    contextKey: "window-b",
+    metadata: { sessionId: "session-b", contextWindowId: "window-b", cacheFamily: "window-b" },
+  });
+
+  assert.match(requests[0].prompt_cache_key, /^yeet-v2-[0-9a-f]{48}$/);
+  assert.equal(requests[0].prompt_cache_key, requests[1].prompt_cache_key);
+  assert.notEqual(requests[0].prompt_cache_key, requests[2].prompt_cache_key);
+  assert.equal(headers[0]["session-id"], "session-a");
+  assert.equal(headers[1]["session-id"], "session-a");
+  assert.equal(headers[2]["session-id"], "session-b");
+  assert.notEqual(headers[0]["session-id"], requests[0].prompt_cache_key);
+  assert.equal(headers[0]["thread-id"], "window-a");
+  assert.equal(headers[1]["thread-id"], "window-a");
+  assert.equal(headers[2]["thread-id"], "window-b");
+});
+
+test("OpenAI recoverable windows preserve lookup breakpoints beyond the write budget", async () => {
+  let sent;
+  const provider = new OpenAIProvider({
+    apiKey: "test",
+    fetch: async (_input, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({ model: "gpt-5.6", status: "completed", output: [] });
+    },
+  });
+  await provider.complete({
+    model: "gpt-5.6",
+    promptCache: true,
+    metadata: { contextManagement: "recoverable-windows", cacheFamily: "window-a" },
+    messages: [
+      { role: "system", content: "stable system" },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        role: "user",
+        content: `round-${index}`,
+        cacheBreakpoint: true,
+      })),
+    ],
+    tools: [{ name: "read_file", inputSchema: { type: "object" } }],
+  });
+
+  assert.equal(sent.instructions, undefined);
+  assert.equal(sent.input[0].role, "system");
+  assert.deepEqual(sent.input[0].content[0].prompt_cache_breakpoint, { mode: "explicit" });
+  const messageBreakpoints = sent.input.slice(1)
+    .flatMap((message) => Array.isArray(message.content) ? message.content : [])
+    .filter((part) => part.prompt_cache_breakpoint);
+  assert.equal(messageBreakpoints.length, 5);
+  assert.deepEqual(sent.input[1].content[0].prompt_cache_breakpoint, { mode: "explicit" });
+});
+
 test("multimodal image attachments are mapped to provider-native request formats", async () => {
   const image = { mediaType: "image/png", data: "aGVsbG8=", name: "pixel.png" };
 
@@ -173,13 +289,15 @@ test("provider-native prompt caching is enabled and cache telemetry is normalize
       { role: "system", content: "volatile request overlay", requestOnly: true },
     ],
   });
-  assert.equal(openAIRequest.prompt_cache_key, "session-cache-key");
+  assert.match(openAIRequest.prompt_cache_key, /^yeet-v2-[0-9a-f]{48}$/);
   assert.deepEqual(openAIRequest.prompt_cache_options, { mode: "explicit", ttl: "30m" });
   assert.equal(openAIRequest.instructions, "stable system");
   assert.deepEqual(openAIRequest.input[0].content[0].prompt_cache_breakpoint, { mode: "explicit" });
   assert.equal(openAIRequest.input[1].role, "system");
   assert.equal(openAIRequest.input[1].content, "volatile request overlay");
   assert.equal(openAIResult.usage.cachedInputTokens, 70);
+  assert.equal(openAIResult.usage.cacheMeasuredInputTokens, 100);
+  assert.equal(openAIResult.usage.cacheUnreportedInputTokens, undefined);
   assert.equal(openAIResult.usage.cacheWriteInputTokens, 10);
   assert.equal(openAIResult.usage.reasoningTokens, 8);
 
@@ -195,6 +313,7 @@ test("provider-native prompt caching is enabled and cache telemetry is normalize
     ],
   });
   assert.deepEqual(openAIRequest.input[1].output[0].prompt_cache_breakpoint, { mode: "explicit" });
+
 
   let anthropicRequest;
   const anthropic = new AnthropicProvider({
@@ -229,6 +348,8 @@ test("provider-native prompt caching is enabled and cache telemetry is normalize
   assert.equal(anthropicResult.usage.inputTokens, 60);
   assert.equal(anthropicResult.usage.totalTokens, 65);
   assert.equal(anthropicResult.usage.cachedInputTokens, 20);
+  assert.equal(anthropicResult.usage.cacheMeasuredInputTokens, 60);
+  assert.equal(anthropicResult.usage.cacheUnreportedInputTokens, undefined);
   assert.equal(anthropicResult.usage.cacheWriteInputTokens, 10);
   assert.equal(anthropicResult.usage.reasoningTokens, 3);
 
@@ -261,6 +382,14 @@ test("provider-native prompt caching is enabled and cache telemetry is normalize
   await anthropic.complete({
     model: "claude-test",
     promptCache: true,
+    providerOptions: { cache_control: { type: "permanent", ttl: "9h", unsafe: true } },
+    messages: [{ role: "user", content: "sanitize automatic cache options" }],
+  });
+  assert.deepEqual(anthropicRequest.cache_control, { type: "ephemeral" });
+
+  await anthropic.complete({
+    model: "claude-test",
+    promptCache: true,
     messages: Array.from({ length: 5 }, (_, index) => ({
       role: "user",
       content: `part-${index}`,
@@ -274,7 +403,120 @@ test("provider-native prompt caching is enabled and cache telemetry is normalize
       .filter((part) => part.cache_control).length,
     4,
   );
-  assert.equal(Array.isArray(anthropicRequest.messages[0].content), false);
+  assert.equal(Array.isArray(anthropicRequest.messages[0].content), true);
+  assert.equal(Array.isArray(anthropicRequest.messages[1].content), false);
+});
+
+
+test("OpenAI public Responses chains cache comparisons and normalizes provider diagnostics", async () => {
+  const requests = [];
+  let call = 0;
+  const provider = new OpenAIProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      call += 1;
+      return jsonResponse({
+        id: `resp-${call}`,
+        model: "gpt-5.6",
+        status: "completed",
+        output: [],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 1,
+          total_tokens: 101,
+          input_tokens_details: { cached_tokens: call === 1 ? 0 : 80 },
+        },
+        ...(call === 2 ? {
+          prompt_cache_diagnostics: {
+            type: "cache_miss",
+            cache_missed_tokens: 20,
+            reason: "input_changed",
+            comparison_reusable_tokens: 80,
+          },
+        } : {}),
+      });
+    },
+  });
+  const request = {
+    model: "gpt-5.6",
+    contextKey: "cache-window-a",
+    promptCache: true,
+    messages: [{ role: "user", content: "hello", cacheBreakpoint: true }],
+  };
+
+  await provider.complete(request);
+  const second = await provider.complete(request);
+
+  assert.deepEqual(requests[0].prompt_cache_options, { mode: "explicit", ttl: "30m" });
+  assert.deepEqual(requests[1].prompt_cache_options, {
+    mode: "explicit",
+    ttl: "30m",
+    comparison_response_id: "resp-1",
+  });
+  assert.deepEqual(second.promptCacheDiagnostics, {
+    type: "cache_miss",
+    cacheMissedTokens: 20,
+    reason: "input_changed",
+    comparisonReusableTokens: 80,
+  });
+  assert.equal(second.usage.providerCacheDiagnosticType, "cache_miss");
+  assert.equal(second.usage.providerCacheMissReason, "input_changed");
+  assert.equal(second.usage.providerCacheMissedTokens, 20);
+  assert.equal(second.usage.providerComparisonReusableTokens, 80);
+});
+
+test("missing provider cache details remain explicitly unreported", async () => {
+  const provider = new OpenAIProvider({
+    apiKey: "test",
+    fetch: async () => jsonResponse({
+      model: "gpt-5.6",
+      status: "completed",
+      output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
+      usage: { input_tokens: 123, output_tokens: 4, total_tokens: 127 },
+    }),
+  });
+  const result = await provider.complete({
+    model: "gpt-5.6",
+    promptCache: true,
+    messages: [{ role: "user", content: "coverage fixture" }],
+  });
+
+  assert.equal(result.usage.inputTokens, 123);
+  assert.equal(result.usage.cachedInputTokens, undefined);
+  assert.equal(result.usage.cacheMeasuredInputTokens, undefined);
+  assert.equal(result.usage.cacheUnreportedInputTokens, 123);
+});
+
+test("Anthropic recoverable agent windows clear only sufficiently old tool context", async () => {
+  let sent;
+  let sentHeaders;
+  const anthropic = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      sentHeaders = init.headers;
+      return jsonResponse({ model: "claude-sonnet-5", content: [], stop_reason: "end_turn", usage: {} });
+    },
+  });
+  await anthropic.complete({
+    model: "claude-sonnet-5",
+    promptCache: true,
+    metadata: { contextManagement: "recoverable-windows" },
+    messages: [
+      { role: "assistant", toolCalls: [{ id: "call-1", name: "read_file", arguments: { path: "a.rs" } }] },
+      { role: "tool", toolCallId: "call-1", name: "read_file", content: "source" },
+    ],
+  });
+  assert.equal(sentHeaders["anthropic-beta"], "context-management-2025-06-27");
+  assert.deepEqual(sent.context_management, {
+    edits: [{
+      type: "clear_tool_uses_20250919",
+      trigger: { type: "input_tokens", value: 40_000 },
+      keep: { type: "tool_uses", value: 6 },
+      clear_at_least: { type: "input_tokens", value: 8_000 },
+    }],
+  });
 });
 
 test("OpenRouter can advance an explicit cache boundary through tool results", async () => {
@@ -304,6 +546,49 @@ test("OpenRouter can advance an explicit cache boundary through tool results", a
   assert.equal(sent.messages[2].content[0].text, "large source evidence");
 });
 
+test("Anthropic maps Yeet deferred search results to native tool references", async () => {
+  let sent;
+  const provider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({
+        model: "claude-sonnet-4-6",
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: {},
+      });
+    },
+  });
+  const deferred = {
+    name: "mcp_krpc_observe",
+    description: "Read kRPC telemetry.",
+    inputSchema: { type: "object", properties: { field: { type: "string" } } },
+  };
+  await provider.complete({
+    model: "claude-sonnet-4-6",
+    messages: [
+      { role: "user", content: "check altitude" },
+      { role: "assistant", toolCalls: [{ id: "search-1", name: "search_tools", arguments: { query: "krpc" } }] },
+      {
+        role: "tool",
+        name: "search_tools",
+        toolCallId: "search-1",
+        content: JSON.stringify({ loaded: [], deferred: [deferred.name], moreMatches: false }),
+      },
+    ],
+    tools: [{ name: "search_tools", inputSchema: { type: "object" } }],
+    deferredTools: [deferred],
+  });
+
+  const mappedDeferred = sent.tools.find((tool) => tool.name === deferred.name);
+  assert.equal(mappedDeferred.defer_loading, true);
+  const toolResult = sent.messages
+    .flatMap((message) => Array.isArray(message.content) ? message.content : [])
+    .find((part) => part.type === "tool_result");
+  assert.deepEqual(toolResult.content[0], { type: "tool_reference", tool_name: deferred.name });
+});
+
 test("Anthropic and Gemini keep volatile coordinator overlays behind the stable system prefix", async () => {
   const messages = [
     { role: "system", content: "stable system" },
@@ -320,7 +605,9 @@ test("Anthropic and Gemini keep volatile coordinator overlays behind the stable 
     },
   });
   await anthropic.complete({ model: "claude-test", messages });
-  assert.equal(anthropicRequest.system, "stable system");
+  assert.deepEqual(anthropicRequest.system, [
+    { type: "text", text: "stable system", cache_control: { type: "ephemeral" } },
+  ]);
   assert.deepEqual(
     anthropicRequest.messages.map((message) => [message.role, message.content]),
     [["user", "hello"], ["user", "volatile request overlay"]],
@@ -340,6 +627,45 @@ test("Anthropic and Gemini keep volatile coordinator overlays behind the stable 
     geminiRequest.contents.map((message) => [message.role, message.parts[0].text]),
     [["user", "hello"], ["user", "volatile request overlay"]],
   );
+});
+
+test("Anthropic reserves cache breakpoints for stable tools and system before rolling messages", async () => {
+  let sent;
+  const provider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({ model: "claude-sonnet-5", content: [], stop_reason: "end_turn", usage: {} });
+    },
+  });
+  await provider.complete({
+    model: "claude-sonnet-5",
+    promptCache: true,
+    messages: [
+      { role: "system", content: "stable system" },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        role: "user",
+        content: `round-${index}`,
+        cacheBreakpoint: true,
+      })),
+    ],
+    tools: [
+      { name: "read_file", inputSchema: { type: "object" } },
+      { name: "run_shell", inputSchema: { type: "object" } },
+    ],
+  });
+
+  assert.deepEqual(sent.tools.at(-1).cache_control, { type: "ephemeral" });
+  assert.deepEqual(sent.system[0].cache_control, { type: "ephemeral" });
+  const messageBreakpoints = sent.messages
+    .flatMap((message) => Array.isArray(message.content) ? message.content : [])
+    .filter((part) => part.cache_control);
+  assert.equal(messageBreakpoints.length, 2);
+  assert.equal(sent.cache_control, undefined);
+  const totalBreakpoints = messageBreakpoints.length
+    + sent.tools.filter((tool) => tool.cache_control).length
+    + sent.system.filter((part) => part.cache_control).length;
+  assert.equal(totalBreakpoints, 4);
 });
 
 test("providers serialize structured tool results and preserve error state", async () => {
@@ -807,7 +1133,9 @@ test("Anthropic Messages normalizes tool use", async () => {
     messages: [{ role: "system", content: "lead" }, { role: "user", content: "inspect" }],
     maxTokens: 100,
   });
-  assert.equal(sent.system, "lead");
+  assert.deepEqual(sent.system, [
+    { type: "text", text: "lead", cache_control: { type: "ephemeral" } },
+  ]);
   assert.equal(sent.max_tokens, 100);
   assert.equal(result.finishReason, "tool_call");
   assert.equal(result.toolCalls[0].name, "read_file");
@@ -1039,6 +1367,57 @@ test("OpenRouter keeps stable session affinity and forwards explicit cache break
   assert.equal(seen.body.session_id, "stable-agent-session");
   assert.deepEqual(seen.body.messages[2].content[0].cache_control, { type: "ephemeral" });
   assert.equal(seen.body.messages[3].content, "volatile orientation");
+});
+
+
+test("OpenRouter preserves the oldest stable breakpoint when marker capacity is full", async () => {
+  let body;
+  const provider = new OpenRouterProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return jsonResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
+    },
+  });
+  await provider.complete({
+    model: "anthropic/claude-test",
+    contextKey: "stable-window",
+    promptCache: true,
+    messages: Array.from({ length: 5 }, (_, index) => ({
+      role: "user",
+      content: `part-${index}`,
+      cacheBreakpoint: true,
+    })),
+  });
+  const marked = body.messages.filter((message) => Array.isArray(message.content));
+  assert.equal(marked.length, 4);
+  assert.equal(Array.isArray(body.messages[0].content), true);
+  assert.equal(Array.isArray(body.messages[1].content), false);
+});
+
+test("OpenRouter keeps OpenAI caching implicit and bounds oversized session affinity ids", async () => {
+  let body;
+  const provider = new OpenRouterProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      body = JSON.parse(init.body);
+      return jsonResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
+    },
+  });
+
+  await provider.complete({
+    model: "openai/gpt-5.6-luna",
+    contextKey: "x".repeat(400),
+    promptCache: true,
+    messages: [
+      { role: "user", content: "stable", cacheBreakpoint: true },
+      { role: "user", content: "volatile" },
+    ],
+  });
+  assert.equal(body.prompt_cache_options, undefined);
+  assert.equal(body.session_id.startsWith("yeet-"), true);
+  assert.equal(body.session_id.length < 256, true);
+  assert.deepEqual(body.messages[0].content[0].cache_control, { type: "ephemeral" });
 });
 
 test("OpenCode Zen discovers models and routes provider-native protocols", async () => {
@@ -1453,7 +1832,8 @@ test("Codex OAuth sends subscription-compatible bodies for complete and stream",
     assert.equal(headers["session-id"], "stable-session-id");
     assert.equal(headers["thread-id"], "context-window-id");
     assert.equal(headers["x-client-request-id"], "context-window-id");
-    assert.equal(body.prompt_cache_key, "stable-session-id");
+    assert.match(body.prompt_cache_key, /^yeet-v2-[0-9a-f]{48}$/);
+    assert.notEqual(body.prompt_cache_key, headers["session-id"]);
     assert.equal(body.store, false);
     assert.equal(body.stream, true);
     assert.equal(body.instructions, "");
@@ -1517,18 +1897,73 @@ test("OpenAI keeps a caller-selected stable cache boundary across tool rounds", 
       { role: "system", content: "round 2", requestOnly: true },
     ] });
   assert.deepEqual(sent[0].input.slice(0, 3), sent[1].input.slice(0, 3));
+  assert.equal(sent[0].prompt_cache_key, sent[1].prompt_cache_key);
   for (const body of sent) {
     assert.equal(body.tools[0].strict, false);
     assert.deepEqual(body.tools[0].parameters, tools[0].inputSchema);
     assert.deepEqual(body.input[0].content[0].prompt_cache_breakpoint, { mode: "explicit" });
     assert.equal(typeof body.input[2].output, "string");
     assert.equal(typeof body.input.at(-1).content, "string");
-    assert.equal(body.prompt_cache_key, "session");
+    assert.match(body.prompt_cache_key, /^yeet-v2-[0-9a-f]{48}$/);
   }
   assert.equal(typeof sent[1].input[4].output, "string");
   await provider.complete({ model: "gpt-5.6-luna", messages, promptCache: false });
   assert.equal(sent[2].prompt_cache_options, undefined);
+  assert.equal(sent[2].prompt_cache_key, undefined);
   assert.equal(JSON.stringify(sent[2]).includes("prompt_cache_breakpoint"), false);
+});
+
+test("OpenAI public Responses uses hosted tool search for deferred function schemas", async () => {
+  let sent;
+  const provider = new OpenAIProvider({ apiKey: "test", fetch: async (_url, init) => {
+    sent = JSON.parse(init.body);
+    return jsonResponse({
+      model: "gpt-5.6-luna",
+      status: "completed",
+      output: [{
+        type: "function_call",
+        call_id: "call_mcp",
+        name: "mcp_krpc_observe",
+        arguments: '{"field":"altitude"}',
+      }],
+    });
+  } });
+  const deferred = {
+    name: "mcp_krpc_observe",
+    description: "Read one kRPC telemetry field.",
+    inputSchema: {
+      type: "object",
+      properties: { field: { type: "string" } },
+      required: ["field"],
+    },
+  };
+  const result = await provider.complete({
+    model: "gpt-5.6-luna",
+    messages: [{ role: "user", content: "check altitude" }],
+    tools: [{ name: "search_tools", inputSchema: { type: "object" } }],
+    deferredTools: [deferred],
+  });
+
+  assert.equal(sent.tools.some((tool) => tool.type === "tool_search"), true);
+  const mapped = sent.tools.find((tool) => tool.name === deferred.name);
+  assert.equal(mapped.defer_loading, true);
+  assert.deepEqual(mapped.parameters, deferred.inputSchema);
+  assert.equal(result.toolCalls[0].name, deferred.name);
+});
+
+test("OpenAI hosted tool search stays off for unsupported 5.4 nano", async () => {
+  let sent;
+  const provider = new OpenAIProvider({ apiKey: "test", fetch: async (_url, init) => {
+    sent = JSON.parse(init.body);
+    return jsonResponse({ model: "gpt-5.4-nano", status: "completed", output: [] });
+  } });
+  await provider.complete({
+    model: "gpt-5.4-nano",
+    messages: [{ role: "user", content: "hi" }],
+    deferredTools: [{ name: "deferred", inputSchema: { type: "object" } }],
+  });
+  assert.equal((sent.tools ?? []).some((tool) => tool.type === "tool_search"), false);
+  assert.equal((sent.tools ?? []).some((tool) => tool.name === "deferred"), false);
 });
 
 test("OpenAI still synthesizes a cache boundary when the caller provides none", async () => {

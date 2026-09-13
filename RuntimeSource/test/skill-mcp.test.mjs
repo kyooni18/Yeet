@@ -88,7 +88,10 @@ test('McpManager uses modern Streamable HTTP metadata and MCP parameter headers'
     const result = (() => {
       switch (rpc.method) {
         case 'tools/list':
-          return { tools: [{ name: 'search', description: 'Search', inputSchema: { type: 'object', properties: { region: { type: 'string', 'x-mcp-header': 'Region' }, q: { type: 'string' } } } }] };
+          return { tools: [
+            { name: 'zeta', description: 'Later tool', inputSchema: { type: 'object', properties: {} } },
+            { name: 'search', description: 'Search', inputSchema: { type: 'object', properties: { region: { type: 'string', 'x-mcp-header': 'Region' }, q: { type: 'string' } } } },
+          ] };
         case 'tools/call':
           return { content: [{ type: 'text', text: 'ok' }], structuredContent: { count: 1 }, isError: false };
         case 'resources/list':
@@ -115,7 +118,7 @@ test('McpManager uses modern Streamable HTTP metadata and MCP parameter headers'
   await mcp.setServer({ name: 'demo', transport: 'http', url: `http://127.0.0.1:${address.port}/mcp` });
 
   const tools = await mcp.listTools('demo');
-  assert.equal(tools[0].qualifiedName, 'demo/search');
+  assert.deepEqual(tools.map((tool) => tool.qualifiedName), ['demo/search', 'demo/zeta']);
   const call = await mcp.callQualifiedTool('demo/search', { region: '서울', q: 'hello' });
   assert.equal(call.isError, false);
   assert.deepEqual(call.structuredContent, { count: 1 });

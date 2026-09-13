@@ -330,6 +330,8 @@ test("bridge persists custom local endpoints and restores them on restart", asyn
   second.send({ v: 1, id: "providers", op: "list-providers" });
   const providers = await second.waitFor((m) => m.id === "providers");
   assert.equal(providers.type, "providers");
+  assert.ok(providers.providers.includes("openai"));
+  assert.ok(providers.providers.includes("codex-cli"));
   assert.ok(providers.providers.includes("local"));
 
   second.send({ v: 1, id: "remove-local", op: "remove-provider-configuration", provider: "local" });

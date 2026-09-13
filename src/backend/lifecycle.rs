@@ -10,6 +10,13 @@ impl BackendService {
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
         let stored = self.store.load(id)?;
+        let persisted_infinity = self.store.infinity_mode(id).unwrap_or(false);
+        let resume_infinity = persisted_infinity
+            && stored
+                .conversation
+                .iter()
+                .any(|entry| matches!(entry.kind, ConversationKind::User { .. }));
+        let stored_history = stored.model_history.clone();
         let sandbox_settings = SandboxStore::new(&self.workspace_root)
             .and_then(|store| store.load())
             .ok()
@@ -18,7 +25,7 @@ impl BackendService {
         self.coordinator
             .lock()
             .map_err(|_| anyhow!("coordinator lock poisoned"))?
-            .replace_model_history(stored.model_history.clone());
+            .replace_model_history(stored_history.clone());
         let mut shared = self.shared.lock().unwrap();
         shared.meta.current_turn = None;
         shared.state.is_streaming = false;
@@ -40,6 +47,7 @@ impl BackendService {
         shared.state.conversation_revision = shared.state.conversation_revision.wrapping_add(1);
         shared.state.active_model = stored.model;
         shared.state.token_usage = stored.token_usage;
+        shared.state.infinity_mode = persisted_infinity;
         shared.state.current_context_tokens = None;
         shared.state.sandbox_settings = sandbox_settings;
         shared.state.credit_usage = stored.credit_usage;
@@ -52,9 +60,22 @@ impl BackendService {
         shared.meta.attached_capabilities = stored.attached_harness_capabilities;
         shared.meta.disabled_capabilities = stored.disabled_capabilities;
         shared.state.error_message = None;
+        let reconciled = shared.reconcile_orphaned_runs(
+            "Persisted run had no live runtime when this session was restored.",
+        );
+        if reconciled {
+            persist_locked(
+                &mut shared,
+                &self.store,
+                &self.workspace_root,
+                stored_history.clone(),
+            )?;
+        }
         let protected = self.store.directory.join(&stored.id);
         let retained_knowledge = shared.meta.retained_debate_knowledge.clone();
         drop(shared);
+        self.infinity_mode
+            .store(persisted_infinity, Ordering::Release);
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.set_protected_write_paths([protected]);
             coordinator.set_session_runtime(self.store.clone(), Some(stored.id.clone()));
@@ -64,11 +85,20 @@ impl BackendService {
         self.refresh_context_length();
         self.request_sessions();
         self.publish_state();
+        if resume_infinity {
+            self.submit_agent(
+                INFINITY_RESUME_PROMPT.to_owned(),
+                false,
+                "infinity-resume",
+                true,
+            )?;
+        }
         Ok(())
     }
 
     /// Replaces the active session with a fresh empty transcript.
     pub(super) fn new_session(&mut self) {
+        let _ = self.set_infinity_enabled(false);
         self.interrupt();
         let _ = self.invalidate_active_turn_for_replacement();
         if let Ok(mut coordinator) = self.coordinator.lock() {
@@ -87,8 +117,18 @@ impl BackendService {
             .and_then(|store| store.load())
             .ok()
             .map(|policy| sandbox_settings_state(&policy));
-        session.meta.attached_capabilities = project.capabilities.attached;
-        session.meta.disabled_capabilities = project.capabilities.disabled;
+        session.meta.attached_capabilities = project.capabilities.attached.map(|values| {
+            values
+                .into_iter()
+                .filter(|value| !value.starts_with("skill:"))
+                .collect()
+        });
+        session.meta.disabled_capabilities = project
+            .capabilities
+            .disabled
+            .into_iter()
+            .filter(|value| !value.starts_with("skill:"))
+            .collect();
         *self.shared.lock().unwrap() = session;
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.set_protected_write_paths(Vec::<PathBuf>::new());

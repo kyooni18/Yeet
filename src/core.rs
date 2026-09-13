@@ -6,7 +6,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -33,10 +33,20 @@ pub struct Usage {
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
+    /// Input tokens for logical model calls where the provider explicitly reported cache-read telemetry.
+    pub cache_measured_input_tokens: Option<u64>,
+    /// Input tokens for logical model calls where cache-read telemetry was absent.
+    pub cache_unreported_input_tokens: Option<u64>,
     pub cache_write_input_tokens: Option<u64>,
+    pub cost_equivalent_input_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
     pub model_calls: Option<u64>,
+    pub transport_attempts: Option<u64>,
     pub estimated_cost_usd: Option<f64>,
+    pub provider_cache_diagnostic_type: Option<String>,
+    pub provider_cache_miss_reason: Option<String>,
+    pub provider_cache_missed_tokens: Option<u64>,
+    pub provider_comparison_reusable_tokens: Option<u64>,
 }
 
 impl Usage {
@@ -51,17 +61,95 @@ impl Usage {
         self.output_tokens = add(self.output_tokens, other.output_tokens);
         self.total_tokens = add(self.total_tokens, other.total_tokens);
         self.cached_input_tokens = add(self.cached_input_tokens, other.cached_input_tokens);
+        let cache_measured_input_tokens = other.cache_measured_input_tokens.or_else(|| {
+            other
+                .input_tokens
+                .filter(|_| other.cached_input_tokens.is_some())
+        });
+        let cache_unreported_input_tokens = other.cache_unreported_input_tokens.or_else(|| {
+            other
+                .input_tokens
+                .filter(|_| other.cached_input_tokens.is_none())
+        });
+        self.cache_measured_input_tokens = add(
+            self.cache_measured_input_tokens,
+            cache_measured_input_tokens,
+        );
+        self.cache_unreported_input_tokens = add(
+            self.cache_unreported_input_tokens,
+            cache_unreported_input_tokens,
+        );
         self.cache_write_input_tokens = add(
             self.cache_write_input_tokens,
             other.cache_write_input_tokens,
         );
+        self.cost_equivalent_input_tokens = add(
+            self.cost_equivalent_input_tokens,
+            other.cost_equivalent_input_tokens,
+        );
         self.reasoning_tokens = add(self.reasoning_tokens, other.reasoning_tokens);
         self.model_calls = add(self.model_calls, other.model_calls);
+        self.transport_attempts = add(self.transport_attempts, other.transport_attempts);
         self.estimated_cost_usd = match (self.estimated_cost_usd, other.estimated_cost_usd) {
             (None, None) => None,
             (lhs, rhs) => Some(lhs.unwrap_or(0.0) + rhs.unwrap_or(0.0)),
         };
     }
+
+    /// Returns a cache-rate view whose denominator includes only calls where
+    /// cache-read telemetry was explicitly reported. Older persisted sessions
+    /// without coverage fields are marked unclassified rather than guessed.
+    pub fn cache_measurement(&self) -> CacheUsageMeasurement {
+        let input_tokens = self.input_tokens.unwrap_or(0);
+        let cached_input_tokens = self.cached_input_tokens.unwrap_or(0).min(input_tokens);
+        let cache_write_input_tokens = self.cache_write_input_tokens.unwrap_or(0);
+        let has_coverage = self.cache_measured_input_tokens.is_some()
+            || self.cache_unreported_input_tokens.is_some();
+        let measured_input_tokens = if has_coverage {
+            self.cache_measured_input_tokens
+                .unwrap_or(0)
+                .min(input_tokens)
+        } else {
+            0
+        };
+        let unreported_input_tokens = if has_coverage {
+            self.cache_unreported_input_tokens
+                .unwrap_or(0)
+                .min(input_tokens.saturating_sub(measured_input_tokens))
+        } else {
+            0
+        };
+        let unclassified_input_tokens = input_tokens
+            .saturating_sub(measured_input_tokens)
+            .saturating_sub(unreported_input_tokens);
+        let hit_rate = (measured_input_tokens > 0 && unclassified_input_tokens == 0).then(|| {
+            cached_input_tokens.min(measured_input_tokens) as f64 / measured_input_tokens as f64
+        });
+        let measurement_coverage_rate =
+            (input_tokens > 0).then(|| measured_input_tokens as f64 / input_tokens as f64);
+        CacheUsageMeasurement {
+            input_tokens,
+            cached_input_tokens,
+            cache_write_input_tokens,
+            measured_input_tokens,
+            unreported_input_tokens,
+            unclassified_input_tokens,
+            hit_rate,
+            measurement_coverage_rate,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CacheUsageMeasurement {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub cache_write_input_tokens: u64,
+    pub measured_input_tokens: u64,
+    pub unreported_input_tokens: u64,
+    pub unclassified_input_tokens: u64,
+    pub hit_rate: Option<f64>,
+    pub measurement_coverage_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -233,6 +321,11 @@ pub struct CallRequest {
     pub system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDefinition>>,
+    /// Optional tools known to the harness but omitted from the ordinary
+    /// schema surface. Provider adapters may expose these through a native
+    /// deferred-tool mechanism; unsupported providers ignore this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferred_tools: Option<Vec<ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,6 +357,7 @@ impl CallRequest {
             context_key: None,
             system: None,
             tools: None,
+            deferred_tools: None,
             tool_choice: None,
             temperature: None,
             max_tokens: None,
@@ -309,9 +403,11 @@ pub struct CallResult {
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: String,
     pub usage: Option<Usage>,
+
     pub raw: Option<Value>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Start,
@@ -551,6 +647,7 @@ struct BridgeInner {
     event_tx: mpsc::Sender<Value>,
     openai_flex: AtomicBool,
     shutting_down: AtomicBool,
+    generation: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -608,6 +705,7 @@ impl BridgeClient {
             event_tx: event_tx.clone(),
             openai_flex: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
+            generation: AtomicU64::new(1),
         });
 
         let reader_inner = inner.clone();
@@ -633,12 +731,14 @@ impl BridgeClient {
                     let _ = reader_inner.event_tx.send(value);
                 }
             }
-            if let Ok(mut pending) = reader_inner.pending.lock() {
-                pending.clear();
+            if reader_inner.generation.load(Ordering::Acquire) == 1 {
+                if let Ok(mut pending) = reader_inner.pending.lock() {
+                    pending.clear();
+                }
+                let _ = reader_inner
+                    .event_tx
+                    .send(json!({ "type": "bridge_closed" }));
             }
-            let _ = reader_inner
-                .event_tx
-                .send(json!({ "type": "bridge_closed" }));
         });
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines() {
@@ -660,6 +760,136 @@ impl BridgeClient {
             bail!("provider bridge did not answer ping");
         }
         Ok(client)
+    }
+
+    pub fn restart(&self) -> Result<()> {
+        if self.inner.shutting_down.load(Ordering::Acquire) {
+            bail!("provider bridge is shutting down");
+        }
+
+        self.interrupt_active_requests();
+        let generation = self.inner.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        if let Ok(mut pending) = self.inner.pending.lock() {
+            pending.clear();
+        }
+
+        {
+            let mut child = self
+                .inner
+                .child
+                .lock()
+                .map_err(|_| anyhow!("bridge child lock poisoned"))?;
+            if child.try_wait()?.is_none() {
+                kill_bridge_process_group(&mut child);
+                let _ = child.wait();
+            }
+        }
+
+        let node = node_executable()?;
+        let script = bridge_script()?;
+        let mut command = Command::new(node);
+        command
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command
+            .spawn()
+            .context("failed to restart Node provider bridge")?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("provider bridge stdin unavailable after restart")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("provider bridge stdout unavailable after restart")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("provider bridge stderr unavailable after restart")?;
+
+        {
+            let mut bridge_stdin = self
+                .inner
+                .stdin
+                .lock()
+                .map_err(|_| anyhow!("bridge stdin lock poisoned"))?;
+            *bridge_stdin = BufWriter::new(stdin);
+        }
+        {
+            let mut bridge_child = self
+                .inner
+                .child
+                .lock()
+                .map_err(|_| anyhow!("bridge child lock poisoned"))?;
+            *bridge_child = child;
+        }
+        if let Ok(mut tail) = self.inner.stderr_tail.lock() {
+            tail.clear();
+        }
+
+        let reader_inner = self.inner.clone();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if let Some(id) = value.get("id").and_then(Value::as_str) {
+                    let sender = reader_inner
+                        .pending
+                        .lock()
+                        .ok()
+                        .and_then(|pending| pending.get(id).cloned());
+                    if let Some(sender) = sender {
+                        let _ = sender.send(value);
+                    }
+                } else {
+                    let _ = reader_inner.event_tx.send(value);
+                }
+            }
+            if reader_inner.generation.load(Ordering::Acquire) == generation {
+                if let Ok(mut pending) = reader_inner.pending.lock() {
+                    pending.clear();
+                }
+                let _ = reader_inner
+                    .event_tx
+                    .send(json!({ "type": "bridge_closed" }));
+            }
+        });
+        let stderr_tail = self.inner.stderr_tail.clone();
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines() {
+                let Ok(line) = line else { break };
+                if let Ok(mut tail) = stderr_tail.lock() {
+                    tail.push_str(&line);
+                    tail.push('\n');
+                    if tail.len() > 16 * 1024 {
+                        let keep = tail.len() - 16 * 1024;
+                        tail.drain(..keep);
+                    }
+                }
+            }
+        });
+
+        let pong = self.request("ping", Map::new())?;
+        if pong.get("type").and_then(Value::as_str) != Some("pong") {
+            bail!("restarted provider bridge did not answer ping");
+        }
+        Ok(())
     }
 
     pub fn request(&self, op: &str, mut fields: Map<String, Value>) -> Result<Value> {
@@ -1146,6 +1376,7 @@ pub struct BridgeStream {
     finished: bool,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum StreamPoll {
     Event(StreamEvent),
     Timeout,
@@ -1256,6 +1487,28 @@ pub fn runtime_directory() -> Result<PathBuf> {
         if beside.join("dist/bridge.js").is_file() {
             return Ok(beside);
         }
+        // Detached development daemons run from the selected workspace, not the
+        // repository root. Recognize Cargo's target/{debug,release}/yeet layout so
+        // they can still locate the repository RuntimeSource without requiring an
+        // inherited YEET_RUNTIME_DIR override.
+        let cargo_profile = bin
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| matches!(value, "debug" | "release"));
+        let cargo_target = bin
+            .parent()
+            .and_then(|value| value.file_name())
+            .and_then(|value| value.to_str())
+            == Some("target");
+        if cargo_profile
+            && cargo_target
+            && let Some(root) = bin.parent().and_then(|target| target.parent())
+        {
+            let development = root.join("RuntimeSource");
+            if development.join("dist/bridge.js").is_file() {
+                return Ok(development);
+            }
+        }
     }
     let cwd = PathBuf::from("RuntimeSource");
     if cwd.join("dist/bridge.js").is_file() {
@@ -1341,6 +1594,48 @@ fn string_field(value: &Value, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_accumulation_preserves_cache_measurement_coverage() {
+        let mut total = Usage::default();
+        total.accumulate(&Usage {
+            input_tokens: Some(100),
+            cached_input_tokens: Some(60),
+            ..Default::default()
+        });
+        total.accumulate(&Usage {
+            input_tokens: Some(200),
+            ..Default::default()
+        });
+
+        assert_eq!(total.input_tokens, Some(300));
+        assert_eq!(total.cached_input_tokens, Some(60));
+        assert_eq!(total.cache_measured_input_tokens, Some(100));
+        assert_eq!(total.cache_unreported_input_tokens, Some(200));
+        let measurement = total.cache_measurement();
+        assert_eq!(measurement.measured_input_tokens, 100);
+        assert_eq!(measurement.unreported_input_tokens, 200);
+        assert_eq!(measurement.unclassified_input_tokens, 0);
+        assert_eq!(measurement.hit_rate, Some(0.6));
+        assert_eq!(measurement.measurement_coverage_rate, Some(1.0 / 3.0));
+    }
+
+    #[test]
+    fn legacy_usage_without_coverage_does_not_guess_cache_hit_rate() {
+        let usage = Usage {
+            input_tokens: Some(300),
+            cached_input_tokens: Some(100),
+            ..Default::default()
+        };
+
+        let measurement = usage.cache_measurement();
+        assert_eq!(measurement.cached_input_tokens, 100);
+        assert_eq!(measurement.measured_input_tokens, 0);
+        assert_eq!(measurement.unreported_input_tokens, 0);
+        assert_eq!(measurement.unclassified_input_tokens, 300);
+        assert_eq!(measurement.hit_rate, None);
+        assert_eq!(measurement.measurement_coverage_rate, Some(0.0));
+    }
 
     #[test]
     fn call_request_uses_typescript_field_names() {

@@ -7,10 +7,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::platform::replace_file;
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use crate::platform::{replace_file, set_private_directory, set_private_file};
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -412,8 +409,7 @@ impl SandboxStore {
             reject_symlink(&directory)?;
         }
         fs::create_dir_all(&directory)?;
-        #[cfg(unix)]
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+        set_private_directory(&directory)?;
         let path = self.path();
         if path.exists() {
             reject_symlink(&path)?;
@@ -426,11 +422,9 @@ impl SandboxStore {
         let mut data = serde_json::to_vec_pretty(&PolicyDocument::from(policy))?;
         data.push(b'\n');
         fs::write(&tmp, data)?;
-        #[cfg(unix)]
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        set_private_file(&tmp)?;
         replace_file(&tmp, &path)?;
-        #[cfg(unix)]
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        set_private_file(&path)?;
         Ok(())
     }
 

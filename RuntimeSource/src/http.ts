@@ -23,6 +23,12 @@ export interface ProviderFetchLog {
 
 export type ProviderFetchLogger = (entry: ProviderFetchLog) => void;
 type ProviderFetchLogEntry = Omit<ProviderFetchLog, "timestamp">;
+const fetchAttemptCounts = new WeakMap<Response, number>();
+
+/** Number of transport attempts consumed to obtain this successful response. */
+export function providerFetchAttempts(response: Response): number {
+  return fetchAttemptCounts.get(response) ?? 1;
+}
 
 const DEFAULT_RETRY: Required<RetryPolicy> = {
   maxAttempts: 3,
@@ -138,6 +144,7 @@ export async function providerFetch(
       const response = await fetchImpl(input, attemptSignal ? { ...init, signal: attemptSignal } : init);
 
       if (response.ok) {
+        fetchAttemptCounts.set(response, attempt);
         emitLog(options.apiCallLogger, {
           provider: options.provider,
           method,

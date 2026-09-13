@@ -21,5 +21,6 @@ pub mod session_store;
 pub mod shell;
 pub mod tools;
 pub mod ui;
+pub mod update;
 pub mod web_search;
 pub mod workers;

@@ -292,7 +292,40 @@ fn shell_actor_route(command: &str) -> bool {
 pub(super) fn shell_is_inspection(command: &str) -> bool {
     let lower = command.trim().to_ascii_lowercase();
     [
-        "cat ", "head ", "tail ", "sed ", "awk ", "grep ", "rg ", "ls", "find ", "tree ", "pwd",
+        "cat ",
+        "head ",
+        "tail ",
+        "sed ",
+        "awk ",
+        "grep ",
+        "rg ",
+        "ls",
+        "find ",
+        "tree ",
+        "pwd",
+        "git status",
+        "git diff",
+        "git log",
+        "git show",
+        "git rev-parse",
+        "git ls-files",
+        "git ls-tree",
+        "git grep",
+        "stat ",
+        "wc ",
+        "file ",
+        "ps ",
+        "pgrep ",
+        "lsof ",
+        "shasum ",
+        "sha256sum ",
+        "md5 ",
+        "which ",
+        "command -v ",
+        "type -a ",
+        "test ",
+        "uname",
+        "sw_vers",
     ]
     .iter()
     .any(|prefix| {
@@ -300,6 +333,7 @@ pub(super) fn shell_is_inspection(command: &str) -> bool {
             || lower.contains(&format!("; {prefix}"))
             || lower.contains(&format!("&& {prefix}"))
             || lower.contains(&format!("| {prefix}"))
+            || lower.contains(&format!("\n{prefix}"))
     })
 }
 
@@ -351,6 +385,22 @@ mod token_tests {
         assert!(inline_shell_result(&output, "saved-log").is_none());
     }
 
+    #[test]
+    fn common_read_only_diagnostics_preserve_workspace_evidence() {
+        for command in [
+            "git status --short",
+            "git diff -- src/agent.rs",
+            "stat -f '%Sp %N' /tmp/file",
+            "ps -axo pid,command",
+            "lsof -nP -iTCP -sTCP:LISTEN",
+            "shasum -a 256 target/release/yeet",
+            "command -v yeet",
+            "printf '%s\\n' header; git status --short",
+            "set -eu\nprintf '%s\\n' header\nls -la .",
+        ] {
+            assert!(shell_is_inspection(command), "{command}");
+        }
+    }
     #[test]
     fn deterministic_summary_extracts_diagnostics_without_provider_calls() {
         let output = crate::shell::ShellResult {

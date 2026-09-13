@@ -8,6 +8,7 @@ import {
   cheapestModel,
   effectiveRates,
   estimateUsageCostUsd,
+  inputCostEquivalentTokens,
 } from "../dist/pricing.js";
 
 const astra = {
@@ -76,6 +77,29 @@ test("cache policy pays a cache-write premium only when reuse can amortize it", 
     applyCacheCostPolicy({ ...base, metadata: { lane: "coding", expectedCacheReuses: "1" } }, astra).promptCache,
     true,
   );
+});
+
+test("Anthropic one-hour caching uses its real 2x write price for break-even and telemetry", () => {
+  const request = {
+    model: "anthropic/claude-sonnet-5",
+    messages: [{ role: "user", content: "tool loop" }],
+    promptCache: true,
+    providerOptions: { cache_control: { type: "ephemeral", ttl: "1h" } },
+    metadata: { expectedCacheReuses: "1" },
+  };
+  assert.equal(cacheBreakEvenReuses(astra, 100_000, request), 2);
+  assert.equal(applyCacheCostPolicy(request, astra).promptCache, false);
+  assert.equal(
+    applyCacheCostPolicy({ ...request, metadata: { expectedCacheReuses: "2" } }, astra).promptCache,
+    true,
+  );
+  const usage = {
+    inputTokens: 100_000,
+    cachedInputTokens: 60_000,
+    cacheWriteInputTokens: 20_000,
+  };
+  assert.equal(estimateUsageCostUsd(astra, usage, request), 0.66);
+  assert.equal(inputCostEquivalentTokens(astra, usage, request), 66_000);
 });
 
 test("cache policy includes tool schemas when selecting cache pricing tiers", () => {

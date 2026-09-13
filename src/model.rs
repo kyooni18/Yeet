@@ -27,6 +27,7 @@ pub struct BridgeState {
     pub active_reasoning_text: String,
     pub active_reasoning_summary: String,
     pub is_streaming: bool,
+    pub infinity_mode: bool,
     pub error_message: Option<String>,
     pub active_model: String,
     pub active_reasoning_level: String,
@@ -37,8 +38,11 @@ pub struct BridgeState {
     pub pending_shell_permission: Option<ShellPermission>,
     pub pending_native_app_permission: Option<NativeAppPermission>,
     pub available_models: Vec<String>,
+    pub model_catalog: Vec<ModelCatalogItem>,
     pub is_loading_models: bool,
     pub saved_sessions: Vec<SessionSummary>,
+    pub known_workspaces: Vec<WorkspaceSummary>,
+    pub workspace_session_groups: Vec<WorkspaceSessionGroup>,
     pub current_session_id: Option<String>,
     pub active_run_id: Option<String>,
     pub available_capabilities: Vec<CapabilityToggleItem>,
@@ -73,6 +77,7 @@ impl BridgeState {
             active_reasoning_text: self.active_reasoning_text.clone(),
             active_reasoning_summary: self.active_reasoning_summary.clone(),
             is_streaming: self.is_streaming,
+            infinity_mode: self.infinity_mode,
             error_message: self.error_message.clone(),
             active_model: self.active_model.clone(),
             active_reasoning_level: self.active_reasoning_level.clone(),
@@ -83,8 +88,11 @@ impl BridgeState {
             pending_shell_permission: self.pending_shell_permission.clone(),
             pending_native_app_permission: self.pending_native_app_permission.clone(),
             available_models: self.available_models.clone(),
+            model_catalog: self.model_catalog.clone(),
             is_loading_models: self.is_loading_models,
             saved_sessions: self.saved_sessions.clone(),
+            known_workspaces: self.known_workspaces.clone(),
+            workspace_session_groups: self.workspace_session_groups.clone(),
             current_session_id: self.current_session_id.clone(),
             active_run_id: self.active_run_id.clone(),
             available_capabilities: self.available_capabilities.clone(),
@@ -124,6 +132,15 @@ pub struct ProviderConfigurationItem {
     pub base_url: String,
     pub require_api_key: bool,
     pub header_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelCatalogItem {
+    pub id: String,
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub context_length: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -203,13 +220,29 @@ pub struct NativeAppPermission {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionSummary {
     pub id: String,
     pub title: String,
     pub updated_at: String,
     pub model: String,
     pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSummary {
+    pub id: String,
+    pub path: String,
+    pub display_name: String,
+    pub updated_at: Option<String>,
+    pub session_count: usize,
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSessionGroup {
+    pub workspace_id: String,
+    pub sessions: Vec<SessionSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +309,7 @@ pub enum ToolCallStatus {
     Streaming,
     Completed,
     Failed,
+    Suppressed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +351,9 @@ pub enum FrontendCommand {
     },
     SelectReasoning {
         level: String,
+    },
+    SetInfinity {
+        enabled: bool,
     },
     RequestSessions,
     LoadSession {
