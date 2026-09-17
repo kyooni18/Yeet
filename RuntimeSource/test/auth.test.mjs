@@ -69,12 +69,14 @@ test("AuthManager persists custom OpenAI-compatible endpoints without storing AP
     baseUrl: "http://127.0.0.1:1234/v1/",
     headers: { "X-Local-Client": "yeet" },
     requireApiKey: true,
+    excludedModels: [" image-only ", "image-only", "legacy-model"],
   });
   assert.deepEqual(saved, {
     id: "local-llm",
     baseUrl: "http://127.0.0.1:1234/v1",
     headers: { "X-Local-Client": "yeet" },
     requireApiKey: true,
+    excludedModels: ["image-only", "legacy-model"],
   });
   await auth.setApiKey("local-llm", "secret-local-key");
 

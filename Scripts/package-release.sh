@@ -5,6 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUT=${YEET_PACKAGE_OUT:-"$ROOT/target/packages"}
 VERSION=${YEET_VERSION:-$(sed -n '/^\[package\]/,/^\[/{s/^version = "\([^"]*\)"/\1/p;}' "$ROOT/Cargo.toml" | head -n 1)}
 VERSION=${VERSION#v}
+node "$ROOT/Scripts/verify-release-version.mjs" "$VERSION"
 TARGET=$(rustc -vV | sed -n 's/^host: //p')
 NAME="yeet-$VERSION-$TARGET"
 STAGE_BASE="$ROOT/target/package-stage"
@@ -22,8 +23,14 @@ checksum() {
 }
 
 cd "$ROOT"
-if [ ! -x RuntimeSource/node_modules/.bin/tsc ]; then
-  npm --prefix RuntimeSource ci
+npm --prefix RuntimeSource ci
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm --dir web install --frozen-lockfile
+elif command -v corepack >/dev/null 2>&1; then
+  corepack pnpm --dir web install --frozen-lockfile
+else
+  echo "pnpm or Corepack is required to install the locked Remote WebUI dependencies." >&2
+  exit 1
 fi
 YEET_RUNTIME_OUT_DIR="$RUNTIME_BUILD/dist" "$ROOT/Scripts/rebuild-runtime.sh"
 "$ROOT/Scripts/build-remote-web.sh"
@@ -34,13 +41,23 @@ mkdir -p "$STAGE/bin" "$STAGE/share/yeet/runtime" "$OUT"
 install -m 755 target/release/yeet "$STAGE/bin/yeet"
 cp -R "$RUNTIME_BUILD/dist" "$STAGE/share/yeet/runtime/dist"
 cp RuntimeSource/package.json "$STAGE/share/yeet/runtime/package.json"
-cp README.md LICENSE.txt "$STAGE/"
+cp README.md CHANGELOG.md LICENSE.txt "$STAGE/"
 cp Scripts/install-release.sh "$STAGE/install.sh"
 chmod 755 "$STAGE/install.sh"
 if [ -f docs/PLATFORM_SUPPORT.md ]; then
   mkdir -p "$STAGE/docs"
   cp docs/PLATFORM_SUPPORT.md "$STAGE/docs/PLATFORM_SUPPORT.md"
 fi
+
+SMOKE_CONFIG="$ROOT/target/release-smoke-config-$TARGET"
+rm -rf "$SMOKE_CONFIG"
+ACTUAL_VERSION=$("$STAGE/bin/yeet" --version)
+if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+  echo "Staged Yeet version $ACTUAL_VERSION does not match release version $VERSION" >&2
+  exit 1
+fi
+YEET_CONFIG_DIR="$SMOKE_CONFIG" "$STAGE/bin/yeet" doctor >/dev/null
+rm -rf "$SMOKE_CONFIG"
 
 ARCHIVE="$OUT/$NAME.tar.gz"
 rm -f "$ARCHIVE" "$ARCHIVE.sha256"
@@ -61,7 +78,7 @@ case "$TARGET" in
       install -m 755 target/release/yeet "$DEB_ROOT/usr/bin/yeet"
       cp -R "$RUNTIME_BUILD/dist" "$DEB_ROOT/usr/share/yeet/runtime/dist"
       cp RuntimeSource/package.json "$DEB_ROOT/usr/share/yeet/runtime/package.json"
-      cp README.md LICENSE.txt "$DEB_ROOT/usr/share/doc/yeet/"
+      cp README.md CHANGELOG.md LICENSE.txt "$DEB_ROOT/usr/share/doc/yeet/"
       cat > "$DEB_ROOT/DEBIAN/control" <<EOF
 Package: yeet
 Version: $VERSION

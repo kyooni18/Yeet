@@ -4,45 +4,74 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
 pub(super) const SEARCH_TOOL: &str = "search_tools";
-const STABLE_RECOVERY_TOOLS: [&str; 5] = [
+
+const STABLE_INSPECTION_TOOLS: [&str; 2] = ["read_file", "search_workspace"];
+const STABLE_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
+const STABLE_BOUNDED_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
+const ARTIFACT_RECOVERY_TOOLS: [&str; 3] = ["artifact_info", "read_artifact", "search_artifact"];
+
+// These capabilities are recovery/context lookups, not ordinary workspace
+// evidence. A fuzzy search_tools query must not attach them just because their
+// descriptions contain generic words such as "project", "source", or
+// "history". Exact tool-name queries remain allowed for genuine recovery.
+const FUZZY_DISCOVERY_BLOCKED_TOOLS: [&str; 8] = [
     "context_history",
     "task_notes",
+    "project_memory_recall",
+    "project_memory_get",
+    "project_memory_connections",
     "artifact_info",
     "read_artifact",
     "search_artifact",
 ];
 
-const STABLE_INSPECTION_TOOLS: [&str; 3] = ["read_file", "list_files", "search_workspace"];
-const STABLE_EXECUTION_TOOLS: [&str; 3] = ["run_shell", "shell_job", "context_status"];
+fn blocked_from_fuzzy_discovery(name: &str) -> bool {
+    FUZZY_DISCOVERY_BLOCKED_TOOLS.contains(&name)
+}
 
-#[derive(Default)]
+fn artifact_recovery_is_ready(loaded: &HashSet<String>) -> bool {
+    loaded.contains("read_artifact")
+}
+
 pub(super) struct ToolDiscovery {
     loaded: HashSet<String>,
+    search_enabled: bool,
     // Prompt-cache ABI for this turn. The registry catalog may be backed by
     // maps or extension/server enumeration whose order can change even when
     // schemas do not. Preserve first attachment order and append later tools.
     loaded_order: Vec<String>,
 }
 
+impl Default for ToolDiscovery {
+    fn default() -> Self {
+        Self {
+            loaded: HashSet::new(),
+            search_enabled: true,
+            loaded_order: Vec::new(),
+        }
+    }
+}
+
 impl ToolDiscovery {
-    /// General agent turns keep the small workspace inspection/execution loop
-    /// attached from attempt one. Current telemetry shows generic analysis turns
-    /// otherwise spending their first model round discovering exactly these
-    /// tools, which creates a deterministic cold tool-envelope epoch.
+    /// General agent turns keep the common workspace inspection/execution loop
+    /// attached from attempt one. Session-history and durable-memory recovery stays
+    /// lazy: ordinary local analysis should not be invited to search task notes or
+    /// history before it has used direct workspace evidence.
     pub fn agent() -> Self {
         let mut discovery = Self::default();
+        discovery.search_enabled = false;
         discovery.load(STABLE_INSPECTION_TOOLS);
         discovery.load(STABLE_EXECUTION_TOOLS);
-        discovery.load(STABLE_RECOVERY_TOOLS);
+        discovery.load(["deploy_agent"]);
         discovery
     }
 
-    /// Keep one stable tool prefix for the common edit/verify loop. For
-    /// analysis-only coding turns, retain the smaller inspection-only prefix.
-    /// Mid-turn schema promotion invalidates provider prompt prefixes, which
-    /// costs substantially more than the extra schemas on implementation turns.
+    /// Keep one stable tool prefix for the common edit/verify loop. Recovery-only
+    /// session tools remain lazy so source inspection does not drift into notes or
+    /// historical context unless the model has a concrete reason to request them.
     pub fn coding(implementation_requested: bool) -> Self {
         let mut discovery = Self::default();
+        discovery.search_enabled = false;
         // Keep this deliberately ordered. Implementation turns pay once for the
         // complete inspect/edit/verify surface instead of promoting shell_job or
         // context_status halfway through a long coding loop.
@@ -51,18 +80,49 @@ impl ToolDiscovery {
             discovery.load(["apply_file_edits"]);
         }
         discovery.load(STABLE_EXECUTION_TOOLS);
-        discovery.load(STABLE_RECOVERY_TOOLS);
         discovery
     }
 
-    /// Research normally searches and then reads primary sources. Recovery
-    /// schemas are also preloaded so large evidence/output compaction cannot
-    /// mutate the tool envelope halfway through the turn.
+    /// Short, non-mutating repository analysis keeps the common evidence path
+    /// stable without paying for context-recovery schemas. Detached-job and
+    /// artifact readers are promoted only when those states actually occur.
+    pub fn bounded_analysis() -> Self {
+        let mut discovery = Self::default();
+        discovery.search_enabled = false;
+        discovery.load(STABLE_INSPECTION_TOOLS);
+        discovery.load(STABLE_BOUNDED_EXECUTION_TOOLS);
+        discovery
+    }
+
+    /// Direct local-file lookup deliberately has no schema-discovery tool,
+    /// directory-listing tool, workspace-content search, or artifact search.
+    /// The model uses one native shell metadata command and then reads the
+    /// selected file directly.
+    pub fn direct_file_lookup() -> Self {
+        let mut discovery = Self::default();
+        discovery.search_enabled = false;
+        discovery.load(["run_shell", "read_file"]);
+        discovery
+    }
+
+    /// Research normally searches and then reads primary sources. Artifact
+    /// readers are promoted only after a result is actually externalized;
+    /// session history, task notes, and project memory stay lazy.
     pub fn research() -> Self {
         let mut discovery = Self::default();
-        discovery.load(["web_search", "web_read", "search_artifact"]);
-        discovery.load(STABLE_RECOVERY_TOOLS);
+        discovery.search_enabled = false;
+        discovery.load(["web_search", "web_read"]);
         discovery
+    }
+
+    /// Enable schema discovery after the request has established a concrete
+    /// reason to use a non-core capability (or after an artifact exists).
+    pub fn enable_search(&mut self) {
+        self.search_enabled = true;
+    }
+
+    pub fn search_enabled(&self) -> bool {
+        self.search_enabled
     }
 
     /// Preserve the canonical promotion order observed when an Agent turn moves
@@ -93,11 +153,14 @@ impl ToolDiscovery {
     }
 
     pub fn attached(&self, catalog: &[ToolDefinition]) -> Vec<ToolDefinition> {
-        let mut tools = vec![ToolDefinition::new(
-            SEARCH_TOOL,
-            "Load missing tool schemas. Prefer exact tool names. Keyword discovery only attaches strong matches (a name match or multiple meaningful description terms), so generic words do not silently expand the provider-visible tool envelope. For Skills/MCP/Workers, load find_capabilities and activate_capability first.",
-            json!({"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
-        )];
+        let mut tools = Vec::new();
+        if self.search_enabled {
+            tools.push(ToolDefinition::new(
+                SEARCH_TOOL,
+                "Load missing tool schemas. Prefer exact tool names. Keyword discovery only attaches strong matches (a name match or multiple meaningful description terms), so generic words do not silently expand the provider-visible tool envelope. For Skills/MCP/Workers, load find_capabilities and activate_capability first.",
+                json!({"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
+            ));
+        }
         let catalog_by_name: HashMap<_, _> = catalog
             .iter()
             .map(|tool| (tool.name.as_str(), tool))
@@ -148,7 +211,16 @@ impl ToolDiscovery {
             .filter_map(|tool| {
                 let name = tool.name.to_lowercase();
                 let description = tool.description.as_deref().unwrap_or("").to_lowercase();
+                if ARTIFACT_RECOVERY_TOOLS.contains(&name.as_str())
+                    && !artifact_recovery_is_ready(&self.loaded)
+                    && !self.loaded.contains(&name)
+                {
+                    return None;
+                }
                 if exact_list && !words.contains(name.as_str()) {
+                    return None;
+                }
+                if !exact_list && blocked_from_fuzzy_discovery(&name) && name != query {
                     return None;
                 }
                 let (score, strong_match) =
@@ -188,7 +260,9 @@ impl ToolDiscovery {
             matches
                 .retain(|(score, tool)| *score == best_score && self.loaded.contains(&tool.name));
         }
-        matches.truncate(5);
+        if !exact_list && matches.len() > 5 {
+            matches.truncate(5);
+        }
         let mut loaded = Vec::new();
         let mut already_loaded = Vec::new();
         let mut deferred = Vec::new();
@@ -266,6 +340,47 @@ mod tests {
     }
 
     #[test]
+    fn fuzzy_discovery_does_not_attach_memory_or_artifact_recovery_tools() {
+        let catalog = vec![
+            tool("read_file", "Read a local file from the workspace"),
+            tool(
+                "project_memory_recall",
+                "Recall project memory, source evidence, and prior task context",
+            ),
+            tool(
+                "context_history",
+                "Search prior context history and task evidence",
+            ),
+            tool(
+                "read_artifact",
+                "Read an externalized artifact containing file output",
+            ),
+        ];
+        let mut discovery = ToolDiscovery::default();
+        let result: Value = serde_json::from_str(&discovery.search(
+            &json!({"query":"inspect workspace file and prior evidence"}),
+            &catalog,
+        ))
+        .unwrap();
+        assert_eq!(result["loaded"], json!(["read_file"]));
+        assert_eq!(discovery.loaded_count(), 1);
+    }
+
+    #[test]
+    fn exact_recovery_tool_name_can_still_be_loaded() {
+        let catalog = vec![tool(
+            "project_memory_recall",
+            "Recall project memory and prior task context",
+        )];
+        let mut discovery = ToolDiscovery::default();
+        let result: Value = serde_json::from_str(
+            &discovery.search(&json!({"query":"project_memory_recall"}), &catalog),
+        )
+        .unwrap();
+        assert_eq!(result["loaded"], json!(["project_memory_recall"]));
+    }
+
+    #[test]
     fn implementation_surface_preloads_complete_inspect_edit_verify_abi() {
         let catalog = [
             "context_status",
@@ -293,21 +408,113 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "search_tools",
                 "read_file",
-                "list_files",
                 "search_workspace",
                 "apply_file_edits",
                 "run_shell",
-                "shell_job",
-                "context_status",
-                "context_history",
-                "task_notes",
-                "artifact_info",
-                "read_artifact",
-                "search_artifact",
             ]
         );
+    }
+
+    #[test]
+    fn bounded_analysis_surface_stays_on_the_core_wire_surface() {
+        let mut catalog = crate::tools::direct_mcp_tool_definitions();
+        catalog.extend(super::super::context::tools());
+
+        let full = ToolDiscovery::agent().attached(&catalog);
+        let bounded = ToolDiscovery::bounded_analysis().attached(&catalog);
+        let bounded_names = bounded
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bounded_names,
+            vec!["read_file", "search_workspace", "run_shell"]
+        );
+        assert_eq!(full, bounded);
+
+        let full_bytes = serde_json::to_vec(&full).unwrap().len();
+        let bounded_bytes = serde_json::to_vec(&bounded).unwrap().len();
+        assert_eq!(bounded_bytes, full_bytes);
+        eprintln!("bounded analysis tool-schema bytes: {full_bytes} -> {bounded_bytes} (stable)");
+    }
+
+    #[test]
+    fn direct_file_lookup_surface_excludes_discovery_and_workspace_search() {
+        let catalog = [
+            "search_tools",
+            "read_file",
+            "search_workspace",
+            "read_artifact",
+            "run_shell",
+        ]
+        .into_iter()
+        .map(|name| tool(name, name))
+        .collect::<Vec<_>>();
+        let names = ToolDiscovery::direct_file_lookup()
+            .attached(&catalog)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["run_shell", "read_file"]);
+    }
+
+    #[test]
+    fn recovery_tools_promote_only_after_their_state_exists() {
+        let catalog = [
+            "read_file",
+            "search_workspace",
+            "run_shell",
+            "shell_job",
+            "read_artifact",
+            "search_artifact",
+        ]
+        .into_iter()
+        .map(|name| tool(name, name))
+        .collect::<Vec<_>>();
+        let mut discovery = ToolDiscovery::agent();
+        assert_eq!(
+            discovery
+                .attached(&catalog)
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>(),
+            vec!["read_file", "search_workspace", "run_shell"]
+        );
+
+        let before_artifact: Value =
+            serde_json::from_str(&discovery.search(&json!({"query":"search_artifact"}), &catalog))
+                .unwrap();
+        assert_eq!(before_artifact["loaded"], json!([]));
+
+        discovery.load(["read_artifact"]);
+        let after_artifact = discovery
+            .attached(&catalog)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            after_artifact,
+            vec![
+                "read_file",
+                "search_workspace",
+                "run_shell",
+                "read_artifact"
+            ]
+        );
+        assert!(!discovery.search_enabled());
+
+        discovery.enable_search();
+        assert!(
+            discovery
+                .attached(&catalog)
+                .iter()
+                .any(|tool| tool.name == SEARCH_TOOL)
+        );
+        let result: Value =
+            serde_json::from_str(&discovery.search(&json!({"query":"search_artifact"}), &catalog))
+                .unwrap();
+        assert_eq!(result["loaded"], json!(["search_artifact"]));
     }
 
     #[test]
@@ -330,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_lists_remain_bounded_and_satisfied_keywords_do_not_expand_the_envelope() {
+    fn exact_lists_load_all_matches_and_satisfied_keywords_do_not_expand_the_envelope() {
         let catalog: Vec<_> = (0..7)
             .map(|i| tool(&format!("tool_{i}"), "Read file"))
             .collect();
@@ -342,8 +549,8 @@ mod tests {
             .join(", ");
         let result: Value =
             serde_json::from_str(&discovery.search(&json!({"query":query}), &catalog)).unwrap();
-        assert_eq!(result["loaded"].as_array().unwrap().len(), 5);
-        assert_eq!(result["moreMatches"], true);
+        assert_eq!(result["loaded"].as_array().unwrap().len(), 7);
+        assert_eq!(result["moreMatches"], false);
         let before = discovery.attached(&catalog);
         let result: Value =
             serde_json::from_str(&discovery.search(&json!({"query":"Read file"}), &catalog))
@@ -393,12 +600,12 @@ mod tests {
         ];
         let mut discovery = ToolDiscovery::coding(false);
         let initial = discovery.attached(&catalog);
-        assert_eq!(initial.len(), 2);
-        assert_eq!(initial[1].name, "read_file");
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0].name, "read_file");
         discovery.search(&json!({"query":"apply_file_edits"}), &catalog);
-        assert_eq!(discovery.attached(&catalog).len(), 3);
-        assert_eq!(discovery.attached(&catalog[..1]).len(), 2);
-        assert_eq!(discovery.attached(&[]).len(), 1);
+        assert_eq!(discovery.attached(&catalog).len(), 2);
+        assert_eq!(discovery.attached(&catalog[..1]).len(), 1);
+        assert_eq!(discovery.attached(&[]).len(), 0);
     }
 
     #[test]
@@ -406,10 +613,8 @@ mod tests {
         let first_catalog = vec![
             tool("search_workspace", "Search"),
             tool("read_file", "Read"),
-            tool("list_files", "List"),
         ];
         let second_catalog = vec![
-            tool("list_files", "List"),
             tool("read_file", "Read"),
             tool("search_workspace", "Search"),
         ];
@@ -421,12 +626,7 @@ mod tests {
                 .map(|tool| tool.name)
                 .collect::<Vec<_>>()
         };
-        let expected = vec![
-            "search_tools",
-            "read_file",
-            "list_files",
-            "search_workspace",
-        ];
+        let expected = vec!["read_file", "search_workspace"];
         assert_eq!(names(&first_catalog), expected);
         assert_eq!(names(&second_catalog), expected);
     }
@@ -459,7 +659,6 @@ mod tests {
     fn preattached_web_research_surface_avoids_a1b3_promotion_and_preserves_wire_order() {
         let catalog = vec![
             tool("read_file", "Read"),
-            tool("list_files", "List"),
             tool("search_workspace", "Search"),
             tool("run_shell", "Shell"),
             tool("shell_job", "Poll shell"),
@@ -474,7 +673,7 @@ mod tests {
             tool("activate_capability", "Activate"),
         ];
         let mut discovery = ToolDiscovery::agent();
-        assert_eq!(discovery.attached(&catalog).len(), 12);
+        assert_eq!(discovery.attached(&catalog).len(), 3);
         discovery.carry_web_research_surface();
         let preattached = discovery
             .attached(&catalog)
@@ -484,18 +683,9 @@ mod tests {
         assert_eq!(
             preattached,
             vec![
-                "search_tools",
                 "read_file",
-                "list_files",
                 "search_workspace",
                 "run_shell",
-                "shell_job",
-                "context_status",
-                "context_history",
-                "task_notes",
-                "artifact_info",
-                "read_artifact",
-                "search_artifact",
                 "web_search",
                 "web_read",
                 "activate_capability",
@@ -521,12 +711,16 @@ mod tests {
     fn general_agent_preloads_common_workspace_tools_without_discovery_churn() {
         let catalog = vec![
             tool("read_file", "Read"),
-            tool("list_files", "List"),
             tool("search_workspace", "Search"),
             tool("run_shell", "Shell"),
             tool("shell_job", "Poll shell"),
             tool("context_status", "Context"),
             tool("apply_file_edits", "Edit"),
+            tool("read_artifact", "Artifact read"),
+            tool("search_artifact", "Artifact search"),
+            tool("context_history", "History"),
+            tool("task_notes", "Notes"),
+            tool("project_memory_recall", "Project memory"),
         ];
         let discovery = ToolDiscovery::agent();
         assert_eq!(
@@ -535,15 +729,7 @@ mod tests {
                 .iter()
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "search_tools",
-                "read_file",
-                "list_files",
-                "search_workspace",
-                "run_shell",
-                "shell_job",
-                "context_status",
-            ]
+            vec!["read_file", "search_workspace", "run_shell"]
         );
     }
 
@@ -563,7 +749,7 @@ mod tests {
             .iter()
             .map(|tool| tool.name.clone())
             .collect::<Vec<_>>();
-        discovery.search(&json!({"query":"workspace status"}), &catalog);
+        discovery.search(&json!({"query":"workspace"}), &catalog);
         let after = discovery
             .attached(&catalog)
             .iter()
@@ -580,11 +766,11 @@ mod tests {
             tool("run_shell", "Shell"),
         ];
         let mut discovery = ToolDiscovery::coding(false);
-        assert_eq!(discovery.attached(&catalog).len(), 3);
+        assert_eq!(discovery.attached(&catalog).len(), 2);
         discovery.load(["apply_file_edits"]);
-        assert_eq!(discovery.attached(&catalog).len(), 4);
+        assert_eq!(discovery.attached(&catalog).len(), 3);
         discovery.load(["run_shell"]);
-        assert_eq!(discovery.attached(&catalog).len(), 4);
+        assert_eq!(discovery.attached(&catalog).len(), 3);
     }
 
     #[test]
@@ -594,7 +780,6 @@ mod tests {
             tool("read_file", "Read"),
             tool("apply_file_edits", "Edit"),
             tool("search_workspace", "Search"),
-            tool("list_files", "List"),
         ];
         let discovery = ToolDiscovery::coding(true);
         assert_eq!(
@@ -604,9 +789,7 @@ mod tests {
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
             vec![
-                "search_tools",
                 "read_file",
-                "list_files",
                 "search_workspace",
                 "apply_file_edits",
                 "run_shell",
@@ -615,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn research_preloads_search_reading_and_stable_recovery_tools() {
+    fn research_preloads_web_without_artifact_recovery() {
         let catalog = vec![
             tool("web_search", "Search"),
             tool("web_read", "Read source"),
@@ -624,13 +807,11 @@ mod tests {
         ];
         let mut discovery = ToolDiscovery::research();
         let attached = discovery.attached(&catalog);
-        assert_eq!(attached.len(), 5);
-        assert_eq!(attached[1].name, "web_search");
-        assert_eq!(attached[2].name, "web_read");
-        assert_eq!(attached[3].name, "search_artifact");
-        assert_eq!(attached[4].name, "read_artifact");
+        assert_eq!(attached.len(), 2);
+        assert_eq!(attached[0].name, "web_search");
+        assert_eq!(attached[1].name, "web_read");
         discovery.load(["web_read"]);
-        assert_eq!(discovery.attached(&catalog).len(), 5);
+        assert_eq!(discovery.attached(&catalog).len(), 2);
     }
 
     fn tool(name: &str, description: &str) -> ToolDefinition {
@@ -676,7 +857,7 @@ mod tests {
         assert_eq!(discovery.attached(&catalog)[1], catalog[0]);
     }
     #[test]
-    fn focused_search_is_bounded_and_exact_match_ranks_first() {
+    fn focused_fuzzy_search_is_bounded_and_exact_match_ranks_first() {
         let mut catalog: Vec<_> = (0..20)
             .map(|i| tool(&format!("tool_{i}"), "tool_19 keyword"))
             .collect();

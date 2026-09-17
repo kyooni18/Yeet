@@ -11,6 +11,12 @@ use super::BuiltinCapabilityDescriptor;
 
 pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
     BuiltinCapabilityDescriptor {
+        id: "builtin:agent-deploy",
+        name: "Agent Deploy",
+        description: "Deploy a task to a separate native Yeet agent session, visible in TUI and WebUI. No MCP server required.",
+        tools: &["deploy_agent"],
+    },
+    BuiltinCapabilityDescriptor {
         id: "builtin:file-read",
         name: "File Read",
         description: "Read one or several UTF-8 files with read_file. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Reads return snapshot-safe line anchors for later edits.",
@@ -21,14 +27,8 @@ pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
     BuiltinCapabilityDescriptor {
         id: "builtin:file-write",
         name: "File Write",
-        description: "Create, modify, move, or delete files with snapshot-safe apply_file_edits. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Existing files require a snapshot from File Read.",
+        description: "Create, modify, move, or delete files with snapshot-safe apply_file_edits. Relative paths resolve from the session cwd; paths outside active context roots require approval unless unlimited or auto-approval mode is enabled. Existing files require fresh read coverage; the runtime binds the cached snapshot automatically.",
         tools: &["apply_file_edits"],
-    },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:file-list",
-        name: "File Listing",
-        description: "List workspace files and directories with list_files. Use it for structure discovery without reading file contents.",
-        tools: &["list_files"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:workspace-search",
@@ -39,7 +39,7 @@ pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
     BuiltinCapabilityDescriptor {
         id: "builtin:shell",
         name: "Shell",
-        description: "Run commands with run_shell. In sandboxed mode, mutating or outside-project execution asks for approval; unlimited mode runs without sandbox restrictions. Builds/tests/noisy commands can use actor mode. Use run_shell background=true to detach and shell_job to check, list, stop, or forget jobs.",
+        description: "Run commands with run_shell. In sandboxed mode, mutating or outside-project execution asks for approval; unlimited mode runs without sandbox restrictions. Builds/tests/noisy commands can use actor mode. Use run_shell background=true for detached work, then shell_job action=wait for event-driven completion or fixed-rate monitoring without model polling.",
         tools: &["run_shell", "shell_job", "request_shell_permission"],
     },
     BuiltinCapabilityDescriptor {
@@ -89,7 +89,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "read_file",
-            "Read one UTF-8 file or batch up to 8 file ranges with line/hash edit anchors and snapshots. Use path for one file or requests for a batch. Outside-project access follows approval rules. Reuse covered ranges; refresh=true forces fresh contents/anchors.",
+            "Read one UTF-8 file or batch up to 8 file ranges with line/hash edit anchors and snapshots. Relative paths resolve from the session cwd; paths outside active context roots follow approval rules. Use path for one file or requests for a batch. Reuse covered ranges; refresh=true forces fresh contents/anchors.",
             json!({
                 "type":"object",
                 "properties":{
@@ -117,13 +117,8 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
             }),
         ),
         ToolDefinition::new(
-            "list_files",
-            "List workspace files/directories without reading contents. Prefer shallow focused listings.",
-            json!({"type":"object","properties":{"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":500},"maxDepth":{"type":"integer","minimum":0,"maximum":12}},"additionalProperties":false}),
-        ),
-        ToolDefinition::new(
             "search_workspace",
-            "Search workspace text. Matching is literal unless regex=true; narrow path when possible.",
+            "Search text from the session cwd or another active context root. Matching is literal unless regex=true; narrow path when possible.",
             json!({"type":"object","properties":{"query":{"type":"string"},"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":100},"caseSensitive":{"type":"boolean"},"regex":{"type":"boolean"}},"required":["query"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
@@ -178,13 +173,13 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command. background=true returns a jobId for shell_job. Sandboxed commands request approval when needed; unlimited mode uses normal user access. mode=actor summarizes builds/tests/noisy output and stores the full log.",
-            json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":900},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
+            "Run a shell command from the session cwd by default. workingDirectory may target any active context root; other locations follow approval rules. For builds/tests likely to outlive a normal tool turn, prefer background=true and then shell_job action=wait instead of repeated status checks. Background jobs default to a 4-hour execution window; set timeoutSeconds explicitly for other long jobs. Sandboxed commands still obey the workspace wall-time policy. Unlimited mode uses normal user access. mode=actor summarizes builds/tests/noisy output and stores the bounded captured log.",
+            json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "shell_job",
-            "Check/list/stop/forget detached shell jobs. Running is not success; reuse jobId instead of rerunning. Forget only completed jobs.",
-            json!({"type":"object","properties":{"action":{"type":"string","enum":["check","list","stop","forget"]},"jobId":{"type":"string"}},"required":["action"],"additionalProperties":false}),
+            "Check, wait for, list, stop, or forget detached shell jobs. action=wait suspends the model-side tool call until the job terminates without model polling. Set reportEverySeconds only when periodic model wakeups are wanted; cadence stays anchored across repeated waits and interval wakeups include only bounded live stdout/stderr tails plus byte counts. Running is not success; reuse jobId instead of rerunning. Forget only completed jobs.",
+            json!({"type":"object","properties":{"action":{"type":"string","enum":["check","wait","list","stop","forget"]},"jobId":{"type":"string"},"reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400}},"required":["action"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "request_shell_permission",
@@ -212,7 +207,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "apply_file_edits",
-            "Apply atomic structured file edits. Use JSON edit objects, never patch strings. replace/delete use range:{start,end,startHash?,endHash?}; never top-level start/end. Hash fields are the 4-character token from read_file's `line:hash|text` anchor (for example `9b12`, not the source text). Sandboxed existing files require a read_file snapshot; creates do not. Outside-project access follows approval rules; unlimited mode may edit without a snapshot.",
+            "Apply atomic structured file edits. Relative paths resolve from the session cwd. Use JSON edit objects, never patch strings. replace/delete use range:{start,end}; insert uses at:{kind:start|end|before|after,line?}. The runtime binds the cached read snapshot and validates stale edits; reread the necessary range if it rejects an edit. Sandboxed existing files require read_file coverage; creates do not. Paths outside active context roots follow approval rules.",
             json!({
                 "type":"object",
                 "properties":{
@@ -222,14 +217,13 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                             "type":"object",
                             "properties":{
                                 "path":{"type":"string"},
-                                "snapshot":{"type":"string"},
                                 "edits":{
                                     "type":"array","minItems":1,
                                     "items":{
                                         "oneOf":[
-                                            {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1},"startHash":{"type":"string"},"endHash":{"type":"string"}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1},"startHash":{"type":"string"},"endHash":{"type":"string"}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1},"hash":{"type":"string"}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false}
+                                            {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false}
                                         ]
                                     }
                                 },
@@ -251,6 +245,11 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                 "required":["changes"],"additionalProperties":false
             }),
         ),
+        ToolDefinition::new(
+            "deploy_agent",
+            "Deploy a task to a new native Yeet agent session in this workspace. Returns the session ID for opening in TUI/WebUI. No MCP. Only deploy when the user requests delegation; the child uses normal session permissions.",
+            json!({"type":"object","properties":{"task":{"type":"string","minLength":1,"maxLength":32000}},"required":["task"],"additionalProperties":false}),
+        ),
     ]
 }
 
@@ -264,7 +263,6 @@ pub fn is_coding_builtin_tool(name: &str) -> bool {
     matches!(
         name,
         "read_file"
-            | "list_files"
             | "search_workspace"
             | "run_shell"
             | "shell_job"
@@ -321,7 +319,10 @@ pub(crate) fn direct_mcp_tool_definitions() -> Vec<ToolDefinition> {
         .filter(|tool| {
             !matches!(
                 tool.name.as_str(),
-                "find_capabilities" | "activate_capability" | "request_shell_permission"
+                "find_capabilities"
+                    | "activate_capability"
+                    | "request_shell_permission"
+                    | "deploy_agent"
             )
         })
         .collect::<Vec<_>>();
@@ -378,6 +379,10 @@ mod tests {
         assert!(!rendered.contains("replaceBlock"));
         assert!(!rendered.contains("insertAfterBlock"));
         assert!(!rendered.contains("deleteBlock"));
+        assert!(!rendered.contains("\"snapshot\""));
+        assert!(!rendered.contains("startHash"));
+        assert!(!rendered.contains("endHash"));
+        assert!(!rendered.contains("\"hash\""));
         assert!(rendered.contains("replace"));
         assert!(rendered.contains("insert"));
         assert!(rendered.contains("delete"));
@@ -405,6 +410,62 @@ mod tests {
         assert_eq!(
             read.input_schema["properties"]["maxChars"]["maximum"].as_u64(),
             Some(4_000)
+        );
+    }
+
+    #[test]
+    fn shell_job_schema_supports_event_driven_and_periodic_waiting() {
+        let tools = base_tool_definitions();
+        let shell_job = tools.iter().find(|tool| tool.name == "shell_job").unwrap();
+        let actions = shell_job.input_schema["properties"]["action"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(actions.iter().any(|value| value.as_str() == Some("wait")));
+        assert_eq!(
+            shell_job.input_schema["properties"]["reportEverySeconds"]["maximum"].as_u64(),
+            Some(86_400)
+        );
+        assert!(
+            shell_job
+                .description
+                .as_deref()
+                .is_some_and(|description| description.contains("without model polling"))
+        );
+
+        let run_shell = tools.iter().find(|tool| tool.name == "run_shell").unwrap();
+        assert_eq!(
+            run_shell.input_schema["properties"]["timeoutSeconds"]["maximum"].as_u64(),
+            Some(86_400)
+        );
+    }
+
+    #[test]
+    fn list_files_is_not_model_visible() {
+        let tools = base_tool_definitions();
+        assert!(tools.iter().all(|tool| tool.name != "list_files"));
+        assert!(
+            direct_mcp_tool_definitions()
+                .iter()
+                .all(|tool| tool.name != "list_files")
+        );
+    }
+
+    #[test]
+    fn agent_deployment_is_native_only() {
+        let tools = base_tool_definitions();
+        let deploy = tools
+            .iter()
+            .find(|tool| tool.name == "deploy_agent")
+            .expect("native deployment schema");
+        assert_eq!(deploy.input_schema["required"], json!(["task"]));
+        assert_eq!(
+            deploy.input_schema["properties"]["task"]["maxLength"],
+            32_000
+        );
+        assert!(
+            direct_mcp_tool_definitions()
+                .iter()
+                .all(|tool| tool.name != "deploy_agent")
         );
     }
 

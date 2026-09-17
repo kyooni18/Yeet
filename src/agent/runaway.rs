@@ -1,14 +1,14 @@
 //! Adaptive detection for runaway agent/tool loops.
 //!
 //! The detector scores several independent failure signals instead of relying
-//! on a hard round cap, preserving recovery attempts while stopping genuine
-//! repeated-work spirals.
+//! on a hard round cap. It preserves mutation recovery while finalizing a
+//! confirmed read-only repeated-work spiral.
 
 use std::collections::{HashSet, VecDeque};
 
-pub(super) const RUNAWAY_FINALIZATION_RETRY_LIMIT: usize = 1;
 const RUNAWAY_WINDOW: usize = 6;
 const RUNAWAY_WARN_SCORE: i32 = 6;
+pub(super) const RUNAWAY_FINALIZATION_RETRY_LIMIT: usize = 1;
 pub(super) const RUNAWAY_FINALIZE_SCORE: i32 = 12;
 const RUNAWAY_CONTEXT_CHARS: usize = 64 * 1024;
 
@@ -65,7 +65,8 @@ impl RunawayDetector {
             .take(4)
             .filter(|previous| previous.semantic_fingerprint == round.semantic_fingerprint)
             .count()
-            >= 2;
+            >= 2
+            && (!round.progressed || round.duplicate_inspection || round.repeated_calls > 0);
         let repeated_failure = round.failure_fingerprints.iter().any(|failure| {
             self.recent
                 .iter()
@@ -115,6 +116,9 @@ impl RunawayDetector {
                     .collect::<HashSet<_>>()
                     .len()
                     <= 2
+                && window.iter().any(|item| {
+                    !item.progressed || item.duplicate_inspection || item.repeated_calls > 0
+                })
         };
         let low_novelty = round.repeated_calls > 0
             && round.repeated_calls >= round.fresh_calls
@@ -161,10 +165,12 @@ impl RunawayDetector {
             self.recent.pop_front();
         }
 
-        let repeated_mutation_failure =
-            implementation_requested && round.failed_mutation && repeated_failure;
-        let implementation_recovery_required =
-            implementation_incomplete && !repeated_mutation_failure;
+        // Any unresolved implementation stays recoverable, including a
+        // repeated failed edit. A first failed mutation also gets recovery
+        // grace; only a repeated failure with no remaining implementation
+        // recovery state can be finalized.
+        let implementation_recovery_required = implementation_requested
+            && (implementation_incomplete || (round.failed_mutation && !repeated_failure));
         if self.score >= RUNAWAY_FINALIZE_SCORE && signal_families >= 2 {
             if implementation_recovery_required {
                 return RunawayDecision::Warn(format!(
@@ -285,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_real_mutation_failure_can_still_hard_stop() {
+    fn repeated_real_mutation_failure_escalates_without_hard_stop() {
         let mut detector = RunawayDetector::default();
         let failed_edit = || RunawayRound {
             progressed: false,
@@ -304,6 +310,6 @@ mod tests {
         for _ in 0..4 {
             decision = detector.observe(failed_edit(), true, true);
         }
-        assert!(matches!(decision, RunawayDecision::Finalize(_)));
+        assert!(matches!(decision, RunawayDecision::Warn(_)));
     }
 }

@@ -44,11 +44,15 @@ pub enum AgentEvent {
         reason: String,
     },
     AuxiliaryUsage(Usage),
-    InfinityCheckpoint {
+    GoalCheckpoint {
         epoch: u64,
         reason: String,
     },
-    InfinityRetry {
+    GoalJudge {
+        passed: bool,
+        reason: String,
+    },
+    GoalRetry {
         attempt: u32,
         delay_ms: u64,
         error: String,
@@ -66,7 +70,7 @@ pub struct AgentRunRequest<'a> {
     pub reasoning_level: &'a str,
     pub attached_capabilities: Option<Vec<String>>,
     pub disabled_capabilities: Vec<String>,
-    pub infinity_mode: Arc<AtomicBool>,
+    pub goal_mode: Arc<AtomicBool>,
     pub cancel: Arc<AtomicBool>,
     pub continuation: bool,
 }
@@ -79,4 +83,5 @@ pub(super) struct AgentTurnRequest<'a> {
     pub attached_capabilities: Option<Vec<String>>,
     pub cancel: &'a AtomicBool,
     pub continuation: bool,
+    pub goal_retry_reason: Option<&'a str>,
 }

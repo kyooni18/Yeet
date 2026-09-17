@@ -35,6 +35,11 @@ test("prompt cache capabilities separate lookup candidates from write slots", ()
   const openrouter = promptCacheCapabilities("openrouter", "anthropic/claude-test");
   assert.equal(openrouter.maxExplicitBreakpoints, 4);
   assert.equal(openrouter.sessionAffinity, true);
+  const openrouterOpenAI = promptCacheCapabilities("openrouter", "openai/gpt-5.6-luna");
+  assert.deepEqual(openrouterOpenAI.modes, ["implicit"]);
+  assert.equal(openrouterOpenAI.maxExplicitBreakpoints, undefined);
+  assert.equal(openrouterOpenAI.minCacheablePrefixTokens, 1024);
+  assert.equal(openrouterOpenAI.sessionAffinity, true);
   const fable = promptCacheCapabilities("anthropic", "claude-fable-5.1");
   assert.equal(fable.minCacheablePrefixTokens, 512);
   assert.equal(fable.cacheReadMultiplier, 0.025);
@@ -774,6 +779,213 @@ test("OpenAI Responses provider discovers available models", async () => {
   assert.equal(request.headers.authorization, "Bearer test");
 });
 
+
+test("OpenAI-compatible strict servers translate JSON tool calls into structured calls", async () => {
+  const requests = [];
+  const provider = new OpenAIChatProvider({
+    id: "strict-chat",
+    baseUrl: "http://127.0.0.1:1978/v1",
+    fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      if (requests.length === 1) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", message: "request contains an unsupported parameter" } },
+          { status: 400 },
+        );
+      }
+      return jsonResponse({
+        id: "chatcmpl-strict",
+        model: "cloud-pro",
+        choices: [{
+          message: { role: "assistant", content: '{"tool_calls":[{"name":"lookup","arguments":{"q":"yeet"}}]}' },
+          finish_reason: "stop",
+        }],
+      });
+    },
+  });
+
+  const result = await provider.complete({
+    model: "cloud-pro",
+    messages: [{ role: "user", content: "hello" }],
+    temperature: 0.2,
+    maxTokens: 64,
+    metadata: { sessionId: "session-1" },
+    providerOptions: { reasoning: { effort: "high" } },
+    tools: [{ name: "lookup", description: "look up a value", inputSchema: { type: "object" } }],
+    toolChoice: "auto",
+  });
+
+  assert.equal(result.text, "");
+  assert.equal(result.finishReason, "tool_call");
+  assert.deepEqual(result.toolCalls, [{ id: "chatcmpl-strict-tool-0", name: "lookup", arguments: { q: "yeet" } }]);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].metadata.sessionId, "session-1");
+  assert.equal(requests[0].tools[0].function.name, "lookup");
+  assert.equal(requests[1].stream, false);
+  assert.equal(requests[1].messages[0].role, "system");
+  assert.match(requests[1].messages[0].content, /Yeet tool protocol/);
+  assert.match(requests[1].messages[0].content, /"tool_calls"/);
+  assert.match(requests[1].messages[0].content, /"name":"lookup"/);
+  assert.doesNotMatch(requests[1].messages[0].content, /tool_call_id/);
+  assert.deepEqual(requests[1].messages[1], { role: "user", content: "hello" });
+  assert.equal("metadata" in requests[1], false);
+  assert.equal("tools" in requests[1], false);
+  assert.equal("temperature" in requests[1], false);
+  const cached = await provider.complete({
+    model: "cloud-pro",
+    messages: [{ role: "user", content: "hello again" }],
+    metadata: { sessionId: "session-2" },
+    tools: [{ name: "lookup", description: "look up a value", inputSchema: { type: "object" } }],
+  });
+  assert.equal(cached.finishReason, "tool_call");
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].messages[0].role, "system");
+  assert.equal("metadata" in requests[2], false);
+  assert.equal("tools" in requests[2], false);
+});
+
+
+test("OpenAI-compatible strict fallback keeps the current turn final message as user", async () => {
+  const requests = [];
+  const provider = new OpenAIChatProvider({
+    id: "strict-chat",
+    baseUrl: "http://127.0.0.1:1978/v1",
+    fetch: async (_url, init) => {
+      const request = JSON.parse(init.body);
+      requests.push(request);
+      if (requests.length === 1) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", message: "request contains an unsupported parameter" } },
+          { status: 400 },
+        );
+      }
+      if (request.messages.at(-1)?.role !== "user") {
+        return jsonResponse(
+          { error: { code: "invalid_input", message: 'the final message must have role "user"' } },
+          { status: 400 },
+        );
+      }
+      return jsonResponse({
+        id: "chatcmpl-final-user",
+        model: "cloud-pro",
+        choices: [{ message: { role: "assistant", content: '{"final":"release answer"}' }, finish_reason: "stop" }],
+      });
+    },
+  });
+
+  const events = [];
+  for await (const event of provider.stream({
+    model: "cloud-pro",
+    messages: [
+      { role: "system", content: "stable system" },
+      { role: "user", content: "GPT-6 Sol release?" },
+      { role: "system", content: "turn context orientation", requestOnly: true },
+      { role: "system", content: "capability guidance", requestOnly: true },
+    ],
+    metadata: { sessionId: "tui-turn" },
+    tools: [{ name: "lookup", description: "look up a value", inputSchema: { type: "object" } }],
+  })) {
+    events.push(event);
+  }
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].messages.map((message) => message.role), ["system", "user"]);
+  assert.equal(requests[1].messages.at(-1).content, "GPT-6 Sol release?");
+  assert.match(requests[1].messages[0].content, /stable system/);
+  assert.match(requests[1].messages[0].content, /turn context orientation/);
+  assert.match(requests[1].messages[0].content, /capability guidance/);
+  assert.match(requests[1].messages[0].content, /Yeet tool protocol/);
+  assert.deepEqual(events.map((event) => event.type), ["start", "text-delta", "finish"]);
+  assert.equal(events[1].delta, "release answer");
+});
+
+test("OpenAI-compatible streaming falls back to structured tool calls on strict non-streaming servers", async () => {
+  const requests = [];
+  const provider = new OpenAIChatProvider({
+    id: "strict-chat",
+    baseUrl: "http://127.0.0.1:1978/v1",
+    fetch: async (_url, init) => {
+      const request = JSON.parse(init.body);
+      requests.push(request);
+      if (request.stream === true) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", message: "streaming is not supported" } },
+          { status: 400 },
+        );
+      }
+      return jsonResponse({
+        id: "chatcmpl-strict-stream",
+        model: "cloud-pro",
+        choices: [{
+          message: { role: "assistant", content: '{"tool_calls":[{"name":"lookup","arguments":{"q":"stream"}}]}' },
+          finish_reason: "stop",
+        }],
+      });
+    },
+  });
+
+  const events = [];
+  for await (const event of provider.stream({
+    model: "cloud-pro",
+    messages: [{ role: "user", content: "hello" }],
+    metadata: { sessionId: "session-1" },
+    tools: [{ name: "lookup", description: "look up a value", inputSchema: { type: "object" } }],
+  })) {
+    events.push(event);
+  }
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].stream, true);
+  assert.equal(requests[1].stream, false);
+  assert.equal(requests[1].messages[0].role, "system");
+  assert.deepEqual(events.map((event) => event.type), ["start", "tool-call", "finish"]);
+  assert.equal(events[1].toolCall.name, "lookup");
+  assert.deepEqual(events[1].toolCall.arguments, { q: "stream" });
+  assert.equal(events[2].finishReason, "tool_call");
+});
+
+test("OpenAI-compatible strict tool protocol replays tool history as ordinary messages", async () => {
+  const requests = [];
+  const provider = new OpenAIChatProvider({
+    id: "strict-chat",
+    baseUrl: "http://127.0.0.1:1978/v1",
+    fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      if (requests.length === 1) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", message: "request contains an unsupported parameter" } },
+          { status: 400 },
+        );
+      }
+      return jsonResponse({
+        id: "chatcmpl-after-tool",
+        model: "cloud-pro",
+        choices: [{ message: { role: "assistant", content: '{"final":"The value is 42."}' }, finish_reason: "stop" }],
+      });
+    },
+  });
+
+  const result = await provider.complete({
+    model: "cloud-pro",
+    messages: [
+      { role: "user", content: "Find the value." },
+      { role: "assistant", toolCalls: [{ id: "call-1", name: "lookup", arguments: { q: "value" } }] },
+      { role: "tool", toolCallId: "call-1", name: "lookup", content: '{"value":42}' },
+    ],
+    tools: [{ name: "lookup", description: "look up a value", inputSchema: { type: "object" } }],
+  });
+
+  assert.equal(result.text, "The value is 42.");
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].messages.map((message) => message.role), ["system", "user", "assistant", "user"]);
+  assert.deepEqual(JSON.parse(requests[1].messages[2].content), {
+    tool_calls: [{ name: "lookup", arguments: { q: "value" } }],
+  });
+  assert.deepEqual(JSON.parse(requests[1].messages[3].content), {
+    tool_result: { name: "lookup", content: '{"value":42}' },
+  });
+});
+
 test("OpenAI OAuth model discovery supplies the ChatGPT client version", async () => {
   let requestedUrl;
   const provider = new OpenAIProvider({
@@ -1349,7 +1561,7 @@ test("OpenRouter keeps stable session affinity and forwards explicit cache break
   });
 
   const result = await provider.complete({
-    model: "openai/test",
+    model: "anthropic/claude-test",
     contextKey: "window-id",
     metadata: { sessionId: "stable-agent-session" },
     promptCache: true,
@@ -1417,7 +1629,7 @@ test("OpenRouter keeps OpenAI caching implicit and bounds oversized session affi
   assert.equal(body.prompt_cache_options, undefined);
   assert.equal(body.session_id.startsWith("yeet-"), true);
   assert.equal(body.session_id.length < 256, true);
-  assert.deepEqual(body.messages[0].content[0].cache_control, { type: "ephemeral" });
+  assert.equal(body.messages[0].content, "stable");
 });
 
 test("OpenCode Zen discovers models and routes provider-native protocols", async () => {
@@ -1610,6 +1822,17 @@ test("non-retryable HTTP error exposes provider and response body", async () => 
       return true;
     },
   );
+});
+
+test("OpenAI-compatible provider excludes configured models from discovery", async () => {
+  const provider = new OpenAIChatProvider({
+    id: "filtered",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    excludedModels: ["image-only"],
+    fetch: async () => jsonResponse({ data: [{ id: "local" }, { id: "image-only" }, { id: "cloud" }] }),
+  });
+
+  assert.deepEqual(await provider.listModels(), ["local", "cloud"]);
 });
 
 test("OpenAI-compatible provider can call local no-auth endpoints", async () => {

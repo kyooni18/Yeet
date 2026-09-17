@@ -4547,6 +4547,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "unicode-segmentation",
  "ureq",
  "url",
  "uuid",

@@ -35,6 +35,7 @@ export interface OpenAICompatibleProviderConfig {
   apiKey?: string;
   headers?: Record<string, string>;
   requireApiKey?: boolean;
+  excludedModels?: string[];
 }
 
 export type BridgeCommand =

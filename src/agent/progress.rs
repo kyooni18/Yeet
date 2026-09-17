@@ -109,7 +109,8 @@ pub(super) fn is_validation_tool_call(call: &ToolCall) -> bool {
 pub(super) fn is_inspection_tool(name: &str) -> bool {
     matches!(
         name,
-        "find_capabilities"
+        "search_tools"
+            | "find_capabilities"
             | "activate_capability"
             | "list_files"
             | "read_file"
@@ -121,6 +122,12 @@ pub(super) fn is_inspection_tool(name: &str) -> bool {
             | "artifact_info"
             | "read_artifact"
             | "search_artifact"
+            | "context_status"
+            | "context_history"
+            | "task_notes"
+            | "project_memory_recall"
+            | "project_memory_get"
+            | "project_memory_connections"
     )
 }
 
@@ -132,6 +139,41 @@ pub(super) fn tool_made_progress(call: &ToolCall, content: &str, succeeded: bool
     let value: Value = serde_json::from_str(content).unwrap_or(Value::Null);
     match call.name.as_str() {
         "apply_file_edits" => true,
+        "search_tools" => {
+            value
+                .get("loaded")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+                || value
+                    .get("deferred")
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| !items.is_empty())
+        }
+        "task_notes" => match call.arguments.get("operation").and_then(Value::as_str) {
+            Some("list") => value
+                .get("notes")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            Some("search") => value
+                .get("matches")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            Some("append" | "replace") => value.get("saved").is_some(),
+            Some("read") => payload_made_progress(&value),
+            _ => false,
+        },
+        "context_history" => match call.arguments.get("operation").and_then(Value::as_str) {
+            Some("windows") => value
+                .get("windows")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            Some("list" | "search") => value
+                .get("items")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            Some("read") => payload_made_progress(&value),
+            _ => false,
+        },
         "find_capabilities" => value.as_array().is_some_and(|values| !values.is_empty()),
         "activate_capability" => {
             value.get("alreadyActive").and_then(Value::as_bool) != Some(true)
@@ -316,6 +358,54 @@ fn normalize_loop_text(value: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn recovery_reads_are_inspection_and_empty_results_are_not_progress() {
+        for name in [
+            "search_tools",
+            "context_status",
+            "context_history",
+            "task_notes",
+            "project_memory_recall",
+            "project_memory_get",
+            "project_memory_connections",
+        ] {
+            assert!(is_inspection_tool(name), "{name} should be inspection-only");
+        }
+
+        let notes = ToolCall {
+            id: "notes".into(),
+            name: "task_notes".into(),
+            arguments: json!({"operation":"list"}),
+        };
+        assert!(!tool_made_progress(
+            &notes,
+            &json!({"notes":[]}).to_string(),
+            true,
+        ));
+
+        let history = ToolCall {
+            id: "history".into(),
+            name: "context_history".into(),
+            arguments: json!({"operation":"search","query":"runway"}),
+        };
+        assert!(!tool_made_progress(
+            &history,
+            &json!({"items":[]}).to_string(),
+            true,
+        ));
+
+        let discovery = ToolCall {
+            id: "discovery".into(),
+            name: "search_tools".into(),
+            arguments: json!({"query":"read_file"}),
+        };
+        assert!(!tool_made_progress(
+            &discovery,
+            &json!({"loaded":[],"alreadyLoaded":["read_file"]}).to_string(),
+            true,
+        ));
+    }
 
     #[test]
     fn web_read_duplicate_signature_ignores_preview_size() {

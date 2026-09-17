@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    model::normalize_reasoning_level,
+    model::{ModelCatalogItem, normalize_reasoning_level},
     platform::{default_config_directory, replace_file, set_private_directory, set_private_file},
 };
 
@@ -26,6 +26,15 @@ struct ConfigDocument {
     // settings instead of silently deleting them on the next write.
     #[serde(flatten)]
     extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelCatalogCacheDocument {
+    #[serde(default = "version_one")]
+    version: u64,
+    #[serde(default)]
+    models: Vec<ModelCatalogItem>,
 }
 
 fn version_one() -> u64 {
@@ -54,6 +63,10 @@ impl ConfigStore {
 
     pub fn config_path(&self) -> PathBuf {
         self.directory.join("config.json")
+    }
+
+    pub fn model_catalog_cache_path(&self) -> PathBuf {
+        self.directory.join("model-catalog.json")
     }
 
     pub fn ensure(&self) -> Result<()> {
@@ -148,6 +161,52 @@ impl ConfigStore {
             document.context_length_overrides.remove(model);
         }
         self.write(&document)
+    }
+
+    pub fn model_catalog_cache(&self) -> Result<Vec<ModelCatalogItem>> {
+        self.ensure_no_recurse()?;
+        let path = self.model_catalog_cache_path();
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        set_private_file(&path)?;
+        let data = fs::read(&path)?;
+        let mut document: ModelCatalogCacheDocument = match serde_json::from_slice(&data) {
+            Ok(document) => document,
+            Err(_) => return Ok(Vec::new()),
+        };
+        if document.version == 0 {
+            document.version = 1;
+        }
+        document.models.retain(|item| {
+            !item.id.is_empty()
+                && !item.provider.is_empty()
+                && !item.model.is_empty()
+                && item.id == format!("{}/{}", item.provider, item.model)
+        });
+        document
+            .models
+            .sort_by_key(|item| item.id.to_ascii_lowercase());
+        document.models.dedup_by(|lhs, rhs| lhs.id == rhs.id);
+        Ok(document.models)
+    }
+
+    pub fn set_model_catalog_cache(&self, models: &[ModelCatalogItem]) -> Result<()> {
+        self.ensure_no_recurse()?;
+        let path = self.model_catalog_cache_path();
+        let tmp = self
+            .directory
+            .join(format!(".model-catalog.json.{}.tmp", std::process::id()));
+        let mut data = serde_json::to_vec_pretty(&ModelCatalogCacheDocument {
+            version: 1,
+            models: models.to_vec(),
+        })?;
+        data.push(b'\n');
+        fs::write(&tmp, data)?;
+        set_private_file(&tmp)?;
+        replace_file(&tmp, &path)?;
+        set_private_file(&path)?;
+        Ok(())
     }
 
     fn read(&self) -> Result<ConfigDocument> {
@@ -264,6 +323,43 @@ mod tests {
             .set_context_length_override("openai/test", None)
             .unwrap();
         assert_eq!(store.context_length_override("openai/test").unwrap(), None);
+    }
+
+    #[test]
+    fn model_catalog_cache_round_trips_and_normalizes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(temp.path());
+        let models = vec![
+            ModelCatalogItem {
+                id: "codex-cli/gpt-6-astra".into(),
+                provider: "codex-cli".into(),
+                model: "gpt-6-astra".into(),
+                context_length: Some(400_000),
+            },
+            ModelCatalogItem {
+                id: "codex-cli/gpt-6-astra".into(),
+                provider: "codex-cli".into(),
+                model: "gpt-6-astra".into(),
+                context_length: Some(400_000),
+            },
+            ModelCatalogItem {
+                id: "invalid".into(),
+                provider: "codex-cli".into(),
+                model: "gpt-5.6-sol".into(),
+                context_length: None,
+            },
+        ];
+
+        store.set_model_catalog_cache(&models).unwrap();
+        assert_eq!(
+            store.model_catalog_cache().unwrap(),
+            vec![ModelCatalogItem {
+                id: "codex-cli/gpt-6-astra".into(),
+                provider: "codex-cli".into(),
+                model: "gpt-6-astra".into(),
+                context_length: Some(400_000),
+            }]
+        );
     }
 
     #[test]

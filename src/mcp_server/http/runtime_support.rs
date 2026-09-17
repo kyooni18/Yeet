@@ -1,12 +1,32 @@
 //! Small, side-effect-free helpers for MCP runtime admission and error shaping.
 
 use super::{
-    HttpResponse, MCP_RUNTIME_DEFAULT_TIMEOUT, MCP_RUNTIME_INITIALIZE_TIMEOUT,
-    MCP_RUNTIME_MAX_TIMEOUT,
+    HttpResponse, LegacyAffinityState, MCP_LEGACY_HANDLE_IDLE_TTL, MCP_RUNTIME_DEFAULT_TIMEOUT,
+    MCP_RUNTIME_INITIALIZE_TIMEOUT, MCP_RUNTIME_MAX_TIMEOUT,
 };
 use crate::mcp_server::jsonrpc_error;
 use serde_json::Value;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+impl LegacyAffinityState {
+    pub(super) fn prune_expired_handles(&mut self, now: Instant) {
+        self.handles.retain(|_, binding| {
+            now.saturating_duration_since(binding.last_used) < MCP_LEGACY_HANDLE_IDLE_TTL
+        });
+        let handles = &self.handles;
+        self.handle_order
+            .retain(|handle| handles.contains_key(handle));
+    }
+
+    pub(super) fn lane_is_pinned(&self, lane: usize) -> bool {
+        self.handles.values().any(|binding| binding.lane == lane)
+            || self.sticky.values().any(|&owner| owner == lane)
+    }
+
+    pub(super) fn forget_preferred_lane(&mut self, lane: usize) {
+        self.preferred.retain(|_, owner| *owner != lane);
+    }
+}
 
 pub(super) fn payload_contains_blocking_tool_call(payload: &Value) -> bool {
     let mut pending = vec![payload];
@@ -121,10 +141,13 @@ pub(super) fn runtime_timeout_for_payload(payload: &Value) -> Duration {
                 .and_then(|value| value.get("timeoutSeconds"))
                 .and_then(Value::as_u64)
                 .map(|seconds| Duration::from_secs(seconds.saturating_add(30))),
-            "computer_use" | "desktop_control" => arguments
-                .and_then(|value| value.get("timeout_ms"))
-                .and_then(Value::as_u64)
-                .map(|millis| Duration::from_millis(millis.saturating_add(30_000))),
+            "computer_use" | "desktop_control" => Some(Duration::from_millis(
+                arguments
+                    .and_then(|value| value.get("timeout_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(30_000)
+                    .saturating_add(30_000),
+            )),
             _ => None,
         };
         requested
@@ -138,5 +161,42 @@ pub(super) fn runtime_timeout_for_payload(payload: &Value) -> Duration {
             .max()
             .unwrap_or(MCP_RUNTIME_DEFAULT_TIMEOUT),
         _ => one(payload),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn computer_use_default_timeout_matches_tool_contract_plus_supervisor_grace() {
+        let omitted = json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"tools/call",
+            "params":{
+                "name":"computer_use",
+                "arguments":{"code":"1 + 1"}
+            }
+        });
+        let explicit = json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{
+                "name":"desktop_control",
+                "arguments":{"code":"1 + 1","timeout_ms":5_000}
+            }
+        });
+
+        assert_eq!(
+            runtime_timeout_for_payload(&omitted),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            runtime_timeout_for_payload(&explicit),
+            Duration::from_secs(35)
+        );
     }
 }

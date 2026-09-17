@@ -16,6 +16,7 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+use crate::platform::force_terminate_process_tree;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -25,6 +26,7 @@ use uuid::Uuid;
 pub const BRIDGE_PROTOCOL_VERSION: u64 = 1;
 const BRIDGE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const BRIDGE_SHUTDOWN_POLL: Duration = Duration::from_millis(20);
+const BRIDGE_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -746,10 +748,7 @@ impl BridgeClient {
                 if let Ok(mut tail) = stderr_tail.lock() {
                     tail.push_str(&line);
                     tail.push('\n');
-                    if tail.len() > 16 * 1024 {
-                        let keep = tail.len() - 16 * 1024;
-                        tail.drain(..keep);
-                    }
+                    trim_bridge_stderr_tail(&mut tail);
                 }
             }
         });
@@ -877,10 +876,7 @@ impl BridgeClient {
                 if let Ok(mut tail) = stderr_tail.lock() {
                     tail.push_str(&line);
                     tail.push('\n');
-                    if tail.len() > 16 * 1024 {
-                        let keep = tail.len() - 16 * 1024;
-                        tail.drain(..keep);
-                    }
+                    trim_bridge_stderr_tail(&mut tail);
                 }
             }
         });
@@ -990,9 +986,12 @@ impl BridgeClient {
             .lock()
             .map_err(|_| anyhow!("bridge pending lock poisoned"))?
             .insert(id.clone(), tx);
-        self.write_value(
+        if let Err(error) = self.write_value(
             &json!({ "v": BRIDGE_PROTOCOL_VERSION, "id": id, "op": "stream", "request": request }),
-        )?;
+        ) {
+            self.remove_pending(&id);
+            return Err(error);
+        }
         Ok(BridgeStream {
             client: self.clone(),
             id,
@@ -1329,14 +1328,22 @@ impl BridgeClient {
 }
 
 fn kill_bridge_process_group(child: &mut Child) {
-    #[cfg(unix)]
-    unsafe {
-        let pid = child.id() as i32;
-        if pid > 0 && libc::kill(-pid, libc::SIGKILL) == 0 {
-            return;
-        }
+    let pid = child.id();
+    if force_terminate_process_tree(pid).is_ok() {
+        return;
     }
     let _ = child.kill();
+}
+
+fn trim_bridge_stderr_tail(tail: &mut String) {
+    if tail.len() <= BRIDGE_STDERR_TAIL_BYTES {
+        return;
+    }
+    let mut split = tail.len() - BRIDGE_STDERR_TAIL_BYTES;
+    while !tail.is_char_boundary(split) {
+        split += 1;
+    }
+    tail.drain(..split);
 }
 
 #[derive(Debug, Clone)]
@@ -1635,6 +1642,44 @@ mod tests {
         assert_eq!(measurement.unclassified_input_tokens, 300);
         assert_eq!(measurement.hit_rate, None);
         assert_eq!(measurement.measurement_coverage_rate, Some(0.0));
+    }
+
+    #[test]
+    fn bridge_stderr_tail_trimming_respects_utf8_boundaries() {
+        let mut tail = "가".repeat(BRIDGE_STDERR_TAIL_BYTES / 3 + 17);
+        let expected_suffix = tail.clone();
+
+        trim_bridge_stderr_tail(&mut tail);
+
+        assert!(tail.len() <= BRIDGE_STDERR_TAIL_BYTES);
+        assert!(expected_suffix.ends_with(&tail));
+        assert!(tail.starts_with('가'));
+    }
+
+    #[test]
+    fn stream_write_failure_removes_pending_request() {
+        let client = BridgeClient::start().unwrap();
+        {
+            let mut child = client.inner.child.lock().unwrap();
+            kill_bridge_process_group(&mut child);
+            let _ = child.wait();
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if matches!(client.try_recv_event(), Some(BridgeEvent::Closed)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "bridge reader did not observe child exit"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let request = CallRequest::simple("openai/test", vec![Message::user("hello")]);
+        assert!(client.stream(&request).is_err());
+        assert!(client.inner.pending.lock().unwrap().is_empty());
     }
 
     #[test]

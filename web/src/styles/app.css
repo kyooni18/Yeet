@@ -24,6 +24,7 @@
   --radius-lg: 22px;
   --visual-viewport-height: 100dvh;
   --visual-viewport-top: 0px;
+  --visual-viewport-bottom: 0px;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -45,6 +46,24 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { opacity: .
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border: 3px solid transparent; background-clip: padding-box; border-radius: 999px; }
 
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0,0,0,0) !important; white-space: nowrap !important; border: 0 !important; }
+
+.skip-link {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  z-index: 1000;
+  transform: translateY(calc(-100% - 18px));
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-raised, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 120ms ease;
+}
+.skip-link:focus { transform: translateY(0); }
 .truncate { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eyebrow { margin: 0; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; }
 .muted { color: var(--muted); }
@@ -140,4 +159,58 @@ body { color: var(--text); }
 @keyframes yeet-signal {
   0%, 100% { opacity: .52; transform: scale(.92); }
   50% { opacity: 1; transform: scale(1.08); }
+}
+
+@keyframes yeet-shell-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes yeet-entry-enter {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+/* Keep the document itself out of the gesture chain. The app owns scrolling in
+   explicit regions below; this is important on iOS where a focused field can
+   otherwise pan the layout viewport even when body has overflow:hidden. */
+@media (hover: none) and (pointer: coarse) {
+  html, body, #app {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    touch-action: none;
+  }
+  .transcript-scroller,
+  .session-sidebar,
+  .settings-app,
+  .activity-inspector,
+  .drawer-layer,
+  .mobile-sheet,
+  .session-controls-layer,
+  .session-controls-panel,
+  .settings-nav { touch-action: pan-y; }
+  .model-picker { touch-action: none; }
+  .model-picker-list { touch-action: pan-y; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+  .model-picker-providers { touch-action: pan-x; overscroll-behavior-x: contain; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .remote-app, .settings-app { animation: yeet-shell-enter 360ms cubic-bezier(.2,.8,.2,1) both; }
+  .conversation-entry { animation: yeet-entry-enter 300ms cubic-bezier(.2,.8,.2,1) both; }
+}
+
+/* iOS Safari zooms focused controls whose computed size is below 16px. Keep
+   the compact labels around them, but give every editable touch control a
+   stable, readable input size. Pinch zoom remains available for accessibility. */
+@media (hover: none) and (pointer: coarse) {
+  input:not([type="checkbox"]), textarea, select { font-size: 16px !important; }
+}
+
+.composer textarea::selection,
+.composer textarea::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
 }

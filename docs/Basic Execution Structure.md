@@ -21,6 +21,24 @@ The interactive process is a single Rust executable. It no longer launches a
 second Yeet backend process. Provider and edit JavaScript sidecars are protocol
 services rather than application-state owners.
 
+
+## Peer agent invariant
+
+Yeet agents are peers. Agent identity grants no permanent authority over another
+agent, and no model is a built-in lead, manager, supervisor, or root decision-maker.
+Coordination authority belongs to deterministic runtime state: task claims, leases,
+dependencies, validation records, and conflict checks.
+
+Roles such as researcher, implementer, reviewer, verifier, or synthesizer are
+scoped to one task and may move between agents. Owning a task means owning its
+bounded work scope, not owning other agents. Final synthesis is likewise a task
+stage, not a privileged agent class.
+
+When peers disagree, resolution should come from stronger evidence, successful
+validation, explicit user direction, or an isolated review task. File ownership and
+exclusive test resources use revocable leases so stale agents cannot block useful
+work indefinitely.
+
 `AgentCoordinator` reconstructs delta-only tool calls, keeps tool call/result
 pairs in one provider-neutral history, retracts provisional assistant prose when
 a response turns into a tool round, detects semantically repeated inspection,
@@ -36,7 +54,7 @@ Workers add schemas only after explicit activation.
 
 Workspace reads use the transactional edit daemon and return a snapshot plus
 `line:hash|text` anchors. Read/search/list coverage is cached for the task so
-the lead can reuse established source instead of growing context with duplicates.
+the agent can reuse established source instead of growing context with duplicates.
 
 `run_shell` executes under a macOS Seatbelt profile. Read-oriented commands can
 run directly with bounded output. Noisy build/test commands can be evaluated by

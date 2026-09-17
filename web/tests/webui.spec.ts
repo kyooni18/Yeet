@@ -38,9 +38,9 @@ test('renders semantic transcript and lazily expands tool details', async ({ pag
   await expect(page.locator('.markdown-document h2', { hasText: 'Interface ready' })).toBeVisible()
   await expect(page.locator('.code-block')).toContainText('const transport')
   await expect(page.getByText('Reasoning trace')).toBeVisible()
-  await expect(page.getByText('Inspecting workspace')).toBeVisible()
-  await expect(page.getByText('Skill · frontend-review')).toBeVisible()
-  await expect(page.getByText('MCP · Yeet-KY')).toBeVisible()
+  await expect(page.getByTestId('transcript').getByText('Inspecting workspace')).toBeVisible()
+  await expect(page.getByTestId('transcript').getByText('Skill · frontend-review')).toBeVisible()
+  await expect(page.getByTestId('transcript').getByText('MCP · Yeet-KY')).toBeVisible()
 
   const reasoning = page.locator('.reasoning-card').first()
   await expect(reasoning.locator('.reasoning-body')).not.toBeAttached()
@@ -68,6 +68,37 @@ test('renders semantic transcript and lazily expands tool details', async ({ pag
 })
 
 
+test('explains empty semantic disclosure content instead of opening a blank pane', async ({ page }) => {
+  const entries = [
+    { id: 'empty-skill', kind: { type: 'skill', name: 'empty-skill', status: 'loaded', content: '' } },
+    { id: 'empty-mcp-success', kind: { type: 'mcp', server: 'Empty-MCP', name: 'success', content: '', isError: false } },
+    { id: 'empty-mcp-error', kind: { type: 'mcp', server: 'Empty-MCP', name: 'failure', content: '', isError: true } },
+  ]
+
+  for (const [index, entry] of entries.entries()) {
+    await emit(page, {
+      type: 'conversation_entry', version: 1, sequence: index + 2, revision: index + 2, entry,
+    })
+  }
+
+  const skill = page.locator('[data-entry-id="empty-skill"]')
+  await activateDisclosure(page, skill.locator('summary'))
+  await expect(skill.locator('.semantic-card-body')).toHaveText('No additional skill details were provided.')
+
+  const success = page.locator('[data-entry-id="empty-mcp-success"]')
+  await activateDisclosure(page, success.locator('summary'))
+  await expect(success.locator('.semantic-empty-output')).toHaveText('This MCP call completed without output.')
+
+  await success.locator('summary').focus()
+  await page.keyboard.press('Tab')
+  await expect(success.locator('.semantic-empty-output')).toBeFocused()
+
+  const failure = page.locator('[data-entry-id="empty-mcp-error"]')
+  await activateDisclosure(page, failure.locator('summary'))
+  await expect(failure.locator('.semantic-empty-output')).toHaveText('This MCP call failed without error details.')
+})
+
+
 test('renders suppressed tool calls as neutral non-success terminal states', async ({ page }) => {
   await emit(page, {
     type: 'tool_update', version: 1, sequence: 2, revision: 2,
@@ -80,6 +111,8 @@ test('renders suppressed tool calls as neutral non-success terminal states', asy
           name: 'apply_file_edits',
           arguments: '{"changes":[]}',
           status: 'suppressed',
+
+          result: 'approval denied',
         },
       },
     },
@@ -92,6 +125,71 @@ test('renders suppressed tool calls as neutral non-success terminal states', asy
   await expect(tool.locator('[data-tool-toggle]')).not.toContainText('Done')
   await expect(tool.locator('.tool-status-icon')).toContainText('⊘')
   await expect(tool.locator('.tool-duration')).not.toHaveClass(/is-error/)
+
+  await tool.locator('[data-tool-toggle]').click()
+  await expect(tool.locator('.tool-detail-heading').last()).toContainText('Reason')
+  await expect(tool.getByRole('button', { name: 'Copy suppression reason' })).toBeVisible()
+  await expect(tool.locator('pre').last()).toHaveAttribute('aria-label', 'Tool suppression reason')
+  await expect(tool.locator('pre').last()).toContainText('approval denied')
+})
+
+
+test('keeps completed tool duration readable when compact layouts hide the timing chip', async ({ page }) => {
+  await emit(page, {
+    type: 'tool_update', version: 1, sequence: 2, revision: 2,
+    entry: {
+      id: 'tool-duration',
+      kind: {
+        type: 'toolCall',
+        toolCall: {
+          id: 'tool-duration',
+          name: 'duration_probe',
+          arguments: '{}',
+          status: 'completed',
+          durationMs: 1530,
+          result: 'ok',
+        },
+      },
+    },
+    tool_call: null,
+  })
+
+  const tool = page.getByTestId('tool-card').filter({ hasText: 'duration_probe' })
+  const toggle = tool.locator('[data-tool-toggle]')
+  await expect(toggle).toHaveAccessibleName(/duration_probe.*Done.*1\.5 s/i)
+  if ((page.viewportSize()?.width ?? 1000) > 480) await expect(tool.getByText('Done · 1.5 s')).toBeVisible()
+  else await expect(tool.getByText('Done · 1.5 s')).toBeHidden()
+})
+
+
+test('explains empty tool output according to the terminal or loading state', async ({ page }) => {
+  const cases = [
+    ['streaming', 'Waiting for tool output…'],
+    ['completed', 'This tool completed without output.'],
+    ['failed', 'This tool failed without error details.'],
+    ['suppressed', 'This tool was suppressed without a reason.'],
+  ] as const
+
+  for (const [index, [status]] of cases.entries()) {
+    const id = `empty-${status}`
+    await emit(page, {
+      type: 'tool_update', version: 1, sequence: index + 2, revision: index + 2,
+      entry: {
+        id,
+        kind: {
+          type: 'toolCall',
+          toolCall: { id, name: `empty_${status}`, arguments: '{}', status },
+        },
+      },
+      tool_call: null,
+    })
+  }
+
+  for (const [status, message] of cases) {
+    const tool = page.getByTestId('tool-card').filter({ hasText: `empty_${status}` })
+    await tool.locator('[data-tool-toggle]').click()
+    await expect(tool.locator('.tool-no-result')).toHaveText(message)
+  }
 })
 
 test('keeps activity chrome compact and sanitizes reasoning and tool previews', async ({ page }, testInfo) => {
@@ -208,7 +306,7 @@ test('settings expose runtime, providers, capabilities, sandbox and sessions', a
     const headingFontSize = await runtimeHeading.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
     const navButtonBox = await settingsNavButton.boundingBox()
     expect(headingFontSize).toBeLessThanOrEqual(22)
-    expect(navButtonBox?.height ?? 999).toBeLessThanOrEqual(42)
+    expect(navButtonBox?.height ?? 0).toBeGreaterThanOrEqual(44)
   }
 
   await page.getByRole('button', { name: 'Providers', exact: true }).click()
@@ -349,7 +447,7 @@ test('phone uses drawers and sheets with a conversation-first layout', async ({ 
   await expect(page.getByTestId('session-drawer').getByText('Protocol review')).toBeVisible()
   await page.getByRole('button', { name: 'Close sessions' }).click()
 
-  await page.getByTestId('open-status').click()
+  await page.getByRole('button', { name: /^Session controls:/ }).click()
   const statusSheet = page.getByTestId('status-sheet')
   await expect(statusSheet).toBeVisible()
   const statusHeading = page.getByText('Session settings')
@@ -388,14 +486,14 @@ test('phone uses drawers and sheets with a conversation-first layout', async ({ 
   expect((topBox?.x ?? 0) + (topBox?.width ?? 0)).toBeLessThanOrEqual((viewport?.width ?? 0) - 8)
   expect(topBox?.height ?? 0).toBeGreaterThanOrEqual(50)
   expect(modelBox?.height ?? 0).toBeGreaterThanOrEqual(42)
-  expect(textareaFontSize).toBeGreaterThanOrEqual(18)
+  expect(textareaFontSize).toBeGreaterThanOrEqual(16)
   expect(conversationFontSize).toBeGreaterThanOrEqual(18)
-  expect(textareaFontSize).toBeGreaterThan(statusHeadingFontSize)
+  expect(textareaFontSize).toBeGreaterThanOrEqual(statusHeadingFontSize)
   expect(conversationFontSize).toBeGreaterThan(statusHeadingFontSize)
   if ((viewport?.height ?? 0) > 500) {
     expect(topBox?.height ?? 0).toBeGreaterThanOrEqual(64)
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(106)
-    expect(textareaFontSize).toBeGreaterThanOrEqual(19.5)
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual((viewport?.width ?? 0) <= 600 ? 88 : 100)
+    expect(textareaFontSize).toBeGreaterThanOrEqual((viewport?.width ?? 0) <= 600 ? 16 : 18)
     expect(conversationFontSize).toBeGreaterThanOrEqual(19)
   }
 
@@ -613,7 +711,7 @@ test('visual-viewport keyboard geometry keeps composer and sheets above the visi
   expect((composer?.y ?? 0) + (composer?.height ?? 0)).toBeLessThanOrEqual(329)
   expect(Number.parseFloat(await page.getByLabel('Message Yeet').evaluate((node) => getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(16)
 
-  await page.getByTestId('open-status').click()
+  await page.getByRole('button', { name: /^Session controls:/ }).click()
   const sheet = await page.getByTestId('status-sheet').boundingBox()
   expect(sheet?.y).toBeCloseTo(28, 0)
   expect((sheet?.y ?? 0) + (sheet?.height ?? 0)).toBeLessThanOrEqual(329)

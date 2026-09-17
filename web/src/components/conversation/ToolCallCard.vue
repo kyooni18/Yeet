@@ -1,13 +1,25 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ConversationToolCall } from '@/remote/protocol'
+import { copyTextToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{ tool: ConversationToolCall }>()
 const expanded = ref(false)
 const showFullResult = ref(false)
+const argumentsCopyButton = ref<HTMLButtonElement | null>(null)
+const resultCopyButton = ref<HTMLButtonElement | null>(null)
 const RESULT_PREVIEW_LIMIT = 12_000
-const copiedPart = ref<'arguments' | 'result' | null>(null)
+type CopyPart = 'arguments' | 'result'
+type CopyStatus = 'copied' | 'failed'
+const copyFeedback = ref<{ part: CopyPart; status: CopyStatus; generation: number } | null>(null)
+let copyFeedbackGeneration = 0
+
+function focusElement(target: HTMLElement | null) {
+  target?.focus()
+}
 const DETAIL_KEYS = ['path', 'query', 'command', 'url', 'capability', 'server'] as const
+
+const toolName = computed(() => props.tool.name?.trim() || 'Tool call')
 
 function looseArgument(key: string): string | null {
   const raw = props.tool.arguments || ''
@@ -45,17 +57,35 @@ const resultText = computed(() => {
   catch { return String(props.tool.result) }
 })
 
-async function copyText(value: string, part: 'arguments' | 'result') {
-  try {
-    await navigator.clipboard.writeText(value)
-    copiedPart.value = part
-    window.setTimeout(() => {
-      if (copiedPart.value === part) copiedPart.value = null
-    }, 1200)
-  } catch {
-    copiedPart.value = null
-  }
+async function copyText(value: string, part: CopyPart) {
+  const generation = ++copyFeedbackGeneration
+  const copied = await copyTextToClipboard(value)
+  copyFeedback.value = { part, status: copied ? 'copied' : 'failed', generation }
+  window.setTimeout(() => {
+    if (copyFeedback.value?.generation === generation) copyFeedback.value = null
+  }, 1500)
 }
+
+function copyButtonText(part: CopyPart): string {
+  if (copyFeedback.value?.part !== part) return 'Copy'
+  return copyFeedback.value.status === 'copied' ? 'Copied' : 'Copy failed'
+}
+
+const resultNoun = computed(() => {
+  if (props.tool.error) return 'error'
+  if (props.tool.status === 'suppressed') return 'suppression reason'
+  return 'result'
+})
+const resultHeading = computed(() => resultNoun.value === 'suppression reason' ? 'Reason' : resultNoun.value[0].toUpperCase() + resultNoun.value.slice(1))
+const resultCopyLabel = computed(() => resultNoun.value === 'suppression reason' ? 'Copy suppression reason' : `Copy tool ${resultNoun.value}`)
+const resultOutputLabel = computed(() => `Tool ${resultNoun.value}${props.tool.error ? ' output' : ''}`)
+
+const copyAnnouncement = computed(() => {
+  const feedback = copyFeedback.value
+  if (!feedback) return ''
+  const target = feedback.part === 'arguments' ? 'Tool arguments' : `Tool ${resultNoun.value}`
+  return feedback.status === 'copied' ? `${target} copied` : `${target} could not be copied`
+})
 
 const resultIsTruncated = computed(() => resultText.value.length > RESULT_PREVIEW_LIMIT)
 const renderedResult = computed(() => {
@@ -76,6 +106,16 @@ const statusLabel = computed(() => {
   if (props.tool.status === 'streaming') return `Running${timing}`
   return `Done${timing}`
 })
+
+
+const noResultMessage = computed(() => {
+  if (props.tool.status === 'streaming') return 'Waiting for tool output…'
+  if (props.tool.status === 'failed') return 'This tool failed without error details.'
+  if (props.tool.status === 'suppressed') return 'This tool was suppressed without a reason.'
+  return 'This tool completed without output.'
+})
+
+const summaryLabel = computed(() => [toolName.value, detail.value, statusLabel.value].filter(Boolean).join(' · '))
 </script>
 
 <template>
@@ -84,6 +124,7 @@ const statusLabel = computed(() => {
       class="tool-card-summary"
       type="button"
       :aria-expanded="expanded"
+      :aria-label="summaryLabel"
       data-tool-toggle
       @click="expanded = !expanded"
     >
@@ -94,7 +135,7 @@ const statusLabel = computed(() => {
         <span v-else>!</span>
       </span>
       <span class="tool-heading">
-        <strong>{{ tool.name }}</strong>
+        <strong>{{ toolName }}</strong>
         <span v-if="detail" class="truncate" :title="detail">{{ detail }}</span>
       </span>
       <span v-if="statusLabel" class="tool-duration" :class="{ 'is-error': tool.status === 'failed' }">{{ statusLabel }}</span>
@@ -107,27 +148,29 @@ const statusLabel = computed(() => {
           <span>Arguments</span>
           <span class="tool-detail-actions">
             <span>{{ tool.status }}</span>
-            <button type="button" class="tool-copy-button" data-copy-tool="arguments" aria-label="Copy tool arguments" @click="copyText(prettyArguments, 'arguments')">{{ copiedPart === 'arguments' ? 'Copied' : 'Copy' }}</button>
+            <button ref="argumentsCopyButton" type="button" class="tool-copy-button" data-copy-tool="arguments" aria-label="Copy tool arguments" @click="copyText(prettyArguments, 'arguments')">{{ copyButtonText('arguments') }}</button>
           </span>
         </div>
-        <pre>{{ prettyArguments }}</pre>
+        <pre tabindex="0" role="group" aria-label="Tool arguments" @keydown.shift.tab.prevent="focusElement(argumentsCopyButton)">{{ prettyArguments }}</pre>
       </section>
       <section v-if="renderedResult">
         <div class="tool-detail-heading">
-          <span>{{ tool.error ? 'Error' : 'Result' }}</span>
+          <span>{{ resultHeading }}</span>
           <span class="tool-detail-actions">
-            <button type="button" class="tool-copy-button" data-copy-tool="result" :aria-label="tool.error ? 'Copy tool error' : 'Copy tool result'" @click="copyText(resultText, 'result')">{{ copiedPart === 'result' ? 'Copied' : 'Copy' }}</button>
+            <button ref="resultCopyButton" type="button" class="tool-copy-button" data-copy-tool="result" :aria-label="resultCopyLabel" @click="copyText(resultText, 'result')">{{ copyButtonText('result') }}</button>
           </span>
         </div>
-        <pre :class="{ 'tool-error-output': tool.error }">{{ renderedResult }}</pre>
+        <pre tabindex="0" role="group" :aria-label="resultOutputLabel" :class="{ 'tool-error-output': tool.error }" @keydown.shift.tab.prevent="focusElement(resultCopyButton)">{{ renderedResult }}</pre>
         <button
           v-if="resultIsTruncated"
           class="tool-output-toggle"
           type="button"
+          :aria-expanded="showFullResult"
           @click="showFullResult = !showFullResult"
         >{{ showFullResult ? 'Collapse output' : `Show full output (${resultText.length.toLocaleString()} chars)` }}</button>
       </section>
-      <p v-else class="tool-no-result">No result payload was included in this update.</p>
+      <p v-else class="tool-no-result" role="status" aria-live="polite">{{ noResultMessage }}</p>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ copyAnnouncement }}</span>
     </div>
   </article>
 </template>

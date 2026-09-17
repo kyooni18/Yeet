@@ -9,6 +9,8 @@ $Version = if ($env:YEET_VERSION) {
     if (-not $Match.Success) { throw "Unable to determine package version from Cargo.toml." }
     $Match.Groups[1].Value
 }
+node (Join-Path $Root "Scripts\verify-release-version.mjs") $Version
+if ($LASTEXITCODE -ne 0) { throw "Release versions are inconsistent." }
 $HostLine = (& rustc -vV | Where-Object { $_ -like 'host: *' } | Select-Object -First 1)
 if (-not $HostLine) { throw "Unable to determine Rust host target." }
 $Target = $HostLine.Substring(6).Trim()
@@ -21,10 +23,16 @@ $RuntimeDist = Join-Path $RuntimeBuild "dist"
 
 Push-Location $Root
 try {
-    if (-not (Test-Path "RuntimeSource\node_modules\.bin\tsc.cmd")) {
-        npm --prefix RuntimeSource ci
-        if ($LASTEXITCODE -ne 0) { throw "RuntimeSource dependency install failed." }
+    npm --prefix RuntimeSource ci
+    if ($LASTEXITCODE -ne 0) { throw "RuntimeSource dependency install failed." }
+    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+        & pnpm --dir (Join-Path $Root "web") install --frozen-lockfile
+    } elseif (Get-Command corepack -ErrorAction SilentlyContinue) {
+        & corepack pnpm --dir (Join-Path $Root "web") install --frozen-lockfile
+    } else {
+        throw "pnpm or Corepack is required to install the locked Remote WebUI dependencies."
     }
+    if ($LASTEXITCODE -ne 0) { throw "Remote WebUI dependency install failed." }
 
     $env:YEET_RUNTIME_OUT_DIR = $RuntimeDist
     & (Join-Path $Root "Scripts\rebuild-runtime.ps1")
@@ -59,11 +67,28 @@ try {
     Copy-Item -Force $BuiltBinary (Join-Path $Stage "bin\yeet.exe")
     Copy-Item -Recurse -Force $RuntimeDist (Join-Path $RuntimeStage "dist")
     Copy-Item -Force "RuntimeSource\package.json" (Join-Path $RuntimeStage "package.json")
-    Copy-Item -Force "README.md", "LICENSE.txt" $Stage
+    Copy-Item -Force "README.md", "CHANGELOG.md", "LICENSE.txt" $Stage
     Copy-Item -Force "Scripts\install-release.ps1" (Join-Path $Stage "install.ps1")
     if (Test-Path "docs\PLATFORM_SUPPORT.md") {
         New-Item -ItemType Directory -Force (Join-Path $Stage "docs") | Out-Null
         Copy-Item -Force "docs\PLATFORM_SUPPORT.md" (Join-Path $Stage "docs\PLATFORM_SUPPORT.md")
+    }
+
+    $StagedBinary = Join-Path $Stage "bin\yeet.exe"
+    $ActualVersion = (& $StagedBinary --version).Trim()
+    if ($LASTEXITCODE -ne 0 -or $ActualVersion -ne $Version) {
+        throw "Staged Yeet version '$ActualVersion' does not match release version '$Version'."
+    }
+    $PreviousConfigDir = $env:YEET_CONFIG_DIR
+    $SmokeConfig = Join-Path $Root "target\release-smoke-config-$Target"
+    if (Test-Path $SmokeConfig) { Remove-Item -Recurse -Force $SmokeConfig }
+    try {
+        $env:YEET_CONFIG_DIR = $SmokeConfig
+        & $StagedBinary doctor | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Staged Yeet doctor smoke test failed." }
+    } finally {
+        $env:YEET_CONFIG_DIR = $PreviousConfigDir
+        if (Test-Path $SmokeConfig) { Remove-Item -Recurse -Force $SmokeConfig }
     }
 
     $Archive = Join-Path $Out "$Name.zip"

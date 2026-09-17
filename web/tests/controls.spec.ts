@@ -82,19 +82,19 @@ test('model picker keeps Codex CLI models separate from OpenAI models', async ({
   await expect(picker.getByRole('option', { name: /gpt-5\.6-codex.*Codex CLI/ })).toBeVisible()
 })
 
-test('desktop Infinity toggle sends the semantic command and reflects state', async ({ page }, testInfo) => {
+test('desktop Goal toggle sends the semantic command and reflects state', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop')
 
-  const toggle = page.getByTestId('toggle-infinity')
+  const toggle = page.getByTestId('toggle-goal')
   await expect(toggle).toHaveAttribute('aria-pressed', 'false')
   await toggle.click()
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'set_infinity', enabled: true }),
+    expect.objectContaining({ type: 'set_goal', enabled: true }),
   ]))
 
   await emit(page, {
     type: 'state_update', version: 1, sequence: 2, revision: 2,
-    patch: { infinity_mode: true },
+    patch: { goal_mode: true },
   })
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
 })

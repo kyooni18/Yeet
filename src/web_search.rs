@@ -27,6 +27,7 @@ use crate::config::ConfigStore;
 pub const CAPABILITY_ID: &str = "web-search";
 const DEFAULT_URL: &str = "http://127.0.0.1:8888";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const AGENT_REACH_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const RESTART_BACKOFF: Duration = Duration::from_secs(3);
 const MAX_SEARCH_LOG_BYTES: u64 = 8 * 1024 * 1024;
 const AGENT_REACH_URL: &str = "https://github.com/Panniantong/agent-reach/archive/main.zip";
@@ -535,17 +536,12 @@ impl WebSearchClient {
             let _ = stderr.read_to_end(&mut bytes);
             bytes
         });
-        let status = loop {
-            if cancel.load(Ordering::Acquire) {
-                kill_child_group(&mut child);
-                let _ = child.wait();
-                bail!("cancelled");
-            }
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            thread::sleep(Duration::from_millis(20));
-        };
+        let status = wait_for_agent_reach_child(
+            &mut child,
+            cancel,
+            AGENT_REACH_OPERATION_TIMEOUT,
+            operation,
+        )?;
         let stdout = stdout_thread.join().unwrap_or_default();
         let stderr = stderr_thread.join().unwrap_or_default();
         if !status.success() {
@@ -878,6 +874,31 @@ fn html_to_readable_text(html: &str) -> String {
         previous_blank = false;
     }
     compact.trim().to_owned()
+}
+
+fn wait_for_agent_reach_child(
+    child: &mut Child,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    operation: &str,
+) -> Result<std::process::ExitStatus> {
+    let started = Instant::now();
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            kill_child_group(child);
+            let _ = child.wait();
+            bail!("cancelled");
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            kill_child_group(child);
+            let _ = child.wait();
+            bail!("Agent-Reach Exa {operation} timed out after {timeout:?}");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn kill_child_group(child: &mut Child) {
@@ -1238,7 +1259,7 @@ fn normalize_agent_reach_output(query: &str, output: &str, max_results: usize) -
     if results.is_empty() && answers.is_empty() {
         bail!("Agent-Reach Exa search returned no usable search evidence");
     }
-    Ok(json!({
+    Ok(sparsify_search_evidence(json!({
         "query": query,
         "source": "agent-reach/exa",
         "numberOfResults": results.len(),
@@ -1246,7 +1267,7 @@ fn normalize_agent_reach_output(query: &str, output: &str, max_results: usize) -
         "answers": answers,
         "suggestions": [],
         "corrections": [],
-    }))
+    })))
 }
 
 fn collect_agent_reach_results(value: &Value, results: &mut Vec<Value>, max_results: usize) {
@@ -1416,7 +1437,7 @@ fn normalize_results(query: &str, value: Value, max_results: usize) -> Value {
             })
         }).collect::<Vec<_>>()
     }).unwrap_or_default();
-    json!({
+    sparsify_search_evidence(json!({
         "query": query,
         "source": "searxng",
         "numberOfResults": value.get("number_of_results").cloned().unwrap_or_else(|| json!(results.len())),
@@ -1424,7 +1445,42 @@ fn normalize_results(query: &str, value: Value, max_results: usize) -> Value {
         "answers": value.get("answers").cloned().unwrap_or_else(|| json!([])),
         "suggestions": value.get("suggestions").cloned().unwrap_or_else(|| json!([])),
         "corrections": value.get("corrections").cloned().unwrap_or_else(|| json!([])),
-    })
+    }))
+}
+
+fn sparsify_search_evidence(mut value: Value) -> Value {
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    for key in ["answers", "suggestions", "corrections"] {
+        if object
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        {
+            object.remove(key);
+        }
+    }
+    if let Some(results) = object.get_mut("results").and_then(Value::as_array_mut) {
+        for result in results {
+            let Some(result) = result.as_object_mut() else {
+                continue;
+            };
+            for key in ["publishedAt", "category", "score"] {
+                if result.get(key).is_some_and(Value::is_null) {
+                    result.remove(key);
+                }
+            }
+            if result
+                .get("engines")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+            {
+                result.remove("engines");
+            }
+        }
+    }
+    value
 }
 
 fn truncate_chars(input: &str, limit: usize) -> String {
@@ -1464,6 +1520,31 @@ fn strip_markup(input: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn agent_reach_child_wait_has_a_hard_deadline_and_reaps_the_process() {
+        let mut child = Command::new("sleep")
+            .arg("5")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let cancel = AtomicBool::new(false);
+        let started = Instant::now();
+        let error = wait_for_agent_reach_child(
+            &mut child,
+            &cancel,
+            Duration::from_millis(60),
+            "test fetch",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("timed out after 60ms"));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
     #[test]
     fn web_read_rejects_private_and_credentialed_urls() {
         assert!(validate_public_http_url("http://127.0.0.1/secret").is_err());
@@ -1494,6 +1575,9 @@ mod tests {
         assert_eq!(result["results"][0]["snippet"], "hello world & friends");
         assert_eq!(result["results"][0]["engines"][0], "duckduckgo");
         assert_eq!(result["numberOfResults"], 42);
+        assert_eq!(result["suggestions"][0], "example search");
+        assert!(result.get("answers").is_none());
+        assert!(result.get("corrections").is_none());
     }
 
     #[test]
@@ -1510,6 +1594,26 @@ mod tests {
                 .count()
                 <= 420
         );
+    }
+
+    #[test]
+    fn omits_empty_optional_search_metadata_without_dropping_evidence() {
+        let value = json!({
+            "results": [{"title":"Example","url":"https://example.com","content":"useful evidence"}]
+        });
+        let result = normalize_results("example", value, 5);
+        let item = result["results"][0].as_object().unwrap();
+
+        assert_eq!(item["title"], "Example");
+        assert_eq!(item["url"], "https://example.com");
+        assert_eq!(item["snippet"], "useful evidence");
+        assert!(item.get("publishedAt").is_none());
+        assert!(item.get("category").is_none());
+        assert!(item.get("engines").is_none());
+        assert!(item.get("score").is_none());
+        assert!(result.get("answers").is_none());
+        assert!(result.get("suggestions").is_none());
+        assert!(result.get("corrections").is_none());
     }
 
     #[test]
@@ -1556,6 +1660,7 @@ mod tests {
         assert_eq!(result["results"][0]["title"], "Agent Reach");
         assert_eq!(result["results"][0]["snippet"], "semantic web search");
         assert_eq!(result["results"][0]["engines"][1], "exa");
+        assert!(result["results"][0].get("category").is_none());
     }
 
     #[test]

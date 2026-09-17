@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { useRemoteStore } from '@/stores/remote'
 import ModelPicker from './ModelPicker.vue'
 
@@ -10,10 +11,16 @@ const reasoning = ['auto', 'low', 'medium', 'high']
 const permissionLabel = computed(() => remote.permissionMode === 'unlimited' ? 'Unlimited' : remote.permissionMode === 'auto' ? 'Auto approve' : remote.permissionMode === 'ask' ? 'Ask first' : 'Unknown')
 const skills = computed(() => remote.state.available_capabilities.filter((capability) => capability.kind === 'skill'))
 const attachedSkillCount = computed(() => skills.value.filter((skill) => skill.enabled).length)
+const sessionControlsReadOnly = computed(() => remote.connection !== 'connected')
 
 function close() {
   remote.mobileStatusOpen = false
 }
+
+const { modalRoot: panel, handleModalKeydown: handleKeydown } = useModalFocus(
+  () => remote.mobileStatusOpen,
+  close,
+)
 
 function openSettings(section = 'runtime') {
   close()
@@ -23,10 +30,19 @@ function openSettings(section = 'runtime') {
 
 <template>
   <div v-if="remote.mobileStatusOpen" class="session-controls-layer" data-testid="status-sheet" @click.self="close">
-    <section class="session-controls-panel" data-testid="session-controls" aria-modal="true" role="dialog" aria-label="Session controls">
+    <section
+      ref="panel"
+      class="session-controls-panel"
+      data-testid="session-controls"
+      aria-modal="true"
+      role="dialog"
+      aria-labelledby="session-controls-title"
+      tabindex="-1"
+      @keydown="handleKeydown"
+    >
       <div class="session-controls-grip" aria-hidden="true"></div>
       <div class="session-controls-heading">
-        <div><span>Current session</span><h2>Session settings</h2></div>
+        <div><span>Current session</span><h2 id="session-controls-title">Session settings</h2></div>
         <button class="icon-button" aria-label="Close session controls" @click="close">×</button>
       </div>
       <div class="session-control-summary">
@@ -34,18 +50,29 @@ function openSettings(section = 'runtime') {
         <span>{{ remote.contextPercent == null ? 'Context —' : `${remote.contextPercent}% context` }}</span>
         <button type="button" @click="openSettings('sandbox')">{{ permissionLabel }} →</button>
       </div>
-      <div class="session-control-field"><span>Model</span><ModelPicker variant="panel" /></div>
+      <p v-if="sessionControlsReadOnly" class="session-controls-readonly" role="status">Session controls are read-only while Yeet Remote reconnects.</p>
+      <fieldset class="session-control-scope" :disabled="sessionControlsReadOnly">
       <div class="session-control-field">
-        <span>Reasoning</span>
+        <div class="session-control-label-row"><span>Model</span><small v-if="remote.state.is_streaming">Next response</small></div>
+        <ModelPicker variant="panel" />
+      </div>
+      <div class="session-control-field">
+        <div class="session-control-label-row"><span>Reasoning</span><small v-if="remote.state.is_streaming">Next response</small></div>
         <div class="segmented-control">
-          <button v-for="level in reasoning" :key="level" :class="{ active: remote.state.active_reasoning_level === level }" @click="remote.selectReasoning(level)">{{ level }}</button>
+          <button
+            v-for="level in reasoning"
+            :key="level"
+            :class="{ active: remote.state.active_reasoning_level === level }"
+            :aria-pressed="remote.state.active_reasoning_level === level"
+            @click="remote.selectReasoning(level)"
+          >{{ level }}</button>
         </div>
       </div>
       <div class="session-control-field">
-        <div class="session-control-label-row"><span>Infinity</span><small>{{ remote.state.infinity_mode ? 'Continuous execution' : 'Normal completion' }}</small></div>
+        <div class="session-control-label-row"><span>Goal</span><small>{{ remote.state.goal_mode ? 'Strict success judging' : 'Normal completion' }}</small></div>
         <div class="segmented-control">
-          <button :class="{ active: remote.state.infinity_mode }" @click="remote.setInfinity(true)">ON</button>
-          <button :class="{ active: !remote.state.infinity_mode }" @click="remote.setInfinity(false)">OFF</button>
+          <button :class="{ active: remote.state.goal_mode }" :aria-pressed="remote.state.goal_mode" @click="remote.setGoal(true)">ON</button>
+          <button :class="{ active: !remote.state.goal_mode }" :aria-pressed="!remote.state.goal_mode" @click="remote.setGoal(false)">OFF</button>
         </div>
       </div>
       <div v-if="skills.length" class="session-control-field skill-control-field">
@@ -70,8 +97,9 @@ function openSettings(section = 'runtime') {
           </button>
         </div>
       </div>
+      </fieldset>
       <div class="session-controls-footer">
-        <span>Model, reasoning, Infinity, skills, and permission state for this session.</span>
+        <span>Model, reasoning, Goal mode, skills, and permission state for this session.</span>
         <button class="secondary-button" @click="openSettings()">All settings</button>
       </div>
     </section>
@@ -90,6 +118,8 @@ function openSettings(section = 'runtime') {
 .session-control-summary > span,.session-control-summary > button { display: inline-flex; min-height: 28px; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font-size: 10px; }
 .session-control-summary > button { cursor: pointer; }
 .session-control-summary > button:hover { border-color: var(--border-strong); color: var(--text); }
+.session-control-scope { min-width: 0; margin: 0; padding: 0; border: 0; }
+.session-controls-readonly { margin: 0 0 10px; padding: 8px 10px; border: 1px solid rgba(255,119,82,.14); border-radius: 10px; background: rgba(255,91,62,.045); color: var(--muted); font-size: 10px; line-height: 1.4; }
 .session-control-field { display: grid; gap: 7px; padding: 12px 0; border-top: 1px solid var(--border); }
 .session-control-field > span,.session-control-label-row > span { color: var(--muted); font-size: 10px; font-weight: 600; }
 .session-control-field .segmented-control { width: 100%; }
@@ -110,6 +140,15 @@ function openSettings(section = 'runtime') {
 .session-controls-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .session-controls-footer > span { max-width: 240px; color: var(--dim); font-size: 9.5px; line-height: 1.35; }
 .session-controls-footer .secondary-button { min-height: 34px; flex: 0 0 auto; font-size: 10.5px; }
+@media (hover: none) and (pointer: coarse) and (min-width: 900px) {
+  .session-controls-heading .icon-button { width: 44px; height: 44px; }
+  .session-control-summary > button { min-height: 44px; }
+  .session-control-field .segmented-control button,
+  .session-controls-footer .secondary-button { min-height: 44px; }
+  :deep(.model-picker-search) { min-height: 44px !important; font-size: 16px; }
+  :deep(.model-picker-providers button) { min-width: 44px; min-height: 44px; }
+}
+
 @media (max-width:899px) {
   .session-controls-layer { align-items: end; padding: max(12px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left)); }
   .session-controls-panel { width: min(100%,520px); max-height: min(74dvh,calc(var(--visual-viewport-height) - 24px)); padding: 7px 14px 14px; border-radius: 22px; box-shadow: 0 20px 55px rgba(0,0,0,.34); }
@@ -119,10 +158,12 @@ function openSettings(section = 'runtime') {
   .session-controls-heading > div > span { font-size: 8.5px; }
   .session-control-summary { gap: 5px; margin-bottom: 10px; }
   .session-control-summary > span,.session-control-summary > button { min-height: 32px; padding-right: 8px; padding-left: 8px; font-size: 9.5px; }
+  .session-controls-heading .icon-button { width: 44px; height: 44px; }
+  .session-control-summary > button { min-height: 44px; }
   .session-control-field { gap: 6px; padding-top: 10px; padding-bottom: 10px; }
   .session-control-field > span,.session-control-label-row > span { font-size: 9.5px; }
   .session-control-label-row small { font-size: 9px; }
-  .session-control-field .segmented-control button,.session-controls-footer .secondary-button { min-height: 38px; }
+  .session-control-field .segmented-control button,.session-controls-footer .secondary-button { min-height: 44px; }
   .session-skill-list { gap: 6px; }
   .session-skill-chip { min-width: min(42vw,164px); min-height: 48px; grid-template-columns: 26px minmax(0,1fr); padding: 6px 8px; border-radius: 12px; }
   .skill-status-mark { width: 26px; height: 26px; border-radius: 8px; font-size: 13px; }

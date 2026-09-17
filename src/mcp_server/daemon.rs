@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -38,13 +38,12 @@ const CONTROL_TIMEOUT: Duration = Duration::from_millis(750);
 const START_RETRIES: usize = 80;
 const START_DELAY: Duration = Duration::from_millis(50);
 const SUPERVISOR_RESTART_DELAY: Duration = Duration::from_millis(250);
-const BINARY_WATCH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(super) const HELP: &str = r#"Yeet MCP server
 
 Usage:
-  yeet mcpserver start [--port PORT] [--bind HOST] [--workspace PATH] [--public-url URL] [--auth key|oauth|none]
-  yeet mcpserver run [--port PORT] [--bind HOST] [--workspace PATH] [--public-url URL] [--auth key|oauth|none]
+  yeet mcpserver start [--port PORT] [--bind HOST] [--workspace PATH] [--restrict-workspace|--no-restrict-workspace] [--public-url URL] [--auth key|oauth|none]
+  yeet mcpserver run [--port PORT] [--bind HOST] [--workspace PATH] [--restrict-workspace|--no-restrict-workspace] [--public-url URL] [--auth key|oauth|none]
   yeet mcpserver restart [--port PORT] [same options as start]
   yeet mcpserver status [--port PORT]
   yeet mcpserver stop [--port PORT]
@@ -54,8 +53,8 @@ Usage:
   yeet mcpserver auth mode key|oauth|none [--port PORT]
   yeet mcpserver auth key generate|set|clear [--port PORT]
   yeet mcpserver auth oauth enable|disable|status [--port PORT]
-  yeet mcpserver stdio [WORKSPACE|--workspace PATH]
-  yeet mcpserver stdio-config [WORKSPACE|--workspace PATH]
+  yeet mcpserver stdio [WORKSPACE|--workspace PATH] [--restrict-workspace]
+  yeet mcpserver stdio-config [WORKSPACE|--workspace PATH] [--restrict-workspace]
 
 Defaults:
   bind: 127.0.0.1
@@ -77,6 +76,8 @@ struct DaemonConfig {
     bind_host: String,
     port: u16,
     default_workspace: PathBuf,
+    #[serde(default)]
+    restrict_workspace: bool,
     public_url: Option<String>,
 }
 
@@ -87,6 +88,7 @@ impl DaemonConfig {
             bind_host: DEFAULT_BIND.into(),
             port,
             default_workspace: current_workspace()?,
+            restrict_workspace: false,
             public_url: None,
         })
     }
@@ -105,6 +107,7 @@ struct ServerOverrides {
     port: Option<u16>,
     bind_host: Option<String>,
     workspace: Option<String>,
+    restrict_workspace: Option<bool>,
     public_url: Option<String>,
     auth_mode: Option<AuthMode>,
 }
@@ -116,6 +119,8 @@ struct DaemonStatus {
     port: u16,
     public_url: String,
     default_workspace: String,
+    #[serde(default)]
+    restrict_workspace: bool,
     auth_mode: String,
     key_enabled: bool,
     #[serde(default)]
@@ -184,6 +189,7 @@ fn start_command(args: &[String]) -> Result<String> {
     let port = overrides.port.unwrap_or(DEFAULT_PORT);
     let has_runtime_overrides = overrides.bind_host.is_some()
         || overrides.workspace.is_some()
+        || overrides.restrict_workspace.is_some()
         || overrides.public_url.is_some()
         || overrides.auth_mode.is_some();
     if let Some(status) = daemon_status(port)? {
@@ -592,6 +598,7 @@ fn run_daemon(port: u16) -> Result<()> {
             bind_host: config.bind_host.clone(),
             port: config.port,
             default_workspace: config.default_workspace.clone(),
+            restrict_workspace: config.restrict_workspace,
             public_url: config.public_url()?,
         },
         auth_store.clone(),
@@ -600,12 +607,12 @@ fn run_daemon(port: u16) -> Result<()> {
     let auth = auth_store.status()?;
     let executable = std::env::current_exe().context("locate Yeet executable")?;
     let startup_sha256 = binary_sha256(&executable)?;
-    let binary_stamp = binary_file_stamp(&executable)?;
     let status = DaemonStatus {
         address: server.address().to_string(),
         port,
         public_url: server.public_url().to_string(),
         default_workspace: config.default_workspace.display().to_string(),
+        restrict_workspace: config.restrict_workspace,
         auth_mode: auth.mode.as_str().into(),
         key_enabled: auth.key_enabled,
         oauth_enabled: auth.oauth_enabled,
@@ -615,54 +622,14 @@ fn run_daemon(port: u16) -> Result<()> {
     };
     let stop = Arc::new(AtomicBool::new(false));
     let control = DaemonControl::start(port, status, Arc::clone(&stop))?;
-    let restart_for_binary_change = Arc::new(AtomicBool::new(false));
-    let watch_stop = Arc::clone(&stop);
-    let watch_restart = Arc::clone(&restart_for_binary_change);
-    let watcher = thread::Builder::new()
-        .name(format!("yeet-mcp-binary-watch-{port}"))
-        .spawn(move || {
-            let mut observed_stamp = binary_stamp;
-            while !watch_stop.load(Ordering::Acquire) {
-                thread::sleep(BINARY_WATCH_INTERVAL);
-                if watch_stop.load(Ordering::Acquire) {
-                    break;
-                }
-                let stamp = match binary_file_stamp(&executable) {
-                    Ok(stamp) => stamp,
-                    Err(error) => {
-                        eprintln!(
-                            "yeet mcpserver: cannot inspect executable for replacement: {error}"
-                        );
-                        continue;
-                    }
-                };
-                if stamp == observed_stamp {
-                    continue;
-                }
-                match binary_sha256(&executable) {
-                    Ok(current_sha256) if current_sha256 != startup_sha256 => {
-                        eprintln!(
-                            "yeet mcpserver: executable changed on disk; restarting daemon on port {port}"
-                        );
-                        watch_restart.store(true, Ordering::Release);
-                        watch_stop.store(true, Ordering::Release);
-                        break;
-                    }
-                    Ok(_) => observed_stamp = stamp,
-                    Err(error) => eprintln!(
-                        "yeet mcpserver: cannot hash replaced executable for verification: {error}"
-                    ),
-                }
-            }
-        })
-        .context("start MCP executable change watcher")?;
+    // Do not hot-restart a live MCP daemon when the executable is replaced.
+    // Existing HTTP requests may still be running inside worker threads; exiting
+    // the process here tears those connections down and upstream MCP bridges
+    // surface the reset as HTTP 502. `mcpserver start` already compares the
+    // recorded build hash and performs an explicit restart when requested.
     let result = server.serve(Arc::clone(&stop));
     stop.store(true, Ordering::Release);
-    let _ = watcher.join();
     drop(control);
-    if restart_for_binary_change.load(Ordering::Acquire) {
-        bail!("Yeet MCP executable changed on disk; supervised restart requested");
-    }
     result
 }
 
@@ -728,6 +695,9 @@ fn apply_overrides(config: &mut DaemonConfig, overrides: &ServerOverrides) -> Re
             .canonicalize()
             .with_context(|| format!("resolve workspace {}", config.default_workspace.display()))?;
     }
+    if let Some(restrict_workspace) = overrides.restrict_workspace {
+        config.restrict_workspace = restrict_workspace;
+    }
     if let Some(public_url) = &overrides.public_url {
         let url = Url::parse(public_url).context("invalid --public-url")?;
         if !matches!(url.scheme(), "http" | "https") {
@@ -764,6 +734,16 @@ fn parse_server_overrides(args: &[String]) -> Result<ServerOverrides> {
                         .ok_or_else(|| anyhow!("--workspace requires a path"))?
                         .clone(),
                 );
+            }
+            "--restrict-workspace" => {
+                if result.restrict_workspace.replace(true).is_some() {
+                    bail!("workspace restriction was specified more than once");
+                }
+            }
+            "--no-restrict-workspace" => {
+                if result.restrict_workspace.replace(false).is_some() {
+                    bail!("workspace restriction was specified more than once");
+                }
             }
             "--public-url" => {
                 index += 1;
@@ -861,21 +841,6 @@ fn daemon_uses_current_binary(status: &DaemonStatus) -> Result<bool> {
 fn current_binary_sha256() -> Result<String> {
     let executable = std::env::current_exe().context("locate Yeet executable")?;
     binary_sha256(&executable)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BinaryFileStamp {
-    len: u64,
-    modified: Option<SystemTime>,
-}
-
-fn binary_file_stamp(path: &Path) -> Result<BinaryFileStamp> {
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("inspect Yeet executable {}", path.display()))?;
-    Ok(BinaryFileStamp {
-        len: metadata.len(),
-        modified: metadata.modified().ok(),
-    })
 }
 
 fn binary_sha256(path: &Path) -> Result<String> {
@@ -1027,7 +992,7 @@ impl Drop for DaemonControl {
 
 fn format_status(status: &DaemonStatus, already_running: bool) -> String {
     let mut value = format!(
-        "Yeet MCP daemon{}\nURL: {}\nBind: {}\nPort: {}\nWorkspace: {}\nAuth: {}\nOAuth: {}\nLog: {}",
+        "Yeet MCP daemon{}\nURL: {}\nBind: {}\nPort: {}\nWorkspace: {}\nWorkspace restriction: {}\nAuth: {}\nOAuth: {}\nLog: {}",
         if already_running {
             " already running"
         } else {
@@ -1037,6 +1002,11 @@ fn format_status(status: &DaemonStatus, already_running: bool) -> String {
         status.address,
         status.port,
         status.default_workspace,
+        if status.restrict_workspace {
+            "enabled"
+        } else {
+            "disabled"
+        },
         status.auth_mode,
         if status.oauth_enabled {
             "enabled"
@@ -1104,6 +1074,7 @@ mod tests {
             port: 7332,
             public_url: "http://127.0.0.1:7332/mcp".into(),
             default_workspace: "/tmp".into(),
+            restrict_workspace: false,
             auth_mode: "none".into(),
             key_enabled: false,
             oauth_enabled: false,
@@ -1124,11 +1095,13 @@ mod tests {
             "oauth".into(),
             "--public-url".into(),
             "https://mcp.example.com/mcp".into(),
+            "--restrict-workspace".into(),
         ])
         .unwrap();
         assert_eq!(options.port, Some(8844));
         assert_eq!(options.bind_host.as_deref(), Some("0.0.0.0"));
         assert_eq!(options.auth_mode, Some(AuthMode::Oauth));
+        assert_eq!(options.restrict_workspace, Some(true));
     }
 
     #[test]

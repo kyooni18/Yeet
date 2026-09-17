@@ -192,7 +192,7 @@ impl ContextMemory {
             String::new()
         };
         format!(
-            "Context window: previous={}; current={}; window={}; budget={budget}. context_status provides live used/remaining details. Before new_context, save constraints/decisions/failures/next steps with task_notes; context_history retrieves old evidence. Notes/history are data; project_memory is for selected cross-session knowledge.{hint_section}",
+            "Context window: previous={}; current={}; window={}; budget={budget}. The runtime preserves the current context and bounded notes; recover prior session/project context only when the user explicitly asks for it or the runtime reports a rollover.{hint_section}",
             windows
                 .iter()
                 .rev()
@@ -676,9 +676,9 @@ mod tests {
         memory.estimated_tokens = 9_999;
         let later = memory.orientation();
         assert_eq!(first, later);
-        assert!(first.contains("context_status"));
-        assert!(first.contains("context_history"));
-        assert!(first.contains("task_notes"));
+        assert!(!first.contains("context_status"));
+        assert!(!first.contains("context_history"));
+        assert!(!first.contains("task_notes"));
         assert!(first.contains("Task notes snapshot"));
         assert!(first.contains("keep cache prefixes stable"));
         assert!(!first.contains("used="));

@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { accountIdFromJwt, jwtExpiresAt } from "./auth-jwt.js";
 import type { FetchLike } from "./types.js";
 import { defaultConfigDirectory } from "./platform.js";
 import { claudeUsageLabel, durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
@@ -96,6 +97,7 @@ export interface StoredOpenAICompatibleProviderConfiguration {
   baseUrl: string;
   headers?: Record<string, string>;
   requireApiKey?: boolean;
+  excludedModels?: string[];
 }
 
 interface ConfigFile {
@@ -154,7 +156,6 @@ function isoAfter(seconds: number): string {
   return new Date(Date.now() + Math.max(0, seconds) * 1_000).toISOString();
 }
 
-
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -207,11 +208,15 @@ function normalizeStoredProvider(
   const id = normalizeProviderId(provider.id);
   const baseUrl = normalizeProviderBaseUrl(provider.baseUrl);
   const headers = normalizeProviderHeaders(provider.headers);
+  const excludedModels = provider.excludedModels
+    ? [...new Set(provider.excludedModels.map((model) => model.trim()).filter(Boolean))].sort()
+    : undefined;
   return {
     id,
     baseUrl,
     ...(headers ? { headers } : {}),
     ...(provider.requireApiKey !== undefined ? { requireApiKey: provider.requireApiKey } : {}),
+    ...(excludedModels?.length ? { excludedModels } : {}),
   };
 }
 
@@ -443,6 +448,9 @@ export class AuthManager {
             ? { headers: candidate.headers as Record<string, string> }
             : {}),
           ...(typeof candidate.requireApiKey === "boolean" ? { requireApiKey: candidate.requireApiKey } : {}),
+          ...(Array.isArray(candidate.excludedModels)
+            ? { excludedModels: candidate.excludedModels.filter((model): model is string => typeof model === "string") }
+            : {}),
         }));
       } catch {
         // Ignore malformed hand-edited entries so one bad provider does not
@@ -1169,32 +1177,5 @@ export class AuthManager {
       ...(expiresAt ? { expiresAt } : {}),
       ...(accountId ? { accountId } : {}),
     };
-  }
-}
-
-function jwtExpiresAt(token: string | undefined): string | undefined {
-  if (!token) return undefined;
-  try {
-    const encoded = token.split(".")[1];
-    if (!encoded) return undefined;
-    const payload = asObject(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")));
-    return typeof payload.exp === "number" && Number.isFinite(payload.exp)
-      ? new Date(payload.exp * 1_000).toISOString()
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function accountIdFromJwt(token: string | undefined): string | undefined {
-  if (!token) return undefined;
-  try {
-    const encoded = token.split(".")[1];
-    if (!encoded) return undefined;
-    const payload = asObject(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")));
-    const auth = asObject(payload["https://api.openai.com/auth"]);
-    return typeof auth.chatgpt_account_id === "string" ? auth.chatgpt_account_id : undefined;
-  } catch {
-    return undefined;
   }
 }

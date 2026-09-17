@@ -296,34 +296,6 @@ pub(super) fn analysis_inspection_threshold(bounded_explanation: bool) -> usize 
     if bounded_explanation { 3 } else { 4 }
 }
 
-pub(super) fn is_initial_mutation_attempt(
-    implementation_requested: bool,
-    successful_mutations: usize,
-    unresolved_failed_mutation: bool,
-    calls: &[ToolCall],
-) -> bool {
-    implementation_requested
-        && successful_mutations == 0
-        && !unresolved_failed_mutation
-        && calls
-            .iter()
-            .any(|call| super::policy::is_mutation_tool(&call.name))
-}
-
-pub(super) fn suppressed_tool_events(
-    calls: &[ToolCall],
-    reason: &str,
-) -> Vec<super::api::AgentEvent> {
-    calls
-        .iter()
-        .cloned()
-        .map(|call| super::api::AgentEvent::ToolExecutionSuppressed {
-            call,
-            reason: reason.to_owned(),
-        })
-        .collect()
-}
-
 pub(super) fn implementation_completion_blocker(
     implementation_requested: bool,
     successful_mutations: usize,

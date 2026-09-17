@@ -15,6 +15,7 @@ use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 
 /// Returns whether a requested path resolves outside the active workspace.
+#[cfg(test)]
 pub(super) fn path_outside_workspace(root: &Path, input: &str) -> Result<bool> {
     if input.trim().is_empty() || input.contains('\0') {
         bail!("invalid file path");

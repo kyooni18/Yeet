@@ -53,6 +53,10 @@ const DAEMON_START_DELAY: Duration = Duration::from_millis(50);
 const DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_millis(600);
 const AUTH_SESSION_SECONDS: u64 = 12 * 60 * 60;
 const PASSKEY_ENROLL_SECONDS: u64 = 10 * 60;
+const MAX_AUTH_SESSIONS: usize = 256;
+const MAX_PASSKEY_ENROLLMENTS: usize = 32;
+const MAX_PENDING_PASSKEY_REGISTRATIONS: usize = 32;
+const MAX_PENDING_PASSKEY_AUTHENTICATIONS: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Configures the remote HTTP/WebSocket frontend server and authentication boundary.
@@ -362,6 +366,13 @@ struct RemoteAuthState {
     authentications: HashMap<String, PendingPasskeyAuthentication>,
 }
 
+fn ensure_remote_auth_capacity(kind: &str, current: usize, maximum: usize) -> Result<()> {
+    if current >= maximum {
+        bail!("Remote {kind} capacity reached ({maximum}); retry after an older entry expires");
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct RemoteAuthRuntime {
     workspace: PathBuf,
@@ -585,11 +596,21 @@ impl RemoteAuthRuntime {
 
     fn issue_session(&self) -> String {
         let token = random_token("session");
-        self.state
-            .lock()
-            .unwrap()
+        let now = unix_time();
+        let mut state = self.state.lock().unwrap();
+        state.sessions.retain(|_, expires_at| *expires_at > now);
+        if state.sessions.len() >= MAX_AUTH_SESSIONS
+            && let Some(oldest) = state
+                .sessions
+                .iter()
+                .min_by_key(|(_, expires_at)| *expires_at)
+                .map(|(token, _)| token.clone())
+        {
+            state.sessions.remove(&oldest);
+        }
+        state
             .sessions
-            .insert(token.clone(), unix_time() + AUTH_SESSION_SECONDS);
+            .insert(token.clone(), now + AUTH_SESSION_SECONDS);
         token
     }
 
@@ -615,11 +636,17 @@ impl RemoteAuthRuntime {
             bail!("passkeys are unavailable for the configured remote origin");
         }
         let token = random_token("enroll");
-        self.state
-            .lock()
-            .unwrap()
+        let now = unix_time();
+        let mut state = self.state.lock().unwrap();
+        state.enrollments.retain(|_, expires_at| *expires_at > now);
+        ensure_remote_auth_capacity(
+            "passkey enrollment",
+            state.enrollments.len(),
+            MAX_PASSKEY_ENROLLMENTS,
+        )?;
+        state
             .enrollments
-            .insert(token.clone(), unix_time() + PASSKEY_ENROLL_SECONDS);
+            .insert(token.clone(), now + PASSKEY_ENROLL_SECONDS);
         Ok(format!(
             "{}/enroll?token={token}",
             origin.as_str().trim_end_matches('/')
@@ -664,12 +691,22 @@ impl RemoteAuthRuntime {
             .start_passkey_registration(user_id, "yeet-remote", "Yeet Remote", exclude_credentials)
             .map_err(|error| anyhow!("start passkey registration: {error}"))?;
         let transaction = random_token("register");
-        self.state.lock().unwrap().registrations.insert(
+        let now = unix_time();
+        let mut state = self.state.lock().unwrap();
+        state
+            .registrations
+            .retain(|_, pending| pending.expires_at > now);
+        ensure_remote_auth_capacity(
+            "pending passkey registration",
+            state.registrations.len(),
+            MAX_PENDING_PASSKEY_REGISTRATIONS,
+        )?;
+        state.registrations.insert(
             transaction.clone(),
             PendingPasskeyRegistration {
                 enrollment_token: enrollment_token.to_owned(),
                 state: registration,
-                expires_at: unix_time() + PASSKEY_ENROLL_SECONDS,
+                expires_at: now + PASSKEY_ENROLL_SECONDS,
             },
         );
         Ok(json!({"transaction": transaction, "options": challenge}))
@@ -728,11 +765,21 @@ impl RemoteAuthRuntime {
             .start_passkey_authentication(&passkeys)
             .map_err(|error| anyhow!("start passkey authentication: {error}"))?;
         let transaction = random_token("auth");
-        self.state.lock().unwrap().authentications.insert(
+        let now = unix_time();
+        let mut state = self.state.lock().unwrap();
+        state
+            .authentications
+            .retain(|_, pending| pending.expires_at > now);
+        ensure_remote_auth_capacity(
+            "pending passkey authentication",
+            state.authentications.len(),
+            MAX_PENDING_PASSKEY_AUTHENTICATIONS,
+        )?;
+        state.authentications.insert(
             transaction.clone(),
             PendingPasskeyAuthentication {
                 state: authentication,
-                expires_at: unix_time() + PASSKEY_ENROLL_SECONDS,
+                expires_at: now + PASSKEY_ENROLL_SECONDS,
             },
         );
         Ok(json!({"transaction": transaction, "options": challenge}))
@@ -848,6 +895,21 @@ fn random_token(prefix: &str) -> String {
     )
 }
 
+fn ensure_remote_bind_available(bind: &str) -> Result<()> {
+    match TcpListener::bind(bind) {
+        Ok(listener) => {
+            drop(listener);
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => bail!(
+            "cannot start Yeet Remote on {bind}: address is already in use; stop the process or Remote daemon using that address, or choose a different address with --bind"
+        ),
+        Err(error) => {
+            Err(error).with_context(|| format!("check whether Yeet Remote can bind to {bind}"))
+        }
+    }
+}
+
 pub fn launch_remote_daemon(
     workspace: &Path,
     options: &RemoteOptions,
@@ -898,6 +960,8 @@ pub fn launch_remote_daemon(
             already_running: true,
         });
     }
+
+    ensure_remote_bind_available(&options.bind)?;
 
     let workspace = workspace
         .canonicalize()
@@ -1579,6 +1643,124 @@ mod tests {
     }
 
     #[test]
+    fn remote_launch_preflight_rejects_an_occupied_bind() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+
+        let error = ensure_remote_bind_available(&address).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("address is already in use"), "{message}");
+        assert!(message.contains("--bind"), "{message}");
+    }
+
+    #[test]
+    fn remote_launch_preflight_allows_an_available_ephemeral_bind() {
+        ensure_remote_bind_available("127.0.0.1:0").unwrap();
+    }
+
+    #[test]
+    fn remote_auth_capacity_guard_rejects_saturated_pending_state() {
+        assert!(
+            ensure_remote_auth_capacity(
+                "pending passkey authentication",
+                MAX_PENDING_PASSKEY_AUTHENTICATIONS - 1,
+                MAX_PENDING_PASSKEY_AUTHENTICATIONS,
+            )
+            .is_ok()
+        );
+        let error = ensure_remote_auth_capacity(
+            "pending passkey authentication",
+            MAX_PENDING_PASSKEY_AUTHENTICATIONS,
+            MAX_PENDING_PASSKEY_AUTHENTICATIONS,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("capacity reached (128)"));
+    }
+
+    #[test]
+    fn issued_remote_sessions_remain_bounded_and_keep_the_newest() {
+        let auth = RemoteAuthRuntime::disabled();
+        let mut newest = String::new();
+        for _ in 0..(MAX_AUTH_SESSIONS + 17) {
+            newest = auth.issue_session();
+        }
+
+        let state = auth.state.lock().unwrap();
+        assert_eq!(state.sessions.len(), MAX_AUTH_SESSIONS);
+        assert!(state.sessions.contains_key(&newest));
+    }
+
+    #[test]
+    fn passkey_enrollment_tokens_are_bounded() {
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: Some("http://localhost:17331".into()),
+            workspace: None,
+            legacy_tui: false,
+        };
+        let auth = RemoteAuthRuntime::from_document(
+            PathBuf::new(),
+            RemoteAuthDocument::default(),
+            &options,
+            "127.0.0.1:17331".parse().unwrap(),
+        )
+        .unwrap();
+        for _ in 0..MAX_PASSKEY_ENROLLMENTS {
+            auth.issue_enrollment().unwrap();
+        }
+
+        let error = auth.issue_enrollment().unwrap_err();
+        assert!(error.to_string().contains("capacity reached (32)"));
+        assert_eq!(
+            auth.state.lock().unwrap().enrollments.len(),
+            MAX_PASSKEY_ENROLLMENTS
+        );
+    }
+
+    #[test]
+    fn browser_origin_policy_is_strict_for_websocket_and_conditional_for_http_auth() {
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let auth = RemoteAuthRuntime::from_document(
+            PathBuf::new(),
+            RemoteAuthDocument::default(),
+            &options,
+            "127.0.0.1:17331".parse().unwrap(),
+        )
+        .unwrap();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            axum::http::HeaderValue::from_static("localhost:17331"),
+        );
+
+        assert!(auth.http_auth_origin_allowed(&headers));
+        assert!(!auth.websocket_origin_allowed(&headers));
+
+        headers.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("http://localhost:17331"),
+        );
+        assert!(auth.http_auth_origin_allowed(&headers));
+        assert!(auth.websocket_origin_allowed(&headers));
+
+        headers.insert(
+            axum::http::header::ORIGIN,
+            axum::http::HeaderValue::from_static("https://evil.example"),
+        );
+        assert!(!auth.http_auth_origin_allowed(&headers));
+        assert!(!auth.websocket_origin_allowed(&headers));
+    }
+
+    #[test]
     fn parses_legacy_remote_fallback_flag() {
         let arguments = vec!["remote".into(), "--legacy-tui".into()];
         let options = RemoteOptions::parse(&arguments).unwrap().unwrap();
@@ -1963,6 +2145,60 @@ mod tests {
     }
 
     #[test]
+    fn remote_websocket_requires_hello_within_deadline() {
+        let options = RemoteOptions {
+            bind: "127.0.0.1:0".into(),
+            cols: 80,
+            rows: 24,
+            origin: None,
+            workspace: None,
+            legacy_tui: false,
+        };
+        let server = RemoteServer::start(&options).unwrap();
+        let address = server.address();
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let request = format!(
+            "GET /api/ws HTTP/1.1\r\nHost: localhost:{}\r\nOrigin: http://localhost:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: yeet.remote.v1\r\n\r\n",
+            address.port(),
+            address.port()
+        );
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        while !String::from_utf8_lossy(&response).contains("\r\n\r\n") {
+            let count = stream.read(&mut chunk).unwrap();
+            assert!(count > 0, "WebSocket closed before upgrade completed");
+            response.extend_from_slice(&chunk[..count]);
+        }
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 101 Switching Protocols"));
+
+        let started = std::time::Instant::now();
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::ConnectionReset => break,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    panic!("Remote WebSocket did not enforce the initial hello deadline")
+                }
+                Err(error) => panic!("read WebSocket after hello deadline: {error}"),
+            }
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(13),
+            "initial hello timeout exceeded its bounded deadline"
+        );
+    }
+
+    #[test]
     fn passkey_enrollment_issues_real_webauthn_challenge() {
         let options = RemoteOptions {
             bind: "127.0.0.1:0".into(),
@@ -2076,11 +2312,11 @@ mod tests {
     fn http_request(address: SocketAddr, request: &str) -> String {
         let mut stream = TcpStream::connect(address).unwrap();
         // Access-key tests exercise production Argon2 parameters. Under a full
-        // parallel test run that can legitimately take longer than one second,
-        // so the client timeout must not turn CPU contention into an empty HTTP
-        // response and a false server failure.
+        // parallel test run, CPU contention can make a valid verification take
+        // several seconds, so the client timeout must not turn contention into
+        // an empty HTTP response and a false server failure.
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
         stream.write_all(request.as_bytes()).unwrap();
         let mut response = Vec::new();

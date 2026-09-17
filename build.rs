@@ -16,12 +16,6 @@ fn main() -> io::Result<()> {
         files.sort_by(|left, right| left.0.cmp(&right.0));
     }
     let has_index = files.iter().any(|(relative, _)| relative == "index.html");
-    if env::var("PROFILE").as_deref() == Ok("release") && !has_index {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Yeet Remote WebUI is not built; run Scripts/build-remote-web.sh before cargo build --release",
-        ));
-    }
     for (_, absolute) in &files {
         println!("cargo:rerun-if-changed={}", absolute.display());
     }

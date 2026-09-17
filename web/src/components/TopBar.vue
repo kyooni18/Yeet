@@ -5,6 +5,7 @@ import ModelPicker from './ModelPicker.vue'
 
 const remote = useRemoteStore()
 const connectionLabel = computed(() => remote.connection.replace('-', ' '))
+const sessionControlsReadOnly = computed(() => remote.connection !== 'connected')
 
 function openSessionControls() {
   remote.mobileStatusOpen = true
@@ -17,9 +18,9 @@ function openSessionControls() {
       <span class="menu-lines" aria-hidden="true"></span>
     </button>
 
-    <div class="top-product-group">
+    <fieldset class="top-product-group" :disabled="sessionControlsReadOnly">
       <ModelPicker variant="topbar" />
-    </div>
+    </fieldset>
 
     <div class="top-status-cluster">
       <button
@@ -33,8 +34,8 @@ function openSessionControls() {
         <span v-if="remote.connection !== 'connected'" class="connection-label">{{ connectionLabel }}</span>
         <span v-else class="sr-only">connected</span>
       </button>
-      <button class="icon-button infinity-toggle" :class="{ active: remote.state.infinity_mode }" data-testid="toggle-infinity" :aria-label="remote.state.infinity_mode ? 'Disable Infinity mode' : 'Enable Infinity mode'" :aria-pressed="remote.state.infinity_mode" @click="remote.setInfinity(!remote.state.infinity_mode)">∞</button>
-      <button class="icon-button inspector-toggle" data-testid="toggle-inspector" aria-label="Toggle activity inspector" :aria-pressed="remote.inspectorOpen" @click="remote.inspectorOpen = !remote.inspectorOpen">
+      <button class="icon-button goal-toggle" :class="{ active: remote.state.goal_mode }" data-testid="toggle-goal" :disabled="sessionControlsReadOnly" :aria-label="remote.state.goal_mode ? 'Disable Goal mode' : 'Enable Goal mode'" :aria-pressed="remote.state.goal_mode" @click="remote.setGoal(!remote.state.goal_mode)">◎</button>
+      <button id="activity-inspector-toggle" class="icon-button inspector-toggle" data-testid="toggle-inspector" aria-label="Toggle activity inspector" aria-controls="activity-inspector" :aria-pressed="remote.inspectorOpen" @click="remote.inspectorOpen = !remote.inspectorOpen">
         <span class="activity-icon" aria-hidden="true"></span>
       </button>
     </div>
@@ -46,7 +47,33 @@ function openSessionControls() {
   display: flex;
   min-width: 0;
   align-items: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
-.infinity-toggle { font-size: 17px; font-weight: 700; }
-.infinity-toggle.active { border-color: var(--brand-hot); color: var(--brand-hot); background: rgba(255,103,70,.08); }
+.goal-toggle { font-size: 17px; font-weight: 700; }
+.goal-toggle.active { border-color: var(--brand-hot); color: var(--brand-hot); background: rgba(255,103,70,.08); }
+@media (hover: none) and (pointer: coarse) and (min-width: 900px) {
+  .top-bar .icon-button {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .connection-button { min-height: 44px; }
+  .top-product-group :deep(.model-picker-trigger) { min-height: 44px; }
+  .top-product-group :deep(.model-picker-search) {
+    min-height: 44px !important;
+    font-size: 16px;
+  }
+  .top-product-group :deep(.model-picker-providers button) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+@media (max-width: 480px) {
+  .top-product-group { flex: 1 1 auto; }
+  .top-status-cluster { flex: 0 0 auto; }
+  .goal-toggle,
+  .desktop-status.is-connected { display: none; }
+}
 </style>

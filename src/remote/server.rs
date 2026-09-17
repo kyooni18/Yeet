@@ -29,6 +29,8 @@ use super::{
 };
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 256 * 1024;
+pub(super) const MAX_ACTIVE_WEBSOCKETS: usize = 128;
+const MAX_CONCURRENT_KEY_VERIFICATIONS: usize = 4;
 
 #[derive(Clone)]
 struct GatewayState {
@@ -36,6 +38,8 @@ struct GatewayState {
     frame: Arc<Mutex<FrameSnapshot>>,
     auth: Arc<RemoteAuthRuntime>,
     hub: Arc<RemoteHub>,
+    websocket_slots: Arc<tokio::sync::Semaphore>,
+    key_verification_slots: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -75,6 +79,10 @@ pub(crate) fn serve(
             frame,
             auth,
             hub: Arc::new(RemoteHub::new(workspace)),
+            websocket_slots: Arc::new(tokio::sync::Semaphore::new(MAX_ACTIVE_WEBSOCKETS)),
+            key_verification_slots: Arc::new(tokio::sync::Semaphore::new(
+                MAX_CONCURRENT_KEY_VERIFICATIONS,
+            )),
         });
         let app = router(state, legacy_tui);
         let shutdown = async move {
@@ -232,11 +240,20 @@ async fn auth_key(
     }
 
     // Argon2 verification is deliberately expensive. Keep it off Tokio's
-    // request workers so a login cannot stall frame, websocket, or health
-    // traffic while the password hash is being checked.
+    // request workers and bound the blocking work so unauthenticated bursts
+    // cannot multiply Argon2 memory/CPU use without limit.
+    let permit = match acquire_key_verification_slot(&state.key_verification_slots) {
+        Ok(permit) => permit,
+        Err(response) => return *response,
+    };
     let auth = Arc::clone(&state.auth);
     let key = body.key;
-    match tokio::task::spawn_blocking(move || auth.verify_access_key(&key)).await {
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        auth.verify_access_key(&key)
+    })
+    .await
+    {
         Ok(Ok(Some(session))) => session_response(&state.auth, &session),
         Ok(Ok(None)) => json_error(StatusCode::UNAUTHORIZED, "invalid access key"),
         Ok(Err(error)) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
@@ -317,15 +334,58 @@ async fn websocket_upgrade(
     if !state.auth.websocket_origin_allowed(&headers) {
         return json_error(StatusCode::FORBIDDEN, "WebSocket origin is not allowed");
     }
+    let permit = match acquire_websocket_slot(&state.websocket_slots) {
+        Ok(permit) => permit,
+        Err(response) => return *response,
+    };
     let hub = Arc::clone(&state.hub);
     let mut response = ws
         .protocols(["yeet.remote.v1"])
         .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
         .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
-        .on_upgrade(move |socket| serve_socket(socket, hub))
+        .on_upgrade(move |socket| async move {
+            let _permit = permit;
+            serve_socket(socket, hub).await;
+        })
         .into_response();
     secure_headers(response.headers_mut(), true);
     response
+}
+
+fn acquire_websocket_slot(
+    slots: &Arc<tokio::sync::Semaphore>,
+) -> std::result::Result<tokio::sync::OwnedSemaphorePermit, Box<Response>> {
+    match Arc::clone(slots).try_acquire_owned() {
+        Ok(permit) => Ok(permit),
+        Err(_) => {
+            let mut response = json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Remote WebSocket capacity reached; retry shortly",
+            );
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            Err(Box::new(response))
+        }
+    }
+}
+
+fn acquire_key_verification_slot(
+    slots: &Arc<tokio::sync::Semaphore>,
+) -> std::result::Result<tokio::sync::OwnedSemaphorePermit, Box<Response>> {
+    match Arc::clone(slots).try_acquire_owned() {
+        Ok(permit) => Ok(permit),
+        Err(_) => {
+            let mut response = json_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Remote access-key verification capacity reached; retry shortly",
+            );
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            Err(Box::new(response))
+        }
+    }
 }
 
 async fn legacy_frame(
@@ -443,5 +503,48 @@ fn secure_web_headers(headers: &mut HeaderMap, index: bool, immutable: bool) {
                 "default-src 'self'; connect-src 'self' ws: wss: https://cloudflareinsights.com; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' https://static.cloudflareinsights.com/beacon.min.js; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
             ),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn websocket_slot_admission_is_bounded_and_recovers() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = acquire_websocket_slot(&slots).expect("first socket slot");
+
+        let response = match acquire_websocket_slot(&slots) {
+            Ok(_) => panic!("saturated WebSocket slots unexpectedly admitted another connection"),
+            Err(response) => response,
+        };
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER),
+            Some(&HeaderValue::from_static("1"))
+        );
+
+        drop(permit);
+        assert!(acquire_websocket_slot(&slots).is_ok());
+    }
+
+    #[test]
+    fn key_verification_admission_is_bounded_and_recovers() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = acquire_key_verification_slot(&slots).expect("first verification slot");
+
+        let response = match acquire_key_verification_slot(&slots) {
+            Ok(_) => panic!("saturated key-verification slots unexpectedly admitted more work"),
+            Err(response) => response,
+        };
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER),
+            Some(&HeaderValue::from_static("1"))
+        );
+
+        drop(permit);
+        assert!(acquire_key_verification_slot(&slots).is_ok());
     }
 }

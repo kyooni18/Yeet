@@ -26,6 +26,19 @@ if [ ! -x "$BINARY" ] || [ ! -f "$RUNTIME/dist/bridge.js" ]; then
   exit 1
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "Yeet requires Node.js 20 or newer. Install Node.js and retry." >&2
+  exit 1
+fi
+NODE_MAJOR=$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)
+case "$NODE_MAJOR" in
+  ''|*[!0-9]*) NODE_MAJOR=0 ;;
+esac
+if [ "$NODE_MAJOR" -lt 20 ]; then
+  echo "Yeet requires Node.js 20 or newer; found $(node --version 2>/dev/null || echo unknown)." >&2
+  exit 1
+fi
+
 RUNNING_MCP_PORTS=""
 if [ -x "$DEST/yeet" ]; then
   RUNNING_MCP_PORTS=$("$DEST/yeet" mcpserver list 2>/dev/null | awk '$2 == "running" { print $1 }' || true)
@@ -40,6 +53,7 @@ install -m 755 "$BINARY" "$DEST/yeet"
 rm -rf "$RUNTIME_DEST/dist"
 cp -R "$RUNTIME/dist" "$RUNTIME_DEST/dist"
 cp "$RUNTIME/package.json" "$RUNTIME_DEST/package.json"
+"$DEST/yeet" skyline setup >/dev/null
 
 for port in $RUNNING_MCP_PORTS; do
   echo "Restarting Yeet MCP daemon on port $port"

@@ -2,6 +2,7 @@ import { fetchEmbeddings } from "../embeddings.js";
 import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
 import { createHash } from "node:crypto";
 import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
+import { ProviderHTTPError } from "../errors.js";
 import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
 import { promptCacheCapabilities } from "../cache-capabilities.js";
@@ -26,6 +27,7 @@ export interface OpenAIChatProviderOptions {
   baseUrl?: string;
   headers?: Record<string, string>;
   requireApiKey?: boolean;
+  excludedModels?: string[];
   /** Route repeated requests with one stable provider-side session affinity key. */
   useContextSessionId?: boolean;
   /** Encode caller-selected message cache boundaries as cache_control blocks. */
@@ -190,7 +192,9 @@ function requestBody(
     messages: mapMessages(
       request.messages,
       request.system,
-      useContentCacheBreakpoints && request.promptCache !== false,
+      useContentCacheBreakpoints
+        && cacheCapabilities.modes.includes("explicit")
+        && request.promptCache !== false,
       cacheCapabilities.maxExplicitBreakpoints ?? 4,
     ),
     stream,
@@ -204,6 +208,187 @@ function requestBody(
   };
 }
 
+function isUnsupportedParameterError(error: unknown): error is ProviderHTTPError {
+  if (!(error instanceof ProviderHTTPError) || error.status !== 400) return false;
+  try {
+    return JSON.parse(error.responseBody ?? "")?.error?.code === "unsupported_parameter";
+  } catch {
+    return /unsupported[_ ]parameter/i.test(error.responseBody ?? "");
+  }
+}
+
+function strictToolProtocolInstruction(tools: ToolDefinition[] | undefined, choice: ToolChoice | undefined): string | undefined {
+  if (!tools?.length || choice === "none") return undefined;
+  const available = typeof choice === "object" ? tools.filter((tool) => tool.name === choice.name) : tools;
+  if (!available.length) return undefined;
+  const schemas = available.map((tool) => ({
+    name: tool.name,
+    ...(tool.description ? { description: tool.description } : {}),
+    input_schema: tool.inputSchema,
+  }));
+  const required = choice === "required" || typeof choice === "object";
+  return [
+    "Yeet tool protocol. Return exactly one JSON object and nothing else.",
+    `Available tools: ${JSON.stringify(schemas)}`,
+    required
+      ? "You must use an available tool before giving a final answer."
+      : "Use tools whenever external inspection or action is needed; otherwise finish the task directly.",
+    'For tool use: {"tool_calls":[{"name":"tool_name","arguments":{"key":"value"}}]}',
+    'For a completed answer: {"final":"your answer"}',
+    'Use exactly one of "tool_calls" or "final". Do not include call IDs; Yeet creates and tracks them.',
+    "You may put multiple independent calls in tool_calls. Each arguments value must be one complete JSON object matching the tool input_schema.",
+    'Tool results arrive in later user messages as {"tool_result":{"name":"tool_name","content":"..."}}. Never invent a tool result.',
+    "Do not wrap the JSON in Markdown or add prose outside it.",
+  ].join("\n");
+}
+
+function strictCompatibilityMessages(messages: Message[]): { messages: Message[]; system?: string } {
+  const systemParts: string[] = [];
+  const compatible: Message[] = [];
+  for (const message of messages) {
+    if (message.role === "system") {
+      if (message.content) systemParts.push(message.content);
+      continue;
+    }
+    if (message.role === "tool") {
+      compatible.push({
+        role: "user",
+        content: JSON.stringify({
+          tool_result: {
+            ...(message.name ? { name: message.name } : {}),
+            content: toolResultContent(message),
+          },
+        }),
+      });
+      continue;
+    }
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      compatible.push({
+        role: "assistant",
+        content: JSON.stringify({
+          tool_calls: message.toolCalls.map((tool) => ({
+            name: tool.name,
+            arguments: tool.arguments,
+          })),
+        }),
+      });
+      continue;
+    }
+    compatible.push({
+      role: message.role,
+      content: message.content ?? "",
+      ...(message.images?.length ? { images: message.images } : {}),
+    });
+  }
+  return {
+    messages: compatible,
+    ...(systemParts.length ? { system: systemParts.join("\n\n") } : {}),
+  };
+}
+
+function jsonObjectText(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  return fenced?.[1]?.trim() ?? trimmed;
+}
+
+function strictCompatibilityJsonResponse(
+  text: string,
+  responseId?: string,
+): { recognized: boolean; text: string; toolCalls: ToolCall[] } {
+  let value: unknown;
+  try {
+    value = JSON.parse(jsonObjectText(text));
+  } catch {
+    return { recognized: false, text, toolCalls: [] };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { recognized: false, text, toolCalls: [] };
+  }
+  const envelope = value as Record<string, unknown>;
+  if (Array.isArray(envelope.tool_calls)) {
+    const toolCalls = envelope.tool_calls.flatMap((raw, index) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const call = raw as Record<string, unknown>;
+      if (typeof call.name !== "string" || !call.name.trim()) return [];
+      let args = call.arguments ?? {};
+      if (typeof args === "string") {
+        try { args = JSON.parse(args); }
+        catch { return []; }
+      }
+      if (!args || typeof args !== "object" || Array.isArray(args)) return [];
+      return [{
+        id: `${responseId ?? "compat"}-tool-${index}`,
+        name: call.name,
+        arguments: args,
+      } satisfies ToolCall];
+    });
+    if (toolCalls.length > 0) return { recognized: true, text: "", toolCalls };
+    if (typeof envelope.final !== "string") return { recognized: true, text: "", toolCalls: [] };
+  }
+  if (typeof envelope.final === "string") {
+    return { recognized: true, text: envelope.final, toolCalls: [] };
+  }
+  return { recognized: false, text, toolCalls: [] };
+}
+
+function legacyStrictCompatibilityToolCalls(text: string, responseId?: string): ToolCall[] {
+  const calls: ToolCall[] = [];
+  const pattern = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    try {
+      const value = JSON.parse(match[1] ?? "") as Record<string, unknown>;
+      const nested = value.function && typeof value.function === "object" && !Array.isArray(value.function)
+        ? value.function as Record<string, unknown>
+        : undefined;
+      const name = typeof value.name === "string" ? value.name : typeof nested?.name === "string" ? nested.name : undefined;
+      const rawArguments = value.arguments ?? nested?.arguments ?? {};
+      const parsedArguments = typeof rawArguments === "string" ? JSON.parse(rawArguments) : rawArguments;
+      if (!name || !parsedArguments || typeof parsedArguments !== "object" || Array.isArray(parsedArguments)) continue;
+      calls.push({
+        id: typeof value.id === "string" && value.id ? value.id : `${responseId ?? "compat"}-tool-${calls.length}`,
+        name,
+        arguments: parsedArguments,
+      });
+    } catch {
+      // Keep malformed legacy output as text so the agent repair path can handle it.
+    }
+  }
+  return calls;
+}
+
+function strictCompatibilityResponse(text: string, responseId?: string): { text: string; toolCalls: ToolCall[] } {
+  const structured = strictCompatibilityJsonResponse(text, responseId);
+  if (structured.recognized) return { text: structured.text, toolCalls: structured.toolCalls };
+  const legacy = legacyStrictCompatibilityToolCalls(text, responseId);
+  return { text: legacy.length ? "" : text, toolCalls: legacy };
+}
+
+function strictCompatibilityRequest(request: ProviderCallRequest): ProviderCallRequest {
+  const {
+    tools,
+    deferredTools: _deferredTools,
+    toolChoice,
+    temperature: _temperature,
+    maxTokens: _maxTokens,
+    metadata: _metadata,
+    providerOptions: _providerOptions,
+    promptCache: _promptCache,
+    ...compatible
+  } = request;
+  const toolProtocol = strictToolProtocolInstruction(tools, toolChoice);
+  const mapped = strictCompatibilityMessages(compatible.messages);
+  const system = [compatible.system, mapped.system, toolProtocol]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+  return {
+    ...compatible,
+    messages: mapped.messages,
+    ...(system ? { system } : {}),
+  };
+}
+
 export class OpenAIChatProvider implements ProviderAdapter {
   readonly id: string;
   readonly #apiKey: string | undefined;
@@ -214,6 +399,8 @@ export class OpenAIChatProvider implements ProviderAdapter {
   readonly #useContentCacheBreakpoints: boolean;
   readonly #fetch: FetchLike | undefined;
   readonly #apiCallLogger: ProviderFetchLogger | undefined;
+  readonly #excludedModels: Set<string>;
+  readonly #strictCompatibilityModels = new Set<string>();
 
   constructor(options: OpenAIChatProviderOptions = {}) {
     this.id = options.id ?? "openai-compatible";
@@ -223,6 +410,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
     this.#requireApiKey = options.requireApiKey ?? false;
     this.#useContextSessionId = options.useContextSessionId ?? false;
     this.#useContentCacheBreakpoints = options.useContentCacheBreakpoints ?? false;
+    this.#excludedModels = new Set((options.excludedModels ?? []).map((model) => model.trim()).filter(Boolean));
     this.#fetch = options.fetch;
     this.#apiCallLogger = options.apiCallLogger;
   }
@@ -256,17 +444,22 @@ export class OpenAIChatProvider implements ProviderAdapter {
         ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
       },
     );
-    return normalizeModelInfo(await readJson(response));
+    return normalizeModelInfo(await readJson(response))
+      .filter((model) => !this.#excludedModels.has(model.id));
   }
 
   async complete(request: ProviderCallRequest): Promise<CallResult> {
-    const response = await providerFetch(
+    return this.#complete(request, this.#strictCompatibilityModels.has(request.model));
+  }
+
+  async #complete(request: ProviderCallRequest, strictCompatibility: boolean): Promise<CallResult> {
+    const send = (candidate: ProviderCallRequest) => providerFetch(
       `${this.#baseUrl}/chat/completions`,
       {
         method: "POST",
         headers: this.#requestHeaders(),
         body: JSON.stringify(requestBody(
-          request,
+          candidate,
           false,
           this.id,
           this.#useContextSessionId,
@@ -277,19 +470,36 @@ export class OpenAIChatProvider implements ProviderAdapter {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
         ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
-        ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
-        ...(request.retry ? { retry: request.retry } : {}),
-        ...(request.signal ? { signal: request.signal } : {}),
+        ...(candidate.timeoutMs !== undefined ? { timeoutMs: candidate.timeoutMs } : {}),
+        ...(candidate.retry ? { retry: candidate.retry } : {}),
+        ...(candidate.signal ? { signal: candidate.signal } : {}),
       },
     );
-    const transportAttempts = providerFetchAttempts(response);
+    let response: Response;
+    let compatibilityAttempts = 0;
+    let usedStrictCompatibility = strictCompatibility;
+    try {
+      response = await send(strictCompatibility ? strictCompatibilityRequest(request) : request);
+    } catch (error) {
+      if (strictCompatibility || !isUnsupportedParameterError(error)) throw error;
+      compatibilityAttempts = 1;
+      usedStrictCompatibility = true;
+      response = await send(strictCompatibilityRequest(request));
+    }
+    if (usedStrictCompatibility) this.#strictCompatibilityModels.add(request.model);
+    const transportAttempts = providerFetchAttempts(response) + compatibilityAttempts;
 
     const raw = await readJson<any>(response);
     const choice = raw.choices?.[0];
     const message = choice?.message ?? {};
-    const toolCalls: ToolCall[] = (message.tool_calls ?? []).map((tool: any, index: number) =>
+    const content = typeof message.content === "string" ? message.content : "";
+    const nativeToolCalls: ToolCall[] = (message.tool_calls ?? []).map((tool: any, index: number) =>
       normalizeToolCall(tool.id, tool.function?.name, safeJsonParse(tool.function?.arguments ?? ""), index),
     );
+    const compatibility = usedStrictCompatibility
+      ? strictCompatibilityResponse(content, typeof raw.id === "string" ? raw.id : undefined)
+      : { text: content, toolCalls: [] as ToolCall[] };
+    const toolCalls = nativeToolCalls.length ? nativeToolCalls : compatibility.toolCalls;
 
     const normalizedUsage = usage(
       raw.usage?.prompt_tokens,
@@ -306,39 +516,72 @@ export class OpenAIChatProvider implements ProviderAdapter {
       provider: this.id,
       model: raw.model ?? request.model,
       ...(raw.id ? { id: raw.id } : {}),
-      text: typeof message.content === "string" ? message.content : "",
+      text: nativeToolCalls.length ? content : compatibility.text,
       ...(normalizedReasoning ? { reasoning: normalizedReasoning } : {}),
       ...(normalizedReasoningSummary ? { reasoningSummary: normalizedReasoningSummary } : {}),
       toolCalls,
-      finishReason: normalizeFinishReason(choice?.finish_reason),
+      finishReason: toolCalls.length ? "tool_call" : normalizeFinishReason(choice?.finish_reason),
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
       raw,
     };
   }
 
+  async *#strictCompatibilityStream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
+    const fallback = await this.#complete(request, true);
+    yield {
+      type: "start",
+      provider: this.id,
+      model: fallback.model,
+      ...(fallback.id ? { id: fallback.id } : {}),
+    };
+    if (fallback.reasoning) yield { type: "reasoning-delta", delta: fallback.reasoning };
+    if (fallback.reasoningSummary) yield { type: "reasoning-summary-delta", delta: fallback.reasoningSummary };
+    if (fallback.text) yield { type: "text-delta", delta: fallback.text };
+    for (const [index, toolCall] of fallback.toolCalls.entries()) {
+      yield { type: "tool-call", index, toolCall };
+    }
+    yield {
+      type: "finish",
+      finishReason: fallback.finishReason,
+      ...(fallback.usage ? { usage: fallback.usage } : {}),
+      ...(fallback.raw !== undefined ? { raw: fallback.raw } : {}),
+    };
+  }
+
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
-    const response = await providerFetch(
-      `${this.#baseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers: this.#requestHeaders(),
-        body: JSON.stringify(requestBody(
-          request,
-          true,
-          this.id,
-          this.#useContextSessionId,
-          this.#useContentCacheBreakpoints,
-        )),
-      },
-      {
-        provider: this.id,
-        ...(this.#fetch ? { fetch: this.#fetch } : {}),
-        ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
-        ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
-        ...(request.retry ? { retry: request.retry } : {}),
-        ...(request.signal ? { signal: request.signal } : {}),
-      },
-    );
+    if (this.#strictCompatibilityModels.has(request.model)) {
+      yield* this.#strictCompatibilityStream(request);
+      return;
+    }
+    let response: Response;
+    try {
+      response = await providerFetch(
+        `${this.#baseUrl}/chat/completions`,
+        {
+          method: "POST",
+          headers: this.#requestHeaders(),
+          body: JSON.stringify(requestBody(
+            request,
+            true,
+            this.id,
+            this.#useContextSessionId,
+            this.#useContentCacheBreakpoints,
+          )),
+        },
+        {
+          provider: this.id,
+          ...(this.#fetch ? { fetch: this.#fetch } : {}),
+          ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
+          ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+          ...(request.retry ? { retry: request.retry } : {}),
+          ...(request.signal ? { signal: request.signal } : {}),
+        },
+      );
+    } catch (error) {
+      if (!isUnsupportedParameterError(error)) throw error;
+      yield* this.#strictCompatibilityStream(request);
+      return;
+    }
     const transportAttempts = providerFetchAttempts(response);
 
     let started = false;

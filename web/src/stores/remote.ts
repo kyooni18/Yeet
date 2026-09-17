@@ -24,6 +24,7 @@ export const useRemoteStore = defineStore('remote', () => {
   const inspectorOpen = ref(false)
   const mobileSessionsOpen = ref(false)
   const mobileStatusOpen = ref(false)
+  const sessionResetRevision = ref(0)
   const transport = shallowRef<RemoteTransport | null>(null)
   const eventQueue: RemoteServerMessage[] = []
   let flushFrame = 0
@@ -280,9 +281,13 @@ export const useRemoteStore = defineStore('remote', () => {
   const requestModels = () => send({ type: 'request_models' })
   const selectModel = (model: string) => send({ type: 'select_model', model })
   const selectReasoning = (level: string) => send({ type: 'select_reasoning', level })
-  const setInfinity = (enabled: boolean) => send({ type: 'set_infinity', enabled })
+  const setGoal = (enabled: boolean) => send({ type: 'set_goal', enabled })
   const loadSession = (session_id: string) => send({ type: 'load_session', session_id })
-  const newSession = () => send({ type: 'new_session' })
+  const newSession = () => {
+    const sent = send({ type: 'new_session' })
+    if (sent) sessionResetRevision.value += 1
+    return sent
+  }
   const toggleCapability = (id: string) => send({ type: 'toggle_capability', id })
   const setFoundationMemory = (enabled: boolean) => send({ type: 'set_foundation_memory', enabled })
   const setOpenAiFlex = (enabled: boolean) => send({ type: 'set_open_ai_flex', enabled })
@@ -314,6 +319,7 @@ export const useRemoteStore = defineStore('remote', () => {
     inspectorOpen,
     mobileSessionsOpen,
     mobileStatusOpen,
+    sessionResetRevision,
     init,
     destroy,
     reconnectAfterAuth,
@@ -323,7 +329,7 @@ export const useRemoteStore = defineStore('remote', () => {
     requestModels,
     selectModel,
     selectReasoning,
-    setInfinity,
+    setGoal,
     loadSession,
     newSession,
     toggleCapability,

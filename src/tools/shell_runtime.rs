@@ -5,6 +5,8 @@
 
 use super::*;
 
+const DEFAULT_BACKGROUND_TIMEOUT_SECONDS: usize = 4 * 60 * 60;
+
 impl ToolRegistry {
     /// Executes a shell command under sandbox/approval policy and selects direct or actor output.
     pub(super) fn run_shell_tool(
@@ -20,24 +22,50 @@ impl ToolRegistry {
         let command = string_arg(object, "command")?.trim().to_owned();
         let has_permit = self.permitted_shell_commands.remove(&command);
         let restricted = restricted_operation(&command);
-        let policy = SandboxStore::new(&self.workspace_root)?.load()?;
-        let mut unrestricted = policy.mode == SandboxMode::Unlimited || has_permit;
+        let requested_working_directory = object
+            .get("workingDirectory")
+            .and_then(Value::as_str)
+            .unwrap_or(".");
+        let effective_cwd = self.resolve_session_path(requested_working_directory)?;
+        if !effective_cwd.is_dir() {
+            bail!(
+                "Invalid shell working directory: {}",
+                effective_cwd.display()
+            );
+        }
+        let context_root = self.context_root_for_path(&effective_cwd).cloned();
+        let shell_root = context_root
+            .clone()
+            .unwrap_or_else(|| self.workspace_root.clone());
+        let effective_working_directory = effective_cwd.to_string_lossy().into_owned();
+        let policy = SandboxStore::new(&shell_root)?.load()?;
+        let hard_confined = self.hard_access_root.is_some();
+        let mut unrestricted =
+            !hard_confined && (policy.mode == SandboxMode::Unlimited || has_permit);
         let mut allow_write = false;
         if restricted.is_some() && self.disabled_capabilities.contains("builtin:file-write") {
             bail!("File Write is disabled for this session; shell is read-only");
         }
-        if !unrestricted
-            && let Some(directory) = object.get("workingDirectory").and_then(Value::as_str)
-            && path_outside_workspace(&self.workspace_root, directory)?
-        {
-            let reason = object
-                .get("purpose")
-                .and_then(Value::as_str)
-                .unwrap_or("The command needs to run outside the current project directory.");
-            if !self.request_approval("shell", &command, "outside-project shell access", reason)? {
-                bail!("User denied outside-project shell access");
+        if context_root.is_none() {
+            if hard_confined {
+                bail!(
+                    "MCP shell workingDirectory must stay inside the selected workspace; select a workspace within the configured MCP access root instead"
+                );
             }
-            unrestricted = true;
+            if !unrestricted {
+                let reason = object.get("purpose").and_then(Value::as_str).unwrap_or(
+                    "The command needs to run outside the active session context roots.",
+                );
+                if !self.request_approval(
+                    "shell",
+                    &command,
+                    "outside-context shell access",
+                    reason,
+                )? {
+                    bail!("User denied outside-context shell access");
+                }
+                unrestricted = true;
+            }
         }
         if let Some(operation) = restricted.as_deref()
             && !unrestricted
@@ -81,33 +109,38 @@ impl ToolRegistry {
         }
         let actor =
             requested_mode == "actor" || (requested_mode == "auto" && shell_actor_route(&command));
-        let timeout =
-            usize_arg(object, "timeoutSeconds").unwrap_or(if actor { 120 } else { 15 }) as u64;
+        let default_timeout = if background {
+            DEFAULT_BACKGROUND_TIMEOUT_SECONDS
+        } else if actor {
+            120
+        } else {
+            15
+        };
+        let timeout = usize_arg(object, "timeoutSeconds").unwrap_or(default_timeout) as u64;
         if background {
             let id = self.shell_jobs.start(
                 command.clone(),
-                self.workspace_root.clone(),
-                object
-                    .get("workingDirectory")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                shell_root.clone(),
+                Some(effective_working_directory.clone()),
                 timeout,
                 allow_write,
                 unrestricted,
+                hard_confined,
             )?;
             self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
             self.invalidate_workspace_cache();
             return Ok(json!({"jobId":id,"status":"running","command":command,
-                "hint":"Use shell_job to check completion or stop this job. Do other work while it runs."}).to_string());
+                "hint":"Use shell_job action=wait to suspend until completion without model polling. Set reportEverySeconds only when periodic monitoring is useful; use check only for an immediate snapshot."}).to_string());
         }
         let output = run_shell_cancellable(ShellExecutionRequest {
             command: &command,
-            workspace_root: &self.workspace_root,
-            working_directory: object.get("workingDirectory").and_then(Value::as_str),
+            workspace_root: &shell_root,
+            working_directory: Some(&effective_working_directory),
             timeout_seconds: timeout,
             capture_bytes: if actor { 512 * 1024 } else { 64 * 1024 },
             allow_write,
             unrestricted,
+            force_sandboxed: hard_confined,
             cancel: Some(cancel),
         })?;
         if allow_write || (unrestricted && !cache_safe_inspection) {
@@ -130,7 +163,7 @@ impl ToolRegistry {
                     "route":"direct","command":output.command,"workingDirectory":output.working_directory,"exitCode":output.exit_code,
                     "succeeded":output.succeeded,"durationMilliseconds":output.duration_milliseconds,"stdoutBytes":output.stdout_bytes,
                     "stderrBytes":output.stderr_bytes,"stdoutTruncated":output.stdout_truncated,"stderrTruncated":output.stderr_truncated,
-                    "summary":"Large shell output was externalized. Use search_artifact first, then a narrow read_artifact range if needed.","artifactId":artifact
+                "summary":"Large shell output was externalized. Use a narrow read_artifact range for specific missing evidence, and search_artifact only when its location is unknown.","artifactId":artifact
                 }).to_string());
             }
             return Ok(value.to_string());

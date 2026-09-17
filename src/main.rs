@@ -9,9 +9,21 @@ use std::{
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    cursor::MoveToColumn,
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event,
+    },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
+};
+
+#[cfg(not(target_os = "windows"))]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::{
     Terminal,
@@ -192,7 +204,12 @@ fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Resu
                         )?;
                     }
                 }
-                RemoteInput::Mouse(mouse) => app.handle_mouse(mouse),
+                RemoteInput::Mouse(mouse) => {
+                    app.handle_mouse(mouse);
+                    if let Some(session_id) = app.take_sidebar_load_request() {
+                        backend.send(yeet::model::FrontendCommand::LoadSession { session_id })?;
+                    }
+                }
                 RemoteInput::Resize { cols, rows } if cols != width || rows != height => {
                     width = cols;
                     height = rows;
@@ -350,13 +367,47 @@ fn resolve_remote_workspace(workspace: Option<PathBuf>) -> Result<PathBuf> {
     Ok(path)
 }
 
+const TUI_STARTUP_NOTICE: &str = "YEET // CONNECTING TO BACKGROUND SERVICE...";
+
 fn run_tui() -> Result<()> {
-    let mut backend = Backend::spawn()?;
+    let mut stdout = io::stdout();
+    if !io::stdin().is_terminal() || !stdout.is_terminal() {
+        anyhow::bail!(
+            "Yeet TUI requires an interactive terminal; in Docker use `docker run -it ...`, or run a non-interactive command such as `yeet doctor` or `yeet mcpserver run`"
+        );
+    }
+    show_tui_startup_notice(&mut stdout)?;
+
+    let backend_result = Backend::spawn();
+
+    execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+    let mut backend = backend_result?;
     let mut app = App::default();
     let mut terminal = setup_terminal()?;
     let result = event_loop(&mut terminal, &mut app, &mut backend);
-    restore_terminal(&mut terminal)?;
-    result
+    let terminal_disconnected = terminal_input_disconnected().unwrap_or(false)
+        || result
+            .as_ref()
+            .err()
+            .is_some_and(terminal_error_indicates_disconnect);
+    // Close the client connection before restoring the terminal. The daemon owns
+    // the actual session work, so dropping the UI client is the detach boundary.
+    drop(backend);
+    if let Err(error) = restore_terminal(&mut terminal)
+        && !terminal_disconnected
+    {
+        return Err(error);
+    }
+    if terminal_disconnected {
+        Ok(())
+    } else {
+        result.context("TUI event loop failed")
+    }
+}
+
+fn show_tui_startup_notice(writer: &mut impl Write) -> io::Result<()> {
+    write!(writer, "{TUI_STARTUP_NOTICE}")?;
+    writer.flush()
 }
 
 fn event_loop(
@@ -364,28 +415,124 @@ fn event_loop(
     app: &mut App,
     backend: &mut Backend,
 ) -> Result<()> {
+    let terminal_events = spawn_terminal_event_reader();
+
     loop {
         while let Some(event) = backend.try_recv() {
             apply_backend_event(app, event);
         }
 
-        terminal.draw(|frame| ui::draw(frame, app))?;
+        // Crossterm 0.28 can spin inside its Unix event reader when a PTY read
+        // returns EOF. Keep that reader off the UI thread so this liveness check
+        // can still terminate the process when the terminal peer disappears.
+        if terminal_input_disconnected().context("failed to check terminal input state")? {
+            return Ok(());
+        }
+
+        terminal
+            .draw(|frame| ui::draw(frame, app))
+            .context("failed to draw terminal")?;
         if app.quit {
             return Ok(());
         }
 
-        if event::poll(Duration::from_millis(16))? {
-            match event::read()? {
-                Event::Key(key) => app.handle_key(key, backend)?,
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
-                Event::Resize(_, _) => {}
-                _ => {}
+        match terminal_events.recv_timeout(Duration::from_millis(16)) {
+            Ok(Ok(event)) => {
+                match event {
+                    Event::Key(key) => app.handle_key(key, backend)?,
+                    Event::Mouse(mouse) => {
+                        app.handle_mouse(mouse);
+                        if let Some(session_id) = app.take_sidebar_load_request() {
+                            backend
+                                .send(yeet::model::FrontendCommand::LoadSession { session_id })?;
+                        }
+                    }
+                    Event::Paste(text) => app.handle_paste(&text),
+                    Event::Resize(_, _) => {}
+                    _ => {}
+                }
+                if let Some(text) = app.take_clipboard_request() {
+                    copy_via_osc52(&text)?;
+                }
             }
-            if let Some(text) = app.take_clipboard_request() {
-                copy_via_osc52(&text)?;
+            Ok(Err(error)) => {
+                if terminal_input_disconnected().unwrap_or(false) {
+                    return Ok(());
+                }
+                return Err(anyhow::Error::new(error).context("failed to read terminal event"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                if terminal_input_disconnected().unwrap_or(false) {
+                    return Ok(());
+                }
+                anyhow::bail!("terminal event reader stopped unexpectedly");
             }
         }
     }
+}
+
+fn spawn_terminal_event_reader() -> std::sync::mpsc::Receiver<io::Result<Event>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        loop {
+            let result = event::read();
+            let should_stop = result.is_err();
+            if sender.send(result).is_err() || should_stop {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
+#[cfg(unix)]
+fn terminal_input_disconnected() -> io::Result<bool> {
+    let mut descriptor = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+
+    loop {
+        // SAFETY: `descriptor` points to one initialized pollfd for the duration
+        // of the call, and a zero timeout makes this a non-blocking state check.
+        let result = unsafe { libc::poll(&mut descriptor, 1, 0) };
+        if result >= 0 {
+            return Ok(result > 0 && terminal_poll_flags_disconnected(descriptor.revents));
+        }
+
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn terminal_poll_flags_disconnected(revents: libc::c_short) -> bool {
+    let disconnect_flags = libc::POLLHUP | libc::POLLERR | libc::POLLNVAL;
+    revents & disconnect_flags != 0
+}
+
+#[cfg(not(unix))]
+fn terminal_input_disconnected() -> io::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn terminal_error_indicates_disconnect(error: &anyhow::Error) -> bool {
+    error.chain().any(|source| {
+        source
+            .downcast_ref::<io::Error>()
+            .and_then(|error| error.raw_os_error())
+            .is_some_and(|code| code == libc::EIO || code == libc::ENXIO)
+    })
+}
+
+#[cfg(not(unix))]
+fn terminal_error_indicates_disconnect(_error: &anyhow::Error) -> bool {
+    false
 }
 
 fn apply_backend_event(app: &mut App, event: BackendEvent) {
@@ -405,20 +552,105 @@ fn apply_backend_event(app: &mut App, event: BackendEvent) {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode().context("failed to enable terminal raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    if let Err(error) = execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    ) {
+        rollback_terminal_setup(&mut stdout, false);
+        return Err(error).context("failed to enter terminal UI mode");
+    }
+
+    // CSI-u keeps modified Enter distinct from plain Enter so Shift+Enter can insert newlines.
+    let keyboard_enhancement_pushed = {
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Err(error) = execute!(
+                stdout,
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            ) {
+                rollback_terminal_setup(&mut stdout, false);
+                return Err(error).context("failed to enable terminal keyboard enhancements");
+            }
+            true
+        }
+        #[cfg(target_os = "windows")]
+        {
+            false
+        }
+    };
+
     let backend = CrosstermBackend::new(stdout);
-    Terminal::new(backend).context("failed to initialize terminal")
+    match Terminal::new(backend) {
+        Ok(terminal) => Ok(terminal),
+        Err(error) => {
+            let mut stdout = io::stdout();
+            rollback_terminal_setup(&mut stdout, keyboard_enhancement_pushed);
+            Err(error).context("failed to initialize terminal")
+        }
+    }
+}
+
+fn rollback_terminal_setup(stdout: &mut io::Stdout, _keyboard_enhancement_pushed: bool) {
+    #[cfg(not(target_os = "windows"))]
+    if _keyboard_enhancement_pushed {
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+    }
+    let _ = execute!(
+        stdout,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    );
+    let _ = disable_raw_mode();
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
-    Ok(())
+    let mut first_error = None;
+    remember_terminal_cleanup_error(
+        &mut first_error,
+        disable_raw_mode(),
+        "failed to disable terminal raw mode",
+    );
+    #[cfg(not(target_os = "windows"))]
+    remember_terminal_cleanup_error(
+        &mut first_error,
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags),
+        "failed to restore terminal keyboard mode",
+    );
+    remember_terminal_cleanup_error(
+        &mut first_error,
+        execute!(
+            terminal.backend_mut(),
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        ),
+        "failed to leave terminal UI mode",
+    );
+    remember_terminal_cleanup_error(
+        &mut first_error,
+        terminal.show_cursor(),
+        "failed to show terminal cursor",
+    );
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn remember_terminal_cleanup_error(
+    first_error: &mut Option<anyhow::Error>,
+    result: io::Result<()>,
+    context: &'static str,
+) {
+    if first_error.is_none()
+        && let Err(error) = result
+    {
+        *first_error = Some(anyhow::Error::new(error).context(context));
+    }
 }
 
 fn copy_via_osc52(text: &str) -> Result<()> {
@@ -427,4 +659,30 @@ fn copy_via_osc52(text: &str) -> Result<()> {
     write!(stdout, "\x1b]52;c;{payload}\x07")?;
     stdout.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tui_startup_notice_is_explicit_and_line_safe() {
+        let mut output = Vec::new();
+        show_tui_startup_notice(&mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+
+        assert_eq!(text, TUI_STARTUP_NOTICE);
+        assert!(text.contains("CONNECTING TO BACKGROUND SERVICE"));
+        assert!(!text.contains('\n'));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_disconnect_flags_detect_hangup_and_errors() {
+        assert!(terminal_poll_flags_disconnected(libc::POLLHUP));
+        assert!(terminal_poll_flags_disconnected(libc::POLLERR));
+        assert!(terminal_poll_flags_disconnected(libc::POLLNVAL));
+        assert!(!terminal_poll_flags_disconnected(libc::POLLIN));
+        assert!(!terminal_poll_flags_disconnected(0));
+    }
 }

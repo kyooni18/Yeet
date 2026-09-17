@@ -42,21 +42,37 @@ impl ToolRegistry {
                 let object = change
                     .as_object_mut()
                     .ok_or_else(|| anyhow!("changes must be objects"))?;
-                let path = object
+                let requested_path = object
                     .get("path")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("change requires path"))?
                     .to_owned();
+                let path = self
+                    .resolve_session_path(&requested_path)?
+                    .to_string_lossy()
+                    .into_owned();
+                let cache_path =
+                    super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
+                object.insert("path".into(), json!(path.clone()));
                 self.ensure_not_protected_write_path(&path)?;
                 self.ensure_file_scope(&path, true)?;
-                if let Some(destination) = object
+                let requested_destination = object
                     .get("fileOp")
                     .and_then(Value::as_object)
                     .and_then(|op| op.get("destination"))
                     .and_then(Value::as_str)
-                {
-                    self.ensure_not_protected_write_path(destination)?;
-                    self.ensure_file_scope(destination, true)?;
+                    .map(str::to_owned);
+                if let Some(requested_destination) = requested_destination {
+                    let destination = self
+                        .resolve_session_path(&requested_destination)?
+                        .to_string_lossy()
+                        .into_owned();
+                    self.ensure_not_protected_write_path(&destination)?;
+                    self.ensure_file_scope(&destination, true)?;
+                    if let Some(operation) = object.get_mut("fileOp").and_then(Value::as_object_mut)
+                    {
+                        operation.insert("destination".into(), json!(destination));
+                    }
                 }
                 paths.push(path.clone());
                 let is_create = object
@@ -78,7 +94,7 @@ impl ToolRegistry {
                 if !unlimited
                     && !is_create
                     && object.get("snapshot").is_none()
-                    && let Some(snapshot) = self.cached_snapshot(&path)
+                    && let Some(snapshot) = self.cached_snapshot(&cache_path)
                 {
                     object.insert("snapshot".into(), json!(snapshot));
                 }
@@ -87,7 +103,7 @@ impl ToolRegistry {
                     && object.get("snapshot").and_then(Value::as_str).is_none()
                 {
                     bail!(
-                        "Editing existing file {path} requires a snapshot. Call read_file first, then retry apply_file_edits using the returned snapshot."
+                        "Editing existing file {path} requires fresh read coverage. Call read_file first, then retry apply_file_edits; the runtime attaches the cached snapshot automatically."
                     );
                 }
             }
@@ -214,7 +230,7 @@ impl ToolRegistry {
         metadata.insert("bytes".into(), json!(content.len()));
         metadata.insert("preview".into(), json!(preview));
         metadata.insert("previewBytes".into(), json!(preview_bytes));
-        metadata.insert("hint".into(), json!("Large output was externalized. Reuse this bounded preview; use search_artifact first, then a narrow read_artifact range only for specific missing evidence."));
+        metadata.insert("hint".into(), json!("Large output was externalized. Reuse this bounded preview; use a narrow read_artifact range for specific missing evidence, and search_artifact only when the needed text cannot be located by range."));
         if let Some(read) = read {
             metadata.insert("path".into(), json!(read.path));
             metadata.insert("snapshot".into(), json!(read.snapshot));

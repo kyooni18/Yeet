@@ -108,6 +108,15 @@ export function promptCacheCapabilities(provider: string, model: string): Prompt
   }
 
   if (provider === "openrouter") {
+    if (/^~?openai\//.test(model)) {
+      return {
+        provider,
+        model,
+        modes: ["implicit"],
+        minCacheablePrefixTokens: 1_024,
+        sessionAffinity: true,
+      };
+    }
     return {
       provider,
       model,

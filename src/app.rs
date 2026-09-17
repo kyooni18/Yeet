@@ -1,9 +1,11 @@
 use std::{
     cmp,
+    path::Path,
     time::{Duration, Instant},
 };
 
 mod selection;
+mod settings;
 pub use selection::TranscriptContextMenu;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -24,7 +26,7 @@ pub enum Mode {
     Debate,
     Models,
     Reasoning,
-    Infinity,
+    Goal,
     Sessions,
     Capabilities,
     CapabilityDetail,
@@ -38,6 +40,13 @@ pub enum Mode {
     SettingsEdit,
     Status,
     Help,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionPickerItem<'a> {
+    pub workspace_name: String,
+    pub workspace_current: bool,
+    pub session: &'a SessionSummary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +68,13 @@ pub enum SettingsEditKind {
     Limit { name: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionPromptAction {
+    Allow,
+    Deny,
+    Interrupt,
+}
+
 pub struct App {
     pub debate_models: crate::debate::DebateModels,
     pub debate_field: usize,
@@ -76,6 +92,8 @@ pub struct App {
     pub editor_index: usize,
     pub editor_toggle: bool,
     pub editing_provider_id: Option<String>,
+    pub pending_provider_delete_id: Option<String>,
+    pub pending_sandbox_reset: bool,
     pub active_auth_provider: Option<String>,
     pub settings_section: Option<SettingsSection>,
     pub settings_edit_kind: Option<SettingsEditKind>,
@@ -93,6 +111,9 @@ pub struct App {
     pub transcript_context_menu: Option<TranscriptContextMenu>,
     pub transcript_context_menu_area: (u16, u16, u16, u16),
     pub(crate) clipboard_request: Option<String>,
+    pub(crate) sidebar_area: (u16, u16, u16, u16),
+    pub(crate) sidebar_session_targets: Vec<(u16, String)>,
+    pub(crate) sidebar_load_request: Option<String>,
     pub quit: bool,
     pub backend_message: Option<String>,
     pub stream_started_at: Option<Instant>,
@@ -118,6 +139,8 @@ impl Default for App {
             editor_index: 0,
             editor_toggle: false,
             editing_provider_id: None,
+            pending_provider_delete_id: None,
+            pending_sandbox_reset: false,
             active_auth_provider: None,
             settings_section: None,
             settings_edit_kind: None,
@@ -135,6 +158,9 @@ impl Default for App {
             transcript_context_menu: None,
             transcript_context_menu_area: (0, 0, 0, 0),
             clipboard_request: None,
+            sidebar_area: (0, 0, 0, 0),
+            sidebar_session_targets: Vec::new(),
+            sidebar_load_request: None,
             quit: false,
             backend_message: None,
             stream_started_at: None,
@@ -147,11 +173,20 @@ impl App {
     pub fn merge_state(&mut self, mut next: BridgeState) {
         let was_streaming = self.state.is_streaming;
         let is_streaming = next.is_streaming;
+        let provider_configurations_changed =
+            self.state.provider_configurations != next.provider_configurations;
+        let sandbox_settings_changed = self.state.sandbox_settings != next.sandbox_settings;
         if let Some(conversation) = next.conversation.take() {
             self.conversation = conversation;
             self.clear_transcript_selection();
         }
         self.state = next;
+        if provider_configurations_changed {
+            self.pending_provider_delete_id = None;
+        }
+        if sandbox_settings_changed {
+            self.pending_sandbox_reset = false;
+        }
         match (was_streaming, is_streaming) {
             (false, true) => {
                 self.stream_started_at = Some(Instant::now());
@@ -178,8 +213,85 @@ impl App {
         self.stream_elapsed().or(self.last_stream_duration)
     }
 
+    pub fn handle_paste(&mut self, text: &str) {
+        if text.is_empty()
+            || self.state.pending_shell_permission.is_some()
+            || self.state.pending_native_app_permission.is_some()
+        {
+            return;
+        }
+
+        if self.mode == Mode::Chat {
+            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            self.insert_text(&normalized);
+            return;
+        }
+
+        let single_line = text
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect::<String>();
+        if single_line.is_empty() {
+            return;
+        }
+        match self.mode {
+            Mode::Debate if !self.state.is_streaming => {
+                self.debate_field_mut().push_str(&single_line)
+            }
+            Mode::Models | Mode::Sessions | Mode::Capabilities => {
+                self.popup_filter.push_str(&single_line);
+                self.popup_index = 0;
+            }
+            Mode::AuthKey => {
+                if let Some(field) = self.editor_fields.first_mut() {
+                    field.push_str(&single_line);
+                }
+            }
+            Mode::ProviderEdit | Mode::SettingsEdit => {
+                if let Some(field) = self.editor_fields.get_mut(self.editor_index) {
+                    field.push_str(&single_line);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn permission_prompt_action(
+        event: &KeyEvent,
+        is_streaming: bool,
+    ) -> Option<PermissionPromptAction> {
+        if is_streaming
+            && event.modifiers == KeyModifiers::CONTROL
+            && event.code == KeyCode::Char('c')
+        {
+            return Some(PermissionPromptAction::Interrupt);
+        }
+        if !event.modifiers.is_empty() {
+            return None;
+        }
+        match event.code {
+            KeyCode::Char('y') | KeyCode::Enter => Some(PermissionPromptAction::Allow),
+            KeyCode::Char('n') | KeyCode::Esc => Some(PermissionPromptAction::Deny),
+            _ => None,
+        }
+    }
+
+    fn should_interrupt_active_non_chat(event: &KeyEvent, is_streaming: bool, mode: Mode) -> bool {
+        is_streaming
+            && mode != Mode::Chat
+            && event.modifiers == KeyModifiers::CONTROL
+            && event.code == KeyCode::Char('c')
+    }
+
     pub fn handle_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
         let mut event = event;
+        // macOS uses Command where the TUI's editing and navigation bindings use Control.
+        // Normalize it once so the existing bindings work without treating Cmd+key as text.
+        #[cfg(target_os = "macos")]
+        if event.modifiers.contains(KeyModifiers::SUPER) {
+            event.modifiers.remove(KeyModifiers::SUPER);
+            event.modifiers.insert(KeyModifiers::CONTROL);
+        }
         if self.vim_navigation_active() && event.modifiers.is_empty() {
             event.code = match event.code {
                 KeyCode::Char('j') => KeyCode::Down,
@@ -191,25 +303,32 @@ impl App {
         if self.state.pending_shell_permission.is_some()
             || self.state.pending_native_app_permission.is_some()
         {
-            match event.code {
-                KeyCode::Char('y') | KeyCode::Enter => {
-                    let command = if self.state.pending_native_app_permission.is_some() {
-                        FrontendCommand::AllowNativeApp
-                    } else {
-                        FrontendCommand::AllowShell
-                    };
-                    backend.send(command)?;
-                }
-                KeyCode::Char('n') | KeyCode::Esc => {
-                    let command = if self.state.pending_native_app_permission.is_some() {
-                        FrontendCommand::DenyNativeApp
-                    } else {
-                        FrontendCommand::DenyShell
-                    };
-                    backend.send(command)?;
-                }
-                _ => {}
+            if let Some(action) = Self::permission_prompt_action(&event, self.state.is_streaming) {
+                let command = match action {
+                    PermissionPromptAction::Allow => {
+                        if self.state.pending_native_app_permission.is_some() {
+                            FrontendCommand::AllowNativeApp
+                        } else {
+                            FrontendCommand::AllowShell
+                        }
+                    }
+                    PermissionPromptAction::Deny => {
+                        if self.state.pending_native_app_permission.is_some() {
+                            FrontendCommand::DenyNativeApp
+                        } else {
+                            FrontendCommand::DenyShell
+                        }
+                    }
+                    PermissionPromptAction::Interrupt => FrontendCommand::Interrupt,
+                };
+                backend.send(command)?;
             }
+
+            return Ok(());
+        }
+
+        if Self::should_interrupt_active_non_chat(&event, self.state.is_streaming, self.mode) {
+            backend.send(FrontendCommand::Interrupt)?;
             return Ok(());
         }
 
@@ -242,7 +361,7 @@ impl App {
             Mode::Chat => self.handle_chat_key(event, backend),
             Mode::Models => self.handle_model_key(event, backend),
             Mode::Reasoning => self.handle_reasoning_key(event, backend),
-            Mode::Infinity => self.handle_infinity_key(event, backend),
+            Mode::Goal => self.handle_goal_key(event, backend),
             Mode::Sessions => self.handle_session_key(event, backend),
             Mode::Capabilities => self.handle_capability_key(event, backend),
             Mode::CapabilityDetail => self.handle_capability_detail_key(event, backend),
@@ -274,17 +393,44 @@ impl App {
         }
     }
 
-    pub fn command_suggestions(&self) -> Vec<(&'static str, &'static str)> {
+    pub fn command_suggestions(&self) -> Vec<(String, String)> {
         if !self.input.starts_with('/') || self.input.chars().any(char::is_whitespace) {
             return Vec::new();
         }
         let query = self.input.to_ascii_lowercase();
-        COMMANDS
+        let mut commands = COMMANDS
             .iter()
-            .copied()
-            .filter(|(name, _)| name.starts_with(&query))
+            .map(|(name, description)| ((*name).to_owned(), (*description).to_owned()))
+            .collect::<Vec<_>>();
+        for item in &self.state.extension_commands {
+            if !commands
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(&item.command))
+            {
+                commands.push((item.command.clone(), item.description.clone()));
+            }
+        }
+        commands.sort_by(|left, right| left.0.cmp(&right.0));
+        commands
+            .into_iter()
+            .filter(|(name, _)| name.to_ascii_lowercase().starts_with(&query))
             .take(6)
             .collect()
+    }
+
+    fn extension_command_invocation(&self, text: &str) -> Option<(String, Vec<String>)> {
+        let mut parts = text.split_whitespace();
+        let command = parts.next()?;
+        self.state
+            .extension_commands
+            .iter()
+            .any(|item| item.command.eq_ignore_ascii_case(command))
+            .then(|| {
+                (
+                    command.trim_start_matches('/').to_owned(),
+                    parts.map(str::to_owned).collect(),
+                )
+            })
     }
 
     pub fn filtered_models(&self) -> Vec<&str> {
@@ -324,12 +470,91 @@ impl App {
         &self.state.saved_sessions
     }
 
+    pub fn session_picker_items(&self) -> Vec<SessionPickerItem<'_>> {
+        let mut items = Vec::new();
+        let mut current_workspace_seen = false;
+
+        for workspace in &self.state.known_workspaces {
+            current_workspace_seen |= workspace.is_current;
+            let grouped = self
+                .state
+                .workspace_session_groups
+                .iter()
+                .find(|group| group.workspace_id == workspace.id)
+                .map(|group| group.sessions.as_slice());
+            let sessions = grouped.unwrap_or_else(|| {
+                if workspace.is_current {
+                    self.sessions()
+                } else {
+                    &[]
+                }
+            });
+            let workspace_name = if workspace.display_name.trim().is_empty() {
+                Path::new(&workspace.path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| workspace.path.clone())
+            } else {
+                workspace.display_name.trim().to_owned()
+            };
+            items.extend(sessions.iter().map(|session| SessionPickerItem {
+                workspace_name: workspace_name.clone(),
+                workspace_current: workspace.is_current,
+                session,
+            }));
+        }
+
+        if !current_workspace_seen {
+            let workspace_name = std::env::current_dir()
+                .ok()
+                .and_then(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "Current workspace".to_owned());
+            items.extend(self.sessions().iter().map(|session| SessionPickerItem {
+                workspace_name: workspace_name.clone(),
+                workspace_current: true,
+                session,
+            }));
+        }
+
+        items
+    }
+
+    pub fn filtered_session_picker_items(&self) -> Vec<SessionPickerItem<'_>> {
+        let query = self.popup_filter.trim().to_ascii_lowercase();
+        let items = self.session_picker_items();
+        if query.is_empty() {
+            return items;
+        }
+        items
+            .into_iter()
+            .filter(|item| {
+                item.workspace_name.to_ascii_lowercase().contains(&query)
+                    || item.session.title.to_ascii_lowercase().contains(&query)
+                    || item.session.model.to_ascii_lowercase().contains(&query)
+                    || item.session.id.to_ascii_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    fn session_requires_load(&self, session_id: &str) -> bool {
+        self.state.current_session_id.as_deref() != Some(session_id)
+    }
+
     pub fn capability_detail(&self) -> Option<&CapabilityToggleItem> {
         let id = self.capability_detail_id.as_deref()?;
         self.state
             .available_capabilities
             .iter()
             .find(|item| item.id == id)
+    }
+
+    fn capability_toggle_available(&self) -> bool {
+        !self.state.is_streaming
     }
 
     pub fn filtered_capabilities(&self) -> Vec<&crate::model::CapabilityToggleItem> {
@@ -347,22 +572,23 @@ impl App {
     }
 
     fn vim_navigation_active(&self) -> bool {
-        match self.mode {
-            Mode::Models | Mode::Capabilities => self.popup_filter.is_empty(),
+        matches!(
+            self.mode,
             Mode::Reasoning
-            | Mode::Infinity
-            | Mode::Sessions
-            | Mode::Providers
-            | Mode::Settings
-            | Mode::SandboxPresets
-            | Mode::SandboxPolicy => true,
-            _ => false,
-        }
+                | Mode::Goal
+                | Mode::Providers
+                | Mode::Settings
+                | Mode::SandboxPresets
+                | Mode::SandboxPolicy
+        )
     }
 
     fn handle_chat_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
         if event.code == KeyCode::Esc && self.transcript_context_menu.is_some() {
             self.transcript_context_menu = None;
+            return Ok(());
+        }
+        if self.handle_chat_editing_key(&event) {
             return Ok(());
         }
         if event.modifiers.contains(KeyModifiers::CONTROL) {
@@ -440,21 +666,13 @@ impl App {
             KeyCode::Char('j') if self.input.is_empty() => self.scroll_down(3),
             KeyCode::Up if self.input.is_empty() => self.scroll_up(3),
             KeyCode::Down if self.input.is_empty() => self.scroll_down(3),
-            KeyCode::Char('g') if self.input.is_empty() => {
-                self.follow_tail = false;
-                self.scroll_y = 0;
-            }
-            KeyCode::Char('G') if self.input.is_empty() => {
-                self.follow_tail = true;
-                self.scroll_y = self.max_scroll;
-            }
+            KeyCode::Char('g') if self.input.is_empty() => self.jump_to_transcript_start(),
+            KeyCode::Char('G') if self.input.is_empty() => self.jump_to_transcript_end(),
             KeyCode::End if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.follow_tail = true;
-                self.scroll_y = self.max_scroll;
+                self.jump_to_transcript_end();
             }
             KeyCode::Home if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.follow_tail = false;
-                self.scroll_y = 0;
+                self.jump_to_transcript_start();
             }
             KeyCode::Up if !self.command_suggestions().is_empty() => {
                 self.command_index = self.command_index.saturating_sub(1);
@@ -474,6 +692,7 @@ impl App {
             KeyCode::Enter if event.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.insert_char('\n');
             }
+            KeyCode::Enter if self.input.contains('\n') => {}
             KeyCode::Enter => {
                 let text = self.input.trim().to_owned();
                 if text.is_empty() {
@@ -498,14 +717,20 @@ impl App {
                     }
                     "/model" => self.open_models(backend)?,
                     "/reasoning" => self.open_reasoning(),
-                    "/infinity" => self.open_infinity(),
+                    "/goal" => self.open_goal(),
                     "/sessions" => self.open_sessions(backend)?,
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
                     "/status" => self.open_status(backend)?,
                     "/login" => self.open_auth(backend)?,
                     "/provider" | "/providers" => self.open_providers(backend)?,
-                    _ => backend.send(FrontendCommand::Submit { text })?,
+                    _ => {
+                        if let Some((command, args)) = self.extension_command_invocation(&text) {
+                            backend.send(FrontendCommand::ExtensionCommand { command, args })?;
+                        } else {
+                            backend.send(FrontendCommand::Submit { text })?;
+                        }
+                    }
                 }
                 let submitted = self.input.clone();
                 self.record_input_history(&submitted);
@@ -532,6 +757,65 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_chat_editing_key(&mut self, event: &KeyEvent) -> bool {
+        if event.modifiers.contains(KeyModifiers::CONTROL) {
+            match event.code {
+                KeyCode::Char('a') => self.cursor = 0,
+                KeyCode::Char('e') => self.cursor = self.input.chars().count(),
+                KeyCode::Char('b') if !self.input.is_empty() => {
+                    self.cursor = self.cursor.saturating_sub(1)
+                }
+                KeyCode::Char('f') if !self.input.is_empty() => {
+                    self.cursor = cmp::min(self.cursor + 1, self.input.chars().count())
+                }
+                KeyCode::Char('u') => {
+                    self.delete_before_cursor();
+                    self.command_index = 0;
+                }
+                KeyCode::Char('k') => {
+                    self.delete_after_cursor();
+                    self.command_index = 0;
+                }
+                KeyCode::Char('w') => {
+                    self.delete_word_before_cursor();
+                    self.command_index = 0;
+                }
+                _ => return false,
+            }
+            return true;
+        }
+
+        if event.modifiers.contains(KeyModifiers::ALT) {
+            match event.code {
+                KeyCode::Left => self.move_word_left(),
+                KeyCode::Right => self.move_word_right(),
+                _ => return false,
+            }
+            return true;
+        }
+
+        if event.modifiers.is_empty() {
+            match event.code {
+                KeyCode::Home if !self.input.is_empty() => self.move_line_start(),
+                KeyCode::End if !self.input.is_empty() => self.move_line_end(),
+                KeyCode::Up
+                    if self.input.contains('\n') && self.command_suggestions().is_empty() =>
+                {
+                    self.move_line_up()
+                }
+                KeyCode::Down
+                    if self.input.contains('\n') && self.command_suggestions().is_empty() =>
+                {
+                    self.move_line_down()
+                }
+                _ => return false,
+            }
+            return true;
+        }
+
+        false
     }
 
     fn open_debate(&mut self) {
@@ -631,11 +915,7 @@ impl App {
         Ok(())
     }
 
-    fn handle_infinity_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
+    fn handle_goal_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
         match event.code {
             KeyCode::Esc => self.close_popup(),
             KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -644,13 +924,37 @@ impl App {
             KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down | KeyCode::Right => self.popup_index = cmp::min(self.popup_index + 1, 1),
             KeyCode::Enter | KeyCode::Char(' ') => {
-                backend.send(FrontendCommand::SetInfinity {
+                backend.send(FrontendCommand::SetGoal {
                     enabled: self.popup_index == 0,
                 })?;
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn navigate_paged_picker(&mut self, code: KeyCode, count: usize) -> bool {
+        let last = count.saturating_sub(1);
+        let current = self.popup_index.min(last);
+        let next = match code {
+            KeyCode::Up => current.saturating_sub(1),
+            KeyCode::Down => cmp::min(current.saturating_add(1), last),
+            KeyCode::Home => 0,
+            KeyCode::End => last,
+            KeyCode::PageUp => current.saturating_sub(8),
+            KeyCode::PageDown => cmp::min(current.saturating_add(8), last),
+            _ => return false,
+        };
+        self.popup_index = next;
+        true
+    }
+
+    fn navigate_model_picker(&mut self, code: KeyCode) -> bool {
+        self.navigate_paged_picker(code, self.filtered_models().len())
+    }
+
+    fn navigate_capability_picker(&mut self, code: KeyCode) -> bool {
+        self.navigate_paged_picker(code, self.filtered_capabilities().len())
     }
 
     fn handle_model_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
@@ -665,10 +969,13 @@ impl App {
                     self.close_popup();
                 }
             }
-            KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down => {
-                let count = self.filtered_models().len();
-                self.popup_index = cmp::min(self.popup_index + 1, count.saturating_sub(1));
+            code @ (KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::Home
+            | KeyCode::End
+            | KeyCode::PageUp
+            | KeyCode::PageDown) => {
+                self.navigate_model_picker(code);
             }
             KeyCode::Enter => {
                 let models = self.filtered_models();
@@ -712,22 +1019,48 @@ impl App {
             KeyCode::Esc | KeyCode::F(3) => self.close_popup(),
             KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down => {
-                self.popup_index = cmp::min(
-                    self.popup_index + 1,
-                    self.state.saved_sessions.len().saturating_sub(1),
-                );
+                let count = self.filtered_session_picker_items().len();
+                self.popup_index = cmp::min(self.popup_index + 1, count.saturating_sub(1));
             }
-            KeyCode::Char('n') => {
+            KeyCode::Home => self.popup_index = 0,
+            KeyCode::End => {
+                self.popup_index = self.filtered_session_picker_items().len().saturating_sub(1);
+            }
+            KeyCode::PageUp => self.popup_index = self.popup_index.saturating_sub(8),
+            KeyCode::PageDown => {
+                let count = self.filtered_session_picker_items().len();
+                self.popup_index =
+                    cmp::min(self.popup_index.saturating_add(8), count.saturating_sub(1));
+            }
+            KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 backend.send(FrontendCommand::NewSession)?;
                 self.close_popup();
             }
             KeyCode::Enter => {
-                if let Some(session) = self.state.saved_sessions.get(self.popup_index) {
-                    let id = session.id.clone();
-                    backend.send(FrontendCommand::LoadSession { session_id: id })?;
+                let id = self
+                    .filtered_session_picker_items()
+                    .get(self.popup_index)
+                    .map(|item| item.session.id.clone());
+                if let Some(session_id) = id {
+                    if !self.session_requires_load(&session_id) {
+                        self.close_popup();
+                        return Ok(());
+                    }
+                    backend.send(FrontendCommand::LoadSession { session_id })?;
                     self.close_popup();
                     self.follow_tail = true;
                 }
+            }
+            KeyCode::Backspace => {
+                self.popup_filter.pop();
+                self.popup_index = 0;
+            }
+            KeyCode::Char(character)
+                if !event.modifiers.contains(KeyModifiers::CONTROL)
+                    && !event.modifiers.contains(KeyModifiers::SUPER) =>
+            {
+                self.popup_filter.push(character);
+                self.popup_index = 0;
             }
             _ => {}
         }
@@ -741,10 +1074,13 @@ impl App {
     ) -> anyhow::Result<()> {
         match event.code {
             KeyCode::Esc | KeyCode::F(5) => self.close_popup(),
-            KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down => {
-                let count = self.filtered_capabilities().len();
-                self.popup_index = cmp::min(self.popup_index + 1, count.saturating_sub(1));
+            code @ (KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::Home
+            | KeyCode::End
+            | KeyCode::PageUp
+            | KeyCode::PageDown) => {
+                self.navigate_capability_picker(code);
             }
             KeyCode::Enter => {
                 let items = self.filtered_capabilities();
@@ -753,7 +1089,7 @@ impl App {
                     self.mode = Mode::CapabilityDetail;
                 }
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char(' ') if self.capability_toggle_available() => {
                 let items = self.filtered_capabilities();
                 if let Some(item) = items.get(self.popup_index) {
                     backend.send(FrontendCommand::ToggleCapability {
@@ -789,7 +1125,7 @@ impl App {
         match event.code {
             KeyCode::Esc | KeyCode::Enter => self.mode = Mode::Capabilities,
             KeyCode::F(5) => self.close_popup(),
-            KeyCode::Char(' ') => {
+            KeyCode::Char(' ') if self.capability_toggle_available() => {
                 if let Some(id) = self.capability_detail_id.clone() {
                     backend.send(FrontendCommand::ToggleCapability { id })?;
                 }
@@ -880,642 +1216,6 @@ impl App {
         Ok(())
     }
 
-    fn handle_providers_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        match event.code {
-            KeyCode::Esc => self.close_popup(),
-            KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down => {
-                self.popup_index = cmp::min(
-                    self.popup_index + 1,
-                    self.state.provider_configurations.len().saturating_sub(1),
-                );
-            }
-            KeyCode::Char('r') => backend.send(FrontendCommand::RequestProviders)?,
-            KeyCode::Char('n') if !self.state.providers_working => self.open_provider_editor(None),
-            KeyCode::Enter if !self.state.providers_working => {
-                if let Some(provider) = self
-                    .state
-                    .provider_configurations
-                    .get(self.popup_index)
-                    .cloned()
-                {
-                    self.open_provider_editor(Some(provider));
-                }
-            }
-            KeyCode::Char('d') | KeyCode::Delete if !self.state.providers_working => {
-                if let Some(provider) = self.state.provider_configurations.get(self.popup_index) {
-                    backend.send(FrontendCommand::RemoveProvider {
-                        id: provider.id.clone(),
-                    })?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_provider_edit_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        match event.code {
-            KeyCode::Esc => {
-                self.clear_editor();
-                self.mode = Mode::Providers;
-            }
-            KeyCode::Tab | KeyCode::Down => self.editor_index = (self.editor_index + 1) % 3,
-            KeyCode::BackTab | KeyCode::Up => self.editor_index = (self.editor_index + 2) % 3,
-            KeyCode::Char(' ') if self.editor_index == 2 => {
-                self.editor_toggle = !self.editor_toggle
-            }
-            KeyCode::Enter => {
-                let id = self.editor_fields.first().cloned().unwrap_or_default();
-                let base_url = self.editor_fields.get(1).cloned().unwrap_or_default();
-                if id.trim().is_empty() || base_url.trim().is_empty() {
-                    self.backend_message = Some("Provider ID and base URL are required".into());
-                } else {
-                    backend.send(FrontendCommand::SaveProvider {
-                        id,
-                        base_url,
-                        require_api_key: self.editor_toggle,
-                    })?;
-                    self.clear_editor();
-                    self.mode = Mode::Providers;
-                }
-            }
-            KeyCode::Backspace if self.provider_field_editable() => {
-                if let Some(field) = self.editor_fields.get_mut(self.editor_index) {
-                    field.pop();
-                }
-            }
-            KeyCode::Char('u')
-                if event.modifiers.contains(KeyModifiers::CONTROL)
-                    && self.provider_field_editable() =>
-            {
-                if let Some(field) = self.editor_fields.get_mut(self.editor_index) {
-                    field.clear();
-                }
-            }
-            KeyCode::Char(character)
-                if self.provider_field_editable()
-                    && !event.modifiers.contains(KeyModifiers::CONTROL)
-                    && !event.modifiers.contains(KeyModifiers::SUPER) =>
-            {
-                if let Some(field) = self.editor_fields.get_mut(self.editor_index) {
-                    field.push(character);
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_settings_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        let row_count = self.settings_row_count();
-        match event.code {
-            KeyCode::Esc => self.close_popup(),
-            KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down => {
-                self.popup_index = cmp::min(self.popup_index + 1, row_count.saturating_sub(1))
-            }
-            KeyCode::Char('r') => backend.send(FrontendCommand::RequestSettings)?,
-            KeyCode::Enter | KeyCode::Char(' ') if !self.state.settings_working => {
-                if self.openai_provider_active() && self.popup_index == 0 {
-                    if self.openai_flex_available() {
-                        backend.send(FrontendCommand::SetOpenAiFlex {
-                            enabled: !self.state.openai_flex,
-                        })?;
-                    }
-                } else if self.popup_index == self.foundation_settings_row_index() {
-                    backend.send(FrontendCommand::SetFoundationMemory {
-                        enabled: !self.state.foundation_memory_enabled,
-                    })?;
-                } else {
-                    self.open_sandbox_presets();
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_sandbox_presets_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        match event.code {
-            KeyCode::Esc => {
-                self.mode = Mode::Settings;
-                self.popup_index = self.sandbox_settings_row_index();
-            }
-            KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down => {
-                self.popup_index = cmp::min(self.popup_index + 1, SANDBOX_PRESET_ROW_COUNT - 1)
-            }
-            KeyCode::Char('r') => backend.send(FrontendCommand::RequestSandbox)?,
-            KeyCode::Enter | KeyCode::Char(' ') => match self.popup_index {
-                0 => self.apply_sandbox_preset("safe", backend)?,
-                1 => self.apply_sandbox_preset("balanced", backend)?,
-                2 => self.apply_sandbox_preset("unlimited", backend)?,
-                3 => self.open_sandbox_policy(),
-                _ => {}
-            },
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_sandbox_policy_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        let section = self.settings_section;
-        match event.code {
-            KeyCode::Esc => {
-                self.popup_index = 3;
-                self.mode = Mode::SandboxPresets;
-            }
-            KeyCode::Tab | KeyCode::Right => self.cycle_settings_section(1),
-            KeyCode::BackTab | KeyCode::Left => self.cycle_settings_section(-1),
-            KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down => {
-                let count = self.settings_detail_count();
-                self.popup_index = cmp::min(self.popup_index + 1, count.saturating_sub(1));
-            }
-            KeyCode::Char('n') => match section {
-                Some(SettingsSection::Workspace) => {
-                    self.open_settings_editor(SettingsEditKind::WorkspacePath, vec![String::new()])
-                }
-                Some(SettingsSection::Network) => self.open_settings_editor(
-                    SettingsEditKind::Network,
-                    vec![String::new(), "*".into()],
-                ),
-                Some(SettingsSection::Environment) => self.open_settings_editor(
-                    SettingsEditKind::Environment { original_key: None },
-                    vec![String::new(), String::new()],
-                ),
-                Some(SettingsSection::Secrets) => {
-                    self.open_settings_editor(SettingsEditKind::Secret, vec![String::new()])
-                }
-                _ => {}
-            },
-            KeyCode::Enter | KeyCode::Char(' ') if section == Some(SettingsSection::Core) => {
-                match self.popup_index {
-                    0 => self.toggle_execution_mode(backend)?,
-                    1 => self.toggle_auto_approve(backend)?,
-                    2 => self.toggle_scratch(backend)?,
-                    3 => backend.send(FrontendCommand::UpdateSandbox {
-                        action: SandboxAction::Reset,
-                    })?,
-                    _ => {}
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ')
-                if section == Some(SettingsSection::Workspace) && self.popup_index == 0 =>
-            {
-                if let Some(settings) = self.state.sandbox_settings.as_ref() {
-                    let mode = if settings.workspace_mode == "all" {
-                        "none"
-                    } else {
-                        "all"
-                    };
-                    backend.send(FrontendCommand::UpdateSandbox {
-                        action: SandboxAction::SetWorkspaceMode { mode: mode.into() },
-                    })?;
-                }
-            }
-            KeyCode::Enter if section == Some(SettingsSection::Environment) => {
-                if let Some(settings) = self.state.sandbox_settings.as_ref()
-                    && let Some(item) = settings.environment.get(self.popup_index).cloned()
-                {
-                    self.open_settings_editor(
-                        SettingsEditKind::Environment {
-                            original_key: Some(item.key.clone()),
-                        },
-                        vec![item.key, item.value],
-                    );
-                }
-            }
-            KeyCode::Enter if section == Some(SettingsSection::Limits) => {
-                if let Some((name, value)) = self.selected_limit() {
-                    self.open_settings_editor(
-                        SettingsEditKind::Limit { name: name.into() },
-                        vec![value.to_string()],
-                    );
-                }
-            }
-            KeyCode::Char('d') | KeyCode::Delete => self.delete_settings_item(backend)?,
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_settings_edit_key(
-        &mut self,
-        event: KeyEvent,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        match event.code {
-            KeyCode::Esc => {
-                self.clear_editor();
-                self.mode = Mode::SandboxPolicy;
-            }
-            KeyCode::Tab | KeyCode::Down if self.editor_fields.len() > 1 => {
-                self.editor_index = (self.editor_index + 1) % self.editor_fields.len();
-            }
-            KeyCode::BackTab | KeyCode::Up if self.editor_fields.len() > 1 => {
-                self.editor_index =
-                    (self.editor_index + self.editor_fields.len() - 1) % self.editor_fields.len();
-            }
-            KeyCode::Enter => self.submit_settings_editor(backend)?,
-            KeyCode::Backspace => {
-                if let Some(field) = self.editor_fields.get_mut(self.editor_index) {
-                    field.pop();
-                }
-            }
-            KeyCode::Char('u') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(field) = self.editor_fields.get_mut(self.editor_index) {
-                    field.clear();
-                }
-            }
-            KeyCode::Char(character)
-                if !event.modifiers.contains(KeyModifiers::CONTROL)
-                    && !event.modifiers.contains(KeyModifiers::SUPER) =>
-            {
-                if let Some(field) = self.editor_fields.get_mut(self.editor_index) {
-                    field.push(character);
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn open_models(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Models;
-        self.popup_filter.clear();
-        self.popup_index = 0;
-        backend.send(FrontendCommand::RequestModels)
-    }
-
-    fn open_infinity(&mut self) {
-        self.mode = Mode::Infinity;
-        self.popup_filter.clear();
-        self.popup_index = if self.state.infinity_mode { 0 } else { 1 };
-    }
-
-    fn open_sessions(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Sessions;
-        self.popup_filter.clear();
-        self.popup_index = 0;
-        backend.send(FrontendCommand::RequestSessions)
-    }
-
-    fn open_reasoning(&mut self) {
-        self.mode = Mode::Reasoning;
-        self.popup_filter.clear();
-        self.popup_index = REASONING_LEVELS
-            .iter()
-            .position(|level| *level == self.state.active_reasoning_level)
-            .unwrap_or(0);
-    }
-
-    fn open_capabilities(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Capabilities;
-        self.popup_filter.clear();
-        self.popup_index = 0;
-        self.capability_detail_id = None;
-        backend.send(FrontendCommand::RequestCapabilities)
-    }
-
-    fn open_auth(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Auth;
-        self.popup_filter.clear();
-        self.popup_index = 0;
-        self.active_auth_provider = None;
-        backend.send(FrontendCommand::RequestAuth)
-    }
-
-    fn open_providers(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Providers;
-        self.popup_filter.clear();
-        self.popup_index = 0;
-        self.clear_editor();
-        backend.send(FrontendCommand::RequestProviders)
-    }
-
-    fn open_provider_editor(&mut self, provider: Option<ProviderConfigurationItem>) {
-        let (id, base_url, require_api_key, existing) = match provider {
-            Some(provider) => (
-                provider.id.clone(),
-                provider.base_url,
-                provider.require_api_key,
-                Some(provider.id),
-            ),
-            None => (String::new(), String::new(), false, None),
-        };
-        self.editor_fields = vec![id, base_url];
-        self.editor_index = if existing.is_some() { 1 } else { 0 };
-        self.editor_toggle = require_api_key;
-        self.editing_provider_id = existing;
-        self.mode = Mode::ProviderEdit;
-    }
-
-    fn provider_field_editable(&self) -> bool {
-        self.editor_index < 2 && !(self.editor_index == 0 && self.editing_provider_id.is_some())
-    }
-
-    fn open_settings(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Settings;
-        self.popup_filter.clear();
-        self.popup_index = 0;
-        self.settings_section = None;
-        self.settings_edit_kind = None;
-        backend.send(FrontendCommand::RequestSettings)
-    }
-
-    fn open_status(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Status;
-        self.popup_filter.clear();
-        self.popup_index = 0;
-        backend.send(FrontendCommand::RequestAuth)
-    }
-
-    fn open_sandbox_presets(&mut self) {
-        self.mode = Mode::SandboxPresets;
-        self.popup_index = 0;
-    }
-
-    fn open_sandbox_policy(&mut self) {
-        self.settings_section = Some(SettingsSection::Core);
-        self.settings_edit_kind = None;
-        self.popup_index = 0;
-        self.mode = Mode::SandboxPolicy;
-    }
-
-    fn open_settings_editor(&mut self, kind: SettingsEditKind, fields: Vec<String>) {
-        self.settings_edit_kind = Some(kind);
-        self.editor_fields = fields;
-        self.editor_index = 0;
-        self.mode = Mode::SettingsEdit;
-    }
-
-    fn selected_auth_provider(&self) -> Option<String> {
-        self.state
-            .auth_providers
-            .get(self.popup_index)
-            .map(|item| item.provider.clone())
-    }
-
-    fn toggle_scratch(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        if let Some(settings) = self.state.sandbox_settings.as_ref() {
-            backend.send(FrontendCommand::UpdateSandbox {
-                action: SandboxAction::SetScratchWritable {
-                    enabled: !settings.scratch_writable,
-                },
-            })?;
-        }
-        Ok(())
-    }
-
-    fn apply_sandbox_preset(&mut self, preset: &str, backend: &mut Backend) -> anyhow::Result<()> {
-        backend.send(FrontendCommand::UpdateSandbox {
-            action: SandboxAction::ApplyPreset {
-                preset: preset.into(),
-            },
-        })
-    }
-
-    fn toggle_execution_mode(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        if let Some(settings) = self.state.sandbox_settings.as_ref() {
-            let mode = if settings.execution_mode == "unlimited" {
-                "sandboxed"
-            } else {
-                "unlimited"
-            };
-            backend.send(FrontendCommand::UpdateSandbox {
-                action: SandboxAction::SetExecutionMode { mode: mode.into() },
-            })?;
-        }
-        Ok(())
-    }
-
-    fn toggle_auto_approve(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        if let Some(settings) = self.state.sandbox_settings.as_ref() {
-            backend.send(FrontendCommand::UpdateSandbox {
-                action: SandboxAction::SetAutoApprove {
-                    enabled: !settings.auto_approve,
-                },
-            })?;
-        }
-        Ok(())
-    }
-
-    fn cycle_settings_section(&mut self, delta: isize) {
-        const SECTIONS: [SettingsSection; 6] = [
-            SettingsSection::Core,
-            SettingsSection::Workspace,
-            SettingsSection::Network,
-            SettingsSection::Environment,
-            SettingsSection::Secrets,
-            SettingsSection::Limits,
-        ];
-        let current = self
-            .settings_section
-            .and_then(|section| SECTIONS.iter().position(|value| *value == section))
-            .unwrap_or(0) as isize;
-        let next = (current + delta).rem_euclid(SECTIONS.len() as isize) as usize;
-        self.settings_section = Some(SECTIONS[next]);
-        self.popup_index = 0;
-    }
-
-    pub fn settings_detail_count(&self) -> usize {
-        let Some(settings) = self.state.sandbox_settings.as_ref() else {
-            return 0;
-        };
-        match self.settings_section {
-            Some(SettingsSection::Core) => 4,
-            Some(SettingsSection::Workspace) => 1 + settings.workspace_paths.len(),
-            Some(SettingsSection::Network) => settings.network_allow.len(),
-            Some(SettingsSection::Environment) => settings.environment.len(),
-            Some(SettingsSection::Secrets) => settings.secret_ids.len(),
-            Some(SettingsSection::Limits) => 5,
-            None => 0,
-        }
-    }
-
-    pub(crate) fn openai_provider_active(&self) -> bool {
-        self.state
-            .active_model
-            .split_once('/')
-            .is_some_and(|(provider, _)| provider == "openai")
-    }
-
-    pub(crate) fn openai_flex_available(&self) -> bool {
-        self.openai_provider_active()
-            && self.state.auth_providers.iter().any(|provider| {
-                provider.provider == "openai"
-                    && provider.authenticated
-                    && matches!(provider.method.as_str(), "api-key" | "environment")
-            })
-    }
-
-    pub(crate) fn settings_row_count(&self) -> usize {
-        2 + usize::from(self.openai_provider_active())
-    }
-
-    fn foundation_settings_row_index(&self) -> usize {
-        usize::from(self.openai_provider_active())
-    }
-
-    fn sandbox_settings_row_index(&self) -> usize {
-        self.foundation_settings_row_index() + 1
-    }
-
-    fn selected_limit(&self) -> Option<(&'static str, u64)> {
-        let settings = self.state.sandbox_settings.as_ref()?;
-        Some(match self.popup_index {
-            0 => ("wall_time_seconds", settings.limits.wall_time_seconds),
-            1 => ("max_stdout_bytes", settings.limits.max_stdout_bytes as u64),
-            2 => ("max_stderr_bytes", settings.limits.max_stderr_bytes as u64),
-            3 => ("max_memory_bytes", settings.limits.max_memory_bytes),
-            4 => ("max_processes", settings.limits.max_processes as u64),
-            _ => return None,
-        })
-    }
-
-    fn delete_settings_item(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        let Some(settings) = self.state.sandbox_settings.as_ref() else {
-            return Ok(());
-        };
-        let action = match self.settings_section {
-            Some(SettingsSection::Workspace) if self.popup_index > 0 => settings
-                .workspace_paths
-                .get(self.popup_index - 1)
-                .cloned()
-                .map(|path| SandboxAction::RemoveWorkspacePath { path }),
-            Some(SettingsSection::Network) => settings
-                .network_allow
-                .get(self.popup_index)
-                .cloned()
-                .map(|item| SandboxAction::RemoveNetwork {
-                    host: item.host,
-                    port: item.port,
-                }),
-            Some(SettingsSection::Environment) => settings
-                .environment
-                .get(self.popup_index)
-                .cloned()
-                .map(|item| SandboxAction::RemoveEnvironment { key: item.key }),
-            Some(SettingsSection::Secrets) => settings
-                .secret_ids
-                .get(self.popup_index)
-                .cloned()
-                .map(|id| SandboxAction::RemoveSecret { id }),
-            _ => None,
-        };
-        if let Some(action) = action {
-            backend.send(FrontendCommand::UpdateSandbox { action })?;
-        }
-        Ok(())
-    }
-
-    fn submit_settings_editor(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        let Some(kind) = self.settings_edit_kind.clone() else {
-            return Ok(());
-        };
-        let action = match kind {
-            SettingsEditKind::WorkspacePath => {
-                let path = self.editor_fields.first().cloned().unwrap_or_default();
-                if path.trim().is_empty() {
-                    self.backend_message = Some("Workspace path cannot be empty".into());
-                    return Ok(());
-                }
-                SandboxAction::AddWorkspacePath { path }
-            }
-            SettingsEditKind::Network => {
-                let host = self.editor_fields.first().cloned().unwrap_or_default();
-                let port_text = self
-                    .editor_fields
-                    .get(1)
-                    .map(String::as_str)
-                    .unwrap_or("*")
-                    .trim();
-                if host.trim().is_empty() {
-                    self.backend_message = Some("Network host cannot be empty".into());
-                    return Ok(());
-                }
-                let port = if port_text.is_empty() || port_text == "*" {
-                    None
-                } else {
-                    match port_text.parse::<u16>() {
-                        Ok(0) | Err(_) => {
-                            self.backend_message =
-                                Some("Network port must be 1...65535 or *".into());
-                            return Ok(());
-                        }
-                        Ok(value) => Some(value),
-                    }
-                };
-                SandboxAction::AddNetwork { host, port }
-            }
-            SettingsEditKind::Environment { original_key } => {
-                let key = self.editor_fields.first().cloned().unwrap_or_default();
-                let value = self.editor_fields.get(1).cloned().unwrap_or_default();
-                if key.trim().is_empty() {
-                    self.backend_message = Some("Environment key cannot be empty".into());
-                    return Ok(());
-                }
-                if let Some(original) = original_key.filter(|original| original != key.trim()) {
-                    backend.send(FrontendCommand::UpdateSandbox {
-                        action: SandboxAction::RemoveEnvironment { key: original },
-                    })?;
-                }
-                SandboxAction::SetEnvironment { key, value }
-            }
-            SettingsEditKind::Secret => {
-                let id = self.editor_fields.first().cloned().unwrap_or_default();
-                if id.trim().is_empty() {
-                    self.backend_message = Some("Secret ID cannot be empty".into());
-                    return Ok(());
-                }
-                SandboxAction::AddSecret { id }
-            }
-            SettingsEditKind::Limit { name } => {
-                let value = match self
-                    .editor_fields
-                    .first()
-                    .map(String::as_str)
-                    .unwrap_or_default()
-                    .trim()
-                    .parse::<u64>()
-                {
-                    Ok(value) => value,
-                    Err(_) => {
-                        self.backend_message = Some("Limit must be a positive integer".into());
-                        return Ok(());
-                    }
-                };
-                SandboxAction::SetLimit { name, value }
-            }
-        };
-        backend.send(FrontendCommand::UpdateSandbox { action })?;
-        self.clear_editor();
-        self.mode = Mode::SandboxPolicy;
-        Ok(())
-    }
-
     fn clear_editor(&mut self) {
         self.editor_fields.clear();
         self.editor_index = 0;
@@ -1531,6 +1231,8 @@ impl App {
         self.popup_index = 0;
         self.capability_detail_id = None;
         self.active_auth_provider = None;
+        self.pending_provider_delete_id = None;
+        self.pending_sandbox_reset = false;
         self.settings_section = None;
         self.clear_editor();
     }
@@ -1539,8 +1241,8 @@ impl App {
         let count = match self.mode {
             Mode::Models => self.filtered_models().len(),
             Mode::Reasoning => REASONING_LEVELS.len(),
-            Mode::Infinity => 2,
-            Mode::Sessions => self.state.saved_sessions.len(),
+            Mode::Goal => 2,
+            Mode::Sessions => self.filtered_session_picker_items().len(),
             Mode::Capabilities => self.filtered_capabilities().len(),
             Mode::Auth => self.state.auth_providers.len(),
             Mode::Providers => self.state.provider_configurations.len(),
@@ -1550,6 +1252,18 @@ impl App {
             _ => return,
         };
         self.popup_index = cmp::min(self.popup_index, count.saturating_sub(1));
+    }
+
+    fn jump_to_transcript_start(&mut self) {
+        self.clear_transcript_selection();
+        self.follow_tail = false;
+        self.scroll_y = 0;
+    }
+
+    fn jump_to_transcript_end(&mut self) {
+        self.clear_transcript_selection();
+        self.follow_tail = true;
+        self.scroll_y = self.max_scroll;
     }
 
     fn scroll_up(&mut self, amount: u16) {
@@ -1567,6 +1281,17 @@ impl App {
         self.follow_tail = self.scroll_y >= self.max_scroll;
     }
 
+    fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.reset_history_navigation();
+        let byte = byte_index(&self.input, self.cursor);
+        self.input.insert_str(byte, text);
+        self.cursor += text.chars().count();
+        self.command_index = 0;
+    }
+
     fn insert_char(&mut self, character: char) {
         self.reset_history_navigation();
         let byte = byte_index(&self.input, self.cursor);
@@ -1582,6 +1307,7 @@ impl App {
         let start = byte_index(&self.input, self.cursor - 1);
         let end = byte_index(&self.input, self.cursor);
         self.input.replace_range(start..end, "");
+        self.command_index = 0;
         self.cursor -= 1;
     }
 
@@ -1593,6 +1319,109 @@ impl App {
         let start = byte_index(&self.input, self.cursor);
         let end = byte_index(&self.input, self.cursor + 1);
         self.input.replace_range(start..end, "");
+        self.command_index = 0;
+    }
+
+    fn move_word_left(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let mut cursor = self.cursor.min(characters.len());
+        while cursor > 0 && characters[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        while cursor > 0 && !characters[cursor - 1].is_whitespace() {
+            cursor -= 1;
+        }
+        self.cursor = cursor;
+    }
+
+    fn move_word_right(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let mut cursor = self.cursor.min(characters.len());
+        while cursor < characters.len() && characters[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        while cursor < characters.len() && !characters[cursor].is_whitespace() {
+            cursor += 1;
+        }
+        self.cursor = cursor;
+    }
+
+    fn move_line_start(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let (start, _) = line_bounds(&characters, self.cursor);
+        self.cursor = start;
+    }
+
+    fn move_line_end(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let (_, end) = line_bounds(&characters, self.cursor);
+        self.cursor = end;
+    }
+
+    fn move_line_up(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let cursor = self.cursor.min(characters.len());
+        let (start, _) = line_bounds(&characters, cursor);
+        if start == 0 {
+            return;
+        }
+        let column = cursor - start;
+        let previous_end = start - 1;
+        let (previous_start, _) = line_bounds(&characters, previous_end);
+        self.cursor = previous_start + column.min(previous_end - previous_start);
+    }
+
+    fn move_line_down(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let cursor = self.cursor.min(characters.len());
+        let (start, end) = line_bounds(&characters, cursor);
+        if end >= characters.len() {
+            return;
+        }
+        let column = cursor - start;
+        let next_start = end + 1;
+        let (_, next_end) = line_bounds(&characters, next_start);
+        self.cursor = next_start + column.min(next_end - next_start);
+    }
+
+    fn delete_word_before_cursor(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.reset_history_navigation();
+        let end_cursor = self.cursor.min(self.input.chars().count());
+        let end = byte_index(&self.input, end_cursor);
+        self.move_word_left();
+        let start = byte_index(&self.input, self.cursor);
+        self.input.replace_range(start..end, "");
+    }
+
+    fn delete_before_cursor(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let cursor = self.cursor.min(characters.len());
+        let (line_start, _) = line_bounds(&characters, cursor);
+        if cursor == line_start {
+            return;
+        }
+        self.reset_history_navigation();
+        let start = byte_index(&self.input, line_start);
+        let end = byte_index(&self.input, cursor);
+        self.input.replace_range(start..end, "");
+        self.cursor = line_start;
+    }
+
+    fn delete_after_cursor(&mut self) {
+        let characters = self.input.chars().collect::<Vec<_>>();
+        let cursor = self.cursor.min(characters.len());
+        let (_, line_end) = line_bounds(&characters, cursor);
+        if cursor >= line_end {
+            return;
+        }
+        self.reset_history_navigation();
+        let start = byte_index(&self.input, cursor);
+        let end = byte_index(&self.input, line_end);
+        self.input.replace_range(start..end, "");
+        self.cursor = cursor;
     }
 
     fn record_input_history(&mut self, text: &str) {
@@ -1671,17 +1500,21 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/settings", "Runtime and sandbox settings"),
     ("/sessions", "Browse saved chats"),
     ("/capabilities", "Toggle skills, capabilities, and MCP"),
+    ("/skyline", "Attach or detach Skyline coordination"),
     ("/image", "Queue an image for the next turn"),
     ("/compact", "Compact model context now"),
     ("/context", "Show or override model context length"),
     ("/status", "Show detailed runtime and usage status"),
-    ("/infinity", "Continuous model execution"),
+    (
+        "/goal",
+        "Continue until a strict success judge accepts concrete evidence",
+    ),
     ("/attach", "Attach an optional capability"),
     ("/detach", "Detach an optional capability"),
     ("/allow", "Allow pending shell command once"),
     ("/deny", "Deny pending shell command"),
     ("/help", "Show commands"),
-    ("/clear", "Clear current response"),
+    ("/clear", "Dismiss latest system notice"),
 ];
 
 fn byte_index(value: &str, char_index: usize) -> usize {
@@ -1692,278 +1525,18 @@ fn byte_index(value: &str, char_index: usize) -> usize {
         .unwrap_or(value.len())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn debate_form_selects_each_role_independently_and_restores_saved_models() {
-        let mut app = App::default();
-        app.state.active_model = "p/default".into();
-        app.state.available_models = vec![
-            "p/default".into(),
-            "p/pro".into(),
-            "p/con".into(),
-            "p/jury".into(),
-        ];
-        app.open_debate();
-        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-        app.edit_debate_form(key(KeyCode::Char('T')));
-        app.edit_debate_form(key(KeyCode::Tab));
-        app.edit_debate_form(key(KeyCode::Down));
-        app.edit_debate_form(key(KeyCode::Tab));
-        app.edit_debate_form(key(KeyCode::Down));
-        app.edit_debate_form(key(KeyCode::Down));
-        app.edit_debate_form(key(KeyCode::Tab));
-        app.edit_debate_form(key(KeyCode::Up));
-        assert_eq!(app.popup_filter, "T");
-        assert_eq!(app.debate_models.pro, "p/pro");
-        assert_eq!(app.debate_models.con, "p/con");
-        assert_eq!(app.debate_models.jury, "p/jury");
-        let saved = app.debate_models.clone();
-        let mut debate = crate::debate::DebateState::default();
-        debate.models = saved.clone();
-        app.state.debate = Some(debate);
-        app.close_popup();
-        app.open_debate();
-        assert_eq!(app.debate_models, saved);
-        app.debate_field = 3;
-        app.edit_debate_form(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
-        app.edit_debate_form(key(KeyCode::Char('x')));
-        assert_eq!(app.debate_models.jury, "x");
-        assert_eq!(app.debate_models.pro, "p/pro");
-    }
-
-    #[test]
-    fn model_filter_uses_structured_catalog_and_catalog_fallback() {
-        let mut app = App::default();
-        app.state.model_catalog = vec![
-            ModelCatalogItem {
-                id: "openai/gpt-5.6-sol".into(),
-                provider: "OpenAI Platform".into(),
-                model: "gpt-5.6-sol".into(),
-                context_length: Some(128_000),
-            },
-            ModelCatalogItem {
-                id: "anthropic/claude-sonnet".into(),
-                provider: "Anthropic".into(),
-                model: "Claude Sonnet".into(),
-                context_length: Some(200_000),
-            },
-        ];
-        app.state.available_models = vec!["legacy/unstructured-model".into()];
-
-        app.popup_filter = "platform".into();
-        assert_eq!(app.filtered_models(), vec!["openai/gpt-5.6-sol"]);
-        app.popup_filter = "sonnet".into();
-        assert_eq!(app.filtered_models(), vec!["anthropic/claude-sonnet"]);
-
-        app.state.model_catalog.clear();
-        app.popup_filter = "legacy".into();
-        assert_eq!(app.filtered_models(), vec!["legacy/unstructured-model"]);
-    }
-
-    #[test]
-    fn streaming_clock_follows_state_transitions() {
-        let mut app = App::default();
-        app.merge_state(BridgeState {
-            is_streaming: true,
-            ..BridgeState::default()
-        });
-        let started = app.stream_started_at.expect("stream should start a clock");
-
-        app.merge_state(BridgeState {
-            is_streaming: true,
-            ..BridgeState::default()
-        });
-        assert_eq!(app.stream_started_at, Some(started));
-
-        app.merge_state(BridgeState::default());
-        assert!(app.stream_started_at.is_none());
-        assert!(app.last_stream_duration.is_some());
-        assert_eq!(app.latest_turn_duration(), app.last_stream_duration);
-    }
-
-    #[test]
-    fn new_command_is_suggested() {
-        let app = App {
-            input: "/n".into(),
-            ..App::default()
-        };
-
-        assert!(
-            app.command_suggestions()
-                .iter()
-                .any(|(name, _)| *name == "/new")
-        );
-    }
-
-    #[test]
-    fn infinity_command_is_suggested() {
-        let app = App {
-            input: "/inf".into(),
-            ..App::default()
-        };
-
-        assert!(
-            app.command_suggestions()
-                .iter()
-                .any(|(name, _)| *name == "/infinity")
-        );
-    }
-
-    #[test]
-    fn input_history_restores_a_draft_and_deduplicates_adjacent_entries() {
-        let mut app = App::default();
-        app.record_input_history("first");
-        app.record_input_history("second");
-        app.record_input_history("second");
-        app.input = "unfinished draft".into();
-        app.cursor = app.input.chars().count();
-
-        app.history_up();
-        assert_eq!(app.input, "second");
-        app.history_up();
-        assert_eq!(app.input, "first");
-        app.history_down();
-        assert_eq!(app.input, "second");
-        app.history_down();
-        assert_eq!(app.input, "unfinished draft");
-        assert_eq!(app.cursor, app.input.chars().count());
-        assert_eq!(app.input_history, ["first", "second"]);
-    }
-
-    #[test]
-    fn mouse_wheel_scrolls_the_transcript_and_restores_tail_following() {
-        let mut app = App {
-            max_scroll: 30,
-            follow_tail: true,
-            scroll_y: 30,
-            transcript_area: (0, 0, 80, 20),
-            ..App::default()
-        };
-
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 10,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(app.scroll_y, 27);
-        assert!(!app.follow_tail);
-
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 10,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(app.scroll_y, 30);
-        assert!(app.follow_tail);
-    }
-
-    #[test]
-    fn transcript_selection_is_scoped_clamped_and_direction_independent() {
-        let mut app = App {
-            transcript_area: (10, 4, 8, 3),
-            transcript_cells: vec![
-                "abcdefgh".chars().map(|ch| ch.to_string()).collect(),
-                "ijklmnop".chars().map(|ch| ch.to_string()).collect(),
-                "qrstuvwx".chars().map(|ch| ch.to_string()).collect(),
-            ],
-            ..App::default()
-        };
-
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 12,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        });
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 15,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(
-            app.selected_transcript_text().as_deref(),
-            Some("cdefgh\nijklmn")
-        );
-
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 15,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        });
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 12,
-            row: 4,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(
-            app.selected_transcript_text().as_deref(),
-            Some("cdefgh\nijklmn")
-        );
-
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 40,
-            row: 40,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(app.selection_end, Some((17, 6)));
-    }
-
-    #[test]
-    fn sidebar_clicks_do_not_start_selection_and_context_menu_copies_selection() {
-        let mut app = App {
-            transcript_area: (20, 5, 6, 2),
-            transcript_cells: vec![
-                "hello!".chars().map(|ch| ch.to_string()).collect(),
-                "world!".chars().map(|ch| ch.to_string()).collect(),
-            ],
-            ..App::default()
-        };
-
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 5,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(app.selection_start.is_none());
-
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 20,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        });
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Drag(MouseButton::Left),
-            column: 24,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        });
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Right),
-            column: 22,
-            row: 5,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(app.transcript_context_menu.is_some());
-
-        app.transcript_context_menu_area = (22, 5, 22, 4);
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 23,
-            row: 6,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert_eq!(app.take_clipboard_request().as_deref(), Some("hello"));
-        assert!(app.transcript_context_menu.is_none());
-    }
+fn line_bounds(characters: &[char], cursor: usize) -> (usize, usize) {
+    let cursor = cursor.min(characters.len());
+    let start = characters[..cursor]
+        .iter()
+        .rposition(|character| *character == '\n')
+        .map_or(0, |index| index + 1);
+    let end = characters[cursor..]
+        .iter()
+        .position(|character| *character == '\n')
+        .map_or(characters.len(), |offset| cursor + offset);
+    (start, end)
 }
+
+#[cfg(test)]
+mod tests;

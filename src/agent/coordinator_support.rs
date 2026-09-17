@@ -146,13 +146,18 @@ pub(super) fn attached_harness_flags(attached: Option<&[String]>) -> (bool, bool
     )
 }
 
-pub(super) fn capability_guidance(mut snapshot: Value) -> String {
+pub(super) fn capability_guidance(mut snapshot: Value, discovery_enabled: bool) -> String {
     if let Some(object) = snapshot.as_object_mut() {
         object.remove("visibleTools");
         object.remove("activeSessionId");
     }
+    let discovery_hint = if discovery_enabled {
+        "Missing schema? use search_tools."
+    } else {
+        "Only the currently attached tools are available; use them directly and finish when the evidence is sufficient."
+    };
     format!(
-        "Runtime: {snapshot}. Missing schema? use search_tools. Current tool results and sandbox/approval state override stale assumptions."
+        "Runtime: {snapshot}. {discovery_hint} Current tool results and sandbox/approval state override stale assumptions."
     )
 }
 

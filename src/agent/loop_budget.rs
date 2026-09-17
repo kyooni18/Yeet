@@ -6,15 +6,12 @@
 use crate::core::Usage;
 
 const SOFT_INPUT_TOKENS: u64 = 200_000;
-const HARD_INPUT_TOKENS: u64 = 400_000;
 const SOFT_REQUEST_CHARS: usize = 90_000;
-const HARD_REQUEST_CHARS: usize = 150_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum LoopBudgetDecision {
     Continue,
     Checkpoint(String),
-    Finalize(String),
 }
 
 #[derive(Debug, Default)]
@@ -70,9 +67,8 @@ impl LoopBudget {
         self.peak_request_chars
     }
 
-    /// Returns a cost guard decision. Implementation turns receive a soft
-    /// checkpoint but are never hard-stopped while a mutation or verification
-    /// obligation remains unresolved; correctness gates outrank token savings.
+    /// Returns advisory cost guidance. Cost observations never withdraw tools or
+    /// force finalization; correctness and user cancellation control termination.
     pub(super) fn decide(
         &mut self,
         root_calls: usize,
@@ -84,19 +80,11 @@ impl LoopBudget {
         // Model/tool round count is diagnostic only. Long-lived Computer Use and
         // other interactive workflows can require many cheap rounds, so a fixed
         // attempt count must never withdraw tools by itself.
-        let hard = self.cumulative_cost_equivalent_input_tokens >= HARD_INPUT_TOKENS
-            || self.peak_request_chars >= HARD_REQUEST_CHARS;
         let soft = self.cumulative_cost_equivalent_input_tokens >= SOFT_INPUT_TOKENS
             || self.peak_request_chars >= SOFT_REQUEST_CHARS;
 
         let unresolved_implementation = implementation_requested
             && (unresolved_failed_mutation || successful_mutations == 0 || !verification_succeeded);
-        if hard && !unresolved_implementation {
-            return LoopBudgetDecision::Finalize(self.message(
-                root_calls,
-                "hard cost limit reached; tool access will be withdrawn for final synthesis",
-            ));
-        }
         if soft && !self.checkpoint_issued {
             self.checkpoint_issued = true;
             return LoopBudgetDecision::Checkpoint(self.message(
@@ -153,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_cost_guard_still_checkpoints_and_finalizes_without_overriding_unverified_edits() {
+    fn actual_cost_guard_only_checkpoints_and_never_finalizes() {
         let mut budget = LoopBudget::default();
         for _ in 0..7 {
             budget.observe_usage(Some(&Usage {
@@ -175,11 +163,15 @@ mod tests {
         }
         assert!(matches!(
             hard_budget.decide(14, false, false, 0, false),
-            LoopBudgetDecision::Finalize(_)
+            LoopBudgetDecision::Checkpoint(_)
+        ));
+        assert!(matches!(
+            hard_budget.decide(15, false, false, 0, false),
+            LoopBudgetDecision::Continue
         ));
 
         let mut implementation = LoopBudget::default();
-        implementation.observe_request(HARD_REQUEST_CHARS);
+        implementation.observe_request(SOFT_REQUEST_CHARS);
         assert!(matches!(
             implementation.decide(10, true, false, 1, false),
             LoopBudgetDecision::Checkpoint(_)
@@ -190,7 +182,7 @@ mod tests {
         ));
         assert!(matches!(
             implementation.decide(12, true, false, 1, true),
-            LoopBudgetDecision::Finalize(_)
+            LoopBudgetDecision::Continue
         ));
     }
 

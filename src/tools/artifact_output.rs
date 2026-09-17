@@ -120,7 +120,7 @@ fn render_externalized_tool_output(
         let hint = if exact_artifact_id.is_some() {
             "artifactId contains directly readable source lines; startLine/endLine refer to those lines. exactArtifactId preserves the raw JSON tool result. Reuse the preview unless raw metadata is specifically needed."
         } else {
-            "Exact tool output is stored in this artifact. Reuse the preview; use search_artifact/read_artifact only for a specific missing section."
+            "Exact tool output is stored in this artifact. Reuse the preview; use a narrow read_artifact range for a specific missing section, and search_artifact only when its location is unknown."
         };
         let rendered = json!({
             "externalized": true,

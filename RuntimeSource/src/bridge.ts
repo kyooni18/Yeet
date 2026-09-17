@@ -5,6 +5,7 @@ import process from "node:process";
 import { AuthManager, type ResolvedCredential } from "./auth.js";
 import { createDefaultCore } from "./defaults.js";
 import { CodexComputerUse } from "./codex-computer-use.js";
+import { codexCliVersion } from "./codex-version.js";
 import type { ProviderFetchLog } from "./http.js";
 import { McpManager } from "./mcp.js";
 import { ModelMetadataCatalog } from "./model-metadata.js";
@@ -15,6 +16,7 @@ import { OpenAIChatProvider } from "./providers/openai-chat.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
 import { OpenRouterProvider } from "./providers/openrouter.js";
+
 import { createRequestCapabilityRegistry } from "./request-capabilities.js";
 import { withReasoningPolicy } from "./request-policy.js";
 import { SkillRegistry } from "./skills.js";
@@ -259,9 +261,16 @@ async function refreshProvider(providerId: string): Promise<void> {
   const credential = await auth.resolve(providerId);
   switch (providerId) {
     case "openai":
-    case "codex-cli":
-      core.register(new OpenAIProvider({ id: providerId, ...openAIProviderOptions(credential), apiCallLogger: writeApiCallLog }));
+    case "codex-cli": {
+      const clientVersion = credential?.kind === "oauth" ? codexCliVersion() : undefined;
+      core.register(new OpenAIProvider({
+        id: providerId,
+        ...openAIProviderOptions(credential),
+        ...(clientVersion ? { clientVersion } : {}),
+        apiCallLogger: writeApiCallLog,
+      }));
       return;
+    }
     case "anthropic":
       core.register(new AnthropicProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
       return;
@@ -305,6 +314,7 @@ async function refreshProvider(providerId: string): Promise<void> {
     ...(key !== undefined ? { apiKey: key } : {}),
     ...(custom.headers !== undefined ? { headers: custom.headers } : {}),
     ...(custom.requireApiKey !== undefined ? { requireApiKey: custom.requireApiKey } : {}),
+    ...(custom.excludedModels !== undefined ? { excludedModels: custom.excludedModels } : {}),
     apiCallLogger: writeApiCallLog,
   }));
 }
@@ -462,7 +472,10 @@ async function handle(command: BridgeCommand): Promise<void> {
     }
     case "list-model-info": {
       await refreshProvider(command.provider);
-      const models = await enrichedModelInfo(command.provider);
+      // Model discovery must reflect the provider immediately. Metadata enrichment
+      // is optional and can involve a slow models.dev fetch, so never put it on the
+      // interactive /model catalog path.
+      const models = await core.listModelInfo(command.provider);
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "model-info", provider: command.provider, modelInfo: models });
       return;
     }
@@ -523,11 +536,17 @@ async function handle(command: BridgeCommand): Promise<void> {
     case "save-provider-configuration": {
       const provider = command.provider;
       if (provider.kind !== "openai-compatible") throw new Error(`Unsupported provider kind: ${String(provider.kind)}`);
+      const existing = (await auth.listCustomProviders()).find((candidate) => candidate.id === provider.id);
       const saved = await auth.setCustomProvider({
         id: provider.id,
         baseUrl: provider.baseUrl,
         ...(provider.headers !== undefined ? { headers: provider.headers } : {}),
         ...(provider.requireApiKey !== undefined ? { requireApiKey: provider.requireApiKey } : {}),
+        ...(provider.excludedModels !== undefined
+          ? { excludedModels: provider.excludedModels }
+          : existing?.excludedModels !== undefined
+            ? { excludedModels: existing.excludedModels }
+            : {}),
       });
       if (provider.apiKey?.trim()) await auth.setApiKey(saved.id, provider.apiKey);
       const configured: OpenAICompatibleProviderConfig = { kind: "openai-compatible", ...saved };

@@ -13,6 +13,7 @@ const router = createRouter({
     { path: '/', name: 'remote', component: RemoteView },
     { path: '/enroll', name: 'enroll', component: AuthGate },
     { path: '/settings/:section?', name: 'settings', component: SettingsView },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 

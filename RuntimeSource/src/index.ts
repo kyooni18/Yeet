@@ -1,7 +1,6 @@
 export * from "./auth.js";
 export * from "./capabilities.js";
 export * from "./vision.js";
-export * from "./lead.js";
 export * from "./core.js";
 export * from "./defaults.js";
 export * from "./errors.js";

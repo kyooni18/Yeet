@@ -510,7 +510,7 @@ test("RequestCompactor reports checkpoint model usage", async () => {
   assert.equal(result.auxiliaryUsage.modelCalls, 1);
 });
 
-test("RequestCompactor always uses the lead request model for checkpoints", async () => {
+test("RequestCompactor always uses the foreground request model for checkpoints", async () => {
   const compactRequests = [];
   const compactor = new RequestCompactor({
     contextLength: async () => 10_000,

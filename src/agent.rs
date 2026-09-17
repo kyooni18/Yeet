@@ -2,12 +2,14 @@ mod api;
 mod cache;
 mod context;
 mod coordinator_support;
+mod goal;
 mod history;
 mod loop_budget;
 mod policy;
 mod progress;
 mod runaway;
 mod session;
+mod session_controls;
 mod tool_discovery;
 mod tool_protocol;
 mod turn_state;
@@ -24,6 +26,7 @@ use coordinator_support::{
     should_inherit_implementation_turn, supports_anthropic_deferred_tool_references,
     supports_native_deferred_tools,
 };
+use goal::{GOAL_JUDGE_SYSTEM_INSTRUCTION, GoalVerdict, parse_goal_verdict, render_goal_evidence};
 use history::{
     compact_older_current_turn_tool_history, deduplicate_skill_instructions,
     trim_completed_conversation_history_for_budget,
@@ -34,10 +37,11 @@ pub use policy::SYSTEM_INSTRUCTION;
 use policy::{RESEARCH_SYSTEM_INSTRUCTION, is_research_evidence_tool, request_history_for_profile};
 use policy::{
     ResearchBudget, TaskProfile, is_mutation_tool, looks_like_bounded_analysis,
-    looks_like_bounded_explanation, looks_like_coding_request, looks_like_implementation_request,
-    looks_like_planning_or_documentation, reasoning_provider_options,
-    request_history_for_profile_at, select_tools_for_profile, should_preserve_web_tool_surface,
-    task_guidance, task_profile_with_history,
+    looks_like_bounded_explanation, looks_like_capability_request, looks_like_coding_request,
+    looks_like_implementation_request, looks_like_local_file_lookup,
+    looks_like_planning_or_documentation, looks_like_prior_context_request,
+    reasoning_provider_options, request_history_for_profile_at, select_tools_for_profile,
+    should_preserve_web_tool_surface, task_guidance, task_profile_with_history,
 };
 use progress::{
     classify_tool_error, content_fingerprint, is_inspection_tool, is_validation_tool_call,
@@ -47,6 +51,10 @@ use progress::{
 #[cfg(test)]
 use runaway::RUNAWAY_FINALIZE_SCORE;
 use runaway::{RUNAWAY_FINALIZATION_RETRY_LIMIT, RunawayDecision, RunawayDetector, RunawayRound};
+use session_controls::{
+    bridge_transport_error, goal_retry_delay, retryable_goal_error,
+    tool_call_indicates_implementation_intent, wait_for_goal,
+};
 use tool_protocol::{
     PartialToolCall, collect_tool_calls, looks_like_malformed_tool_call,
     normalize_tool_output_for_model, recover_text_tool_calls,
@@ -80,13 +88,24 @@ const EMPTY_RESPONSE_REPAIR_LIMIT: usize = 1;
 const IMPLEMENTATION_REPAIR_LIMIT: usize = 1;
 const NO_PROGRESS_CORRECTION_THRESHOLD: usize = 1;
 const NO_PROGRESS_DECISION_THRESHOLD: usize = 2;
+
+fn runtime_attached_capabilities(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .filter(|value| {
+            value.as_str() != WEB_SEARCH_CAPABILITY_ID
+                && value.as_str() != "lead"
+                && value.as_str() != crate::skyline::CAPABILITY_ID
+                && !value.starts_with("skill:")
+        })
+        .cloned()
+        .collect()
+}
 const IMPLEMENTATION_INSPECTION_CHECKPOINT: usize = 3;
 const COMPLETION_GATE_REPAIR_LIMIT: usize = 2;
-const FORCED_FINALIZATION_REPAIR_LIMIT: usize = 1;
 const MODEL_ATTEMPT_TIMEOUT_MS: u64 = 15 * 60 * 1_000;
-const INFINITY_CONTINUATION_DELAY: Duration = Duration::from_secs(1);
-const INFINITY_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
-const INFINITY_CONTINUATION_PROMPT: &str = "Continue the current task from the existing working state. Do not restart completed work. Keep making useful forward progress.";
+const GOAL_CONTINUATION_DELAY: Duration = Duration::from_secs(1);
+const GOAL_CONTINUATION_PROMPT: &str = "Continue the current goal from the existing working state. Do not restart completed work. Make useful forward progress toward satisfying every requirement and do not stop until the strict goal judge can accept concrete evidence.";
 
 pub struct AgentCoordinator {
     bridge: BridgeClient,
@@ -117,129 +136,6 @@ impl AgentCoordinator {
         }
     }
 
-    pub fn model_history(&self) -> Vec<Message> {
-        self.history.clone()
-    }
-
-    pub fn replace_model_history(&mut self, restored: Vec<Message>) {
-        let body = if restored
-            .first()
-            .is_some_and(is_internal_coordinator_system_message)
-        {
-            restored.into_iter().skip(1).collect()
-        } else {
-            restored
-        };
-        self.context_memory = context::ContextMemory::default();
-        self.cache_continuity = cache::ContinuityTracker::default();
-        self.previous_turn_working_state = None;
-        let attached_skills = self.attached_skills.drain().collect::<Vec<_>>();
-        for skill in attached_skills {
-            self.registry.deactivate_skill(&skill);
-        }
-        self.history = vec![Message::system(SYSTEM_INSTRUCTION)];
-        self.history.extend(body);
-        self.skill_instruction_history = self
-            .history
-            .iter()
-            .filter_map(|message| message.content.as_deref())
-            .filter_map(|content| content.strip_prefix("Attached Skill: "))
-            .filter_map(|rest| rest.lines().next())
-            .map(str::to_owned)
-            .collect();
-        self.context_key = Uuid::new_v4().to_string();
-    }
-
-    // Prompt-cache invariant: skill attachment history is append-only. Never edit or
-    // delete an earlier skill instruction; later state changes are appended as markers.
-    pub fn attach_skill_to_session(&mut self, name: &str) -> Result<()> {
-        if self.attached_skills.contains(name) {
-            return Ok(());
-        }
-        self.registry.enable_skill_attachment(name);
-        let activation = self.registry.activate_explicit_skill(name)?;
-        let parsed: Value = serde_json::from_str(&activation)?;
-        if self.skill_instruction_history.contains(name) {
-            self.history.push(Message::system(format!(
-                "Skill attachment state: {name} reattached. Resume following the previously attached Skill instruction for {name} from this session history. Keep all earlier history unchanged for prompt-cache continuity."
-            )));
-        } else if let Some(instructions) = parsed.get("instructions").and_then(Value::as_str) {
-            self.history.push(Message::system(format!(
-                "Attached Skill: {name}\n{instructions}\nThis Skill is attached to the current session. Follow it when relevant and use its support tools only as needed; normal sandbox/approval rules apply."
-            )));
-            self.skill_instruction_history.insert(name.to_owned());
-        }
-        self.attached_skills.insert(name.to_owned());
-        Ok(())
-    }
-
-    pub fn detach_skill_from_session(&mut self, name: &str) {
-        self.attached_skills.remove(name);
-        self.registry.deactivate_skill(name);
-        if self.skill_instruction_history.contains(name) {
-            self.history.push(Message::system(format!(
-                "Skill attachment state: {name} detached. From this point onward, do not treat the earlier attached Skill instruction for {name} as active unless the user explicitly invokes or reattaches it. Preserve and do not reinterpret any earlier history."
-            )));
-        }
-    }
-
-    fn sync_attached_skills(&mut self, attached: Option<&[String]>) -> Result<()> {
-        let requested = attached
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|value| value.strip_prefix("skill:"))
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
-            .collect::<HashSet<_>>();
-        let stale = self
-            .attached_skills
-            .difference(&requested)
-            .cloned()
-            .collect::<Vec<_>>();
-        for skill in stale {
-            self.registry.deactivate_skill(&skill);
-        }
-        for skill in requested.difference(&self.attached_skills) {
-            let _ = self.registry.activate_explicit_skill(skill)?;
-        }
-        self.attached_skills = requested;
-        Ok(())
-    }
-
-    pub fn compact_model_history(&mut self) -> Result<(usize, usize)> {
-        self.context_memory.load(&mut self.history)?;
-        let before = self.history.len();
-        self.context_memory.rollover(&mut self.history, None)?;
-        self.context_key = self.context_memory.id().to_owned();
-        self.cache_continuity = cache::ContinuityTracker::default();
-        Ok((before, self.history.len()))
-    }
-
-    pub fn set_protected_write_paths(
-        &mut self,
-        paths: impl IntoIterator<Item = std::path::PathBuf>,
-    ) {
-        self.registry.set_protected_write_paths(paths);
-    }
-    pub fn configure_foundation_memory(
-        &mut self,
-        enabled: bool,
-        server: impl Into<String>,
-        project: impl Into<String>,
-    ) {
-        self.registry
-            .configure_foundation_memory(enabled, server, project);
-    }
-
-    pub fn set_retained_debate_knowledge(
-        &mut self,
-        knowledge: Vec<crate::debate::RetainedDebateKnowledge>,
-    ) {
-        self.retained_debate_knowledge = knowledge;
-        self.context_key = Uuid::new_v4().to_string();
-        self.cache_continuity = cache::ContinuityTracker::default();
-    }
-
     pub fn run<F>(&mut self, request: AgentRunRequest<'_>, mut emit: F) -> Result<AgentRunOutcome>
     where
         F: FnMut(AgentEvent),
@@ -251,12 +147,23 @@ impl AgentCoordinator {
             reasoning_level,
             attached_capabilities,
             disabled_capabilities,
-            infinity_mode,
+            goal_mode,
             cancel,
             continuation: initial_continuation,
         } = request;
         self.context_memory.load(&mut self.history)?;
         settle_interrupted_context_batch(&mut self.history);
+        let goal_input = if initial_continuation {
+            self.history
+                .iter()
+                .rev()
+                .find(|message| message.role == MessageRole::User)
+                .and_then(|message| message.content.as_deref())
+                .unwrap_or(input)
+                .to_owned()
+        } else {
+            input.to_owned()
+        };
         self.context_key = self.context_memory.id().to_owned();
         self.context_memory.capacity = self
             .bridge
@@ -268,11 +175,13 @@ impl AgentCoordinator {
         self.registry
             .set_disabled_capabilities(disabled_capabilities);
         self.sync_attached_skills(attached_capabilities.as_deref())?;
+        self.sync_attached_skyline(attached_capabilities.as_deref())?;
         self.registry.attach_enabled_mcp_servers()?;
 
         let mut continuation = initial_continuation;
-        let mut infinity_epoch = 0u64;
+        let mut goal_epoch = 0u64;
         let mut retry_attempt = 0u32;
+        let mut goal_retry_reason: Option<String> = None;
         let result = loop {
             let attempt = self.run_turn(
                 AgentTurnRequest {
@@ -287,35 +196,69 @@ impl AgentCoordinator {
                     attached_capabilities: attached_capabilities.clone(),
                     cancel: &cancel,
                     continuation,
+                    goal_retry_reason: goal_retry_reason.as_deref(),
                 },
                 &mut emit,
             );
 
             match attempt {
                 Ok(outcome) => {
-                    if !infinity_mode.load(Ordering::Acquire) || cancel.load(Ordering::Acquire) {
+                    if !goal_mode.load(Ordering::Acquire) || cancel.load(Ordering::Acquire) {
                         break Ok(outcome);
                     }
-                    infinity_epoch = infinity_epoch.saturating_add(1);
+                    goal_epoch = goal_epoch.saturating_add(1);
                     retry_attempt = 0;
-                    let reason = match &outcome {
-                        AgentRunOutcome::Completed => {
-                            "model completed the current Infinity epoch".to_owned()
+                    let verdict = if let AgentRunOutcome::CompletedUnverified { reason } = &outcome
+                    {
+                        GoalVerdict {
+                            passed: false,
+                            reason: format!("worker completion gate rejected the turn: {reason}"),
                         }
-                        AgentRunOutcome::CompletedUnverified { reason } => {
-                            format!(
-                                "current Infinity epoch completed without verification: {reason}"
-                            )
+                    } else {
+                        match self.judge_goal(&goal_input, model, reasoning_level, &cancel, &mut emit) {
+                            Ok(verdict) => verdict,
+                            Err(error) => {
+                                let message = error.to_string();
+                                if !retryable_goal_error(&message) {
+                                    goal_mode.store(false, Ordering::Release);
+                                    break Err(error);
+                                }
+                                retry_attempt = retry_attempt.saturating_add(1);
+                                emit(AgentEvent::GoalRetry {
+                                    attempt: retry_attempt,
+                                    delay_ms: GOAL_CONTINUATION_DELAY
+                                        .as_millis()
+                                        .min(u128::from(u64::MAX))
+                                        as u64,
+                                    error: message,
+                                });
+                                continuation = true;
+                                if !wait_for_goal(&cancel, &goal_mode, GOAL_CONTINUATION_DELAY) {
+                                    if cancel.load(Ordering::Acquire) {
+                                        break Err(anyhow!("cancelled"));
+                                    }
+                                    break Err(error);
+                                }
+                                continue;
+                            }
                         }
                     };
-                    emit(AgentEvent::InfinityCheckpoint {
-                        epoch: infinity_epoch,
-                        reason,
+                    emit(AgentEvent::GoalJudge {
+                        passed: verdict.passed,
+                        reason: verdict.reason.clone(),
+                    });
+                    if verdict.passed {
+                        break Ok(AgentRunOutcome::Completed);
+                    }
+                    emit(AgentEvent::GoalCheckpoint {
+                        epoch: goal_epoch,
+                        reason: verdict.reason.clone(),
                     });
                     let _ = self.context_memory.sync(&self.history);
                     let _ = self.context_memory.flush();
                     continuation = true;
-                    if !wait_for_infinity(&cancel, &infinity_mode, INFINITY_CONTINUATION_DELAY) {
+                    goal_retry_reason = Some(verdict.reason);
+                    if !wait_for_goal(&cancel, &goal_mode, GOAL_CONTINUATION_DELAY) {
                         if cancel.load(Ordering::Acquire) {
                             break Err(anyhow!("cancelled"));
                         }
@@ -326,12 +269,12 @@ impl AgentCoordinator {
                     if cancel.load(Ordering::Acquire) {
                         break Err(error);
                     }
-                    if !infinity_mode.load(Ordering::Acquire) {
+                    if !goal_mode.load(Ordering::Acquire) {
                         break Err(error);
                     }
                     let message = error.to_string();
-                    if !retryable_infinity_error(&message) {
-                        infinity_mode.store(false, Ordering::Release);
+                    if !retryable_goal_error(&message) {
+                        goal_mode.store(false, Ordering::Release);
                         break Err(error);
                     }
                     retry_attempt = retry_attempt.saturating_add(1);
@@ -341,8 +284,8 @@ impl AgentCoordinator {
                             .restart()
                             .and_then(|_| self.registry.attach_enabled_mcp_servers());
                     }
-                    let delay = infinity_retry_delay(retry_attempt);
-                    emit(AgentEvent::InfinityRetry {
+                    let delay = goal_retry_delay(retry_attempt);
+                    emit(AgentEvent::GoalRetry {
                         attempt: retry_attempt,
                         delay_ms: delay.as_millis().min(u128::from(u64::MAX)) as u64,
                         error: message,
@@ -350,7 +293,7 @@ impl AgentCoordinator {
                     let _ = self.context_memory.sync(&self.history);
                     let _ = self.context_memory.flush();
                     continuation = true;
-                    if !wait_for_infinity(&cancel, &infinity_mode, delay) {
+                    if !wait_for_goal(&cancel, &goal_mode, delay) {
                         if cancel.load(Ordering::Acquire) {
                             break Err(anyhow!("cancelled"));
                         }
@@ -365,6 +308,50 @@ impl AgentCoordinator {
         self.context_memory.sync(&self.history)?;
         self.context_memory.flush()?;
         result
+    }
+
+    fn judge_goal<F>(
+        &self,
+        input: &str,
+        model: &str,
+        reasoning_level: &str,
+        cancel: &AtomicBool,
+        emit: &mut F,
+    ) -> Result<GoalVerdict>
+    where
+        F: FnMut(AgentEvent),
+    {
+        check_cancel(cancel)?;
+        let evidence = render_goal_evidence(&self.history);
+        let mut request = CallRequest::simple(
+            model,
+            vec![
+                Message::system(GOAL_JUDGE_SYSTEM_INSTRUCTION),
+                Message::user(format!("GOAL:\n{input}\n\nWORKER EVIDENCE:\n{evidence}")),
+            ],
+        );
+        request.temperature = Some(0.0);
+        request.max_tokens = Some(300);
+        request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
+        request.provider_options = reasoning_provider_options(model, reasoning_level);
+        request.metadata = Some(HashMap::from([
+            ("lane".into(), "goal-judge".into()),
+            ("strict".into(), "true".into()),
+            ("agentId".into(), "goal-judge".into()),
+            ("yeetVersion".into(), env!("CARGO_PKG_VERSION").to_owned()),
+        ]));
+        emit(AgentEvent::ModelAttemptStarted {
+            diagnostics: json!({"lane":"goal-judge", "strict":true}),
+        });
+        let result = self.bridge.complete_cancellable(&request, cancel)?;
+        emit(AgentEvent::ModelAttemptFinished(
+            json!({"lane":"goal-judge", "strict":true}),
+            result.usage.clone(),
+        ));
+        if let Some(usage) = result.usage {
+            emit(AgentEvent::AuxiliaryUsage(usage));
+        }
+        Ok(parse_goal_verdict(&result.text))
     }
 
     fn run_turn<F>(
@@ -383,11 +370,18 @@ impl AgentCoordinator {
             attached_capabilities,
             cancel,
             continuation,
+            goal_retry_reason,
         } = request;
         self.history
             .retain(|message| message.request_only != Some(true));
         let current_request = if continuation {
-            Message::user(INFINITY_CONTINUATION_PROMPT).request_only()
+            Message::user(format!(
+                "{GOAL_CONTINUATION_PROMPT}{}",
+                goal_retry_reason
+                    .map(|reason| format!(" Strict judge feedback: {reason}"))
+                    .unwrap_or_default()
+            ))
+            .request_only()
         } else {
             Message::user_with_images(input, images)
         };
@@ -397,6 +391,7 @@ impl AgentCoordinator {
             .unwrap_or_else(|| input.to_owned());
         self.history.push(current_request.clone());
         let mut explicitly_activated_tools = self.registry.skill_tools_for(&self.attached_skills);
+        explicitly_activated_tools.extend(self.registry.skyline_tool_names());
         if let Some(skill_name) = explicit_skill_name(input) {
             let activation = self.registry.activate_explicit_skill(skill_name)?;
             let parsed: Value = serde_json::from_str(&activation)?;
@@ -419,23 +414,34 @@ impl AgentCoordinator {
         explicitly_activated_tools.dedup();
         let (vision_enabled, web_search_enabled, web_search_explicitly_attached) =
             attached_harness_flags(attached_capabilities.as_deref());
-        let (foundation_memory, memory_error) = match self
-            .registry
-            .recall_foundation_memory(input, cancel)
-        {
-            Ok(memory) => (memory, None),
-            Err(error) => (
-                None,
-                Some(format!(
-                    "Yeet project memory is unavailable: {error}. No project memories were retrieved. Continue using local task notes and original history; never switch the embedding model to bypass this error."
-                )),
-            ),
-        };
-        let foundation_guidance = self
-            .registry
-            .foundation_memory_guidance()
-            .map(str::to_owned);
         let profile = task_profile_with_history(input, web_search_enabled, &self.history);
+        let local_file_lookup =
+            profile == TaskProfile::Agent && looks_like_local_file_lookup(input);
+        let capability_discovery_requested =
+            !local_file_lookup && looks_like_capability_request(input);
+        let prior_context_requested = looks_like_prior_context_request(input);
+        let (foundation_memory, memory_error) = if local_file_lookup {
+            (None, None)
+        } else if !prior_context_requested {
+            (None, None)
+        } else {
+            match self.registry.recall_foundation_memory(input, cancel) {
+                Ok(memory) => (memory, None),
+                Err(error) => (
+                    None,
+                    Some(format!(
+                        "Yeet project memory is unavailable: {error}. No project memories were retrieved. Continue using local task notes and original history; never switch the embedding model to bypass this error."
+                    )),
+                ),
+            }
+        };
+        let foundation_guidance = (prior_context_requested && !local_file_lookup)
+            .then(|| {
+                self.registry
+                    .foundation_memory_guidance()
+                    .map(str::to_owned)
+            })
+            .flatten();
         let inherited_implementation = should_inherit_implementation_turn(input, &self.history);
         let mut implementation_requested =
             looks_like_implementation_request(input) || inherited_implementation;
@@ -462,7 +468,6 @@ impl AgentCoordinator {
         let mut consecutive_no_progress = 0usize;
         let mut progressful_inspection_rounds = 0usize;
         let mut implementation_inspection_checkpoint_used = false;
-        let mut force_decision_without_tools = false;
         let mut retry_instruction: Option<String> = None;
         let mut final_consistency_pending = false;
         let mut final_consistency_used = false;
@@ -473,16 +478,44 @@ impl AgentCoordinator {
         let mut last_validation_evidence: Option<String> = None;
         let mut recent_execution_evidence = Vec::new();
         let mut session_provenance = SessionExecutionProvenance::default();
+        let mut local_lookup_read_calls = 0usize;
+        let mut local_lookup_read_externalized = false;
+        let mut local_lookup_recovery_calls = 0usize;
+        let mut local_lookup_shell_calls = 0usize;
         let mut call_counts: HashMap<String, usize> = HashMap::new();
         let mut workspace_generation = self.registry.workspace_generation();
         let mut workspace_write_generation = self.registry.workspace_write_generation();
         let mut tool_discovery = match profile {
-            TaskProfile::Agent if implementation_requested || looks_like_coding_request(input) => {
-                tool_discovery::ToolDiscovery::coding(implementation_requested)
+            TaskProfile::Agent if local_file_lookup => {
+                tool_discovery::ToolDiscovery::direct_file_lookup()
+            }
+            TaskProfile::Agent if implementation_requested => {
+                tool_discovery::ToolDiscovery::coding(true)
+            }
+            TaskProfile::Agent if bounded_analysis => {
+                tool_discovery::ToolDiscovery::bounded_analysis()
+            }
+            TaskProfile::Agent if looks_like_coding_request(input) => {
+                tool_discovery::ToolDiscovery::coding(false)
             }
             TaskProfile::Agent => tool_discovery::ToolDiscovery::agent(),
             TaskProfile::Research => tool_discovery::ToolDiscovery::research(),
         };
+        if capability_discovery_requested {
+            tool_discovery.enable_search();
+        }
+        if prior_context_requested && !local_file_lookup {
+            tool_discovery.load([
+                "context_history",
+                "task_notes",
+                "project_memory_recall",
+                "project_memory_get",
+                "project_memory_connections",
+            ]);
+        }
+        if profile == TaskProfile::Agent && self.registry.has_shell_jobs() {
+            tool_discovery.load(["shell_job"]);
+        }
         if profile == TaskProfile::Agent
             && (web_search_explicitly_attached
                 || should_preserve_web_tool_surface(input, &self.history))
@@ -495,7 +528,6 @@ impl AgentCoordinator {
         let mut loop_budget = LoopBudget::default();
         let mut research_stop_grace_used = false;
         let mut analysis_stop_grace_used = false;
-        let mut forced_finalization_repairs = 0usize;
         let mut runaway_detector = RunawayDetector::default();
         let mut runaway_finalization = false;
         let mut runaway_finalization_repairs = 0usize;
@@ -506,6 +538,16 @@ impl AgentCoordinator {
                 .load()?
                 .context;
         let mut turn_stable_overlays = Vec::new();
+        let (session_cwd, context_roots) = self.registry.session_environment();
+        if session_cwd != workspace_root || context_roots.len() > 1 {
+            turn_stable_overlays.push(
+                Message::system(format!(
+                    "Session filesystem environment: primary workspace={workspace_root}; cwd={session_cwd}; context roots={}. Relative file and shell paths resolve from cwd. The primary workspace remains the project/settings identity, not a filesystem access boundary.",
+                    context_roots.join(", ")
+                ))
+                .request_only(),
+            );
+        }
         let mut turn_context_orientation = self.context_memory.orientation();
         let mut current_turn_compaction_end = None;
         let padded_input = format!(" {} ", input.trim().to_ascii_lowercase());
@@ -628,18 +670,19 @@ impl AgentCoordinator {
             }
             let attached_names: HashSet<_> =
                 selected_tools.iter().map(|t| t.name.clone()).collect();
-            let deferred_tools = if native_deferred_tools_supported {
-                tool_catalog
-                    .iter()
-                    .filter(|tool| {
-                        !attached_names.contains(&tool.name)
-                            && self.registry.is_provider_defer_candidate(&tool.name)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+            let deferred_tools =
+                if native_deferred_tools_supported && capability_discovery_requested {
+                    tool_catalog
+                        .iter()
+                        .filter(|tool| {
+                            !attached_names.contains(&tool.name)
+                                && self.registry.is_provider_defer_candidate(&tool.name)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
             let deferred_names: HashSet<_> = deferred_tools
                 .iter()
                 .map(|tool| tool.name.clone())
@@ -660,8 +703,13 @@ impl AgentCoordinator {
             let mut stable_request_overlays = turn_stable_overlays.clone();
             stable_request_overlays
                 .push(Message::system(turn_context_orientation.clone()).request_only());
-            stable_request_overlays
-                .push(Message::system(capability_guidance(capability_snapshot)).request_only());
+            stable_request_overlays.push(
+                Message::system(capability_guidance(
+                    capability_snapshot,
+                    tool_discovery.search_enabled(),
+                ))
+                .request_only(),
+            );
             insert_turn_stable_overlays(
                 &mut request_messages,
                 &request_input,
@@ -720,7 +768,7 @@ impl AgentCoordinator {
             request.prompt_cache = Some(true);
             request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
             request.deferred_tools = (!deferred_tools.is_empty()).then_some(deferred_tools);
-            configure_tool_access(&mut request, selected_tools, force_decision_without_tools);
+            configure_tool_access(&mut request, selected_tools, false);
             let mut request_metadata = HashMap::from([
                 (
                     "lane".into(),
@@ -801,15 +849,9 @@ impl AgentCoordinator {
             }
             request.metadata = Some(request_metadata);
             request.provider_options = reasoning_provider_options(model, reasoning_level);
-            request.attached_capabilities = attached_capabilities.as_ref().map(|values| {
-                values
-                    .iter()
-                    .filter(|value| {
-                        value.as_str() != WEB_SEARCH_CAPABILITY_ID && !value.starts_with("skill:")
-                    })
-                    .cloned()
-                    .collect()
-            });
+            request.attached_capabilities = attached_capabilities
+                .as_deref()
+                .map(runtime_attached_capabilities);
             let attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
             emit(AgentEvent::ModelAttemptStarted {
                 diagnostics: attempt_cache_diagnostics.clone(),
@@ -946,26 +988,19 @@ impl AgentCoordinator {
                     calls = recovered;
                 }
             }
-            if turn_state::is_initial_mutation_attempt(
-                implementation_requested,
-                successful_mutations,
-                unresolved_failed_mutation,
-                &calls,
-            ) {
-                runaway_finalization = false;
-                force_decision_without_tools = false;
-            }
             if runaway_finalization && !calls.is_empty() {
-                for event in turn_state::suppressed_tool_events(
-                    &calls,
-                    "Runaway guard required tool-free finalization",
-                ) {
-                    emit(event);
+                for call in &calls {
+                    emit(AgentEvent::ToolExecutionSuppressed {
+                        call: call.clone(),
+                        reason: "Runaway guard required tool-free finalization".into(),
+                    });
                 }
                 if runaway_finalization_repairs < RUNAWAY_FINALIZATION_RETRY_LIMIT {
                     runaway_finalization_repairs += 1;
                     if !emitted_text.is_empty() {
-                        emit(AgentEvent::DiscardAssistantText(emitted_text));
+                        emit(AgentEvent::DiscardAssistantText(std::mem::take(
+                            &mut emitted_text,
+                        )));
                     }
                     retry_instruction = Some(
                         "Internal runaway-guard correction: multiple loop signals were confirmed. Do not request more tools. Return the best final answer from the evidence already present and identify any unresolved blocker.".into(),
@@ -979,32 +1014,6 @@ impl AgentCoordinator {
                 bail!(
                     "Runaway guard finalization was ignored after a tool-free answer was required"
                 );
-            }
-            if force_decision_without_tools && !calls.is_empty() {
-                for event in turn_state::suppressed_tool_events(
-                    &calls,
-                    "Cost/sufficiency guard required tool-free finalization",
-                ) {
-                    emit(event);
-                }
-                if forced_finalization_repairs < FORCED_FINALIZATION_REPAIR_LIMIT {
-                    forced_finalization_repairs += 1;
-                    if !emitted_text.is_empty() {
-                        emit(AgentEvent::DiscardAssistantText(std::mem::take(
-                            &mut emitted_text,
-                        )));
-                    }
-                    retry_instruction = Some(
-                        "Internal finalization correction: the cost/sufficiency guard requires an answer without additional tool calls. Return the best final answer from evidence already present and state any remaining uncertainty."
-                            .into(),
-                    );
-                    emit(AgentEvent::Finished {
-                        reason: finish_reason,
-                        usage: finish_usage,
-                    });
-                    continue;
-                }
-                bail!("Finalization guard was ignored after a tool-free answer was required");
             }
             if finish_reason == "error" {
                 if !text.is_empty() {
@@ -1046,7 +1055,6 @@ impl AgentCoordinator {
                 }
                 if implementation_requested
                     && successful_mutations == 0
-                    && !force_decision_without_tools
                     && implementation_repairs < IMPLEMENTATION_REPAIR_LIMIT
                 {
                     implementation_repairs += 1;
@@ -1070,10 +1078,7 @@ impl AgentCoordinator {
                     verification_succeeded,
                 );
                 if let Some(blocker) = completion_blocker {
-                    if completion_gate_repairs < COMPLETION_GATE_REPAIR_LIMIT
-                        && !force_decision_without_tools
-                        && !runaway_finalization
-                    {
+                    if completion_gate_repairs < COMPLETION_GATE_REPAIR_LIMIT {
                         completion_gate_repairs += 1;
                         if !emitted_text.is_empty() {
                             emit(AgentEvent::DiscardAssistantText(emitted_text));
@@ -1149,6 +1154,14 @@ impl AgentCoordinator {
                 emit(AgentEvent::ToolExecutionStarted(call.clone()));
                 let inspection_call = is_inspection_tool(&call.name)
                     || self.registry.is_read_only_extension_tool(&call.name);
+                let local_lookup_complete = local_file_lookup
+                    && local_lookup_read_calls >= 1
+                    && (!local_lookup_read_externalized
+                        || local_lookup_read_calls >= 2
+                        || local_lookup_recovery_calls >= 1);
+                let local_lookup_selection_complete = local_file_lookup
+                    && local_lookup_read_calls == 0
+                    && local_lookup_shell_calls >= 1;
                 let (content, transport_succeeded) = if !callable_names.contains(&call.name) {
                     (json!({"error":"Tool schema is not attached. Call search_tools to load it, then call it on the next request."}).to_string(), false)
                 } else if call.name == tool_discovery::SEARCH_TOOL {
@@ -1162,21 +1175,23 @@ impl AgentCoordinator {
                         tool_discovery.search(&call.arguments, &tool_catalog)
                     };
                     (content, true)
-                } else if profile == TaskProfile::Research
-                    && call.name == "web_read"
-                    && !research_budget.allows_source_read()
-                {
-                    (
-                        json!({
-                            "duplicate": true,
-                            "budgetSuppressed": true,
-                            "contentAlreadySufficient": true,
-                            "remainingSourceReads": research_budget.remaining_source_reads(),
-                            "hint": "The configured full-source evidence target is already satisfied. Reuse the source evidence already returned and synthesize unless a concrete conflict requires another search round."
-                        })
-                        .to_string(),
-                        true,
-                    )
+                } else if local_lookup_complete && (inspection_call || call.name == "run_shell") {
+                    (json!({
+                        "duplicate": true,
+                        "contentAlreadyReturned": true,
+                        "blockedReplay": true,
+                        "localLookupComplete": true,
+                        "tool": call.name,
+                        "hint": "The bounded local lookup already read the selected file. Answer from that evidence now; request only one narrower read_file range if a specific section is genuinely missing."
+                    }).to_string(), true)
+                } else if local_lookup_selection_complete && call.name == "run_shell" {
+                    (json!({
+                        "duplicate": true,
+                        "blockedReplay": true,
+                        "localLookupSelectionComplete": true,
+                        "tool": call.name,
+                        "hint": "The focused native metadata command already ran. Use its selected path with read_file now; do not run another discovery command."
+                    }).to_string(), true)
                 } else if repeated_call && inspection_call {
                     duplicate_inspection = true;
                     (json!({
@@ -1227,18 +1242,23 @@ impl AgentCoordinator {
                         .into_iter()
                         .filter_map(|value| value.as_str().map(str::to_owned))
                         .collect::<Vec<_>>();
-                    if !activated.is_empty() && activated.len() <= 5 {
+                    if !activated.is_empty() {
                         tool_discovery.load(activated.iter().map(String::as_str));
                     }
+                }
+                if call.name == "run_shell"
+                    && succeeded
+                    && call.arguments.get("background").and_then(Value::as_bool) == Some(true)
+                {
+                    // Detached execution is the only reason a local lookup
+                    // needs the shell-job control surface.
+                    tool_discovery.load(["shell_job"]);
                 }
                 let inspection_progress =
                     inspection_call && tool_made_progress(call, &content, succeeded);
                 if implementation_requested
                     && inspection_progress
-                    && matches!(
-                        call.name.as_str(),
-                        "read_file" | "list_files" | "search_workspace"
-                    )
+                    && matches!(call.name.as_str(), "read_file" | "search_workspace")
                 {
                     // Defer the large edit schema until source/capability evidence exists.
                     tool_discovery.load(["apply_file_edits"]);
@@ -1254,8 +1274,23 @@ impl AgentCoordinator {
                     self.registry
                         .bound_round_output(call, normalized, &mut round_output_budget)?;
                 if externally_bounded {
-                    // Artifact results already include exact locators; attach bounded recovery tools.
-                    tool_discovery.load(["artifact_info", "read_artifact", "search_artifact"]);
+                    // Artifact results already include exact locators. Attach
+                    // only the reader; searching an artifact remains an
+                    // explicit, exact discovery step after the artifact exists.
+                    tool_discovery.load(["read_artifact"]);
+                    if !local_file_lookup {
+                        tool_discovery.enable_search();
+                    }
+                }
+                if local_file_lookup && call.name == "read_file" && succeeded {
+                    local_lookup_read_calls += 1;
+                    local_lookup_read_externalized = externally_bounded;
+                }
+                if local_file_lookup && call.name == "run_shell" && succeeded {
+                    local_lookup_shell_calls += 1;
+                }
+                if local_file_lookup && call.name == "read_artifact" && succeeded {
+                    local_lookup_recovery_calls += 1;
                 }
                 let recorded_content = model_content.clone();
                 self.history.push(Message::tool(
@@ -1284,7 +1319,6 @@ impl AgentCoordinator {
                     if is_mutation_tool(&call.name) {
                         unresolved_failed_mutation = false;
                     }
-                    force_decision_without_tools = false;
                     call_counts.clear();
                     workspace_generation = self.registry.workspace_generation();
                     if is_mutation_tool(&call.name)
@@ -1388,39 +1422,23 @@ impl AgentCoordinator {
             );
             if let RunawayDecision::Finalize(message) = runaway_decision {
                 runaway_finalization = true;
-                force_decision_without_tools = true;
                 retry_instruction = Some(format!("Internal execution guard: {message}"));
-            } else if let LoopBudgetDecision::Finalize(message) = &loop_budget_decision {
-                force_decision_without_tools = true;
-                retry_instruction = Some(message.clone());
             } else if profile == TaskProfile::Research
                 && research_budget.sufficient(progressful_inspection_rounds)
+                && !research_stop_grace_used
             {
-                if research_stop_grace_used {
-                    force_decision_without_tools = true;
-                    retry_instruction = Some(format!(
-                        "{} One synthesis grace call was already used; do not request more tools and return the final answer now.",
-                        research_budget.checkpoint_message(progressful_inspection_rounds)
-                    ));
-                } else {
-                    research_stop_grace_used = true;
-                    retry_instruction =
-                        Some(research_budget.checkpoint_message(progressful_inspection_rounds));
-                }
+                research_stop_grace_used = true;
+                retry_instruction =
+                    Some(research_budget.checkpoint_message(progressful_inspection_rounds));
             } else if bounded_analysis
                 && successful_mutations == 0
                 && progressful_inspection_rounds >= analysis_threshold
+                && !analysis_stop_grace_used
             {
-                if analysis_stop_grace_used {
-                    force_decision_without_tools = true;
-                    retry_instruction = Some("Internal sufficiency checkpoint: the bounded analysis already received one grace call after sufficient evidence was collected. Do not request more tools; answer from the evidence already present.".into());
-                } else {
-                    analysis_stop_grace_used = true;
-                    retry_instruction = Some("Internal sufficiency checkpoint: several focused inspection rounds have already produced evidence. Stop expanding source coverage and answer from the evidence already collected now. One final tool call is still available only for a concrete missing fact.".into());
-                }
+                analysis_stop_grace_used = true;
+                retry_instruction = Some("Internal sufficiency checkpoint: several focused inspection rounds have already produced evidence. Prefer synthesis over redundant inspection, but tools remain available for any concrete missing fact or materially different check.".into());
             } else if round_failed_mutation {
-                force_decision_without_tools = false;
-                retry_instruction = Some("Internal execution correction: the previous file edit failed. This is not automatically a sandbox denial. Retry the mutation after only the focused source refresh actually needed. For apply_file_edits, use changes:[{path, snapshot?, edits:[{kind:\"replace\", range:{start,end,startHash?,endHash?}, text:\"...\"}]}]; start/end belong inside range, not at the edit object's top level. Do not replay unrelated inspection.".into());
+                retry_instruction = Some("Internal execution correction: the previous file edit failed. This is not automatically a sandbox denial. Retry the mutation after only the focused source refresh actually needed. For apply_file_edits, use changes:[{path, edits:[{kind:\"replace\", range:{start,end}, text:\"...\"}]}]; runtime snapshot and stale-edit validation are automatic. Do not replay unrelated inspection.".into());
             } else if implementation_requested
                 && successful_mutations == 0
                 && !implementation_inspection_checkpoint_used
@@ -1429,13 +1447,11 @@ impl AgentCoordinator {
                 implementation_inspection_checkpoint_used = true;
                 retry_instruction = Some("Internal implementation checkpoint: enough focused inspection has produced source evidence. Stop broad repository discovery and reuse what is already in context. Make the smallest justified workspace edit now. If one exact edit anchor is missing, do at most one focused read or refresh for that file before editing; do not start another repository survey.".into());
             } else if consecutive_no_progress >= NO_PROGRESS_DECISION_THRESHOLD {
-                if implementation_requested && successful_mutations == 0 {
-                    force_decision_without_tools = false;
-                    retry_instruction = Some("Internal execution correction: several consecutive tool rounds made no material progress. Reuse existing evidence. Read only genuinely missing source needed for an edit or snapshot, then apply the justified change; otherwise explain why no safe edit is possible. Do not replay covered inspection.".into());
+                retry_instruction = Some(if implementation_requested && successful_mutations == 0 {
+                    "Internal execution correction: several consecutive tool rounds made no material progress. Reuse existing evidence. Read only genuinely missing source needed for an edit or snapshot, then apply the justified change; otherwise explain why no safe edit is possible. Do not replay covered inspection."
                 } else {
-                    force_decision_without_tools = true;
-                    retry_instruction = Some("Internal execution correction: several consecutive tool rounds made no material progress. Stop inspecting and answer from the evidence already in context.".into());
-                }
+                    "Internal execution correction: several consecutive tool rounds made no material progress. Reuse existing evidence and change strategy. Tools remain available for a materially different action; otherwise finish from the evidence already in context."
+                }.into());
             } else if consecutive_no_progress >= NO_PROGRESS_CORRECTION_THRESHOLD {
                 retry_instruction = Some(if implementation_requested && successful_mutations == 0 {
                     if duplicate_inspection {
@@ -1457,112 +1473,48 @@ impl AgentCoordinator {
             }
         }
     }
-    pub fn shutdown(&self) {
-        self.registry.shutdown();
-    }
 }
 
-fn infinity_retry_delay(attempt: u32) -> Duration {
-    let shift = attempt.saturating_sub(1).min(5);
-    Duration::from_secs((1u64 << shift).min(INFINITY_RETRY_MAX_DELAY.as_secs()))
-}
-
-fn wait_for_infinity(cancel: &AtomicBool, enabled: &AtomicBool, delay: Duration) -> bool {
-    let deadline = Instant::now() + delay;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::Acquire) || !enabled.load(Ordering::Acquire) {
-            return false;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        std::thread::sleep(remaining.min(Duration::from_millis(100)));
-    }
-    !cancel.load(Ordering::Acquire) && enabled.load(Ordering::Acquire)
-}
-
-fn retryable_infinity_error(message: &str) -> bool {
-    let value = message.to_ascii_lowercase();
-    ![
-        "cancelled",
-        "canceled",
-        "authentication",
-        "not authenticated",
-        "unauthorized",
-        "forbidden",
-        "api key",
-        "no model is configured",
-        "no model selected",
-        "unknown provider",
-        "unsupported provider",
-        "vision capability is not attached",
-        "exceed the fresh working-context budget",
-    ]
-    .iter()
-    .any(|needle| value.contains(needle))
-}
-
-fn bridge_transport_error(message: &str) -> bool {
-    let value = message.to_ascii_lowercase();
-    [
-        "provider bridge closed",
-        "provider bridge stream ended unexpectedly",
-        "broken pipe",
-        "connection reset",
-        "connection aborted",
-    ]
-    .iter()
-    .any(|needle| value.contains(needle))
-}
-
-fn tool_call_indicates_implementation_intent(
-    call: &ToolCall,
-    content: &str,
-    succeeded: bool,
-) -> bool {
-    if call.name == "apply_file_edits" {
-        return true;
-    }
-    if !succeeded || call.name != tool_discovery::SEARCH_TOOL {
-        return false;
-    }
-    let Ok(value) = serde_json::from_str::<Value>(content) else {
-        return false;
-    };
-    ["loaded", "alreadyLoaded", "deferred"].iter().any(|field| {
-        value
-            .get(*field)
-            .and_then(Value::as_array)
-            .is_some_and(|tools| {
-                tools
-                    .iter()
-                    .any(|tool| tool.as_str() == Some("apply_file_edits"))
-            })
-    })
-}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn infinity_retry_policy_retries_guards_and_transient_provider_failures() {
-        assert_eq!(infinity_retry_delay(1), Duration::from_secs(1));
-        assert_eq!(infinity_retry_delay(2), Duration::from_secs(2));
-        assert_eq!(infinity_retry_delay(6), Duration::from_secs(30));
-        assert_eq!(infinity_retry_delay(99), Duration::from_secs(30));
+    fn runtime_requests_exclude_yeet_owned_capabilities() {
+        let attached = vec![
+            "vision".into(),
+            WEB_SEARCH_CAPABILITY_ID.into(),
+            "lead".into(),
+            "skill:example".into(),
+            crate::skyline::CAPABILITY_ID.into(),
+            "context-mode".into(),
+        ];
 
-        assert!(retryable_infinity_error(
+        assert_eq!(
+            runtime_attached_capabilities(&attached),
+            vec!["vision", "context-mode"]
+        );
+    }
+
+    #[test]
+    fn goal_retry_policy_retries_guards_and_transient_provider_failures() {
+        assert_eq!(goal_retry_delay(1), Duration::from_secs(1));
+        assert_eq!(goal_retry_delay(2), Duration::from_secs(2));
+        assert_eq!(goal_retry_delay(6), Duration::from_secs(30));
+        assert_eq!(goal_retry_delay(99), Duration::from_secs(30));
+
+        assert!(retryable_goal_error(
             "Runaway guard finalization was ignored after a tool-free answer was required"
         ));
-        assert!(retryable_infinity_error(
+        assert!(retryable_goal_error(
             "provider bridge stream ended unexpectedly"
         ));
         assert!(bridge_transport_error(
             "provider bridge closed before response"
         ));
-        assert!(!retryable_infinity_error("cancelled"));
-        assert!(!retryable_infinity_error(
-            "401 unauthorized: invalid API key"
-        ));
-        assert!(!retryable_infinity_error(
+        assert!(!retryable_goal_error("cancelled"));
+        assert!(!retryable_goal_error("401 unauthorized: invalid API key"));
+        assert!(!retryable_goal_error(
             "The task input and tool schemas exceed the fresh working-context budget"
         ));
     }
@@ -1976,7 +1928,7 @@ shell command terminal
                 true,
                 false,
             );
-            assert!(!matches!(decision, RunawayDecision::Finalize(_)));
+            assert!(matches!(decision, RunawayDecision::Continue));
         }
     }
 
@@ -2003,7 +1955,7 @@ shell command terminal
             true,
             false,
         );
-        assert!(!matches!(decision, RunawayDecision::Finalize(_)));
+        assert!(matches!(decision, RunawayDecision::Warn(_)));
     }
 
     #[test]
@@ -2072,11 +2024,11 @@ shell command terminal
                 true,
                 false,
             );
-            if matches!(final_decision, RunawayDecision::Finalize(_)) {
+            if matches!(final_decision, RunawayDecision::Warn(_)) {
                 break;
             }
         }
-        assert!(matches!(final_decision, RunawayDecision::Finalize(_)));
+        assert!(matches!(final_decision, RunawayDecision::Warn(_)));
     }
 
     #[test]
@@ -2209,10 +2161,11 @@ shell command terminal
             "activeSessionProtected": true, "activeSessionId": "session-1",
             "workspaceRoot": "/workspace"
         });
-        let guidance = capability_guidance(snapshot.clone());
+        let guidance = capability_guidance(snapshot.clone(), false);
         assert!(!guidance.contains("visibleTools"));
         assert!(!guidance.contains("read_file"));
         assert!(!guidance.contains("activeSessionId"));
+        assert!(!guidance.contains("search_tools"));
         for key in [
             "sandboxMode",
             "autoApprove",
@@ -2222,6 +2175,7 @@ shell command terminal
             assert!(guidance.contains(&format!("\"{key}\":{}", snapshot[key])));
         }
         assert!(guidance.contains("stale assumptions"));
+        assert!(capability_guidance(snapshot, true).contains("search_tools"));
     }
 
     #[test]
@@ -2268,6 +2222,39 @@ shell command terminal
             task_profile_with_history("search for cacheSurfaceHash in the repository", true, &[]),
             TaskProfile::Agent
         );
+        assert_eq!(
+            task_profile_with_history(
+                "Analyze the latest shuttle one, the one that closed into KSC runway, what went wrong and what went well.",
+                true,
+                &[],
+            ),
+            TaskProfile::Agent
+        );
+        assert_eq!(
+            task_profile_with_history("latest OpenAI model news", true, &[]),
+            TaskProfile::Research
+        );
+        assert_eq!(
+            task_profile_with_history("최신 셔틀 로그 분석해", true, &[]),
+            TaskProfile::Agent
+        );
+        assert_eq!(
+            task_profile_with_history("최신 OpenAI 모델 뉴스", true, &[]),
+            TaskProfile::Research
+        );
+        assert!(looks_like_local_file_lookup(
+            "Analyze the latest shuttle one, the one that closed into KSC runway, what went wrong and what went well."
+        ));
+        assert!(looks_like_local_file_lookup(
+            "read the newest local .log file"
+        ));
+        assert!(looks_like_local_file_lookup(
+            "investigate the single log file"
+        ));
+        assert!(!looks_like_local_file_lookup(
+            "analyze all log files in the repository"
+        ));
+        assert!(!looks_like_local_file_lookup("latest OpenAI model news"));
         let followup_history = vec![
             Message::system(SYSTEM_INSTRUCTION),
             Message::user("search about lower GPT-6 series models"),

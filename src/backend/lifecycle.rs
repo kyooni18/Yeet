@@ -10,8 +10,10 @@ impl BackendService {
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
         let stored = self.store.load(id)?;
-        let persisted_infinity = self.store.infinity_mode(id).unwrap_or(false);
-        let resume_infinity = persisted_infinity
+        let stored_working_directory = stored.working_directory.clone();
+        let stored_context_roots = stored.context_roots.clone();
+        let persisted_goal = self.store.goal_mode(id).unwrap_or(false);
+        let resume_goal = persisted_goal
             && stored
                 .conversation
                 .iter()
@@ -47,7 +49,7 @@ impl BackendService {
         shared.state.conversation_revision = shared.state.conversation_revision.wrapping_add(1);
         shared.state.active_model = stored.model;
         shared.state.token_usage = stored.token_usage;
-        shared.state.infinity_mode = persisted_infinity;
+        shared.state.goal_mode = persisted_goal;
         shared.state.current_context_tokens = None;
         shared.state.sandbox_settings = sandbox_settings;
         shared.state.credit_usage = stored.credit_usage;
@@ -59,6 +61,8 @@ impl BackendService {
         shared.meta.retained_debate_knowledge = stored.retained_debate_knowledge;
         shared.meta.attached_capabilities = stored.attached_harness_capabilities;
         shared.meta.disabled_capabilities = stored.disabled_capabilities;
+        shared.meta.working_directory = stored_working_directory.clone();
+        shared.meta.context_roots = stored_context_roots.clone();
         shared.state.error_message = None;
         let reconciled = shared.reconcile_orphaned_runs(
             "Persisted run had no live runtime when this session was restored.",
@@ -74,22 +78,35 @@ impl BackendService {
         let protected = self.store.directory.join(&stored.id);
         let retained_knowledge = shared.meta.retained_debate_knowledge.clone();
         drop(shared);
-        self.infinity_mode
-            .store(persisted_infinity, Ordering::Release);
-        if let Ok(mut coordinator) = self.coordinator.lock() {
+        self.goal_mode.store(persisted_goal, Ordering::Release);
+        let (working_directory, context_roots) = {
+            let mut coordinator = self
+                .coordinator
+                .lock()
+                .map_err(|_| anyhow!("coordinator lock poisoned"))?;
             coordinator.set_protected_write_paths([protected]);
             coordinator.set_session_runtime(self.store.clone(), Some(stored.id.clone()));
             coordinator.set_retained_debate_knowledge(retained_knowledge);
+            coordinator.restore_session_environment(
+                stored_working_directory.as_deref(),
+                &stored_context_roots,
+            )?;
+            coordinator.session_environment()
+        };
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.meta.working_directory = Some(working_directory);
+            shared.meta.context_roots = context_roots;
         }
         self.reload_project_capabilities()?;
         self.refresh_context_length();
         self.request_sessions();
         self.publish_state();
-        if resume_infinity {
+        if resume_goal {
             self.submit_agent(
-                INFINITY_RESUME_PROMPT.to_owned(),
+                GOAL_RESUME_PROMPT.to_owned(),
                 false,
-                "infinity-resume",
+                "goal-resume",
                 true,
             )?;
         }
@@ -98,7 +115,7 @@ impl BackendService {
 
     /// Replaces the active session with a fresh empty transcript.
     pub(super) fn new_session(&mut self) {
-        let _ = self.set_infinity_enabled(false);
+        let _ = self.set_goal_enabled(false);
         self.interrupt();
         let _ = self.invalidate_active_turn_for_replacement();
         if let Ok(mut coordinator) = self.coordinator.lock() {
@@ -113,6 +130,8 @@ impl BackendService {
         };
         let project = self.project_settings.load().unwrap_or_default();
         let mut session = SharedSession::new(model, reasoning_level);
+        session.meta.working_directory = Some(self.workspace_root.display().to_string());
+        session.meta.context_roots = vec![self.workspace_root.display().to_string()];
         session.state.sandbox_settings = SandboxStore::new(&self.workspace_root)
             .and_then(|store| store.load())
             .ok()
@@ -120,20 +139,21 @@ impl BackendService {
         session.meta.attached_capabilities = project.capabilities.attached.map(|values| {
             values
                 .into_iter()
-                .filter(|value| !value.starts_with("skill:"))
+                .filter(|value| !session_only_capability(value))
                 .collect()
         });
         session.meta.disabled_capabilities = project
             .capabilities
             .disabled
             .into_iter()
-            .filter(|value| !value.starts_with("skill:"))
+            .filter(|value| !session_only_capability(value))
             .collect();
         *self.shared.lock().unwrap() = session;
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.set_protected_write_paths(Vec::<PathBuf>::new());
             coordinator.set_session_runtime(self.store.clone(), None);
             coordinator.set_retained_debate_knowledge(Vec::new());
+            let _ = coordinator.restore_session_environment(None, &[]);
         }
         self.publish_state();
     }

@@ -3,6 +3,8 @@ withDefaults(defineProps<{ size?: number; title?: string }>(), {
   size: 28,
   title: 'Yeet',
 })
+
+const stripePatternId = `yeet-mark-stripes-${Math.random().toString(36).slice(2, 9)}`
 </script>
 
 <template>
@@ -13,22 +15,21 @@ withDefaults(defineProps<{ size?: number; title?: string }>(), {
     viewBox="0 0 32 32"
     role="img"
     :aria-label="title"
+    fill="none"
+    stroke="currentColor"
+    stroke-linecap="round"
+    stroke-linejoin="round"
   >
-    <g fill="currentColor">
-      <rect x="15" y="2" width="2" height="2" rx="1" />
-      <rect x="13" y="5" width="6" height="2" rx="1" />
-      <rect x="11" y="8" width="10" height="2" rx="1" />
-      <rect x="7" y="12" width="7" height="2" rx="1" />
-      <rect x="15" y="12" width="2" height="2" rx="1" />
-      <rect x="18" y="12" width="7" height="2" rx="1" />
-      <rect x="5" y="16" width="10" height="2" rx="1" />
-      <rect x="17" y="16" width="10" height="2" rx="1" />
-      <rect x="3" y="20" width="12" height="2" rx="1" />
-      <rect x="17" y="20" width="12" height="2" rx="1" />
-      <rect x="2" y="24" width="13" height="2" rx="1" />
-      <rect x="17" y="24" width="13" height="2" rx="1" />
-      <rect x="1" y="28" width="14" height="2" rx="1" />
-      <rect x="17" y="28" width="14" height="2" rx="1" />
+    <defs>
+      <pattern :id="stripePatternId" width="32" height="2.5" patternUnits="userSpaceOnUse">
+        <rect width="32" height="1.25" fill="currentColor" stroke="none" />
+      </pattern>
+    </defs>
+    <g :fill="`url(#${stripePatternId})`" stroke="none">
+      <path d="M2 13 14.5 22.75V31H2Z" />
+      <path d="M30 13 17.5 22.75V31H30Z" />
+      <path d="M16 1 26.5 11.25 16 20 5.5 11.25 16 1Z" />
     </g>
+    <path d="M16 19.5v3.25M14.5 22.75 2 13M17.5 22.75 30 13" stroke="var(--bg, #080607)" stroke-width="1.5" />
   </svg>
 </template>

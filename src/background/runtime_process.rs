@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backend::{BackendEvent, BackendService},
     model::{BridgeEnvelope, BridgeState, FrontendCommand},
-    platform::force_terminate_process_tree,
+    platform::{configure_process_group, force_terminate_process_tree},
 };
 
 const RUNTIME_START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,7 +29,7 @@ enum RuntimeCommand {
 }
 
 enum WorkerEvent {
-    Envelope(BridgeEnvelope),
+    Envelope(Box<BridgeEnvelope>),
     ProtocolError(String),
     Closed,
 }
@@ -49,15 +49,23 @@ pub(super) struct RuntimeProcess {
 }
 
 impl RuntimeProcess {
-    pub(super) fn spawn(workspace: &Path) -> Result<Self> {
+    pub(super) fn spawn(workspace: &Path, scope: Option<&str>) -> Result<Self> {
         let executable =
             std::env::current_exe().context("locate yeet executable for background runtime")?;
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg("__background-runtime")
             .arg(workspace)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        if let Some(scope) = scope {
+            command.env("YEET_BACKGROUND_SCOPE", scope);
+        } else {
+            command.env_remove("YEET_BACKGROUND_SCOPE");
+        }
+        configure_process_group(&mut command);
+        let mut child = command
             .spawn()
             .context("start Yeet background runtime process")?;
 
@@ -107,7 +115,7 @@ impl RuntimeProcess {
         match self.events.try_recv() {
             Ok(WorkerEvent::Envelope(envelope)) => {
                 self.observe_envelope(&envelope);
-                Some(BackendEvent::Envelope(envelope))
+                Some(BackendEvent::Envelope(*envelope))
             }
             Ok(WorkerEvent::ProtocolError(error)) => {
                 self.closed = true;
@@ -169,13 +177,30 @@ impl RuntimeProcess {
         if self.closed {
             bail!("background runtime process is closed");
         }
-        let writer = self
-            .command
-            .as_mut()
-            .ok_or_else(|| anyhow!("background runtime command pipe is closed"))?;
-        serde_json::to_writer(&mut *writer, command)?;
-        writer.write_all(b"\n")?;
-        writer.flush()?;
+        let mut frame = serde_json::to_vec(command)?;
+        frame.push(b'\n');
+        let write_result = {
+            let writer = self
+                .command
+                .as_mut()
+                .ok_or_else(|| anyhow!("background runtime command pipe is closed"))?;
+            writer.write_all(&frame).and_then(|()| writer.flush())
+        };
+        if let Err(error) = write_result {
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::UnexpectedEof
+            ) {
+                self.closed = true;
+                self.command.take();
+                bail!("background runtime closed while sending command: {error}");
+            }
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -273,7 +298,7 @@ fn runtime_reader(stdout: std::process::ChildStdout, tx: mpsc::Sender<WorkerEven
             Ok(0) => break,
             Ok(_) => match serde_json::from_str::<BridgeEnvelope>(line.trim_end()) {
                 Ok(envelope) => {
-                    if tx.send(WorkerEvent::Envelope(envelope)).is_err() {
+                    if tx.send(WorkerEvent::Envelope(Box::new(envelope))).is_err() {
                         return;
                     }
                 }

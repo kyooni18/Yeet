@@ -11,7 +11,27 @@ permissions:
   attestations: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: RuntimeSource/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: node Scripts/verify-release-version.mjs "$GITHUB_REF_NAME"
+      - run: cargo test --all-targets
+      - run: npm --prefix RuntimeSource ci
+      - run: npm --prefix RuntimeSource run check
+      - run: corepack enable
+      - run: corepack pnpm --dir web install --frozen-lockfile
+      - run: corepack pnpm --dir web build
+
   package:
+    needs: check
     strategy:
       fail-fast: false
       matrix:
@@ -44,17 +64,6 @@ jobs:
           cache-dependency-path: RuntimeSource/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Verify tag matches Cargo version
-        shell: pwsh
-        run: |
-          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          $version = ($metadata.packages | Where-Object { $_.name -eq 'yeet' } | Select-Object -First 1).version
-          if ($env:GITHUB_REF_NAME -ne "v$version") {
-            throw "Release tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
-          }
-      - run: npm --prefix RuntimeSource ci
-      - run: corepack enable
-      - run: corepack pnpm --dir web install --frozen-lockfile
       - name: Prepare Windows signing certificate
         if: runner.os == 'Windows'
         shell: pwsh

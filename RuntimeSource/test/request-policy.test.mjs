@@ -25,34 +25,18 @@ test("older Responses model families keep the legacy minimal auxiliary effort", 
   assert.deepEqual(prepared.providerOptions?.reasoning, { effort: "minimal", summary: "auto" });
 });
 
-test("ordinary primary requests default to low effort without a lead purpose", () => {
+test("ordinary agent requests default to low effort", () => {
   const prepared = withReasoningPolicy(request("opencode-go/muse-spark-1.2-contributor"));
   assert.deepEqual(prepared.providerOptions?.reasoning, { effort: "low", summary: "auto" });
 });
 
-test("request capability registry exposes lead as opt-in, not default", () => {
-  const capabilities = createRequestCapabilityRegistry({
-    contextLength: async () => 10_000,
-    complete: async () => ({ text: "" }),
-  });
-  const lead = capabilities.list().find((capability) => capability.id === "lead");
-  assert.equal(lead?.defaultAttached, false);
-  assert.equal(capabilities.defaultAttached().includes("lead"), false);
-});
 
-test("opt-in lead capability owns purpose before primary request policy", async () => {
+test("request capability registry exposes no agent hierarchy marker", () => {
   const capabilities = createRequestCapabilityRegistry({
     contextLength: async () => 10_000,
     complete: async () => ({ text: "" }),
   });
-  const marked = await capabilities.prepare({
-    model: "openai/gpt-5.6",
-    messages: [{ role: "user", content: "hello" }],
-    attachedCapabilities: ["lead"],
-  });
-  const prepared = withReasoningPolicy(marked);
-  assert.equal(prepared.metadata?.purpose, "lead");
-  assert.deepEqual(prepared.providerOptions?.reasoning, { effort: "low", summary: "auto" });
+  assert.equal(capabilities.list().some((capability) => capability.id === "lead"), false);
 });
 
 test("reasoning policy preserves explicit options and unsupported providers", () => {

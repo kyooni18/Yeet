@@ -199,7 +199,7 @@ export interface BridgeState {
   active_reasoning_text: string
   active_reasoning_summary: string
   is_streaming: boolean
-  infinity_mode: boolean
+  goal_mode: boolean
   error_message?: string | null
   active_model: string
   active_reasoning_level: string
@@ -244,7 +244,7 @@ export const emptyBridgeState = (): BridgeState => ({
   active_reasoning_text: '',
   active_reasoning_summary: '',
   is_streaming: false,
-  infinity_mode: false,
+  goal_mode: false,
   active_model: '',
   active_reasoning_level: 'auto',
   token_usage: {},
@@ -296,7 +296,7 @@ export type FrontendCommand =
   | { type: 'request_models' }
   | { type: 'select_model'; model: string }
   | { type: 'select_reasoning'; level: string }
-  | { type: 'set_infinity'; enabled: boolean }
+  | { type: 'set_goal'; enabled: boolean }
   | { type: 'request_sessions' }
   | { type: 'load_session'; session_id: string }
   | { type: 'new_session' }

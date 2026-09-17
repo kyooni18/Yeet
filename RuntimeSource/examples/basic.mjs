@@ -6,7 +6,7 @@ if (!model) throw new Error("Set MODEL in provider/model form, for example opena
 const core = createDefaultCore();
 const result = await core.complete({
   model,
-  system: "You are the lead agent in a coding harness.",
+  system: "You are an agent in a coding harness.",
   messages: [{ role: "user", content: "Return a one-line status." }],
   timeoutMs: 30_000,
 });

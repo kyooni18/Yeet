@@ -42,6 +42,7 @@ use crate::{
     workers::WorkerRegistry,
 };
 
+mod commands;
 mod debate_context;
 mod debate_runtime;
 mod events;
@@ -77,7 +78,19 @@ use transport::{
 };
 
 use crate::background::BackgroundConnection;
-const INFINITY_RESUME_PROMPT: &str = "Continue the current task from the existing working state. Do not restart completed work. Keep making useful forward progress.";
+const GOAL_RESUME_PROMPT: &str = "Continue the current goal from the existing working state. Do not restart completed work. Make useful forward progress toward satisfying every requirement and do not stop until the strict goal judge can accept concrete evidence.";
+
+const SKYLINE_CAPABILITY_ID: &str = crate::skyline::CAPABILITY_ID;
+const CAPABILITY_STREAMING_LOCK_ERROR: &str =
+    "Capabilities cannot be changed while a response is running.";
+const SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR: &str =
+    "Session environment cannot be changed while a response is running.";
+const VISION_DETACHED_ERROR: &str =
+    "Vision is detached. Enable it in /capabilities or run /attach vision before sending images.";
+
+fn session_only_capability(id: &str) -> bool {
+    id.starts_with("skill:") || id == SKYLINE_CAPABILITY_ID
+}
 
 fn default_attached_harness(capabilities: &[HarnessCapabilityDescriptor]) -> Vec<String> {
     let mut values = capabilities
@@ -91,6 +104,29 @@ fn default_attached_harness(capabilities: &[HarnessCapabilityDescriptor]) -> Vec
     values.sort();
     values.dedup();
     values
+}
+
+fn model_selection_changes(current: &str, next: &str) -> bool {
+    current != next
+}
+
+fn session_environment_mutation_allowed(is_streaming: bool) -> bool {
+    !is_streaming
+}
+
+fn clear_resolved_streaming_lock_error(error_message: &mut Option<String>) {
+    if matches!(
+        error_message.as_deref(),
+        Some(CAPABILITY_STREAMING_LOCK_ERROR | SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR)
+    ) {
+        *error_message = None;
+    }
+}
+
+fn clear_resolved_vision_detached_error(error_message: &mut Option<String>, vision_attached: bool) {
+    if vision_attached && error_message.as_deref() == Some(VISION_DETACHED_ERROR) {
+        *error_message = None;
+    }
 }
 
 fn native_app_approval_is_automatic(policy: &SandboxPolicy) -> bool {
@@ -122,8 +158,6 @@ pub enum BackendEvent {
 pub struct Backend {
     connection: BackgroundConnection,
 }
-
-type LoadedModelCatalog = (Vec<String>, Vec<ModelCatalogItem>, HashMap<String, u64>);
 
 impl Backend {
     pub fn spawn() -> Result<Self> {
@@ -163,7 +197,7 @@ pub(crate) struct BackendService {
     workspace_root: PathBuf,
     permission: PermissionBroker,
     active_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
-    infinity_mode: Arc<AtomicBool>,
+    goal_mode: Arc<AtomicBool>,
     events: Receiver<BackendEvent>,
     tx: Sender<BackendEvent>,
     closed: bool,
@@ -207,6 +241,12 @@ impl BackendService {
             coordinator.set_session_runtime(store.clone(), None);
         }
         let mut session = SharedSession::new(model, reasoning_level);
+        session.meta.working_directory = Some(workspace_root.display().to_string());
+        session.meta.context_roots = vec![workspace_root.display().to_string()];
+        if let Ok(catalog) = config.model_catalog_cache() {
+            session.state.available_models = catalog.iter().map(|item| item.id.clone()).collect();
+            session.state.model_catalog = catalog;
+        }
         session.state.saved_sessions = store.list(&workspace_root).unwrap_or_default();
         if let Ok((workspaces, session_groups)) = store.list_workspace_catalog(&workspace_root) {
             session.state.known_workspaces = workspaces;
@@ -222,14 +262,14 @@ impl BackendService {
         session.meta.attached_capabilities = project.capabilities.attached.map(|values| {
             values
                 .into_iter()
-                .filter(|value| !value.starts_with("skill:"))
+                .filter(|value| !session_only_capability(value))
                 .collect()
         });
         session.meta.disabled_capabilities = project
             .capabilities
             .disabled
             .into_iter()
-            .filter(|value| !value.starts_with("skill:"))
+            .filter(|value| !session_only_capability(value))
             .collect();
         let shared = Arc::new(Mutex::new(session));
         let (tx, events) = mpsc::channel();
@@ -257,7 +297,7 @@ impl BackendService {
             workspace_root,
             permission,
             active_cancel: Arc::new(Mutex::new(None)),
-            infinity_mode: Arc::new(AtomicBool::new(false)),
+            goal_mode: Arc::new(AtomicBool::new(false)),
             events,
             tx,
             closed: false,
@@ -272,7 +312,7 @@ impl BackendService {
             FrontendCommand::Submit { text } => self.submit(text),
             FrontendCommand::StartDebate { topic, models } => self.start_debate(topic, models),
             FrontendCommand::Interrupt => {
-                self.set_infinity_enabled(false)?;
+                self.set_goal_enabled(false)?;
                 self.interrupt();
                 Ok(())
             }
@@ -302,7 +342,7 @@ impl BackendService {
             }
             FrontendCommand::SelectModel { model } => self.select_model(model),
             FrontendCommand::SelectReasoning { level } => self.select_reasoning(level),
-            FrontendCommand::SetInfinity { enabled } => self.set_infinity_enabled(enabled),
+            FrontendCommand::SetGoal { enabled } => self.set_goal_enabled(enabled),
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
                 Ok(())
@@ -316,7 +356,7 @@ impl BackendService {
                 self.request_capabilities();
                 Ok(())
             }
-            FrontendCommand::ToggleCapability { id } => self.toggle_capability(&id),
+            FrontendCommand::ToggleCapability { id } => self.toggle_capability(&id).map(|_| ()),
             FrontendCommand::RequestAuth => {
                 self.request_auth();
                 Ok(())
@@ -369,6 +409,7 @@ impl BackendService {
                 self.update_sandbox(action);
                 Ok(())
             }
+            FrontendCommand::ExtensionCommand { .. } => Ok(()),
             FrontendCommand::Shutdown => {
                 self.shutdown();
                 Ok(())
@@ -435,27 +476,19 @@ impl BackendService {
         self.shared.lock().unwrap().state.clone()
     }
 
-    pub(crate) fn is_streaming(&self) -> bool {
-        self.shared.lock().unwrap().state.is_streaming
-    }
-
-    pub(crate) fn current_session_id(&self) -> Option<String> {
-        self.shared.lock().unwrap().state.current_session_id.clone()
-    }
-
     pub(crate) fn is_closed(&self) -> bool {
         self.closed
     }
 
-    pub(super) fn set_infinity_enabled(&self, enabled: bool) -> Result<()> {
-        self.infinity_mode.store(enabled, Ordering::Release);
+    pub(super) fn set_goal_enabled(&self, enabled: bool) -> Result<()> {
+        self.goal_mode.store(enabled, Ordering::Release);
         let session_id = {
             let mut shared = self.shared.lock().unwrap();
-            shared.state.infinity_mode = enabled;
+            shared.state.goal_mode = enabled;
             shared.state.current_session_id.clone()
         };
         if let Some(session_id) = session_id {
-            self.store.set_infinity_mode(&session_id, enabled)?;
+            self.store.set_goal_mode(&session_id, enabled)?;
         }
         self.publish_state();
         Ok(())
@@ -496,7 +529,7 @@ impl BackendService {
                         .as_ref()
                         .is_some_and(|values| !values.iter().any(|value| value == "vision"))
                 {
-                    shared.state.error_message = Some("Vision is detached. Enable it in /capabilities or run /attach vision before sending images.".into());
+                    shared.state.error_message = Some(VISION_DETACHED_ERROR.into());
                     drop(shared);
                     self.publish_state();
                     return Ok(());
@@ -541,11 +574,11 @@ impl BackendService {
             shared.set_activity(
                 "thinking",
                 if continuation {
-                    "Infinity · resuming"
+                    "Goal · resuming"
                 } else {
                     "Thinking"
                 },
-                continuation.then(|| "Resuming persisted Infinity execution".to_owned()),
+                continuation.then(|| "Resuming persisted Goal execution".to_owned()),
             );
         }
         self.publish_state();
@@ -607,7 +640,7 @@ impl BackendService {
         let store = self.store.clone();
         let workspace = self.workspace_root.clone();
         let active_cancel = self.active_cancel.clone();
-        let infinity_mode = self.infinity_mode.clone();
+        let goal_mode = self.goal_mode.clone();
         let permission = self.permission.clone();
         let bridge = self.bridge.clone();
         thread::spawn(move || {
@@ -633,7 +666,7 @@ impl BackendService {
                             attached_capabilities: attached,
                             disabled_capabilities,
                             cancel: cancel.clone(),
-                            infinity_mode: infinity_mode.clone(),
+                            goal_mode: goal_mode.clone(),
                             continuation,
                         },
                         |event| {
@@ -645,8 +678,9 @@ impl BackendService {
                                     AgentEvent::ModelAttemptStarted { .. }
                                     | AgentEvent::ModelAttemptFinished(..)
                                     | AgentEvent::AuxiliaryUsage(_)
-                                    | AgentEvent::InfinityCheckpoint { .. }
-                                    | AgentEvent::InfinityRetry { .. } => true,
+                                    | AgentEvent::GoalCheckpoint { .. }
+                                    | AgentEvent::GoalJudge { .. }
+                                    | AgentEvent::GoalRetry { .. } => true,
                                     AgentEvent::TextDelta(_) => {
                                         state.state.active_assistant_entry_id.is_some()
                                     }
@@ -682,7 +716,7 @@ impl BackendService {
             if let Ok(mut state) = shared.lock()
                 && state.meta.current_turn.as_deref() == Some(&turn_id)
             {
-                state.state.infinity_mode = infinity_mode.load(Ordering::Acquire);
+                state.state.goal_mode = goal_mode.load(Ordering::Acquire);
                 let (run_status, run_error) = match result {
                     Err(error) if cancel.load(Ordering::Acquire) => {
                         state.set_activity("interrupted", "Interrupted", None);
@@ -722,6 +756,7 @@ impl BackendService {
                 state.state.pending_shell_permission = None;
                 state.state.pending_native_app_permission = None;
                 state.state.is_streaming = false;
+                clear_resolved_streaming_lock_error(&mut state.state.error_message);
                 state.finish_run(run_status, run_error);
                 state.meta.current_turn = None;
                 if state.meta.pending_compaction
@@ -763,314 +798,13 @@ impl BackendService {
         Ok(())
     }
 
-    fn run_command(&mut self, input: &str) -> Result<()> {
-        let mut parts = input.split_whitespace();
-        let command = parts.next().unwrap_or_default();
-        let arguments: Vec<_> = parts.collect();
-        match command {
-            "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /sessions  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /infinity  /attach ID  /detach ID  /allow  /deny  /clear"),
-            "/new" => self.new_session(),
-            "/clear" => {
-                let mut shared = self.shared.lock().unwrap();
-                if let Some(entries) = shared.state.conversation.as_mut()
-                    && let Some(index) = entries
-                        .iter()
-                        .rposition(|entry| matches!(entry.kind, ConversationKind::System { .. }))
-                {
-                    entries.remove(index);
-                    shared.state.conversation_revision =
-                        shared.state.conversation_revision.wrapping_add(1);
-                }
-                drop(shared);
-                self.publish_state();
-            }
-            "/allow" => { self.permission.resolve(true); self.publish_state(); }
-            "/deny" => { self.permission.resolve(false); self.publish_state(); }
-            "/compact" => {
-                let streaming = self.shared.lock().unwrap().state.is_streaming;
-                if streaming {
-                    self.shared.lock().unwrap().meta.pending_compaction = true;
-                    self.append_system("Context compaction queued for the end of the current response.");
-                } else {
-                    self.compact_context()?;
-                }
-            }
-            "/context" => {
-                let model = self.shared.lock().unwrap().state.active_model.clone();
-                if model.is_empty() {
-                    self.append_error("No model is selected.".into());
-                    return Ok(());
-                }
-                match arguments.first().copied() {
-                    None => {
-                        let override_length = self.config.context_length_override(&model)?;
-                        let effective = self.shared.lock().unwrap().state.active_model_context_length;
-                        let message = match (override_length, effective) {
-                            (Some(value), _) => format!("Context length for {model}: {value} tokens (manual override)."),
-                            (None, Some(value)) => format!("Context length for {model}: {value} tokens (automatic)."),
-                            (None, None) => format!("Context length for {model}: unknown."),
-                        };
-                        self.append_system(&message);
-                    }
-                    Some("auto") | Some("reset") => {
-                        self.config.set_context_length_override(&model, None)?;
-                        self.refresh_context_length();
-                        self.append_system(&format!("Context length override cleared for {model}."));
-                    }
-                    Some(value) => {
-                        let length = parse_context_length(value)?;
-                        self.config.set_context_length_override(&model, Some(length))?;
-                        self.shared.lock().unwrap().state.active_model_context_length = Some(length);
-                        self.append_system(&format!("Context length for {model} set to {length} tokens."));
-                    }
-                }
-            }
-            "/status" => self.append_system(&self.status_report()),
-            "/infinity" => self.append_system("Open /infinity in the interactive TUI."),
-            "/image" => {
-                let Some(argument) = arguments.first().copied() else {
-                    let count = self.shared.lock().unwrap().meta.pending_images.len();
-                    self.append_system(&format!("{count} image{} queued for the next turn. Use /image PATH to add one or /image clear to remove them.", if count == 1 { "" } else { "s" }));
-                    return Ok(());
-                };
-                if argument == "clear" {
-                    self.shared.lock().unwrap().meta.pending_images.clear();
-                    self.append_system("Cleared queued images.");
-                    return Ok(());
-                }
-                let path_text = arguments.join(" ");
-                let path = PathBuf::from(&path_text);
-                let path = if path.is_absolute() { path } else { self.workspace_root.join(path) };
-                let image = ImageAttachment::from_file(&path)?;
-                let name = image.name.clone().unwrap_or_else(|| path.display().to_string());
-                let mut shared = self.shared.lock().unwrap();
-                shared.meta.pending_images.push(image);
-                let count = shared.meta.pending_images.len();
-                drop(shared);
-                self.append_system(&format!("Queued {name} for the next turn ({count} total)."));
-            }
-            "/capabilities" => {
-                self.reload_project_capabilities()?;
-                let capabilities = self.bridge.list_harness_capabilities()?;
-                let attached = self.shared.lock().unwrap().meta.attached_capabilities.clone();
-                let effective: Vec<String> =
-                    attached.unwrap_or_else(|| default_attached_harness(&capabilities));
-                let mut lines = capabilities.into_iter().map(|capability| format!("{} [{}] — {}", capability.id, if effective.contains(&capability.id) { "attached" } else { "detached" }, capability.description)).collect::<Vec<_>>();
-                lines.push(format!("web-search [{}] — Default-attached live web search through Agent-Reach/Exa with managed SearXNG fallback.", if effective.iter().any(|value| value == "web-search") { "attached" } else { "detached" }));
-                let text = lines.join("\n");
-                self.append_system(if text.is_empty() { "No harness capabilities are available." } else { &text });
-            }
-            "/attach" => {
-                let Some(id) = arguments.first() else { self.append_system("Usage: /attach capability-id"); return Ok(()); };
-                self.reload_project_capabilities()?;
-                let capabilities = self.bridge.list_harness_capabilities()?;
-                if *id != "web-search" && !capabilities.iter().any(|capability| capability.id == *id) { self.append_error(format!("Unknown capability: {id}")); return Ok(()); }
-                let mut shared = self.shared.lock().unwrap();
-                let mut values = shared.meta.attached_capabilities.clone().unwrap_or_else(|| default_attached_harness(&capabilities));
-                if !values.iter().any(|value| value == id) { values.push((*id).to_owned()); values.sort(); }
-                shared.meta.attached_capabilities = Some(values); drop(shared);
-                self.save_project_capabilities()?;
-                self.append_system(&format!("Attached {id}."));
-            }
-            "/detach" => {
-                let Some(id) = arguments.first() else { self.append_system("Usage: /detach capability-id"); return Ok(()); };
-                self.reload_project_capabilities()?;
-                let capabilities = self.bridge.list_harness_capabilities()?;
-                let mut shared = self.shared.lock().unwrap();
-                let mut values = shared.meta.attached_capabilities.clone().unwrap_or_else(|| default_attached_harness(&capabilities));
-                values.retain(|value| value != id); shared.meta.attached_capabilities = Some(values); drop(shared);
-                self.save_project_capabilities()?;
-                self.append_system(&format!("Detached {id}."));
-            }
-            "/provider" => self.append_system("Use `yeet provider ...` for custom API endpoints."),
-            "/login" => self.append_system("Use `yeet auth ...` for provider authentication."),
-            "/settings" => self.append_system(
-                "Open /settings in the interactive TUI to manage runtime and sandbox settings.",
-            ),
-            "/model" | "/reasoning" | "/sessions" => {},
-            _ => self.append_error(format!("Unknown command: {command}. Type /help for commands.")),
-        }
-        Ok(())
-    }
-
-    fn status_report(&self) -> String {
-        let state = self.shared.lock().unwrap().state.without_conversation();
-        let current_context = state.current_context_tokens.unwrap_or(0);
-        let context = match state.active_model_context_length {
-            Some(total) if total > 0 => format!(
-                "Context: {current_context}/{total} tokens ({:.1}% used)",
-                current_context as f64 * 100.0 / total as f64
-            ),
-            Some(total) => format!("Context: {current_context}/{total} tokens"),
-            None => format!("Context: {current_context} tokens / unknown limit"),
-        };
-        let usage = &state.token_usage;
-        let cache = usage.cache_measurement();
-        let input = cache.input_tokens;
-        let output = usage.output_tokens.unwrap_or(0);
-        let reasoning_tokens = usage.reasoning_tokens.unwrap_or(0);
-        let reasoning_mode = if state.active_reasoning_level.is_empty() {
-            "auto"
-        } else {
-            state.active_reasoning_level.as_str()
-        };
-        let (permission, sandbox_detail) = state
-            .sandbox_settings
-            .as_ref()
-            .map(|settings| {
-                (
-                    settings.permission_mode(),
-                    format!(
-                        "preset {} · execution {} · auto-approve {}",
-                        settings.preset, settings.execution_mode, settings.auto_approve
-                    ),
-                )
-            })
-            .unwrap_or(("unknown", "sandbox state unavailable".to_owned()));
-        let cache_line = cache_status_line(usage);
-        let mut lines = vec![
-            format!(
-                "Model: {}",
-                if state.active_model.is_empty() {
-                    "not selected"
-                } else {
-                    &state.active_model
-                }
-            ),
-            context,
-            format!("Tokens: input {input} · output {output} · reasoning {reasoning_tokens}"),
-            cache_line,
-            format!("Reasoning mode: {reasoning_mode}"),
-            format!(
-                "Infinity: {}",
-                if state.infinity_mode { "ON" } else { "OFF" }
-            ),
-            format!("Permission: {permission} · {sandbox_detail}"),
-            format!(
-                "Runtime: {}",
-                if state.is_streaming {
-                    "executing"
-                } else {
-                    "idle"
-                }
-            ),
-        ];
-        if let Some(cost) = usage.estimated_cost_usd {
-            lines.push(format!("Estimated cost: ${cost:.4}"));
-        }
-        if state.credit_usage > 0 {
-            lines.push(format!("Provider calls / credits: {}", state.credit_usage));
-        }
-        if let Some(session_id) = state.current_session_id.as_deref() {
-            lines.push(format!("Session: {session_id}"));
-        }
-        if let Some(run_id) = state.active_run_id.as_deref() {
-            lines.push(format!("Run: {run_id}"));
-        }
-        if let Some(error) = state.error_message.as_deref() {
-            lines.push(format!("Last error: {error}"));
-        }
-        if let Some((provider, _)) = state.active_model.split_once('/')
-            && let Ok(provider_usage) = self.bridge.provider_usage(provider)
-            && provider_usage.source != "none"
-        {
-            if provider_usage.windows.is_empty() {
-                lines.push(format!(
-                    "Quota: {} · {}",
-                    provider_usage.source,
-                    provider_usage.message.as_deref().unwrap_or("unavailable")
-                ));
-            } else {
-                let windows = provider_usage
-                    .windows
-                    .iter()
-                    .map(|window| {
-                        let reset = window
-                            .resets_at
-                            .as_deref()
-                            .map(|value| format!(" · resets {value}"))
-                            .unwrap_or_default();
-                        format!("{} {}% left{reset}", window.label, window.remaining_percent)
-                    })
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                lines.push(format!("Quota: {} · {windows}", provider_usage.source));
-            }
-        }
-        lines.join("\n")
-    }
-
-    fn request_models(&self) {
-        {
-            let mut shared = self.shared.lock().unwrap();
-            if shared.state.is_loading_models {
-                return;
-            }
-            shared.state.is_loading_models = true;
-            shared.state.error_message = None;
-        }
-        self.publish_state();
-        let bridge = self.bridge.clone();
-        let shared = self.shared.clone();
-        let tx = self.tx.clone();
-        let config = self.config.clone();
-        thread::spawn(move || {
-            let result = (|| -> Result<LoadedModelCatalog> {
-                let mut providers = bridge.list_providers()?;
-                providers.sort();
-                let mut catalog = Vec::new();
-                let mut lengths = HashMap::new();
-                for provider in providers {
-                    if let Ok(info) = bridge.list_model_info(&provider) {
-                        for model in info {
-                            let full = format!("{provider}/{}", model.id);
-                            if let Some(length) = model.context_length {
-                                lengths.insert(full.clone(), length);
-                            }
-                            catalog.push(ModelCatalogItem {
-                                id: full,
-                                provider: provider.clone(),
-                                model: model.id,
-                                context_length: model.context_length,
-                            });
-                        }
-                    }
-                }
-                catalog.sort_by_key(|value| value.id.to_ascii_lowercase());
-                catalog.dedup_by(|lhs, rhs| lhs.id == rhs.id);
-                let models = catalog.iter().map(|value| value.id.clone()).collect();
-                Ok((models, catalog, lengths))
-            })();
-            if let Ok(mut state) = shared.lock() {
-                match result {
-                    Ok((models, catalog, lengths)) => {
-                        for (model, length) in lengths {
-                            let _ = config.set_context_length(&model, Some(length));
-                        }
-                        state.state.available_models = models;
-                        state.state.model_catalog = catalog;
-                        if state.state.available_models.is_empty() {
-                            state.state.error_message = Some(
-                                "No available models could be loaded. Check provider credentials."
-                                    .into(),
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        state.state.error_message = Some(format!("Unable to load models: {error}"))
-                    }
-                }
-                state.state.is_loading_models = false;
-                let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
-            }
-        });
-    }
-
     fn select_model(&self, model: String) -> Result<()> {
         let model = self.config.set_model(&model)?;
         {
             let mut shared = self.shared.lock().unwrap();
+            if !model_selection_changes(&shared.state.active_model, &model) {
+                return Ok(());
+            }
             shared.state.active_model = model.clone();
             shared.state.active_model_context_length = None;
             shared.state.current_context_tokens = None;
@@ -1189,6 +923,15 @@ impl BackendService {
                             .into(),
                     enabled: effective_harness.iter().any(|value| value == "web-search"),
                 });
+                items.push(CapabilityToggleItem {
+                    id: SKYLINE_CAPABILITY_ID.into(),
+                    kind: "builtin".into(),
+                    name: "Skyline".into(),
+                    description: "Explicit session-attached autonomy-first shared coordination through ~/.yeet/Skyline. Models choose work themselves; Skyline provides compact deltas, peer intent, evidence exchange, and scarce live-test serialization.".into(),
+                    enabled: effective_harness
+                        .iter()
+                        .any(|value| value == SKYLINE_CAPABILITY_ID),
+                });
                 items.extend(
                     crate::tools::builtin_capabilities()
                         .iter()
@@ -1252,7 +995,7 @@ impl BackendService {
         });
     }
 
-    fn toggle_capability(&self, id: &str) -> Result<()> {
+    fn toggle_capability(&self, id: &str) -> Result<bool> {
         self.reload_project_capabilities()?;
         let harness = self.bridge.list_harness_capabilities()?;
         let is_harness = id == "web-search" || harness.iter().any(|capability| capability.id == id);
@@ -1262,24 +1005,25 @@ impl BackendService {
                 .is_ok_and(|skills| skills.iter().any(|skill| skill.name == name))
         });
         let is_mcp = id.starts_with("mcp:");
+        let is_skyline = id == SKYLINE_CAPABILITY_ID;
         let is_builtin = crate::tools::builtin_capabilities()
             .iter()
             .any(|capability| capability.id == id);
-        if !is_harness && !is_skill && !is_mcp && !is_builtin {
+        if !is_harness && !is_skill && !is_mcp && !is_builtin && !is_skyline {
             return Err(anyhow!("Unknown capability: {id}"));
         }
 
         let mut skill_transition: Option<(String, bool)> = None;
+        let mut skyline_transition: Option<bool> = None;
         {
             let mut shared = self.shared.lock().unwrap();
             if shared.state.is_streaming {
-                shared.state.error_message =
-                    Some("Capabilities cannot be changed while a response is running.".into());
+                shared.state.error_message = Some(CAPABILITY_STREAMING_LOCK_ERROR.into());
                 drop(shared);
                 self.publish_state();
-                return Ok(());
+                return Ok(false);
             }
-            if is_harness || is_skill {
+            if is_harness || is_skill || is_skyline {
                 let mut values = shared
                     .meta
                     .attached_capabilities
@@ -1293,6 +1037,10 @@ impl BackendService {
                     values.sort();
                     values.dedup();
                 }
+                clear_resolved_vision_detached_error(
+                    &mut shared.state.error_message,
+                    id == "vision" && !was_attached,
+                );
                 shared.meta.attached_capabilities = Some(values);
                 if let Some(name) = id.strip_prefix("skill:") {
                     shared
@@ -1300,6 +1048,13 @@ impl BackendService {
                         .disabled_capabilities
                         .retain(|value| value != id);
                     skill_transition = Some((name.to_owned(), !was_attached));
+                }
+                if is_skyline {
+                    shared
+                        .meta
+                        .disabled_capabilities
+                        .retain(|value| value != id);
+                    skyline_transition = Some(!was_attached);
                 }
             } else if shared
                 .meta
@@ -1317,19 +1072,24 @@ impl BackendService {
                 shared.meta.disabled_capabilities.dedup();
             }
         }
-        if let Some((name, attached)) = skill_transition.as_ref() {
+        if skill_transition.is_some() || skyline_transition.is_some() {
             let mut coordinator = self
                 .coordinator
                 .lock()
                 .map_err(|_| anyhow!("agent coordinator lock poisoned"))?;
-            if *attached {
-                coordinator.attach_skill_to_session(name)?;
-            } else {
-                coordinator.detach_skill_from_session(name);
+            if let Some((name, attached)) = skill_transition.as_ref() {
+                if *attached {
+                    coordinator.attach_skill_to_session(name)?;
+                } else {
+                    coordinator.detach_skill_from_session(name);
+                }
+            }
+            if let Some(attached) = skyline_transition {
+                coordinator.set_skyline_attachment(attached)?;
             }
         }
         self.save_project_capabilities()?;
-        if skill_transition.is_some() {
+        if skill_transition.is_some() || skyline_transition.is_some() {
             let history = self
                 .coordinator
                 .lock()
@@ -1341,7 +1101,7 @@ impl BackendService {
             }
         }
         self.request_capabilities();
-        Ok(())
+        Ok(true)
     }
 
     fn save_project_capabilities(&self) -> Result<()> {
@@ -1349,14 +1109,14 @@ impl BackendService {
         let attached = shared.meta.attached_capabilities.clone().map(|values| {
             values
                 .into_iter()
-                .filter(|value| !value.starts_with("skill:"))
+                .filter(|value| !session_only_capability(value))
                 .collect::<Vec<_>>()
         });
         let disabled = shared
             .meta
             .disabled_capabilities
             .iter()
-            .filter(|value| !value.starts_with("skill:"))
+            .filter(|value| !session_only_capability(value))
             .cloned()
             .collect::<Vec<_>>();
         self.project_settings.save_capabilities(attached, disabled)
@@ -1366,24 +1126,24 @@ impl BackendService {
         let project = self.project_settings.load()?;
         let harness = self.bridge.list_harness_capabilities()?;
         let mut shared = self.shared.lock().unwrap();
-        let attached_skills = shared
+        let session_attachments = shared
             .meta
             .attached_capabilities
             .as_deref()
             .unwrap_or_default()
             .iter()
-            .filter(|value| value.starts_with("skill:"))
+            .filter(|value| session_only_capability(value))
             .cloned()
             .collect::<Vec<_>>();
         let mut attached = project.capabilities.attached.map(|values| {
             values
                 .into_iter()
-                .filter(|value| !value.starts_with("skill:"))
+                .filter(|value| !session_only_capability(value))
                 .collect::<Vec<_>>()
         });
-        if !attached_skills.is_empty() {
+        if !session_attachments.is_empty() {
             let values = attached.get_or_insert_with(|| default_attached_harness(&harness));
-            values.extend(attached_skills);
+            values.extend(session_attachments);
             values.sort();
             values.dedup();
         }
@@ -1392,7 +1152,7 @@ impl BackendService {
             .capabilities
             .disabled
             .into_iter()
-            .filter(|value| !value.starts_with("skill:"))
+            .filter(|value| !session_only_capability(value))
             .collect();
         Ok(())
     }
@@ -1421,6 +1181,62 @@ pub fn forward_cli(arguments: &[String]) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skyline_and_skills_are_session_only_capabilities() {
+        assert!(session_only_capability(SKYLINE_CAPABILITY_ID));
+        assert!(session_only_capability("skill:polaris"));
+        assert!(!session_only_capability("web-search"));
+        assert!(!session_only_capability("builtin:shell"));
+    }
+
+    #[test]
+    fn model_reselection_is_idempotent_after_normalization() {
+        assert!(!model_selection_changes(
+            "openai/gpt-5.6-sol",
+            "openai/gpt-5.6-sol"
+        ));
+        assert!(model_selection_changes(
+            "openai/gpt-5.6-sol",
+            "openai/gpt-5.6-luna"
+        ));
+    }
+
+    #[test]
+    fn session_environment_mutation_is_locked_only_while_streaming() {
+        assert!(session_environment_mutation_allowed(false));
+        assert!(!session_environment_mutation_allowed(true));
+    }
+
+    #[test]
+    fn run_settlement_clears_only_resolved_streaming_lock_errors() {
+        for message in [
+            CAPABILITY_STREAMING_LOCK_ERROR,
+            SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR,
+        ] {
+            let mut error = Some(message.to_owned());
+            clear_resolved_streaming_lock_error(&mut error);
+            assert!(error.is_none());
+        }
+
+        let mut real_error = Some("Save failed: disk full".to_owned());
+        clear_resolved_streaming_lock_error(&mut real_error);
+        assert_eq!(real_error.as_deref(), Some("Save failed: disk full"));
+    }
+
+    #[test]
+    fn attaching_vision_clears_only_the_resolved_detached_error() {
+        let mut error = Some(VISION_DETACHED_ERROR.to_owned());
+        clear_resolved_vision_detached_error(&mut error, false);
+        assert_eq!(error.as_deref(), Some(VISION_DETACHED_ERROR));
+
+        clear_resolved_vision_detached_error(&mut error, true);
+        assert!(error.is_none());
+
+        let mut unrelated = Some("Save failed: disk full".to_owned());
+        clear_resolved_vision_detached_error(&mut unrelated, true);
+        assert_eq!(unrelated.as_deref(), Some("Save failed: disk full"));
+    }
 
     #[test]
     fn web_search_is_part_of_default_attached_harness() {
@@ -1764,6 +1580,8 @@ mod tests {
                     && matches!(tool_call.status, ToolCallStatus::Streaming)
         )));
 
+        apply_agent_event(&mut state, AgentEvent::ToolExecutionStarted(call.clone()));
+
         apply_agent_event(
             &mut state,
             AgentEvent::ToolExecutionFinished {
@@ -1780,7 +1598,134 @@ mod tests {
                 if tool_call.call_id.as_deref() == Some("call-1")
                     && matches!(tool_call.status, ToolCallStatus::Completed)
         )));
+
+        let finished = entries
+            .iter()
+            .find_map(|entry| match &entry.kind {
+                ConversationKind::ToolCall { tool_call }
+                    if tool_call.call_id.as_deref() == Some("call-1") =>
+                {
+                    Some(tool_call)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let value = serde_json::to_value(finished).unwrap();
+        assert_eq!(value.get("result"), Some(&json!("ok")));
+
+        assert!(value.get("durationMs").and_then(Value::as_u64).is_some());
         assert!(state.meta.pending_tool_calls.is_empty());
+    }
+
+    #[test]
+    fn tool_outcomes_preserve_failure_and_suppression_payloads() {
+        let mut state = SharedSession::new("test/model".into(), "medium".into());
+        let failed_call = crate::core::ToolCall {
+            id: "failed-call".into(),
+            name: "run_shell".into(),
+            arguments: json!({"command": "false"}),
+        };
+        apply_agent_event(
+            &mut state,
+            AgentEvent::ToolCall {
+                index: 0,
+                call: failed_call.clone(),
+            },
+        );
+        apply_agent_event(
+            &mut state,
+            AgentEvent::ToolExecutionFinished {
+                call: failed_call,
+                succeeded: false,
+                result: "command exited with status 1".into(),
+            },
+        );
+
+        let suppressed_call = crate::core::ToolCall {
+            id: "suppressed-call".into(),
+            name: "run_shell".into(),
+            arguments: json!({"command": "rm -rf scratch"}),
+        };
+        apply_agent_event(
+            &mut state,
+            AgentEvent::ToolCall {
+                index: 1,
+                call: suppressed_call.clone(),
+            },
+        );
+        apply_agent_event(
+            &mut state,
+            AgentEvent::ToolExecutionSuppressed {
+                call: suppressed_call,
+                reason: "approval denied".into(),
+            },
+        );
+
+        let entries = state.state.conversation.as_ref().unwrap();
+        let serialized = |call_id: &str| {
+            let call = entries
+                .iter()
+                .find_map(|entry| match &entry.kind {
+                    ConversationKind::ToolCall { tool_call }
+                        if tool_call.call_id.as_deref() == Some(call_id) =>
+                    {
+                        Some(tool_call)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            serde_json::to_value(call).unwrap()
+        };
+
+        let failed = serialized("failed-call");
+        assert_eq!(
+            failed.get("error"),
+            Some(&json!("command exited with status 1"))
+        );
+        assert!(failed.get("result").is_none());
+
+        let suppressed = serialized("suppressed-call");
+        assert_eq!(suppressed.get("result"), Some(&json!("approval denied")));
+        assert!(suppressed.get("error").is_none());
+    }
+
+    #[test]
+    fn settling_started_tools_keeps_elapsed_duration() {
+        let mut state = SharedSession::new("test/model".into(), "medium".into());
+        let call = crate::core::ToolCall {
+            id: "settled-call".into(),
+            name: "run_shell".into(),
+            arguments: json!({"command": "sleep 1"}),
+        };
+        apply_agent_event(
+            &mut state,
+            AgentEvent::ToolCall {
+                index: 0,
+                call: call.clone(),
+            },
+        );
+        apply_agent_event(&mut state, AgentEvent::ToolExecutionStarted(call.clone()));
+
+        state.settle_pending_tool_calls(ToolCallStatus::Failed);
+
+        let settled = state
+            .state
+            .conversation
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find_map(|entry| match &entry.kind {
+                ConversationKind::ToolCall { tool_call }
+                    if tool_call.call_id.as_deref() == Some("settled-call") =>
+                {
+                    Some(tool_call)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(matches!(settled.status, ToolCallStatus::Failed));
+        assert!(settled.duration_ms.is_some());
+        assert!(state.meta.tool_execution_started_at.is_empty());
     }
 
     #[test]

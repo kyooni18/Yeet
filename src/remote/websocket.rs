@@ -23,11 +23,17 @@ use super::protocol::{
 
 const EVENT_HISTORY_LIMIT: usize = 1024;
 const CLIENT_RUNTIME_TTL: Duration = Duration::from_secs(15 * 60);
+// Each retained semantic client owns a BackgroundConnection plus a dedicated
+// runtime thread, so client-supplied IDs must not make this registry unbounded.
+const MAX_CLIENT_RUNTIMES: usize = 64;
+const CLIENT_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_secs(2);
+
+type ClientRuntimeKey = (PathBuf, String);
 
 pub(crate) struct RemoteHub {
     default_workspace: PathBuf,
-    clients: Mutex<HashMap<(PathBuf, String), Arc<RemoteClientRuntime>>>,
+    clients: Mutex<HashMap<ClientRuntimeKey, Arc<RemoteClientRuntime>>>,
 }
 
 impl RemoteHub {
@@ -85,10 +91,30 @@ impl RemoteHub {
             runtime.touch();
             return Ok(Arc::clone(runtime));
         }
+        make_room_for_client_runtime(&mut clients)?;
         let runtime = Arc::new(RemoteClientRuntime::spawn(workspace)?);
         clients.insert(key, Arc::clone(&runtime));
         Ok(runtime)
     }
+}
+
+fn make_room_for_client_runtime(
+    clients: &mut HashMap<ClientRuntimeKey, Arc<RemoteClientRuntime>>,
+) -> Result<()> {
+    while clients.len() >= MAX_CLIENT_RUNTIMES {
+        let candidate = clients
+            .iter()
+            .filter(|(_, runtime)| Arc::strong_count(runtime) == 1 && !runtime.is_streaming())
+            .min_by_key(|(_, runtime)| runtime.last_touched())
+            .map(|(key, _)| key.clone());
+        let Some(candidate) = candidate else {
+            return Err(anyhow!(
+                "Remote client runtime capacity reached ({MAX_CLIENT_RUNTIMES}); close an existing Remote client or retry after one becomes idle"
+            ));
+        };
+        clients.remove(&candidate);
+    }
+    Ok(())
 }
 
 struct RuntimeShared {
@@ -654,8 +680,22 @@ async fn send_json(socket: &mut WebSocket, message: &ServerMessage) -> Result<()
 }
 
 pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
-    let Some(Ok(Message::Text(first))) = socket.recv().await else {
-        return;
+    let first = match tokio::time::timeout(CLIENT_HELLO_TIMEOUT, socket.recv()).await {
+        Ok(Some(Ok(Message::Text(first)))) => first,
+        Ok(_) => return,
+        Err(_) => {
+            let _ = send_json(
+                &mut socket,
+                &ServerMessage::error(
+                    "hello_timeout",
+                    "timed out waiting for the initial Remote hello message",
+                    true,
+                    None,
+                ),
+            )
+            .await;
+            return;
+        }
     };
     let hello = match decode_client_message(&first) {
         Ok(ClientMessage::Hello {
@@ -967,6 +1007,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn remote_hub_expands_home_workspace() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        let hub = RemoteHub::new(home.clone());
+
+        assert_eq!(hub.resolve_workspace(Some("~")).unwrap(), home.canonicalize().unwrap());
+        assert_eq!(
+            hub.resolve_workspace(Some("~/Code/Rust/Yeet")).unwrap(),
+            home.join("Code/Rust/Yeet").canonicalize().unwrap()
+        );
+    }
+
     fn base_state() -> BridgeState {
         BridgeState {
             active_model: "model".into(),
@@ -974,6 +1028,79 @@ mod tests {
             conversation: Some(Vec::new()),
             ..BridgeState::default()
         }
+    }
+
+    fn mock_remote_client_runtime(
+        last_touched: Instant,
+        is_streaming: bool,
+    ) -> Arc<RemoteClientRuntime> {
+        let (commands, _command_rx) = mpsc::channel();
+        let (events, _events_rx) = broadcast::channel(1);
+        Arc::new(RemoteClientRuntime {
+            shared: Arc::new(Mutex::new(RuntimeShared {
+                state: BridgeState {
+                    is_streaming,
+                    ..BridgeState::default()
+                },
+                sequence: 0,
+                history: VecDeque::new(),
+                last_touched,
+            })),
+            commands,
+            events,
+            thread: Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn client_runtime_capacity_recycles_oldest_idle_runtime() {
+        let now = Instant::now();
+        let mut clients = HashMap::new();
+        for index in 0..MAX_CLIENT_RUNTIMES {
+            let key = (PathBuf::from("/tmp"), format!("client-{index}"));
+            let age = Duration::from_secs((MAX_CLIENT_RUNTIMES - index) as u64);
+            clients.insert(key, mock_remote_client_runtime(now - age, false));
+        }
+
+        make_room_for_client_runtime(&mut clients).unwrap();
+
+        assert_eq!(clients.len(), MAX_CLIENT_RUNTIMES - 1);
+        assert!(!clients.contains_key(&(PathBuf::from("/tmp"), "client-0".into())));
+    }
+
+    #[test]
+    fn client_runtime_capacity_never_evicts_active_runtimes() {
+        let now = Instant::now();
+        let mut clients = HashMap::new();
+        let mut active = Vec::new();
+        for index in 0..MAX_CLIENT_RUNTIMES {
+            let runtime = mock_remote_client_runtime(now, false);
+            active.push(Arc::clone(&runtime));
+            clients.insert((PathBuf::from("/tmp"), format!("client-{index}")), runtime);
+        }
+
+        let error = make_room_for_client_runtime(&mut clients).unwrap_err();
+
+        assert_eq!(clients.len(), MAX_CLIENT_RUNTIMES);
+        assert!(error.to_string().contains("runtime capacity reached"));
+        drop(active);
+    }
+
+    #[test]
+    fn client_runtime_capacity_never_evicts_streaming_runtimes() {
+        let now = Instant::now();
+        let mut clients = HashMap::new();
+        for index in 0..MAX_CLIENT_RUNTIMES {
+            clients.insert(
+                (PathBuf::from("/tmp"), format!("client-{index}")),
+                mock_remote_client_runtime(now, true),
+            );
+        }
+
+        let error = make_room_for_client_runtime(&mut clients).unwrap_err();
+
+        assert_eq!(clients.len(), MAX_CLIENT_RUNTIMES);
+        assert!(error.to_string().contains("runtime capacity reached"));
     }
 
     #[test]
@@ -1084,7 +1211,12 @@ mod tests {
                         call_id: Some("call".into()),
                         name: "read_file".into(),
                         arguments: "{}".into(),
-                        status: crate::model::ToolCallStatus::Streaming,
+                        status: crate::model::ToolCallStatus::Completed,
+
+                        duration_ms: Some(82),
+
+                        result: Some("App.vue loaded successfully".into()),
+                        error: None,
                     },
                 },
             },
@@ -1109,11 +1241,14 @@ mod tests {
         let (events, mut rx) = broadcast::channel(16);
         process_state_update(&shared, &events, next);
         let messages = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-        assert!(
-            messages
-                .iter()
-                .any(|message| matches!(message, ServerMessage::ToolUpdate { .. }))
-        );
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            ServerMessage::ToolUpdate { tool_call: Some(tool_call), .. }
+                if tool_call.result.as_deref() == Some("App.vue loaded successfully")
+
+                    && tool_call.duration_ms == Some(82)
+                    && tool_call.error.is_none()
+        )));
         assert!(
             messages
                 .iter()

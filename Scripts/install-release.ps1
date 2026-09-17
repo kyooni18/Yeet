@@ -59,6 +59,17 @@ if (-not (Test-Path $SourceBinary -PathType Leaf) -or
     throw "This installer must be run from an extracted Yeet release bundle."
 }
 
+$Node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $Node) {
+    throw "Yeet requires Node.js 20 or newer. Install Node.js and retry."
+}
+$NodeMajorText = (& $Node.Source -p "process.versions.node.split('.')[0]").Trim()
+$NodeMajor = 0
+if (-not [int]::TryParse($NodeMajorText, [ref]$NodeMajor) -or $NodeMajor -lt 20) {
+    $NodeVersion = (& $Node.Source --version).Trim()
+    throw "Yeet requires Node.js 20 or newer; found $NodeVersion."
+}
+
 New-Item -ItemType Directory -Force $Destination | Out-Null
 New-Item -ItemType Directory -Force $RuntimeDestination | Out-Null
 Copy-Item -Force $SourceBinary $InstalledBinary
@@ -66,6 +77,8 @@ $InstalledDist = Join-Path $RuntimeDestination "dist"
 if (Test-Path $InstalledDist) { Remove-Item -Recurse -Force $InstalledDist }
 Copy-Item -Recurse -Force (Join-Path $SourceRuntime "dist") $InstalledDist
 Copy-Item -Force (Join-Path $SourceRuntime "package.json") (Join-Path $RuntimeDestination "package.json")
+& $InstalledBinary skyline setup | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Skyline setup failed." }
 
 foreach ($Port in $RunningMcpPorts) {
     & $InstalledBinary mcpserver start --port $Port | Out-Null

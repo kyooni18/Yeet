@@ -16,3 +16,16 @@ __pycache__/
 .DS_Store
 .yeet/
 third_party/open-computer-use/
+
+# Local investigation / coordination scratch
+.tmp-*
+.yeet-session-inspect/
+skyline/
+# The Skyline coordinator is generated at runtime, but its bundled source
+# must remain in the source distribution for include_bytes! builds.
+!skyline/
+skyline/*
+!skyline/skyline.py
+swiftly.pkg
+web/tests/*.tmp.spec.ts
+.tmp_*

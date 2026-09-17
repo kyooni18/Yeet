@@ -8,6 +8,8 @@ use super::{responsive, theme};
 use crate::app::{App, Mode};
 use ratatui::{Frame, prelude::Color};
 
+const MIN_GUIDE_GUTTER: u16 = 2;
+
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     if app.mode != Mode::Chat
         || app.state.pending_shell_permission.is_some()
@@ -49,7 +51,13 @@ fn draw_content_guides(
         return;
     };
     let right = content_x.saturating_add(content_width).saturating_add(1);
-    if left <= area.x || right >= area.right() {
+    let left_gutter = left.saturating_sub(body_x);
+    let right_gutter = area.right().saturating_sub(right.saturating_add(1));
+    if left <= area.x
+        || right >= area.right()
+        || left_gutter < MIN_GUIDE_GUTTER
+        || right_gutter < MIN_GUIDE_GUTTER
+    {
         return;
     }
 
@@ -96,5 +104,23 @@ mod tests {
         assert_eq!(buffer[(left, y)].symbol(), "│");
         assert_eq!(buffer[(right, y)].symbol(), "│");
         assert_eq!(buffer[(content_x, y)].symbol(), " ");
+    }
+
+    #[test]
+    fn content_guides_yield_until_wide_layout_has_real_gutters() {
+        let tight = Rect::new(0, 0, 132, 24);
+        let tight_metrics = responsive::metrics(tight);
+        let mut tight_buffer = Buffer::empty(tight);
+        draw_content_guides(&mut tight_buffer, tight, tight_metrics);
+        assert!(
+            !tight_buffer.content.iter().any(|cell| cell.symbol() == "│"),
+            "tight wide layout should not paint guides against the sidebar and edge"
+        );
+
+        let roomy = Rect::new(0, 0, 156, 24);
+        let roomy_metrics = responsive::metrics(roomy);
+        let mut roomy_buffer = Buffer::empty(roomy);
+        draw_content_guides(&mut roomy_buffer, roomy, roomy_metrics);
+        assert!(roomy_buffer.content.iter().any(|cell| cell.symbol() == "│"));
     }
 }

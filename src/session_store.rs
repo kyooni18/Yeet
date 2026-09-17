@@ -29,7 +29,8 @@ const RUNS_DIR: &str = "runs";
 const EVENT_SEQUENCE_FILE: &str = ".event-seq";
 const OBJECTS_DIR: &str = ".objects";
 const MANIFEST_FILE: &str = ".current.json";
-const INFINITY_STATE_FILE: &str = ".infinity.json";
+const GOAL_STATE_FILE: &str = ".goal.json";
+const LEGACY_GOAL_STATE_FILE: &str = ".infinity.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +43,10 @@ pub struct StoredSession {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub workspace_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_roots: Vec<String>,
     pub model: String,
     pub token_usage: Usage,
     pub credit_usage: u64,
@@ -169,13 +174,22 @@ impl SessionStore {
     }
 
     /// Prepare the on-disk store and collapse older revision-based sessions
-    /// into the current semantic layout. Migration is intentionally done once
-    /// at backend startup rather than on every save.
+    /// into the current semantic layout. Migration is opportunistic: current
+    /// readers understand every legacy layout, so backend startup must not wait
+    /// behind an unrelated save/export that already owns the store lock.
     pub fn prepare(&self) -> Result<()> {
-        self.serialized(true, || {
-            self.migrate_legacy_layouts();
-            cleanup_stale_materialization_links_in_store(&self.directory)
-        })
+        let _process_guard = self
+            .io_lock
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session store lock poisoned"))?;
+        self.ensure()?;
+        let Some(_file_guard) =
+            StoreFileLock::try_acquire_exclusive(&self.directory.join(".store.lock"))?
+        else {
+            return Ok(());
+        };
+        self.migrate_legacy_layouts();
+        cleanup_stale_materialization_links_in_store(&self.directory)
     }
 
     pub fn save(&self, session: &StoredSession) -> Result<()> {
@@ -776,21 +790,27 @@ impl SessionStore {
         })
     }
 
-    pub fn set_infinity_mode(&self, id: &str, enabled: bool) -> Result<()> {
+    pub fn set_goal_mode(&self, id: &str, enabled: bool) -> Result<()> {
         self.serialized_session(id, true, || {
             let root = self.directory.join(id);
             create_private_dir(&root)?;
             let data = serde_json::to_vec_pretty(&serde_json::json!({ "enabled": enabled }))?;
-            write_private_replace(&root.join(INFINITY_STATE_FILE), &data)
+            write_private_replace(&root.join(GOAL_STATE_FILE), &data)
         })
     }
 
-    pub fn infinity_mode(&self, id: &str) -> Result<bool> {
+    pub fn goal_mode(&self, id: &str) -> Result<bool> {
         self.serialized_session(id, false, || {
-            let path = self.directory.join(id).join(INFINITY_STATE_FILE);
-            if !path.is_file() {
+            let root = self.directory.join(id);
+            let path = [
+                root.join(GOAL_STATE_FILE),
+                root.join(LEGACY_GOAL_STATE_FILE),
+            ]
+            .into_iter()
+            .find(|path| path.is_file());
+            let Some(path) = path else {
                 return Ok(false);
-            }
+            };
             let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
             Ok(value
                 .get("enabled")
@@ -1069,6 +1089,22 @@ impl StoreFileLock {
         }
         Ok(Self { file })
     }
+
+    fn try_acquire_exclusive(path: &Path) -> Result<Option<Self>> {
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(path)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error).context("lock session store"),
+        }
+    }
 }
 
 impl Drop for StoreFileLock {
@@ -1341,18 +1377,31 @@ mod tests {
     };
 
     #[test]
-    fn infinity_mode_state_is_durable_and_defaults_off() {
+    fn goal_mode_state_is_durable_and_defaults_off() {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::new(temp.path());
-        let id = "session-infinity";
+        let id = "session-goal";
 
-        assert!(!store.infinity_mode(id).unwrap());
-        store.set_infinity_mode(id, true).unwrap();
-        assert!(store.infinity_mode(id).unwrap());
-        assert!(store.directory.join(id).join(INFINITY_STATE_FILE).is_file());
+        assert!(!store.goal_mode(id).unwrap());
+        store.set_goal_mode(id, true).unwrap();
+        assert!(store.goal_mode(id).unwrap());
+        assert!(store.directory.join(id).join(GOAL_STATE_FILE).is_file());
 
-        store.set_infinity_mode(id, false).unwrap();
-        assert!(!store.infinity_mode(id).unwrap());
+        store.set_goal_mode(id, false).unwrap();
+        assert!(!store.goal_mode(id).unwrap());
+    }
+
+    #[test]
+    fn goal_mode_reads_legacy_state_without_writing_back_to_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        let id = "legacy-goal";
+        let root = store.directory.join(id);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(LEGACY_GOAL_STATE_FILE), br#"{"enabled":true}"#).unwrap();
+
+        assert!(store.goal_mode(id).unwrap());
+        assert!(!root.join(GOAL_STATE_FILE).exists());
     }
 
     #[test]
@@ -1376,6 +1425,8 @@ mod tests {
                 created_at: now,
                 updated_at: now + chrono::Duration::seconds(index as i64),
                 workspace_root: workspace.path().display().to_string(),
+                working_directory: Some(workspace.path().display().to_string()),
+                context_roots: vec![workspace.path().display().to_string()],
                 model: "openai/test".into(),
                 token_usage: Usage::default(),
                 credit_usage: 0,
@@ -1420,6 +1471,14 @@ mod tests {
         );
         assert!(!store.file_path("session-0").exists());
         let saved = store.load("session-0").unwrap();
+        assert_eq!(
+            saved.working_directory.as_deref(),
+            Some(workspace.path().to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            saved.context_roots,
+            vec![workspace.path().display().to_string()]
+        );
         assert_eq!(saved.debate.as_ref().unwrap().models.jury, "p/jury");
         assert_eq!(saved.debate.as_ref().unwrap().models.pro, "p/pro");
         assert_eq!(saved.debate.as_ref().unwrap().models.con, "p/con");
@@ -1530,6 +1589,8 @@ mod tests {
                     created_at: now,
                     updated_at: now + chrono::Duration::seconds(offset),
                     workspace_root: root.display().to_string(),
+                    working_directory: None,
+                    context_roots: Vec::new(),
                     model: "openai/test".into(),
                     token_usage: Usage::default(),
                     credit_usage: 0,
@@ -1593,6 +1654,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
+            working_directory: None,
+            context_roots: Vec::new(),
             model: "openai/test".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
@@ -1653,6 +1716,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
+            working_directory: None,
+            context_roots: Vec::new(),
             model: "openai/test".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
@@ -1741,6 +1806,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
+            working_directory: None,
+            context_roots: Vec::new(),
             model: "openai/test".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
@@ -1777,6 +1844,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
+            working_directory: None,
+            context_roots: Vec::new(),
             model: "openai/test".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
@@ -1842,6 +1911,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             workspace_root: workspace.path().display().to_string(),
+            working_directory: None,
+            context_roots: Vec::new(),
             model: "openai/test".into(),
             token_usage: Usage::default(),
             credit_usage: 0,
@@ -1899,6 +1970,67 @@ mod tests {
     }
 
     #[test]
+    fn prepare_does_not_wait_for_busy_store_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        fs::create_dir_all(&store.directory).unwrap();
+        let now = Utc::now();
+        let legacy = StoredSession {
+            version: 1,
+            debate: None,
+            id: "busy-legacy".into(),
+            title: "busy legacy".into(),
+            created_at: now,
+            updated_at: now,
+            workspace_root: workspace.path().display().to_string(),
+            working_directory: None,
+            context_roots: Vec::new(),
+            model: "openai/test".into(),
+            token_usage: Usage::default(),
+            credit_usage: 0,
+            conversation: vec![],
+            model_history: vec![],
+            runs: vec![],
+            retained_debate_knowledge: vec![],
+            attached_harness_capabilities: None,
+            disabled_capabilities: vec![],
+        };
+        let legacy_file = store.file_path(&legacy.id);
+        fs::write(&legacy_file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let shared_lock =
+            StoreFileLock::acquire(&store.directory.join(".store.lock"), false).unwrap();
+        let worker_store = store.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = tx.send(worker_store.prepare());
+        });
+        let prompt_result = rx.recv_timeout(std::time::Duration::from_millis(250));
+
+        if prompt_result.is_ok() {
+            assert!(legacy_file.is_file(), "busy prepare should defer migration");
+        }
+        drop(shared_lock);
+        let eventual_result = match prompt_result {
+            Ok(result) => result,
+            Err(error) => {
+                let result = rx.recv_timeout(std::time::Duration::from_secs(2));
+                worker.join().unwrap();
+                panic!(
+                    "prepare blocked on a busy store lock: {error}; eventual result: {result:?}"
+                );
+            }
+        };
+        worker.join().unwrap();
+        eventual_result.unwrap();
+
+        store.prepare().unwrap();
+        assert!(!legacy_file.exists());
+        assert!(store.directory.join("busy-legacy/metadata.json").is_file());
+    }
+
+    #[test]
     fn prepare_removes_orphaned_materialization_links_without_broad_link_deletion() {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::new(temp.path());
@@ -1946,6 +2078,8 @@ mod tests {
             created_at: now,
             updated_at: now,
             workspace_root: "/tmp/project".into(),
+            working_directory: None,
+            context_roots: Vec::new(),
             model: "openai/test".into(),
             token_usage: Usage {
                 input_tokens: Some(1),

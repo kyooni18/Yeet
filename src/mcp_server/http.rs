@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     io::{BufRead, BufReader, BufWriter, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
@@ -27,10 +27,16 @@ use super::{
 };
 
 mod runtime_support;
+mod wire;
 
+use crate::platform::force_terminate_process_tree;
 use runtime_support::{
     JsonRpcErrorShape, mcp_jsonrpc_error_response, payload_contains_blocking_tool_call,
     runtime_timeout_for_payload,
+};
+use wire::{
+    HttpRequest, HttpResponse, inferred_public_url, issuer_for_resource, normalize_public_url,
+    parse_form, read_request, split_target, write_response,
 };
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -46,6 +52,10 @@ const MAX_MCP_SESSIONS: usize = 32;
 const MAX_LEGACY_RUNTIMES: usize = 16;
 const MAX_BLOCKING_TOOL_RUNTIMES: usize = 12;
 const MAX_LEGACY_AFFINITY_HANDLES: usize = 8192;
+const MCP_LEGACY_RUNTIME_RETAIN_COUNT: usize = 4;
+const MCP_LEGACY_RUNTIME_IDLE_TTL: Duration = Duration::from_secs(5 * 60);
+const MCP_LEGACY_RUNTIME_REAP_INTERVAL: Duration = Duration::from_secs(30);
+const MCP_LEGACY_HANDLE_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 const MCP_SESSION_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 const MCP_RUNTIME_LANE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const MCP_RUNTIME_FIXED_LANE_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -62,6 +72,7 @@ pub(super) struct HttpOptions {
     pub bind_host: String,
     pub port: u16,
     pub default_workspace: PathBuf,
+    pub restrict_workspace: bool,
     pub public_url: Option<Url>,
 }
 
@@ -85,7 +96,10 @@ impl HttpServer {
         };
         let issuer = issuer_for_resource(&public_url)?;
         let oauth = OAuthRuntime::new(auth_store, issuer.clone(), public_url.clone())?;
-        let runtimes = Arc::new(McpRuntimeManager::new(options.default_workspace)?);
+        let runtimes = Arc::new(McpRuntimeManager::new(
+            options.default_workspace,
+            options.restrict_workspace,
+        )?);
         Ok(Self {
             listener,
             address,
@@ -106,7 +120,12 @@ impl HttpServer {
 
     pub(super) fn serve(self, stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
         let active_workers = Arc::new(AtomicUsize::new(0));
+        let mut next_runtime_reap = Instant::now() + MCP_LEGACY_RUNTIME_REAP_INTERVAL;
         while !stop.load(std::sync::atomic::Ordering::Acquire) {
+            if Instant::now() >= next_runtime_reap {
+                self.runtimes.reap_idle_legacy_runtimes();
+                next_runtime_reap = Instant::now() + MCP_LEGACY_RUNTIME_REAP_INTERVAL;
+            }
             match self.listener.accept() {
                 Ok((mut stream, _)) => {
                     let active = active_workers.fetch_add(1, Ordering::AcqRel);
@@ -164,12 +183,14 @@ impl Drop for HttpWorkerSlot {
 
 struct SessionRuntime {
     process: McpProcess,
+    last_used: Instant,
 }
 
 impl SessionRuntime {
-    fn new(default_workspace: PathBuf) -> Result<Self> {
+    fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
         Ok(Self {
-            process: McpProcess::new(default_workspace)?,
+            process: McpProcess::new(default_workspace, restrict_workspace)?,
+            last_used: Instant::now(),
         })
     }
 
@@ -180,7 +201,9 @@ impl SessionRuntime {
             );
             self.process.restart()?;
         }
-        self.process.handle(payload)
+        let result = self.process.handle(payload);
+        self.last_used = Instant::now();
+        result
     }
 }
 
@@ -190,9 +213,9 @@ struct SessionRuntimePool {
 }
 
 impl SessionRuntimePool {
-    fn new(default_workspace: PathBuf) -> Result<Self> {
+    fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
         Ok(Self {
-            runtimes: RuntimeLanePool::new(default_workspace)?,
+            runtimes: RuntimeLanePool::new(default_workspace, restrict_workspace)?,
             last_used: Mutex::new(Instant::now()),
         })
     }
@@ -218,13 +241,20 @@ impl SessionRuntimePool {
 
 struct RuntimeLanePool {
     default_workspace: PathBuf,
+    restrict_workspace: bool,
     lanes: Vec<Arc<Mutex<Option<SessionRuntime>>>>,
     affinity: Mutex<LegacyAffinityState>,
 }
 
+#[derive(Clone, Copy)]
+struct LegacyHandleAffinity {
+    lane: usize,
+    last_used: Instant,
+}
+
 #[derive(Default)]
 struct LegacyAffinityState {
-    handles: HashMap<String, usize>,
+    handles: HashMap<String, LegacyHandleAffinity>,
     handle_order: VecDeque<String>,
     sticky: HashMap<String, usize>,
     preferred: HashMap<String, usize>,
@@ -244,21 +274,22 @@ enum LegacyRoute {
 }
 
 impl RuntimeLanePool {
-    fn new(default_workspace: PathBuf) -> Result<Self> {
+    fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
         let mut lanes = Vec::with_capacity(MAX_LEGACY_RUNTIMES);
         lanes.push(Arc::new(Mutex::new(Some(SessionRuntime::new(
             default_workspace.clone(),
+            restrict_workspace,
         )?))));
         for _ in 1..MAX_LEGACY_RUNTIMES {
             lanes.push(Arc::new(Mutex::new(None)));
         }
         Ok(Self {
             default_workspace,
+            restrict_workspace,
             lanes,
             affinity: Mutex::new(LegacyAffinityState::default()),
         })
     }
-
     fn call(&self, payload: Value) -> std::result::Result<Option<Value>, RuntimeCallError> {
         let blocking = payload_contains_blocking_tool_call(&payload);
         let info = legacy_request_info(&payload, &self.default_workspace);
@@ -267,9 +298,8 @@ impl RuntimeLanePool {
         // side of the pool. Everything else that can safely choose a fresh runtime
         // starts in the reserved short-call lanes, so snapshots/artifacts are not
         // created on a lane that a long shell or desktop call can monopolize.
-        let use_reserved_short_lanes = !blocking
-            && info.sticky_key.is_none()
-            && blocking_end < self.lanes.len();
+        let use_reserved_short_lanes =
+            !blocking && info.sticky_key.is_none() && blocking_end < self.lanes.len();
         let (lane_start, lane_end) = if use_reserved_short_lanes {
             (blocking_end, self.lanes.len())
         } else {
@@ -281,19 +311,24 @@ impl RuntimeLanePool {
                 let response = call_runtime_lane_bounded(
                     &self.lanes[lane],
                     &self.default_workspace,
+                    self.restrict_workspace,
                     payload,
                     lane,
                 )?;
                 (lane, response)
             }
-            LegacyRoute::Flexible(start) => call_flexible_runtime_bounded(
-                &self.lanes,
-                &self.default_workspace,
-                payload,
-                lane_start,
-                lane_end,
-                start,
-            )?,
+            LegacyRoute::Flexible(start) => {
+                let protected_lanes = self.sticky_lanes_in_range(lane_start, lane_end)?;
+                call_flexible_runtime_bounded(
+                    &self.lanes,
+                    &self.default_workspace,
+                    self.restrict_workspace,
+                    payload,
+                    lane_start..lane_end,
+                    start,
+                    &protected_lanes,
+                )?
+            }
         };
         if let Some(key) = info.preferred_key.as_ref() {
             self.affinity
@@ -323,11 +358,15 @@ impl RuntimeLanePool {
         let mut affinity = self.affinity.lock().map_err(|_| {
             RuntimeCallError::Unavailable(anyhow!("legacy MCP affinity lock poisoned"))
         })?;
+        let now = Instant::now();
+        affinity.prune_expired_handles(now);
         let mut fixed_lane = None;
         for handle in &info.handles {
-            let Some(&lane) = affinity.handles.get(handle) else {
+            let Some(binding) = affinity.handles.get_mut(handle) else {
                 continue;
             };
+            binding.last_used = now;
+            let lane = binding.lane;
             match fixed_lane {
                 None => fixed_lane = Some(lane),
                 Some(existing) if existing == lane => {}
@@ -354,19 +393,36 @@ impl RuntimeLanePool {
             if let Some(&lane) = affinity.preferred.get(key)
                 && (lane_start..lane_end).contains(&lane)
             {
-                return Ok(LegacyRoute::Flexible(lane));
+                return Ok(LegacyRoute::Fixed(lane));
             }
-            // Preferred affinity is only a performance hint, not state ownership.
-            // Drop a stale mapping when pool policy moves this workspace to another
-            // lane class (for example after reserving short-call lanes).
+            // Short file calls create daemon-local snapshot/artifact state. Bind the
+            // workspace before execution so concurrent first-use requests cannot spill
+            // across reserved lanes and later produce incompatible handles.
             affinity.preferred.remove(key);
             let lane = lane_start + affinity.next_lane % lane_count;
             affinity.next_lane = affinity.next_lane.wrapping_add(1);
-            return Ok(LegacyRoute::Flexible(lane));
+            affinity.preferred.insert(key.clone(), lane);
+            return Ok(LegacyRoute::Fixed(lane));
         }
         let start = lane_start + affinity.next_lane % lane_count;
         affinity.next_lane = affinity.next_lane.wrapping_add(1);
         Ok(LegacyRoute::Flexible(start))
+    }
+
+    fn sticky_lanes_in_range(
+        &self,
+        lane_start: usize,
+        lane_end: usize,
+    ) -> std::result::Result<HashSet<usize>, RuntimeCallError> {
+        let affinity = self.affinity.lock().map_err(|_| {
+            RuntimeCallError::Unavailable(anyhow!("legacy MCP affinity lock poisoned"))
+        })?;
+        Ok(affinity
+            .sticky
+            .values()
+            .copied()
+            .filter(|lane| (lane_start..lane_end).contains(lane))
+            .collect())
     }
 
     fn record_response_handles(&self, response: &Value, lane: usize) -> Result<()> {
@@ -379,11 +435,19 @@ impl RuntimeLanePool {
             .affinity
             .lock()
             .map_err(|_| anyhow!("legacy MCP affinity lock poisoned"))?;
+        let now = Instant::now();
+        affinity.prune_expired_handles(now);
         for handle in handles {
             if !affinity.handles.contains_key(&handle) {
                 affinity.handle_order.push_back(handle.clone());
             }
-            affinity.handles.insert(handle, lane);
+            affinity.handles.insert(
+                handle,
+                LegacyHandleAffinity {
+                    lane,
+                    last_used: now,
+                },
+            );
         }
         while affinity.handles.len() > MAX_LEGACY_AFFINITY_HANDLES {
             let Some(oldest) = affinity.handle_order.pop_front() else {
@@ -392,6 +456,65 @@ impl RuntimeLanePool {
             affinity.handles.remove(&oldest);
         }
         Ok(())
+    }
+
+    fn reap_idle_legacy_runtimes(&self) -> usize {
+        let now = Instant::now();
+        let mut active_count = 0usize;
+        let mut candidates = Vec::new();
+
+        for (lane_index, lane) in self.lanes.iter().enumerate() {
+            match lane.try_lock() {
+                Ok(slot) => {
+                    if let Some(runtime) = slot.as_ref() {
+                        active_count += 1;
+                        if now.saturating_duration_since(runtime.last_used)
+                            >= MCP_LEGACY_RUNTIME_IDLE_TTL
+                        {
+                            candidates.push((runtime.last_used, lane_index));
+                        }
+                    }
+                }
+                Err(std::sync::TryLockError::WouldBlock)
+                | Err(std::sync::TryLockError::Poisoned(_)) => active_count += 1,
+            }
+        }
+
+        if active_count <= MCP_LEGACY_RUNTIME_RETAIN_COUNT {
+            return 0;
+        }
+        candidates.sort_unstable_by_key(|(last_used, _)| *last_used);
+
+        let mut retired = 0usize;
+        for (_, lane_index) in candidates {
+            if active_count <= MCP_LEGACY_RUNTIME_RETAIN_COUNT {
+                break;
+            }
+            let Ok(mut slot) = self.lanes[lane_index].try_lock() else {
+                continue;
+            };
+            let Some(runtime) = slot.as_ref() else {
+                continue;
+            };
+            if now.saturating_duration_since(runtime.last_used) < MCP_LEGACY_RUNTIME_IDLE_TTL {
+                continue;
+            }
+            let Ok(mut affinity) = self.affinity.lock() else {
+                continue;
+            };
+            affinity.prune_expired_handles(now);
+            if affinity.lane_is_pinned(lane_index) {
+                continue;
+            }
+            affinity.forget_preferred_lane(lane_index);
+            let runtime = slot.take();
+            drop(affinity);
+            drop(slot);
+            drop(runtime);
+            active_count -= 1;
+            retired += 1;
+        }
+        retired
     }
 
     fn add_health(&self, health: &mut RuntimeHealth) {
@@ -419,6 +542,7 @@ impl RuntimeLanePool {
 fn call_runtime_lane_bounded(
     lane: &Arc<Mutex<Option<SessionRuntime>>>,
     default_workspace: &Path,
+    restrict_workspace: bool,
     payload: Value,
     lane_index: usize,
 ) -> std::result::Result<Option<Value>, RuntimeCallError> {
@@ -430,7 +554,13 @@ fn call_runtime_lane_bounded(
     loop {
         match lane.try_lock() {
             Ok(mut runtime) => {
-                return call_locked_runtime(&mut runtime, default_workspace, payload, lane_index);
+                return call_locked_runtime(
+                    &mut runtime,
+                    default_workspace,
+                    restrict_workspace,
+                    payload,
+                    lane_index,
+                );
             }
             Err(std::sync::TryLockError::WouldBlock) => {
                 if Instant::now() >= deadline {
@@ -454,11 +584,14 @@ fn call_runtime_lane_bounded(
 fn call_flexible_runtime_bounded(
     lanes: &[Arc<Mutex<Option<SessionRuntime>>>],
     default_workspace: &Path,
+    restrict_workspace: bool,
     payload: Value,
-    lane_start: usize,
-    lane_end: usize,
+    lane_range: std::ops::Range<usize>,
     start: usize,
+    protected_lanes: &HashSet<usize>,
 ) -> std::result::Result<(usize, Option<Value>), RuntimeCallError> {
+    let lane_start = lane_range.start;
+    let lane_end = lane_range.end;
     if lanes.is_empty() || lane_start >= lane_end || lane_end > lanes.len() {
         return Err(RuntimeCallError::Unavailable(anyhow!(
             "MCP runtime pool has no eligible lanes"
@@ -471,50 +604,62 @@ fn call_flexible_runtime_bounded(
     } else {
         start % lane_count
     };
+    let lane_order = (0..lane_count)
+        .map(|offset| lane_start + (start_offset + offset) % lane_count)
+        .collect::<Vec<_>>();
     let request = runtime_request_summary(&payload, default_workspace);
     let deadline = Instant::now() + MCP_RUNTIME_LANE_WAIT_TIMEOUT;
     let mut payload = Some(payload);
     loop {
-        // Prefer the routed warm lane before spilling or growing the selected pool.
-        for offset in 0..lane_count {
-            let lane_index = lane_start + (start_offset + offset) % lane_count;
-            let lane = &lanes[lane_index];
-            match lane.try_lock() {
-                Ok(mut runtime) if runtime.is_some() => {
-                    let response = call_locked_runtime(
-                        &mut runtime,
-                        default_workspace,
-                        payload
-                            .take()
-                            .expect("payload consumed only after lane selection"),
-                        lane_index,
-                    )?;
-                    return Ok((lane_index, response));
+        // Prefer lanes without sticky shell/computer state. Stateful lanes remain
+        // fallback capacity when every unpinned lane is busy or unavailable.
+        for protected_phase in [false, true] {
+            // Prefer an already initialized idle runtime within this priority group.
+            for &lane_index in &lane_order {
+                if protected_lanes.contains(&lane_index) != protected_phase {
+                    continue;
                 }
-                Ok(_) | Err(std::sync::TryLockError::WouldBlock) => {}
-                Err(std::sync::TryLockError::Poisoned(_)) => continue,
+                match lanes[lane_index].try_lock() {
+                    Ok(mut runtime) if runtime.is_some() => {
+                        let response = call_locked_runtime(
+                            &mut runtime,
+                            default_workspace,
+                            restrict_workspace,
+                            payload
+                                .take()
+                                .expect("payload consumed only after lane selection"),
+                            lane_index,
+                        )?;
+                        return Ok((lane_index, response));
+                    }
+                    Ok(_) | Err(std::sync::TryLockError::WouldBlock) => {}
+                    Err(std::sync::TryLockError::Poisoned(_)) => continue,
+                }
             }
-        }
 
-        // Grow only when every warm eligible lane is currently busy. Rotate the cold
-        // lane choice for fairness under real concurrency, but never pay the
-        // process/startup cost merely because the next_lane cursor advanced.
-        for offset in 0..lane_count {
-            let lane_index = lane_start + (start_offset + offset) % lane_count;
-            match lanes[lane_index].try_lock() {
-                Ok(mut runtime) => {
-                    let response = call_locked_runtime(
-                        &mut runtime,
-                        default_workspace,
-                        payload
-                            .take()
-                            .expect("payload consumed only after lane selection"),
-                        lane_index,
-                    )?;
-                    return Ok((lane_index, response));
+            // A cold unpinned slot is preferable to borrowing a lane that carries
+            // stateful affinity; initialization cost is bounded and paid once.
+            for &lane_index in &lane_order {
+                if protected_lanes.contains(&lane_index) != protected_phase {
+                    continue;
                 }
-                Err(std::sync::TryLockError::WouldBlock) => continue,
-                Err(std::sync::TryLockError::Poisoned(_)) => continue,
+                match lanes[lane_index].try_lock() {
+                    Ok(mut runtime) => {
+                        let response = call_locked_runtime(
+                            &mut runtime,
+                            default_workspace,
+                            restrict_workspace,
+                            payload
+                                .take()
+                                .expect("payload consumed only after lane selection"),
+                            lane_index,
+                        )?;
+                        return Ok((lane_index, response));
+                    }
+                    Err(
+                        std::sync::TryLockError::WouldBlock | std::sync::TryLockError::Poisoned(_),
+                    ) => continue,
+                }
             }
         }
 
@@ -528,19 +673,29 @@ fn call_flexible_runtime_bounded(
     }
 }
 
+fn runtime_pool_busy_error(lane_index: usize, wait: Duration, request: &str) -> RuntimeCallError {
+    RuntimeCallError::Unavailable(anyhow!(
+        "MCP runtime lane {lane_index} stayed busy for {} ms; retry shortly ({request})",
+        wait.as_millis()
+    ))
+}
+
 fn call_locked_runtime(
     slot: &mut Option<SessionRuntime>,
     default_workspace: &Path,
+    restrict_workspace: bool,
     payload: Value,
     lane_index: usize,
 ) -> std::result::Result<Option<Value>, RuntimeCallError> {
     if slot.is_none() {
         *slot = Some(
-            SessionRuntime::new(default_workspace.to_path_buf()).map_err(|error| {
-                RuntimeCallError::Unavailable(
-                    error.context(format!("initialize MCP runtime lane {lane_index}")),
-                )
-            })?,
+            SessionRuntime::new(default_workspace.to_path_buf(), restrict_workspace).map_err(
+                |error| {
+                    RuntimeCallError::Unavailable(
+                        error.context(format!("initialize MCP runtime lane {lane_index}")),
+                    )
+                },
+            )?,
         );
     }
     slot.as_mut()
@@ -549,13 +704,6 @@ fn call_locked_runtime(
         .map_err(|error| {
             RuntimeCallError::Unavailable(error.context(format!("MCP runtime lane {lane_index}")))
         })
-}
-
-fn runtime_pool_busy_error(lane_index: usize, wait: Duration, request: &str) -> RuntimeCallError {
-    RuntimeCallError::Unavailable(anyhow!(
-        "MCP runtime lane {lane_index} stayed busy for {} ms; retry shortly ({request})",
-        wait.as_millis()
-    ))
 }
 
 fn legacy_request_info(payload: &Value, default_workspace: &Path) -> LegacyRequestInfo {
@@ -711,6 +859,7 @@ fn collect_response_handles(value: &Value, handles: &mut Vec<String>) {
 
 struct McpRuntimeManager {
     default_workspace: PathBuf,
+    restrict_workspace: bool,
     legacy: RuntimeLanePool,
     sessions: Mutex<HashMap<String, Arc<SessionRuntimePool>>>,
 }
@@ -755,10 +904,11 @@ enum RuntimeTarget {
 }
 
 impl McpRuntimeManager {
-    fn new(default_workspace: PathBuf) -> Result<Self> {
-        let legacy = RuntimeLanePool::new(default_workspace.clone())?;
+    fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
+        let legacy = RuntimeLanePool::new(default_workspace.clone(), restrict_workspace)?;
         Ok(Self {
             default_workspace,
+            restrict_workspace,
             legacy,
             sessions: Mutex::new(HashMap::new()),
         })
@@ -766,6 +916,13 @@ impl McpRuntimeManager {
 
     fn call_legacy(&self, payload: Value) -> std::result::Result<Option<Value>, RuntimeCallError> {
         self.legacy.call(payload)
+    }
+
+    fn reap_idle_legacy_runtimes(&self) {
+        let retired = self.legacy.reap_idle_legacy_runtimes();
+        if retired > 0 {
+            eprintln!("yeet mcpserver: retired {retired} idle legacy runtime(s)");
+        }
     }
 
     fn get_session(&self, id: &str) -> Result<Option<Arc<SessionRuntimePool>>> {
@@ -796,7 +953,10 @@ impl McpRuntimeManager {
             }
         }
 
-        let runtime = Arc::new(SessionRuntimePool::new(self.default_workspace.clone())?);
+        let runtime = Arc::new(SessionRuntimePool::new(
+            self.default_workspace.clone(),
+            self.restrict_workspace,
+        )?);
         let id = Uuid::new_v4().to_string();
         let mut sessions = self
             .sessions
@@ -1250,14 +1410,15 @@ fn payload_contains_method(payload: &Value, method: &str) -> bool {
 
 struct McpProcess {
     default_workspace: PathBuf,
+    restrict_workspace: bool,
     child: Child,
     stdin: BufWriter<ChildStdin>,
     responses: Receiver<std::result::Result<String, String>>,
 }
 
 impl McpProcess {
-    fn new(default_workspace: PathBuf) -> Result<Self> {
-        let mut process = Self::spawn(default_workspace)?;
+    fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
+        let mut process = Self::spawn(default_workspace, restrict_workspace)?;
         // Prove the child is ready before advertising the HTTP server. This also
         // makes daemon startup fail fast if the stdio runtime cannot initialize.
         let response = process.call_with_timeout(
@@ -1270,13 +1431,18 @@ impl McpProcess {
         Ok(process)
     }
 
-    fn spawn(default_workspace: PathBuf) -> Result<Self> {
+    fn spawn(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
         let executable = std::env::current_exe().context("locate Yeet executable")?;
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg("mcpserver")
             .arg("stdio")
             .arg("--workspace")
-            .arg(&default_workspace)
+            .arg(&default_workspace);
+        if restrict_workspace {
+            command.arg("--restrict-workspace");
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -1297,6 +1463,7 @@ impl McpProcess {
             .context("start MCP runtime stdout reader")?;
         Ok(Self {
             default_workspace,
+            restrict_workspace,
             child,
             stdin: BufWriter::new(stdin),
             responses,
@@ -1386,11 +1553,26 @@ impl McpProcess {
     }
 
     fn restart(&mut self) -> Result<()> {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let replacement = Self::new(self.default_workspace.clone())?;
+        self.terminate();
+        let replacement = Self::new(self.default_workspace.clone(), self.restrict_workspace)?;
         *self = replacement;
         Ok(())
+    }
+
+    fn terminate(&mut self) {
+        match self.child.try_wait() {
+            Ok(None) => {
+                let pid = self.child.id();
+                if force_terminate_process_tree(pid).is_err() {
+                    let _ = self.child.kill();
+                }
+            }
+            Ok(Some(_)) => {}
+            Err(_) => {
+                let _ = self.child.kill();
+            }
+        }
+        let _ = self.child.wait();
     }
 
     fn is_alive(&mut self) -> bool {
@@ -1426,8 +1608,7 @@ fn runtime_stdout_reader(
 
 impl Drop for McpProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.terminate();
     }
 }
 
@@ -1510,228 +1691,6 @@ fn html_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
-}
-
-fn inferred_public_url(bind_host: &str, address: SocketAddr) -> Result<Url> {
-    if matches!(bind_host, "0.0.0.0" | "::") {
-        bail!(
-            "--public-url is required for wildcard MCP binds; use the externally reachable /mcp URL"
-        );
-    }
-    let host = if bind_host.is_empty() {
-        address.ip().to_string()
-    } else {
-        bind_host.to_owned()
-    };
-    let host = if host.contains(':') {
-        format!("[{host}]")
-    } else {
-        host
-    };
-    Url::parse(&format!("http://{host}:{}/mcp", address.port())).map_err(Into::into)
-}
-
-fn normalize_public_url(mut url: Url) -> Result<Url> {
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        bail!("--public-url must be an HTTP(S) MCP endpoint without credentials/query/fragment");
-    }
-    if url.path() == "/" || url.path().is_empty() {
-        url.set_path("/mcp");
-    }
-    Ok(url)
-}
-
-fn issuer_for_resource(resource: &Url) -> Result<Url> {
-    let mut issuer = resource.clone();
-    issuer.set_path("/");
-    issuer.set_query(None);
-    issuer.set_fragment(None);
-    Ok(issuer)
-}
-
-#[derive(Debug)]
-struct HttpRequest {
-    method: String,
-    target: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
-}
-
-fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 4096];
-    let header_end = loop {
-        let count = stream.read(&mut chunk)?;
-        if count == 0 {
-            bail!("HTTP connection closed before request headers");
-        }
-        buffer.extend_from_slice(&chunk[..count]);
-        if buffer.len() > MAX_HEADER_BYTES {
-            bail!("HTTP headers exceed {MAX_HEADER_BYTES} bytes");
-        }
-        if let Some(index) = find_bytes(&buffer, b"\r\n\r\n") {
-            break index + 4;
-        }
-    };
-    let header_text = std::str::from_utf8(&buffer[..header_end - 4])?;
-    let mut lines = header_text.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or_else(|| anyhow!("missing HTTP request line"))?;
-    let mut request_parts = request_line.split_whitespace();
-    let method = request_parts
-        .next()
-        .ok_or_else(|| anyhow!("missing HTTP method"))?
-        .to_owned();
-    let target = request_parts
-        .next()
-        .ok_or_else(|| anyhow!("missing HTTP target"))?
-        .to_owned();
-    let version = request_parts
-        .next()
-        .ok_or_else(|| anyhow!("missing HTTP version"))?;
-    if !matches!(version, "HTTP/1.1" | "HTTP/1.0") {
-        bail!("unsupported HTTP version: {version}");
-    }
-    let mut headers = HashMap::new();
-    for line in lines {
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| anyhow!("malformed HTTP header"))?;
-        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
-    }
-    let content_length = headers
-        .get("content-length")
-        .map(|value| value.parse::<usize>())
-        .transpose()
-        .context("invalid Content-Length")?
-        .unwrap_or(0);
-    if content_length > MAX_BODY_BYTES {
-        bail!("HTTP body exceeds {MAX_BODY_BYTES} bytes");
-    }
-    while buffer.len() - header_end < content_length {
-        let count = stream.read(&mut chunk)?;
-        if count == 0 {
-            bail!("HTTP connection closed before request body completed");
-        }
-        buffer.extend_from_slice(&chunk[..count]);
-    }
-    Ok(HttpRequest {
-        method,
-        target,
-        headers,
-        body: buffer[header_end..header_end + content_length].to_vec(),
-    })
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-fn split_target(target: &str) -> (&str, &str) {
-    target.split_once('?').unwrap_or((target, ""))
-}
-
-fn parse_form(bytes: &[u8]) -> HashMap<String, String> {
-    form_urlencoded::parse(bytes)
-        .into_owned()
-        .collect::<HashMap<_, _>>()
-}
-
-struct HttpResponse {
-    status: u16,
-    content_type: &'static str,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
-impl HttpResponse {
-    fn json(status: u16, value: Value) -> Self {
-        Self {
-            status,
-            content_type: "application/json",
-            headers: Vec::new(),
-            body: serde_json::to_vec(&value).unwrap_or_else(|_| b"{}".to_vec()),
-        }
-    }
-
-    fn text(status: u16, value: &str) -> Self {
-        Self {
-            status,
-            content_type: "text/plain; charset=utf-8",
-            headers: Vec::new(),
-            body: value.as_bytes().to_vec(),
-        }
-    }
-
-    fn html(status: u16, value: String) -> Self {
-        Self {
-            status,
-            content_type: "text/html; charset=utf-8",
-            headers: Vec::new(),
-            body: value.into_bytes(),
-        }
-    }
-
-    fn redirect(location: &str) -> Self {
-        Self {
-            status: 302,
-            content_type: "text/plain; charset=utf-8",
-            headers: vec![("Location".into(), location.into())],
-            body: b"Redirecting".to_vec(),
-        }
-    }
-
-    fn empty(status: u16) -> Self {
-        Self {
-            status,
-            content_type: "text/plain",
-            headers: Vec::new(),
-            body: Vec::new(),
-        }
-    }
-}
-
-fn write_response(stream: &mut TcpStream, response: HttpResponse) -> Result<()> {
-    let reason = match response.status {
-        200 => "OK",
-        201 => "Created",
-        202 => "Accepted",
-        302 => "Found",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        408 => "Request Timeout",
-        429 => "Too Many Requests",
-        500 => "Internal Server Error",
-        503 => "Service Unavailable",
-        _ => "Response",
-    };
-    write!(
-        stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        response.status,
-        reason,
-        response.content_type,
-        response.body.len()
-    )?;
-    for (name, value) in response.headers {
-        write!(stream, "{name}: {value}\r\n")?;
-    }
-    stream.write_all(b"\r\n")?;
-    stream.write_all(&response.body)?;
-    stream.flush()?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1835,15 +1794,38 @@ mod tests {
         let result = call_flexible_runtime_bounded(
             &lanes,
             &PathBuf::from("/tmp"),
+            false,
             json!({"jsonrpc":"2.0","id":1,"method":"ping"}),
+            0..lanes.len(),
             0,
-            lanes.len(),
-            0,
+            &HashSet::new(),
         );
         let RuntimeCallError::Unavailable(error) = result.unwrap_err();
         assert!(error.to_string().contains("runtime pool stayed busy"));
         assert!(started.elapsed() >= MCP_RUNTIME_LANE_WAIT_TIMEOUT);
         assert!(started.elapsed() < MCP_RUNTIME_LANE_WAIT_TIMEOUT + Duration::from_secs(1));
+    }
+
+    #[test]
+    fn flexible_scheduler_tracks_sticky_lanes_without_hiding_fallback_capacity() {
+        let pool = RuntimeLanePool {
+            default_workspace: PathBuf::from("/tmp"),
+            restrict_workspace: false,
+            lanes: (0..4).map(|_| Arc::new(Mutex::new(None))).collect(),
+            affinity: Mutex::new(LegacyAffinityState {
+                sticky: HashMap::from([("computer:/a".into(), 1), ("shell:/b".into(), 3)]),
+                ..Default::default()
+            }),
+        };
+
+        assert_eq!(
+            pool.sticky_lanes_in_range(0, 4).unwrap(),
+            HashSet::from([1, 3])
+        );
+        assert_eq!(
+            pool.sticky_lanes_in_range(2, 4).unwrap(),
+            HashSet::from([3])
+        );
     }
 
     #[test]
@@ -1910,10 +1892,11 @@ mod tests {
     }
 
     #[test]
-    fn new_preferred_route_is_bound_only_after_execution() {
+    fn preferred_file_route_is_bound_before_execution() {
         let key = "edit:/tmp/yeet-mcp-affinity".to_owned();
         let pool = RuntimeLanePool {
             default_workspace: PathBuf::from("/tmp"),
+            restrict_workspace: false,
             lanes: vec![Arc::new(Mutex::new(None)), Arc::new(Mutex::new(None))],
             affinity: Mutex::new(LegacyAffinityState::default()),
         };
@@ -1922,9 +1905,17 @@ mod tests {
             sticky_key: None,
             preferred_key: Some(key.clone()),
         };
-        let route = pool.route(&info, 0, pool.lanes.len());
-        assert!(matches!(route, Ok(LegacyRoute::Flexible(_))));
-        assert!(!pool.affinity.lock().unwrap().preferred.contains_key(&key));
+        let first = pool.route(&info, 0, pool.lanes.len()).unwrap();
+        let second = pool.route(&info, 0, pool.lanes.len()).unwrap();
+        let (LegacyRoute::Fixed(first_lane), LegacyRoute::Fixed(second_lane)) = (first, second)
+        else {
+            panic!("preferred file state must use a fixed lane");
+        };
+        assert_eq!(first_lane, second_lane);
+        assert_eq!(
+            pool.affinity.lock().unwrap().preferred.get(&key),
+            Some(&first_lane)
+        );
     }
 
     #[test]
@@ -1981,6 +1972,7 @@ mod tests {
             .collect::<Vec<_>>();
         let pool = RuntimeLanePool {
             default_workspace: PathBuf::from("/tmp"),
+            restrict_workspace: false,
             lanes,
             affinity: Mutex::new(LegacyAffinityState {
                 next_lane: MAX_BLOCKING_TOOL_RUNTIMES,
@@ -2000,9 +1992,36 @@ mod tests {
             panic!("expected flexible route");
         };
         assert!(start < MAX_BLOCKING_TOOL_RUNTIMES);
-        assert!(MAX_BLOCKING_TOOL_RUNTIMES < MAX_LEGACY_RUNTIMES);
+        const { assert!(MAX_BLOCKING_TOOL_RUNTIMES < MAX_LEGACY_RUNTIMES) };
     }
 
+    #[test]
+    fn sticky_domains_share_a_bounded_stateful_partition() {
+        let lanes = (0..MAX_LEGACY_RUNTIMES)
+            .map(|_| Arc::new(Mutex::new(None)))
+            .collect::<Vec<_>>();
+        let pool = RuntimeLanePool {
+            default_workspace: PathBuf::from("/tmp"),
+            restrict_workspace: false,
+            lanes,
+            affinity: Mutex::new(LegacyAffinityState::default()),
+        };
+        for index in 0..128 {
+            let info = LegacyRequestInfo {
+                handles: Vec::new(),
+                sticky_key: Some(format!("computer:/tmp/project-{index}")),
+                preferred_key: None,
+            };
+            let LegacyRoute::Fixed(lane) = pool
+                .route(&info, 0, MAX_BLOCKING_TOOL_RUNTIMES)
+                .expect("stateful route should fit the bounded partition")
+            else {
+                panic!("expected fixed stateful route");
+            };
+            assert!(lane < MAX_BLOCKING_TOOL_RUNTIMES);
+        }
+        assert_eq!(pool.lanes.len(), MAX_LEGACY_RUNTIMES);
+    }
 
     #[test]
     fn short_stateful_work_is_routed_into_reserved_lanes() {
@@ -2011,6 +2030,7 @@ mod tests {
             .collect::<Vec<_>>();
         let pool = RuntimeLanePool {
             default_workspace: PathBuf::from("/tmp"),
+            restrict_workspace: false,
             lanes,
             affinity: Mutex::new(LegacyAffinityState::default()),
         };
@@ -2022,11 +2042,52 @@ mod tests {
         let route = pool
             .route(&info, MAX_BLOCKING_TOOL_RUNTIMES, MAX_LEGACY_RUNTIMES)
             .expect("short-call route should be available");
-        let LegacyRoute::Flexible(start) = route else {
-            panic!("expected flexible route");
+        let LegacyRoute::Fixed(lane) = route else {
+            panic!("expected fixed short-state route");
         };
-        assert!(start >= MAX_BLOCKING_TOOL_RUNTIMES);
-        assert!(start < MAX_LEGACY_RUNTIMES);
+        assert!(lane >= MAX_BLOCKING_TOOL_RUNTIMES);
+        assert!(lane < MAX_LEGACY_RUNTIMES);
+    }
+
+    #[test]
+    fn legacy_handle_affinity_expires_without_dropping_sticky_state() {
+        let now = Instant::now();
+        let stale = now
+            .checked_sub(MCP_LEGACY_HANDLE_IDLE_TTL + Duration::from_secs(1))
+            .unwrap();
+        let mut affinity = LegacyAffinityState::default();
+        affinity.handles.insert(
+            "fresh".into(),
+            LegacyHandleAffinity {
+                lane: 2,
+                last_used: now,
+            },
+        );
+        affinity.handles.insert(
+            "stale".into(),
+            LegacyHandleAffinity {
+                lane: 3,
+                last_used: stale,
+            },
+        );
+        affinity
+            .handle_order
+            .extend(["fresh".into(), "stale".into()]);
+        affinity.sticky.insert("shell:/tmp/project".into(), 4);
+        affinity.preferred.insert("edit:/tmp/project".into(), 5);
+
+        affinity.prune_expired_handles(now);
+
+        assert!(affinity.handles.contains_key("fresh"));
+        assert!(!affinity.handles.contains_key("stale"));
+        assert_eq!(affinity.handle_order, VecDeque::from(["fresh".to_owned()]));
+        assert!(affinity.lane_is_pinned(2));
+        assert!(!affinity.lane_is_pinned(3));
+        assert!(affinity.lane_is_pinned(4));
+        assert!(!affinity.lane_is_pinned(5));
+        affinity.forget_preferred_lane(5);
+        assert!(affinity.preferred.is_empty());
+        const { assert!(MCP_LEGACY_RUNTIME_RETAIN_COUNT < MAX_LEGACY_RUNTIMES) };
     }
 
     #[test]

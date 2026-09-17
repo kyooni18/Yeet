@@ -92,7 +92,7 @@ pub(super) fn metrics(area: Rect) -> Metrics {
             input_max_lines: 7,
             horizontal_margin: 1,
             content_max_width: 112,
-            sidebar_width: sidebar_width(area, 24),
+            sidebar_width: None,
         },
         Shape::Wide => Metrics {
             shape,
@@ -249,7 +249,7 @@ mod tests {
 
         let standard = metrics(Rect::new(0, 0, 120, 32));
         assert_eq!(standard.shape, Shape::Standard);
-        assert_eq!(standard.sidebar_width, Some(24));
+        assert_eq!(standard.sidebar_width, None);
         assert_eq!(standard.content_max_width, 112);
 
         let wide = metrics(Rect::new(0, 0, 160, 30));

@@ -271,9 +271,11 @@ impl ProjectSettingsStore {
 
 fn normalize_capabilities(capabilities: &mut ProjectCapabilities) {
     if let Some(attached) = capabilities.attached.as_mut() {
+        attached.retain(|value| value != "lead");
         attached.sort();
         attached.dedup();
     }
+    capabilities.disabled.retain(|value| value != "lead");
     capabilities.disabled.sort();
     capabilities.disabled.dedup();
 }
@@ -308,11 +310,13 @@ mod tests {
             .save_capabilities(
                 Some(vec![
                     "web-search".into(),
+                    "lead".into(),
                     "context-mode".into(),
                     "web-search".into(),
                 ]),
                 vec![
                     "builtin:file-write".into(),
+                    "lead".into(),
                     "skill:test".into(),
                     "builtin:file-write".into(),
                 ],

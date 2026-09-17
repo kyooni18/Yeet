@@ -14,7 +14,11 @@ pub(super) struct SessionMeta {
     pub(super) title_generation_attempted: bool,
     pub(super) attached_capabilities: Option<Vec<String>>,
     pub(super) disabled_capabilities: Vec<String>,
+    pub(super) working_directory: Option<String>,
+    pub(super) context_roots: Vec<String>,
     pub(super) pending_tool_calls: HashMap<usize, ConversationToolCall>,
+
+    pub(super) tool_execution_started_at: HashMap<String, Instant>,
     pub(super) current_turn: Option<String>,
     pub(super) pending_compaction: bool,
     pub(super) pending_images: Vec<ImageAttachment>,
@@ -351,12 +355,26 @@ impl SharedSession {
         }
     }
 
-    /// Updates execution status for a tool call, creating a row if needed.
+    /// Updates execution status and terminal output for a tool call, creating a row if needed.
     pub(super) fn set_tool_call_execution_status(
         &mut self,
         call: &crate::core::ToolCall,
         status: ToolCallStatus,
+        result: Option<String>,
+        error: Option<String>,
     ) {
+        let duration_ms = if matches!(status, ToolCallStatus::Streaming) {
+            self.meta
+                .tool_execution_started_at
+                .entry(call.id.clone())
+                .or_insert_with(Instant::now);
+            None
+        } else {
+            self.meta
+                .tool_execution_started_at
+                .remove(&call.id)
+                .map(|started| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX))
+        };
         let existing_index = self
             .meta
             .pending_tool_calls
@@ -371,6 +389,11 @@ impl SharedSession {
             pending.name = call.name.clone();
             pending.arguments = pretty_json(&call.arguments);
             pending.status = status;
+
+            pending.duration_ms = duration_ms;
+
+            pending.result = result;
+            pending.error = error;
             pending.clone()
         } else {
             ConversationToolCall {
@@ -380,6 +403,11 @@ impl SharedSession {
                 name: call.name.clone(),
                 arguments: pretty_json(&call.arguments),
                 status,
+
+                duration_ms,
+
+                result,
+                error,
             }
         };
 
@@ -404,8 +432,15 @@ impl SharedSession {
             })
             .collect::<Vec<_>>();
         self.meta.pending_tool_calls.clear();
-        for call in calls {
+        for mut call in calls {
+            call.duration_ms = call.call_id.as_deref().and_then(|call_id| {
+                self.meta
+                    .tool_execution_started_at
+                    .remove(call_id)
+                    .map(|started| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX))
+            });
             self.sync_tool_call(call);
         }
+        self.meta.tool_execution_started_at.clear();
     }
 }

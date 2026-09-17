@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -15,17 +15,23 @@ use crate::{
     permission::PermissionBroker,
     sandbox::{SandboxMode, SandboxStore},
     session_store::SessionStore,
-    shell::{ShellExecutionRequest, restricted_operation, run_shell_cancellable},
+    shell::{
+        ShellExecutionRequest, ShellProgress, restricted_operation, run_shell_cancellable,
+        run_shell_cancellable_with_progress,
+    },
     web_search::{WebSearchBackend, WebSearchClient, WebSearchRequest},
     workers::WorkerRegistry,
 };
 
+mod agent_deploy;
 mod artifact_output;
 mod computer_use;
 mod definitions;
 mod editing;
+mod environment;
 mod io;
 mod paths;
+mod session_capabilities;
 mod shell_jobs;
 mod shell_runtime;
 mod support;
@@ -33,12 +39,15 @@ mod token_efficiency;
 
 #[cfg(test)]
 use crate::edit::ReadResult;
+pub(crate) use agent_deploy::deploy_agent_for_workspace;
 use definitions::BUILTIN_CAPABILITIES;
 pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
 pub use definitions::{is_coding_builtin_tool, is_general_builtin_tool};
+use paths::canonicalize_existing_ancestor;
+#[cfg(test)]
+use paths::path_outside_workspace;
 pub(crate) use paths::workspace_revision_for_path;
-use paths::{canonicalize_existing_ancestor, path_outside_workspace};
 #[cfg(test)]
 use shell_runtime::shell_is_inspection;
 use shell_runtime::shell_mentions_path;
@@ -61,6 +70,7 @@ const EXPLICIT_READ_LINES: usize = 480;
 const DEFAULT_INLINE_BYTES: usize = 12 * 1024;
 const EXPLICIT_INLINE_BYTES: usize = 16 * 1024;
 const FOUNDATION_RECALL_TOOL: &str = "project_memory_recall";
+const MAX_CAPABILITY_SEARCH_RESULTS: usize = 8;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityDescriptor {
     pub id: String,
@@ -80,6 +90,25 @@ pub fn builtin_capabilities() -> &'static [BuiltinCapabilityDescriptor] {
     BUILTIN_CAPABILITIES
 }
 
+fn capability_search_values(descriptors: &[CapabilityDescriptor], query: &str) -> Vec<Value> {
+    descriptors
+        .iter()
+        .filter(|descriptor| {
+            query.is_empty()
+                || descriptor.id.to_ascii_lowercase().contains(query)
+                || descriptor.description.to_ascii_lowercase().contains(query)
+        })
+        .take(MAX_CAPABILITY_SEARCH_RESULTS)
+        .map(|descriptor| {
+            json!({
+                "id": descriptor.id,
+                "kind": descriptor.kind,
+                "description": truncate_state_value(&descriptor.description, 320)
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 struct MutationValidation {
     error_count: usize,
@@ -97,6 +126,9 @@ pub struct ToolRegistry {
     edit: Option<EditClient>,
     edit_generation: u64,
     workspace_root: PathBuf,
+    working_directory: PathBuf,
+    context_roots: Vec<PathBuf>,
+    hard_access_root: Option<PathBuf>,
     workers: WorkerRegistry,
     permission: PermissionBroker,
     artifacts: ArtifactStore,
@@ -115,6 +147,7 @@ pub struct ToolRegistry {
     foundation_project: Option<String>,
     foundation_memory_store: crate::memory::MemoryStore,
     active_workers: HashSet<String>,
+    skyline_handle: Option<String>,
     disabled_capabilities: HashSet<String>,
     read_cache: HashMap<String, Vec<ReadCacheEntry>>,
     searches: HashSet<String>,
@@ -146,6 +179,9 @@ impl ToolRegistry {
         // The structured edit daemon is started lazily. Most MCP calls do not
         // need file I/O, and eagerly spawning one per workspace runtime caused
         // every HTTP lane to accumulate idle Node edit daemons.
+        let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
+        let working_directory = workspace_root.clone();
+        let context_roots = vec![workspace_root.clone()];
         let mut active_tools = BTreeMap::new();
         for tool in base_tool_definitions() {
             active_tools.insert(tool.name.clone(), tool);
@@ -155,6 +191,9 @@ impl ToolRegistry {
             edit: None,
             edit_generation: 0,
             workspace_root,
+            working_directory,
+            context_roots,
+            hard_access_root: None,
             workers,
             permission,
             artifacts: ArtifactStore::new()?,
@@ -173,6 +212,7 @@ impl ToolRegistry {
             foundation_project: None,
             foundation_memory_store: crate::memory::MemoryStore::default(),
             active_workers: HashSet::new(),
+            skyline_handle: None,
             disabled_capabilities: HashSet::new(),
             read_cache: HashMap::new(),
             searches: HashSet::new(),
@@ -202,10 +242,6 @@ impl ToolRegistry {
             self.edit = Some(edit);
         }
         Ok(self.edit.as_mut().expect("edit client initialized"))
-    }
-
-    pub fn set_protected_write_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
-        self.protected_write_paths = paths.into_iter().collect();
     }
 
     pub fn set_session_runtime(&mut self, store: SessionStore, active_session_id: Option<String>) {
@@ -508,33 +544,22 @@ impl ToolRegistry {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                let values: Vec<_> = self
-                    .descriptors
-                    .iter()
-                    .filter(|descriptor| {
-                        query.is_empty()
-                            || descriptor.id.to_ascii_lowercase().contains(&query)
-                            || descriptor.description.to_ascii_lowercase().contains(&query)
-                    })
-                    .take(8)
-                    .map(|descriptor| {
-                        json!({
-                            "id": descriptor.id,
-                            "kind": descriptor.kind,
-                            "description": truncate_state_value(&descriptor.description, 320)
-                        })
-                    })
-                    .collect();
+                let values = capability_search_values(&self.descriptors, &query);
                 Ok(serde_json::to_string(&values)?)
             }
             "activate_capability" => {
                 let id = string_arg(&object, "capability")?;
                 self.activate(id)
             }
+            "skyline" => self.execute_skyline(&object),
+            "deploy_agent" => self.deploy_agent(&object, cancel),
             "read_file" => self.read_file(&object),
             // Hidden compatibility alias for restored sessions created before
             // read_file absorbed batch reads. New requests never expose this schema.
             "read_files" => self.read_files(&object),
+            // Compatibility path for historical calls. list_files is no longer
+            // part of the model-visible built-in catalog; use run_shell for
+            // native directory and metadata inspection instead.
             "list_files" => self.list_files(&object),
             "search_workspace" => self.search_workspace(&object),
             "web_search" => self.web_search(&object, cancel),
@@ -665,7 +690,7 @@ impl ToolRegistry {
                 Ok(json!({"granted": granted, "permissionRequired": true, "command": command, "operation": operation, "oneTime": true}).to_string())
             }
             "run_shell" => self.run_shell_tool(&object, model, cancel),
-            "shell_job" => self.shell_job_tool(&object),
+            "shell_job" => self.shell_job_tool(&object, cancel),
             "computer_use" => self.computer_use_tool(&object, cancel),
             "computer_use_reset" => self.computer_use_reset_tool(&object, cancel),
             "apply_file_edits" => self.apply_file_edits(&call.arguments),
@@ -744,53 +769,6 @@ impl ToolRegistry {
         self.activate(id)
     }
 
-    pub fn activate_explicit_skill(&mut self, name: &str) -> Result<String> {
-        let id = format!("skill:{name}");
-        if self.disabled_capabilities.contains(&id) {
-            bail!("Capability {id} is disabled for this session");
-        }
-        self.activate_skill(name, true)
-    }
-
-    pub fn enable_skill_attachment(&mut self, name: &str) {
-        self.disabled_capabilities.remove(&format!("skill:{name}"));
-    }
-
-    pub fn deactivate_skill(&mut self, name: &str) {
-        let tool_names = self
-            .skill_tool_map
-            .iter()
-            .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone()))
-            .chain(
-                self.skill_script_tool_map
-                    .iter()
-                    .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone())),
-            )
-            .collect::<Vec<_>>();
-        for tool_name in tool_names {
-            self.skill_tool_map.remove(&tool_name);
-            self.skill_script_tool_map.remove(&tool_name);
-            self.active_tools.remove(&tool_name);
-        }
-        self.active_skills.remove(name);
-    }
-
-    pub fn skill_tools_for(&self, skills: &HashSet<String>) -> Vec<String> {
-        let mut tools = self
-            .skill_tool_map
-            .iter()
-            .filter_map(|(tool, skill)| skills.contains(skill).then_some(tool.clone()))
-            .chain(
-                self.skill_script_tool_map
-                    .iter()
-                    .filter_map(|(tool, skill)| skills.contains(skill).then_some(tool.clone())),
-            )
-            .collect::<Vec<_>>();
-        tools.sort();
-        tools.dedup();
-        tools
-    }
-
     pub fn finish_task(&mut self, task_id: &str) {
         self.read_cache.clear();
         self.searches.clear();
@@ -821,6 +799,10 @@ impl ToolRegistry {
 
     pub fn workspace_write_generation(&self) -> u64 {
         self.workspace_write_generation
+    }
+
+    pub fn has_shell_jobs(&self) -> bool {
+        self.shell_jobs.has_jobs()
     }
 
     pub fn working_state_summary(&self) -> Option<String> {
@@ -1220,18 +1202,30 @@ impl ToolRegistry {
     }
 
     fn ensure_file_scope(&self, path: &str, write: bool) -> Result<()> {
-        if !path_outside_workspace(&self.workspace_root, path)? {
+        if self.path_outside_hard_access_root(path)? {
+            let operation = if write { "file write" } else { "file read" };
+            let root = self
+                .hard_access_root
+                .as_ref()
+                .expect("hard access root exists when path is outside it");
+            bail!(
+                "MCP {operation} is restricted to {} and its descendants: {path}",
+                root.display()
+            );
+        }
+        let resolved = self.resolve_session_path(path)?;
+        if self.path_in_context_roots(&resolved) {
             return Ok(());
         }
         let operation = if write {
-            "outside-project file write"
+            "outside-context file write"
         } else {
-            "outside-project file read"
+            "outside-context file read"
         };
         let reason = if write {
-            "The model requested a file change outside the current project."
+            "The model requested a file change outside the active session context roots."
         } else {
-            "The model requested file access outside the current project."
+            "The model requested file access outside the active session context roots."
         };
         if self.request_approval("file", path, operation, reason)? {
             return Ok(());
@@ -1502,6 +1496,24 @@ mod tests {
         assert!(builtin_capability_for_tool("find_capabilities").is_none());
         assert!(builtin_capability_for_tool("activate_capability").is_none());
         assert!(builtin_capability_for_tool("web_search").is_none());
+    }
+
+    #[test]
+    fn capability_discovery_is_bounded_without_hiding_targeted_matches() {
+        let descriptors = (0..12)
+            .map(|index| CapabilityDescriptor {
+                id: format!("builtin:capability-{index:02}"),
+                kind: "builtin".into(),
+                description: format!("Capability number {index}"),
+            })
+            .collect::<Vec<_>>();
+
+        let broad = capability_search_values(&descriptors, "");
+        assert_eq!(broad.len(), MAX_CAPABILITY_SEARCH_RESULTS);
+
+        let targeted = capability_search_values(&descriptors, "capability-11");
+        assert_eq!(targeted.len(), 1);
+        assert_eq!(targeted[0]["id"], "builtin:capability-11");
     }
 
     #[test]

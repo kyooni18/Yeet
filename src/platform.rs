@@ -261,6 +261,24 @@ pub(crate) fn configure_detached(command: &mut Command) {
     }
 }
 
+pub(crate) fn configure_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
 pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
     if pid == 0 || pid == std::process::id() {
         return Err(io::Error::new(
@@ -271,19 +289,20 @@ pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
 
     #[cfg(unix)]
     {
-        // Capture descendants before signalling the daemon. Once the parent
-        // exits, launchd/init may immediately re-parent the Node bridge and MCP
-        // children, making later PPID-based cleanup impossible.
+        // Capture descendants before signalling anything because init may re-parent
+        // them immediately after a supervisor exits. Yeet-owned children can each
+        // lead their own process group, so killing only the root group can leave a
+        // detached runtime or extension alive.
         let mut tree = unix_process_tree(pid).unwrap_or_else(|_| vec![pid]);
         if !tree.contains(&pid) {
             tree.push(pid);
         }
         for target in tree.iter().rev().copied() {
-            signal_process(target, libc::SIGTERM)?;
+            signal_owned_process_or_group(target, libc::SIGTERM)?;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
         for target in tree.iter().rev().copied() {
-            let _ = signal_process(target, libc::SIGKILL);
+            let _ = signal_owned_process_or_group(target, libc::SIGKILL);
         }
         return Ok(());
     }
@@ -320,6 +339,63 @@ pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+fn process_group_id(pid: u32) -> io::Result<i32> {
+    let pid = i32::try_from(pid)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process id is out of range"))?;
+    let group = unsafe { libc::getpgid(pid) };
+    if group == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(group)
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: i32) -> io::Result<()> {
+    let pid = i32::try_from(pid)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process id is out of range"))?;
+    let result = unsafe { libc::kill(-pid, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(error)
+}
+
+#[cfg(target_os = "linux")]
+fn unix_process_tree(root: u32) -> io::Result<Vec<u32>> {
+    let mut pairs = Vec::new();
+    for entry in fs::read_dir("/proc")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+            // Processes can disappear while /proc is being scanned.
+            continue;
+        };
+        let Some((_, fields)) = stat.rsplit_once(") ") else {
+            continue;
+        };
+        let mut fields = fields.split_whitespace();
+        let _state = fields.next();
+        let Some(ppid) = fields.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        pairs.push((pid, ppid));
+    }
+    Ok(process_tree_from_pairs(root, &pairs))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 fn unix_process_tree(root: u32) -> io::Result<Vec<u32>> {
     let output = Command::new("ps").args(["-axo", "pid=,ppid="]).output()?;
     if !output.status.success() {
@@ -336,18 +412,32 @@ fn unix_process_tree(root: u32) -> io::Result<Vec<u32>> {
             Some((pid, ppid))
         })
         .collect::<Vec<_>>();
+    Ok(process_tree_from_pairs(root, &pairs))
+}
+
+#[cfg(unix)]
+fn process_tree_from_pairs(root: u32, pairs: &[(u32, u32)]) -> Vec<u32> {
     let mut tree = vec![root];
     let mut cursor = 0usize;
     while cursor < tree.len() {
         let parent = tree[cursor];
-        for (child, ppid) in &pairs {
+        for (child, ppid) in pairs {
             if *ppid == parent && !tree.contains(child) {
                 tree.push(*child);
             }
         }
         cursor += 1;
     }
-    Ok(tree)
+    tree
+}
+
+#[cfg(unix)]
+fn signal_owned_process_or_group(pid: u32, signal: i32) -> io::Result<()> {
+    if process_group_id(pid).is_ok_and(|group| group == pid as i32) {
+        signal_process_group(pid, signal)
+    } else {
+        signal_process(pid, signal)
+    }
 }
 
 #[cfg(unix)]
@@ -368,28 +458,53 @@ mod tests {
     use super::*;
     use std::{process::Stdio, time::Instant};
 
+    #[cfg(target_os = "linux")]
+    fn linux_process_group_has_live_members(group: u32) -> bool {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return true;
+        };
+        for entry in entries.flatten() {
+            let Some(_pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| value.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+                continue;
+            };
+            let Some((_, fields)) = stat.rsplit_once(") ") else {
+                continue;
+            };
+            let mut fields = fields.split_whitespace();
+            let Some(state) = fields.next() else {
+                continue;
+            };
+            let _ppid = fields.next();
+            let Some(process_group) = fields.next().and_then(|value| value.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if process_group == group && !matches!(state, "Z" | "X") {
+                return true;
+            }
+        }
+        false
+    }
+
     #[test]
-    fn forced_tree_termination_reaps_a_process_with_a_child() {
-        let mut child = Command::new("sh")
+    fn forced_group_termination_reaps_a_process_with_a_child() {
+        let mut command = Command::new("sh");
+        command
             .args(["-c", "sleep 30 & wait"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
         let pid = child.id();
-
-        let discovery_started = Instant::now();
-        loop {
-            if unix_process_tree(pid).is_ok_and(|tree| tree.len() >= 2) {
-                break;
-            }
-            assert!(
-                discovery_started.elapsed() < std::time::Duration::from_secs(2),
-                "child process never appeared in the process tree"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        assert_eq!(process_group_id(pid).unwrap(), pid as i32);
 
         force_terminate_process_tree(pid).unwrap();
         let exit_started = Instant::now();
@@ -399,7 +514,52 @@ mod tests {
             }
             if exit_started.elapsed() >= std::time::Duration::from_secs(2) {
                 let _ = child.kill();
-                panic!("forced process-tree termination did not stop the root process");
+                panic!("forced process-group termination did not stop the root process");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn forced_tree_termination_stops_descendant_in_separate_process_group() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "setsid sleep 30 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+
+        let discovery_started = Instant::now();
+        let descendant_group = loop {
+            let tree = unix_process_tree(pid).unwrap_or_default();
+            if let Some(group) = tree.into_iter().find(|candidate| {
+                *candidate != pid
+                    && process_group_id(*candidate).is_ok_and(|pgid| pgid == *candidate as i32)
+            }) {
+                break group;
+            }
+            assert!(
+                discovery_started.elapsed() < std::time::Duration::from_secs(2),
+                "separate descendant process group never appeared"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+
+        force_terminate_process_tree(pid).unwrap();
+        let exit_started = Instant::now();
+        loop {
+            let root_exited = child.try_wait().unwrap().is_some();
+            if root_exited && !linux_process_group_has_live_members(descendant_group) {
+                break;
+            }
+            if exit_started.elapsed() >= std::time::Duration::from_secs(2) {
+                let _ = child.kill();
+                let _ = signal_process_group(descendant_group, libc::SIGKILL);
+                panic!("forced tree termination left a separate descendant process group alive");
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }

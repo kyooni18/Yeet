@@ -385,11 +385,10 @@ impl BackendService {
                                 crate::debate::JURY_TARGET_BALLOTS
                             };
                             format!(
-                                "Jury ballot {}/{} · attempt {}/{}",
+                                "Jury ballot {}/{} · attempt {}",
                                 d.ballots.len() + 1,
                                 jury_target,
                                 d.jury_attempts.len() + 1,
-                                crate::debate::JURY_MAX_ATTEMPTS,
                             )
                         };
                         let request = if !judging {

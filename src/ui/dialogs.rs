@@ -1,10 +1,16 @@
 //! Modal dialogs and settings forms.
 use super::theme;
-use super::{centered_rect, compact_number, truncate_end, truncate_middle};
+use super::{cell_width, centered_rect, compact_number, truncate_end, truncate_middle};
 use crate::{
     app::{App, SettingsEditKind, SettingsSection},
     model::REASONING_LEVELS,
 };
+mod navigation;
+
+#[cfg(test)]
+use navigation::model_picker_rows;
+pub(super) use navigation::{draw_goal, draw_models, draw_reasoning, draw_sessions};
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Position, Rect},
@@ -12,279 +18,28 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph, Wrap},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ModelPickerRow {
-    id: String,
-    provider: String,
-    provider_heading: String,
-    model: String,
-    context_length: Option<u64>,
-}
-
-fn model_picker_rows(app: &App) -> Vec<ModelPickerRow> {
-    let mut previous_provider = String::new();
-    app.filtered_models()
-        .into_iter()
-        .map(|id| {
-            let (provider, model, context_length) = app
-                .model_catalog_item(id)
-                .map(|item| {
-                    (
-                        item.provider.clone(),
-                        item.model.clone(),
-                        item.context_length,
-                    )
-                })
-                .unwrap_or_else(|| {
-                    id.split_once('/')
-                        .map(|(provider, model)| (provider.to_owned(), model.to_owned(), None))
-                        .unwrap_or_else(|| ("other".to_owned(), id.to_owned(), None))
-                });
-            let provider_heading = if provider == previous_provider {
-                String::new()
-            } else {
-                previous_provider = provider.clone();
-                match provider.as_str() {
-                    "codex-cli" => "Codex CLI".to_owned(),
-                    "gemini" => "Gemini".to_owned(),
-                    "gemini-web" => "Gemini Web".to_owned(),
-                    "anthropic" => "Claude (Anthropic)".to_owned(),
-                    "claude" => "Claude Web".to_owned(),
-                    _ => provider.clone(),
-                }
-            };
-            ModelPickerRow {
-                id: id.to_owned(),
-                provider,
-                provider_heading,
-                model,
-                context_length,
-            }
-        })
-        .collect()
-}
-
-pub(super) fn draw_models(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(76, 74, frame.area());
-    theme::modal_backdrop(frame, area);
-    let title = if app.debate_model_picker {
-        let role = match app.debate_field {
-            1 => "Pro",
-            2 => "Con",
-            3 => "Jury",
-            _ => "Model",
-        };
-        format!(" {role} model · ↑/↓ navigate · type filter · Enter select · Esc back ")
-    } else {
-        " Models · ↑/↓ navigate · type filter · Enter select · Esc close ".to_owned()
-    };
-    let block = theme::modal_block(title);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
-    let rows = model_picker_rows(app);
-    let provider_count = rows
-        .iter()
-        .map(|row| row.provider.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    let query = if app.popup_filter.is_empty() {
-        "all".to_owned()
-    } else {
-        app.popup_filter.clone()
-    };
-    let refreshing = if app.state.is_loading_models {
-        " · refreshing…"
-    } else {
-        ""
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" FILTER// ", Style::default().fg(theme::ACCENT_WARM).bold()),
-            Span::styled(query, Style::default().fg(theme::TEXT)),
-            Span::styled(
-                format!(
-                    "  ·  {} MODELS  ·  {provider_count} PROVIDERS{refreshing}",
-                    rows.len()
-                ),
-                Style::default().fg(theme::MUTED),
-            ),
-        ])),
-        chunks[0],
-    );
-
-    if app.state.is_loading_models && rows.is_empty() {
-        frame.render_widget(
-            Paragraph::new("Loading model catalog…").fg(theme::TEXT_DIM),
-            chunks[1],
-        );
-        return;
-    }
-    if rows.is_empty() {
-        let (message, color) = app
-            .state
-            .error_message
-            .as_deref()
-            .map(|message| (message, theme::ERROR))
-            .unwrap_or((
-                "No matching models. Search by provider or model.",
-                theme::MUTED,
-            ));
-        frame.render_widget(Paragraph::new(message).fg(color), chunks[1]);
-        return;
-    }
-
-    let provider_width = if chunks[1].width < 54 { 9 } else { 13 };
-    let items = rows.iter().map(|row| {
-        let marker = if row.id == app.state.active_model {
-            "●"
-        } else {
-            " "
-        };
-        let context = row
-            .context_length
-            .map(|length| format!(" · {} ctx", compact_number(length)))
-            .unwrap_or_default();
-        let model_budget = (chunks[1].width as usize)
-            .saturating_sub(provider_width + context.chars().count() + 6)
-            .max(8);
-        let provider = truncate_end(&row.provider_heading, provider_width);
-        ListItem::new(Line::from(vec![
-            Span::raw(format!("{marker} {provider:<provider_width$} ")),
-            Span::styled(
-                truncate_middle(&row.model, model_budget),
-                Style::default().fg(theme::TEXT),
-            ),
-            Span::styled(context, Style::default().fg(theme::MUTED)),
-        ]))
-    });
-    let list = List::new(items)
-        .highlight_style(theme::selected())
-        .highlight_symbol("▸ ");
-    let mut state = ListState::default().with_selected(Some(app.popup_index));
-    frame.render_stateful_widget(list, chunks[1], &mut state);
-}
-
-pub(super) fn draw_infinity(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(64, 42, frame.area());
-    theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Infinity · ↑/↓ select · Enter apply · Esc close ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let chunks = Layout::vertical([Constraint::Length(4), Constraint::Min(2)]).split(inner);
-    let status = if app.state.infinity_mode { "ON" } else { "OFF" };
-    frame.render_widget(
-        Paragraph::new(Text::from(vec![
-            Line::from(vec![
-                Span::styled(
-                    " INFINITY// ",
-                    Style::default().fg(theme::ACCENT_WARM).bold(),
-                ),
-                Span::styled(status, Style::default().fg(theme::TEXT).bold()),
-            ]),
-            Line::from(""),
-            Line::from("Runs bounded execution epochs continuously until you turn Infinity off or interrupt."),
-            Line::from("Transient provider errors back off and retry; guard limits checkpoint one epoch, not the mode."),
-        ])),
-        chunks[0],
-    );
-    let items = [
-        (true, "ON", "Continuous model execution"),
-        (false, "OFF", "Normal completion behavior"),
-    ]
-    .into_iter()
-    .map(|(enabled, label, description)| {
-        let marker = if app.state.infinity_mode == enabled {
-            "●"
-        } else {
-            " "
-        };
-        ListItem::new(Line::from(vec![
-            Span::raw(format!("{marker} {label:<3}  ")),
-            Span::styled(description, Style::default().fg(theme::TEXT)),
-        ]))
-    });
-    let list = List::new(items)
-        .highlight_style(theme::selected())
-        .highlight_symbol("▸ ");
-    let mut state = ListState::default().with_selected(Some(app.popup_index.min(1)));
-    frame.render_stateful_widget(list, chunks[1], &mut state);
-}
-
-pub(super) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(78, 70, frame.area());
-    theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Sessions · ↑/↓ navigate · Enter open · n new · Esc close ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if app.sessions().is_empty() {
-        frame.render_widget(Paragraph::new("No saved sessions."), inner);
-        return;
-    }
-    let items = app.sessions().iter().map(|session| {
-        let marker = if app.state.current_session_id.as_deref() == Some(session.id.as_str()) {
-            "●"
-        } else {
-            " "
-        };
-        ListItem::new(Line::from(vec![
-            Span::raw(format!("{marker} {}", session.title)),
-            Span::styled(
-                format!("  ·  {}  ·  {}", session.model, session.message_count),
-                Style::default().fg(theme::MUTED),
-            ),
-        ]))
-    });
-    let list = List::new(items)
-        .highlight_style(theme::selected())
-        .highlight_symbol("▸ ");
-    let mut state = ListState::default().with_selected(Some(app.popup_index));
-    frame.render_stateful_widget(list, inner, &mut state);
-}
-
-pub(super) fn draw_reasoning(frame: &mut Frame<'_>, app: &App) {
-    let area = centered_rect(58, 46, frame.area());
-    theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Reasoning · ↑/↓ navigate · Enter select · Esc close ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let descriptions = [
-        "Yeet default: low primary-request reasoning; Lead is an opt-in capability",
-        "Faster, lighter reasoning",
-        "Balanced reasoning depth",
-        "Maximum supported reasoning depth",
-    ];
-    let items = REASONING_LEVELS
-        .iter()
-        .zip(descriptions)
-        .map(|(level, description)| {
-            let marker = if *level == app.state.active_reasoning_level {
-                "●"
-            } else {
-                " "
-            };
-            ListItem::new(Line::from(vec![
-                Span::raw(format!("{marker} {level:<7}")),
-                Span::styled(description, Style::default().fg(theme::MUTED)),
-            ]))
-        });
-    let list = List::new(items)
-        .highlight_style(theme::selected())
-        .highlight_symbol("▸ ");
-    let mut state = ListState::default().with_selected(Some(app.popup_index));
-    frame.render_stateful_widget(list, inner, &mut state);
-}
-
 pub(super) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(82, 76, frame.area());
     theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(
-        " Capabilities · ↑/↓ navigate · type filter · Space toggle · Enter details · Esc close ",
-    );
+    let block = if app.state.is_streaming {
+        theme::modal_block(
+            " Capabilities · changes locked while response runs · Enter details · Esc close ",
+        )
+    } else {
+        theme::modal_block(
+            " Capabilities · ↑/↓ navigate · type filter · Space toggle · Enter details · Esc close ",
+        )
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
+    let navigation_hint = if app.state.is_streaming {
+        " · changes locked"
+    } else if chunks[0].width >= 60 {
+        " · ↑/↓ PgUp/PgDn"
+    } else {
+        ""
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" FILTER// ", Style::default().fg(theme::ACCENT_WARM).bold()),
@@ -296,6 +51,7 @@ pub(super) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
                 },
                 Style::default().fg(theme::TEXT),
             ),
+            Span::styled(navigation_hint, Style::default().fg(theme::MUTED)),
         ])),
         chunks[0],
     );
@@ -331,7 +87,13 @@ pub(super) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
 pub(super) fn draw_capability_detail(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(76, 62, frame.area());
     theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Capability detail · Space toggle · Enter/Esc back ");
+    let block = if app.state.is_streaming {
+        theme::modal_block(
+            " Capability detail · changes locked while response runs · Enter/Esc back ",
+        )
+    } else {
+        theme::modal_block(" Capability detail · Space toggle · Enter/Esc back ")
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -351,6 +113,14 @@ pub(super) fn draw_capability_detail(frame: &mut Frame<'_>, app: &App) {
             Span::styled("Status  ", Style::default().fg(theme::MUTED)),
             Span::raw(status),
         ]),
+        if app.state.is_streaming {
+            Line::styled(
+                "Changes locked while a response is running.",
+                Style::default().fg(theme::ACCENT_WARM),
+            )
+        } else {
+            Line::from("")
+        },
         Line::from(vec![
             Span::styled("Type    ", Style::default().fg(theme::MUTED)),
             Span::raw(item.kind.clone()),
@@ -578,35 +348,31 @@ fn runtime_status_lines(app: &App, width: usize) -> Vec<Line<'static>> {
 fn usage_status_lines(app: &App, width: usize, height: usize) -> Vec<Line<'static>> {
     let usage = &app.state.token_usage;
     let cache = usage.cache_measurement();
-    let input = cache.input_tokens;
-    let output = usage.output_tokens.unwrap_or(0);
-    let reasoning = usage.reasoning_tokens.unwrap_or(0);
     let cache_detail = if let Some(hit_rate) = cache.hit_rate {
         format!(
-            "{}/{} read  ·  {:.0}% hit  ·  {} write  ·  {:.0}% measured",
+            "{} read · {:.0}% hit · {} write · {:.0}% measured",
             compact_number(cache.cached_input_tokens),
-            compact_number(cache.measured_input_tokens),
             hit_rate * 100.0,
             compact_number(cache.cache_write_input_tokens),
             cache.measurement_coverage_rate.unwrap_or(0.0) * 100.0,
         )
     } else if cache.unclassified_input_tokens > 0 {
         format!(
-            "{} read  ·  hit n/a  ·  {} write  ·  {} unclassified",
+            "{} read · hit n/a · {} write · {} unclassified",
             compact_number(cache.cached_input_tokens),
             compact_number(cache.cache_write_input_tokens),
             compact_number(cache.unclassified_input_tokens),
         )
     } else if cache.unreported_input_tokens > 0 {
         format!(
-            "{} read  ·  hit n/a  ·  {} write  ·  {} unreported",
+            "{} read · hit n/a · {} write · {} unreported",
             compact_number(cache.cached_input_tokens),
             compact_number(cache.cache_write_input_tokens),
             compact_number(cache.unreported_input_tokens),
         )
     } else {
         format!(
-            "{} read  ·  {} write",
+            "{} read · {} write",
             compact_number(cache.cached_input_tokens),
             compact_number(cache.cache_write_input_tokens),
         )
@@ -615,10 +381,10 @@ fn usage_status_lines(app: &App, width: usize, height: usize) -> Vec<Line<'stati
         Line::from(vec![
             Span::styled("Tokens  ", Style::default().fg(theme::MUTED)),
             Span::raw(format!(
-                "{} in  ·  {} out  ·  {} reasoning",
-                compact_number(input),
-                compact_number(output),
-                compact_number(reasoning)
+                "{} input · {} output · {} reasoning",
+                compact_number(cache.input_tokens),
+                compact_number(usage.output_tokens.unwrap_or(0)),
+                compact_number(usage.reasoning_tokens.unwrap_or(0)),
             )),
         ]),
         Line::from(vec![
@@ -639,14 +405,14 @@ fn usage_status_lines(app: &App, width: usize, height: usize) -> Vec<Line<'stati
         .split_once('/')
         .map(|(provider, _)| provider);
     let available_rows = height.saturating_sub(lines.len());
-    let providers = app
+    let mut found_usage = false;
+    for item in app
         .state
         .auth_providers
         .iter()
         .filter(|item| item.usage.is_some())
-        .take(available_rows.max(1));
-    let mut found_usage = false;
-    for item in providers {
+        .take(available_rows.max(1))
+    {
         let Some(provider_usage) = item.usage.as_ref() else {
             continue;
         };
@@ -671,14 +437,11 @@ fn usage_status_lines(app: &App, width: usize, height: usize) -> Vec<Line<'stati
                 .windows
                 .iter()
                 .take(3)
-                .map(|window| format!("{} {}%", window.label, window.remaining_percent))
+                .map(|window| format!("{} {}% left", window.label, window.remaining_percent))
                 .collect::<Vec<_>>()
                 .join(" · ")
         };
-        let value = format!(
-            "{marker} {}{plan} · {} · {summary}",
-            item.provider, provider_usage.source
-        );
+        let value = format!("{marker} {}{plan} · {summary}", item.provider);
         lines.push(Line::from(vec![
             Span::styled("Quota   ", Style::default().fg(theme::MUTED)),
             Span::raw(truncate_end(&value, width.saturating_sub(8))),
@@ -843,6 +606,7 @@ pub(super) fn draw_providers(frame: &mut Frame<'_>, app: &App) {
             chunks[0],
         );
     } else {
+        let row_width = chunks[0].width.saturating_sub(2) as usize;
         let rows = app.state.provider_configurations.iter().map(|provider| {
             let auth = if provider.require_api_key {
                 "key required"
@@ -854,16 +618,27 @@ pub(super) fn draw_providers(frame: &mut Frame<'_>, app: &App) {
             } else {
                 String::new()
             };
+            let metadata = if row_width >= 80 {
+                format!("  {auth}{headers}")
+            } else if row_width >= 64 {
+                format!("  {auth}")
+            } else {
+                String::new()
+            };
+            let content_width = row_width.saturating_sub(cell_width(&metadata));
+            let id_budget = content_width.saturating_sub(16).clamp(8, 18);
+            let id = truncate_middle(&provider.id, id_budget);
+            let id_padding = id_budget.saturating_sub(cell_width(&id));
+            let url_budget = content_width
+                .saturating_sub(id_budget.saturating_add(1))
+                .min(42);
             ListItem::new(Line::from(vec![
-                Span::raw(format!("{:<18} ", provider.id)),
+                Span::raw(format!("{id}{} ", " ".repeat(id_padding))),
                 Span::styled(
-                    truncate_middle(&provider.base_url, 42),
+                    truncate_middle(&provider.base_url, url_budget),
                     Style::default().fg(theme::TEXT_DIM),
                 ),
-                Span::styled(
-                    format!("  {auth}{headers}"),
-                    Style::default().fg(theme::MUTED),
-                ),
+                Span::styled(metadata, Style::default().fg(theme::MUTED)),
             ]))
         });
         let list = List::new(rows)
@@ -872,7 +647,17 @@ pub(super) fn draw_providers(frame: &mut Frame<'_>, app: &App) {
         let mut state = ListState::default().with_selected(Some(app.popup_index));
         frame.render_stateful_widget(list, chunks[0], &mut state);
     }
-    if let Some(notice) = app.state.providers_notice.as_deref() {
+    if let Some(id) = app.pending_provider_delete_id.as_deref() {
+        let warning_width = chunks[1].width as usize;
+        let id_budget = warning_width.saturating_sub(cell_width("Delete provider ?"));
+        let identity = format!("Delete provider {}?", truncate_middle(id, id_budget));
+        let action = truncate_end("d/Delete again to confirm · ↑/↓ cancels", warning_width);
+        frame.render_widget(
+            Paragraph::new(Text::from(vec![Line::from(identity), Line::from(action)]))
+                .fg(theme::ERROR),
+            chunks[1],
+        );
+    } else if let Some(notice) = app.state.providers_notice.as_deref() {
         frame.render_widget(
             Paragraph::new(truncate_end(notice, chunks[1].width as usize)).fg(theme::MUTED),
             chunks[1],
@@ -1095,6 +880,61 @@ pub(super) fn draw_sandbox_presets(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
+fn sandbox_policy_tab_line(current: SettingsSection, width: usize) -> Line<'static> {
+    let sections = [
+        (SettingsSection::Core, "Core"),
+        (SettingsSection::Workspace, "Workspace"),
+        (SettingsSection::Network, "Network"),
+        (SettingsSection::Environment, "Environment"),
+        (SettingsSection::Secrets, "Secrets"),
+        (SettingsSection::Limits, "Limits"),
+    ];
+    let current_index = sections
+        .iter()
+        .position(|(section, _)| *section == current)
+        .unwrap_or(0);
+    let window_width = |start: usize, end: usize| {
+        let labels = sections[start..end]
+            .iter()
+            .map(|(_, label)| cell_width(label))
+            .sum::<usize>();
+        let gaps = end.saturating_sub(start + 1) * 2;
+        labels + gaps + usize::from(start > 0) * 2 + usize::from(end < sections.len()) * 2
+    };
+
+    let mut start = 0usize;
+    let mut end = sections.len();
+    while end.saturating_sub(start) > 1 && window_width(start, end) > width {
+        let hidden_left_distance = current_index.saturating_sub(start);
+        let hidden_right_distance = end.saturating_sub(current_index + 1);
+        if hidden_left_distance > hidden_right_distance {
+            start += 1;
+        } else {
+            end -= 1;
+        }
+    }
+
+    let mut tabs = Vec::new();
+    if start > 0 {
+        tabs.push(Span::styled("‹ ", Style::default().fg(theme::MUTED)));
+    }
+    for (visible_index, (section, label)) in sections[start..end].iter().enumerate() {
+        if visible_index > 0 {
+            tabs.push(Span::styled("  ", Style::default().fg(theme::MUTED)));
+        }
+        let style = if *section == current {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::MUTED)
+        };
+        tabs.push(Span::styled(*label, style));
+    }
+    if end < sections.len() {
+        tabs.push(Span::styled(" ›", Style::default().fg(theme::MUTED)));
+    }
+    Line::from(tabs)
+}
+
 pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(92, 80, frame.area());
     theme::modal_backdrop(frame, area);
@@ -1117,28 +957,11 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
     ])
     .split(inner);
 
-    let sections = [
-        (SettingsSection::Core, "Core"),
-        (SettingsSection::Workspace, "Workspace"),
-        (SettingsSection::Network, "Network"),
-        (SettingsSection::Environment, "Environment"),
-        (SettingsSection::Secrets, "Secrets"),
-        (SettingsSection::Limits, "Limits"),
-    ];
     let current = app.settings_section.unwrap_or(SettingsSection::Core);
-    let mut tabs = Vec::new();
-    for (index, (section, label)) in sections.iter().enumerate() {
-        if index > 0 {
-            tabs.push(Span::styled("  ", Style::default().fg(theme::MUTED)));
-        }
-        let style = if *section == current {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::MUTED)
-        };
-        tabs.push(Span::styled(*label, style));
-    }
-    frame.render_widget(Paragraph::new(Line::from(tabs)), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(sandbox_policy_tab_line(current, chunks[0].width as usize)),
+        chunks[0],
+    );
 
     let rows: Vec<ListItem<'static>> = match app.settings_section {
         Some(SettingsSection::Core) | None => vec![
@@ -1176,6 +999,7 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
             ])),
         ],
         Some(SettingsSection::Workspace) => {
+            let row_width = chunks[1].width.saturating_sub(2) as usize;
             let mut rows = vec![ListItem::new(Line::from(vec![
                 Span::raw("Workspace read mode  "),
                 Span::styled(
@@ -1183,38 +1007,65 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
                     Style::default().fg(theme::TEXT_DIM),
                 ),
             ]))];
+            let path_label = if row_width >= 64 {
+                "Path                 "
+            } else {
+                "Path  "
+            };
+            let path_budget = row_width.saturating_sub(cell_width(path_label));
             rows.extend(settings.workspace_paths.iter().map(|path| {
                 ListItem::new(Line::from(vec![
-                    Span::raw("Path                 "),
-                    Span::styled(path.clone(), Style::default().fg(theme::TEXT_DIM)),
+                    Span::raw(path_label),
+                    Span::styled(
+                        truncate_middle(path, path_budget),
+                        Style::default().fg(theme::TEXT_DIM),
+                    ),
                 ]))
             }));
             rows
         }
-        Some(SettingsSection::Network) => settings
-            .network_allow
-            .iter()
-            .map(|item| {
-                let port = item
-                    .port
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "*".into());
-                ListItem::new(format!("{}:{port}", item.host))
-            })
-            .collect(),
-        Some(SettingsSection::Environment) => settings
-            .environment
-            .iter()
-            .map(|item| {
-                ListItem::new(Line::from(vec![
-                    Span::raw(format!("{:<24}", item.key)),
-                    Span::styled(
-                        truncate_end(&item.value, 44),
-                        Style::default().fg(theme::TEXT_DIM),
-                    ),
-                ]))
-            })
-            .collect(),
+        Some(SettingsSection::Network) => {
+            let row_width = chunks[1].width.saturating_sub(2) as usize;
+            settings
+                .network_allow
+                .iter()
+                .map(|item| {
+                    let port = item
+                        .port
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "*".into());
+                    let suffix = format!(":{port}");
+                    let host_budget = row_width.saturating_sub(cell_width(&suffix)).max(1);
+                    ListItem::new(format!(
+                        "{}{}",
+                        truncate_middle(&item.host, host_budget),
+                        suffix
+                    ))
+                })
+                .collect()
+        }
+        Some(SettingsSection::Environment) => {
+            let row_width = chunks[1].width.saturating_sub(2) as usize;
+            settings
+                .environment
+                .iter()
+                .map(|item| {
+                    let key_budget = row_width.saturating_sub(10).clamp(1, 24);
+                    let key = truncate_middle(&item.key, key_budget);
+                    let key_padding = key_budget.saturating_sub(cell_width(&key));
+                    let value_budget = row_width
+                        .saturating_sub(key_budget.saturating_add(2))
+                        .min(44);
+                    ListItem::new(Line::from(vec![
+                        Span::raw(format!("{key}{}  ", " ".repeat(key_padding))),
+                        Span::styled(
+                            truncate_end(&item.value, value_budget),
+                            Style::default().fg(theme::TEXT_DIM),
+                        ),
+                    ]))
+                })
+                .collect()
+        }
         Some(SettingsSection::Secrets) => settings
             .secret_ids
             .iter()
@@ -1260,15 +1111,28 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
         frame.render_stateful_widget(list, chunks[1], &mut state);
     }
 
-    let status = if let Some(notice) = app.state.sandbox_notice.as_deref() {
-        truncate_end(notice, chunks[2].width as usize)
+    let (status, status_color) = if app.pending_sandbox_reset {
+        (
+            "Reset the sandbox policy to Safe defaults? Press Enter/Space again to confirm · navigation cancels".to_owned(),
+            theme::ERROR,
+        )
+    } else if let Some(notice) = app.state.sandbox_notice.as_deref() {
+        (truncate_end(notice, chunks[2].width as usize), theme::MUTED)
     } else {
-        format!(
-            "Preset: {} · advanced changes are reported as custom",
-            settings.preset
+        (
+            format!(
+                "Preset: {} · advanced changes are reported as custom",
+                settings.preset
+            ),
+            theme::MUTED,
         )
     };
-    frame.render_widget(Paragraph::new(status).fg(theme::MUTED), chunks[2]);
+    frame.render_widget(
+        Paragraph::new(status)
+            .fg(status_color)
+            .wrap(Wrap { trim: false }),
+        chunks[2],
+    );
 }
 
 pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
@@ -1307,16 +1171,26 @@ fn draw_form_rows(
     selected: usize,
     show_cursor: bool,
 ) {
+    let row_width = area.width.saturating_sub(2) as usize;
+    let label_width = row_width.saturating_sub(10).clamp(1, 22);
+    let value_width = row_width
+        .saturating_sub(label_width.saturating_add(2))
+        .max(1);
     let items = rows.iter().map(|(label, value)| {
+        let label = truncate_end(label, label_width);
+        let label_padding = label_width.saturating_sub(cell_width(&label));
         ListItem::new(Line::from(vec![
             Span::styled(
-                format!("{label:<22}"),
+                format!("{label}{}", " ".repeat(label_padding)),
                 Style::default()
                     .fg(theme::MUTED)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled("│ ", Style::default().fg(theme::BORDER)),
-            Span::styled(value.clone(), Style::default().fg(theme::TEXT)),
+            Span::styled(
+                truncate_middle(value, value_width),
+                Style::default().fg(theme::TEXT),
+            ),
         ]))
     });
     let list = List::new(items)
@@ -1325,12 +1199,14 @@ fn draw_form_rows(
     let mut state = ListState::default()
         .with_selected((!rows.is_empty()).then_some(selected.min(rows.len().saturating_sub(1))));
     frame.render_stateful_widget(list, area, &mut state);
-    if show_cursor && let Some((label, value)) = rows.get(selected) {
+    if show_cursor && let Some((_, value)) = rows.get(selected) {
+        let rendered_value_width = cell_width(&truncate_middle(value, value_width));
         let x = area
             .x
             .saturating_add(2)
-            .saturating_add(label.chars().count().max(22) as u16)
-            .saturating_add(value.chars().count() as u16)
+            .saturating_add(label_width.min(u16::MAX as usize) as u16)
+            .saturating_add(2)
+            .saturating_add(rendered_value_width.min(u16::MAX as usize) as u16)
             .min(area.right().saturating_sub(1));
         let y = area
             .y
@@ -1344,41 +1220,126 @@ fn masked_secret(value: &str) -> String {
     "•".repeat(value.chars().count())
 }
 
+fn help_columns(left: &str, right: &str, width: u16) -> String {
+    let gap = 2usize.min(width as usize);
+    let left_width = (width as usize).saturating_sub(gap) / 2;
+    let right_width = (width as usize).saturating_sub(gap + left_width);
+    let left = truncate_end(left, left_width);
+    let right = truncate_end(right, right_width);
+    let padding = left_width
+        .saturating_sub(left.chars().count())
+        .saturating_add(gap);
+    format!("{left}{}{right}", " ".repeat(padding))
+}
+
+fn help_rect(frame_area: Rect) -> Rect {
+    let mut area = centered_rect(92, 100, frame_area);
+    let height = frame_area.height.min(15);
+    area.y = frame_area.y + frame_area.height.saturating_sub(height) / 2;
+    area.height = height;
+    area
+}
+
+fn compact_help_rows() -> [&'static str; 13] {
+    [
+        "Enter  send",
+        "Shift+Enter  newline",
+        "Esc/Ctrl+C  interrupt",
+        "Ctrl+D  quit",
+        "Alt+M/S/R/K  pickers",
+        "j/k · g/G  navigate",
+        "Alt+↑/↓  input history",
+        "Ctrl+N  new session",
+        "Ctrl+A/E · Ctrl+B/F",
+        "Alt+←/→  word move",
+        "Ctrl+W · Ctrl+U/K",
+        "/settings /status /login",
+        "/goal · ? help",
+    ]
+}
+
 pub(super) fn draw_help(frame: &mut Frame<'_>) {
-    let area = centered_rect(64, 62, frame.area());
+    let area = help_rect(frame.area());
     theme::modal_backdrop(frame, area);
-    let text = Text::from(vec![
-        Line::from("Yeet".bold()),
-        Line::from(""),
-        Line::from("Enter          send"),
-        Line::from("Shift+Enter    newline"),
-        Line::from("Esc / Ctrl+C   interrupt"),
-        Line::from("Alt+M          models"),
-        Line::from("Alt+S          sessions"),
-        Line::from("Alt+R          reasoning level"),
-        Line::from("Alt+K          skills / capabilities / MCP"),
-        Line::from("/capabilities  toggle skills / capabilities / MCP"),
-        Line::from("/login         authentication"),
-        Line::from("/settings      runtime and sandbox settings"),
-        Line::from("/status        detailed runtime / usage status"),
-        Line::from("/infinity      continuous model execution"),
-        Line::from("Ctrl+N         new session"),
-        Line::from("j / k          scroll transcript"),
-        Line::from("Ctrl+B / Ctrl+F page up / page down"),
-        Line::from("g / G          oldest / latest transcript"),
-        Line::from("?              this help"),
-        Line::from("Ctrl+D          detach / quit"),
-        Line::from("Ctrl+C          quit when idle"),
-    ]);
+    let width = area.width.saturating_sub(2);
+    let lines = if area.width < 60 {
+        compact_help_rows()
+            .into_iter()
+            .map(|row| Line::from(truncate_end(row, width as usize)))
+            .collect()
+    } else {
+        let left = [
+            "Enter  send",
+            "Shift+Enter  newline",
+            "Esc/Ctrl+C  interrupt",
+            "Ctrl+A/E  line ends",
+            "Ctrl+B/F  char move",
+            "Alt+←/→  word move",
+            "Ctrl+W  delete word",
+            "Ctrl+U/K  kill sides",
+            "Alt+↑/↓  input history",
+            "?  help / close",
+            "Ctrl+D  detach / quit",
+            "/goal  strict success judged",
+        ];
+        let right = [
+            "Ctrl+N  new session",
+            "Alt+M  models",
+            "Alt+S  sessions",
+            "Alt+R  reasoning",
+            "Alt+K  capabilities",
+            "j/k  scroll transcript",
+            "Ctrl+B/F  page empty",
+            "g/G  oldest / latest",
+            "/settings  runtime",
+            "/status  usage",
+            "/login  auth",
+            "Ctrl+C  quit idle",
+        ];
+        let mut lines =
+            vec![Line::from(help_columns("EDIT / SEND", "NAV / COMMANDS", width)).bold()];
+        lines.extend(
+            left.into_iter()
+                .zip(right)
+                .map(|(left, right)| Line::from(help_columns(left, right, width))),
+        );
+        lines
+    };
     frame.render_widget(
-        Paragraph::new(text).block(theme::modal_block(" Help · Esc close ")),
+        Paragraph::new(Text::from(lines)).block(theme::modal_block(" Help · Esc close ")),
         area,
     );
 }
 
+fn permission_action_line() -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "Enter/y",
+            Style::default()
+                .fg(theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" allow once  ·  ", Style::default().fg(theme::MUTED)),
+        Span::styled(
+            "n/Esc",
+            Style::default()
+                .fg(theme::ACCENT_HOT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" deny  ·  ", Style::default().fg(theme::MUTED)),
+        Span::styled(
+            "Ctrl+C",
+            Style::default()
+                .fg(theme::ACCENT_HOT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" stop task", Style::default().fg(theme::MUTED)),
+    ])
+}
+
 pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
     if let Some(permission) = app.state.pending_native_app_permission.as_ref() {
-        let area = centered_rect(78, 44, frame.area());
+        let area = centered_rect(82, 70, frame.area());
         theme::modal_backdrop(frame, area);
         let identity = match (&permission.app_name, &permission.bundle_id) {
             (Some(name), Some(bundle_id)) => format!("{name} ({bundle_id})"),
@@ -1403,24 +1364,24 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
             Line::from(source).fg(theme::MUTED),
             Line::from("Session-only access; no persistent approval will be saved.")
                 .fg(theme::ACCENT),
-            Line::from(""),
             Line::from(permission.reason.clone()).fg(theme::TEXT_DIM),
-            Line::from(""),
-            Line::from("Enter / y allow once    n / Esc deny").fg(theme::MUTED),
         ]);
+        let block = theme::modal_block(" Native app permission ")
+            .border_style(Style::default().fg(theme::ACCENT_HOT));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
+        frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), rows[0]);
         frame.render_widget(
-            Paragraph::new(text).wrap(Wrap { trim: false }).block(
-                theme::modal_block("Native app permission")
-                    .border_style(Style::default().fg(theme::ACCENT_HOT)),
-            ),
-            area,
+            Paragraph::new(permission_action_line()).wrap(Wrap { trim: false }),
+            rows[1],
         );
         return;
     }
     let Some(permission) = app.state.pending_shell_permission.as_ref() else {
         return;
     };
-    let area = centered_rect(72, 38, frame.area());
+    let area = centered_rect(82, 70, frame.area());
     theme::modal_backdrop(frame, area);
     let text = Text::from(vec![
         Line::from(vec![
@@ -1431,21 +1392,20 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
             Span::raw(&permission.operation),
         ]),
         Line::from(format!("{} action", permission.kind)).fg(theme::MUTED),
-        Line::from(""),
         Line::from(Span::styled(
             permission.command.clone(),
             Style::default().fg(theme::ACCENT_HOT),
         )),
-        Line::from(""),
         Line::from(permission.reason.clone()).fg(theme::TEXT_DIM),
-        Line::from(""),
-        Line::from("Enter / y allow once    n / Esc deny").fg(theme::MUTED),
     ]);
+    let block = theme::modal_block(" Permission ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), rows[0]);
     frame.render_widget(
-        Paragraph::new(text)
-            .wrap(Wrap { trim: false })
-            .block(theme::modal_block(" Permission ")),
-        area,
+        Paragraph::new(permission_action_line()).wrap(Wrap { trim: false }),
+        rows[1],
     );
 }
 
@@ -1457,6 +1417,479 @@ mod tests {
     fn authentication_key_input_is_masked() {
         assert_eq!(masked_secret("secret"), "••••••");
         assert_eq!(masked_secret(""), "");
+    }
+
+    #[test]
+    fn settings_form_cursor_tracks_visible_unicode_value_end() {
+        use ratatui::{
+            Terminal,
+            backend::{Backend, TestBackend},
+        };
+
+        let rows = vec![("Value".to_owned(), "한글".to_owned())];
+        let mut terminal = Terminal::new(TestBackend::new(60, 4)).unwrap();
+        terminal
+            .draw(|frame| draw_form_rows(frame, frame.area(), &rows, 0, true))
+            .unwrap();
+
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!(cursor, Position::new(30, 0));
+    }
+
+    #[test]
+    fn settings_form_keeps_long_value_tail_visible_at_insertion_point() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let rows = vec![(
+            "Base URL".to_owned(),
+            "https://api.example.test/a/very/long/provider/path/important-tail".to_owned(),
+        )];
+        let mut terminal = Terminal::new(TestBackend::new(60, 4)).unwrap();
+        terminal
+            .draw(|frame| draw_form_rows(frame, frame.area(), &rows, 0, true))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("important-tail"),
+            "the editable value tail should stay visible near the insertion point: {rendered}"
+        );
+    }
+
+    #[test]
+    fn permission_actions_stay_visible_when_content_wraps() {
+        let mut app = App::default();
+        app.state.pending_shell_permission = Some(crate::model::ShellPermission {
+            id: "shell".into(),
+            kind: "shell".into(),
+            command: "git diff --stat && cargo test --workspace --all-features --very-long-placeholder-that-wraps-across-the-dialog".into(),
+            operation: "Run a long shell command that requires explicit approval".into(),
+            reason: "This deliberately long explanation should wrap over several visual lines so the fixed approval controls must remain visible at the bottom of a short terminal.".into(),
+        });
+
+        for (width, height) in [(40, 12), (48, 18), (80, 24)] {
+            let backend = ratatui::backend::TestBackend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw_permission(frame, &app)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                rendered.contains("Enter/y"),
+                "approval action should remain visible at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("n/Esc") && rendered.contains("deny"),
+                "deny action should remain fully visible at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("Ctrl+C") && rendered.contains("stop task"),
+                "interrupt action should remain fully visible at {width}x{height}"
+            );
+            if width >= 48 {
+                assert!(
+                    rendered.contains("This deliberately long explanation"),
+                    "permission reason should remain visible at {width}x{height}"
+                );
+            }
+        }
+
+        app.state.pending_shell_permission = None;
+        app.state.pending_native_app_permission = Some(crate::model::NativeAppPermission {
+            id: "native".into(),
+            server: "codex-computer-use".into(),
+            tool: "native_app".into(),
+            bundle_id: Some("com.example.extremely-long-native-application-bundle".into()),
+            app_name: Some("Example Native Application With A Long Name".into()),
+            operation: "Control this native application for a long-running interaction".into(),
+            reason: "This deliberately long native-app reason must not displace the approval controls even when it wraps across several terminal rows.".into(),
+        });
+        for (width, height) in [(40, 12), (48, 18), (80, 24)] {
+            let backend = ratatui::backend::TestBackend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw_permission(frame, &app)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                rendered.contains("Enter/y"),
+                "native approval action should remain visible at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("n/Esc") && rendered.contains("deny"),
+                "native deny action should remain fully visible at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("Ctrl+C") && rendered.contains("stop task"),
+                "native interrupt action should remain fully visible at {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn providers_row_keeps_id_and_endpoint_visible_on_compact_terminals() {
+        let mut app = App::default();
+        app.state.provider_configurations = vec![crate::model::ProviderConfigurationItem {
+            id: "custom-provider-with-a-very-long-identifier".into(),
+            base_url: "https://very.long.custom.provider.api.example.test/v1".into(),
+            require_api_key: true,
+            header_count: 2,
+        }];
+
+        let backend = ratatui::backend::TestBackend::new(48, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw_providers(frame, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("custom"),
+            "provider id should remain identifiable: {rendered}"
+        );
+        assert!(
+            rendered.contains("https://"),
+            "provider endpoint should remain identifiable: {rendered}"
+        );
+        assert!(
+            rendered.contains("/v1"),
+            "provider endpoint tail should remain identifiable: {rendered}"
+        );
+
+        let backend = ratatui::backend::TestBackend::new(100, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw_providers(frame, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("key required"));
+        assert!(rendered.contains("2 headers"));
+    }
+
+    #[test]
+    fn provider_delete_confirmation_is_visible_before_destructive_action() {
+        let mut app = App::default();
+        app.state.provider_configurations = vec![crate::model::ProviderConfigurationItem {
+            id: "custom".into(),
+            base_url: "https://custom.example".into(),
+            require_api_key: true,
+            header_count: 0,
+        }];
+        app.pending_provider_delete_id = Some("custom".into());
+
+        for (width, height) in [(40, 12), (60, 18), (100, 30)] {
+            let backend = ratatui::backend::TestBackend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw_providers(frame, &app)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                rendered.contains("Delete provider custom?"),
+                "delete confirmation should name the provider at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("d/Delete") && rendered.contains("again"),
+                "delete confirmation should explain the second key press at {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_delete_confirmation_keeps_action_visible_for_long_ids() {
+        let mut app = App::default();
+        let id = "custom-provider-with-an-extremely-long-identifier-used-for-production";
+        app.state.provider_configurations = vec![crate::model::ProviderConfigurationItem {
+            id: id.into(),
+            base_url: "https://provider.example".into(),
+            require_api_key: true,
+            header_count: 0,
+        }];
+        app.pending_provider_delete_id = Some(id.into());
+
+        let backend = ratatui::backend::TestBackend::new(48, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw_providers(frame, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("custom"),
+            "confirmation should identify the provider: {rendered}"
+        );
+        assert!(
+            rendered.contains("d/Delete") && rendered.contains("again"),
+            "confirmation action must stay visible for long provider ids: {rendered}"
+        );
+    }
+
+    #[test]
+    fn sandbox_reset_confirmation_is_visible_before_full_policy_reset() {
+        let mut app = App::default();
+        app.state.sandbox_settings = Some(crate::model::SandboxSettingsState {
+            preset: "custom".into(),
+            execution_mode: "sandboxed".into(),
+            auto_approve: false,
+            workspace_mode: "all".into(),
+            workspace_paths: vec!["src".into()],
+            scratch_writable: true,
+            network_allow: Vec::new(),
+            environment: Vec::new(),
+            secret_ids: Vec::new(),
+            limits: crate::model::SandboxLimitsState {
+                wall_time_seconds: 30,
+                max_stdout_bytes: 1024,
+                max_stderr_bytes: 1024,
+                max_memory_bytes: 0,
+                max_processes: 0,
+            },
+        });
+        app.settings_section = Some(crate::app::SettingsSection::Core);
+        app.popup_index = 3;
+        app.pending_sandbox_reset = true;
+
+        for (width, height) in [(40, 12), (60, 18), (100, 30)] {
+            let backend = ratatui::backend::TestBackend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| draw_sandbox_policy(frame, &app))
+                .unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                rendered.contains("Reset the sandbox policy"),
+                "reset warning should stay visible at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("Enter/Space"),
+                "reset warning should explain the second confirmation at {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn sandbox_policy_keeps_selected_compact_tab_visible() {
+        let mut app = App::default();
+        app.state.sandbox_settings = Some(crate::model::SandboxSettingsState {
+            preset: "custom".into(),
+            execution_mode: "sandboxed".into(),
+            auto_approve: false,
+            workspace_mode: "all".into(),
+            workspace_paths: Vec::new(),
+            scratch_writable: true,
+            network_allow: Vec::new(),
+            environment: Vec::new(),
+            secret_ids: Vec::new(),
+            limits: crate::model::SandboxLimitsState {
+                wall_time_seconds: 30,
+                max_stdout_bytes: 1024,
+                max_stderr_bytes: 1024,
+                max_memory_bytes: 0,
+                max_processes: 0,
+            },
+        });
+        app.settings_section = Some(crate::app::SettingsSection::Limits);
+
+        let backend = ratatui::backend::TestBackend::new(48, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_sandbox_policy(frame, &app))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("Limits"),
+            "selected Limits tab should remain visible at 48 columns: {rendered}"
+        );
+    }
+
+    #[test]
+    fn sandbox_workspace_row_keeps_project_tail_visible_on_compact_terminals() {
+        let mut app = App::default();
+        app.state.sandbox_settings = Some(crate::model::SandboxSettingsState {
+            preset: "custom".into(),
+            execution_mode: "sandboxed".into(),
+            auto_approve: false,
+            workspace_mode: "all".into(),
+            workspace_paths: vec![
+                "/Users/example/Projects/very/deep/source/tree/ImportantWorkspaceProject".into(),
+            ],
+            scratch_writable: true,
+            network_allow: Vec::new(),
+            environment: Vec::new(),
+            secret_ids: Vec::new(),
+            limits: crate::model::SandboxLimitsState {
+                wall_time_seconds: 30,
+                max_stdout_bytes: 1024,
+                max_stderr_bytes: 1024,
+                max_memory_bytes: 0,
+                max_processes: 0,
+            },
+        });
+        app.settings_section = Some(crate::app::SettingsSection::Workspace);
+        app.popup_index = 1;
+
+        let backend = ratatui::backend::TestBackend::new(48, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_sandbox_policy(frame, &app))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("Path"),
+            "workspace path row should stay labeled: {rendered}"
+        );
+        assert!(
+            rendered.contains("WorkspaceProject"),
+            "workspace path tail should remain identifiable: {rendered}"
+        );
+    }
+
+    #[test]
+    fn sandbox_network_row_keeps_host_and_port_visible_on_compact_terminals() {
+        let mut app = App::default();
+        app.state.sandbox_settings = Some(crate::model::SandboxSettingsState {
+            preset: "custom".into(),
+            execution_mode: "sandboxed".into(),
+            auto_approve: false,
+            workspace_mode: "all".into(),
+            workspace_paths: Vec::new(),
+            scratch_writable: true,
+            network_allow: vec![crate::model::SandboxNetworkItem {
+                host: "very-long-service-name.with.many.subdomains.internal.example.test".into(),
+                port: Some(443),
+            }],
+            environment: Vec::new(),
+            secret_ids: Vec::new(),
+            limits: crate::model::SandboxLimitsState {
+                wall_time_seconds: 30,
+                max_stdout_bytes: 1024,
+                max_stderr_bytes: 1024,
+                max_memory_bytes: 0,
+                max_processes: 0,
+            },
+        });
+        app.settings_section = Some(crate::app::SettingsSection::Network);
+
+        let backend = ratatui::backend::TestBackend::new(48, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_sandbox_policy(frame, &app))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("very"),
+            "network host should remain identifiable: {rendered}"
+        );
+        assert!(
+            rendered.contains(":443"),
+            "network port should remain visible: {rendered}"
+        );
+    }
+
+    #[test]
+    fn sandbox_environment_row_keeps_key_and_value_visible_on_compact_terminals() {
+        let mut app = App::default();
+        app.state.sandbox_settings = Some(crate::model::SandboxSettingsState {
+            preset: "custom".into(),
+            execution_mode: "sandboxed".into(),
+            auto_approve: false,
+            workspace_mode: "all".into(),
+            workspace_paths: Vec::new(),
+            scratch_writable: true,
+            network_allow: Vec::new(),
+            environment: vec![crate::model::SandboxEnvironmentItem {
+                key: "YEET_EXTREMELY_LONG_ENVIRONMENT_VARIABLE_NAME_FOR_REMOTE_DEBUGGING".into(),
+                value: "https://api.example.test/important-endpoint".into(),
+            }],
+            secret_ids: Vec::new(),
+            limits: crate::model::SandboxLimitsState {
+                wall_time_seconds: 30,
+                max_stdout_bytes: 1024,
+                max_stderr_bytes: 1024,
+                max_memory_bytes: 0,
+                max_processes: 0,
+            },
+        });
+        app.settings_section = Some(crate::app::SettingsSection::Environment);
+
+        let backend = ratatui::backend::TestBackend::new(48, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_sandbox_policy(frame, &app))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("YEET"),
+            "environment key should remain identifiable: {rendered}"
+        );
+        assert!(
+            rendered.contains("https://"),
+            "environment value should remain identifiable: {rendered}"
+        );
     }
 
     #[test]
@@ -1494,6 +1927,332 @@ mod tests {
         assert_eq!(rows[1].provider_heading, "");
         assert_eq!(rows[2].provider_heading, "Claude (Anthropic)");
         assert_eq!(rows[0].context_length, Some(128_000));
+
+        for (width, expect_hint) in [(48, false), (100, true)] {
+            let backend = ratatui::backend::TestBackend::new(width, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw_models(frame, &app)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert_eq!(
+                rendered.contains("PgUp/PgDn"),
+                expect_hint,
+                "unexpected model navigation hint at {width} columns"
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_model_and_reasoning_pickers_explain_next_response_timing() {
+        let mut app = App::default();
+        app.state.is_streaming = true;
+        app.state.active_model = "openai/gpt-5.6-sol".into();
+        app.state.available_models = vec![
+            "openai/gpt-5.6-sol".into(),
+            "anthropic/claude-sonnet".into(),
+        ];
+
+        for draw in [draw_models as fn(&mut Frame<'_>, &App), draw_reasoning] {
+            let backend = ratatui::backend::TestBackend::new(100, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw(frame, &app)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+
+            assert!(
+                rendered.contains("next response"),
+                "streaming selector should explain deferred timing: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn capabilities_picker_advertises_page_navigation_when_roomy() {
+        let mut app = App::default();
+        app.state.available_capabilities = vec![crate::model::CapabilityToggleItem {
+            id: "skill:test".into(),
+            kind: "skill".into(),
+            name: "Test capability".into(),
+            description: "Used to verify the capability picker navigation hint".into(),
+            enabled: true,
+        }];
+
+        for (width, expect_hint) in [(48, false), (100, true)] {
+            let backend = ratatui::backend::TestBackend::new(width, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| draw_capabilities(frame, &app))
+                .unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert_eq!(
+                rendered.contains("PgUp/PgDn"),
+                expect_hint,
+                "unexpected capability navigation hint at {width} columns"
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_capabilities_are_visibly_read_only_in_list_and_detail() {
+        let mut app = App::default();
+        app.state.is_streaming = true;
+        app.state.available_capabilities = vec![crate::model::CapabilityToggleItem {
+            id: "skill:test".into(),
+            kind: "skill".into(),
+            name: "Test capability".into(),
+            description: "Capability changes must wait for the active response".into(),
+            enabled: true,
+        }];
+        app.capability_detail_id = Some("skill:test".into());
+
+        for draw in [
+            draw_capabilities as fn(&mut Frame<'_>, &App),
+            draw_capability_detail,
+        ] {
+            let backend = ratatui::backend::TestBackend::new(80, 24);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw(frame, &app)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            let rendered_lower = rendered.to_ascii_lowercase();
+            assert!(rendered_lower.contains("changes locked"));
+            assert!(!rendered.contains("Space toggle"));
+        }
+    }
+
+    #[test]
+    fn sessions_modal_preserves_cross_workspace_navigation_on_compact_terminals() {
+        let mut app = App::default();
+        app.state.known_workspaces = vec![
+            crate::model::WorkspaceSummary {
+                id: "one".into(),
+                path: "/tmp/one".into(),
+                display_name: "One".into(),
+                updated_at: None,
+                session_count: 1,
+                is_current: true,
+            },
+            crate::model::WorkspaceSummary {
+                id: "two".into(),
+                path: "/tmp/two".into(),
+                display_name: "Two".into(),
+                updated_at: None,
+                session_count: 1,
+                is_current: false,
+            },
+        ];
+        app.state.workspace_session_groups = vec![
+            crate::model::WorkspaceSessionGroup {
+                workspace_id: "one".into(),
+                sessions: vec![crate::model::SessionSummary {
+                    id: "current".into(),
+                    title: "Current task".into(),
+                    updated_at: String::new(),
+                    model: "sol".into(),
+                    message_count: 4,
+                }],
+            },
+            crate::model::WorkspaceSessionGroup {
+                workspace_id: "two".into(),
+                sessions: vec![crate::model::SessionSummary {
+                    id: "foreign".into(),
+                    title: "Foreign task".into(),
+                    updated_at: String::new(),
+                    model: "sol".into(),
+                    message_count: 7,
+                }],
+            },
+        ];
+        app.state.current_session_id = Some("foreign".into());
+        app.popup_index = 1;
+
+        let catalog = app.session_picker_items();
+        assert_eq!(
+            catalog
+                .iter()
+                .map(|item| item.session.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["current", "foreign"]
+        );
+        assert_eq!(catalog[0].workspace_name, "One");
+        assert_eq!(catalog[1].workspace_name, "Two");
+
+        for (width, height) in [(80, 24), (120, 32)] {
+            let backend = ratatui::backend::TestBackend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| draw_sessions(frame, &app)).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+
+            assert!(
+                rendered.contains("One / Current task"),
+                "current workspace missing at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("Two / Foreign task"),
+                "other workspace missing at {width}x{height}"
+            );
+            assert!(
+                rendered.contains("● Two / Foreign task"),
+                "active cross-workspace session not identified at {width}x{height}"
+            );
+        }
+
+        app.popup_filter = "foreign".into();
+        app.popup_index = 0;
+        let filtered = app.filtered_session_picker_items();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].session.id, "foreign");
+
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw_sessions(frame, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("foreign  ·  1/2"));
+        assert!(rendered.contains("Two / Foreign task"));
+        assert!(!rendered.contains("One / Current task"));
+    }
+
+    #[test]
+    fn sessions_modal_keeps_title_visible_when_workspace_name_is_long() {
+        let mut app = App::default();
+        app.state.known_workspaces = vec![crate::model::WorkspaceSummary {
+            id: "long-workspace".into(),
+            path: "/tmp/workspace-with-an-extremely-long-name".into(),
+            display_name: "WorkspaceWithAnExtremelyLongName".into(),
+            updated_at: None,
+            session_count: 1,
+            is_current: true,
+        }];
+        app.state.workspace_session_groups = vec![crate::model::WorkspaceSessionGroup {
+            workspace_id: "long-workspace".into(),
+            sessions: vec![crate::model::SessionSummary {
+                id: "important-session".into(),
+                title: "Important landing investigation".into(),
+                updated_at: String::new(),
+                model: "provider/model-with-an-extremely-long-name".into(),
+                message_count: 42,
+            }],
+        }];
+        app.state.current_session_id = Some("important-session".into());
+
+        let backend = ratatui::backend::TestBackend::new(48, 18);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw_sessions(frame, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            rendered.contains("Work"),
+            "workspace should remain identifiable at 48 columns: {rendered}"
+        );
+        assert!(
+            rendered.contains("Important"),
+            "session title should remain identifiable at 48 columns: {rendered}"
+        );
+    }
+
+    #[test]
+    fn help_keeps_critical_shortcuts_visible_at_common_sizes() {
+        for (width, height) in [(48, 18), (80, 24), (120, 32)] {
+            let backend = ratatui::backend::TestBackend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(draw_help).unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+
+            assert_eq!(
+                help_rect(Rect::new(0, 0, width, height)).height,
+                height.min(15)
+            );
+            for shortcut in [
+                "Ctrl+W",
+                "Alt+←/→",
+                "Ctrl+N",
+                "/status",
+                "/goal",
+                "Ctrl+D",
+            ] {
+                assert!(
+                    rendered.contains(shortcut),
+                    "{shortcut} should stay visible at {width}x{height}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn help_uses_readable_single_column_summary_on_narrow_terminals() {
+        let width = 32;
+        let height = 18;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(draw_help).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(!rendered.contains("EDIT / SEND"));
+        for shortcut in [
+            "Shift+Enter",
+            "Esc/Ctrl+C",
+            "Alt+M/S/R/K",
+            "Alt+←/→",
+                "/settings",
+            "/goal",
+            "Ctrl+D",
+        ] {
+            assert!(
+                rendered.contains(shortcut),
+                "{shortcut} should remain readable at {width}x{height}: {rendered}"
+            );
+        }
     }
 }
 
@@ -1661,10 +2420,8 @@ pub(super) fn draw_debate(frame: &mut Frame<'_>, app: &App) {
             "Scores follow the debate contract's criteria; evidence and rebuttal quality are cross-checks.",
         ));
         lines.push(Line::from(format!(
-            "Default model: {} · Up to {} strengthening rounds · {} jury retries max",
+            "Default model: {} · Adaptive strengthening · jury retries uncapped",
             app.state.active_model,
-            crate::debate::MAX_STRENGTHENING_ROUNDS,
-            crate::debate::JURY_MAX_ATTEMPTS,
         )));
     }
     if let Some(error) = &app.state.error_message {

@@ -2,11 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import MarkdownIt from 'markdown-it'
+import { copyTextToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{ content: string }>()
 const root = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 let disposed = false
+
+let copyFeedbackSequence = 0
 
 const markdown = new MarkdownIt({
   html: false,
@@ -26,7 +29,7 @@ markdown.renderer.rules.fence = (tokens, index) => {
   const language = token.info.trim().split(/\s+/)[0] || 'text'
   const code = markdown.utils.escapeHtml(token.content)
   const safeLanguage = markdown.utils.escapeHtml(language)
-  return `<figure class="code-block"><figcaption><span>${safeLanguage}</span><button type="button" data-copy-code>Copy</button></figcaption><pre><code class="language-${safeLanguage}" data-language="${safeLanguage}">${code}</code></pre></figure>`
+  return `<figure class="code-block"><figcaption><span>${safeLanguage}</span><button type="button" data-copy-code aria-label="Copy ${safeLanguage} code" aria-live="polite">Copy</button></figcaption><pre tabindex="0" role="group" aria-label="${safeLanguage} code block"><code class="language-${safeLanguage}" data-language="${safeLanguage}">${code}</code></pre></figure>`
 }
 
 const html = computed(() => DOMPurify.sanitize(markdown.render(props.content || ''), {
@@ -62,45 +65,24 @@ function observeCodeBlocks() {
   root.value?.querySelectorAll<HTMLElement>('pre code').forEach((code) => observer?.observe(code))
 }
 
-async function copyToClipboard(value: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value)
-      return true
-    }
-  } catch {
-    // Fall through to the user-gesture-compatible legacy path below. This is
-    // still needed in embedded browsers and test environments where the
-    // Clipboard API exists but permission is unavailable.
-  }
-
-  const textarea = document.createElement('textarea')
-  textarea.value = value
-  textarea.setAttribute('readonly', '')
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  textarea.style.pointerEvents = 'none'
-  document.body.appendChild(textarea)
-  textarea.select()
-  textarea.setSelectionRange(0, textarea.value.length)
-  try {
-    return document.execCommand('copy')
-  } catch {
-    return false
-  } finally {
-    textarea.remove()
-  }
-}
-
 function handleClick(event: MouseEvent) {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy-code]')
   if (!button || !root.value?.contains(button)) return
   const code = button.closest('.code-block')?.querySelector('code')?.textContent ?? ''
-  void copyToClipboard(code).then((copied) => {
-    if (!copied) return
-    const original = button.textContent
-    button.textContent = 'Copied'
-    window.setTimeout(() => { button.textContent = original }, 1200)
+  const original = button.dataset.copyOriginal || button.textContent || 'Copy'
+  const feedbackId = String(++copyFeedbackSequence)
+  button.dataset.copyOriginal = original
+  button.dataset.copyFeedback = feedbackId
+  void copyTextToClipboard(code).then((copied) => {
+    if (!button.isConnected || button.dataset.copyFeedback !== feedbackId) return
+    const feedback = copied ? 'Copied' : 'Copy failed'
+    button.textContent = feedback
+    window.setTimeout(() => {
+      if (!button.isConnected || button.dataset.copyFeedback !== feedbackId) return
+      button.textContent = original
+      delete button.dataset.copyFeedback
+      delete button.dataset.copyOriginal
+    }, 1500)
   })
 }
 

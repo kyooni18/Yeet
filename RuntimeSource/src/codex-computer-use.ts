@@ -8,6 +8,48 @@ import { McpManager } from "./mcp.js";
 export const CODEX_COMPUTER_USE_RUNTIME = "codex-computer-use";
 const COMPUTER_USE_PLUGIN = "unified-computer-use";
 
+const DEFAULT_COMPUTER_USE_TIMEOUT_MS = 30_000;
+const MAX_SAFE_TIMER_TIMEOUT_MS = 2_147_483_647;
+
+function computerUseTimeoutMs(args: Record<string, unknown>): number {
+  const requested = args.timeout_ms;
+  if (typeof requested !== "number" || !Number.isSafeInteger(requested) || requested < 1) {
+    return DEFAULT_COMPUTER_USE_TIMEOUT_MS;
+  }
+  return Math.min(requested, MAX_SAFE_TIMER_TIMEOUT_MS);
+}
+
+function signalReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("Codex Computer Use cancelled");
+}
+
+async function withComputerUseTimeout<T>(
+  timeoutMs: number,
+  parent: AbortSignal | undefined,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (parent?.aborted) throw signalReason(parent);
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort(signalReason(parent!));
+  parent?.addEventListener("abort", onParentAbort, { once: true });
+  const timer = setTimeout(
+    () => controller.abort(new Error(`Codex Computer Use timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signalReason(controller.signal));
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([operation(controller.signal), aborted]);
+  } finally {
+    clearTimeout(timer);
+    parent?.removeEventListener("abort", onParentAbort);
+    if (onAbort) controller.signal.removeEventListener("abort", onAbort);
+  }
+}
+
 type RawPluginServer = {
   command?: unknown;
   args?: unknown;
@@ -138,10 +180,24 @@ export class CodexComputerUse {
     signal?: AbortSignal,
   ): Promise<McpCallToolResult> {
     if (tool !== "js" && tool !== "js_reset") throw new Error(`Unsupported Codex Computer Use tool: ${tool}`);
+    let runtimeReady = false;
     try {
       await this.#ensureRuntime();
-      return await this.#mcp.callTool(CODEX_COMPUTER_USE_RUNTIME, tool, args, signal);
+      runtimeReady = true;
+      const timeoutMs = computerUseTimeoutMs(args);
+      return await withComputerUseTimeout(
+        timeoutMs,
+        signal,
+        (requestSignal) => this.#mcp.callTool(CODEX_COMPUTER_USE_RUNTIME, tool, args, requestSignal),
+      );
     } catch (error) {
+      if (runtimeReady) {
+        try {
+          await this.#mcp.disconnect(CODEX_COMPUTER_USE_RUNTIME);
+        } catch {
+          // Best effort: the original call failure is the useful error to preserve.
+        }
+      }
       // The bundled transport currently speaks MCP internally, but that is a
       // Codex implementation detail. Do not leak it into Yeet's user-facing
       // error classification for this first-party capability.

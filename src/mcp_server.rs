@@ -49,11 +49,12 @@ const STDIO_ORPHAN_STARTUP_GRACE: Duration = Duration::from_secs(3);
 
 pub fn serve_stdio(args: &[String]) -> Result<()> {
     let launch_workspace = current_workspace()?;
-    let default_workspace = parse_workspace_option(args, &launch_workspace)?
-        .unwrap_or_else(|| launch_workspace.clone());
+    let (workspace, restrict_workspace) = parse_workspace_options(args, &launch_workspace)?;
+    let default_workspace = workspace.unwrap_or_else(|| launch_workspace.clone());
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
-    let mut server = McpServer::new(default_workspace);
+    let mut server =
+        McpServer::new_with_workspace_restriction(default_workspace, restrict_workspace);
     let result = serve_stdio_guarded(&mut server, stdin, stdout);
     if result.as_ref().is_err_and(is_stdio_disconnect) {
         return Ok(());
@@ -144,12 +145,15 @@ fn serve_stdio_guarded(
 
 pub fn print_stdio_config(args: &[String]) -> Result<()> {
     let launch_workspace = current_workspace()?;
-    let workspace = parse_workspace_option(args, &launch_workspace)?;
+    let (workspace, restrict_workspace) = parse_workspace_options(args, &launch_workspace)?;
     let executable = std::env::current_exe().context("locate Yeet executable")?;
     let mut command_args = vec![json!("mcpserver"), json!("stdio")];
     if let Some(workspace) = workspace {
         command_args.push(json!("--workspace"));
         command_args.push(json!(workspace));
+    }
+    if restrict_workspace {
+        command_args.push(json!("--restrict-workspace"));
     }
     println!(
         "{}",
@@ -167,8 +171,9 @@ pub(super) fn current_workspace() -> Result<PathBuf> {
         .with_context(|| format!("resolve current workspace {}", path.display()))
 }
 
-fn parse_workspace_option(args: &[String], base: &Path) -> Result<Option<PathBuf>> {
+fn parse_workspace_options(args: &[String], base: &Path) -> Result<(Option<PathBuf>, bool)> {
     let mut workspace = None;
+    let mut restrict_workspace = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -182,6 +187,12 @@ fn parse_workspace_option(args: &[String], base: &Path) -> Result<Option<PathBuf
                 }
                 workspace = Some(resolve_workspace_path(base, value)?);
             }
+            "--restrict-workspace" => {
+                if restrict_workspace {
+                    bail!("--restrict-workspace was specified more than once");
+                }
+                restrict_workspace = true;
+            }
             value if !value.starts_with('-') && workspace.is_none() => {
                 workspace = Some(resolve_workspace_path(base, value)?);
             }
@@ -189,11 +200,18 @@ fn parse_workspace_option(args: &[String], base: &Path) -> Result<Option<PathBuf
         }
         index += 1;
     }
-    Ok(workspace)
+    Ok((workspace, restrict_workspace))
 }
 
 pub(super) fn resolve_workspace_path(base: &Path, value: &str) -> Result<PathBuf> {
-    let path = PathBuf::from(value);
+    let path = match value {
+        "~" => dirs::home_dir().ok_or_else(|| anyhow!("home directory is unavailable"))?,
+        value if value.starts_with("~/") || value.starts_with("~\\") => {
+            let home = dirs::home_dir().ok_or_else(|| anyhow!("home directory is unavailable"))?;
+            home.join(&value[2..])
+        }
+        value => PathBuf::from(value),
+    };
     let path = if path.is_absolute() {
         path
     } else {
@@ -294,15 +312,23 @@ pub(super) fn mcp_json_nesting_within_limit(value: &Value) -> bool {
 }
 
 fn is_stdio_disconnect(error: &anyhow::Error) -> bool {
+    fn is_disconnect_kind(kind: std::io::ErrorKind) -> bool {
+        matches!(
+            kind,
+            std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+        )
+    }
+
     error.chain().any(|cause| {
-        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
-            matches!(
-                io.kind(),
-                std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::ConnectionAborted
-            )
-        })
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| is_disconnect_kind(io.kind()))
+            || cause
+                .downcast_ref::<serde_json::Error>()
+                .and_then(serde_json::Error::io_error_kind)
+                .is_some_and(is_disconnect_kind)
     })
 }
 
@@ -323,7 +349,11 @@ struct WorkspaceRuntime {
 }
 
 impl WorkspaceRuntime {
-    fn new(workspace: PathBuf, bridge: BridgeClient) -> Result<Self> {
+    fn new(
+        workspace: PathBuf,
+        bridge: BridgeClient,
+        hard_access_root: Option<PathBuf>,
+    ) -> Result<Self> {
         let config = ConfigStore::default();
         config.ensure()?;
         let project_settings = ProjectSettingsStore::new(&workspace)?;
@@ -348,6 +378,7 @@ impl WorkspaceRuntime {
 
         let workers = WorkerRegistry::new(Vec::new())?;
         let mut registry = ToolRegistry::new(bridge.clone(), workspace, workers, permission)?;
+        registry.set_hard_access_root(hard_access_root)?;
         registry.set_disabled_capabilities(project.capabilities.disabled.clone());
         registry.configure_foundation_memory(
             project.foundation_memory.enabled,
@@ -433,14 +464,24 @@ impl WorkspaceRuntime {
 
 pub(super) struct McpServer {
     default_workspace: PathBuf,
+    restrict_workspace: bool,
     bridge: Option<BridgeClient>,
     workspaces: HashMap<PathBuf, WorkspaceRuntime>,
 }
 
 impl McpServer {
+    #[cfg(test)]
     pub(super) fn new(default_workspace: PathBuf) -> Self {
+        Self::new_with_workspace_restriction(default_workspace, false)
+    }
+
+    pub(super) fn new_with_workspace_restriction(
+        default_workspace: PathBuf,
+        restrict_workspace: bool,
+    ) -> Self {
         Self {
             default_workspace,
+            restrict_workspace,
             bridge: None,
             workspaces: HashMap::new(),
         }
@@ -455,8 +496,11 @@ impl McpServer {
 
     fn runtime(&mut self, workspace: PathBuf) -> Result<&mut WorkspaceRuntime> {
         if !self.workspaces.contains_key(&workspace) {
+            let hard_access_root = self
+                .restrict_workspace
+                .then(|| self.default_workspace.clone());
             let bridge = self.bridge()?;
-            let runtime = WorkspaceRuntime::new(workspace.clone(), bridge)?;
+            let runtime = WorkspaceRuntime::new(workspace.clone(), bridge, hard_access_root)?;
             self.workspaces.insert(workspace.clone(), runtime);
         }
         Ok(self
@@ -517,8 +561,12 @@ impl McpServer {
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("tools/call requires a tool name"))?;
+        let lazy_tool = crate::skyline::direct_mcp_tool_definitions()
+            .iter()
+            .any(|tool| tool.name == name);
         if name != "sandbox_get"
             && name != "sandbox_configure"
+            && !lazy_tool
             && !direct_mcp_tool_definitions()
                 .iter()
                 .any(|tool| tool.name == name)
@@ -547,6 +595,8 @@ impl McpServer {
         let result = match name {
             "sandbox_get" => sandbox_get(&workspace, arguments),
             "sandbox_configure" => sandbox_configure(&workspace, arguments),
+            "activate_capability" => crate::skyline::activate(&workspace, arguments),
+            "invoke_capability" => crate::skyline::invoke(&workspace, arguments),
             _ => self
                 .runtime(workspace)
                 .and_then(|runtime| runtime.execute(execution_name, arguments)),
@@ -559,13 +609,24 @@ impl McpServer {
 
     fn workspace_from_arguments(&self, arguments: &mut Map<String, Value>) -> Result<PathBuf> {
         let value = arguments.remove("workspace");
-        match value {
-            None | Some(Value::Null) => Ok(self.default_workspace.clone()),
+        let workspace = match value {
+            None | Some(Value::Null) => self.default_workspace.clone(),
             Some(Value::String(value)) if !value.trim().is_empty() => {
-                resolve_workspace_path(&self.default_workspace, value.trim())
+                resolve_workspace_path(&self.default_workspace, value.trim())?
             }
             Some(_) => bail!("workspace must be a non-empty path string"),
+        };
+        if self.restrict_workspace
+            && workspace != self.default_workspace
+            && !workspace.starts_with(&self.default_workspace)
+        {
+            bail!(
+                "MCP workspace access is restricted to {} and its descendants; requested {}",
+                self.default_workspace.display(),
+                workspace.display()
+            );
         }
+        Ok(workspace)
     }
 }
 
@@ -926,6 +987,7 @@ fn modernize_result(result: &mut Value) {
 fn tool_definitions() -> Vec<Value> {
     let mut tools = direct_mcp_tool_definitions()
         .into_iter()
+        .chain(crate::skyline::direct_mcp_tool_definitions())
         .map(export_tool_definition)
         .collect::<Vec<_>>();
     tools.push(sandbox_get_definition());
@@ -1063,6 +1125,8 @@ fn tool_annotations(name: &str) -> Value {
             | "project_memory_relate"
             | "computer_use"
             | "desktop_control"
+            | "activate_capability"
+            | "invoke_capability"
     );
     let open_world = matches!(
         name,
@@ -1122,6 +1186,21 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_mcp_discovery_keeps_lazy_capabilities_generic() {
+        let tools = tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"activate_capability"));
+        assert!(names.contains(&"invoke_capability"));
+        assert!(names.iter().all(|name| !name.starts_with("skyline_")));
+        let rendered = serde_json::to_string(&tools).unwrap().to_ascii_lowercase();
+        assert!(!rendered.contains("skyline"));
+        assert!(!rendered.contains("test_run_start"));
+    }
+
+    #[test]
     fn legacy_initialize_preserves_supported_requested_version() {
         let result = initialize_result(Some(&json!({"protocolVersion":"2025-06-18"})));
         assert_eq!(result["protocolVersion"], "2025-06-18");
@@ -1144,6 +1223,32 @@ mod tests {
             "client disconnected",
         ));
         assert!(is_stdio_disconnect(&error));
+    }
+
+    #[test]
+    fn stdio_json_writer_broken_pipe_is_a_clean_shutdown_condition() {
+        struct BrokenWriter;
+
+        impl std::io::Write for BrokenWriter {
+            fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "client disconnected during JSON write",
+                ))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let error = write_json(&mut BrokenWriter, &json!({"jsonrpc":"2.0"})).unwrap_err();
+        assert!(is_stdio_disconnect(&error));
+
+        let syntax_error = anyhow::Error::from(
+            serde_json::from_str::<Value>("{").expect_err("malformed JSON must fail"),
+        );
+        assert!(!is_stdio_disconnect(&syntax_error));
     }
 
     #[test]
@@ -1204,7 +1309,8 @@ mod tests {
         assert!(names.contains(&"sandbox_get"));
         assert!(names.contains(&"sandbox_configure"));
         assert!(!names.iter().any(|name| name.starts_with("yeet_")));
-        assert!(!names.contains(&"activate_capability"));
+        assert!(names.contains(&"activate_capability"));
+        assert!(names.contains(&"invoke_capability"));
         assert!(
             tool_by_name(&result, "read_file")["inputSchema"]["properties"]
                 .get("workspace")
@@ -1238,6 +1344,54 @@ mod tests {
         assert_eq!(selected, other.path().canonicalize().unwrap());
         assert!(!arguments.contains_key("workspace"));
         assert_eq!(arguments["path"], "README.md");
+    }
+
+    #[test]
+    fn workspace_paths_expand_home_prefix() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+
+        assert_eq!(
+            resolve_workspace_path(Path::new("/tmp"), "~/Code/Rust/Yeet").unwrap(),
+            home.join("Code/Rust/Yeet").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn restricted_workspace_rejects_escape_but_allows_descendants() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let child_path = child.canonicalize().unwrap();
+        let other_path = other.path().canonicalize().unwrap();
+        let server = McpServer::new_with_workspace_restriction(root_path.clone(), true);
+
+        let mut inside = Map::from_iter([("workspace".into(), json!(child_path.clone()))]);
+        assert_eq!(
+            server.workspace_from_arguments(&mut inside).unwrap(),
+            child_path
+        );
+
+        let mut outside = Map::from_iter([("workspace".into(), json!(other_path.clone()))]);
+        let error = server.workspace_from_arguments(&mut outside).unwrap_err();
+        assert!(error.to_string().contains("restricted to"));
+        assert!(error.to_string().contains(&root_path.display().to_string()));
+        assert!(
+            error
+                .to_string()
+                .contains(&other_path.display().to_string())
+        );
+    }
+
+    #[test]
+    fn restricted_server_does_not_expose_restriction_as_sandbox_setting() {
+        let definition = sandbox_configure_definition();
+        let properties = definition["inputSchema"]["properties"].as_object().unwrap();
+        assert!(!properties.contains_key("restrictWorkspace"));
+        assert!(!properties.contains_key("accessRoot"));
     }
 
     #[test]

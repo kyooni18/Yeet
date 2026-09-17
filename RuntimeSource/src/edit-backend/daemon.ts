@@ -62,19 +62,55 @@ async function dispatch(request: RpcRequest): Promise<unknown> {
   }
 }
 
+function isPeerDisconnect(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPIPE" || code === "ECONNRESET";
+}
+
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+let responsePipeClosed = false;
+
+function closeResponsePipe(): void {
+  if (responsePipeClosed) return;
+  responsePipeClosed = true;
+  rl.close();
+  process.stdin.destroy();
+}
+
+process.stdout.on("error", (error) => {
+  if (isPeerDisconnect(error)) {
+    closeResponsePipe();
+    return;
+  }
+  throw error;
+});
+
+function writeResponse(payload: unknown): boolean {
+  if (responsePipeClosed || process.stdout.destroyed) return false;
+  try {
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+    return true;
+  } catch (error) {
+    if (isPeerDisconnect(error)) {
+      closeResponsePipe();
+      return false;
+    }
+    throw error;
+  }
+}
+
 for await (const line of rl) {
   if (!line.trim()) continue;
   let request: RpcRequest | undefined;
   try {
     request = JSON.parse(line) as RpcRequest;
     const result = await dispatch(request);
-    process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+    if (!writeResponse({ id: request.id, result })) break;
   } catch (error) {
-    process.stdout.write(`${JSON.stringify({
+    if (!writeResponse({
       id: request?.id ?? null,
       error: { message: error instanceof Error ? error.message : String(error) },
-    })}\n`);
+    })) break;
   }
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRemoteStore } from '@/stores/remote'
 import ProviderIcon from './ProviderIcon.vue'
 
@@ -22,16 +22,34 @@ const props = withDefaults(defineProps<{
 
 const remote = useRemoteStore()
 const root = ref<HTMLElement | null>(null)
+const popover = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
+const modelList = ref<HTMLElement | null>(null)
 const open = ref(false)
 const query = ref('')
 const providerFilter = ref('all')
 const activeIndex = ref(0)
+const isMobileTopbar = ref(false)
+const isViewportFloating = ref(false)
 const listboxId = `model-picker-${Math.random().toString(36).slice(2, 9)}`
+const shouldTeleport = computed(() => props.variant === 'topbar' && isMobileTopbar.value && isViewportFloating.value)
+let mobileMediaQuery: MediaQueryList | null = null
+
+function updateMobileTopbar(): void {
+  isMobileTopbar.value = props.variant === 'topbar' && (mobileMediaQuery?.matches ?? false)
+}
+
+function onVisualViewportChange(): void {
+  if (!open.value || !isMobileTopbar.value) return
+  const viewport = window.visualViewport
+  const keyboardIsOpen = !!viewport && viewport.height < window.innerHeight - 40
+  if (keyboardIsOpen || viewport?.offsetTop) isViewportFloating.value = true
+}
 
 const providerLabels: Record<string, string> = {
   openai: 'OpenAI',
+  opencode: 'OpenCode',
   'codex-cli': 'Codex CLI',
   anthropic: 'Claude (Anthropic)',
   claude: 'Claude Web',
@@ -181,7 +199,20 @@ function resetActiveIndex(): void {
 
 async function revealActiveOption(): Promise<void> {
   await nextTick()
-  document.getElementById(optionId(activeIndex.value))?.scrollIntoView({ block: 'nearest' })
+  const list = modelList.value
+  const option = list?.querySelector<HTMLElement>(`#${CSS.escape(optionId(activeIndex.value))}`)
+  if (!list || !option) return
+
+  // scrollIntoView() is allowed to scroll every scrollable ancestor. On iOS
+  // that can include the visual viewport while the search field is focused;
+  // keep keyboard navigation confined to the model list instead.
+  const listRect = list.getBoundingClientRect()
+  const optionRect = option.getBoundingClientRect()
+  if (optionRect.top < listRect.top) {
+    list.scrollTop -= listRect.top - optionRect.top
+  } else if (optionRect.bottom > listRect.bottom) {
+    list.scrollTop += optionRect.bottom - listRect.bottom
+  }
 }
 
 async function openPicker(direction: 'selected' | 'first' | 'last' = 'selected'): Promise<void> {
@@ -195,16 +226,17 @@ async function openPicker(direction: 'selected' | 'first' | 'last' = 'selected')
   else if (direction === 'last') activeIndex.value = Math.max(0, filteredModels.value.length - 1)
   else resetActiveIndex()
   await nextTick()
-  searchInput.value?.focus()
+  searchInput.value?.focus({ preventScroll: true })
   void revealActiveOption()
 }
 
 function closePicker(returnFocus = false): void {
   if (!open.value) return
   open.value = false
+  isViewportFloating.value = false
   query.value = ''
   providerFilter.value = 'all'
-  if (returnFocus) void nextTick(() => trigger.value?.focus())
+  if (returnFocus) void nextTick(() => trigger.value?.focus({ preventScroll: true }))
 }
 
 function togglePicker(): void {
@@ -221,7 +253,7 @@ function setProvider(provider: string): void {
   providerFilter.value = provider
   resetActiveIndex()
   void revealActiveOption()
-  searchInput.value?.focus()
+  searchInput.value?.focus({ preventScroll: true })
 }
 
 function moveActive(delta: number): void {
@@ -263,19 +295,24 @@ function onSearchKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     const model = filteredModels.value[activeIndex.value]
     if (model) selectModel(model)
-  } else if (event.key === 'Escape') {
-    event.preventDefault()
-    closePicker(true)
   }
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
-  if (open.value && root.value && !root.value.contains(event.target as Node)) closePicker()
+  const target = event.target as Node
+  if (open.value && root.value && !root.value.contains(target) && !popover.value?.contains(target)) closePicker()
 }
 
 function onDocumentFocusIn(event: FocusEvent): void {
-  if (open.value && root.value && !root.value.contains(event.target as Node)) closePicker()
+  const target = event.target as Node
+  if (open.value && root.value && !root.value.contains(target) && !popover.value?.contains(target)) closePicker()
 }
+
+watch(query, () => {
+  if (!open.value) return
+  resetActiveIndex()
+  void revealActiveOption()
+})
 
 watch(filteredModels, () => {
   if (!open.value) return
@@ -294,7 +331,18 @@ watch(open, (isOpen) => {
   }
 })
 
+onMounted(() => {
+  mobileMediaQuery = window.matchMedia('(max-width: 899px)')
+  updateMobileTopbar()
+  mobileMediaQuery.addEventListener('change', updateMobileTopbar)
+  window.visualViewport?.addEventListener('resize', onVisualViewportChange)
+  window.visualViewport?.addEventListener('scroll', onVisualViewportChange)
+})
+
 onBeforeUnmount(() => {
+  mobileMediaQuery?.removeEventListener('change', updateMobileTopbar)
+  window.visualViewport?.removeEventListener('resize', onVisualViewportChange)
+  window.visualViewport?.removeEventListener('scroll', onVisualViewportChange)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   document.removeEventListener('focusin', onDocumentFocusIn)
 })
@@ -322,8 +370,17 @@ onBeforeUnmount(() => {
       <span class="model-picker-chevron" aria-hidden="true">⌄</span>
     </button>
 
-    <Transition name="model-picker-popover">
-      <section v-if="open" class="model-picker-popover" data-testid="model-picker-popover" aria-label="Choose model">
+    <Teleport to="body" :disabled="!shouldTeleport">
+      <Transition name="model-picker-popover">
+        <section
+          v-if="open"
+          ref="popover"
+          class="model-picker-popover"
+          :class="{ 'model-picker-popover--mobile-floating': shouldTeleport }"
+          data-testid="model-picker-popover"
+          aria-label="Choose model"
+          @keydown.esc.stop.prevent="closePicker(true)"
+        >
         <div class="model-picker-search-row">
           <input
             ref="searchInput"
@@ -336,6 +393,9 @@ onBeforeUnmount(() => {
             spellcheck="false"
             placeholder="Search models"
             aria-label="Search models"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded="true"
             :aria-controls="listboxId"
             :aria-activedescendant="filteredModels.length ? optionId(activeIndex) : undefined"
             @keydown="onSearchKeydown"
@@ -360,8 +420,13 @@ onBeforeUnmount(() => {
           >{{ provider.label }}</button>
         </div>
 
+        <p v-if="remote.state.is_streaming" class="model-picker-timing" role="status">
+          Model changes apply to the next response.
+        </p>
+
         <div
           :id="listboxId"
+          ref="modelList"
           class="model-picker-list"
           role="listbox"
           aria-label="Models"
@@ -386,6 +451,7 @@ onBeforeUnmount(() => {
             :class="{ active: index === activeIndex, selected: model.id === remote.state.active_model }"
             role="option"
             :aria-selected="model.id === remote.state.active_model"
+            tabindex="-1"
             :data-model="model.id"
             @mousemove="activeIndex = index"
             @focus="activeIndex = index"
@@ -399,8 +465,9 @@ onBeforeUnmount(() => {
             <span v-if="model.id === remote.state.active_model" class="model-picker-check" aria-hidden="true">✓</span>
           </button>
         </div>
-      </section>
-    </Transition>
+        </section>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -558,6 +625,16 @@ onBeforeUnmount(() => {
   color: var(--text);
 }
 
+.model-picker-timing {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .model-picker-list {
   min-height: 0;
   overflow-y: auto;
@@ -643,19 +720,20 @@ onBeforeUnmount(() => {
   .model-picker--topbar .model-picker-chevron { font-size: 17px; }
   .model-picker--topbar :deep(.provider-icon) { width: 31px !important; height: 31px !important; }
 
-  .model-picker--topbar .model-picker-popover {
+  .model-picker--topbar .model-picker-popover,
+  .model-picker-popover--mobile-floating {
     position: fixed;
     top: calc(var(--visual-viewport-top) + 72px);
     right: max(8px, env(safe-area-inset-right));
     left: max(8px, env(safe-area-inset-left));
     width: auto;
-    max-height: min(62dvh, calc(var(--visual-viewport-height) - 80px));
+    max-height: min(520px, calc(var(--visual-viewport-height) - 80px));
     border-radius: 15px;
   }
   .model-picker-search-row { min-height: 48px; padding: 7px; }
-  .model-picker-search { min-height: 38px !important; font-size: 12px; }
+  .model-picker-search { min-height: 44px !important; font-size: 16px; }
   .model-picker-providers { gap: 5px; padding: 6px 7px; }
-  .model-picker-providers button { min-height: 34px; padding: 0 10px; font-size: 10.5px; }
+  .model-picker-providers button { min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 10.5px; }
   .model-picker-list { padding: 5px; }
   .model-picker-option { min-height: 44px; gap: 8px; padding: 4px 6px; border-radius: 9px; }
   .model-picker-option-copy strong { font-size: 12px; }

@@ -124,14 +124,10 @@ pub(super) fn fit(value: &str, width: usize) -> String {
 }
 
 pub(super) fn height(app: &App) -> u16 {
-    let status = TaskStatus::for_app(app);
-    if app.state.is_streaming
-        || matches!(
-            status,
-            TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted
-        )
-        || !app.follow_tail
-    {
+    if matches!(
+        TaskStatus::for_app(app),
+        TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted
+    ) {
         2
     } else {
         1
@@ -145,42 +141,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         status.color()
     };
-    let mut spans = vec![
-        Span::styled("╸ ", Style::default().fg(rail_color)),
-        status.badge(app),
-    ];
     let (done, failed) = tool_step_counts(app);
-    let mut metrics = Vec::new();
-    if done > 0 {
-        metrics.push(format!("{done} OK"));
-    }
-    if failed > 0 {
-        metrics.push(format!("{failed} ERR"));
-    }
-    let elapsed = if app.state.is_streaming {
-        app.stream_elapsed()
-    } else {
-        app.state
-            .active_activity_entry_id
-            .as_ref()
-            .and_then(|_| app.latest_turn_duration())
-    };
-    if let Some(elapsed) = elapsed.filter(|_| status != TaskStatus::Ready) {
-        metrics.push(format_elapsed(elapsed.as_millis()));
-    }
-    let suffix = if metrics.is_empty() {
-        String::new()
-    } else {
-        format!("  //  {}", metrics.join("  ·  "))
-    };
-    let remaining = (area.width as usize).saturating_sub(Line::from(spans.clone()).width());
-    spans.push(Span::styled(
-        format!(" {}", fit(&suffix, remaining.saturating_sub(1))),
-        Style::default().fg(theme::MUTED),
-    ));
-
     let detail = if status == TaskStatus::Approval {
-        "Waiting for your decision · Enter allow · Esc deny".to_owned()
+        "Enter allow · Esc deny · Ctrl+C stop".to_owned()
     } else if status == TaskStatus::Working {
         if let Some(operation) = live_operation(app) {
             match operation.detail {
@@ -207,20 +170,77 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else if status == TaskStatus::Interrupted {
         "Current turn interrupted".to_owned()
     } else if !app.follow_tail && !app.conversation.is_empty() {
-        "Viewing history · Ctrl+End to return to latest".to_owned()
+        "History Ctrl+End latest".to_owned()
     } else {
         String::new()
     };
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(spans),
-            Line::styled(
-                format!("╰─ {}", fit(&detail, area.width.saturating_sub(3) as usize)),
-                Style::default().fg(theme::MUTED),
-            ),
-        ]),
-        area,
+    let detail =
+        if status == TaskStatus::Working && !app.follow_tail && !app.conversation.is_empty() {
+            format!("History Ctrl+End {detail}")
+        } else {
+            detail
+        };
+    let detail_row = matches!(
+        status,
+        TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted
     );
+    let detail_row_available = detail_row && area.height > 1;
+
+    let mut metrics = Vec::new();
+    if done > 0 {
+        metrics.push(format!("{done} OK"));
+    }
+    if failed > 0 {
+        metrics.push(format!("{failed} ERR"));
+    }
+    let elapsed = if app.state.is_streaming {
+        app.stream_elapsed()
+    } else {
+        app.state
+            .active_activity_entry_id
+            .as_ref()
+            .and_then(|_| app.latest_turn_duration())
+    };
+    if let Some(elapsed) = elapsed.filter(|_| status != TaskStatus::Ready) {
+        metrics.push(format_elapsed(elapsed.as_millis()));
+    }
+    let metric_text = if metrics.is_empty() {
+        String::new()
+    } else {
+        format!("// {}", metrics.join(" · "))
+    };
+    let inline_detail = if detail_row_available || detail.is_empty() || detail == status.label() {
+        String::new()
+    } else {
+        format!("· {detail}")
+    };
+    let tail = match (inline_detail.is_empty(), metric_text.is_empty()) {
+        (false, false) => format!("{inline_detail}  {metric_text}"),
+        (false, true) => inline_detail,
+        (true, false) => metric_text,
+        (true, true) => String::new(),
+    };
+
+    let mut spans = vec![
+        Span::styled("╸ ", Style::default().fg(rail_color)),
+        status.badge(app),
+    ];
+    if !tail.is_empty() {
+        let remaining = (area.width as usize).saturating_sub(Line::from(spans.clone()).width());
+        spans.push(Span::styled(
+            format!(" {}", fit(&tail, remaining.saturating_sub(1))),
+            Style::default().fg(theme::MUTED),
+        ));
+    }
+
+    let mut lines = vec![Line::from(spans)];
+    if detail_row_available {
+        lines.push(Line::styled(
+            format!("╰─ {}", fit(&detail, area.width.saturating_sub(3) as usize)),
+            Style::default().fg(theme::MUTED),
+        ));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]

@@ -13,6 +13,14 @@ pub fn normalize_reasoning_level(value: &str) -> Option<&'static str> {
         .find(|level| *level == normalized)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionCommandItem {
+    pub extension_id: String,
+    pub command: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BridgeState {
@@ -27,7 +35,7 @@ pub struct BridgeState {
     pub active_reasoning_text: String,
     pub active_reasoning_summary: String,
     pub is_streaming: bool,
-    pub infinity_mode: bool,
+    pub goal_mode: bool,
     pub error_message: Option<String>,
     pub active_model: String,
     pub active_reasoning_level: String,
@@ -37,6 +45,7 @@ pub struct BridgeState {
     pub credit_usage: u64,
     pub pending_shell_permission: Option<ShellPermission>,
     pub pending_native_app_permission: Option<NativeAppPermission>,
+    pub extension_commands: Vec<ExtensionCommandItem>,
     pub available_models: Vec<String>,
     pub model_catalog: Vec<ModelCatalogItem>,
     pub is_loading_models: bool,
@@ -77,7 +86,7 @@ impl BridgeState {
             active_reasoning_text: self.active_reasoning_text.clone(),
             active_reasoning_summary: self.active_reasoning_summary.clone(),
             is_streaming: self.is_streaming,
-            infinity_mode: self.infinity_mode,
+            goal_mode: self.goal_mode,
             error_message: self.error_message.clone(),
             active_model: self.active_model.clone(),
             active_reasoning_level: self.active_reasoning_level.clone(),
@@ -87,6 +96,7 @@ impl BridgeState {
             credit_usage: self.credit_usage,
             pending_shell_permission: self.pending_shell_permission.clone(),
             pending_native_app_permission: self.pending_native_app_permission.clone(),
+            extension_commands: self.extension_commands.clone(),
             available_models: self.available_models.clone(),
             model_catalog: self.model_catalog.clone(),
             is_loading_models: self.is_loading_models,
@@ -301,6 +311,18 @@ pub struct ConversationToolCall {
     pub name: String,
     pub arguments: String,
     pub status: ToolCallStatus,
+
+    #[serde(
+        default,
+        rename = "durationMs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub duration_ms: Option<u64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -352,7 +374,7 @@ pub enum FrontendCommand {
     SelectReasoning {
         level: String,
     },
-    SetInfinity {
+    SetGoal {
         enabled: bool,
     },
     RequestSessions,
@@ -394,6 +416,11 @@ pub enum FrontendCommand {
     RequestSandbox,
     UpdateSandbox {
         action: SandboxAction,
+    },
+    ExtensionCommand {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
     },
     Shutdown,
 }

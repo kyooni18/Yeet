@@ -72,7 +72,7 @@ export async function installMockRemote(page: Page): Promise<void> {
       active_reasoning_text: '',
       active_reasoning_summary: '',
       is_streaming: false,
-      infinity_mode: false,
+      goal_mode: false,
       error_message: null,
       active_model: 'gpt-5.6-sol',
       active_reasoning_level: 'high',

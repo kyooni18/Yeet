@@ -43,13 +43,13 @@ exact-command permission path. Never add an unsandboxed fallback.
 
 ## Lazy Skills and MCP
 
-Skill and MCP metadata is discovered cheaply through the Node bridge. The lead
+Skill and MCP metadata is discovered cheaply through the Node bridge. The agent
 uses `find_capabilities`, followed by `activate_capability` for one exact
 capability. Activation adds only that Skill's file reader or that MCP server's
-tool schemas to subsequent lead rounds.
+tool schemas to subsequent agent rounds.
 
 Keep generated tool names ASCII-only and collision-safe. Tool protocol errors
-should return structured errors to the lead rather than crashing the TUI.
+should return structured errors to the agent rather than crashing the TUI.
 
 ## Rust Workers
 

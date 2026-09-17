@@ -42,7 +42,6 @@ RUNTIME_BUILD="$ROOT/target/install-runtime"
 
 cd "$ROOT"
 YEET_RUNTIME_OUT_DIR="$RUNTIME_BUILD/dist" "$ROOT/Scripts/rebuild-runtime.sh"
-"$ROOT/Scripts/build-remote-web.sh"
 cargo build --release
 mkdir -p "$DEST" "$RUNTIME_DEST"
 
@@ -63,6 +62,7 @@ fi
 rm -rf "$RUNTIME_DEST/dist"
 cp -R "$RUNTIME_BUILD/dist" "$RUNTIME_DEST/dist"
 cp RuntimeSource/package.json "$RUNTIME_DEST/package.json"
+"$DEST/yeet" skyline setup >/dev/null
 
 # Resume every daemon that was running before the install using the freshly
 # replaced executable and runtime. Stopping before replacement also avoids a

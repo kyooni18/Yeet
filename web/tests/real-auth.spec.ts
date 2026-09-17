@@ -29,6 +29,14 @@ test.describe.serial('real Remote authentication', () => {
     await page.goto('/')
 
     await expect(page.getByRole('heading', { name: 'Authorization required' })).toBeVisible()
+    const accessKeyInput = page.getByLabel('Access key')
+    const authorizeButton = page.getByRole('button', { name: 'Authorize' })
+    await expect(accessKeyInput).toBeFocused()
+
+    await accessKeyInput.fill('definitely-wrong')
+    await authorizeButton.focus()
+    await page.keyboard.press('Tab')
+    await expect(accessKeyInput).toBeFocused()
     const unauthorizedSocket = await page.evaluate(async () => {
       const socket = new WebSocket(`${location.origin.replace(/^http/, 'ws')}/api/ws`, 'yeet.remote.v1')
       return await new Promise<string>((resolve) => {
@@ -39,12 +47,11 @@ test.describe.serial('real Remote authentication', () => {
     })
     expect(unauthorizedSocket).toBe('rejected')
 
-    await page.getByLabel('Access key').fill('definitely-wrong')
-    await page.getByRole('button', { name: 'Authorize' }).click()
+    await authorizeButton.click()
     await expect(page.getByRole('alert')).toContainText('invalid access key')
 
-    await page.getByLabel('Access key').fill(accessKey)
-    await page.getByRole('button', { name: 'Authorize' }).click()
+    await accessKeyInput.fill(accessKey)
+    await authorizeButton.click()
     await expect(page.locator('.desktop-status').first()).toContainText('connected')
 
     const status = await page.request.get('/api/auth/status')
@@ -70,6 +77,7 @@ test.describe.serial('real Remote authentication', () => {
     authCommand(['key', 'set'], `${accessKey}\n`)
     await page.reload()
     await expect(page.getByRole('heading', { name: 'Authorization required' })).toBeVisible()
+    await expect(page.getByLabel('Access key')).toBeFocused()
   })
 
   test('enrolls and authenticates a real passkey with a virtual platform authenticator', async ({ page, context }) => {
@@ -94,6 +102,7 @@ test.describe.serial('real Remote authentication', () => {
 
       await page.goto(enrollmentUrl!)
       await expect(page.getByRole('heading', { name: 'Register a passkey' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Register passkey' })).toBeFocused()
       await page.getByRole('button', { name: 'Register passkey' }).click()
       await expect(page.locator('.desktop-status').first()).toContainText('connected')
 
@@ -104,6 +113,7 @@ test.describe.serial('real Remote authentication', () => {
 
       await page.goto(duplicateEnrollmentUrl!)
       await expect(page.getByRole('heading', { name: 'Register a passkey' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Register passkey' })).toBeFocused()
       await page.getByRole('button', { name: 'Register passkey' }).click()
       await expect(page.locator('.desktop-status').first()).toContainText('connected')
 
@@ -116,6 +126,7 @@ test.describe.serial('real Remote authentication', () => {
       await page.goto('/')
       await expect(page.getByRole('heading', { name: 'Authorization required' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Use a passkey' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Use a passkey' })).toBeFocused()
       await page.getByRole('button', { name: 'Use a passkey' }).click()
       await expect(page.locator('.desktop-status').first()).toContainText('connected')
 

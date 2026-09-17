@@ -20,7 +20,11 @@ impl ToolRegistry {
             return self.read_file_batch(object);
         }
 
-        let path = string_arg(object, "path")?.to_owned();
+        let requested_path = string_arg(object, "path")?.to_owned();
+        let path = self
+            .resolve_session_path(&requested_path)?
+            .to_string_lossy()
+            .into_owned();
         self.ensure_file_scope(&path, false)?;
         let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
         let unsafe_access =
@@ -199,18 +203,23 @@ impl ToolRegistry {
 
     /// Lists a bounded workspace subtree and suppresses exact replay requests.
     pub(super) fn list_files(&mut self, object: &Map<String, Value>) -> Result<String> {
-        let path = root_capable_workspace_path(object.get("path").and_then(Value::as_str));
-        self.ensure_file_scope(path, false)?;
-        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, path)?;
+        let requested_path =
+            root_capable_workspace_path(object.get("path").and_then(Value::as_str));
+        let path = self
+            .resolve_session_path(requested_path)?
+            .to_string_lossy()
+            .into_owned();
+        self.ensure_file_scope(&path, false)?;
+        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
         let max_results = usize_arg(object, "maxResults").unwrap_or(50).clamp(1, 500);
         let max_depth = usize_arg(object, "maxDepth").unwrap_or(2).min(12);
         let key = format!("{cache_path}:{max_results}:{max_depth}");
         if !self.listings.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This directory listing was already returned. Reuse it or expand a different subtree."}).to_string());
         }
-        let result =
-            self.edit_mut()?
-                .list_files((path != ".").then_some(path), max_results, max_depth)?;
+        let result = self
+            .edit_mut()?
+            .list_files(Some(&path), max_results, max_depth)?;
         self.sync_edit_state();
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
@@ -221,9 +230,14 @@ impl ToolRegistry {
         if query.is_empty() {
             bail!("search_workspace requires query");
         }
-        let path = root_capable_workspace_path(object.get("path").and_then(Value::as_str));
-        self.ensure_file_scope(path, false)?;
-        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, path)?;
+        let requested_path =
+            root_capable_workspace_path(object.get("path").and_then(Value::as_str));
+        let path = self
+            .resolve_session_path(requested_path)?
+            .to_string_lossy()
+            .into_owned();
+        self.ensure_file_scope(&path, false)?;
+        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
         let max_results = usize_arg(object, "maxResults").unwrap_or(20).clamp(1, 100);
         let case_sensitive = object
             .get("caseSensitive")
@@ -233,27 +247,14 @@ impl ToolRegistry {
             .get("regex")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let key = format!(
-            "{}:{}:{}:{}",
-            cache_path,
-            case_sensitive,
-            regex,
-            if case_sensitive {
-                query.into()
-            } else {
-                query.to_ascii_lowercase()
-            }
-        );
+        let key =
+            workspace_search_cache_key(&cache_path, max_results, case_sensitive, regex, query);
         if !self.searches.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This search was already returned. Reuse it or change query/path."}).to_string());
         }
-        let result = self.edit_mut()?.search(
-            query,
-            (path != ".").then_some(path),
-            max_results,
-            case_sensitive,
-            regex,
-        )?;
+        let result =
+            self.edit_mut()?
+                .search(query, Some(&path), max_results, case_sensitive, regex)?;
         self.sync_edit_state();
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
@@ -420,7 +421,7 @@ impl ToolRegistry {
         object.insert("previewTruncated".into(), json!(true));
         object.insert(
             "hint".into(),
-            json!("The fetched source text is stored as an artifact. Reuse this preview; use search_artifact and then a narrow read_artifact range only if a specific missing section is needed."),
+            json!("The fetched source text is stored as an artifact. Reuse this preview; use a narrow read_artifact range for a specific missing section, and search_artifact only when its location is unknown."),
         );
         object.entry("url").or_insert_with(|| json!(url));
         Ok(serde_json::to_string(&result)?)
@@ -430,7 +431,7 @@ impl ToolRegistry {
     pub(super) fn read_document_tool(&mut self, object: &Map<String, Value>) -> Result<String> {
         let path = string_arg(object, "path")?;
         self.ensure_file_scope(path, false)?;
-        let resolved = self.resolve_local_path(path);
+        let resolved = self.resolve_local_path(path)?;
         let document = general::read_document(&resolved)?;
         let artifact = self.artifacts.store_typed(
             &document.text,
@@ -452,7 +453,7 @@ impl ToolRegistry {
         Ok(json!({
             "path":path,"artifactId":artifact,"artifactKind":document.kind,"mediaType":document.media_type,
             "metadata":document.metadata,"characters":total_chars,"content":content,"truncated":truncated,
-            "hint":if truncated { "The full extracted document is stored as a typed artifact. Use search_artifact or read_artifact for additional sections." } else { "The extracted document is also stored as a typed artifact for follow-up inspection." }
+            "hint":if truncated { "The full extracted document is stored as a typed artifact. Use a narrow read_artifact range for additional sections, and search_artifact only when a section's location is unknown." } else { "The extracted document is also stored as a typed artifact for follow-up inspection." }
         }).to_string())
     }
 
@@ -460,7 +461,7 @@ impl ToolRegistry {
     pub(super) fn analyze_data_tool(&mut self, object: &Map<String, Value>) -> Result<String> {
         let path = string_arg(object, "path")?;
         self.ensure_file_scope(path, false)?;
-        let resolved = self.resolve_local_path(path);
+        let resolved = self.resolve_local_path(path)?;
         let result = general::analyze_data(&resolved, object)?;
         let rendered = serde_json::to_string_pretty(&result)?;
         let artifact = self.artifacts.store_typed(&rendered, "data-analysis", "application/json", Some(path), json!({
@@ -473,14 +474,9 @@ impl ToolRegistry {
         self.externalize_if_large(Value::Object(payload), 12 * 1024, None)
     }
 
-    /// Resolves a user path relative to the active workspace when needed.
-    fn resolve_local_path(&self, path: &str) -> PathBuf {
-        let candidate = PathBuf::from(path);
-        if candidate.is_absolute() {
-            candidate
-        } else {
-            self.workspace_root.join(candidate)
-        }
+    /// Resolves a user path relative to the persisted session cwd.
+    fn resolve_local_path(&self, path: &str) -> Result<PathBuf> {
+        self.resolve_session_path(path)
     }
 
     /// Executes a helper script from an activated Skill through the normal shell policy.
@@ -553,6 +549,21 @@ fn root_capable_workspace_path(path: Option<&str>) -> &str {
     }
 }
 
+fn workspace_search_cache_key(
+    cache_path: &str,
+    max_results: usize,
+    case_sensitive: bool,
+    regex: bool,
+    query: &str,
+) -> String {
+    let query = if case_sensitive {
+        query.to_owned()
+    } else {
+        query.to_ascii_lowercase()
+    };
+    format!("{cache_path}:{max_results}:{case_sensitive}:{regex}:{query}")
+}
+
 fn refresh_matches_cached_coverage(
     entries: &[ReadCacheEntry],
     snapshot: &str,
@@ -582,6 +593,25 @@ mod tests {
         assert_eq!(effective_web_search_max_results(8, 2), 4);
         assert_eq!(effective_web_search_max_results(10, 3), 2);
         assert_eq!(effective_web_search_max_results(8, 4), 2);
+    }
+
+    #[test]
+    fn workspace_search_cache_key_distinguishes_result_limits() {
+        let narrow = workspace_search_cache_key("src", 1, false, false, "Needle");
+        let wide = workspace_search_cache_key("src", 20, false, false, "Needle");
+        assert_ne!(narrow, wide);
+    }
+
+    #[test]
+    fn workspace_search_cache_key_preserves_query_case_semantics() {
+        assert_eq!(
+            workspace_search_cache_key("src", 20, false, false, "Needle"),
+            workspace_search_cache_key("src", 20, false, false, "needle")
+        );
+        assert_ne!(
+            workspace_search_cache_key("src", 20, true, false, "Needle"),
+            workspace_search_cache_key("src", 20, true, false, "needle")
+        );
     }
 
     #[test]

@@ -3,7 +3,9 @@ use super::theme;
 use ratatui::prelude::{Line, Modifier, Span, Style};
 
 pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
-    let source: Vec<&str> = content.lines().collect();
+    // Preserve every source row so intentional Markdown line breaks survive in
+    // the TUI instead of streamed reasoning collapsing into one paragraph.
+    let source: Vec<&str> = content.split('\n').collect();
     let mut lines = Vec::new();
     let mut code_fence: Option<(char, usize)> = None;
     let mut index = 0;
@@ -264,7 +266,9 @@ fn inline_spans(content: &str, base: Style) -> Vec<Span<'static>> {
 
         if rest.starts_with('\\') {
             let slash_len = '\\'.len_utf8();
-            if let Some(next) = content[cursor + slash_len..].chars().next() {
+            if let Some(next) = content[cursor + slash_len..].chars().next()
+                && next.is_ascii_punctuation()
+            {
                 flush_inline_text(&mut spans, &content[plain_start..cursor], base);
                 spans.push(Span::styled(next.to_string(), base));
                 cursor += slash_len + next.len_utf8();
@@ -440,6 +444,16 @@ mod tests {
         let spans = inline_spans("partial **bold", Style::default());
         let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
         assert_eq!(text, "partial **bold");
+    }
+
+    #[test]
+    fn markdown_only_escapes_ascii_punctuation() {
+        let spans = inline_spans(
+            r"C:\Users\name uses \d+ and \*literal stars\*",
+            Style::default(),
+        );
+        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(text, r"C:\Users\name uses \d+ and *literal stars*");
     }
 
     #[test]

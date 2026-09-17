@@ -69,7 +69,7 @@ export class AutoCompactor {
         consumedMessages: 0,
       };
     }
-    // Ordinary lead requests may use a token-thinned transcript where older
+    // Ordinary foreground requests may use a token-thinned transcript where older
     // tool payloads have been replaced by compact metadata. That form is fine
     // for presentation, but it is the wrong source for a durable checkpoint:
     // summarizing `contentOmitted` permanently discards the source facts the

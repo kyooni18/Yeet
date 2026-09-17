@@ -7,7 +7,7 @@ mod task;
 mod theme;
 mod yeet_brand;
 use dialogs::{
-    draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_help, draw_infinity,
+    draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_goal, draw_help,
     draw_models, draw_permission, draw_provider_edit, draw_providers, draw_reasoning,
     draw_sandbox_policy, draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
     draw_status_dialog,
@@ -35,9 +35,11 @@ use crate::{
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     frame.render_widget(Block::default().style(theme::base()), frame.area());
     let adaptive = responsive::metrics(frame.area());
+    let (sidebar_area, sidebar_targets) = shell::sidebar_session_targets(app, frame.area());
+    app.set_sidebar_session_targets(sidebar_area, sidebar_targets);
     let area = shell::draw_shell(frame, app);
     let suggestions = app.command_suggestions();
-    let suggestion_height = if suggestions.is_empty() {
+    let requested_suggestion_height = if suggestions.is_empty() {
         0
     } else {
         (suggestions.len() as u16 + 2)
@@ -49,6 +51,17 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         .clamp(adaptive.input_min_lines, adaptive.input_max_lines)
         + 2;
     let task_height = task::height(app).min(adaptive.task_height);
+    let suggestion_budget = area.height.saturating_sub(
+        task_height
+            .saturating_add(input_height)
+            .saturating_add(adaptive.status_height)
+            .saturating_add(1),
+    );
+    let suggestion_height = if requested_suggestion_height >= 3 && suggestion_budget >= 3 {
+        requested_suggestion_height.min(suggestion_budget)
+    } else {
+        0
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -73,7 +86,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Mode::Debate => dialogs::draw_debate(frame, app),
         Mode::Models => draw_models(frame, app),
         Mode::Reasoning => draw_reasoning(frame, app),
-        Mode::Infinity => draw_infinity(frame, app),
+        Mode::Goal => draw_goal(frame, app),
         Mode::Sessions => draw_sessions(frame, app),
         Mode::Capabilities => draw_capabilities(frame, app),
         Mode::CapabilityDetail => draw_capability_detail(frame, app),
@@ -112,7 +125,12 @@ fn draw_transcript(
         horizontal: 1,
         vertical: u16::from(area.height > 4),
     });
-    app.transcript_area = (area.x, area.y, area.width, area.height);
+    let transcript_area = (area.x, area.y, area.width, area.height);
+    let previous_area = app.transcript_area;
+    if previous_area.2 > 0 && previous_area.3 > 0 && previous_area != transcript_area {
+        app.clear_transcript_selection();
+    }
+    app.transcript_area = transcript_area;
     if app.conversation.is_empty() {
         app.max_scroll = 0;
         app.scroll_y = 0;
@@ -135,7 +153,9 @@ fn draw_transcript(
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None)
-            .track_style(Style::default().fg(theme::BORDER))
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .track_style(Style::default().fg(theme::BORDER_DIM))
             .thumb_style(Style::default().fg(theme::ACCENT));
         let mut state = ScrollbarState::new(app.max_scroll as usize + 1)
             .position(app.scroll_y as usize)
@@ -192,6 +212,7 @@ fn draw_transcript_context_menu(frame: &mut Frame<'_>, app: &mut App) {
     };
     let screen = frame.area();
     if screen.width < 18 || screen.height < 4 {
+        app.transcript_context_menu_area = (0, 0, 0, 0);
         return;
     }
     let width = 22u16.min(screen.width);
@@ -234,7 +255,7 @@ fn draw_suggestions(
     frame: &mut Frame<'_>,
     app: &App,
     area: Rect,
-    suggestions: &[(&'static str, &'static str)],
+    suggestions: &[(String, String)],
 ) {
     let items = suggestions
         .iter()
@@ -249,7 +270,7 @@ fn draw_suggestions(
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {name:<14}"), style),
-                Span::styled(*description, style.fg(theme::TEXT_DIM)),
+                Span::styled(description.as_str(), style.fg(theme::TEXT_DIM)),
             ]))
         });
     let list = List::new(items).block(theme::modal_block("Commands · ↑/↓ choose · Tab complete"));
@@ -265,24 +286,32 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     };
     let roomy = area.width >= 54;
     let title = if app.state.is_streaming && roomy {
-        " ◈  BUFFERED DIRECTIVE // UPLINK  ".to_owned()
+        " ◈  Next message · Replying  ".to_owned()
     } else if app.state.is_streaming {
-        " ◈  UPLINK // BUF  ".to_owned()
+        " ◈  Draft · Replying  ".to_owned()
     } else if roomy {
-        " ◈  DIRECTIVE // UPLINK  ·  READY  ".to_owned()
+        " ◈  Message · Ready  ".to_owned()
     } else {
-        " ◈  UPLINK // READY  ".to_owned()
+        " ◈  Message  ".to_owned()
     };
-    let hint = if area.width < 34 {
-        " ENTER//TX "
-    } else if app.state.is_streaming && area.width < 60 {
-        " ESC//ABORT · ENTER//QUEUE "
-    } else if !app.state.is_streaming && area.width < 60 {
-        " ENTER//TX · / //CMDS "
-    } else if app.state.is_streaming {
-        " ESC//ABORT  ·  ENTER//QUEUE  ·  ALT+↑/↓//HISTORY  ·  / //COMMANDS "
+    let hint = if app.state.is_streaming {
+        if area.width < 34 {
+            " Esc stop "
+        } else if area.width < 60 {
+            " Esc stop · Send after reply "
+        } else if area.width < 104 {
+            " Esc stop · Send after reply · Shift+Enter newline "
+        } else {
+            " Esc stop  ·  Send after reply  ·  Shift+Enter newline  ·  Alt+↑/↓ history  ·  / commands "
+        }
+    } else if area.width < 34 {
+        " Enter send "
+    } else if area.width < 60 {
+        " Enter send · / commands "
+    } else if area.width < 104 {
+        " Enter send · Shift+Enter newline · / commands "
     } else {
-        " ENTER//TRANSMIT  ·  ALT+↑/↓//HISTORY  ·  / //COMMANDS "
+        " Enter send  ·  Shift+Enter newline  ·  Alt+↑/↓ history  ·  / commands "
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -310,7 +339,7 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let scroll = layout.row.saturating_sub(inner.height as usize - 1);
     let lines = if app.input.is_empty() {
         vec![Line::styled(
-            "› awaiting directive_",
+            "› Type a message",
             Style::default()
                 .fg(theme::MUTED)
                 .add_modifier(Modifier::ITALIC),
@@ -348,14 +377,6 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
 fn status_line(app: &App, width: usize) -> Line<'static> {
     let current_tokens = app.state.current_context_tokens.unwrap_or(0);
     let total_tokens = app.state.active_model_context_length;
-    let (total, percent) = match total_tokens {
-        Some(total) if total > 0 => (
-            compact_number(total),
-            format!("{:.0}%", current_tokens as f64 * 100.0 / total as f64),
-        ),
-        Some(total) => (compact_number(total), "?%".to_owned()),
-        None => ("?".to_owned(), "?%".to_owned()),
-    };
 
     let reasoning = if app.state.active_reasoning_level.is_empty() {
         "auto"
@@ -413,25 +434,38 @@ fn status_line(app: &App, width: usize) -> Line<'static> {
         other => other,
     };
     let model_micro = truncate_middle(&model_short, 7);
-    let meter = context_meter(current_tokens, total_tokens, 7);
-    let candidates = [
-        format!(
-            "model {model_full} │ ctx {current}/{total} {percent} {meter} │ reason {reasoning} │ perm {permission}"
-        ),
-        format!("{model_short} │ ctx {percent} {meter} │ {reasoning} │ {permission}"),
-        format!("{model_short} · {percent} · {reasoning_short}/{permission_short}"),
-        format!("{model_tiny} {percent} {reasoning_short}/{permission_short}"),
-        format!("{model_micro} {percent} {reasoning_micro}/{permission_micro}"),
-    ];
+    let candidates = if let Some(total) = total_tokens.filter(|total| *total > 0) {
+        let total_label = compact_number(total);
+        let percent = format!("{:.0}%", current_tokens as f64 * 100.0 / total as f64);
+        let meter = context_meter(current_tokens, total_tokens, 7);
+        vec![
+            format!(
+                "model {model_full} │ ctx {current}/{total_label} {percent} {meter} │ reason {reasoning} │ perm {permission}"
+            ),
+            format!("{model_short} │ ctx {percent} {meter} │ {reasoning} │ {permission}"),
+            format!("{model_short} · {percent} · {reasoning_short}/{permission_short}"),
+            format!("{model_tiny} {percent} {reasoning_short}/{permission_short}"),
+            format!("{model_micro} {percent} {reasoning_micro}/{permission_micro}"),
+        ]
+    } else {
+        let model_label = if app.state.active_model.is_empty() {
+            model_full.clone()
+        } else {
+            format!("model {model_full}")
+        };
+        vec![
+            format!("{model_label} │ ctx unavailable │ reason {reasoning} │ perm {permission}"),
+            format!("{model_short} │ ctx — │ {reasoning} │ {permission}"),
+            format!("{model_short} · ctx — · {reasoning_short}/{permission_short}"),
+            format!("{model_tiny} · {reasoning_short}/{permission_short}"),
+            format!("{model_micro} {reasoning_micro}/{permission_micro}"),
+        ]
+    };
+    let fallback = candidates.last().cloned().unwrap_or_default();
     let text = candidates
         .into_iter()
         .find(|candidate| Span::raw(candidate).width() <= available)
-        .unwrap_or_else(|| {
-            task::fit(
-                &format!("{model_micro} {percent} {reasoning_micro}/{permission_micro}"),
-                available,
-            )
-        });
+        .unwrap_or_else(|| task::fit(&fallback, available));
     Line::from(vec![
         Span::styled(
             prefix,
@@ -509,34 +543,110 @@ fn format_elapsed(elapsed_ms: u128) -> String {
     }
 }
 
-fn truncate_end(value: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let count = value.chars().count();
-    if count <= max_chars {
-        return value.to_owned();
-    }
-    if max_chars == 1 {
-        return "…".into();
-    }
-    format!("{}…", value.chars().take(max_chars - 1).collect::<String>())
+fn cell_width(value: &str) -> usize {
+    Span::raw(value).width()
 }
 
-fn truncate_middle(value: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    if chars.len() <= max_chars {
+fn char_cell_width(value: char) -> usize {
+    cell_width(&value.to_string())
+}
+
+fn truncate_end(value: &str, max_cells: usize) -> String {
+    if max_cells == 0 {
+        return String::new();
+    }
+    if cell_width(value) <= max_cells {
         return value.to_owned();
     }
-    if max_chars <= 2 {
+    if max_cells == 1 {
         return "…".into();
     }
-    let left = (max_chars - 1) / 2;
-    let right = max_chars - 1 - left;
+
+    let budget = max_cells - 1;
+    let mut used = 0usize;
+    let mut output = String::new();
+    for ch in value.chars() {
+        let width = char_cell_width(ch);
+        if used + width > budget {
+            break;
+        }
+        output.push(ch);
+        used += width;
+    }
+    output.push('…');
+    output
+}
+
+fn truncate_middle(value: &str, max_cells: usize) -> String {
+    if max_cells == 0 {
+        return String::new();
+    }
+    if cell_width(value) <= max_cells {
+        return value.to_owned();
+    }
+    if max_cells <= 2 {
+        return "…".into();
+    }
+
+    let chars = value.chars().collect::<Vec<_>>();
+    let widths = chars
+        .iter()
+        .map(|ch| char_cell_width(*ch))
+        .collect::<Vec<_>>();
+    let payload = max_cells - 1;
+    let left_target = payload / 2;
+    let right_target = payload - left_target;
+
+    let mut left_count = 0usize;
+    let mut left_width = 0usize;
+    while left_count < chars.len() {
+        let width = widths[left_count];
+        if left_width + width > left_target {
+            break;
+        }
+        left_width += width;
+        left_count += 1;
+    }
+
+    let mut right_start = chars.len();
+    let mut right_width = 0usize;
+    while right_start > left_count {
+        let width = widths[right_start - 1];
+        if right_width + width > right_target {
+            break;
+        }
+        right_width += width;
+        right_start -= 1;
+    }
+
+    let mut remaining = payload.saturating_sub(left_width + right_width);
+    loop {
+        let mut progressed = false;
+        if left_count < right_start {
+            let width = widths[left_count];
+            if width <= remaining {
+                left_count += 1;
+                remaining -= width;
+                progressed = true;
+            }
+        }
+        if left_count < right_start {
+            let width = widths[right_start - 1];
+            if width <= remaining {
+                right_start -= 1;
+                remaining -= width;
+                progressed = true;
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+
     format!(
         "{}…{}",
-        chars[..left].iter().collect::<String>(),
-        chars[chars.len() - right..].iter().collect::<String>()
+        chars[..left_count].iter().collect::<String>(),
+        chars[right_start..].iter().collect::<String>()
     )
 }
 
@@ -544,14 +654,46 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
     let mut lines = Vec::new();
     let mut rendered_any = false;
     let mut previous_compact = false;
+    let mut index = 0;
 
-    for entry in &app.conversation {
+    while index < app.conversation.len() {
+        let entry = &app.conversation[index];
         if matches!(
             &entry.kind,
             ConversationKind::Activity { activity } if !terminal_activity(activity)
         ) {
+            index += 1;
             continue;
         }
+
+        if matches!(&entry.kind, ConversationKind::ToolCall { .. }) {
+            let start = index;
+            while index < app.conversation.len()
+                && matches!(&app.conversation[index].kind, ConversationKind::ToolCall { .. })
+            {
+                index += 1;
+            }
+            let calls = app.conversation[start..index]
+                .iter()
+                .filter_map(|entry| match &entry.kind {
+                    ConversationKind::ToolCall { tool_call } => Some(tool_call),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if calls.len() > 1 {
+                if rendered_any {
+                    lines.push(Line::from(""));
+                }
+                lines.push(tool_batch_line(calls.iter().copied(), width));
+                rendered_any = true;
+                previous_compact = true;
+            }
+            for entry in &app.conversation[start..index] {
+                lines.extend(entry_lines(app, entry, width));
+            }
+            continue;
+        }
+
         let compact = compact_transcript_entry(&entry.kind);
         if rendered_any && (!compact || !previous_compact) {
             lines.push(Line::from(""));
@@ -559,6 +701,7 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
         lines.extend(entry_lines(app, entry, width));
         rendered_any = true;
         previous_compact = compact;
+        index += 1;
     }
 
     Text::from(lines)
@@ -655,6 +798,152 @@ fn terminal_activity(activity: &crate::model::ModelActivity) -> bool {
     )
 }
 
+fn transcript_continuation_indent(line: &Line<'static>, content_width: usize) -> usize {
+    let Some(first) = line.spans.first() else {
+        return 0;
+    };
+    if first.style.bg == Some(theme::CODE_BACKGROUND) {
+        return 2.min(content_width.saturating_sub(1));
+    }
+    let marker = first.content.trim();
+    let ordered = marker
+        .strip_suffix('.')
+        .or_else(|| marker.strip_suffix(')'))
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit()));
+    let structural = marker.starts_with('│')
+        || marker.starts_with('•')
+        || marker.starts_with('☐')
+        || marker.starts_with('☑')
+        || ordered;
+    if structural {
+        first.width().min(content_width.saturating_sub(1))
+    } else {
+        0
+    }
+}
+
+fn text_runs(value: &str) -> Vec<&str> {
+    if value.is_empty() {
+        return Vec::new();
+    }
+    let mut runs = Vec::new();
+    let mut start = 0;
+    let mut whitespace = None;
+    for (index, ch) in value.char_indices() {
+        let current = ch.is_whitespace();
+        if whitespace.is_some_and(|previous| previous != current) {
+            runs.push(&value[start..index]);
+            start = index;
+        }
+        whitespace = Some(current);
+    }
+    runs.push(&value[start..]);
+    runs
+}
+
+fn push_styled_text(row: &mut Vec<Span<'static>>, value: &str, style: Style) {
+    if value.is_empty() {
+        return;
+    }
+    if let Some(last) = row.last_mut().filter(|last| last.style == style) {
+        last.content.to_mut().push_str(value);
+    } else {
+        row.push(Span::styled(value.to_owned(), style));
+    }
+}
+
+fn prefixed_wrapped_line(
+    prefix: Span<'static>,
+    line: Line<'static>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let prefix_width = prefix.width();
+    let width = width as usize;
+    if prefix_width >= width {
+        let mut visible = String::new();
+        let mut used = 0usize;
+        for ch in prefix.content.chars() {
+            let cells = char_cell_width(ch);
+            if used + cells > width {
+                break;
+            }
+            visible.push(ch);
+            used += cells;
+        }
+        return vec![Line::from(Span::styled(visible, prefix.style))];
+    }
+    let content_width = width - prefix_width;
+    let continuation_indent = transcript_continuation_indent(&line, content_width);
+    let mut rows = vec![vec![prefix.clone()]];
+    let mut used = 0usize;
+    let mut has_content = false;
+
+    let new_row = |rows: &mut Vec<Vec<Span<'static>>>| {
+        let mut row = vec![prefix.clone()];
+        if continuation_indent > 0 {
+            row.push(Span::raw(" ".repeat(continuation_indent)));
+        }
+        rows.push(row);
+    };
+
+    for span in line.spans {
+        let style = span.style;
+        let text = span.content.into_owned();
+        for run in text_runs(&text) {
+            let whitespace = run.chars().all(char::is_whitespace);
+            let run_width = Span::raw(run).width();
+            if whitespace {
+                if !has_content && rows.len() > 1 {
+                    continue;
+                }
+                if used + run_width <= content_width {
+                    push_styled_text(rows.last_mut().unwrap(), run, style);
+                    used += run_width;
+                    has_content = true;
+                } else {
+                    new_row(&mut rows);
+                    used = continuation_indent;
+                    has_content = false;
+                }
+                continue;
+            }
+
+            if has_content && used + run_width > content_width {
+                new_row(&mut rows);
+                used = continuation_indent;
+                has_content = false;
+            }
+            if used + run_width <= content_width {
+                push_styled_text(rows.last_mut().unwrap(), run, style);
+                used += run_width;
+                has_content = true;
+                continue;
+            }
+
+            for ch in run.chars() {
+                let value = ch.to_string();
+                let cells = Span::raw(&value).width();
+                if used + cells > content_width {
+                    if has_content {
+                        new_row(&mut rows);
+                        used = continuation_indent;
+                        has_content = false;
+                    }
+                    if used + cells > content_width {
+                        push_styled_text(rows.last_mut().unwrap(), "…", style);
+                        break;
+                    }
+                }
+                push_styled_text(rows.last_mut().unwrap(), &value, style);
+                used += cells;
+                has_content = true;
+            }
+        }
+    }
+
+    rows.into_iter().map(Line::from).collect()
+}
+
 fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'static>> {
     match &entry.kind {
         ConversationKind::User { content } => {
@@ -668,12 +957,13 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                 ),
                 Span::styled(" ╼", Style::default().fg(theme::BORDER)),
             ])];
-            lines.extend(content.lines().map(|line| {
-                Line::from(vec![
+            for line in content.lines() {
+                lines.extend(prefixed_wrapped_line(
                     Span::styled("┃ ", Style::default().fg(theme::ACCENT)),
-                    Span::styled(format!("{line} "), theme::surface()),
-                ])
-            }));
+                    Line::from(Span::styled(format!("{line} "), theme::surface())),
+                    width,
+                ));
+            }
             lines
         }
         ConversationKind::Assistant {
@@ -693,10 +983,14 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                 Span::styled(" ╼", Style::default().fg(theme::BORDER)),
             ])];
             for line in markdown_lines(content) {
-                let mut spans = Vec::with_capacity(line.spans.len() + 1);
-                spans.push(Span::styled("┃ ", Style::default().fg(theme::BORDER)));
-                spans.extend(line.spans);
-                lines.push(Line::from(spans));
+                lines.extend(prefixed_wrapped_line(
+                    Span::styled("┃ ", Style::default().fg(theme::BORDER)),
+                    line,
+                    width,
+                ));
+            }
+            if tool_calls.len() > 1 {
+                lines.push(tool_batch_line(tool_calls.iter(), width));
             }
             for call in tool_calls {
                 lines.extend(tool_lines(elapsed_ms, call, width));
@@ -723,11 +1017,12 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                     Style::default().fg(theme::MUTED),
                 ),
             ])];
-            for line in content.lines() {
-                lines.push(Line::from(vec![
+            for line in markdown_lines(content) {
+                lines.extend(prefixed_wrapped_line(
                     Span::styled("┊ ", Style::default().fg(theme::BORDER_DIM)),
-                    Span::styled(line.to_owned(), Style::default().fg(theme::MUTED)),
-                ]));
+                    line,
+                    width,
+                ));
             }
             lines
         }
@@ -916,6 +1211,7 @@ fn tool_lines(
     };
 
     let mut primary = vec![
+        Span::styled("  ", Style::default().fg(theme::BORDER_DIM)),
         Span::styled(format!("{marker} "), marker_style),
         Span::styled(
             format!("{} ", tool_glyph(&call.name)),
@@ -959,6 +1255,52 @@ fn tool_lines(
         ]));
     }
     lines
+}
+
+fn tool_batch_line<'a>(
+    calls: impl IntoIterator<Item = &'a crate::model::ConversationToolCall>,
+    width: u16,
+) -> Line<'static> {
+    let calls = calls.into_iter().collect::<Vec<_>>();
+    let completed = calls
+        .iter()
+        .filter(|call| matches!(call.status, ToolCallStatus::Completed))
+        .count();
+    let failed = calls
+        .iter()
+        .filter(|call| matches!(call.status, ToolCallStatus::Failed))
+        .count();
+    let running = calls
+        .iter()
+        .filter(|call| matches!(call.status, ToolCallStatus::Streaming))
+        .count();
+    let mut parts = vec![format!(
+        "{} call{}",
+        calls.len(),
+        if calls.len() == 1 { "" } else { "s" }
+    )];
+    if completed > 0 {
+        parts.push(format!("{completed} OK"));
+    }
+    if running > 0 {
+        parts.push(format!("{running} running"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} ERR"));
+    }
+    let summary = task::fit(
+        &format!("TOOLS  ·  {}", parts.join(" · ")),
+        width.saturating_sub(4) as usize,
+    );
+    Line::from(vec![
+        Span::styled("  ├─ ", Style::default().fg(theme::BORDER_DIM)),
+        Span::styled(
+            summary,
+            Style::default()
+                .fg(theme::MUTED)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
 
 fn tool_class(name: &str) -> &'static str {
@@ -1152,12 +1494,67 @@ mod tests {
             terminal.draw(|frame| draw(frame, &mut app)).unwrap();
             let buffer = terminal.backend().buffer();
             let screen: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-            assert_eq!(screen.contains("RECENT"), width >= 110);
+            assert_eq!(screen.contains("WORKSPACES"), width >= 110);
             assert!(screen.contains("NEW DIRECTIVE"));
             assert!(screen.contains("YEET"));
             assert!(screen.contains("AWAITING DIRECTIVE"));
-            assert!(screen.contains("ENTER//TRANSMIT"));
+            assert!(screen.contains("Enter send"));
         }
+    }
+
+    #[test]
+    fn composer_footer_advertises_multiline_shortcut_at_usable_widths() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        for width in [80, 140] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 32)).unwrap();
+            let mut app = App::default();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(
+                screen.contains("Shift+Enter newline"),
+                "{width}-column composer should advertise multiline input: {screen}"
+            );
+            assert!(screen.contains("Type a message"));
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 32)).unwrap();
+        let mut app = App::default();
+        app.state.is_streaming = true;
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("Esc stop"));
+        assert!(screen.contains("Send after reply"));
+        assert!(screen.contains("Shift+Enter newline"));
+        assert!(!screen.contains("Enter queue"));
+        assert!(!screen.contains("UPLINK"));
+
+        let mut terminal = Terminal::new(TestBackend::new(32, 12)).unwrap();
+        let mut app = App::default();
+        app.state.is_streaming = true;
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("Esc stop"));
+        assert!(!screen.contains("Enter queue"));
+        assert!(!screen.contains("Enter send"));
     }
 
     #[test]
@@ -1219,6 +1616,55 @@ mod tests {
             let popup = centered_rect(76, 74, Rect::new(0, 0, width, height));
             assert!(popup.right() <= width && popup.bottom() <= height);
         }
+    }
+
+    #[test]
+    fn tiny_command_suggestions_keep_composer_cursor_visible() {
+        use ratatui::{
+            Terminal,
+            backend::{Backend, TestBackend},
+        };
+
+        let mut terminal = Terminal::new(TestBackend::new(32, 8)).unwrap();
+        let mut app = App {
+            input: "/".into(),
+            cursor: 1,
+            ..Default::default()
+        };
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+
+        assert!(
+            cursor.y > 0,
+            "composer cursor should not fall back to terminal origin"
+        );
+    }
+
+    #[test]
+    fn short_terminal_keeps_command_suggestions_when_they_fit() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        let mut app = App {
+            input: "/".into(),
+            cursor: 1,
+            ..Default::default()
+        };
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            screen.contains("COMMANDS"),
+            "suggestion popup should remain visible when it fits: {screen:?}"
+        );
     }
 
     #[test]
@@ -1345,6 +1791,34 @@ mod tests {
     }
 
     #[test]
+    fn bottom_status_uses_explicit_unknown_context_instead_of_fake_telemetry() {
+        let app = App::default();
+        for width in [32, 48, 80] {
+            let text = status_line(&app, width)
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert!(status_line(&app, width).width() <= width);
+            assert!(
+                !text.contains("?%"),
+                "unexpected fake percent at {width}: {text}"
+            );
+            assert!(
+                !text.contains("···"),
+                "unexpected fake context meter at {width}: {text}"
+            );
+            assert!(!text.contains("model no model"));
+            if width >= 48 {
+                assert!(
+                    text.contains("ctx —") || text.contains("ctx unavailable"),
+                    "unknown context should be explicit at {width}: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn bottom_status_never_exceeds_terminal_width() {
         let mut app = App::default();
         app.state.active_model = "provider/a-very-long-model-identifier".into();
@@ -1355,6 +1829,48 @@ mod tests {
         for width in 1..=120 {
             assert!(status_line(&app, width).width() <= width);
         }
+    }
+
+    #[test]
+    fn transcript_scrollbar_uses_quiet_single_line_symbols() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(48, 12)).unwrap();
+        let mut app = App::default();
+        app.conversation.push(ConversationEntry {
+            id: "long-response".into(),
+            kind: ConversationKind::Assistant {
+                content: (0..80)
+                    .map(|index| format!("line {index}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                tool_calls: vec![],
+            },
+        });
+
+        terminal
+            .draw(|frame| {
+                draw_transcript(frame, &mut app, frame.area(), responsive::Shape::Compact);
+            })
+            .unwrap();
+        assert!(app.max_scroll > 0);
+
+        let buffer = terminal.backend().buffer();
+        let edge = (1..11)
+            .map(|y| buffer[(47, y)].symbol())
+            .collect::<Vec<_>>();
+        assert!(
+            edge.contains(&"┃"),
+            "scroll thumb should remain visible: {edge:?}"
+        );
+        assert!(
+            edge.contains(&"│"),
+            "scroll track should remain visible: {edge:?}"
+        );
+        assert!(
+            edge.iter().all(|symbol| *symbol != "█" && *symbol != "║"),
+            "scrollbar should not dominate the transcript edge: {edge:?}"
+        );
     }
 
     #[test]
@@ -1415,6 +1931,19 @@ mod tests {
             "Qwen3.8…XS.gguf"
         );
         assert_eq!(truncate_end("provider unavailable", 10), "provider …");
+
+        let wide_middle = truncate_middle("모델/가나다라마바사.gguf", 11);
+        assert_eq!(wide_middle, "모델/….gguf");
+        assert_eq!(cell_width(&wide_middle), 11);
+
+        let wide_end = truncate_end("경로/가나다라마바사", 10);
+        assert_eq!(wide_end, "경로/가나…");
+        assert_eq!(cell_width(&wide_end), 10);
+
+        for width in 0..=16 {
+            assert!(cell_width(&truncate_end("한국어🙂path", width)) <= width);
+            assert!(cell_width(&truncate_middle("한국어🙂path", width)) <= width);
+        }
     }
 
     #[test]
@@ -1432,6 +1961,11 @@ mod tests {
             name: "run_shell".into(),
             arguments: "{}".into(),
             status,
+
+            duration_ms: None,
+
+            result: None,
+            error: None,
         };
         let mut app = App::default();
         app.conversation.push(crate::model::ConversationEntry {
@@ -1467,6 +2001,11 @@ mod tests {
             })
             .to_string(),
             status: ToolCallStatus::Completed,
+
+            duration_ms: None,
+
+            result: None,
+            error: None,
         };
 
         let lines = tool_lines(0, &call, 80);
@@ -1488,6 +2027,90 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_tool_calls_render_under_one_batch_boundary() {
+        let mut app = App::default();
+        app.conversation = vec![
+            ConversationEntry {
+                id: "user".into(),
+                kind: ConversationKind::User {
+                    content: "Inspect the project".into(),
+                },
+            },
+            ConversationEntry {
+                id: "tool-1".into(),
+                kind: ConversationKind::ToolCall {
+                    tool_call: crate::model::ConversationToolCall {
+                        id: "tool-1".into(),
+                        index: Some(0),
+                        call_id: None,
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "src/ui.rs"}).to_string(),
+                        status: ToolCallStatus::Completed,
+                        duration_ms: None,
+                        result: None,
+                        error: None,
+                    },
+                },
+            },
+            ConversationEntry {
+                id: "tool-2".into(),
+                kind: ConversationKind::ToolCall {
+                    tool_call: crate::model::ConversationToolCall {
+                        id: "tool-2".into(),
+                        index: Some(1),
+                        call_id: None,
+                        name: "read_file".into(),
+                        arguments: serde_json::json!({"path": "src/app.rs"}).to_string(),
+                        status: ToolCallStatus::Completed,
+                        duration_ms: None,
+                        result: None,
+                        error: None,
+                    },
+                },
+            },
+        ];
+
+        let text = transcript_text(&app, 80);
+        let rendered = text
+            .lines
+            .iter()
+            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>();
+        assert_eq!(rendered.iter().filter(|line| line.contains("TOOLS")).count(), 1);
+        assert!(rendered.iter().any(|line| line.contains("2 calls")));
+        assert!(rendered.iter().filter(|line| line.contains("Read file")).count() >= 2);
+    }
+
+    #[test]
+    fn tool_argument_rows_respect_cell_width_with_wide_paths() {
+        let call = crate::model::ConversationToolCall {
+            id: "wide-path".into(),
+            index: Some(0),
+            call_id: None,
+            name: "read_file".into(),
+            arguments: serde_json::json!({
+                "path": "자료/가나다라마바사아자차카타파하/화면.rs"
+            })
+            .to_string(),
+            status: ToolCallStatus::Streaming,
+
+            duration_ms: None,
+
+            result: None,
+            error: None,
+        };
+
+        for width in [32, 40, 48, 64] {
+            let lines = tool_lines(0, &call, width);
+            assert!(lines.len() >= 2);
+            assert!(
+                lines.iter().all(|line| line.width() <= width as usize),
+                "tool rows must stay within {width} cells: {lines:?}"
+            );
+        }
+    }
+
+    #[test]
     fn tool_argument_summary_compacts_multi_file_calls() {
         let arguments = serde_json::json!({
             "changes": [
@@ -1502,6 +2125,159 @@ mod tests {
         assert!(summary.contains("src/ui.rs"));
         assert!(summary.contains("src/backend.rs"));
         assert!(summary.contains("+1"));
+    }
+
+    #[test]
+    fn wrapped_transcript_lines_keep_message_rails_and_list_indent() {
+        let app = App::default();
+        let entry = ConversationEntry {
+            id: "assistant-wrap".into(),
+            kind: ConversationKind::Assistant {
+                content: "- This deliberately long list item must wrap without escaping its assistant response rail.\n\nThis deliberately long paragraph must also stay inside the response rail.".into(),
+                tool_calls: vec![],
+            },
+        };
+        let lines = entry_lines(&app, &entry, 32);
+        let rendered = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered.len() > 5,
+            "fixture should wrap onto continuation rows"
+        );
+        assert!(
+            rendered.iter().skip(1).all(|line| line.starts_with("┃ ")),
+            "every assistant body row should retain its message rail: {rendered:?}"
+        );
+        let list_rows = rendered
+            .iter()
+            .skip(1)
+            .take_while(|line| line.as_str() != "┃ ")
+            .collect::<Vec<_>>();
+        assert!(list_rows.len() > 1);
+        assert!(
+            list_rows
+                .iter()
+                .skip(1)
+                .all(|line| line.starts_with("┃   ")),
+            "wrapped list rows should use a hanging indent: {list_rows:?}"
+        );
+        assert!(lines.iter().all(|line| line.width() <= 32));
+        let code = markdown_lines(
+            "```rust\nconst VERY_LONG_IDENTIFIER: &str = \"abcdefghijklmnopqrstuvwxyz0123456789\";\n```",
+        )
+        .into_iter()
+        .next()
+        .unwrap();
+        let code_lines = prefixed_wrapped_line(
+            Span::styled("┃ ", Style::default().fg(theme::BORDER)),
+            code,
+            24,
+        );
+        let rendered_code = code_lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert!(rendered_code.len() > 1);
+        assert!(
+            rendered_code.iter().all(|line| line.starts_with("┃   ")),
+            "wrapped code rows should retain code indentation: {rendered_code:?}"
+        );
+        assert!(code_lines.iter().all(|line| line.width() <= 24));
+    }
+
+    #[test]
+    fn wrapped_user_and_reasoning_lines_keep_their_rails_with_wide_text() {
+        let app = App::default();
+        let cases = [
+            (
+                ConversationEntry {
+                    id: "user-wrap".into(),
+                    kind: ConversationKind::User {
+                        content: "긴 사용자 요청은 좁은 터미널에서도 메시지 경계를 유지해야 합니다"
+                            .into(),
+                    },
+                },
+                "┃ ",
+            ),
+            (
+                ConversationEntry {
+                    id: "reasoning-wrap".into(),
+                    kind: ConversationKind::Reasoning {
+                        content: "긴 추론 내용도 여러 줄로 이어질 때 같은 레일 안에 있어야 합니다"
+                            .into(),
+                        summary: None,
+                    },
+                },
+                "┊ ",
+            ),
+        ];
+
+        for (entry, prefix) in cases {
+            let lines = entry_lines(&app, &entry, 18);
+            assert!(lines.len() > 2);
+            assert!(
+                lines.iter().skip(1).all(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                        .starts_with(prefix)
+                }),
+                "wrapped rows should preserve {prefix:?}"
+            );
+            assert!(lines.iter().skip(1).all(|line| line.width() <= 18));
+        }
+
+        for width in [0, 1, 2, 3] {
+            let tiny = prefixed_wrapped_line(
+                Span::styled("\u{2503} ".to_owned(), Style::default()),
+                Line::from("\u{ac00}\u{b098}\u{b2e4}"),
+                width,
+            );
+            assert!(
+                tiny.iter().all(|line| line.width() <= width as usize),
+                "tiny wide-text rows must fit {width} cells: {tiny:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn transcript_selection_clears_when_viewport_geometry_changes() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut app = App::default();
+        app.conversation.push(crate::model::ConversationEntry {
+            id: "assistant".into(),
+            kind: ConversationKind::Assistant {
+                content: "selection should not retarget after terminal resize".into(),
+                tool_calls: Vec::new(),
+            },
+        });
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let (x, y, _, _) = app.transcript_area;
+        app.selection_start = Some((x, y));
+        app.selection_end = Some((x.saturating_add(8), y));
+
+        terminal.backend_mut().resize(60, 18);
+        terminal.resize(Rect::new(0, 0, 60, 18)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+
+        assert!(app.selection_start.is_none());
+        assert!(app.selection_end.is_none());
     }
 
     #[test]
@@ -1540,6 +2316,15 @@ mod tests {
         assert_eq!(
             terminal.backend().buffer()[(menu_x.saturating_add(1), menu_y.saturating_add(1))].bg,
             theme::SURFACE
+        );
+
+        terminal.backend_mut().resize(17, 3);
+        terminal.resize(Rect::new(0, 0, 17, 3)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        assert_eq!(
+            app.transcript_context_menu_area,
+            (0, 0, 0, 0),
+            "hidden context menu must not retain a clickable hitbox after resize"
         );
     }
 }

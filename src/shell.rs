@@ -3,7 +3,10 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -34,6 +37,81 @@ pub struct ShellResult {
     pub stderr_truncated: bool,
     pub stdout: Option<String>,
     pub stderr: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ShellProgress {
+    inner: Arc<Mutex<ShellProgressState>>,
+}
+
+struct ShellProgressState {
+    stdout_bytes: usize,
+    stderr_bytes: usize,
+    stdout_tail: TailBuffer,
+    stderr_tail: TailBuffer,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellProgressSnapshot {
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
+    pub stdout_tail: Option<String>,
+    pub stderr_tail: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum ShellStream {
+    Stdout,
+    Stderr,
+}
+
+impl ShellProgress {
+    pub fn new(tail_bytes: usize) -> Self {
+        let tail_bytes = tail_bytes.clamp(256, 64 * 1024);
+        Self {
+            inner: Arc::new(Mutex::new(ShellProgressState {
+                stdout_bytes: 0,
+                stderr_bytes: 0,
+                stdout_tail: TailBuffer::new(tail_bytes),
+                stderr_tail: TailBuffer::new(tail_bytes),
+            })),
+        }
+    }
+
+    pub fn snapshot(&self) -> ShellProgressSnapshot {
+        let state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let stdout_tail = state.stdout_tail.ordered();
+        let stderr_tail = state.stderr_tail.ordered();
+        ShellProgressSnapshot {
+            stdout_bytes: state.stdout_bytes,
+            stderr_bytes: state.stderr_bytes,
+            stdout_tail: (!stdout_tail.is_empty())
+                .then(|| String::from_utf8_lossy(&stdout_tail).into_owned()),
+            stderr_tail: (!stderr_tail.is_empty())
+                .then(|| String::from_utf8_lossy(&stderr_tail).into_owned()),
+        }
+    }
+
+    fn push(&self, stream: ShellStream, bytes: &[u8]) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match stream {
+            ShellStream::Stdout => {
+                state.stdout_bytes = state.stdout_bytes.saturating_add(bytes.len());
+                state.stdout_tail.push(bytes);
+            }
+            ShellStream::Stderr => {
+                state.stderr_bytes = state.stderr_bytes.saturating_add(bytes.len());
+                state.stderr_tail.push(bytes);
+            }
+        }
+    }
 }
 
 const MAX_NESTED_SHELL_POLICY_DEPTH: usize = 32;
@@ -271,6 +349,7 @@ pub fn run_shell(
         capture_bytes,
         allow_write,
         unrestricted,
+        force_sandboxed: false,
         cancel: None,
     })
 }
@@ -283,10 +362,18 @@ pub struct ShellExecutionRequest<'a> {
     pub capture_bytes: usize,
     pub allow_write: bool,
     pub unrestricted: bool,
+    pub force_sandboxed: bool,
     pub cancel: Option<&'a AtomicBool>,
 }
 
 pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<ShellResult> {
+    run_shell_cancellable_with_progress(request, None)
+}
+
+pub fn run_shell_cancellable_with_progress(
+    request: ShellExecutionRequest<'_>,
+    progress: Option<ShellProgress>,
+) -> Result<ShellResult> {
     let ShellExecutionRequest {
         command,
         workspace_root,
@@ -295,6 +382,7 @@ pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<Shell
         capture_bytes,
         allow_write,
         unrestricted,
+        force_sandboxed,
         cancel,
     } = request;
     let command = command.trim();
@@ -306,7 +394,8 @@ pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<Shell
     }
     let root = workspace_root.canonicalize()?;
     let requested = SandboxStore::new(&root)?.load()?;
-    let unrestricted = unrestricted || requested.mode == SandboxMode::Unlimited;
+    let unrestricted =
+        !force_sandboxed && (unrestricted || requested.mode == SandboxMode::Unlimited);
     if !allow_write
         && !unrestricted
         && let Some(operation) = restricted_operation(command)
@@ -325,7 +414,7 @@ pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<Shell
         effective.limits.wall_time_seconds = effective
             .limits
             .wall_time_seconds
-            .min(timeout_seconds.clamp(1, 900));
+            .min(timeout_seconds.clamp(1, 86_400));
     }
     if !unrestricted {
         if !effective.network_allow.is_empty() {
@@ -384,15 +473,21 @@ pub fn run_shell_cancellable(request: ShellExecutionRequest<'_>) -> Result<Shell
     let stderr_limit = capture_limit.min(effective.limits.max_stderr_bytes);
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let stdout_thread = thread::spawn(move || read_bounded(stdout, stdout_limit));
-    let stderr_thread = thread::spawn(move || read_bounded(stderr, stderr_limit));
+    let stdout_progress = progress.clone();
+    let stderr_progress = progress;
+    let stdout_thread = thread::spawn(move || {
+        read_bounded_with_progress(stdout, stdout_limit, stdout_progress, ShellStream::Stdout)
+    });
+    let stderr_thread = thread::spawn(move || {
+        read_bounded_with_progress(stderr, stderr_limit, stderr_progress, ShellStream::Stderr)
+    });
     let start = Instant::now();
     // `unrestricted` controls filesystem/network policy, not execution lifetime.
     // Always honor the caller's deadline so an unlimited workspace cannot pin an
     // MCP stdio runtime forever. In sandboxed mode `effective` already applies
     // the tighter policy wall-time cap above.
     let timeout_seconds = if unrestricted {
-        timeout_seconds.clamp(1, 900)
+        timeout_seconds.clamp(1, 86_400)
     } else {
         effective.limits.wall_time_seconds
     };
@@ -515,6 +610,18 @@ fn sandboxed_shell_command(
         let executable =
             std::env::current_exe().context("resolve Yeet executable for Linux sandbox")?;
         let mut value = Command::new(executable);
+
+        #[cfg(test)]
+        value
+            .arg("shell::tests::linux_sandbox_helper_entry")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env_clear()
+            .envs(sandbox_environment(policy, scratch, cwd))
+            .env("YEET_TEST_LINUX_SANDBOX_PLAN", &plan_path)
+            .env("YEET_TEST_LINUX_SANDBOX_COMMAND", command);
+
+        #[cfg(not(test))]
         value
             .arg("__linux-sandbox-shell")
             .arg(&plan_path)
@@ -622,7 +729,11 @@ pub fn run_linux_sandbox_shell_helper(plan_path: &Path, command: &str) -> Result
     if plan.block_network {
         caps = caps.block_network();
     }
-    Sandbox::apply_auto(&caps).context("apply Linux Landlock shell sandbox")?;
+    Sandbox::apply_auto(&caps).map_err(|error| {
+        anyhow::anyhow!(
+            "Linux sandbox unavailable: {error}. Sandboxed shell execution fails closed. If this container is intentionally trusted and unrestricted shell execution is acceptable, opt in explicitly with `yeet sandbox mode unlimited`."
+        )
+    })?;
 
     let status = Command::new("/bin/sh")
         .arg("-c")
@@ -828,7 +939,7 @@ fn trusted_maximum(requested: &SandboxPolicy, allow_write: bool) -> SandboxPolic
         environment: safe_environment,
         secret_ids: Default::default(),
         limits: crate::sandbox::SandboxLimits {
-            wall_time_seconds: 900,
+            wall_time_seconds: 86_400,
             max_stdout_bytes: 4 * 1024 * 1024,
             max_stderr_bytes: 4 * 1024 * 1024,
             max_memory_bytes: 4 * 1024 * 1024 * 1024,
@@ -1171,6 +1282,14 @@ impl TailBuffer {
         self.start = (self.start + bytes.len()) % self.capacity;
     }
 
+    fn ordered(&self) -> Vec<u8> {
+        let mut bytes = self.bytes.clone();
+        if bytes.len() == self.capacity && self.start != 0 {
+            bytes.rotate_left(self.start);
+        }
+        bytes
+    }
+
     fn into_ordered(mut self) -> Vec<u8> {
         if self.bytes.len() == self.capacity && self.start != 0 {
             self.bytes.rotate_left(self.start);
@@ -1179,13 +1298,29 @@ impl TailBuffer {
     }
 }
 
-fn read_bounded(mut reader: impl Read, limit: usize) -> BoundedOutput {
+#[cfg(test)]
+fn read_bounded(reader: impl Read, limit: usize) -> BoundedOutput {
+    read_bounded_with_progress(reader, limit, None, ShellStream::Stdout)
+}
+
+fn read_bounded_with_progress(
+    mut reader: impl Read,
+    limit: usize,
+    progress: Option<ShellProgress>,
+    stream: ShellStream,
+) -> BoundedOutput {
     let mut output = BoundedOutput::new(limit);
     let mut buffer = [0_u8; 16 * 1024];
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
-            Ok(read) => output.push(&buffer[..read]),
+            Ok(read) => {
+                let bytes = &buffer[..read];
+                if let Some(progress) = progress.as_ref() {
+                    progress.push(stream, bytes);
+                }
+                output.push(bytes);
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
@@ -1453,6 +1588,47 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_sandbox_helper_entry() {
+        let Some(plan) = std::env::var_os("YEET_TEST_LINUX_SANDBOX_PLAN") else {
+            return;
+        };
+        let Some(command) = std::env::var_os("YEET_TEST_LINUX_SANDBOX_COMMAND") else {
+            return;
+        };
+        let command = command
+            .into_string()
+            .expect("Linux sandbox test command must be valid UTF-8");
+        let code = match run_linux_sandbox_shell_helper(Path::new(&plan), &command) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("{error:#}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_sandbox_available_or_asserts_fail_closed(result: &ShellResult) -> bool {
+        if nono::Sandbox::detect_abi().is_ok() {
+            return true;
+        }
+        assert!(
+            !result.succeeded,
+            "sandbox unexpectedly ran without Landlock"
+        );
+        assert!(
+            result.stderr.as_deref().is_some_and(|text| {
+                text.contains("Linux sandbox unavailable:") && text.contains("fails closed")
+            }),
+            "sandbox failure was not actionable: {:?}",
+            result.stderr
+        );
+        false
+    }
+
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     #[test]
     fn native_sandbox_executes_a_basic_command() {
@@ -1471,6 +1647,10 @@ mod tests {
         )
         .unwrap();
 
+        #[cfg(target_os = "linux")]
+        if !linux_sandbox_available_or_asserts_fail_closed(&result) {
+            return;
+        }
         assert!(result.succeeded, "sandbox stderr: {:?}", result.stderr);
         assert!(
             result
@@ -1499,6 +1679,10 @@ mod tests {
         let result =
             run_shell(command, workspace.path(), None, 10, 16 * 1024, false, false).unwrap();
 
+        #[cfg(target_os = "linux")]
+        if !linux_sandbox_available_or_asserts_fail_closed(&result) {
+            return;
+        }
         assert!(result.succeeded, "sandbox stderr: {:?}", result.stderr);
         assert!(
             result
@@ -1647,6 +1831,49 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn force_sandboxed_overrides_persisted_unlimited_mode() {
+        if !Path::new("/usr/bin/sandbox-exec").exists() {
+            return;
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let workspace = parent.path().join("project");
+        std::fs::create_dir(&workspace).unwrap();
+        let outside = parent.path().join("outside-secret.txt");
+        std::fs::write(&outside, "outside-secret-value").unwrap();
+        SandboxStore::new(&workspace)
+            .unwrap()
+            .save(&SandboxPolicy {
+                mode: SandboxMode::Unlimited,
+                workspace_read: WorkspaceRead::All,
+                ..SandboxPolicy::default()
+            })
+            .unwrap();
+
+        let command = format!("/bin/cat '{}'", outside.display());
+        let result = run_shell_cancellable(ShellExecutionRequest {
+            command: &command,
+            workspace_root: &workspace,
+            working_directory: None,
+            timeout_seconds: 5,
+            capture_bytes: 16 * 1024,
+            allow_write: false,
+            unrestricted: true,
+            force_sandboxed: true,
+            cancel: None,
+        })
+        .unwrap();
+
+        assert!(!result.succeeded);
+        assert!(
+            !result
+                .stdout
+                .unwrap_or_default()
+                .contains("outside-secret-value")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn unrestricted_shell_allows_nested_sandbox() {
         if !Path::new("/usr/bin/sandbox-exec").exists() {
             return;
@@ -1668,6 +1895,7 @@ mod tests {
             capture_bytes: 16 * 1024,
             allow_write: true,
             unrestricted: true,
+            force_sandboxed: false,
             cancel: None,
         })
         .unwrap();
@@ -1689,6 +1917,7 @@ mod tests {
             capture_bytes: 16 * 1024,
             allow_write: false,
             unrestricted: true,
+            force_sandboxed: false,
             cancel: None,
         })
         .unwrap_err()
@@ -1716,6 +1945,7 @@ mod tests {
                 capture_bytes: 16 * 1024,
                 allow_write: false,
                 unrestricted: true,
+                force_sandboxed: false,
                 cancel: Some(&worker_cancel),
             })
         });

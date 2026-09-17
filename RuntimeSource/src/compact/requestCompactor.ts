@@ -40,13 +40,13 @@ export class RequestCompactor {
       // issue an LLM checkpoint. Keep exact source for the first few model
       // calls, then switch to deterministic thinning. The two newest tool
       // rounds remain verbatim, and an older read can still be replayed
-      // explicitly with refresh=true when the lead genuinely needs it again.
+      // explicitly with refresh=true when the foreground agent genuinely needs it again.
       const optimizedMessages = optimizeToolHistory(stableMessages, { preserveSource: attempts < 4 });
       return { request: finalizeRequest(request, optimizedMessages, requestOnlyMessages) };
     }
     if (request.contextKey) this.#unknownWindowRequests.delete(`${request.contextKey}\0${request.model}`);
 
-    // Compaction must stay on the same provider/model as the lead request.
+    // Compaction must stay on the same provider/model as the foreground request.
     // A separate override can silently route this auxiliary call through a
     // different credential/provider and make context-mode fail independently.
     const compactModel = request.model;
@@ -84,7 +84,7 @@ export class RequestCompactor {
     }
 
     // Before the first durable checkpoint exists, source reads are the only
-    // exact copy of code the lead model has. Do not replace them with metadata
+    // exact copy of code the foreground model has. Do not replace them with metadata
     // merely to save tokens. Once a checkpoint exists, older source payloads
     // may be thinned because their facts have been summarized durably.
     const optimizedMessages = optimizeToolHistory(stableMessages, {
@@ -110,7 +110,7 @@ export class RequestCompactor {
         },
       });
     } catch {
-      // Compaction is an optimization, never a reason to fail the lead turn.
+      // Compaction is an optimization, never a reason to fail the foreground turn.
       // A provider-specific request rejection, transient failure, or malformed
       // checkpoint falls back to deterministic history thinning.
       const fallback = optimizeToolHistory(stableMessages, { preserveSource: true });

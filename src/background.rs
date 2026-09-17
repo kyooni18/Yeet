@@ -17,7 +17,8 @@ use fs2::FileExt;
 use crate::{
     backend::BackendEvent,
     config::ConfigStore,
-    model::{BridgeEnvelope, FrontendCommand},
+    extensions::{ExtensionHost, ExtensionRequest},
+    model::{BridgeEnvelope, BridgeState, FrontendCommand},
     platform::{
         LocalStream, bind_local, configure_detached, connect_local, force_terminate_process_tree,
         set_private_directory, set_private_file,
@@ -46,6 +47,20 @@ struct SessionRuntime {
     service: RuntimeProcess,
     idle_since: Option<Instant>,
     interrupt_requested_at: Option<Instant>,
+}
+
+struct RuntimeStartupEvent {
+    client_id: u64,
+    runtime_id: u64,
+    stream: LocalStream,
+    result: Result<SessionRuntime>,
+}
+
+struct RuntimeIsolationEvent {
+    client_id: u64,
+    runtime_id: u64,
+    command: Option<FrontendCommand>,
+    result: Result<SessionRuntime>,
 }
 
 const CONNECT_RETRIES: usize = 60;
@@ -502,7 +517,9 @@ fn spawn_daemon(workspace: &Path, scope: Option<&str>, paths: &BackgroundPaths) 
     if let Err(error) =
         fs::write(&paths.pid, format!("{child_id}\n")).and_then(|()| set_private_file(&paths.pid))
     {
-        let _ = child.kill();
+        if force_terminate_process_tree(child_id).is_err() {
+            let _ = child.kill();
+        }
         let _ = child.wait();
         return Err(error.into());
     }
@@ -545,7 +562,13 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
     set_private_file(&paths.pid)?;
     fs::write(&paths.identity, format!("{executable_identity}\n"))?;
     set_private_file(&paths.identity)?;
+    let config = ConfigStore::default();
+    config.ensure()?;
+    let extensions = ExtensionHost::discover_and_start(&config.directory, &workspace);
     let (client_tx, client_rx) = mpsc::channel::<ClientEvent>();
+
+    let (runtime_start_tx, runtime_start_rx) = mpsc::channel::<RuntimeStartupEvent>();
+    let (runtime_isolation_tx, runtime_isolation_rx) = mpsc::channel::<RuntimeIsolationEvent>();
     let mut clients: Vec<ClientConnection> = Vec::new();
     let mut runtimes: Vec<SessionRuntime> = Vec::new();
     let mut next_client_id = 1u64;
@@ -554,7 +577,70 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
     let mut shutdown_requested = false;
     let mut last_heartbeat = Instant::now();
 
+    let mut runtime_startup_pending = false;
+
     loop {
+        while let Ok(event) = runtime_start_rx.try_recv() {
+            runtime_startup_pending = false;
+            match event.result {
+                Ok(runtime) => {
+                    runtimes.push(runtime);
+                    if attach_client_to_runtime(
+                        &mut clients,
+                        &mut runtimes,
+                        &extensions,
+                        &client_tx,
+                        event.client_id,
+                        event.runtime_id,
+                        event.stream,
+                    ) {
+                        idle_since = None;
+                    }
+                }
+                Err(error) => send_unattached_client_error(event.stream, error),
+            }
+        }
+
+        while let Ok(event) = runtime_isolation_rx.try_recv() {
+            runtime_startup_pending = false;
+            let Some(client_index) = clients
+                .iter()
+                .position(|client| client.id == event.client_id)
+            else {
+                if let Ok(runtime) = event.result {
+                    retire_runtime_async(runtime);
+                }
+                continue;
+            };
+            match event.result {
+                Ok(mut runtime) => {
+                    if let Some(command) = event.command
+                        && let Err(error) = runtime.service.send(command)
+                    {
+                        send_client_error(&mut clients, client_index, error);
+                        retire_runtime_async(runtime);
+                        continue;
+                    }
+                    let envelope = BridgeEnvelope {
+                        kind: "state".into(),
+                        state: Some(state_with_extension_commands(
+                            runtime.service.state_snapshot(),
+                            &extensions,
+                        )),
+                        message: None,
+                    };
+                    runtimes.push(runtime);
+                    clients[client_index].runtime_id = event.runtime_id;
+                    if send_envelope(&mut clients[client_index].stream, &envelope).is_err() {
+                        clients.remove(client_index);
+                    } else {
+                        idle_since = None;
+                    }
+                }
+                Err(error) => send_client_error(&mut clients, client_index, error),
+            }
+        }
+
         while let Ok(event) = client_rx.try_recv() {
             match event {
                 ClientEvent::Command { client_id, command } => {
@@ -564,6 +650,11 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                         continue;
                     };
                     let runtime_id = clients[client_index].runtime_id;
+                    if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
+                        eprintln!(
+                            "background client command: client={client_id} runtime={runtime_id}"
+                        );
+                    }
 
                     match command {
                         FrontendCommand::Shutdown => {
@@ -588,7 +679,10 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                                     runtime.idle_since = None;
                                     let envelope = BridgeEnvelope {
                                         kind: "state".into(),
-                                        state: Some(runtime.service.state_snapshot()),
+                                        state: Some(state_with_extension_commands(
+                                            runtime.service.state_snapshot(),
+                                            &extensions,
+                                        )),
                                         message: None,
                                     };
                                     if send_envelope(&mut clients[client_index].stream, &envelope)
@@ -603,44 +697,35 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                             let isolate_runtime =
                                 runtime_requires_isolation(&runtimes, &clients, runtime_id);
                             if isolate_runtime {
-                                let new_runtime_id = allocate_runtime_id(&mut next_runtime_id);
-                                match spawn_runtime(&workspace, new_runtime_id) {
-                                    Ok(mut runtime) => {
-                                        let load = FrontendCommand::LoadSession {
-                                            session_id: session_id.clone(),
-                                        };
-                                        match runtime.service.send(load) {
-                                            Ok(()) => {
-                                                let envelope = BridgeEnvelope {
-                                                    kind: "state".into(),
-                                                    state: Some(runtime.service.state_snapshot()),
-                                                    message: None,
-                                                };
-                                                runtimes.push(runtime);
-                                                clients[client_index].runtime_id = new_runtime_id;
-                                                if send_envelope(
-                                                    &mut clients[client_index].stream,
-                                                    &envelope,
-                                                )
-                                                .is_err()
-                                                {
-                                                    clients.remove(client_index);
-                                                }
-                                            }
-                                            Err(error) => {
-                                                send_client_error(
-                                                    &mut clients,
-                                                    client_index,
-                                                    error,
-                                                );
-                                                retire_runtime_async(runtime);
-                                            }
-                                        }
-                                    }
-                                    Err(error) => {
-                                        send_client_error(&mut clients, client_index, error);
-                                    }
+                                if runtime_startup_pending {
+                                    send_client_error(
+                                        &mut clients,
+                                        client_index,
+                                        anyhow!(
+                                            "background session runtime startup already in progress"
+                                        ),
+                                    );
+                                    continue;
                                 }
+                                let new_runtime_id = allocate_runtime_id(&mut next_runtime_id);
+                                let startup_tx = runtime_isolation_tx.clone();
+                                let startup_workspace = workspace.clone();
+                                let startup_client_id = client_id;
+                                let startup_scope = scope.clone();
+                                runtime_startup_pending = true;
+                                thread::spawn(move || {
+                                    let result = spawn_runtime(
+                                        &startup_workspace,
+                                        new_runtime_id,
+                                        startup_scope.as_deref(),
+                                    );
+                                    let _ = startup_tx.send(RuntimeIsolationEvent {
+                                        client_id: startup_client_id,
+                                        runtime_id: new_runtime_id,
+                                        command: Some(FrontendCommand::LoadSession { session_id }),
+                                        result,
+                                    });
+                                });
                                 continue;
                             }
 
@@ -655,24 +740,46 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                         FrontendCommand::NewSession
                             if runtime_requires_isolation(&runtimes, &clients, runtime_id) =>
                         {
+                            if runtime_startup_pending {
+                                send_client_error(
+                                    &mut clients,
+                                    client_index,
+                                    anyhow!(
+                                        "background session runtime startup already in progress"
+                                    ),
+                                );
+                                continue;
+                            }
                             let new_runtime_id = allocate_runtime_id(&mut next_runtime_id);
-                            match spawn_runtime(&workspace, new_runtime_id) {
-                                Ok(runtime) => {
-                                    let envelope = BridgeEnvelope {
-                                        kind: "state".into(),
-                                        state: Some(runtime.service.state_snapshot()),
-                                        message: None,
-                                    };
-                                    runtimes.push(runtime);
-                                    clients[client_index].runtime_id = new_runtime_id;
-                                    if send_envelope(&mut clients[client_index].stream, &envelope)
-                                        .is_err()
-                                    {
-                                        clients.remove(client_index);
-                                    }
-                                }
+                            let startup_tx = runtime_isolation_tx.clone();
+                            let startup_workspace = workspace.clone();
+                            let startup_client_id = client_id;
+                            let startup_scope = scope.clone();
+                            runtime_startup_pending = true;
+                            thread::spawn(move || {
+                                let result = spawn_runtime(
+                                    &startup_workspace,
+                                    new_runtime_id,
+                                    startup_scope.as_deref(),
+                                );
+                                let _ = startup_tx.send(RuntimeIsolationEvent {
+                                    client_id: startup_client_id,
+                                    runtime_id: new_runtime_id,
+                                    command: None,
+                                    result,
+                                });
+                            });
+                        }
+                        FrontendCommand::ExtensionCommand { command, args } => {
+                            match extensions.invoke_command(&command, &args) {
+                                Ok(true) => {}
+                                Ok(false) => broadcast_runtime_error(
+                                    &mut clients,
+                                    runtime_id,
+                                    anyhow!("unknown extension command: /{command}"),
+                                ),
                                 Err(error) => {
-                                    send_client_error(&mut clients, client_index, error);
+                                    broadcast_runtime_error(&mut clients, runtime_id, error)
                                 }
                             }
                         }
@@ -705,8 +812,57 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     }
                 }
                 ClientEvent::Disconnected(client_id) => {
+                    if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
+                        eprintln!("background client disconnected: client={client_id}");
+                    }
                     clients.retain(|client| client.id != client_id);
                 }
+            }
+        }
+
+        while let Some(request) = extensions.try_recv_request() {
+            let runtime_id =
+                if let Some(runtime_id) = clients.last().map(|client| client.runtime_id) {
+                    runtime_id
+                } else if let Some(runtime) = runtimes
+                    .iter()
+                    .rev()
+                    .find(|runtime| !runtime.service.is_closed())
+                {
+                    runtime.id
+                } else {
+                    let runtime_id = allocate_runtime_id(&mut next_runtime_id);
+                    runtimes.push(spawn_runtime(&workspace, runtime_id, scope.as_deref())?);
+                    runtime_id
+                };
+            if let Some(runtime) = runtimes.iter_mut().find(|runtime| runtime.id == runtime_id) {
+                runtime.idle_since = None;
+            }
+            let (extension_id, command) = match request {
+                ExtensionRequest::Submit { extension_id, text } => {
+                    (extension_id, FrontendCommand::Submit { text })
+                }
+                ExtensionRequest::SelectModel {
+                    extension_id,
+                    model,
+                } => (extension_id, FrontendCommand::SelectModel { model }),
+                ExtensionRequest::SelectReasoning {
+                    extension_id,
+                    level,
+                } => (extension_id, FrontendCommand::SelectReasoning { level }),
+                ExtensionRequest::Interrupt { extension_id } => {
+                    (extension_id, FrontendCommand::Interrupt)
+                }
+                ExtensionRequest::NewSession { extension_id } => {
+                    (extension_id, FrontendCommand::NewSession)
+                }
+                ExtensionRequest::RequestModels { extension_id } => {
+                    (extension_id, FrontendCommand::RequestModels)
+                }
+            };
+            if let Err(error) = dispatch_runtime_command(&mut runtimes, runtime_id, command) {
+                eprintln!("yeet: extension {extension_id} request failed: {error}");
+                broadcast_runtime_error(&mut clients, runtime_id, error);
             }
         }
         if shutdown_requested {
@@ -714,6 +870,9 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
         }
 
         loop {
+            if runtime_startup_pending && reusable_runtime_id(&runtimes, &clients).is_none() {
+                break;
+            }
             match listener.accept() {
                 Ok((stream, _)) => {
                     // Accepted Unix-domain sockets can share listener flags on some
@@ -722,42 +881,52 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     // stalling the daemon. Darwin rejects SO_SNDTIMEO on AF_UNIX
                     // with EINVAL, so treat that specific unsupported option as
                     // non-fatal rather than killing the whole background service.
-                    stream.set_nonblocking(false)?;
+                    if stream.set_nonblocking(false).is_err() {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        continue;
+                    }
                     if let Err(error) = stream.set_write_timeout(Some(CLIENT_WRITE_TIMEOUT))
                         && error.kind() != std::io::ErrorKind::InvalidInput
                     {
-                        return Err(error.into());
+                        let _ = stream.shutdown(Shutdown::Both);
+                        continue;
                     }
-                    let reader = stream.try_clone()?;
                     let client_id = next_client_id;
                     next_client_id = next_client_id.wrapping_add(1).max(1);
-                    let tx = client_tx.clone();
-                    thread::spawn(move || client_reader(client_id, reader, tx));
 
-                    let runtime_id = reusable_runtime_id(&runtimes, &clients)
-                        .unwrap_or_else(|| allocate_runtime_id(&mut next_runtime_id));
-                    if !runtimes.iter().any(|runtime| runtime.id == runtime_id) {
-                        runtimes.push(spawn_runtime(&workspace, runtime_id)?);
-                    }
-                    let runtime = runtimes
-                        .iter_mut()
-                        .find(|runtime| runtime.id == runtime_id)
-                        .expect("selected background runtime must exist");
-                    runtime.idle_since = None;
-                    let mut writer = stream;
-                    let initial = BridgeEnvelope {
-                        kind: "state".into(),
-                        state: Some(runtime.service.state_snapshot()),
-                        message: None,
-                    };
-                    if send_envelope(&mut writer, &initial).is_ok() {
-                        clients.push(ClientConnection {
-                            id: client_id,
+                    if let Some(runtime_id) = reusable_runtime_id(&runtimes, &clients) {
+                        if attach_client_to_runtime(
+                            &mut clients,
+                            &mut runtimes,
+                            &extensions,
+                            &client_tx,
+                            client_id,
                             runtime_id,
-                            stream: writer,
-                        });
-                        idle_since = None;
+                            stream,
+                        ) {
+                            idle_since = None;
+                        }
+                        continue;
                     }
+
+                    let runtime_id = allocate_runtime_id(&mut next_runtime_id);
+                    let startup_tx = runtime_start_tx.clone();
+                    let startup_workspace = workspace.clone();
+                    let startup_scope = scope.clone();
+                    runtime_startup_pending = true;
+                    thread::spawn(move || {
+                        let result =
+                            spawn_runtime(&startup_workspace, runtime_id, startup_scope.as_deref());
+                        let _ = startup_tx.send(RuntimeStartupEvent {
+                            client_id,
+                            runtime_id,
+                            stream,
+                            result,
+                        });
+                    });
+                    // Keep at most one unattached runtime startup in flight. This
+                    // bounds resource use when a caller retries a slow handshake.
+                    break;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(error) => return Err(error.into()),
@@ -766,7 +935,11 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
 
         for runtime in &mut runtimes {
             while let Some(event) = runtime.service.try_recv() {
-                let BackendEvent::Envelope(envelope) = event;
+                let BackendEvent::Envelope(mut envelope) = event;
+                if let Some(state) = envelope.state.as_mut() {
+                    state.extension_commands = extensions.command_items();
+                    extensions.publish_state(state);
+                }
                 broadcast_runtime_envelope(&mut clients, runtime.id, &envelope);
             }
             if !runtime.service.is_streaming() {
@@ -836,7 +1009,18 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 state: None,
                 message: None,
             };
-            clients.retain_mut(|client| send_envelope(&mut client.stream, &heartbeat).is_ok());
+            clients.retain_mut(|client| match send_envelope(&mut client.stream, &heartbeat) {
+                Ok(()) => true,
+                Err(error) => {
+                    if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
+                        eprintln!(
+                            "background client send failed: client={} runtime={} envelope=heartbeat error={error:#}",
+                            client.id, client.runtime_id
+                        );
+                    }
+                    false
+                }
+            });
             last_heartbeat = Instant::now();
         }
 
@@ -875,10 +1059,10 @@ fn allocate_runtime_id(next_runtime_id: &mut u64) -> u64 {
     runtime_id
 }
 
-fn spawn_runtime(workspace: &Path, id: u64) -> Result<SessionRuntime> {
+fn spawn_runtime(workspace: &Path, id: u64, scope: Option<&str>) -> Result<SessionRuntime> {
     Ok(SessionRuntime {
         id,
-        service: RuntimeProcess::spawn(workspace)?,
+        service: RuntimeProcess::spawn(workspace, scope)?,
         idle_since: None,
         interrupt_requested_at: None,
     })
@@ -982,6 +1166,79 @@ fn choose_reusable_runtime_id(states: &[(u64, bool, bool)]) -> Option<u64> {
     None
 }
 
+fn attach_client_to_runtime(
+    clients: &mut Vec<ClientConnection>,
+    runtimes: &mut [SessionRuntime],
+    extensions: &ExtensionHost,
+    client_tx: &mpsc::Sender<ClientEvent>,
+    client_id: u64,
+    runtime_id: u64,
+    mut stream: LocalStream,
+) -> bool {
+    let Some(runtime) = runtimes.iter_mut().find(|runtime| runtime.id == runtime_id) else {
+        send_unattached_client_error(
+            stream,
+            anyhow!("background session runtime is no longer available"),
+        );
+        return false;
+    };
+    let reader = match stream.try_clone() {
+        Ok(reader) => reader,
+        Err(error) => {
+            send_unattached_client_error(
+                stream,
+                anyhow!("clone background client stream: {error}"),
+            );
+            return false;
+        }
+    };
+    runtime.idle_since = None;
+    let initial = BridgeEnvelope {
+        kind: "state".into(),
+        state: Some(state_with_extension_commands(
+            runtime.service.state_snapshot(),
+            extensions,
+        )),
+        message: None,
+    };
+    if let Some(state) = initial.state.as_ref() {
+        extensions.publish_state(state);
+    }
+    if send_envelope(&mut stream, &initial).is_err() {
+        let _ = stream.shutdown(Shutdown::Both);
+        return false;
+    }
+    let tx = client_tx.clone();
+    thread::spawn(move || client_reader(client_id, reader, tx));
+    clients.push(ClientConnection {
+        id: client_id,
+        runtime_id,
+        stream,
+    });
+    if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
+        eprintln!("background client attached: client={client_id} runtime={runtime_id}");
+    }
+    true
+}
+
+fn send_unattached_client_error(mut stream: LocalStream, error: anyhow::Error) {
+    let envelope = BridgeEnvelope {
+        kind: "error".into(),
+        state: None,
+        message: Some(error.to_string()),
+    };
+    let _ = send_envelope(&mut stream, &envelope);
+    let _ = stream.shutdown(Shutdown::Both);
+}
+
+fn state_with_extension_commands(
+    mut state: BridgeState,
+    extensions: &ExtensionHost,
+) -> BridgeState {
+    state.extension_commands = extensions.command_items();
+    state
+}
+
 fn broadcast_runtime_error(
     clients: &mut Vec<ClientConnection>,
     runtime_id: u64,
@@ -1001,7 +1258,21 @@ fn broadcast_runtime_envelope(
     envelope: &BridgeEnvelope,
 ) {
     clients.retain_mut(|client| {
-        client.runtime_id != runtime_id || send_envelope(&mut client.stream, envelope).is_ok()
+        if client.runtime_id != runtime_id {
+            return true;
+        }
+        match send_envelope(&mut client.stream, envelope) {
+            Ok(()) => true,
+            Err(error) => {
+                if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
+                    eprintln!(
+                        "background client send failed: client={} runtime={} envelope={} error={error:#}",
+                        client.id, client.runtime_id, envelope.kind
+                    );
+                }
+                false
+            }
+        }
     });
 }
 
@@ -1043,6 +1314,31 @@ mod tests {
         assert_ne!(terminal, remote);
         assert_eq!(terminal, background_key(workspace, None));
         assert_eq!(remote, background_key(workspace, Some("remote")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn send_envelope_retries_transient_nonblocking_backpressure() {
+        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        writer.set_nonblocking(true).unwrap();
+        let message = "x".repeat(256 * 1024);
+        let envelope = BridgeEnvelope {
+            kind: "error".into(),
+            state: None,
+            message: Some(message.clone()),
+        };
+        let reader_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            line
+        });
+
+        send_envelope(&mut writer, &envelope).unwrap();
+        let line = reader_thread.join().unwrap();
+        let decoded: BridgeEnvelope = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(decoded.message.as_deref(), Some(message.as_str()));
     }
 
     #[test]
@@ -1181,7 +1477,37 @@ fn client_reader(client_id: u64, stream: LocalStream, tx: mpsc::Sender<ClientEve
 }
 
 fn send_envelope(stream: &mut LocalStream, envelope: &BridgeEnvelope) -> Result<()> {
-    serde_json::to_writer(&mut *stream, envelope)?;
-    stream.write_all(b"\n").map_err(|error| anyhow!(error))?;
-    stream.flush().map_err(|error| anyhow!(error))
+    let mut frame = serde_json::to_vec(envelope)?;
+    frame.push(b'\n');
+    let deadline = Instant::now() + CLIENT_WRITE_TIMEOUT;
+    let mut offset = 0usize;
+
+    while offset < frame.len() {
+        match stream.write(&frame[offset..]) {
+            Ok(0) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                return Err(anyhow!(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "background client socket accepted zero-byte write",
+                )));
+            }
+            Ok(written) => offset += written,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Err(anyhow!(
+                        "background client write remained blocked for {:?}: {error}",
+                        CLIENT_WRITE_TIMEOUT
+                    ));
+                }
+                thread::sleep(Duration::from_millis(4));
+            }
+            Err(error) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                return Err(anyhow!(error));
+            }
+        }
+    }
+    Ok(())
 }

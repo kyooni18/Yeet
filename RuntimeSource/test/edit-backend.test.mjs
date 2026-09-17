@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   mkdtemp,
   mkdir,
@@ -576,5 +578,45 @@ test("move edits are committed transactionally and return a destination snapshot
     assert.match(result.files[0].anchors, /2:[0-9a-f]{4}\|TWO/);
   } finally {
     await f.cleanup();
+  }
+});
+
+
+test("edit daemon exits cleanly when its response pipe closes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-daemon-epipe-"));
+  const daemon = fileURLToPath(new URL("../dist/edit-backend/daemon.js", import.meta.url));
+  const child = spawn(process.execPath, [daemon, "--root", root], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const exited = new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+
+  try {
+    child.stdout.destroy();
+    child.stdin.write(`${JSON.stringify({ id: 1, method: "health" })}\n`);
+    let timeout;
+    const result = await Promise.race([
+      exited,
+      new Promise((resolve) => {
+        timeout = setTimeout(() => resolve({ timeout: true }), 3_000);
+      }),
+    ]);
+    clearTimeout(timeout);
+    if (result.timeout) {
+      child.kill("SIGKILL");
+      await exited;
+      assert.fail("edit daemon did not exit after its response pipe closed");
+    }
+    assert.deepEqual(result, { code: 0, signal: null });
+    assert.doesNotMatch(stderr, /Unhandled 'error' event|write EPIPE/);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await rm(root, { recursive: true, force: true });
   }
 });

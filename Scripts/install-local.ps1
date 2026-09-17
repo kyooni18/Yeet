@@ -30,9 +30,6 @@ try {
     & (Join-Path $Root "Scripts\rebuild-runtime.ps1")
     if ($LASTEXITCODE -ne 0) { throw "Runtime build failed." }
 
-    & (Join-Path $Root "Scripts\build-remote-web.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "Remote WebUI build failed." }
-
     cargo build --release
     if ($LASTEXITCODE -ne 0) { throw "Rust release build failed." }
 
@@ -73,6 +70,8 @@ try {
     }
     Copy-Item -Recurse -Force $RuntimeDist $InstalledDist
     Copy-Item -Force (Join-Path $Root "RuntimeSource\package.json") (Join-Path $RuntimeDestination "package.json")
+    & $InstalledBinary skyline setup | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Skyline setup failed." }
 
     # Resume every daemon that was running before the install using the freshly
     # replaced executable and runtime. Stopping first is required on Windows,

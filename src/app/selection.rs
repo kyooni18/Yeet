@@ -16,6 +16,14 @@ impl App {
             return;
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && let Some(session_id) = self.sidebar_session_at(event.column, event.row)
+        {
+            self.clear_transcript_selection();
+            self.sidebar_load_request = Some(session_id);
+            self.follow_tail = true;
+            return;
+        }
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
             && self.point_in_transcript_context_menu(event.column, event.row)
         {
             self.activate_transcript_context_menu(event.row);
@@ -50,6 +58,19 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    pub(crate) fn set_sidebar_session_targets(
+        &mut self,
+        area: (u16, u16, u16, u16),
+        targets: Vec<(u16, String)>,
+    ) {
+        self.sidebar_area = area;
+        self.sidebar_session_targets = targets;
+    }
+
+    pub fn take_sidebar_load_request(&mut self) -> Option<String> {
+        self.sidebar_load_request.take()
     }
 
     pub fn selected_transcript_text(&self) -> Option<String> {
@@ -111,6 +132,22 @@ impl App {
         self.selection_end = None;
         self.transcript_context_menu = None;
         self.transcript_context_menu_area = (0, 0, 0, 0);
+    }
+
+    fn sidebar_session_at(&self, column: u16, row: u16) -> Option<String> {
+        let (x, y, width, height) = self.sidebar_area;
+        if width == 0
+            || height == 0
+            || column < x
+            || column >= x.saturating_add(width)
+            || row < y
+            || row >= y.saturating_add(height)
+        {
+            return None;
+        }
+        self.sidebar_session_targets
+            .iter()
+            .find_map(|(target_row, session_id)| (*target_row == row).then(|| session_id.clone()))
     }
 
     fn point_in_transcript(&self, column: u16, row: u16) -> bool {

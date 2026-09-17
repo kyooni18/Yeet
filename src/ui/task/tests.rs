@@ -37,6 +37,11 @@ fn tool(status: ToolCallStatus) -> ConversationEntry {
             name: "read_file".into(),
             arguments: json!({"path": "src/ui.rs"}).to_string(),
             status,
+
+            duration_ms: None,
+
+            result: None,
+            error: None,
         },
     })
 }
@@ -96,7 +101,23 @@ fn status_uses_actual_outcome_and_approval_overrides_streaming() {
         .collect();
     assert!(screen.contains("Approval needed"));
     assert!(screen.contains("Enter allow"));
+    assert!(screen.contains("Ctrl+C stop"));
     assert!(!screen.contains("Working"));
+
+    let mut one_row = Terminal::new(TestBackend::new(80, 1)).unwrap();
+    one_row
+        .draw(|frame| draw(frame, &app, frame.area()))
+        .unwrap();
+    let one_row_screen: String = one_row
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(one_row_screen.contains("Approval needed"));
+    assert!(one_row_screen.contains("Enter allow"));
+    assert!(one_row_screen.contains("Ctrl+C stop"));
 }
 
 #[test]
@@ -133,6 +154,20 @@ fn failed_turn_keeps_the_failure_reason_visible() {
         .map(|cell| cell.symbol())
         .collect();
     assert!(screen.contains("Provider connection failed"));
+
+    let mut short_wide = Terminal::new(TestBackend::new(70, 12)).unwrap();
+    short_wide
+        .draw(|frame| crate::ui::draw(frame, &mut app))
+        .unwrap();
+    let short_wide_screen: String = short_wide
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(short_wide_screen.contains("Failed"));
+    assert!(short_wide_screen.contains("Provider connection failed"));
 }
 
 #[test]
@@ -152,6 +187,7 @@ fn live_progress_remains_visible_while_reading_history() {
             }),
             tool(ToolCallStatus::Streaming),
         ];
+        assert_eq!(super::height(&app), 1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| crate::ui::draw(frame, &mut app))
@@ -163,18 +199,90 @@ fn live_progress_remains_visible_while_reading_history() {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect())
             .collect();
         let footer = rows[height as usize - 9..].join("\n");
-        assert!(footer.contains("Working"));
-        assert!(footer.contains("Read file"));
-        assert!(footer.contains("src/ui.rs"));
-        assert!(footer.contains("BUFFERED DIRECTIVE"));
+        let progress_row = rows
+            .iter()
+            .find(|row| row.contains("Read file"))
+            .expect("live operation should stay visible in the task rail");
+        assert!(progress_row.contains("Working"));
+        assert!(progress_row.contains("src/ui.rs"));
+        assert!(footer.contains("Next message"));
+        assert!(footer.contains("Send after reply"));
+        assert!(!footer.contains("Enter queue"));
         assert!(!footer.contains("Enter send"));
-        assert!(rows.join("\n").contains("Ctrl+End"));
+        assert_eq!(rows.join("\n").matches("Ctrl+End").count(), 1);
         assert_eq!(rows.join("\n").contains("Current · Working"), width >= 110);
         assert_eq!(app.scroll_y, 0);
         if width == 100 {
             println!("{}", rows.join("\n"));
         }
     }
+}
+
+#[test]
+fn short_wide_history_keeps_return_to_latest_visible_during_streaming() {
+    let mut app = App {
+        follow_tail: false,
+        ..App::default()
+    };
+    app.state.is_streaming = true;
+    app.state.active_model = "openai/test-model".into();
+    app.conversation = vec![user(), tool(ToolCallStatus::Streaming)];
+
+    let mut terminal = Terminal::new(TestBackend::new(70, 12)).unwrap();
+    terminal
+        .draw(|frame| crate::ui::draw(frame, &mut app))
+        .unwrap();
+    let rows: Vec<String> = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(70)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+        .collect();
+    let screen = rows.join("\n");
+    assert!(screen.contains("Ctrl+End"));
+    assert!(screen.contains("Read file"));
+    assert!(screen.contains("Working"));
+}
+
+#[test]
+fn compact_task_rail_keeps_history_hint_and_avoids_working_echo() {
+    let mut app = App {
+        follow_tail: false,
+        conversation: vec![user()],
+        ..App::default()
+    };
+    assert_eq!(height(&app), 1);
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+    terminal
+        .draw(|frame| draw(frame, &app, frame.area()))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(screen.contains("Ready"));
+    assert!(screen.contains("History"));
+    assert!(screen.contains("Ctrl+End"));
+
+    app.follow_tail = true;
+    app.conversation.clear();
+    app.state.is_streaming = true;
+    terminal
+        .draw(|frame| draw(frame, &app, frame.area()))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert_eq!(screen.matches("Working").count(), 1);
 }
 
 #[test]

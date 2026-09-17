@@ -75,17 +75,22 @@ pub(super) fn agent_event_log_value(event: &AgentEvent) -> Option<Value> {
         AgentEvent::AuxiliaryUsage(usage) => {
             Some(json!({"type":"agent-auxiliary-usage", "usage":usage}))
         }
-        AgentEvent::InfinityCheckpoint { epoch, reason } => Some(json!({
-            "type":"agent-infinity-checkpoint",
+        AgentEvent::GoalCheckpoint { epoch, reason } => Some(json!({
+            "type":"agent-goal-checkpoint",
             "epoch":epoch,
             "reason":reason,
         })),
-        AgentEvent::InfinityRetry {
+        AgentEvent::GoalJudge { passed, reason } => Some(json!({
+            "type":"agent-goal-judge",
+            "passed":passed,
+            "reason":reason,
+        })),
+        AgentEvent::GoalRetry {
             attempt,
             delay_ms,
             error,
         } => Some(json!({
-            "type":"agent-infinity-retry",
+            "type":"agent-goal-retry",
             "attempt":attempt,
             "delayMs":delay_ms,
             "error":error,
@@ -137,6 +142,11 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                         name: name.clone().unwrap_or_else(|| "tool".into()),
                         arguments: String::new(),
                         status: ToolCallStatus::Streaming,
+
+                        duration_ms: None,
+
+                        result: None,
+                        error: None,
                     });
                 if let Some(id) = id.filter(|value| !value.is_empty()) {
                     call.call_id = Some(id);
@@ -166,6 +176,11 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                         name: call.name.clone(),
                         arguments: String::new(),
                         status: ToolCallStatus::Streaming,
+
+                        duration_ms: None,
+
+                        result: None,
+                        error: None,
                     });
                 pending.index = Some(index as i64);
                 pending.call_id = Some(call.id.clone());
@@ -178,14 +193,19 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
             state.set_activity("tool", "Preparing", Some(call.name));
         }
         AgentEvent::ToolExecutionStarted(call) => {
-            state.set_tool_call_execution_status(&call, ToolCallStatus::Streaming);
+            state.set_tool_call_execution_status(&call, ToolCallStatus::Streaming, None, None);
             state.set_activity("tool", &tool_activity_title(&call.name), tool_detail(&call));
         }
         AgentEvent::ToolExecutionFinished {
             call,
             succeeded,
-            result: _,
+            result,
         } => {
+            let (result, error) = if succeeded {
+                (Some(result), None)
+            } else {
+                (None, Some(result))
+            };
             state.set_tool_call_execution_status(
                 &call,
                 if succeeded {
@@ -193,6 +213,8 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                 } else {
                     ToolCallStatus::Failed
                 },
+                result,
+                error,
             );
             state.set_activity(
                 if succeeded {
@@ -205,25 +227,37 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
             );
         }
         AgentEvent::ToolExecutionSuppressed { call, reason } => {
-            state.set_tool_call_execution_status(&call, ToolCallStatus::Suppressed);
+            state.set_tool_call_execution_status(
+                &call,
+                ToolCallStatus::Suppressed,
+                Some(reason.clone()),
+                None,
+            );
             state.set_activity("tool-suppressed", "Suppressed", Some(reason));
         }
         AgentEvent::AuxiliaryUsage(usage) => record_usage(&mut state.state, &usage, 0),
-        AgentEvent::InfinityCheckpoint { epoch, reason } => {
+        AgentEvent::GoalCheckpoint { epoch, reason } => {
             state.set_activity(
-                "infinity",
-                "Infinity · continuing",
+                "goal",
+                "Goal · judging",
                 Some(format!("Epoch {epoch} · {reason}")),
             );
         }
-        AgentEvent::InfinityRetry {
+        AgentEvent::GoalJudge { passed, reason } => {
+            state.set_activity(
+                "goal",
+                if passed { "Goal · accepted" } else { "Goal · rejected" },
+                Some(reason),
+            );
+        }
+        AgentEvent::GoalRetry {
             attempt,
             delay_ms,
             error,
         } => {
             state.set_activity(
                 "retrying",
-                "Infinity · retrying",
+                "Goal · retrying",
                 Some(format!(
                     "Attempt {attempt} · retry in {:.1}s · {error}",
                     delay_ms as f64 / 1000.0
@@ -292,6 +326,8 @@ pub(super) fn persist_locked(
         created_at,
         updated_at: Utc::now(),
         workspace_root: workspace.display().to_string(),
+        working_directory: state.meta.working_directory.clone(),
+        context_roots: state.meta.context_roots.clone(),
         model: state.state.active_model.clone(),
         token_usage: state.state.token_usage.clone(),
         credit_usage: state.state.credit_usage,
@@ -302,7 +338,7 @@ pub(super) fn persist_locked(
         attached_harness_capabilities: state.meta.attached_capabilities.clone(),
         disabled_capabilities: state.meta.disabled_capabilities.clone(),
     })?;
-    store.set_infinity_mode(&id, state.state.infinity_mode)
+    store.set_goal_mode(&id, state.state.goal_mode)
 }
 
 /// Removes the coordinator's internal coding prompt before session persistence.
