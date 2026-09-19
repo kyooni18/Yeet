@@ -1,0 +1,3 @@
+interface:
+  display_name: "PDF"
+  short_description: "Create, edit, OCR, redact, convert, and verify PDFs"

@@ -122,6 +122,25 @@ pub(super) fn foundation_server_ready(_bridge: &BridgeClient, _server: &str) -> 
     crate::memory::MemoryStore::default().status().is_ok()
 }
 
+/// Loads persistent runtime preferences that historically required the CLI.
+pub(super) fn runtime_settings_state(
+    config: &ConfigStore,
+    active_model: &str,
+) -> Result<RuntimeSettingsState> {
+    let theme = config.theme_settings()?;
+    Ok(RuntimeSettingsState {
+        appearance: theme.appearance.unwrap_or_else(|| "auto".into()),
+        theme_dark: theme.dark.unwrap_or_else(|| "kanagawa".into()),
+        theme_light: theme.light.unwrap_or_else(|| "adwaita".into()),
+        context_length_override: if active_model.is_empty() {
+            None
+        } else {
+            config.context_length_override(active_model)?
+        },
+        jev_loop_mode: config.jev_loop_mode()?,
+    })
+}
+
 /// Converts a sandbox policy into its bridge/UI representation.
 pub(super) fn sandbox_settings_state(policy: &SandboxPolicy) -> SandboxSettingsState {
     let (workspace_mode, workspace_paths) = match &policy.workspace_read {

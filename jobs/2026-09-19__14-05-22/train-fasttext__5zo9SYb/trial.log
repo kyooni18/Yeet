@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/train-fasttext:20251031: docker inspect returned 1
+Trial train-fasttext__5zo9SYb failed: Docker compose command failed for environment train-fasttext. Command: docker compose --project-name train-fasttext__5zo9syb__env --project-directory /Users/kyooni18/.cache/harbor/tasks/QUdXqzZFwRrgRZ7SPHyxto/train-fasttext/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmph585jcol/train-fasttext__5zo9SYb__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1hc6rtkp/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpywdk5wa7/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/train-fasttext:20251031 Pulling 
+ Image alexgshaw/train-fasttext:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

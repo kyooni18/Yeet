@@ -25,7 +25,9 @@ use crate::{
     },
 };
 
+mod client_writer;
 mod runtime_process;
+use client_writer::ClientWriter;
 use runtime_process::RuntimeProcess;
 
 enum ClientEvent {
@@ -39,7 +41,7 @@ enum ClientEvent {
 struct ClientConnection {
     id: u64,
     runtime_id: u64,
-    stream: LocalStream,
+    writer: ClientWriter,
 }
 
 struct SessionRuntime {
@@ -74,6 +76,12 @@ const IDLE_EXIT_AFTER: Duration = Duration::from_secs(60);
 const STALE_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 const FORCED_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_BACKGROUND_LOG_BYTES: u64 = 8 * 1024 * 1024;
+// State snapshots can contain a retained transcript, so the protocol limit is
+// deliberately larger than an ordinary command. It still prevents a peer
+// that never sends a newline from growing a String without bound.
+const MAX_BACKGROUND_FRAME_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CLIENT_COMMAND_BYTES: usize = 8 * 1024 * 1024;
+const CLIENT_EVENT_QUEUE_CAPACITY: usize = 256;
 
 pub fn run_runtime_worker(workspace: PathBuf) -> Result<()> {
     runtime_process::run_worker(&workspace)
@@ -129,10 +137,23 @@ impl BackgroundConnection {
 
         // Another terminal may have finished starting the daemon while this
         // process was waiting for the lifecycle lock.
-        if daemon_identity_matches(&paths, &executable_identity)
-            && let Ok(connection) = Self::connect_existing(&paths.socket)
-        {
-            return Ok(connection);
+        if daemon_identity_matches(&paths, &executable_identity) {
+            match Self::connect_existing(&paths.socket) {
+                Ok(connection) => return Ok(connection),
+                Err(handshake_error) => match connect_local(&paths.socket) {
+                    Ok(stream) => {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        // A slow worker startup or a busy daemon can miss the
+                        // handshake deadline while existing sessions are healthy.
+                        // Never turn a failed attach into a workspace-wide kill.
+                        return Err(handshake_error).context(
+                            "background service is reachable but not ready; retry attaching (existing sessions were left running)",
+                        );
+                    }
+                    Err(error) if stale_socket_error(&error) => {}
+                    Err(error) => return Err(error.into()),
+                },
+            }
         }
 
         if paths.socket.exists() || paths.identity.exists() {
@@ -159,24 +180,21 @@ impl BackgroundConnection {
         let first_envelope = serde_json::from_slice::<BridgeEnvelope>(&first_line)
             .context("invalid background service handshake")?;
         let mut reader = BufReader::new(reader_stream);
-        let (tx, events) = mpsc::channel();
+        let (tx, events) = mpsc::sync_channel(CLIENT_EVENT_QUEUE_CAPACITY);
         tx.send(first_envelope)
             .map_err(|_| anyhow!("background event channel closed"))?;
         thread::spawn(move || {
-            let mut line = String::new();
             loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if let Ok(envelope) =
-                            serde_json::from_str::<BridgeEnvelope>(line.trim_end())
-                            && tx.send(envelope).is_err()
-                        {
-                            break;
-                        }
-                    }
+                let frame = match read_bounded_frame(&mut reader, MAX_BACKGROUND_FRAME_BYTES) {
+                    Ok(Some(frame)) => frame,
+                    Ok(None) | Err(_) => break,
+                };
+                let envelope = match serde_json::from_slice::<BridgeEnvelope>(&frame) {
+                    Ok(envelope) => envelope,
                     Err(_) => break,
+                };
+                if tx.send(envelope).is_err() {
+                    break;
                 }
             }
         });
@@ -201,7 +219,12 @@ impl BackgroundConnection {
             match stream.read(&mut byte) {
                 Ok(0) => bail!("background service closed during handshake"),
                 Ok(_) if byte[0] == b'\n' => return Ok(line),
-                Ok(_) => line.push(byte[0]),
+                Ok(_) => {
+                    if line.len() >= MAX_BACKGROUND_FRAME_BYTES {
+                        bail!("background service handshake exceeded frame limit");
+                    }
+                    line.push(byte[0]);
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
@@ -565,7 +588,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
     let config = ConfigStore::default();
     config.ensure()?;
     let extensions = ExtensionHost::discover_and_start(&config.directory, &workspace);
-    let (client_tx, client_rx) = mpsc::channel::<ClientEvent>();
+    let (client_tx, client_rx) = mpsc::sync_channel::<ClientEvent>(CLIENT_EVENT_QUEUE_CAPACITY);
 
     let (runtime_start_tx, runtime_start_rx) = mpsc::channel::<RuntimeStartupEvent>();
     let (runtime_isolation_tx, runtime_isolation_rx) = mpsc::channel::<RuntimeIsolationEvent>();
@@ -631,7 +654,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     };
                     runtimes.push(runtime);
                     clients[client_index].runtime_id = event.runtime_id;
-                    if send_envelope(&mut clients[client_index].stream, &envelope).is_err() {
+                    if clients[client_index].writer.send(&envelope).is_err() {
                         clients.remove(client_index);
                     } else {
                         idle_since = None;
@@ -685,9 +708,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                                         )),
                                         message: None,
                                     };
-                                    if send_envelope(&mut clients[client_index].stream, &envelope)
-                                        .is_err()
-                                    {
+                                    if clients[client_index].writer.send(&envelope).is_err() {
                                         clients.remove(client_index);
                                     }
                                 }
@@ -815,7 +836,14 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
                         eprintln!("background client disconnected: client={client_id}");
                     }
+                    let runtime_id = clients
+                        .iter()
+                        .find(|client| client.id == client_id)
+                        .map(|client| client.runtime_id);
                     clients.retain(|client| client.id != client_id);
+                    if let Some(runtime_id) = runtime_id {
+                        interrupt_orphaned_runtime(&mut runtimes, &clients, runtime_id);
+                    }
                 }
             }
         }
@@ -1009,7 +1037,8 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 state: None,
                 message: None,
             };
-            clients.retain_mut(|client| match send_envelope(&mut client.stream, &heartbeat) {
+            let mut heartbeat_disconnected_runtime_ids = Vec::new();
+            clients.retain_mut(|client| match client.writer.send(&heartbeat) {
                 Ok(()) => true,
                 Err(error) => {
                     if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
@@ -1018,9 +1047,13 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                             client.id, client.runtime_id
                         );
                     }
+                    heartbeat_disconnected_runtime_ids.push(client.runtime_id);
                     false
                 }
             });
+            for runtime_id in heartbeat_disconnected_runtime_ids {
+                interrupt_orphaned_runtime(&mut runtimes, &clients, runtime_id);
+            }
             last_heartbeat = Instant::now();
         }
 
@@ -1080,7 +1113,7 @@ fn send_client_error(
     };
     if clients
         .get_mut(client_index)
-        .is_some_and(|client| send_envelope(&mut client.stream, &envelope).is_err())
+        .is_some_and(|client| client.writer.send(&envelope).is_err())
     {
         clients.remove(client_index);
     }
@@ -1091,7 +1124,7 @@ fn disconnect_runtime_clients(clients: &mut Vec<ClientConnection>, runtime_id: u
         if client.runtime_id != runtime_id {
             return true;
         }
-        let _ = client.stream.shutdown(Shutdown::Both);
+        client.writer.disconnect();
         false
     });
 }
@@ -1114,6 +1147,46 @@ fn runtime_client_count(clients: &[ClientConnection], runtime_id: u64) -> usize 
         .count()
 }
 
+fn interrupt_orphaned_runtime(
+    runtimes: &mut [SessionRuntime],
+    clients: &[ClientConnection],
+    runtime_id: u64,
+) {
+    let client_count = runtime_client_count(clients, runtime_id);
+    let Some(runtime) = runtimes.iter_mut().find(|runtime| runtime.id == runtime_id) else {
+        return;
+    };
+    if !should_interrupt_orphaned_runtime(
+        client_count,
+        runtime.service.is_streaming(),
+        runtime.interrupt_requested_at.is_some(),
+    ) {
+        return;
+    }
+
+    if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
+        eprintln!(
+            "background runtime orphaned while streaming: runtime={runtime_id}; interrupting"
+        );
+    }
+    if let Err(error) = runtime.service.send(FrontendCommand::Interrupt)
+        && std::env::var_os("YEET_BACKGROUND_TRACE").is_some()
+    {
+        eprintln!(
+            "background runtime orphan interrupt failed: runtime={runtime_id} error={error:#}"
+        );
+    }
+    runtime.interrupt_requested_at = Some(Instant::now());
+}
+
+fn should_interrupt_orphaned_runtime(
+    client_count: usize,
+    is_streaming: bool,
+    interrupt_requested: bool,
+) -> bool {
+    client_count == 0 && is_streaming && !interrupt_requested
+}
+
 fn runtime_requires_isolation(
     runtimes: &[SessionRuntime],
     clients: &[ClientConnection],
@@ -1129,6 +1202,27 @@ fn runtime_requires_isolation(
 
 fn should_isolate_runtime(client_count: usize, is_streaming: bool) -> bool {
     client_count > 1 || is_streaming
+}
+
+#[cfg(test)]
+mod runtime_lifecycle_decision_tests {
+    use super::*;
+
+    #[test]
+    fn orphaned_streaming_runtime_is_interrupted_once() {
+        assert!(should_interrupt_orphaned_runtime(0, true, false));
+        assert!(!should_interrupt_orphaned_runtime(1, true, false));
+        assert!(!should_interrupt_orphaned_runtime(0, false, false));
+        assert!(!should_interrupt_orphaned_runtime(0, true, true));
+    }
+
+    #[test]
+    fn shared_or_streaming_runtime_requires_isolation() {
+        assert!(!should_isolate_runtime(0, false));
+        assert!(!should_isolate_runtime(1, false));
+        assert!(should_isolate_runtime(2, false));
+        assert!(should_isolate_runtime(1, true));
+    }
 }
 
 fn reusable_runtime_id(runtimes: &[SessionRuntime], clients: &[ClientConnection]) -> Option<u64> {
@@ -1170,10 +1264,10 @@ fn attach_client_to_runtime(
     clients: &mut Vec<ClientConnection>,
     runtimes: &mut [SessionRuntime],
     extensions: &ExtensionHost,
-    client_tx: &mpsc::Sender<ClientEvent>,
+    client_tx: &mpsc::SyncSender<ClientEvent>,
     client_id: u64,
     runtime_id: u64,
-    mut stream: LocalStream,
+    stream: LocalStream,
 ) -> bool {
     let Some(runtime) = runtimes.iter_mut().find(|runtime| runtime.id == runtime_id) else {
         send_unattached_client_error(
@@ -1204,8 +1298,11 @@ fn attach_client_to_runtime(
     if let Some(state) = initial.state.as_ref() {
         extensions.publish_state(state);
     }
-    if send_envelope(&mut stream, &initial).is_err() {
-        let _ = stream.shutdown(Shutdown::Both);
+    let writer = match ClientWriter::new(stream) {
+        Ok(writer) => writer,
+        Err(_) => return false,
+    };
+    if writer.send(&initial).is_err() {
         return false;
     }
     let tx = client_tx.clone();
@@ -1213,7 +1310,7 @@ fn attach_client_to_runtime(
     clients.push(ClientConnection {
         id: client_id,
         runtime_id,
-        stream,
+        writer,
     });
     if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
         eprintln!("background client attached: client={client_id} runtime={runtime_id}");
@@ -1261,7 +1358,7 @@ fn broadcast_runtime_envelope(
         if client.runtime_id != runtime_id {
             return true;
         }
-        match send_envelope(&mut client.stream, envelope) {
+        match client.writer.send(envelope) {
             Ok(()) => true,
             Err(error) => {
                 if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
@@ -1300,161 +1397,11 @@ impl Drop for DaemonFilesCleanup {
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::*;
-    use std::io::Read;
-
-    #[test]
-    fn scoped_background_keys_do_not_collide_with_terminal_session() {
-        let workspace = Path::new("/tmp/yeet-workspace");
-        let terminal = background_key(workspace, None);
-        let remote = background_key(workspace, Some("remote"));
-        assert_ne!(terminal, remote);
-        assert_eq!(terminal, background_key(workspace, None));
-        assert_eq!(remote, background_key(workspace, Some("remote")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn send_envelope_retries_transient_nonblocking_backpressure() {
-        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
-        writer.set_nonblocking(true).unwrap();
-        let message = "x".repeat(256 * 1024);
-        let envelope = BridgeEnvelope {
-            kind: "error".into(),
-            state: None,
-            message: Some(message.clone()),
-        };
-        let reader_thread = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            let mut reader = BufReader::new(reader);
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            line
-        });
-
-        send_envelope(&mut writer, &envelope).unwrap();
-        let line = reader_thread.join().unwrap();
-        let decoded: BridgeEnvelope = serde_json::from_str(line.trim_end()).unwrap();
-        assert_eq!(decoded.message.as_deref(), Some(message.as_str()));
-    }
-
-    #[test]
-    fn live_clients_never_reuse_the_same_session_runtime() {
-        assert_eq!(choose_reusable_runtime_id(&[(1, true, false)]), None);
-        assert_eq!(
-            choose_reusable_runtime_id(&[(1, true, true), (2, true, false)]),
-            None
-        );
-    }
-
-    #[test]
-    fn detached_runtime_can_be_reused_for_reconnect() {
-        assert_eq!(
-            choose_reusable_runtime_id(&[(1, false, false), (2, true, false)]),
-            Some(1)
-        );
-        assert_eq!(
-            choose_reusable_runtime_id(&[(1, false, false), (2, false, true)]),
-            Some(2)
-        );
-        assert_eq!(
-            choose_reusable_runtime_id(&[(1, false, true), (2, false, true)]),
-            None
-        );
-    }
-
-    #[test]
-    fn busy_or_shared_runtime_is_isolated_before_session_replacement() {
-        assert!(!should_isolate_runtime(1, false));
-        assert!(should_isolate_runtime(1, true));
-        assert!(should_isolate_runtime(2, false));
-        assert!(should_isolate_runtime(2, true));
-    }
-
-    #[test]
-    fn dropping_connection_really_detaches_cloned_socket_reader() {
-        let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("background.sock");
-        let listener = bind_local(&socket).unwrap();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            send_envelope(
-                &mut stream,
-                &BridgeEnvelope {
-                    kind: "state".into(),
-                    state: None,
-                    message: None,
-                },
-            )
-            .unwrap();
-            stream.set_nonblocking(true).unwrap();
-            let deadline = Instant::now() + Duration::from_millis(500);
-            let mut byte = [0u8; 1];
-            loop {
-                match stream.read(&mut byte) {
-                    Ok(read) => break Ok(read),
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        if Instant::now() >= deadline {
-                            break Err(error);
-                        }
-                        thread::sleep(Duration::from_millis(4));
-                    }
-                    Err(error) => break Err(error),
-                }
-            }
-        });
-
-        let (stream, events) = BackgroundConnection::connect_existing(&socket).unwrap();
-        let connection = BackgroundConnection {
-            workspace: directory.path().to_path_buf(),
-            scope: None,
-            resume_session_id: None,
-            stream,
-            events,
-            last_daemon_activity: Instant::now(),
-        };
-        drop(connection);
-
-        assert_eq!(server.join().unwrap().unwrap(), 0);
-    }
-
-    #[test]
-    fn stale_orphan_socket_is_removed_without_manual_cleanup() {
-        let directory = tempfile::tempdir().unwrap();
-        let paths = BackgroundPaths {
-            socket: directory.path().join("background.sock"),
-            log: directory.path().join("background.log"),
-            identity: directory.path().join("background.identity"),
-            pid: directory.path().join("background.pid"),
-            lifecycle_lock: directory.path().join("background.lock"),
-        };
-        let listener = bind_local(&paths.socket).unwrap();
-        fs::write(&paths.identity, b"stale\n").unwrap();
-        fs::write(&paths.pid, b"424242\n").unwrap();
-        drop(listener);
-
-        assert!(paths.socket.exists());
-        assert!(paths.identity.exists());
-        assert!(paths.pid.exists());
-        retire_stale_daemon(&paths).unwrap();
-        assert!(!paths.socket.exists());
-        assert!(!paths.identity.exists());
-        assert!(!paths.pid.exists());
-    }
-}
-
-fn client_reader(client_id: u64, stream: LocalStream, tx: mpsc::Sender<ClientEvent>) {
+fn client_reader(client_id: u64, stream: LocalStream, tx: mpsc::SyncSender<ClientEvent>) {
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => match serde_json::from_str::<FrontendCommand>(line.trim_end()) {
+        match read_bounded_frame(&mut reader, MAX_CLIENT_COMMAND_BYTES) {
+            Ok(Some(frame)) => match serde_json::from_slice::<FrontendCommand>(&frame) {
                 Ok(command) => {
                     if tx
                         .send(ClientEvent::Command { client_id, command })
@@ -1465,49 +1412,190 @@ fn client_reader(client_id: u64, stream: LocalStream, tx: mpsc::Sender<ClientEve
                 }
                 Err(_) => continue,
             },
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(4));
-                continue;
-            }
-            Err(_) => break,
+            Ok(None) | Err(_) => break,
         }
     }
     let _ = tx.send(ClientEvent::Disconnected(client_id));
 }
 
+/// Reads one newline-delimited protocol frame without allowing a partial
+/// frame to grow memory indefinitely. The returned bytes exclude the newline.
+fn read_bounded_frame(
+    reader: &mut impl BufRead,
+    max_bytes: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut frame = Vec::new();
+    loop {
+        let buffered = reader.fill_buf()?;
+        if buffered.is_empty() {
+            if frame.is_empty() {
+                return Ok(None);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "background protocol frame ended before newline",
+            ));
+        }
+
+        if let Some(newline) = buffered.iter().position(|byte| *byte == b'\n') {
+            if frame.len().saturating_add(newline) > max_bytes {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "background protocol frame exceeded its limit",
+                ));
+            }
+            frame.extend_from_slice(&buffered[..newline]);
+            reader.consume(newline + 1);
+            return Ok(Some(frame));
+        }
+
+        if frame.len().saturating_add(buffered.len()) > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "background protocol frame exceeded its limit",
+            ));
+        }
+        frame.extend_from_slice(buffered);
+        let consumed = buffered.len();
+        reader.consume(consumed);
+    }
+}
+
 fn send_envelope(stream: &mut LocalStream, envelope: &BridgeEnvelope) -> Result<()> {
     let mut frame = serde_json::to_vec(envelope)?;
+    if frame.len() > MAX_BACKGROUND_FRAME_BYTES {
+        bail!("background protocol frame exceeded its limit");
+    }
     frame.push(b'\n');
-    let deadline = Instant::now() + CLIENT_WRITE_TIMEOUT;
+    let result = write_client_frame(stream, &frame, CLIENT_WRITE_TIMEOUT);
+    if result.is_err() {
+        // A partially written JSON frame cannot be resumed on another connection.
+        let _ = stream.shutdown(Shutdown::Both);
+    }
+    result.map_err(Into::into)
+}
+
+fn write_client_frame(
+    writer: &mut impl Write,
+    frame: &[u8],
+    timeout: Duration,
+) -> std::io::Result<()> {
+    let deadline = Instant::now() + timeout;
     let mut offset = 0usize;
 
     while offset < frame.len() {
-        match stream.write(&frame[offset..]) {
+        // Bound the whole frame, not just WouldBlock retries. A slow client
+        // making partial progress (or repeated EINTR) must not monopolize the
+        // daemon loop and delay heartbeats for every other session.
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "background client frame write exceeded its deadline",
+            ));
+        }
+        match writer.write(&frame[offset..]) {
             Ok(0) => {
-                let _ = stream.shutdown(Shutdown::Both);
-                return Err(anyhow!(std::io::Error::new(
+                return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
                     "background client socket accepted zero-byte write",
-                )));
+                ));
             }
             Ok(written) => offset += written,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    let _ = stream.shutdown(Shutdown::Both);
-                    return Err(anyhow!(
-                        "background client write remained blocked for {:?}: {error}",
-                        CLIENT_WRITE_TIMEOUT
-                    ));
-                }
-                thread::sleep(Duration::from_millis(4));
+                thread::sleep(
+                    Duration::from_millis(4)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
             }
-            Err(error) => {
-                let _ = stream.shutdown(Shutdown::Both);
-                return Err(anyhow!(error));
-            }
+            Err(error) => return Err(error),
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod client_frame_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    struct SlowWriter {
+        error: Option<std::io::ErrorKind>,
+        calls: usize,
+    }
+
+    impl Write for SlowWriter {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            self.calls += 1;
+            thread::sleep(Duration::from_millis(10));
+            match self.error {
+                Some(kind) => Err(std::io::Error::from(kind)),
+                None => Ok(1),
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn client_frame_deadline_applies_to_partial_progress_and_retries() {
+        for error in [
+            None,
+            Some(std::io::ErrorKind::Interrupted),
+            Some(std::io::ErrorKind::WouldBlock),
+        ] {
+            let mut writer = SlowWriter { error, calls: 0 };
+            let error =
+                write_client_frame(&mut writer, b"frame\n", Duration::from_millis(5)).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+            assert!(
+                writer.calls <= 1,
+                "continued writing beyond the frame deadline"
+            );
+        }
+    }
+
+    #[test]
+    fn client_frame_preserves_complete_payload() {
+        let mut output = Vec::new();
+        write_client_frame(
+            &mut output,
+            b"{\"kind\":\"heartbeat\"}\n",
+            CLIENT_WRITE_TIMEOUT,
+        )
+        .unwrap();
+        assert_eq!(output, b"{\"kind\":\"heartbeat\"}\n");
+    }
+
+    #[test]
+    fn client_frame_rejects_zero_byte_write() {
+        let mut output = &mut [][..];
+        let error = write_client_frame(&mut output, b"frame\n", CLIENT_WRITE_TIMEOUT).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn inbound_frame_reader_rejects_partial_frames_over_the_limit() {
+        let input = Cursor::new(b"12345".to_vec());
+        let mut reader = BufReader::new(input);
+        let error = read_bounded_frame(&mut reader, 4).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn inbound_frame_reader_preserves_frame_boundaries() {
+        let input = Cursor::new(b"first\nsecond\n".to_vec());
+        let mut reader = BufReader::new(input);
+        assert_eq!(
+            read_bounded_frame(&mut reader, 16).unwrap(),
+            Some(b"first".to_vec())
+        );
+        assert_eq!(
+            read_bounded_frame(&mut reader, 16).unwrap(),
+            Some(b"second".to_vec())
+        );
+        assert_eq!(read_bounded_frame(&mut reader, 16).unwrap(), None);
+    }
 }

@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/count-dataset-tokens:20251031: docker inspect returned 1
+Trial count-dataset-tokens__QCa2Nzt failed: Docker compose command failed for environment count-dataset-tokens. Command: docker compose --project-name count-dataset-tokens__qca2nzt__env --project-directory /Users/kyooni18/.cache/harbor/tasks/V8M9GUmT67TmSKo9FQTdoC/count-dataset-tokens/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbcqm7_ib/count-dataset-tokens__QCa2Nzt__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp3j5o2ofz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdkr8xnon/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/count-dataset-tokens:20251031 Pulling 
+ Image alexgshaw/count-dataset-tokens:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

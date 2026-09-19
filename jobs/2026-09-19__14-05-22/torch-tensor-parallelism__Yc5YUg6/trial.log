@@ -1,0 +1,8 @@
+Trial torch-tensor-parallelism__Yc5YUg6 failed: Docker compose command failed for environment torch-tensor-parallelism. Command: docker compose --project-name torch-tensor-parallelism__yc5yug6__env --project-directory /Users/kyooni18/.cache/harbor/tasks/8njYn5Af8tPLKjM5cFeNvR/torch-tensor-parallelism/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpcz5colns/torch-tensor-parallelism__Yc5YUg6__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp23p48o_n/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpphr0feng/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network torch-tensor-parallelism__yc5yug6__env_default Creating 
+ Network torch-tensor-parallelism__yc5yug6__env_default Creating 
+ Network torch-tensor-parallelism__yc5yug6__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network torch-tensor-parallelism__yc5yug6__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container torch-tensor-parallelism__yc5yug6__env-main-1 Creating 
+failed to create network torch-tensor-parallelism__yc5yug6__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

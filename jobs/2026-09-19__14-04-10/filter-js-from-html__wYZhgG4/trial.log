@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/filter-js-from-html:20251031: docker inspect returned 1
+Trial filter-js-from-html__wYZhgG4 failed: Docker compose command failed for environment filter-js-from-html. Command: docker compose --project-name filter-js-from-html__wyzhgg4__env --project-directory /Users/kyooni18/.cache/harbor/tasks/SeKnWxFXAqYwFdRQvLn2Wk/filter-js-from-html/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpicctzsia/filter-js-from-html__wYZhgG4__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvs9nyto2/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp5ztagx76/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/filter-js-from-html:20251031 Pulling 
+ Image alexgshaw/filter-js-from-html:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

@@ -1,8 +1,10 @@
 //! Session-scoped history, attachments, environment controls, and Goal retry helpers.
 
 use super::*;
+use uuid::Uuid;
 
-const GOAL_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+const API_RETRY_DELAY: Duration = Duration::from_secs(60);
+const API_RETRY_LIMIT: u32 = 5;
 
 impl AgentCoordinator {
     pub fn shutdown(&self) {
@@ -191,9 +193,10 @@ impl AgentCoordinator {
     }
 }
 
-pub(super) fn goal_retry_delay(attempt: u32) -> Duration {
-    let shift = attempt.saturating_sub(1).min(5);
-    Duration::from_secs((1u64 << shift).min(GOAL_RETRY_MAX_DELAY.as_secs()))
+pub(super) fn goal_retry_delay(attempt: u32) -> Option<Duration> {
+    (1..=API_RETRY_LIMIT)
+        .contains(&attempt)
+        .then_some(API_RETRY_DELAY)
 }
 
 pub(super) fn wait_for_goal(cancel: &AtomicBool, enabled: &AtomicBool, delay: Duration) -> bool {
@@ -210,7 +213,7 @@ pub(super) fn wait_for_goal(cancel: &AtomicBool, enabled: &AtomicBool, delay: Du
 
 pub(super) fn retryable_goal_error(message: &str) -> bool {
     let value = message.to_ascii_lowercase();
-    ![
+    if [
         "cancelled",
         "canceled",
         "authentication",
@@ -224,9 +227,51 @@ pub(super) fn retryable_goal_error(message: &str) -> bool {
         "unsupported provider",
         "vision capability is not attached",
         "exceed the fresh working-context budget",
+        "workspace mutation lease",
+        "previously submitted context changed",
     ]
     .iter()
     .any(|needle| value.contains(needle))
+    {
+        return false;
+    }
+
+    contains_retryable_http_status(&value)
+        || [
+            "rate limit",
+            "rate-limited",
+            "too many requests",
+            "temporarily unavailable",
+            "temporary unavailable",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "provider overloaded",
+            "overloaded",
+            "timed out",
+            "timeout",
+            "broken pipe",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "connection closed",
+            "stream ended unexpectedly",
+            "provider bridge closed",
+            "unexpected eof",
+        ]
+        .iter()
+        .any(|needle| value.contains(needle))
+}
+
+fn contains_retryable_http_status(message: &str) -> bool {
+    message
+        .split(|ch: char| !ch.is_ascii_digit())
+        .filter_map(|part| {
+            (part.len() == 3)
+                .then(|| part.parse::<u16>().ok())
+                .flatten()
+        })
+        .any(|status| matches!(status, 408 | 409 | 425 | 429) || (500..=599).contains(&status))
 }
 
 pub(super) fn bridge_transport_error(message: &str) -> bool {
@@ -266,4 +311,51 @@ pub(super) fn tool_call_indicates_implementation_intent(
                     .any(|tool| tool.as_str() == Some("apply_file_edits"))
             })
     })
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn api_retry_allows_five_one_minute_cooldowns() {
+        assert_eq!(goal_retry_delay(0), None);
+        for attempt in 1..=5 {
+            assert_eq!(goal_retry_delay(attempt), Some(Duration::from_secs(60)));
+        }
+        assert_eq!(goal_retry_delay(6), None);
+    }
+
+    #[test]
+    fn api_retry_accepts_only_transient_provider_errors() {
+        for error in [
+            "API error: HTTP 503 Service Unavailable",
+            "API error: 429 Too Many Requests",
+            "provider bridge stream ended unexpectedly",
+            "connection reset",
+            "request timed out",
+        ] {
+            assert!(retryable_goal_error(error), "{error}");
+        }
+        for error in [
+            "cancelled",
+            "unauthorized",
+            "no model selected",
+            "HTTP 400 invalid request",
+            "workspace mutation lease is held by another active Yeet task",
+            "Previously submitted context changed within this window",
+        ] {
+            assert!(!retryable_goal_error(error), "{error}");
+        }
+    }
+
+    #[test]
+    fn api_retry_wait_is_cancellable() {
+        let cancel = AtomicBool::new(true);
+        assert!(!wait_for_goal(
+            &cancel,
+            &AtomicBool::new(true),
+            API_RETRY_DELAY
+        ));
+    }
 }

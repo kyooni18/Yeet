@@ -73,7 +73,7 @@ const filteredWorkspaceCatalog = computed(() => {
 
     return [{
       ...item,
-      visibleSessions: matchingSessions,
+      visibleSessions: workspaceMatches ? item.sessions : matchingSessions,
       canToggleSessions: false,
     }]
   })
@@ -168,6 +168,10 @@ function handleWorkspaceListKeydown(event: KeyboardEvent) {
   event.preventDefault()
   if (!next || next === current) return
   next.focus({ preventScroll: true })
+  const listBounds = list.getBoundingClientRect()
+  const nextBounds = next.getBoundingClientRect()
+  if (nextBounds.top < listBounds.top) list.scrollTop -= listBounds.top - nextBounds.top
+  else if (nextBounds.bottom > listBounds.bottom) list.scrollTop += nextBounds.bottom - listBounds.bottom
 }
 
 async function openWorkspacePathEditor() {
@@ -377,19 +381,20 @@ watch(
 
 <style scoped>
 .workspace-filter-shell {
-  margin: 0 2px 7px;
+  margin: 0 2px 12px;
 }
 
 .workspace-filter-shell input {
   width: 100%;
   min-width: 0;
-  min-height: 34px;
-  height: 34px;
-  padding: 0 9px;
+  min-height: 36px;
+  height: 36px;
+  padding: 0 11px;
   border-color: var(--border);
-  background: rgba(255, 255, 255, .025);
+  border-radius: 9px;
+  background: var(--surface-soft);
   color: var(--soft);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .workspace-filter-shell input::placeholder {

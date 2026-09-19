@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/cancel-async-tasks:20251031: docker inspect returned 1
+Trial cancel-async-tasks__9CQxty7 failed: Docker compose command failed for environment cancel-async-tasks. Command: docker compose --project-name cancel-async-tasks__9cqxty7__env --project-directory /Users/kyooni18/.cache/harbor/tasks/5pwPaf92MGZBJjvqnuBn9d/cancel-async-tasks/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp863pc2pc/cancel-async-tasks__9CQxty7__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqevbl1yu/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpi18kt35v/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/cancel-async-tasks:20251031 Pulling 
+ Image alexgshaw/cancel-async-tasks:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

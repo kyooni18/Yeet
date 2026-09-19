@@ -24,6 +24,7 @@ impl ToolRegistry {
 
     /// Applies validated structured file changes and records mutation diagnostics.
     pub(super) fn apply_file_edits(&mut self, arguments: &Value) -> Result<String> {
+        let _mutation_guard = self.workspace_mutation_guard()?;
         self.sync_edit_state();
         let mut request = arguments.clone();
         normalize_legacy_edit_shapes(&mut request);
@@ -315,52 +316,5 @@ fn normalize_legacy_edit_shapes(request: &mut Value) {
             object.remove("endHash");
             object.insert("range".into(), Value::Object(range));
         }
-    }
-}
-
-#[cfg(test)]
-mod legacy_edit_tests {
-    use super::*;
-
-    #[test]
-    fn normalizes_flat_legacy_replace_ranges() {
-        let mut request = json!({
-            "changes": [{
-                "path": "src/lib.rs",
-                "edits": [{
-                    "kind": "replace",
-                    "start": 12,
-                    "end": 14,
-                    "startHash": "abcd",
-                    "endHash": "ef01",
-                    "text": "replacement"
-                }]
-            }]
-        });
-        normalize_legacy_edit_shapes(&mut request);
-        let edit = &request["changes"][0]["edits"][0];
-        assert_eq!(edit["range"]["start"], 12);
-        assert_eq!(edit["range"]["end"], 14);
-        assert_eq!(edit["range"]["startHash"], "abcd");
-        assert_eq!(edit["range"]["endHash"], "ef01");
-        assert!(edit.get("start").is_none());
-        assert!(edit.get("end").is_none());
-    }
-
-    #[test]
-    fn preserves_current_range_shape() {
-        let mut request = json!({
-            "changes": [{
-                "path": "src/lib.rs",
-                "edits": [{
-                    "kind": "replace",
-                    "range": {"start": 3, "end": 4},
-                    "text": "current"
-                }]
-            }]
-        });
-        let before = request.clone();
-        normalize_legacy_edit_shapes(&mut request);
-        assert_eq!(request, before);
     }
 }

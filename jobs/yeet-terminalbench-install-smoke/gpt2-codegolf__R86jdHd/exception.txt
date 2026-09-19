@@ -1,0 +1,314 @@
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 415, in run
+    await self._prepare()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 453, in _prepare
+    await self._setup_agent_environment()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1542, in _setup_agent_environment
+    await self._start_agent_environment()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1548, in _start_agent_environment
+    await asyncio.wait_for(
+    ...<4 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 1007, in start
+    await self._run_docker_compose_command(["up", *runtime.up_args])
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 704, in _run_docker_compose_command
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Docker compose command failed for environment gpt2-codegolf. Command: docker compose --project-name gpt2-codegolf__r86jdhd__env --project-directory /Users/kyooni18/.cache/harbor/tasks/CGqXnFmcaVcQCTbCZMpg2T/gpt2-codegolf/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpluyc1b89/gpt2-codegolf__R86jdHd__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmplx3yjqms/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppwvd8pjo/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/gpt2-codegolf:20251031 Pulling 
+ 4b3ffd8ccb52 Pulling fs layer 0B
+ 9040135e24f8 Pulling fs layer 0B
+ 5b291480786e Pulling fs layer 0B
+ 35d0239b0b78 Pulling fs layer 0B
+ 8fa1f13ab2ca Pulling fs layer 0B
+ 35d0239b0b78 Waiting 0B
+ 8fa1f13ab2ca Waiting 0B
+ 9040135e24f8 Downloading 93B
+ 9040135e24f8 Download complete 0B
+ 4b3ffd8ccb52 Downloading 310.7kB
+ 5b291480786e Downloading 530.3kB
+ 35d0239b0b78 Downloading 3.482kB
+ 4b3ffd8ccb52 Downloading 2.49MB
+ 5b291480786e Downloading 2.145MB
+ 35d0239b0b78 Downloading 196kB
+ 35d0239b0b78 Downloading 212kB
+ 35d0239b0b78 Verifying Checksum 0B
+ 35d0239b0b78 Download complete 0B
+ 4b3ffd8ccb52 Downloading 8.404MB
+ 5b291480786e Downloading 3.756MB
+ 4b3ffd8ccb52 Downloading 12.14MB
+ 4b3ffd8ccb52 Downloading 16.19MB
+ 5b291480786e Downloading 5.909MB
+ 8fa1f13ab2ca Downloading 537.8kB
+ 4b3ffd8ccb52 Downloading 18.37MB
+ 5b291480786e Downloading 6.978MB
+ 4b3ffd8ccb52 Downloading 24.9MB
+ 5b291480786e Downloading 9.1MB
+ 8fa1f13ab2ca Downloading 1.607MB
+ 5b291480786e Downloading 10.69MB
+ 4b3ffd8ccb52 Downloading 28.64MB
+ 4b3ffd8ccb52 Verifying Checksum 0B
+ 4b3ffd8ccb52 Download complete 0B
+ 4b3ffd8ccb52 Extracting 327.7kB
+ 8fa1f13ab2ca Downloading 3.229MB
+ 5b291480786e Downloading 13.35MB
+ 4b3ffd8ccb52 Extracting 3.277MB
+ 8fa1f13ab2ca Downloading 4.841MB
+ 5b291480786e Downloading 16.58MB
+ 4b3ffd8ccb52 Extracting 6.226MB
+ 8fa1f13ab2ca Downloading 6.454MB
+ 5b291480786e Downloading 20.33MB
+ 4b3ffd8ccb52 Extracting 8.192MB
+ 5b291480786e Downloading 24.61MB
+ 8fa1f13ab2ca Downloading 8.599MB
+ 4b3ffd8ccb52 Extracting 10.16MB
+ 5b291480786e Downloading 28.88MB
+ 8fa1f13ab2ca Downloading 10.21MB
+ 4b3ffd8ccb52 Extracting 13.76MB
+ 5b291480786e Downloading 33.14MB
+ 4b3ffd8ccb52 Extracting 17.69MB
+ 8fa1f13ab2ca Downloading 11.83MB
+ 5b291480786e Downloading 37.94MB
+ 4b3ffd8ccb52 Extracting 21.3MB
+ 8fa1f13ab2ca Downloading 13.98MB
+ 5b291480786e Downloading 43.23MB
+ 8fa1f13ab2ca Downloading 15.58MB
+ 4b3ffd8ccb52 Extracting 24.58MB
+ 5b291480786e Downloading 46.42MB
+ 8fa1f13ab2ca Downloading 17.18MB
+ 5b291480786e Downloading 51.75MB
+ 4b3ffd8ccb52 Extracting 25.23MB
+ 8fa1f13ab2ca Downloading 18.79MB
+ 5b291480786e Downloading 57.08MB
+ 4b3ffd8ccb52 Extracting 25.89MB
+ 8fa1f13ab2ca Downloading 20.4MB
+ 5b291480786e Downloading 61.3MB
+ 8fa1f13ab2ca Downloading 22.01MB
+ 4b3ffd8ccb52 Extracting 27.85MB
+ 5b291480786e Downloading 66.1MB
+ 8fa1f13ab2ca Downloading 23.62MB
+ 5b291480786e Downloading 70.36MB
+ 8fa1f13ab2ca Downloading 25.75MB
+ 4b3ffd8ccb52 Extracting 29.16MB
+ 5b291480786e Downloading 74.64MB
+ 8fa1f13ab2ca Downloading 27.88MB
+ 5b291480786e Downloading 78.91MB
+ 4b3ffd8ccb52 Extracting 29.72MB
+ 8fa1f13ab2ca Downloading 30.02MB
+ 4b3ffd8ccb52 Pull complete 0B
+ 9040135e24f8 Extracting 93B
+ 5b291480786e Downloading 83.16MB
+ 9040135e24f8 Extracting 93B
+ 5b291480786e Downloading 86.9MB
+ 8fa1f13ab2ca Downloading 32.16MB
+ 9040135e24f8 Pull complete 0B
+ 8fa1f13ab2ca Downloading 33.76MB
+ 5b291480786e Downloading 91.69MB
+ 8fa1f13ab2ca Downloading 35.9MB
+ 5b291480786e Downloading 96.49MB
+ 5b291480786e Downloading 100.7MB
+ 8fa1f13ab2ca Downloading 38.04MB
+ 5b291480786e Downloading 105MB
+ 8fa1f13ab2ca Downloading 40.18MB
+ 5b291480786e Downloading 109.3MB
+ 8fa1f13ab2ca Downloading 42.32MB
+ 5b291480786e Downloading 113.6MB
+ 8fa1f13ab2ca Downloading 44.45MB
+ 5b291480786e Downloading 117.8MB
+ 8fa1f13ab2ca Downloading 46.59MB
+ 5b291480786e Verifying Checksum 0B
+ 5b291480786e Download complete 0B
+ 5b291480786e Extracting 557.1kB
+ 8fa1f13ab2ca Downloading 49.79MB
+ 5b291480786e Extracting 4.456MB
+ 8fa1f13ab2ca Downloading 53.53MB
+ 5b291480786e Extracting 8.913MB
+ 8fa1f13ab2ca Downloading 58.34MB
+ 8fa1f13ab2ca Downloading 64.21MB
+ 5b291480786e Extracting 12.81MB
+ 5b291480786e Extracting 16.71MB
+ 8fa1f13ab2ca Downloading 70.06MB
+ 8fa1f13ab2ca Downloading 75.92MB
+ 5b291480786e Extracting 18.94MB
+ 8fa1f13ab2ca Downloading 82.31MB
+ 8fa1f13ab2ca Downloading 87.61MB
+ 5b291480786e Extracting 20.05MB
+ 8fa1f13ab2ca Downloading 92.92MB
+ 5b291480786e Extracting 20.61MB
+ 8fa1f13ab2ca Downloading 99.84MB
+ 5b291480786e Extracting 21.17MB
+ 8fa1f13ab2ca Downloading 104.6MB
+ 5b291480786e Extracting 25.62MB
+ 8fa1f13ab2ca Downloading 110.5MB
+ 5b291480786e Extracting 27.85MB
+ 8fa1f13ab2ca Downloading 116.3MB
+ 5b291480786e Extracting 32.31MB
+ 8fa1f13ab2ca Downloading 121.6MB
+ 8fa1f13ab2ca Downloading 126.4MB
+ 5b291480786e Extracting 36.21MB
+ 8fa1f13ab2ca Downloading 133.4MB
+ 5b291480786e Extracting 40.11MB
+ 5b291480786e Extracting 44.01MB
+ 8fa1f13ab2ca Downloading 138.7MB
+ 5b291480786e Extracting 47.91MB
+ 8fa1f13ab2ca Downloading 144.5MB
+ 5b291480786e Extracting 51.81MB
+ 8fa1f13ab2ca Downloading 150.9MB
+ 5b291480786e Extracting 55.71MB
+ 8fa1f13ab2ca Downloading 157.8MB
+ 5b291480786e Extracting 60.16MB
+ 8fa1f13ab2ca Downloading 163.1MB
+ 8fa1f13ab2ca Downloading 167.9MB
+ 5b291480786e Extracting 64.62MB
+ 5b291480786e Extracting 68.52MB
+ 8fa1f13ab2ca Downloading 173.8MB
+ 5b291480786e Extracting 72.97MB
+ 8fa1f13ab2ca Downloading 179.6MB
+ 5b291480786e Extracting 77.43MB
+ 8fa1f13ab2ca Downloading 187MB
+ 8fa1f13ab2ca Downloading 192.3MB
+ 5b291480786e Extracting 79.1MB
+ 8fa1f13ab2ca Downloading 199.8MB
+ 5b291480786e Extracting 80.22MB
+ 8fa1f13ab2ca Downloading 203.5MB
+ 5b291480786e Extracting 83MB
+ 8fa1f13ab2ca Downloading 210.9MB
+ 5b291480786e Extracting 87.46MB
+ 8fa1f13ab2ca Downloading 218.4MB
+ 5b291480786e Extracting 92.47MB
+ 8fa1f13ab2ca Downloading 224.2MB
+ 5b291480786e Extracting 97.48MB
+ 8fa1f13ab2ca Downloading 229.5MB
+ 5b291480786e Extracting 102.5MB
+ 8fa1f13ab2ca Downloading 236.4MB
+ 5b291480786e Extracting 107.5MB
+ 8fa1f13ab2ca Downloading 242.8MB
+ 5b291480786e Extracting 112.5MB
+ 8fa1f13ab2ca Downloading 249.8MB
+ 5b291480786e Extracting 117.5MB
+ 8fa1f13ab2ca Downloading 255.6MB
+ 8fa1f13ab2ca Downloading 261.5MB
+ 8fa1f13ab2ca Downloading 266.3MB
+ 5b291480786e Extracting 122MB
+ 8fa1f13ab2ca Downloading 267.9MB
+ 5b291480786e Extracting 122.1MB
+ 8fa1f13ab2ca Downloading 278MB
+ 8fa1f13ab2ca Downloading 283.8MB
+ 8fa1f13ab2ca Downloading 289.1MB
+ 5b291480786e Pull complete 0B
+ 35d0239b0b78 Extracting 32.77kB
+ 35d0239b0b78 Extracting 212kB
+ 35d0239b0b78 Extracting 212kB
+ 35d0239b0b78 Pull complete 0B
+ 8fa1f13ab2ca Downloading 295.5MB
+ 8fa1f13ab2ca Downloading 301.4MB
+ 8fa1f13ab2ca Downloading 307.8MB
+ 8fa1f13ab2ca Downloading 314.7MB
+ 8fa1f13ab2ca Downloading 320.5MB
+ 8fa1f13ab2ca Downloading 326.4MB
+ 8fa1f13ab2ca Downloading 331.7MB
+ 8fa1f13ab2ca Downloading 337.5MB
+ 8fa1f13ab2ca Downloading 345MB
+ 8fa1f13ab2ca Downloading 348.7MB
+ 8fa1f13ab2ca Downloading 354.6MB
+ 8fa1f13ab2ca Downloading 359.9MB
+ 8fa1f13ab2ca Downloading 365.2MB
+ 8fa1f13ab2ca Downloading 372.7MB
+ 8fa1f13ab2ca Downloading 378.5MB
+ 8fa1f13ab2ca Downloading 384.4MB
+ 8fa1f13ab2ca Downloading 390.2MB
+ 8fa1f13ab2ca Downloading 395.5MB
+ 8fa1f13ab2ca Downloading 402.4MB
+ 8fa1f13ab2ca Downloading 407.2MB
+ 8fa1f13ab2ca Downloading 414.7MB
+ 8fa1f13ab2ca Downloading 420.5MB
+ 8fa1f13ab2ca Downloading 425.8MB
+ 8fa1f13ab2ca Downloading 430MB
+ 8fa1f13ab2ca Downloading 436.9MB
+ 8fa1f13ab2ca Downloading 444.3MB
+ 8fa1f13ab2ca Downloading 450.2MB
+ 8fa1f13ab2ca Downloading 455.5MB
+ 8fa1f13ab2ca Downloading 461.9MB
+ 8fa1f13ab2ca Verifying Checksum 0B
+ 8fa1f13ab2ca Download complete 0B
+ 8fa1f13ab2ca Extracting 557.1kB
+ 8fa1f13ab2ca Extracting 8.356MB
+ 8fa1f13ab2ca Extracting 15.6MB
+ 8fa1f13ab2ca Extracting 22.84MB
+ 8fa1f13ab2ca Extracting 30.08MB
+ 8fa1f13ab2ca Extracting 37.32MB
+ 8fa1f13ab2ca Extracting 44.56MB
+ 8fa1f13ab2ca Extracting 51.81MB
+ 8fa1f13ab2ca Extracting 59.6MB
+ 8fa1f13ab2ca Extracting 66.85MB
+ 8fa1f13ab2ca Extracting 74.09MB
+ 8fa1f13ab2ca Extracting 81.33MB
+ 8fa1f13ab2ca Extracting 89.13MB
+ 8fa1f13ab2ca Extracting 96.37MB
+ 8fa1f13ab2ca Extracting 104.2MB
+ 8fa1f13ab2ca Extracting 112MB
+ 8fa1f13ab2ca Extracting 119.8MB
+ 8fa1f13ab2ca Extracting 127.6MB
+ 8fa1f13ab2ca Extracting 135.4MB
+ 8fa1f13ab2ca Extracting 143.2MB
+ 8fa1f13ab2ca Extracting 151MB
+ 8fa1f13ab2ca Extracting 158.2MB
+ 8fa1f13ab2ca Extracting 165.4MB
+ 8fa1f13ab2ca Extracting 172.7MB
+ 8fa1f13ab2ca Extracting 179.9MB
+ 8fa1f13ab2ca Extracting 187.7MB
+ 8fa1f13ab2ca Extracting 195MB
+ 8fa1f13ab2ca Extracting 202.2MB
+ 8fa1f13ab2ca Extracting 209.5MB
+ 8fa1f13ab2ca Extracting 216.7MB
+ 8fa1f13ab2ca Extracting 223.9MB
+ 8fa1f13ab2ca Extracting 231.7MB
+ 8fa1f13ab2ca Extracting 239MB
+ 8fa1f13ab2ca Extracting 246.8MB
+ 8fa1f13ab2ca Extracting 254.6MB
+ 8fa1f13ab2ca Extracting 261.8MB
+ 8fa1f13ab2ca Extracting 268.5MB
+ 8fa1f13ab2ca Extracting 274.6MB
+ 8fa1f13ab2ca Extracting 281.9MB
+ 8fa1f13ab2ca Extracting 289.7MB
+ 8fa1f13ab2ca Extracting 296.9MB
+ 8fa1f13ab2ca Extracting 304.7MB
+ 8fa1f13ab2ca Extracting 312MB
+ 8fa1f13ab2ca Extracting 319.2MB
+ 8fa1f13ab2ca Extracting 326.4MB
+ 8fa1f13ab2ca Extracting 334.2MB
+ 8fa1f13ab2ca Extracting 341.5MB
+ 8fa1f13ab2ca Extracting 349.3MB
+ 8fa1f13ab2ca Extracting 356.5MB
+ 8fa1f13ab2ca Extracting 363.8MB
+ 8fa1f13ab2ca Extracting 371.6MB
+ 8fa1f13ab2ca Extracting 379.4MB
+ 8fa1f13ab2ca Extracting 386.6MB
+ 8fa1f13ab2ca Extracting 394.4MB
+ 8fa1f13ab2ca Extracting 401.6MB
+ 8fa1f13ab2ca Extracting 409.4MB
+ 8fa1f13ab2ca Extracting 417.2MB
+ 8fa1f13ab2ca Extracting 425MB
+ 8fa1f13ab2ca Extracting 432.8MB
+ 8fa1f13ab2ca Extracting 440.6MB
+ 8fa1f13ab2ca Extracting 448.4MB
+ 8fa1f13ab2ca Extracting 455.1MB
+ 8fa1f13ab2ca Extracting 460.1MB
+ 8fa1f13ab2ca Extracting 462.2MB
+ 8fa1f13ab2ca Pull complete 0B
+ Image alexgshaw/gpt2-codegolf:20251031 Pulled 
+ Network gpt2-codegolf__r86jdhd__env_default Creating 
+ Network gpt2-codegolf__r86jdhd__env_default Creating 
+ Network gpt2-codegolf__r86jdhd__env_default Created 
+ Network gpt2-codegolf__r86jdhd__env_default Created 
+ Container gpt2-codegolf__r86jdhd__env-main-1 Creating 
+ main The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested 
+ Container gpt2-codegolf__r86jdhd__env-main-1 Created 
+ Container gpt2-codegolf__r86jdhd__env-main-1 Starting 
+ Container gpt2-codegolf__r86jdhd__env-main-1 Started 
+ Container gpt2-codegolf__r86jdhd__env-main-1 Waiting 
+container gpt2-codegolf__r86jdhd__env-main-1 exited (255)
+. Stderr: None. 

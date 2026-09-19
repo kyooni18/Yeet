@@ -5,7 +5,7 @@ type TestHooks = {
   __yeetEmit: (message: Record<string, unknown>) => void
 }
 
-function toolEntry(id: string, status: 'completed' | 'streaming' | 'failed') {
+function toolEntry(id: string, status: 'completed' | 'running' | 'failed') {
   return {
     type: 'conversation_entry',
     version: 1,
@@ -32,7 +32,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('groups consecutive completed tool calls into one collapsed transcript block', async ({ page }) => {
+test('groups consecutive completed tool calls into one user-collapsible transcript block', async ({ page }) => {
   const entries = ['tool-1', 'tool-2', 'tool-3'].map((id) => toolEntry(id, 'completed'))
   await page.evaluate((entries) => {
     const emit = (window as unknown as TestHooks).__yeetEmit
@@ -41,16 +41,16 @@ test('groups consecutive completed tool calls into one collapsed transcript bloc
 
   const group = page.getByTestId('activity-group')
   await expect(group).toHaveCount(1)
-  await expect(group.locator('summary')).toContainText('3 tool calls')
-  await expect(group.locator('summary')).toContainText('3 complete')
+  await expect(group.locator('summary')).toContainText('3 tools')
+  await expect(group.locator('.tool-card')).toHaveCount(3)
+  await group.locator('summary').click()
   await expect(group.locator('.tool-card')).toHaveCount(0)
-
   await group.locator('summary').click()
   await expect(group.locator('.tool-card')).toHaveCount(3)
 })
 
 test('keeps a live tool group open and promotes failures in the summary', async ({ page }) => {
-  const entries = [toolEntry('tool-4', 'streaming'), toolEntry('tool-5', 'failed')]
+  const entries = [toolEntry('tool-4', 'running'), toolEntry('tool-5', 'failed')]
   await page.evaluate((entries) => {
     const emit = (window as unknown as TestHooks).__yeetEmit
     emit({ type: 'conversation_reset', version: 1, sequence: 2, revision: 2, conversation: entries.map((message) => message.entry) })

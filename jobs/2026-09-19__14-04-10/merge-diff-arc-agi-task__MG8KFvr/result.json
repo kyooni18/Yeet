@@ -1,0 +1,106 @@
+{
+    "id": "7038b0ee-a815-45ff-b6a7-ad223138e794",
+    "task_name": "merge-diff-arc-agi-task",
+    "trial_name": "merge-diff-arc-agi-task__MG8KFvr",
+    "trial_uri": "file:///Users/kyooni18/Code/Rust/Yeet/jobs/2026-09-19__14-04-10/merge-diff-arc-agi-task__MG8KFvr",
+    "task_id": {
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "path": "merge-diff-arc-agi-task"
+    },
+    "source": "terminal-bench",
+    "task_checksum": "1e69376aa87a540b46c4dea3ba4f8507ed18aeeeef6f8786dab68eff71b0b58d",
+    "config": {
+        "task": {
+            "path": "merge-diff-arc-agi-task",
+            "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+            "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": "terminal-bench"
+        },
+        "trial_name": "merge-diff-arc-agi-task__MG8KFvr",
+        "trials_dir": "jobs/2026-09-19__14-04-10",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": null,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": "benchmarks.terminalbench.yeet_agent:YeetAgent",
+            "import_path": null,
+            "model_name": "openai/gpt-5.6-luna",
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {
+                "reasoning": "high"
+            },
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "84fe397d-ac46-4488-be0e-b2d65552b099",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "yeet",
+        "version": "unknown",
+        "model_info": {
+            "name": "gpt-5.6-luna",
+            "provider": "openai"
+        }
+    },
+    "agent_result": null,
+    "verifier_result": null,
+    "verifier_environment_mode": "shared",
+    "exception_info": {
+        "exception_type": "RuntimeError",
+        "exception_message": "Docker compose command failed for environment merge-diff-arc-agi-task. Command: docker compose --project-name merge-diff-arc-agi-task__mg8kfvr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/Q3LDEno2RovPVJEJXuoivq/merge-diff-arc-agi-task/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbxoilcy6/merge-diff-arc-agi-task__MG8KFvr__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9f6_aquz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpesx5up9n/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network merge-diff-arc-agi-task__mg8kfvr__env_default Creating \n Network merge-diff-arc-agi-task__mg8kfvr__env_default Creating \n Network merge-diff-arc-agi-task__mg8kfvr__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system\n network:default failed to create network merge-diff-arc-agi-task__mg8kfvr__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system \n Container merge-diff-arc-agi-task__mg8kfvr__env-main-1 Creating \nfailed to create network merge-diff-arc-agi-task__mg8kfvr__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system\n. Stderr: None. ",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 415, in run\n    await self._prepare()\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 453, in _prepare\n    await self._setup_agent_environment()\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 1542, in _setup_agent_environment\n    await self._start_agent_environment()\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 1548, in _start_agent_environment\n    await asyncio.wait_for(\n    ...<4 lines>...\n    )\n  File \"/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py\", line 507, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py\", line 1007, in start\n    await self._run_docker_compose_command([\"up\", *runtime.up_args])\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py\", line 704, in _run_docker_compose_command\n    raise RuntimeError(\n    ...<5 lines>...\n    )\nRuntimeError: Docker compose command failed for environment merge-diff-arc-agi-task. Command: docker compose --project-name merge-diff-arc-agi-task__mg8kfvr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/Q3LDEno2RovPVJEJXuoivq/merge-diff-arc-agi-task/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbxoilcy6/merge-diff-arc-agi-task__MG8KFvr__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9f6_aquz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpesx5up9n/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network merge-diff-arc-agi-task__mg8kfvr__env_default Creating \n Network merge-diff-arc-agi-task__mg8kfvr__env_default Creating \n Network merge-diff-arc-agi-task__mg8kfvr__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system\n network:default failed to create network merge-diff-arc-agi-task__mg8kfvr__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system \n Container merge-diff-arc-agi-task__mg8kfvr__env-main-1 Creating \nfailed to create network merge-diff-arc-agi-task__mg8kfvr__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system\n. Stderr: None. \n",
+        "occurred_at": "2026-09-19T05:04:14.144955Z"
+    },
+    "started_at": "2026-09-19T05:04:13.532437Z",
+    "finished_at": "2026-09-19T05:04:14.784448Z",
+    "environment_setup": {
+        "started_at": "2026-09-19T05:04:13.843964Z",
+        "finished_at": "2026-09-19T05:04:14.144148Z"
+    },
+    "agent_setup": null,
+    "agent_execution": null,
+    "verifier": null,
+    "step_results": null
+}

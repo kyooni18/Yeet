@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, inject, ref, type ComputedRef } from 'vue'
 import type { ConversationToolCall } from '@/remote/protocol'
 import { copyTextToClipboard } from '@/utils/clipboard'
+import { toolPurpose } from '@/utils/toolPurpose'
 
 const props = defineProps<{ tool: ConversationToolCall }>()
+const promotedPurpose = inject<ComputedRef<string>>('promotedToolPurpose', computed(() => ''))
 const expanded = ref(false)
 const showFullResult = ref(false)
 const argumentsCopyButton = ref<HTMLButtonElement | null>(null)
@@ -34,6 +36,9 @@ function looseArgument(key: string): string | null {
 }
 
 const detail = computed(() => {
+  // Intent is the summary; raw arguments remain available in the expanded card.
+  const purpose = toolPurpose(props.tool.arguments)
+  if (purpose) return purpose === promotedPurpose.value ? null : purpose
   if (props.tool.detail) return props.tool.detail
   for (const key of DETAIL_KEYS) {
     const value = looseArgument(key)
@@ -98,24 +103,23 @@ const duration = computed(() => {
   if (ms == null) return ''
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`
 })
-
 const statusLabel = computed(() => {
   const timing = duration.value ? ` · ${duration.value}` : ''
   if (props.tool.status === 'failed') return `Failed${timing}`
   if (props.tool.status === 'suppressed') return `Suppressed${timing}`
-  if (props.tool.status === 'streaming') return `Running${timing}`
-  return `Done${timing}`
+  if (props.tool.status === 'running') return `Running${timing}`
+  return duration.value
 })
 
 
 const noResultMessage = computed(() => {
-  if (props.tool.status === 'streaming') return 'Waiting for tool output…'
+  if (props.tool.status === 'running') return 'Waiting for tool output…'
   if (props.tool.status === 'failed') return 'This tool failed without error details.'
   if (props.tool.status === 'suppressed') return 'This tool was suppressed without a reason.'
   return 'This tool completed without output.'
 })
 
-const summaryLabel = computed(() => [toolName.value, detail.value, statusLabel.value].filter(Boolean).join(' · '))
+const summaryLabel = computed(() => [toolName.value, detail.value, props.tool.status, duration.value].filter(Boolean).join(' · '))
 </script>
 
 <template>
@@ -129,14 +133,13 @@ const summaryLabel = computed(() => [toolName.value, detail.value, statusLabel.v
       @click="expanded = !expanded"
     >
       <span class="tool-status-icon" aria-hidden="true">
-        <span v-if="tool.status === 'streaming'" class="spinner"></span>
+        <span v-if="tool.status === 'running'" class="spinner"></span>
         <span v-else-if="tool.status === 'completed'">✓</span>
         <span v-else-if="tool.status === 'suppressed'">⊘</span>
         <span v-else>!</span>
       </span>
       <span class="tool-heading">
-        <strong>{{ toolName }}</strong>
-        <span v-if="detail" class="truncate" :title="detail">{{ detail }}</span>
+        <span class="tool-purpose truncate" :title="detail || toolName">{{ detail || toolName.replaceAll('_', ' ') }}</span>
       </span>
       <span v-if="statusLabel" class="tool-duration" :class="{ 'is-error': tool.status === 'failed' }">{{ statusLabel }}</span>
       <span class="disclosure" :class="{ open: expanded }" aria-hidden="true">⌄</span>
@@ -145,7 +148,7 @@ const summaryLabel = computed(() => [toolName.value, detail.value, statusLabel.v
     <div v-if="expanded" class="tool-card-details" data-testid="tool-details">
       <section>
         <div class="tool-detail-heading">
-          <span>Arguments</span>
+          <span>{{ toolName }} · Arguments</span>
           <span class="tool-detail-actions">
             <span>{{ tool.status }}</span>
             <button ref="argumentsCopyButton" type="button" class="tool-copy-button" data-copy-tool="arguments" aria-label="Copy tool arguments" @click="copyText(prettyArguments, 'arguments')">{{ copyButtonText('arguments') }}</button>

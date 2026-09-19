@@ -1,0 +1,8 @@
+Trial feal-linear-cryptanalysis__oZvnJKe failed: Docker compose command failed for environment feal-linear-cryptanalysis. Command: docker compose --project-name feal-linear-cryptanalysis__ozvnjke__env --project-directory /Users/kyooni18/.cache/harbor/tasks/LVyG59RRyF7y2PiCy5VT3B/feal-linear-cryptanalysis/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwxyyxgak/feal-linear-cryptanalysis__oZvnJKe__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpicrypw05/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmplfl5o1_q/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network feal-linear-cryptanalysis__ozvnjke__env_default Creating 
+ Network feal-linear-cryptanalysis__ozvnjke__env_default Creating 
+ Network feal-linear-cryptanalysis__ozvnjke__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network feal-linear-cryptanalysis__ozvnjke__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container feal-linear-cryptanalysis__ozvnjke__env-main-1 Creating 
+failed to create network feal-linear-cryptanalysis__ozvnjke__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

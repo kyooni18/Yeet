@@ -1,0 +1,8 @@
+Trial path-tracing-reverse__PU4FXFF failed: Docker compose command failed for environment path-tracing-reverse. Command: docker compose --project-name path-tracing-reverse__pu4fxff__env --project-directory /Users/kyooni18/.cache/harbor/tasks/5CV2XfZKatcdbEk2ctQQAF/path-tracing-reverse/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp689zuohf/path-tracing-reverse__PU4FXFF__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9axnvbkl/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpuhilf3pi/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network path-tracing-reverse__pu4fxff__env_default Creating 
+ Network path-tracing-reverse__pu4fxff__env_default Creating 
+ Network path-tracing-reverse__pu4fxff__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network path-tracing-reverse__pu4fxff__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container path-tracing-reverse__pu4fxff__env-main-1 Creating 
+failed to create network path-tracing-reverse__pu4fxff__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

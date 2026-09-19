@@ -1,0 +1,4 @@
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured

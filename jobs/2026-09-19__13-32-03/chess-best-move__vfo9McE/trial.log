@@ -1,0 +1,8 @@
+Skipping image OS validation for alexgshaw/chess-best-move:20251031: docker inspect returned 1
+Trial chess-best-move__vfo9McE cancelled
+Docker compose down failed: Docker compose command failed for environment chess-best-move. Command: docker compose --project-name chess-best-move__vfo9mce__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7bFmFkDrFkAzWEnmNWFgw9/chess-best-move/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2um88q9v/chess-best-move__vfo9McE__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpz2liu5v_/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpb5zosgq7/docker-compose-mounts.json down --rmi local --volumes --remove-orphans. Return code: 1. Stdout:  Dangling images Removing 
+ Dangling images Removed 
+failed to list networks: error during connect: Get "http://docker.example.com/v1.55/networks?filters=%7B%22label%22%3A%7B%22com.docker.compose.network%3Ddefault%22%3Atrue%2C%22com.docker.compose.project%3Dchess-best-move__vfo9mce__env%22%3Atrue%7D%7D": command [ssh -o ConnectTimeout=30 -T -- dockerd-machine docker system dial-stdio] has exited with exit status 255, make sure the URL is valid, and Docker 18.09 or later is installed on the remote host: stderr=mux_client_request_session: session request failed: Session open refused by peer
+unix_listener: cannot bind to path /Users/kyooni18/.config/dockerd/ssh-8ce52c807048a68ccd71d7b7ed2b57e330de468d.80dI9qtIlNIF1h96: No space left on device
+
+. Stderr: None. 

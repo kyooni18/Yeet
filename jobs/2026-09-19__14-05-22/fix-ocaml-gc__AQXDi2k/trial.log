@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/fix-ocaml-gc:20251031: docker inspect returned 1
+Trial fix-ocaml-gc__AQXDi2k failed: Docker compose command failed for environment fix-ocaml-gc. Command: docker compose --project-name fix-ocaml-gc__aqxdi2k__env --project-directory /Users/kyooni18/.cache/harbor/tasks/dXxv47w6VWWtstSMMiefPe/fix-ocaml-gc/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpfqwcp4yk/fix-ocaml-gc__AQXDi2k__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpionh7s4z/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzwiqmc0y/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/fix-ocaml-gc:20251031 Pulling 
+ Image alexgshaw/fix-ocaml-gc:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

@@ -1,0 +1,8 @@
+Trial gpt2-codegolf__eTi4yEz failed: Docker compose command failed for environment gpt2-codegolf. Command: docker compose --project-name gpt2-codegolf__eti4yez__env --project-directory /Users/kyooni18/.cache/harbor/tasks/CGqXnFmcaVcQCTbCZMpg2T/gpt2-codegolf/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpcm_upob6/gpt2-codegolf__eTi4yEz__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpiipjdg_x/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpoq_rxp9k/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network gpt2-codegolf__eti4yez__env_default Creating 
+ Network gpt2-codegolf__eti4yez__env_default Creating 
+ Network gpt2-codegolf__eti4yez__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network gpt2-codegolf__eti4yez__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container gpt2-codegolf__eti4yez__env-main-1 Creating 
+failed to create network gpt2-codegolf__eti4yez__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

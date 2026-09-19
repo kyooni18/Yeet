@@ -66,8 +66,13 @@ try {
     New-Item -ItemType Directory -Force $Out | Out-Null
     Copy-Item -Force $BuiltBinary (Join-Path $Stage "bin\yeet.exe")
     Copy-Item -Recurse -Force $RuntimeDist (Join-Path $RuntimeStage "dist")
+    Copy-Item -Recurse -Force "RuntimeSource\skills" (Join-Path $RuntimeStage "skills")
     Copy-Item -Force "RuntimeSource\package.json" (Join-Path $RuntimeStage "package.json")
     Copy-Item -Force "README.md", "CHANGELOG.md", "LICENSE.txt" $Stage
+    $BundledPdfSkill = Join-Path $RuntimeStage "skills\pdf\SKILL.md"
+    if (-not (Test-Path $BundledPdfSkill -PathType Leaf)) {
+        throw "Staged release is missing bundled PDF skill."
+    }
     Copy-Item -Force "Scripts\install-release.ps1" (Join-Path $Stage "install.ps1")
     if (Test-Path "docs\PLATFORM_SUPPORT.md") {
         New-Item -ItemType Directory -Force (Join-Path $Stage "docs") | Out-Null

@@ -25,11 +25,13 @@ use crate::{
 
 mod agent_deploy;
 mod artifact_output;
+mod capability_runtime;
 mod computer_use;
 mod definitions;
 mod editing;
 mod environment;
 mod io;
+mod mutation_lease;
 mod paths;
 mod session_capabilities;
 mod shell_jobs;
@@ -37,25 +39,15 @@ mod shell_runtime;
 mod support;
 mod token_efficiency;
 
-#[cfg(test)]
-use crate::edit::ReadResult;
 pub(crate) use agent_deploy::deploy_agent_for_workspace;
 use definitions::BUILTIN_CAPABILITIES;
 pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
 pub use definitions::{is_coding_builtin_tool, is_general_builtin_tool};
 use paths::canonicalize_existing_ancestor;
-#[cfg(test)]
-use paths::path_outside_workspace;
 pub(crate) use paths::workspace_revision_for_path;
-#[cfg(test)]
-use shell_runtime::shell_is_inspection;
 use shell_runtime::shell_mentions_path;
-#[cfg(test)]
-use std::fs;
 pub(crate) use support::canonical_web_source_key;
-#[cfg(test)]
-use support::foundation_wrapper_schema;
 use support::{
     ArtifactStore, McpServerIdentity, ReadCacheEntry, allocate_stable_tool_name,
     append_bounded_state_set, builtin_capability_for_tool, cache_read_result,
@@ -167,6 +159,8 @@ pub struct ToolRegistry {
     protected_write_paths: Vec<PathBuf>,
     session_store: Option<SessionStore>,
     active_session_id: Option<String>,
+    active_task_id: Option<String>,
+    mutation_lease: Option<mutation_lease::WorkspaceMutationLease>,
 }
 
 impl ToolRegistry {
@@ -232,6 +226,8 @@ impl ToolRegistry {
             protected_write_paths: Vec::new(),
             session_store: None,
             active_session_id: None,
+            active_task_id: None,
+            mutation_lease: None,
         })
     }
 
@@ -410,6 +406,67 @@ impl ToolRegistry {
                 | "project_memory_connections"
         ) || self.skill_tool_map.contains_key(name)
             || self.read_only_mcp_tools.contains(name)
+    }
+
+    pub fn can_parallel_read_only_mcp_batch(&self, calls: &[ToolCall]) -> bool {
+        (2..=4).contains(&calls.len())
+            && calls.iter().all(|call| {
+                self.read_only_mcp_tools.contains(&call.name)
+                    && call.arguments.is_object()
+                    && self
+                        .mcp_tool_map
+                        .get(&call.name)
+                        .is_some_and(|(server, _)| !self.capability_disabled("mcp", server))
+            })
+    }
+
+    /// Executes a batch only when every call is an MCP tool explicitly annotated read-only.
+    /// The shared bridge supports concurrent request ids; mutation-capable tools never enter this path.
+    pub fn execute_parallel_read_only_mcp_batch(
+        &self,
+        calls: &[ToolCall],
+        cancel: &AtomicBool,
+    ) -> Option<Vec<std::result::Result<String, String>>> {
+        if !(2..=4).contains(&calls.len()) {
+            return None;
+        }
+        let targets = calls
+            .iter()
+            .map(|call| {
+                if !self.read_only_mcp_tools.contains(&call.name) {
+                    return None;
+                }
+                let (server, tool) = self.mcp_tool_map.get(&call.name)?.clone();
+                if self.capability_disabled("mcp", &server) {
+                    return None;
+                }
+                let arguments = call.arguments.as_object()?.clone();
+                Some((server, tool, arguments))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let bridge = self.bridge.clone();
+        Some(thread::scope(|scope| {
+            let handles = targets
+                .into_iter()
+                .map(|(server, tool, arguments)| {
+                    let bridge = bridge.clone();
+                    scope.spawn(move || {
+                        bridge
+                            .call_mcp_tool_cancellable(&server, &tool, &arguments, cancel)
+                            .map(|value| value.to_string())
+                            .map_err(|error| error.to_string())
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("parallel read-only MCP execution panicked".into()))
+                })
+                .collect()
+        }))
     }
 
     pub fn execute_research(
@@ -719,6 +776,7 @@ impl ToolRegistry {
                     if self.disabled_capabilities.contains("builtin:shell") {
                         bail!("Shell is disabled for this session; Skill scripts cannot execute");
                     }
+                    let _mutation_guard = self.workspace_mutation_guard()?;
                     return self.run_skill_script(&skill, &object, model, cancel);
                 }
                 if let Some(skill) = self.skill_tool_map.get(other) {
@@ -735,6 +793,11 @@ impl ToolRegistry {
                         bail!("MCP server {server} is disabled for this session");
                     }
                     let read_only = self.read_only_mcp_tools.contains(other);
+                    let _mutation_guard = if read_only {
+                        None
+                    } else {
+                        self.workspace_mutation_guard()?
+                    };
                     let result = self
                         .bridge
                         .call_mcp_tool_cancellable(&server, &tool, &object, cancel)?
@@ -751,10 +814,11 @@ impl ToolRegistry {
                     }
                     return Ok(result);
                 }
-                if let Some((worker, tool)) = self.worker_tool_map.get(other) {
+                if let Some((worker, tool)) = self.worker_tool_map.get(other).cloned() {
+                    let _mutation_guard = self.workspace_mutation_guard()?;
                     let result =
                         self.workers
-                            .execute(worker, tool, &object, &self.workspace_root)?;
+                            .execute(&worker, &tool, &object, &self.workspace_root)?;
                     self.workspace_write_generation =
                         self.workspace_write_generation.wrapping_add(1);
                     self.invalidate_workspace_cache();
@@ -769,7 +833,49 @@ impl ToolRegistry {
         self.activate(id)
     }
 
+    pub fn begin_task(&mut self, task_id: &str) {
+        if self.active_task_id.as_deref() != Some(task_id) {
+            self.mutation_lease = None;
+            self.active_task_id = Some(task_id.to_owned());
+        }
+    }
+
+    pub(super) fn ensure_workspace_mutation_lease(&mut self) -> Result<()> {
+        if self.mutation_lease.is_some() {
+            return Ok(());
+        }
+        let Some(task_id) = self.active_task_id.as_deref() else {
+            return Ok(());
+        };
+        self.mutation_lease = Some(mutation_lease::WorkspaceMutationLease::acquire(
+            &crate::platform::default_config_directory(),
+            &self.workspace_root,
+            self.active_session_id.as_deref(),
+            task_id,
+        )?);
+        Ok(())
+    }
+
+    fn workspace_mutation_guard(
+        &mut self,
+    ) -> Result<Option<mutation_lease::WorkspaceMutationLease>> {
+        if self.active_task_id.is_some() {
+            self.ensure_workspace_mutation_lease()?;
+            return Ok(None);
+        }
+        Ok(Some(mutation_lease::WorkspaceMutationLease::acquire(
+            &crate::platform::default_config_directory(),
+            &self.workspace_root,
+            self.active_session_id.as_deref(),
+            "direct-tool-call",
+        )?))
+    }
+
     pub fn finish_task(&mut self, task_id: &str) {
+        if self.active_task_id.as_deref() == Some(task_id) {
+            self.mutation_lease = None;
+            self.active_task_id = None;
+        }
         self.read_cache.clear();
         self.searches.clear();
         self.web_searches.clear();
@@ -903,234 +1009,6 @@ impl ToolRegistry {
         self.workers.shutdown();
     }
 
-    fn activate(&mut self, id: &str) -> Result<String> {
-        if self.disabled_capabilities.contains(id) {
-            bail!("Capability {id} is disabled for this session");
-        }
-        if self.descriptors.is_empty() {
-            self.refresh_capabilities();
-        }
-        if let Some(name) = id.strip_prefix("skill:") {
-            return self.activate_skill(name, false);
-        }
-        if let Some(server) = id.strip_prefix("mcp:") {
-            if self.foundation_server.as_deref() == Some(server) {
-                if !self.foundation_enabled {
-                    bail!("Foundation memory is disabled in this project's settings");
-                }
-                let already_active = self.foundation_memory_active();
-                if !already_active {
-                    self.activate_foundation();
-                }
-                let mut names = self.foundation_tool_map.keys().cloned().collect::<Vec<_>>();
-                names.sort();
-                return Ok(json!({
-                    "activated": id,
-                    "alreadyActive": already_active,
-                    "projectScoped": true,
-                    "tools": names
-                })
-                .to_string());
-            }
-            if self.active_mcp.contains(server) {
-                return Ok(json!({"activated":id,"alreadyActive":true}).to_string());
-            }
-            let mut tools = self.bridge.list_mcp_tools(Some(server))?;
-            // Provider-facing MCP names must not depend on tools/list order.
-            // Sort by logical identity before allocating names so an unrelated
-            // upstream reorder cannot churn the schema/order cache surface.
-            tools.sort_by(|left, right| left.name.cmp(&right.name));
-            let mut names = Vec::new();
-            for tool in tools {
-                let stable_identity = format!("mcp:{server}:{}", tool.name);
-                let safe = allocate_stable_tool_name(
-                    "mcp",
-                    &[server, &tool.name],
-                    &stable_identity,
-                    self.active_tools.keys(),
-                );
-                let definition = ToolDefinition {
-                    name: safe.clone(),
-                    description: tool.description,
-                    input_schema: tool.input_schema,
-                };
-                if tool
-                    .annotations
-                    .as_ref()
-                    .and_then(|a| a.get("readOnlyHint"))
-                    .and_then(Value::as_bool)
-                    == Some(true)
-                {
-                    self.read_only_mcp_tools.insert(safe.clone());
-                } else {
-                    self.read_only_mcp_tools.remove(&safe);
-                }
-                self.mcp_tool_map
-                    .insert(safe.clone(), (server.to_owned(), tool.name));
-                self.active_tools.insert(safe.clone(), definition);
-                names.push(safe);
-            }
-            self.active_mcp.insert(server.to_owned());
-            return Ok(json!({"activated":id,"tools":names}).to_string());
-        }
-        if let Some(worker) = id.strip_prefix("worker:") {
-            if self.active_workers.contains(worker) {
-                return Ok(json!({"activated":id,"alreadyActive":true}).to_string());
-            }
-            let mut definitions = self.workers.activate(worker)?;
-            definitions.sort_by(|left, right| left.name.cmp(&right.name));
-            let mut names = Vec::new();
-            for definition in definitions {
-                let stable_identity = format!("worker:{worker}:{}", definition.name);
-                let safe = allocate_stable_tool_name(
-                    "worker",
-                    &[worker, &definition.name],
-                    &stable_identity,
-                    self.active_tools.keys(),
-                );
-                self.worker_tool_map
-                    .insert(safe.clone(), (worker.to_owned(), definition.name.clone()));
-                self.active_tools.insert(
-                    safe.clone(),
-                    ToolDefinition {
-                        name: safe.clone(),
-                        ..definition
-                    },
-                );
-                names.push(safe);
-            }
-            self.active_workers.insert(worker.to_owned());
-            return Ok(json!({"activated":id,"tools":names}).to_string());
-        }
-        bail!("Unknown capability: {id}")
-    }
-
-    fn activate_foundation(&mut self) {
-        for tool in crate::memory::tool_definitions() {
-            let operation = tool.name.strip_prefix("project_").unwrap().to_owned();
-            self.foundation_tool_map
-                .insert(tool.name.clone(), operation);
-            self.active_tools.insert(tool.name.clone(), tool);
-        }
-    }
-
-    fn activate_skill(&mut self, name: &str, explicit: bool) -> Result<String> {
-        let id = format!("skill:{name}");
-        if self.active_skills.contains(name) {
-            let mut tools = self
-                .skill_tool_map
-                .iter()
-                .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone()))
-                .chain(
-                    self.skill_script_tool_map
-                        .iter()
-                        .filter_map(|(tool, skill)| (skill == name).then_some(tool.clone())),
-                )
-                .collect::<Vec<_>>();
-            tools.sort();
-            if explicit {
-                let skill = self.bridge.load_skill(name)?;
-                return Ok(json!({
-                    "activated":id,
-                    "alreadyActive":true,
-                    "instructions":skill.instructions,
-                    "tools":tools
-                })
-                .to_string());
-            }
-            return Ok(json!({"activated":id,"alreadyActive":true,"tools":tools}).to_string());
-        }
-        let skill = self.bridge.load_skill(name)?;
-        if !explicit && skill.allow_implicit_invocation == Some(false) {
-            bail!("Skill {name} requires explicit user invocation with ${name}");
-        }
-        let read_identity = format!("skill:{name}:read_file");
-        let tool_name = allocate_stable_tool_name(
-            "skill",
-            &[name, "read_file"],
-            &read_identity,
-            self.active_tools.keys(),
-        );
-        let definition = ToolDefinition::new(
-            &tool_name,
-            format!("Read a supporting file from Skill {name}."),
-            json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
-        );
-        self.active_tools.insert(tool_name.clone(), definition);
-        self.skill_tool_map
-            .insert(tool_name.clone(), name.to_owned());
-        let script_tool_name = if skill.files.iter().any(|path| path.starts_with("scripts/")) {
-            let script_identity = format!("skill:{name}:run_script");
-            let script_tool_name = allocate_stable_tool_name(
-                "skill",
-                &[name, "run_script"],
-                &script_identity,
-                self.active_tools.keys(),
-            );
-            let script_definition = ToolDefinition::new(
-                &script_tool_name,
-                format!(
-                    "Run a helper from Skill {name}'s scripts/ under normal sandbox/approval rules."
-                ),
-                json!({
-                    "type":"object",
-                    "properties":{
-                        "path":{"type":"string","description":"Relative script path such as scripts/check.py"},
-                        "args":{"type":"array","items":{"type":"string"},"maxItems":64},
-                        "timeoutSeconds":{"type":"integer","minimum":1,"maximum":900}
-                    },
-                    "required":["path"],
-                    "additionalProperties":false
-                }),
-            );
-            self.active_tools
-                .insert(script_tool_name.clone(), script_definition);
-            self.skill_script_tool_map
-                .insert(script_tool_name.clone(), name.to_owned());
-            Some(script_tool_name)
-        } else {
-            None
-        };
-        self.active_skills.insert(name.to_owned());
-        let mut tools = vec![tool_name.clone()];
-        if let Some(script) = script_tool_name.as_ref() {
-            tools.push(script.clone());
-        }
-        Ok(json!({
-            "activated":id,
-            "instructions":skill.instructions,
-            "readTool":tool_name,
-            "scriptTool":script_tool_name,
-            "tools":tools
-        })
-        .to_string())
-    }
-
-    fn deactivate_mcp(&mut self, server: &str) {
-        let tool_names = self
-            .mcp_tool_map
-            .iter()
-            .filter(|(_, (mapped_server, _))| mapped_server == server)
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>();
-        for name in tool_names {
-            self.mcp_tool_map.remove(&name);
-            self.active_tools.remove(&name);
-            self.read_only_mcp_tools.remove(&name);
-        }
-        self.active_mcp.remove(server);
-        self.active_mcp_identity.remove(server);
-    }
-
-    fn deactivate_foundation(&mut self) {
-        let tool_names = self.foundation_tool_map.keys().cloned().collect::<Vec<_>>();
-        for name in tool_names {
-            self.foundation_tool_map.remove(&name);
-            self.active_tools.remove(&name);
-            self.read_only_mcp_tools.remove(&name);
-        }
-    }
-
     fn tool_enabled(&self, tool_name: &str) -> bool {
         if builtin_capability_for_tool(tool_name)
             .is_some_and(|capability| self.disabled_capabilities.contains(capability.id))
@@ -1231,368 +1109,5 @@ impl ToolRegistry {
             return Ok(());
         }
         bail!("User denied {operation}: {path}")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn coverage_merges_adjacent_ranges() {
-        assert_eq!(
-            merged_ranges(vec![(10, 20), (1, 5), (6, 9), (30, 31)]),
-            vec![(1, 20), (30, 31)]
-        );
-    }
-
-    #[test]
-    fn overlapping_reads_request_only_uncovered_ranges() {
-        let entries = vec![
-            ReadCacheEntry {
-                path: "a".into(),
-                snapshot: "s".into(),
-                start: 300,
-                end: 520,
-                total: 1333,
-                anchored: String::new(),
-            },
-            ReadCacheEntry {
-                path: "a".into(),
-                snapshot: "s".into(),
-                start: 761,
-                end: 1240,
-                total: 1333,
-                anchored: String::new(),
-            },
-        ];
-
-        let covered = covered_ranges_within(&entries, 334, 580);
-        assert_eq!(covered, vec![(334, 520)]);
-        assert_eq!(uncovered_ranges(334, 580, &covered), vec![(521, 580)]);
-    }
-
-    #[test]
-    fn cache_coverage_is_scoped_to_current_snapshot() {
-        let mut cache = HashMap::new();
-        let read = |snapshot: &str, start, end, total| ReadResult {
-            path: "a".into(),
-            snapshot: snapshot.into(),
-            start_line: start,
-            end_line: end,
-            total_lines: total,
-            content: String::new(),
-            numbered: String::new(),
-            anchored: String::new(),
-        };
-        cache_read_result(&mut cache, read("old", 1, 10, 20));
-        cache_read_result(&mut cache, read("old", 11, 20, 20));
-        assert!(coverage_complete(20, &cache["a"]));
-        cache_read_result(&mut cache, read("new", 1, 10, 30));
-        assert_eq!(cache["a"].len(), 1);
-        assert_eq!(next_uncovered(30, &cache["a"]), Some(11));
-    }
-
-    #[test]
-    fn union_coverage_suppresses_reads_not_covered_by_one_cache_entry() {
-        let entries = vec![
-            ReadCacheEntry {
-                path: "a".into(),
-                snapshot: "s".into(),
-                start: 1,
-                end: 160,
-                total: 300,
-                anchored: String::new(),
-            },
-            ReadCacheEntry {
-                path: "a".into(),
-                snapshot: "s".into(),
-                start: 161,
-                end: 300,
-                total: 300,
-                anchored: String::new(),
-            },
-        ];
-
-        let covered = covered_ranges_within(&entries, 80, 240);
-        assert_eq!(covered, vec![(80, 240)]);
-        assert!(uncovered_ranges(80, 240, &covered).is_empty());
-        assert!(coverage_complete(300, &entries));
-    }
-
-    #[test]
-    fn stable_tool_names_do_not_depend_on_enumeration_indexes() {
-        let existing = ["mcp_server_read".to_owned()];
-        let first = allocate_stable_tool_name(
-            "mcp",
-            &["Server", "Read"],
-            "mcp:Server:Read",
-            existing.iter(),
-        );
-        let second = allocate_stable_tool_name(
-            "mcp",
-            &["Server", "Read"],
-            "mcp:Server:Read",
-            existing.iter(),
-        );
-        assert_eq!(first, second);
-        assert!(first.starts_with("mcp_server_read_"));
-        assert!(!first.contains("_0_"));
-    }
-
-    #[test]
-    fn stable_extension_names_do_not_depend_on_current_occupancy() {
-        let empty: Vec<String> = Vec::new();
-        let unrelated = ["unrelated_tool".to_owned()];
-        for (prefix, parts, identity) in [
-            ("mcp", ["Server", "Read"], "mcp:Server:Read"),
-            (
-                "skill",
-                ["review-code", "read_file"],
-                "skill:review-code:read_file",
-            ),
-        ] {
-            let first = allocate_stable_tool_name(prefix, &parts, identity, empty.iter());
-            let second = allocate_stable_tool_name(prefix, &parts, identity, unrelated.iter());
-            assert_eq!(first, second);
-            assert_ne!(first, crate::tools::support::tool_name_base(prefix, &parts));
-        }
-    }
-
-    #[test]
-    fn foundation_wrapper_hides_project_scope_from_model_schema() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "text": {"type": "string"},
-                "project": {"type": "string"},
-                "key": {"type": "string"}
-            },
-            "required": ["text", "project"]
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        let wrapped = foundation_wrapper_schema(&schema);
-        assert!(wrapped["properties"].get("project").is_none());
-        assert_eq!(wrapped["required"], json!(["text"]));
-        assert!(wrapped["properties"].get("key").is_some());
-    }
-
-    #[test]
-    fn foundation_recall_extracts_only_nonempty_context() {
-        let result = json!({
-            "content": [{
-                "type": "text",
-                "text": "{\"context\":\"provider.active = openai\",\"atomCount\":1}"
-            }]
-        });
-        assert_eq!(
-            foundation_context_from_tool_result(&result).as_deref(),
-            Some("provider.active = openai")
-        );
-        assert!(
-            foundation_context_from_tool_result(&json!({
-                "isError": true,
-                "content": [{"type":"text","text":"failed"}]
-            }))
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn project_scope_detection_handles_absolute_and_parent_paths() {
-        let workspace = tempfile::tempdir().unwrap();
-        let root = workspace.path().canonicalize().unwrap();
-        assert!(!path_outside_workspace(&root, "src/new.rs").unwrap());
-        assert!(!path_outside_workspace(&root, ".").unwrap());
-        assert!(path_outside_workspace(&root, "../outside.txt").unwrap());
-        assert!(path_outside_workspace(&root, "/tmp/yeet-outside.txt").unwrap());
-    }
-
-    #[test]
-    fn workspace_revision_changes_for_uncommitted_worktree_edits() {
-        let workspace = tempfile::tempdir().unwrap();
-        let root = workspace.path();
-        assert!(
-            std::process::Command::new("git")
-                .arg("init")
-                .arg(root)
-                .status()
-                .unwrap()
-                .success()
-        );
-        fs::write(root.join("controller.rs"), "const GAIN: f64 = 1.0;\n").unwrap();
-        assert!(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args(["add", "."])
-                .status()
-                .unwrap()
-                .success()
-        );
-        assert!(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args([
-                    "-c",
-                    "user.name=Yeet Test",
-                    "-c",
-                    "user.email=yeet@example.invalid",
-                    "commit",
-                    "-m",
-                    "base"
-                ])
-                .status()
-                .unwrap()
-                .success()
-        );
-        let clean = workspace_revision_for_path(root).unwrap();
-        fs::write(root.join("controller.rs"), "const GAIN: f64 = 2.0;\n").unwrap();
-        let tracked_dirty = workspace_revision_for_path(root).unwrap();
-        assert_ne!(clean, tracked_dirty);
-        fs::write(root.join("new-controller.rs"), "const NEW: bool = true;\n").unwrap();
-        let untracked_dirty = workspace_revision_for_path(root).unwrap();
-        assert_ne!(tracked_dirty, untracked_dirty);
-    }
-
-    #[test]
-    fn builtin_capabilities_cover_independent_tool_surfaces() {
-        assert_eq!(
-            builtin_capability_for_tool("read_file").map(|value| value.id),
-            Some("builtin:file-read")
-        );
-        assert_eq!(
-            builtin_capability_for_tool("apply_file_edits").map(|value| value.id),
-            Some("builtin:file-write")
-        );
-        assert_eq!(
-            builtin_capability_for_tool("run_shell").map(|value| value.id),
-            Some("builtin:shell")
-        );
-        assert_eq!(
-            builtin_capability_for_tool("read_document").map(|value| value.id),
-            Some("builtin:document-read")
-        );
-        assert_eq!(
-            builtin_capability_for_tool("analyze_data").map(|value| value.id),
-            Some("builtin:data-analysis")
-        );
-        assert_eq!(
-            builtin_capability_for_tool("artifact_info").map(|value| value.id),
-            Some("builtin:artifacts")
-        );
-        assert_eq!(
-            builtin_capability_for_tool("list_sessions").map(|value| value.id),
-            Some("builtin:sessions")
-        );
-        assert_eq!(
-            builtin_capability_for_tool("export_session").map(|value| value.id),
-            Some("builtin:sessions")
-        );
-        assert!(builtin_capability_for_tool("find_capabilities").is_none());
-        assert!(builtin_capability_for_tool("activate_capability").is_none());
-        assert!(builtin_capability_for_tool("web_search").is_none());
-    }
-
-    #[test]
-    fn capability_discovery_is_bounded_without_hiding_targeted_matches() {
-        let descriptors = (0..12)
-            .map(|index| CapabilityDescriptor {
-                id: format!("builtin:capability-{index:02}"),
-                kind: "builtin".into(),
-                description: format!("Capability number {index}"),
-            })
-            .collect::<Vec<_>>();
-
-        let broad = capability_search_values(&descriptors, "");
-        assert_eq!(broad.len(), MAX_CAPABILITY_SEARCH_RESULTS);
-
-        let targeted = capability_search_values(&descriptors, "capability-11");
-        assert_eq!(targeted.len(), 1);
-        assert_eq!(targeted[0]["id"], "builtin:capability-11");
-    }
-
-    #[test]
-    fn shell_inspection_detection_handles_replay_commands() {
-        assert!(shell_is_inspection("cat src/lib.rs"));
-        assert!(shell_is_inspection("ls -R src | head -n 20"));
-        assert!(shell_is_inspection("sed -i '' 's/a/b/' src/lib.rs"));
-        assert!(restricted_operation("sed -i '' 's/a/b/' src/lib.rs").is_some());
-        assert!(!shell_is_inspection("cargo test"));
-        assert!(shell_mentions_path(
-            "cat RuntimeSource/src/core.ts",
-            "RuntimeSource/src/core.ts"
-        ));
-    }
-
-    #[test]
-    fn web_search_queries_supports_batched_unique_queries() {
-        let object = json!({
-            "query": "OpenAI Astra pricing",
-            "queries": ["OpenAI Astra pricing", "site:openai.com Astra", "Astra pricing rumors"]
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        let queries = web_search_queries(&object).unwrap();
-
-        assert_eq!(
-            queries,
-            vec![
-                "OpenAI Astra pricing",
-                "site:openai.com Astra",
-                "Astra pricing rumors",
-            ]
-        );
-    }
-}
-
-#[cfg(test)]
-mod durable_artifact_tests {
-    use super::*;
-
-    #[test]
-    fn oversized_model_visible_tool_output_is_externalized_and_recoverable() {
-        let store = ArtifactStore::new().unwrap();
-        let source = format!("header\n{}\nfooter", "x".repeat(24 * 1024));
-        let (bounded, externalized) = artifact_output::externalize_model_visible_tool_output(
-            &store,
-            "mcp_big_result",
-            source.clone(),
-        )
-        .unwrap();
-        assert!(externalized);
-        assert!(bounded.len() < source.len());
-        let payload: Value = serde_json::from_str(&bounded).unwrap();
-        assert_eq!(payload["externalized"], true);
-        assert_eq!(payload["tool"], "mcp_big_result");
-        let id = payload["artifactId"].as_str().unwrap();
-        assert_eq!(store.read(id, Some(1), Some(3)).unwrap(), source);
-    }
-
-    #[test]
-    fn externalized_evidence_survives_registry_restart_and_is_session_scoped() {
-        let session = tempfile::tempdir().unwrap();
-        let mut first = ArtifactStore::new().unwrap();
-        first.root = session.path().join("artifacts");
-        let id = first
-            .store("exact earlier compiler error\nsecond line")
-            .unwrap();
-        drop(first);
-        let mut restored = ArtifactStore::new().unwrap();
-        restored.root = session.path().join("artifacts");
-        assert_eq!(
-            restored.read(&id, Some(1), Some(2)).unwrap(),
-            "exact earlier compiler error\nsecond line"
-        );
-        assert!(restored.read("../other-session/item", None, None).is_err());
-        let other = tempfile::tempdir().unwrap();
-        restored.root = other.path().join("artifacts");
-        assert!(restored.read(&id, None, None).is_err());
     }
 }

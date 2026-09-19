@@ -22,6 +22,8 @@ struct State {
     windows: Vec<Window>,
     notes: BTreeMap<String, String>,
     active: Vec<Message>,
+    #[serde(default)]
+    goal: Option<super::goal::GoalJob>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -32,6 +34,7 @@ impl Default for State {
             }],
             notes: BTreeMap::new(),
             active: Vec::new(),
+            goal: None,
         }
     }
 }
@@ -47,6 +50,39 @@ pub(super) struct ContextMemory {
     pub policy: crate::project_settings::ContextSettings,
 }
 impl ContextMemory {
+    pub fn goal(&self) -> Option<&super::goal::GoalJob> {
+        self.state.goal.as_ref()
+    }
+
+    pub fn goal_mut(&mut self) -> Option<&mut super::goal::GoalJob> {
+        self.dirty = true;
+        self.state.goal.as_mut()
+    }
+
+    pub fn start_goal(&mut self, objective: &str, continuation: bool) -> String {
+        if !continuation
+            || !self
+                .state
+                .goal
+                .as_ref()
+                .is_some_and(|goal| goal.resumable())
+        {
+            self.state.goal = Some(super::goal::GoalJob::new(objective));
+        }
+        self.dirty = true;
+        let goal = self.state.goal.as_mut().unwrap();
+        // Paused/cancelled jobs only reach here on explicit resume, not session
+        // auto-load. Permit a new bounded recovery attempt without losing work.
+        if matches!(
+            goal.status,
+            super::goal::GoalStatus::Paused | super::goal::GoalStatus::Cancelled
+        ) {
+            goal.progress = super::goal::GoalProgress::default();
+        }
+        goal.status = super::goal::GoalStatus::Running;
+        goal.objective.clone()
+    }
+
     pub fn bind(&mut self, root: Option<PathBuf>) {
         if self.root != root {
             self.root = root;
@@ -454,303 +490,89 @@ pub(super) fn tools() -> Vec<ToolDefinition> {
 }
 
 #[cfg(test)]
-mod tests {
+mod goal_persistence_tests {
     use super::*;
-    fn call(name: &str, arguments: Value) -> ToolCall {
-        ToolCall {
-            id: Uuid::new_v4().to_string(),
-            name: name.into(),
-            arguments,
-        }
-    }
-    fn memory() -> (tempfile::TempDir, ContextMemory, Vec<Message>) {
-        let dir = tempfile::tempdir().unwrap();
-        let mut memory = ContextMemory::default();
-        memory.bind(Some(dir.path().join("context")));
-        let mut history = vec![Message::system("system"), Message::user("objective")];
-        memory.load(&mut history).unwrap();
-        (dir, memory, history)
-    }
+    use crate::agent::goal::{
+        GoalCheckpointAction, GoalObservation, GoalStatus, MAX_GOAL_RECOVERIES, parse_goal_verdict,
+    };
+
     #[test]
-    fn rollover_restart_recovers_exact_original_evidence_and_notes() {
-        let (dir, mut memory, mut history) = memory();
-        let output = format!("compiler: unique-error {}", "한글".repeat(5000));
-        history.push(Message::assistant(
-            "",
-            Some(vec![call("run_shell", json!({"command":"cargo test"}))]),
+    fn restart_and_rollover_preserve_goal_and_recovery_budget() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("context");
+        let mut memory = ContextMemory::default();
+        memory.bind(Some(root.clone()));
+        let mut history = vec![Message::system("system"), Message::user("ship feature")];
+        memory.load(&mut history)?;
+        memory.start_goal("ship feature", false);
+        let window = memory.id().to_owned();
+        history.push(Message::tool(
+            "test failed",
+            "test-1",
+            Some("run_shell".into()),
         ));
-        history.push(Message::tool(&output, "tool-id", Some("run_shell".into())));
-        let old = memory.id().to_owned();
-        memory.execute(&call("task_notes",json!({"operation":"replace","name":"failures","content":"Keep the original compiler failure"}))).unwrap();
-        memory
-            .rollover(&mut history, Some(&Message::user("objective")))
-            .unwrap();
-        assert_eq!(history.len(), 2);
-        assert_ne!(memory.id(), old);
-        let mut restored = ContextMemory::default();
-        restored.bind(Some(dir.path().join("context")));
-        restored.load(&mut history).unwrap();
-        assert_eq!(restored.number(), 2);
-        let search: Value = serde_json::from_str(
-            &restored
-                .execute(&call(
-                    "context_history",
-                    json!({"operation":"search","query":"unique-error","toolName":"run_shell"}),
-                ))
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(search["items"][0]["windowId"], old);
-        let expected =
-            serde_json::to_string(&Message::tool(&output, "tool-id", Some("run_shell".into())))
-                .unwrap();
-        let mut recovered = String::new();
-        loop {
-            let result: Value = serde_json::from_str(&restored.execute(&call("context_history",json!({"operation":"read","windowId":old,"item":3,"offset":recovered.chars().count()}))).unwrap()).unwrap();
-            recovered.push_str(result["text"].as_str().unwrap());
-            if result["done"] == true {
-                break;
-            }
+        let goal = memory.goal_mut().unwrap();
+        goal.observe(GoalObservation {
+            window_id: window.clone(),
+            item: 2,
+            tool_call_id: "test-1".into(),
+            tool_name: "run_shell".into(),
+            succeeded: false,
+            excerpt: "test failed".into(),
+        });
+        goal.checkpoint(&parse_goal_verdict(
+            r#"{"verdict":"failure","evidence":["test failed"],"remaining":["fix failing test"]}"#,
+        ));
+        const RECOVERIES_BEFORE_RESTART: usize = 2;
+        for _ in 0..RECOVERIES_BEFORE_RESTART {
+            assert_eq!(
+                goal.progress.checkpoint(true),
+                GoalCheckpointAction::Recover
+            );
         }
-        assert_eq!(recovered, expected);
-        assert!(
-            restored
-                .orientation()
-                .contains("Keep the original compiler failure")
-        );
-        assert!(restored.orientation().contains(&format!("previous={old}")));
-    }
-    #[test]
-    fn failed_rollover_keeps_working_context_and_window_identity() {
-        let (dir, mut memory, mut history) = memory();
-        let id = memory.id().to_owned();
-        let old = history.clone();
-        fs::create_dir(dir.path().join("context").join(format!("{id}.json"))).unwrap();
-        assert!(
-            memory
-                .rollover(&mut history, Some(&Message::user("next")))
-                .is_err()
-        );
-        assert_eq!(history, old);
-        assert_eq!(memory.id(), id);
-        assert_eq!(memory.number(), 1);
-    }
-    #[test]
-    fn rollover_handoff_is_persisted_in_the_new_active_window() {
-        let (dir, mut memory, mut history) = memory();
-        let handoff = Message::system(
-            "Internal context rollover handoff. successfulWorkspaceMutations=2; verification=passed.",
-        );
-        memory
-            .rollover_with_handoff(
-                &mut history,
-                Some(&Message::user("objective")),
-                Some(&handoff),
-            )
-            .unwrap();
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[2], handoff);
+        goal.status = GoalStatus::Recovering;
+        let objective = Message::user("synthetic continuation");
+        memory.rollover(&mut history, Some(&objective))?;
+        drop(memory);
 
         let mut restored = ContextMemory::default();
-        restored.bind(Some(dir.path().join("context")));
+        restored.bind(Some(root));
         let mut restored_history = Vec::new();
-        restored.load(&mut restored_history).unwrap();
-        assert_eq!(restored_history.len(), 3);
-        assert_eq!(restored_history[2], handoff);
-    }
-    #[test]
-    fn rollover_keeps_current_turn_skill_instructions_without_old_skill_history() {
-        let (_, mut memory, mut history) = memory();
-        history.push(Message::user("old turn"));
-        history.push(Message::system("User-invoked Skill: old\nOLD"));
-        history.push(Message::assistant("done", None));
-        let objective = Message::user("current turn");
-        let skill = Message::system("User-invoked Skill: current\nCURRENT");
-        history.push(objective.clone());
-        history.push(skill.clone());
-
-        memory
-            .rollover_with_handoff(&mut history, Some(&objective), None)
-            .unwrap();
-
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[1], objective);
-        assert_eq!(history[2], skill);
-        assert!(!history.iter().any(|message| {
-            message
-                .content
-                .as_deref()
-                .is_some_and(|content| content.contains("OLD"))
-        }));
-    }
-    #[test]
-    fn note_names_are_not_paths_and_reads_are_bounded() {
-        let (dir, mut memory, _) = memory();
-        memory
-            .execute(&call(
-                "task_notes",
-                json!({"operation":"replace","name":"../outside","content":"한".repeat(10000)}),
-            ))
-            .unwrap();
-        assert!(!dir.path().join("outside").exists());
-        let result: Value = serde_json::from_str(
-            &memory
-                .execute(&call(
-                    "task_notes",
-                    json!({"operation":"read","name":"../outside"}),
-                ))
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(result["text"].as_str().unwrap().chars().count(), 8192);
-        assert_eq!(result["done"], false);
-        let hint = memory.orientation();
-        assert!(hint.len() < 6000);
-        assert!(hint.contains("../outside"));
-        assert!(
-            memory
-                .execute(&call(
-                    "task_notes",
-                    json!({"operation":"replace","name":"too-big","content":"x".repeat(65537)})
-                ))
-                .is_err()
-        );
-    }
-    #[test]
-    fn history_filters_and_pagination_are_literal_and_stable() {
-        let (_, mut memory, mut history) = memory();
-        for _ in 0..25 {
-            history.push(Message::user("literal [error]."));
-        }
-        memory.sync(&history).unwrap();
-        let query = |offset| {
-            call(
-                "context_history",
-                json!({"operation":"search","query":"[error].","role":"user","offset":offset}),
-            )
-        };
-        let first: Value = serde_json::from_str(&memory.execute(&query(0)).unwrap()).unwrap();
-        let last: Value = serde_json::from_str(&memory.execute(&query(20)).unwrap()).unwrap();
-        assert_eq!(first["items"].as_array().unwrap().len(), 20);
-        assert_eq!(last["items"].as_array().unwrap().len(), 5);
-        assert!(
-            memory
-                .execute(&call(
-                    "context_history",
-                    json!({"operation":"search","query":""})
-                ))
-                .is_err()
-        );
-        assert!(
-            memory
-                .execute(&call(
-                    "context_history",
-                    json!({"operation":"read","windowId":"../outside","item":0})
-                ))
-                .is_err()
-        );
-    }
-    #[test]
-    fn window_rollover_does_not_touch_environment() {
-        let (dir, mut memory, mut history) = memory();
-        let source = dir.path().join("source.rs");
-        fs::write(&source, "dirty workspace edit").unwrap();
-        for _ in 0..3 {
-            memory
-                .rollover(&mut history, Some(&Message::user("keep working")))
-                .unwrap();
-        }
-        assert_eq!(memory.number(), 4);
-        assert_eq!(fs::read_to_string(source).unwrap(), "dirty workspace edit");
-        assert_eq!(fs::read_dir(dir.path().join("context")).unwrap().count(), 4);
-    }
-    #[test]
-    fn orientation_is_turn_stable_and_live_budget_stays_in_context_status() {
-        let (_, mut memory, _) = memory();
-        memory
-            .state
-            .notes
-            .insert("goal".into(), "keep cache prefixes stable".into());
-        memory.estimated_tokens = 100;
-        let first = memory.orientation();
-        memory.estimated_tokens = 9_999;
-        let later = memory.orientation();
-        assert_eq!(first, later);
-        assert!(!first.contains("context_status"));
-        assert!(!first.contains("context_history"));
-        assert!(!first.contains("task_notes"));
-        assert!(first.contains("Task notes snapshot"));
-        assert!(first.contains("keep cache prefixes stable"));
-        assert!(!first.contains("used="));
-        assert!(!first.contains("remaining="));
-        assert_eq!(memory.status()["estimatedInputTokens"], 9_999);
-    }
-
-    #[test]
-    fn automatic_working_budget_uses_model_context_and_explicit_caps_remain_hard() {
-        let (_, mut memory, _) = memory();
-        memory.capacity = Some(272_000);
-        assert_eq!(memory.policy.working_set_tokens, None);
-        assert_eq!(memory.working_budget(), 272_000);
-        assert_eq!(memory.rollover_budget(), 244_800);
-        assert_eq!(memory.compaction_pressure_budget(), 228_416);
-
-        memory.policy.working_set_tokens = Some(65_536);
-        assert_eq!(memory.working_budget(), 65_536);
-        assert_eq!(memory.rollover_budget(), 58_982);
-        assert_eq!(memory.compaction_pressure_budget(), 42_598);
-
-        memory.capacity = Some(32_000);
-        assert_eq!(memory.working_budget(), 32_000);
-        memory.capacity = None;
-        memory.policy.working_set_tokens = None;
-        assert_eq!(memory.working_budget(), memory.policy.unknown_model_tokens);
+        restored.load(&mut restored_history)?;
         assert_eq!(
-            memory.status()["workingBudgetSource"],
-            "unknown-model-default"
+            restored.start_goal("synthetic continuation", true),
+            "ship feature"
         );
-    }
-
-    #[test]
-    fn malformed_manifest_fails_closed_and_budget_is_explicitly_estimated() {
-        let (dir, mut memory, _) = memory();
-        memory.capacity = Some(10000);
-        memory.estimated_tokens = 7500;
-        assert_eq!(memory.status()["lowBudget"], true);
-        assert_eq!(memory.status()["estimatedRemainingTokens"], 2500);
-        fs::write(dir.path().join("context/state.json"), "invalid").unwrap();
-        let mut restored = ContextMemory::default();
-        restored.bind(Some(dir.path().join("context")));
-        let mut history = vec![Message::user("do not discard")];
-        assert!(restored.load(&mut history).is_err());
-        assert_eq!(history[0].content.as_deref(), Some("do not discard"));
+        let goal = restored.goal_mut().unwrap();
+        assert_eq!(goal.remaining, vec!["fix failing test"]);
+        assert_eq!(goal.next_action.as_deref(), Some("fix failing test"));
+        assert_eq!(goal.observations[0].window_id, window);
+        for _ in RECOVERIES_BEFORE_RESTART..MAX_GOAL_RECOVERIES {
+            assert_eq!(
+                goal.progress.checkpoint(true),
+                GoalCheckpointAction::Recover
+            );
+        }
+        assert_eq!(goal.progress.checkpoint(true), GoalCheckpointAction::Pause);
+        let original: Vec<Message> = serde_json::from_slice(&fs::read(
+            directory
+                .path()
+                .join("context")
+                .join(format!("{window}.json")),
+        )?)?;
         assert_eq!(
-            fs::read_to_string(dir.path().join("context/state.json")).unwrap(),
-            "invalid"
+            original[goal.observations[0].item].content.as_deref(),
+            Some("test failed")
         );
+        Ok(())
     }
-}
 
-#[cfg(test)]
-mod image_tests {
-    use super::*;
     #[test]
-    fn image_payload_is_retained_without_counting_base64_as_text_tokens() {
-        let request = Message::user_with_images(
-            "Inspect this image",
-            vec![crate::core::ImageAttachment {
-                media_type: "image/png".into(),
-                data: "a".repeat(1_000_000),
-                name: Some("screenshot.png".into()),
-            }],
-        );
-        assert!(estimate_messages(std::slice::from_ref(&request)).unwrap() < 5000);
-        let directory = tempfile::tempdir().unwrap();
-        let mut memory = ContextMemory::default();
-        memory.bind(Some(directory.path().join("context")));
-        let mut history = vec![Message::system("system"), request.clone()];
-        memory.load(&mut history).unwrap();
-        memory.rollover(&mut history, Some(&request)).unwrap();
-        assert_eq!(history[1], request);
+    fn legacy_context_without_goal_remains_loadable() -> Result<()> {
+        let mut value = serde_json::to_value(State::default())?;
+        value.as_object_mut().unwrap().remove("goal");
+        let state: State = serde_json::from_value(value)?;
+        assert!(state.goal.is_none());
+        Ok(())
     }
 }

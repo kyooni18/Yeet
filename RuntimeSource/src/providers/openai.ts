@@ -14,6 +14,7 @@ import type {
   Message,
   ModelInfo,
   PromptCacheDiagnostics,
+  ProviderState,
   ProviderAdapter,
   StreamEvent,
   ToolChoice,
@@ -70,9 +71,18 @@ function stableSystemCacheInput(system: string): Record<string, unknown> {
   };
 }
 
+function matchingProviderState(message: Message, provider: string, protocol: string, model: string): any | undefined {
+  const state = message.providerState;
+  if (!state || state.provider !== provider || state.protocol !== protocol) return undefined;
+  if (state.model && state.model !== model) return undefined;
+  return state.data;
+}
+
 function mapInput(
   messages: Message[],
   promptCacheSupported: boolean,
+  provider: string,
+  model: string,
   cacheHistory = false,
   maxLookupBreakpoints = 80,
 ): unknown[] {
@@ -105,6 +115,12 @@ function mapInput(
           : output,
       });
       continue;
+    }
+
+    if (message.role === "assistant") {
+      const state = matchingProviderState(message, provider, "openai-responses", model);
+      const reasoningItems = Array.isArray(state?.reasoningItems) ? state.reasoningItems : [];
+      for (const item of reasoningItems) input.push(item);
     }
 
     if (message.content || message.images?.length) {
@@ -143,6 +159,7 @@ function bodyFor(
   stream: boolean,
   codex = false,
   comparisonResponseId?: string,
+  providerId = "openai",
 ): Record<string, unknown> {
   const split = splitLeadingSystem(request.messages, request.system);
   const toolChoice = mapToolChoice(request.toolChoice);
@@ -176,32 +193,68 @@ function bodyFor(
     cacheCapabilities.maxExplicitBreakpoints ?? cacheCapabilities.maxLookupBreakpoints ?? 80,
   );
   const maxMessageBreakpoints = Math.max(0, lookupBreakpoints - Number(stableSystemBreakpoint));
+  const strictToolSchema = (schema: Record<string, unknown>): boolean => {
+    for (const unsupported of ["oneOf", "anyOf", "allOf", "not", "patternProperties", "$ref"]) {
+      if (unsupported in schema) return false;
+    }
+    if (schema.type !== undefined && typeof schema.type !== "string") return false;
+    const type = typeof schema.type === "string"
+      ? schema.type
+      : schema.properties && typeof schema.properties === "object"
+        ? "object"
+        : undefined;
+    if (type === "object") {
+      if (schema.additionalProperties !== false) return false;
+      const properties = schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+        ? schema.properties as Record<string, unknown>
+        : {};
+      const required = new Set(Array.isArray(schema.required) ? schema.required.filter((value): value is string => typeof value === "string") : []);
+      if (Object.keys(properties).some((name) => !required.has(name))) return false;
+      return Object.values(properties).every((value) =>
+        !value || typeof value !== "object" || Array.isArray(value) || strictToolSchema(value as Record<string, unknown>));
+    }
+    if (type === "array") {
+      return Boolean(schema.items && typeof schema.items === "object" && !Array.isArray(schema.items)
+        && strictToolSchema(schema.items as Record<string, unknown>));
+    }
+    return true;
+  };
   const mappedTools = [
     ...(request.tools ?? []).map((tool) => ({
       type: "function",
       name: tool.name,
       ...(tool.description ? { description: tool.description } : {}),
       parameters: tool.inputSchema,
-      strict: false,
+      strict: strictToolSchema(tool.inputSchema),
     })),
     ...deferredTools.map((tool) => ({
       type: "function",
       name: tool.name,
       ...(tool.description ? { description: tool.description } : {}),
       parameters: tool.inputSchema,
-      strict: false,
+      strict: strictToolSchema(tool.inputSchema),
       defer_loading: true,
     })),
     ...(deferredTools.length > 0 ? [{ type: "tool_search" }] : []),
   ];
+  const requestedInclude = request.providerOptions?.include;
+  const providerInclude = Array.isArray(requestedInclude)
+    ? requestedInclude.filter((value): value is string => typeof value === "string")
+    : [];
+  const include = !codex && providerId === "openai"
+    ? [...new Set([...providerInclude, "reasoning.encrypted_content"])]
+    : providerInclude;
   const body: Record<string, unknown> = {
     ...(request.providerOptions ?? {}),
     model: request.model,
+    ...(include.length ? { include } : {}),
     input: [
       ...(stableSystemBreakpoint ? [stableSystemCacheInput(split.system!)] : []),
       ...mapInput(
         split.messages,
         promptCacheSupported,
+        providerId,
+        request.model,
         request.promptCache === true,
         maxMessageBreakpoints,
       ),
@@ -212,7 +265,7 @@ function bodyFor(
     ...(request.maxTokens !== undefined ? { max_output_tokens: request.maxTokens } : {}),
     ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
-    ...(request.metadata ? { metadata: request.metadata } : {}),
+    ...(request.providerMetadata ? { metadata: request.providerMetadata } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...cacheOptions,
   };
@@ -269,6 +322,19 @@ function reasoningText(raw: any): string | undefined {
     })
     .join("");
   return text || undefined;
+}
+
+function openAIProviderState(raw: any, provider: string, model: string): ProviderState | undefined {
+  const reasoningItems = Array.isArray(raw?.output)
+    ? raw.output.filter((item: any) => item?.type === "reasoning")
+    : [];
+  if (reasoningItems.length === 0) return undefined;
+  return {
+    provider,
+    protocol: "openai-responses",
+    model,
+    data: { reasoningItems },
+  };
 }
 
 function promptCacheDiagnostics(raw: any): PromptCacheDiagnostics | undefined {
@@ -398,6 +464,7 @@ export class OpenAIProvider implements ProviderAdapter {
     let transportAttempts: number | undefined;
     let streamedUsage: CallResult["usage"];
     let streamedPromptCacheDiagnostics: PromptCacheDiagnostics | undefined;
+    let streamedProviderState: ProviderState | undefined;
     let streamedText = "";
     let streamedReasoning = "";
     let streamedSummary = "";
@@ -409,6 +476,7 @@ export class OpenAIProvider implements ProviderAdapter {
           raw = event.raw;
           streamedUsage = event.usage;
           streamedPromptCacheDiagnostics = event.promptCacheDiagnostics;
+          streamedProviderState = event.providerState;
         }
         else if (event.type === "text-delta") streamedText += event.delta;
         else if (event.type === "reasoning-delta") streamedReasoning += event.delta;
@@ -424,7 +492,7 @@ export class OpenAIProvider implements ProviderAdapter {
         {
           method: "POST",
           headers: this.#headers(request),
-          body: JSON.stringify(bodyFor(request, false, false, comparisonResponseId)),
+          body: JSON.stringify(bodyFor(request, false, false, comparisonResponseId, this.id)),
         },
         {
           provider: this.id,
@@ -458,6 +526,7 @@ export class OpenAIProvider implements ProviderAdapter {
     const normalizedReasoning = streamedReasoning || reasoningText(raw);
     const normalizedReasoningSummary = streamedSummary || reasoningSummary(raw);
     const normalizedPromptCacheDiagnostics = streamedPromptCacheDiagnostics ?? promptCacheDiagnostics(raw);
+    const normalizedProviderState = streamedProviderState ?? openAIProviderState(raw, this.id, request.model);
     const normalizedUsageWithDiagnostics = usageWithPromptCacheDiagnostics(
       normalizedUsage,
       normalizedPromptCacheDiagnostics,
@@ -471,6 +540,7 @@ export class OpenAIProvider implements ProviderAdapter {
       ...(normalizedReasoning ? { reasoning: normalizedReasoning } : {}),
       ...(normalizedReasoningSummary ? { reasoningSummary: normalizedReasoningSummary } : {}),
       toolCalls,
+      ...(normalizedProviderState ? { providerState: normalizedProviderState } : {}),
       finishReason: toolCalls.length ? "tool_call" : finishReason(raw),
       ...(normalizedUsageWithDiagnostics ? { usage: normalizedUsageWithDiagnostics } : {}),
       ...(normalizedPromptCacheDiagnostics ? { promptCacheDiagnostics: normalizedPromptCacheDiagnostics } : {}),
@@ -489,7 +559,7 @@ export class OpenAIProvider implements ProviderAdapter {
       {
         method: "POST",
         headers: this.#headers(request),
-        body: JSON.stringify(bodyFor(request, true, codex, comparisonResponseId)),
+        body: JSON.stringify(bodyFor(request, true, codex, comparisonResponseId, this.id)),
       },
       {
         provider: this.id,
@@ -609,6 +679,7 @@ export class OpenAIProvider implements ProviderAdapter {
       normalizedUsage,
       normalizedPromptCacheDiagnostics,
     );
+    const normalizedProviderState = openAIProviderState(completedRaw, this.id, request.model);
     yield {
       type: "finish",
       finishReason: tools.size > 0 ? "tool_call" : finishReason(completedRaw),
@@ -616,6 +687,7 @@ export class OpenAIProvider implements ProviderAdapter {
       ...(normalizedPromptCacheDiagnostics
         ? { promptCacheDiagnostics: normalizedPromptCacheDiagnostics }
         : {}),
+      ...(normalizedProviderState ? { providerState: normalizedProviderState } : {}),
       ...(completedRaw ? { raw: completedRaw } : {}),
     };
   }

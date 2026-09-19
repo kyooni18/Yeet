@@ -1,0 +1,8 @@
+Trial merge-diff-arc-agi-task__Qic7ZZw failed: Docker compose command failed for environment merge-diff-arc-agi-task. Command: docker compose --project-name merge-diff-arc-agi-task__qic7zzw__env --project-directory /Users/kyooni18/.cache/harbor/tasks/Q3LDEno2RovPVJEJXuoivq/merge-diff-arc-agi-task/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpya3w8326/merge-diff-arc-agi-task__Qic7ZZw__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9wv6l50c/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp85hraw9v/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network merge-diff-arc-agi-task__qic7zzw__env_default Creating 
+ Network merge-diff-arc-agi-task__qic7zzw__env_default Creating 
+ Network merge-diff-arc-agi-task__qic7zzw__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network merge-diff-arc-agi-task__qic7zzw__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container merge-diff-arc-agi-task__qic7zzw__env-main-1 Creating 
+failed to create network merge-diff-arc-agi-task__qic7zzw__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

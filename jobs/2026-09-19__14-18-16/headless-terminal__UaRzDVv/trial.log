@@ -1,0 +1,114 @@
+Skipping image OS validation for alexgshaw/headless-terminal:20251031: docker inspect returned 1
+Trial headless-terminal__UaRzDVv failed: Docker compose command failed for environment headless-terminal. Command: docker compose --project-name headless-terminal__uarzdvv__env --project-directory /Users/kyooni18/.cache/harbor/tasks/KSwQXLapvDLmcHTvZcJVQG/headless-terminal/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpr_wffut_/headless-terminal__UaRzDVv__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpoe4zrobs/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpce0vaj2c/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/headless-terminal:20251031 Pulling 
+ b1badc6e5066 Already exists 0B
+ 7e88bf276da0 Already exists 0B
+ d55dfff74d98 Already exists 0B
+ e97853488aa5 Already exists 0B
+ 63ff33ad641b Already exists 0B
+ 6010ae45bbe7 Pulling fs layer 0B
+ 18aeee1a49c7 Pulling fs layer 0B
+ 6010ae45bbe7 Downloading 193.7kB
+ 6010ae45bbe7 Downloading 963.2kB
+ 18aeee1a49c7 Downloading 347B
+ 18aeee1a49c7 Verifying Checksum 0B
+ 18aeee1a49c7 Download complete 0B
+ 6010ae45bbe7 Downloading 2.143MB
+ 6010ae45bbe7 Downloading 3.323MB
+ 6010ae45bbe7 Downloading 4.483MB
+ 6010ae45bbe7 Downloading 5.456MB
+ 6010ae45bbe7 Downloading 6.439MB
+ 6010ae45bbe7 Downloading 7.399MB
+ 6010ae45bbe7 Downloading 8.357MB
+ 6010ae45bbe7 Downloading 9.327MB
+ 6010ae45bbe7 Downloading 10.11MB
+ 6010ae45bbe7 Downloading 11.47MB
+ 6010ae45bbe7 Downloading 12.64MB
+ 6010ae45bbe7 Downloading 13.82MB
+ 6010ae45bbe7 Downloading 15.38MB
+ 6010ae45bbe7 Downloading 16.54MB
+ 6010ae45bbe7 Downloading 17.91MB
+ 6010ae45bbe7 Download complete 0B
+ 6010ae45bbe7 Extracting 196.6kB
+ 6010ae45bbe7 Extracting 2.556MB
+ 6010ae45bbe7 Extracting 6.488MB
+ 6010ae45bbe7 Extracting 11.4MB
+ 6010ae45bbe7 Extracting 16.91MB
+ 6010ae45bbe7 Extracting 18.11MB
+failed to register layer: open /var/lib/docker/image/overlay2/layerdb/tmp/write-set-1472128111/diff: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Failed to write artifacts manifest
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 415, in run
+    await self._prepare()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 453, in _prepare
+    await self._setup_agent_environment()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1542, in _setup_agent_environment
+    await self._start_agent_environment()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1548, in _start_agent_environment
+    await asyncio.wait_for(
+    ...<4 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 1007, in start
+    await self._run_docker_compose_command(["up", *runtime.up_args])
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 704, in _run_docker_compose_command
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Docker compose command failed for environment headless-terminal. Command: docker compose --project-name headless-terminal__uarzdvv__env --project-directory /Users/kyooni18/.cache/harbor/tasks/KSwQXLapvDLmcHTvZcJVQG/headless-terminal/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpr_wffut_/headless-terminal__UaRzDVv__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpoe4zrobs/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpce0vaj2c/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/headless-terminal:20251031 Pulling 
+ b1badc6e5066 Already exists 0B
+ 7e88bf276da0 Already exists 0B
+ d55dfff74d98 Already exists 0B
+ e97853488aa5 Already exists 0B
+ 63ff33ad641b Already exists 0B
+ 6010ae45bbe7 Pulling fs layer 0B
+ 18aeee1a49c7 Pulling fs layer 0B
+ 6010ae45bbe7 Downloading 193.7kB
+ 6010ae45bbe7 Downloading 963.2kB
+ 18aeee1a49c7 Downloading 347B
+ 18aeee1a49c7 Verifying Checksum 0B
+ 18aeee1a49c7 Download complete 0B
+ 6010ae45bbe7 Downloading 2.143MB
+ 6010ae45bbe7 Downloading 3.323MB
+ 6010ae45bbe7 Downloading 4.483MB
+ 6010ae45bbe7 Downloading 5.456MB
+ 6010ae45bbe7 Downloading 6.439MB
+ 6010ae45bbe7 Downloading 7.399MB
+ 6010ae45bbe7 Downloading 8.357MB
+ 6010ae45bbe7 Downloading 9.327MB
+ 6010ae45bbe7 Downloading 10.11MB
+ 6010ae45bbe7 Downloading 11.47MB
+ 6010ae45bbe7 Downloading 12.64MB
+ 6010ae45bbe7 Downloading 13.82MB
+ 6010ae45bbe7 Downloading 15.38MB
+ 6010ae45bbe7 Downloading 16.54MB
+ 6010ae45bbe7 Downloading 17.91MB
+ 6010ae45bbe7 Download complete 0B
+ 6010ae45bbe7 Extracting 196.6kB
+ 6010ae45bbe7 Extracting 2.556MB
+ 6010ae45bbe7 Extracting 6.488MB
+ 6010ae45bbe7 Extracting 11.4MB
+ 6010ae45bbe7 Extracting 16.91MB
+ 6010ae45bbe7 Extracting 18.11MB
+failed to register layer: open /var/lib/docker/image/overlay2/layerdb/tmp/write-set-1472128111/diff: read-only file system
+. Stderr: None. 
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/artifact_handler.py", line 417, in _write_manifest
+    manifest_path.write_text(json.dumps(manifest.to_json_data(), indent=2))
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_local.py", line 555, in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_abc.py", line 651, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_local.py", line 537, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 28] No space left on device: 'jobs/2026-09-19__14-18-16/headless-terminal__UaRzDVv/artifacts/manifest.json'

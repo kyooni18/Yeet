@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/make-mips-interpreter:20251031: docker inspect returned 1
+Trial make-mips-interpreter__sM2Shou failed: Docker compose command failed for environment make-mips-interpreter. Command: docker compose --project-name make-mips-interpreter__sm2shou__env --project-directory /Users/kyooni18/.cache/harbor/tasks/LeNjAXy6fbV5X852Td8iV9/make-mips-interpreter/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmph2i_3b9u/make-mips-interpreter__sM2Shou__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpunqneuzz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpo_9v97jq/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/make-mips-interpreter:20251031 Pulling 
+ Image alexgshaw/make-mips-interpreter:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

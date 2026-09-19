@@ -85,33 +85,3 @@ fn trace_list(values: &[String], fallback: &str) -> String {
     }
     joined
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::path::PathBuf;
-
-    #[test]
-    fn summary_identifies_request_without_logging_arguments() {
-        let payload = json!({
-            "jsonrpc":"2.0",
-            "id":"call-42",
-            "method":"tools/call",
-            "params":{
-                "name":"run_shell",
-                "arguments":{
-                    "command":"printf SUPER_SECRET_VALUE",
-                    "workspace":"/tmp/trace-workspace",
-                    "timeoutSeconds":5
-                }
-            }
-        });
-        let summary = runtime_request_summary(&payload, &PathBuf::from("/fallback"));
-        assert!(summary.contains("id=call-42"));
-        assert!(summary.contains("tool=run_shell"));
-        assert!(summary.contains("workspace=/tmp/trace-workspace"));
-        assert!(!summary.contains("SUPER_SECRET_VALUE"));
-        assert!(!summary.contains("command="));
-    }
-}

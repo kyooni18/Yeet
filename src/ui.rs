@@ -1,9 +1,16 @@
 mod chrome;
 mod composer;
+use composer::draw as draw_input;
 mod dialogs;
+#[cfg(test)]
+mod render_tests;
 mod responsive;
 mod shell;
+mod status;
 mod task;
+use status::draw as draw_status;
+#[cfg(test)]
+use status::{status_aux_line, status_line};
 mod theme;
 mod yeet_brand;
 use dialogs::{
@@ -18,8 +25,8 @@ use markdown::markdown_lines;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Margin, Position, Rect},
-    prelude::{Line, Modifier, Span, Style, Text},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    prelude::{Color, Line, Modifier, Span, Style, Text},
     widgets::{
         Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Wrap,
@@ -32,7 +39,42 @@ use crate::{
     model::{ConversationEntry, ConversationKind, ToolCallStatus},
 };
 
+pub fn initialize_theme() {
+    let settings = crate::config::ConfigStore::default()
+        .theme_settings()
+        .unwrap_or_default();
+    let runtime = crate::model::RuntimeSettingsState {
+        appearance: settings.appearance.unwrap_or_else(|| "auto".into()),
+        theme_dark: settings.dark.unwrap_or_else(|| "kanagawa".into()),
+        theme_light: settings.light.unwrap_or_else(|| "adwaita".into()),
+        ..Default::default()
+    };
+    apply_runtime_theme(&runtime);
+}
+
+pub(crate) fn apply_runtime_theme(settings: &crate::model::RuntimeSettingsState) {
+    let appearance = match std::env::var("YEET_THEME_MODE")
+        .ok()
+        .as_deref()
+        .unwrap_or(settings.appearance.as_str())
+    {
+        value if value.eq_ignore_ascii_case("light") => theme::Appearance::Light,
+        _ => theme::Appearance::Dark,
+    };
+    let theme_name = match appearance {
+        theme::Appearance::Dark => settings.theme_dark.as_str(),
+        theme::Appearance::Light => settings.theme_light.as_str(),
+    };
+    theme::initialize(appearance, Some(theme_name));
+}
+
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    if app.state.is_streaming {
+        let activity_label = live_operation(app)
+            .map(|operation| operation.label)
+            .unwrap_or_else(|| live_activity(app).0);
+        app.sync_activity_label(&activity_label);
+    }
     frame.render_widget(Block::default().style(theme::base()), frame.area());
     let adaptive = responsive::metrics(frame.area());
     let (sidebar_area, sidebar_targets) = shell::sidebar_session_targets(app, frame.area());
@@ -155,8 +197,8 @@ fn draw_transcript(
             .end_symbol(None)
             .track_symbol(Some("│"))
             .thumb_symbol("┃")
-            .track_style(Style::default().fg(theme::BORDER_DIM))
-            .thumb_style(Style::default().fg(theme::ACCENT));
+            .track_style(Style::default().fg(theme::border_dim()))
+            .thumb_style(Style::default().fg(theme::accent()));
         let mut state = ScrollbarState::new(app.max_scroll as usize + 1)
             .position(app.scroll_y as usize)
             .viewport_content_length(area.height as usize);
@@ -189,7 +231,7 @@ fn draw_selection(frame: &mut Frame<'_>, app: &App, area: Rect) {
         };
         for column in from.max(area.x)..=to.min(area.right().saturating_sub(1)) {
             let cell = &mut buffer[(column, row)];
-            cell.set_style(Style::default().bg(theme::ACCENT).fg(theme::BACKGROUND));
+            cell.set_style(Style::default().bg(theme::accent()).fg(theme::background()));
         }
     }
 }
@@ -231,7 +273,7 @@ fn draw_transcript_context_menu(frame: &mut Frame<'_>, app: &mut App) {
     let copy_style = if app.selected_transcript_text().is_some() {
         theme::surface()
     } else {
-        theme::surface().fg(theme::MUTED)
+        theme::surface().fg(theme::muted())
     };
     let items = vec![
         ListItem::new(Line::styled(" Copy", copy_style)),
@@ -244,7 +286,7 @@ fn draw_transcript_context_menu(frame: &mut Frame<'_>, app: &mut App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme::BORDER))
+                .border_style(Style::default().fg(theme::border()))
                 .style(theme::surface()),
         ),
         area,
@@ -257,242 +299,44 @@ fn draw_suggestions(
     area: Rect,
     suggestions: &[(String, String)],
 ) {
-    let items = suggestions
-        .iter()
-        .enumerate()
-        .map(|(index, (name, description))| {
-            let style = if index == app.command_index {
-                Style::default()
-                    .bg(theme::SELECTED)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {name:<14}"), style),
-                Span::styled(description.as_str(), style.fg(theme::TEXT_DIM)),
-            ]))
-        });
-    let list = List::new(items).block(theme::modal_block("Commands · ↑/↓ choose · Tab complete"));
+    let list = suggestion_list(suggestions);
     let mut state = ratatui::widgets::ListState::default().with_selected(Some(app.command_index));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let border_style = if app.state.is_streaming {
-        Style::default().fg(theme::pulse_color())
-    } else {
-        Style::default().fg(theme::BORDER)
-    };
-    let roomy = area.width >= 54;
-    let title = if app.state.is_streaming && roomy {
-        " ◈  Next message · Replying  ".to_owned()
-    } else if app.state.is_streaming {
-        " ◈  Draft · Replying  ".to_owned()
-    } else if roomy {
-        " ◈  Message · Ready  ".to_owned()
-    } else {
-        " ◈  Message  ".to_owned()
-    };
-    let hint = if app.state.is_streaming {
-        if area.width < 34 {
-            " Esc stop "
-        } else if area.width < 60 {
-            " Esc stop · Send after reply "
-        } else if area.width < 104 {
-            " Esc stop · Send after reply · Shift+Enter newline "
-        } else {
-            " Esc stop  ·  Send after reply  ·  Shift+Enter newline  ·  Alt+↑/↓ history  ·  / commands "
-        }
-    } else if area.width < 34 {
-        " Enter send "
-    } else if area.width < 60 {
-        " Enter send · / commands "
-    } else if area.width < 104 {
-        " Enter send · Shift+Enter newline · / commands "
-    } else {
-        " Enter send  ·  Shift+Enter newline  ·  Alt+↑/↓ history  ·  / commands "
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(border_style)
-        .style(theme::surface())
-        .padding(ratatui::widgets::Padding::horizontal(1))
-        .title(title)
-        .title_bottom(Line::from(hint).style(Style::default().fg(theme::MUTED)))
-        .title_style(
-            Style::default()
-                .fg(if app.state.is_streaming {
-                    theme::ACCENT_HOT
-                } else {
-                    theme::ACCENT_WARM
-                })
-                .add_modifier(Modifier::BOLD),
-        );
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-    let layout = composer::layout(&app.input, app.cursor, inner.width);
-    let scroll = layout.row.saturating_sub(inner.height as usize - 1);
-    let lines = if app.input.is_empty() {
-        vec![Line::styled(
-            "› Type a message",
-            Style::default()
-                .fg(theme::MUTED)
-                .add_modifier(Modifier::ITALIC),
-        )]
-    } else {
-        layout
-            .lines
-            .iter()
-            .skip(scroll)
-            .take(inner.height as usize)
-            .map(|line| Line::raw(line.clone()))
-            .collect()
-    };
-    frame.render_widget(Paragraph::new(lines), inner);
-    if app.mode == Mode::Chat
-        && app.state.pending_shell_permission.is_none()
-        && app.state.pending_native_app_permission.is_none()
-    {
-        frame.set_cursor_position(Position::new(
-            inner.x + (layout.column as u16).min(inner.width - 1),
-            inner.y + (layout.row - scroll) as u16,
-        ));
-    }
-}
-
-fn draw_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let width = area.width as usize;
-    if width == 0 {
-        return;
-    }
-    frame.render_widget(Block::default().style(theme::surface()), area);
-    frame.render_widget(Paragraph::new(status_line(app, width)), area);
-}
-
-fn status_line(app: &App, width: usize) -> Line<'static> {
-    let current_tokens = app.state.current_context_tokens.unwrap_or(0);
-    let total_tokens = app.state.active_model_context_length;
-
-    let reasoning = if app.state.active_reasoning_level.is_empty() {
-        "auto"
-    } else {
-        app.state.active_reasoning_level.as_str()
-    };
-    let permission = app
-        .state
-        .sandbox_settings
-        .as_ref()
-        .map(|settings| settings.permission_mode())
-        .unwrap_or("ask");
-    let current = compact_number(current_tokens);
-    let prefix = if width >= 3 { " ◈ " } else { "" };
-    let available = width.saturating_sub(prefix.chars().count());
-    let model_full = if app.state.active_model.is_empty() {
-        "no model".to_owned()
-    } else {
-        truncate_middle(&app.state.active_model, 30)
-    };
-    let model_short = if app.state.active_model.is_empty() {
-        "no model".to_owned()
-    } else {
-        let short = app
-            .state
-            .active_model
-            .rsplit_once('/')
-            .map(|(_, model)| model)
-            .unwrap_or(app.state.active_model.as_str());
-        truncate_middle(short, 18)
-    };
-    let model_tiny = truncate_middle(&model_short, 11);
-    let reasoning_short = match reasoning {
-        "medium" => "med",
-        "auto" => "auto",
-        "low" => "low",
-        "high" => "high",
-        other => other,
-    };
-    let permission_short = match permission {
-        "unlimited" => "unlim",
-        other => other,
-    };
-    let reasoning_micro = match reasoning_short {
-        "high" => "hi",
-        "med" => "me",
-        "low" => "lo",
-        "auto" => "au",
-        other => other,
-    };
-    let permission_micro = match permission_short {
-        "unlim" => "un",
-        "auto" => "au",
-        "ask" => "as",
-        other => other,
-    };
-    let model_micro = truncate_middle(&model_short, 7);
-    let candidates = if let Some(total) = total_tokens.filter(|total| *total > 0) {
-        let total_label = compact_number(total);
-        let percent = format!("{:.0}%", current_tokens as f64 * 100.0 / total as f64);
-        let meter = context_meter(current_tokens, total_tokens, 7);
-        vec![
-            format!(
-                "model {model_full} │ ctx {current}/{total_label} {percent} {meter} │ reason {reasoning} │ perm {permission}"
+fn suggestion_list(suggestions: &[(String, String)]) -> List<'_> {
+    let items = suggestions.iter().map(|(name, description)| {
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("{name:<14}  "),
+                Style::default().fg(theme::accent_warm()),
             ),
-            format!("{model_short} │ ctx {percent} {meter} │ {reasoning} │ {permission}"),
-            format!("{model_short} · {percent} · {reasoning_short}/{permission_short}"),
-            format!("{model_tiny} {percent} {reasoning_short}/{permission_short}"),
-            format!("{model_micro} {percent} {reasoning_micro}/{permission_micro}"),
-        ]
-    } else {
-        let model_label = if app.state.active_model.is_empty() {
-            model_full.clone()
-        } else {
-            format!("model {model_full}")
-        };
-        vec![
-            format!("{model_label} │ ctx unavailable │ reason {reasoning} │ perm {permission}"),
-            format!("{model_short} │ ctx — │ {reasoning} │ {permission}"),
-            format!("{model_short} · ctx — · {reasoning_short}/{permission_short}"),
-            format!("{model_tiny} · {reasoning_short}/{permission_short}"),
-            format!("{model_micro} {reasoning_micro}/{permission_micro}"),
-        ]
-    };
-    let fallback = candidates.last().cloned().unwrap_or_default();
-    let text = candidates
-        .into_iter()
-        .find(|candidate| Span::raw(candidate).width() <= available)
-        .unwrap_or_else(|| task::fit(&fallback, available));
-    Line::from(vec![
-        Span::styled(
-            prefix,
-            Style::default()
-                .fg(theme::ACCENT_WARM)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(text, Style::default().fg(theme::TEXT_DIM)),
-    ])
-}
-
-fn context_meter(current: u64, total: Option<u64>, cells: usize) -> String {
-    let Some(total) = total.filter(|total| *total > 0) else {
-        return "·".repeat(cells);
-    };
-    let filled =
-        ((current.saturating_mul(cells as u64) + total / 2) / total).min(cells as u64) as usize;
-    format!(
-        "{}{}",
-        "▰".repeat(filled),
-        "▱".repeat(cells.saturating_sub(filled))
-    )
+            Span::styled(description.as_str(), Style::default().fg(theme::text_dim())),
+        ]))
+    });
+    List::new(items)
+        .block(theme::modal_block("Commands · ↑/↓ choose · Tab complete"))
+        .highlight_style(theme::selected())
+        .highlight_symbol("› ")
 }
 
 fn live_activity(app: &App) -> (String, Option<&str>) {
     if app.state.active_reasoning_entry_id.is_some() {
-        return ("Reasoning".into(), None);
+        let title = app
+            .state
+            .active_activity_entry_id
+            .as_deref()
+            .and_then(|id| {
+                app.conversation.iter().rev().find_map(|entry| {
+                    (entry.id == id).then(|| match &entry.kind {
+                        ConversationKind::Activity { activity } => activity.title.clone(),
+                        _ => String::new(),
+                    })
+                })
+            })
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "Reasoning".into());
+        return (title, None);
     }
     let Some(id) = app.state.active_activity_entry_id.as_deref() else {
         return ("Working".into(), None);
@@ -510,6 +354,37 @@ fn live_activity(app: &App) -> (String, Option<&str>) {
         .unwrap_or_else(|| ("Working".into(), None))
 }
 
+pub(super) fn animated_activity_label(app: &App, label: &str) -> String {
+    let Some(started_at) = app.activity_label_started_at else {
+        return label.to_owned();
+    };
+    let progress = (started_at.elapsed().as_millis() as f32
+        / f32::from(app.activity_label_transition_ms))
+    .clamp(0.0, 1.0);
+    if progress >= 1.0 || app.activity_label_to != label {
+        return label.to_owned();
+    }
+    morph_activity_text(&app.activity_label_from, label, progress)
+}
+
+fn morph_activity_text(from: &str, to: &str, progress: f32) -> String {
+    let from = from.chars().collect::<Vec<_>>();
+    let to = to.chars().collect::<Vec<_>>();
+    let length = from.len().max(to.len());
+    let mut result = String::new();
+    for index in 0..length {
+        let stagger = index as f32 / (length.max(1) as f32) * 0.35;
+        let local = ((progress - stagger) / 0.65).clamp(0.0, 1.0);
+        let character = if local < 0.5 {
+            from.get(index).copied().unwrap_or(' ')
+        } else {
+            to.get(index).copied().unwrap_or(' ')
+        };
+        result.push(character);
+    }
+    result.trim_end().to_owned()
+}
+
 fn tool_step_counts(app: &App) -> (usize, usize) {
     let mut counts = (0usize, 0usize);
     for entry in task::latest_turn(app) {
@@ -521,17 +396,18 @@ fn tool_step_counts(app: &App) -> (usize, usize) {
         for call in calls {
             match call.status {
                 ToolCallStatus::Completed => counts.0 += 1,
-                ToolCallStatus::Failed => counts.1 += 1,
-                ToolCallStatus::Streaming | ToolCallStatus::Suppressed => {}
+                ToolCallStatus::Failed
+                | ToolCallStatus::Cancelled
+                | ToolCallStatus::Interrupted
+                | ToolCallStatus::TimedOut => counts.1 += 1,
+                ToolCallStatus::Preparing
+                | ToolCallStatus::AwaitingPermission
+                | ToolCallStatus::Running
+                | ToolCallStatus::Suppressed => {}
             }
         }
     }
     counts
-}
-
-fn spinner_frame(elapsed_ms: u128) -> &'static str {
-    const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    FRAMES[((elapsed_ms / 80) as usize) % FRAMES.len()]
 }
 
 fn format_elapsed(elapsed_ms: u128) -> String {
@@ -541,6 +417,77 @@ fn format_elapsed(elapsed_ms: u128) -> String {
         let seconds = elapsed_ms / 1_000;
         format!("{}m{:02}s", seconds / 60, seconds % 60)
     }
+}
+
+/// A deliberately small motion cue for the one piece of UI that is still live.
+/// The glyph family changes with the actual live phase, while the cadence stays stable.
+pub(super) fn activity_marker(app: &App) -> &'static str {
+    let frame = activity_frame(app);
+    if app.state.active_reasoning_entry_id.is_some() {
+        ["—", "–", "-", "·", "∙", "○", "◌", "◉", "◌", "○", "∙", "·"][frame]
+    } else if app.state.active_assistant_entry_id.is_some() {
+        ["-", "–", "—", "·", "•", "●", "◉", "●", "•", "·", "–", "-"][frame]
+    } else {
+        ["-", "–", "—", "◌", "◍", "◉", "◍", "◌", "—", "–", "-", "·"][frame]
+    }
+}
+
+pub(super) fn activity_marker_color(app: &App) -> Color {
+    let frame = activity_frame(app);
+    if app.state.active_reasoning_entry_id.is_some() {
+        [
+            theme::muted(),
+            theme::muted(),
+            theme::muted(),
+            theme::accent_warm(),
+            theme::accent_warm(),
+            theme::accent_hot(),
+            theme::accent_hot(),
+            theme::accent_warm(),
+            theme::accent_warm(),
+            theme::muted(),
+            theme::muted(),
+            theme::muted(),
+        ][frame]
+    } else if app.state.active_assistant_entry_id.is_some() {
+        [
+            theme::user(),
+            theme::text_dim(),
+            theme::text(),
+            theme::text_dim(),
+            theme::text(),
+            theme::text_dim(),
+            theme::user(),
+            theme::user(),
+            theme::text_dim(),
+            theme::user(),
+            theme::text_dim(),
+            theme::user(),
+        ][frame]
+    } else {
+        [
+            theme::accent(),
+            theme::accent(),
+            theme::accent_hot(),
+            theme::accent_hot(),
+            theme::accent_hot(),
+            theme::accent(),
+            theme::accent(),
+            theme::accent_hot(),
+            theme::accent_hot(),
+            theme::accent(),
+            theme::accent(),
+            theme::accent(),
+        ][frame]
+    }
+}
+
+fn activity_frame(app: &App) -> usize {
+    let elapsed_ms = app
+        .stream_elapsed()
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    ((elapsed_ms / 110) as usize) % 12
 }
 
 fn cell_width(value: &str) -> usize {
@@ -655,6 +602,11 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
     let mut rendered_any = false;
     let mut previous_compact = false;
     let mut index = 0;
+    let latest_turn_start = app
+        .conversation
+        .iter()
+        .rposition(|entry| matches!(entry.kind, ConversationKind::User { .. }))
+        .unwrap_or(0);
 
     while index < app.conversation.len() {
         let entry = &app.conversation[index];
@@ -669,7 +621,10 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
         if matches!(&entry.kind, ConversationKind::ToolCall { .. }) {
             let start = index;
             while index < app.conversation.len()
-                && matches!(&app.conversation[index].kind, ConversationKind::ToolCall { .. })
+                && matches!(
+                    &app.conversation[index].kind,
+                    ConversationKind::ToolCall { .. }
+                )
             {
                 index += 1;
             }
@@ -680,17 +635,14 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            if calls.len() > 1 {
-                if rendered_any {
-                    lines.push(Line::from(""));
-                }
-                lines.push(tool_batch_line(calls.iter().copied(), width));
-                rendered_any = true;
-                previous_compact = true;
-            }
-            for entry in &app.conversation[start..index] {
-                lines.extend(entry_lines(app, entry, width));
-            }
+            lines.extend(tool_group_lines(
+                app,
+                &calls,
+                width,
+                app.state.is_streaming && start >= latest_turn_start,
+            ));
+            rendered_any = true;
+            previous_compact = true;
             continue;
         }
 
@@ -715,7 +667,7 @@ struct LiveOperation {
 fn live_operation(app: &App) -> Option<LiveOperation> {
     if app.state.active_reasoning_entry_id.is_some() {
         return Some(LiveOperation {
-            label: "Reasoning".into(),
+            label: live_activity(app).0,
             detail: live_reasoning_detail(app),
         });
     }
@@ -725,19 +677,30 @@ fn live_operation(app: &App) -> Option<LiveOperation> {
         .rev()
         .find_map(|entry| match &entry.kind {
             ConversationKind::ToolCall { tool_call }
-                if matches!(tool_call.status, ToolCallStatus::Streaming) =>
+                if matches!(
+                    tool_call.status,
+                    ToolCallStatus::Preparing
+                        | ToolCallStatus::AwaitingPermission
+                        | ToolCallStatus::Running
+                ) =>
             {
                 Some(tool_call)
             }
-            ConversationKind::Assistant { tool_calls, .. } => tool_calls
-                .iter()
-                .rev()
-                .find(|call| matches!(call.status, ToolCallStatus::Streaming)),
+            ConversationKind::Assistant { tool_calls, .. } => {
+                tool_calls.iter().rev().find(|call| {
+                    matches!(
+                        call.status,
+                        ToolCallStatus::Preparing
+                            | ToolCallStatus::AwaitingPermission
+                            | ToolCallStatus::Running
+                    )
+                })
+            }
             _ => None,
         })
     {
         return Some(LiveOperation {
-            label: format!("{} {}", tool_glyph(&call.name), tool_title(&call.name)),
+            label: tool_activity_detail(call),
             detail: tool_argument_summary(&call.arguments, 72),
         });
     }
@@ -802,7 +765,7 @@ fn transcript_continuation_indent(line: &Line<'static>, content_width: usize) ->
     let Some(first) = line.spans.first() else {
         return 0;
     };
-    if first.style.bg == Some(theme::CODE_BACKGROUND) {
+    if first.style.bg == Some(theme::code_background()) {
         return 2.min(content_width.saturating_sub(1));
     }
     let marker = first.content.trim();
@@ -857,6 +820,7 @@ fn prefixed_wrapped_line(
     line: Line<'static>,
     width: u16,
 ) -> Vec<Line<'static>> {
+    let line_style = line.style;
     let prefix_width = prefix.width();
     let width = width as usize;
     if prefix_width >= width {
@@ -887,7 +851,7 @@ fn prefixed_wrapped_line(
     };
 
     for span in line.spans {
-        let style = span.style;
+        let style = line_style.patch(span.style);
         let text = span.content.into_owned();
         for run in text_runs(&text) {
             let whitespace = run.chars().all(char::is_whitespace);
@@ -947,22 +911,29 @@ fn prefixed_wrapped_line(
 fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'static>> {
     match &entry.kind {
         ConversationKind::User { content } => {
-            let mut lines = vec![Line::from(vec![
-                Span::styled("╾ ", Style::default().fg(theme::BORDER)),
-                Span::styled(
-                    "USER // DIRECTIVE",
+            let mut lines = vec![
+                Line::from(Span::styled(
+                    "▌ You",
                     Style::default()
-                        .fg(theme::ACCENT_HOT)
+                        .fg(theme::user())
                         .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" ╼", Style::default().fg(theme::BORDER)),
-            ])];
+                ))
+                .style(Style::default().bg(theme::user_surface())),
+            ];
             for line in content.lines() {
                 lines.extend(prefixed_wrapped_line(
-                    Span::styled("┃ ", Style::default().fg(theme::ACCENT)),
-                    Line::from(Span::styled(format!("{line} "), theme::surface())),
+                    Span::styled("▌ ", Style::default().fg(theme::user())),
+                    Line::from(Span::styled(
+                        line.to_owned(),
+                        Style::default().fg(theme::text()),
+                    )),
                     width,
                 ));
+            }
+            for line in &mut lines {
+                line.style = line.style.bg(theme::user_surface());
+                let padding = usize::from(width).saturating_sub(line.width());
+                line.spans.push(Span::raw(" ".repeat(padding)));
             }
             lines
         }
@@ -976,25 +947,24 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                 } else {
                     content
                 };
-            let elapsed_ms = app.stream_elapsed().unwrap_or_default().as_millis();
-            let mut lines = vec![Line::from(vec![
-                Span::styled("╾ ", Style::default().fg(theme::BORDER)),
-                Span::styled("YEET // RESPONSE", theme::brand()),
-                Span::styled(" ╼", Style::default().fg(theme::BORDER)),
-            ])];
+            let mut lines = if content.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![Line::styled("● Yeet", theme::brand())]
+            };
             for line in markdown_lines(content) {
                 lines.extend(prefixed_wrapped_line(
-                    Span::styled("┃ ", Style::default().fg(theme::BORDER)),
+                    Span::styled("  ", Style::default().fg(theme::border())),
                     line,
                     width,
                 ));
             }
-            if tool_calls.len() > 1 {
-                lines.push(tool_batch_line(tool_calls.iter(), width));
-            }
-            for call in tool_calls {
-                lines.extend(tool_lines(elapsed_ms, call, width));
-            }
+            lines.extend(tool_group_lines(
+                app,
+                &tool_calls.iter().collect::<Vec<_>>(),
+                width,
+                app.state.is_streaming,
+            ));
             lines
         }
         ConversationKind::Reasoning { content, summary } => {
@@ -1009,18 +979,18 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                     (content.as_str(), summary.as_deref())
                 };
             let mut lines = vec![Line::from(vec![
-                Span::styled("◇ COGNITION //", Style::default().fg(theme::ACCENT)),
+                Span::styled("Thinking", Style::default().fg(theme::accent_warm())),
                 Span::styled(
                     summary
-                        .map(|value| format!(" · {value}"))
+                        .map(|value| format!(" — {value}"))
                         .unwrap_or_default(),
-                    Style::default().fg(theme::MUTED),
+                    Style::default().fg(theme::muted()),
                 ),
             ])];
             for line in markdown_lines(content) {
                 lines.extend(prefixed_wrapped_line(
-                    Span::styled("┊ ", Style::default().fg(theme::BORDER_DIM)),
-                    line,
+                    Span::styled("┊ ", Style::default().fg(theme::border())),
+                    line.style(Style::default().fg(theme::muted())),
                     width,
                 ));
             }
@@ -1030,25 +1000,23 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             let latest = app.state.active_activity_entry_id.as_deref() == Some(entry.id.as_str());
             vec![activity_line(app, activity, false, latest, width)]
         }
-        ConversationKind::ToolCall { tool_call } => tool_lines(
-            app.stream_elapsed().unwrap_or_default().as_millis(),
-            tool_call,
-            width,
-        ),
+        ConversationKind::ToolCall { tool_call } => {
+            tool_group_lines(app, &[tool_call], width, app.state.is_streaming)
+        }
         ConversationKind::Skill {
             name,
             content,
             status,
         } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled("skill ", Style::default().fg(theme::ACCENT)),
+                Span::styled("skill ", Style::default().fg(theme::accent())),
                 Span::styled(name.clone(), Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     status
                         .as_deref()
                         .map(|value| format!(" · {value}"))
                         .unwrap_or_default(),
-                    Style::default().fg(theme::MUTED),
+                    Style::default().fg(theme::muted()),
                 ),
             ])];
             lines.extend(markdown_lines(content));
@@ -1061,9 +1029,9 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             is_error,
         } => {
             let color = if *is_error {
-                theme::ERROR
+                theme::error()
             } else {
-                theme::ACCENT
+                theme::accent()
             };
             let mut lines = vec![Line::from(Span::styled(
                 format!("MCP {server}/{name}"),
@@ -1077,7 +1045,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             .map(|line| {
                 Line::from(Span::styled(
                     line.to_owned(),
-                    Style::default().fg(theme::TEXT_DIM),
+                    Style::default().fg(theme::text_dim()),
                 ))
             })
             .collect(),
@@ -1093,45 +1061,44 @@ fn activity_line(
 ) -> Line<'static> {
     let phase = activity.phase.as_str().unwrap_or_default();
     let (marker, marker_style, title_style) = if active {
-        let elapsed = app.stream_elapsed().unwrap_or_default();
         (
-            spinner_frame(elapsed.as_millis()),
+            "·",
             Style::default()
-                .fg(theme::ACCENT_HOT)
+                .fg(theme::accent_hot())
                 .add_modifier(Modifier::BOLD),
             Style::default()
-                .fg(theme::ACCENT_HOT)
+                .fg(theme::accent_hot())
                 .add_modifier(Modifier::BOLD),
         )
     } else {
         match phase {
             "done" => (
-                "✓",
-                Style::default().fg(theme::TEXT),
-                Style::default().fg(theme::TEXT_DIM),
+                "·",
+                Style::default().fg(theme::muted()),
+                Style::default().fg(theme::text_dim()),
             ),
             "failed" => (
-                "×",
+                "!",
                 Style::default()
-                    .fg(theme::ERROR)
+                    .fg(theme::error())
                     .add_modifier(Modifier::BOLD),
-                Style::default().fg(theme::ERROR),
+                Style::default().fg(theme::error()),
             ),
             "interrupted" => (
-                "■",
-                Style::default().fg(theme::ACCENT),
-                Style::default().fg(theme::TEXT_DIM),
+                "—",
+                Style::default().fg(theme::accent()),
+                Style::default().fg(theme::text_dim()),
             ),
             _ => (
                 "·",
-                Style::default().fg(theme::MUTED),
-                Style::default().fg(theme::MUTED),
+                Style::default().fg(theme::muted()),
+                Style::default().fg(theme::muted()),
             ),
         }
     };
 
     let mut spans = vec![
-        Span::styled(format!("{marker} "), marker_style),
+        Span::styled(format!("  {marker} "), marker_style),
         Span::styled(activity.title.clone(), title_style),
     ];
 
@@ -1149,7 +1116,7 @@ fn activity_line(
         spans.push(Span::styled("  ", Style::default()));
         spans.push(Span::styled(
             truncate_middle(detail, budget),
-            Style::default().fg(theme::MUTED),
+            Style::default().fg(theme::muted()),
         ));
     }
 
@@ -1162,7 +1129,7 @@ fn activity_line(
         if let Some(elapsed) = elapsed {
             spans.push(Span::styled(
                 format!("  {}", format_elapsed(elapsed.as_millis())),
-                Style::default().fg(theme::MUTED),
+                Style::default().fg(theme::muted()),
             ));
         }
     }
@@ -1170,210 +1137,400 @@ fn activity_line(
     Line::from(spans)
 }
 
-fn tool_lines(
-    elapsed_ms: u128,
-    call: &crate::model::ConversationToolCall,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let (marker, marker_style, title_style) = match call.status {
-        ToolCallStatus::Streaming => (
-            spinner_frame(elapsed_ms),
-            Style::default()
-                .fg(theme::ACCENT_HOT)
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(theme::ACCENT_HOT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        ToolCallStatus::Completed => (
-            "✓",
-            Style::default()
-                .fg(theme::SUCCESS)
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(theme::TEXT_DIM)
-                .add_modifier(Modifier::BOLD),
-        ),
-        ToolCallStatus::Failed => (
-            "×",
-            Style::default()
-                .fg(theme::ERROR)
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(theme::ERROR)
-                .add_modifier(Modifier::BOLD),
-        ),
-        ToolCallStatus::Suppressed => (
-            "⊘",
-            Style::default().fg(theme::MUTED),
-            Style::default().fg(theme::TEXT_DIM),
-        ),
-    };
-
-    let mut primary = vec![
-        Span::styled("  ", Style::default().fg(theme::BORDER_DIM)),
-        Span::styled(format!("{marker} "), marker_style),
-        Span::styled(
-            format!("{} ", tool_glyph(&call.name)),
-            Style::default().fg(theme::MUTED),
-        ),
-        Span::styled(tool_title(&call.name), title_style),
-    ];
-    if width >= 42 {
-        primary.push(Span::styled("  [", Style::default().fg(theme::BORDER)));
-        primary.push(Span::styled(
-            tool_class(&call.name),
-            Style::default()
-                .fg(theme::ACCENT_WARM)
-                .add_modifier(Modifier::BOLD),
-        ));
-        primary.push(Span::styled("]", Style::default().fg(theme::BORDER)));
-    }
-    if width >= 64 {
-        let used = Line::from(primary.clone()).width();
-        let budget = (width as usize).saturating_sub(used + 5).min(34);
-        if budget >= 4 {
-            primary.push(Span::styled(
-                "  ·  ",
-                Style::default().fg(theme::BORDER_DIM),
-            ));
-            primary.push(Span::styled(
-                truncate_middle(&call.name, budget),
-                Style::default().fg(theme::MUTED),
-            ));
-        }
-    }
-
-    let mut lines = vec![Line::from(primary)];
-    if width >= 32
-        && let Some(summary) =
-            tool_argument_summary(&call.arguments, (width as usize).saturating_sub(7))
-    {
-        lines.push(Line::from(vec![
-            Span::styled("  ╰─ ", Style::default().fg(theme::BORDER_DIM)),
-            Span::styled(summary, Style::default().fg(theme::MUTED)),
-        ]));
-    }
-    lines
+#[cfg(test)]
+fn tool_activity_line(call: &crate::model::ConversationToolCall, width: u16) -> Line<'static> {
+    tool_activity_line_count(call, width, 1)
 }
 
-fn tool_batch_line<'a>(
-    calls: impl IntoIterator<Item = &'a crate::model::ConversationToolCall>,
+fn tool_activity_line_count(
+    call: &crate::model::ConversationToolCall,
     width: u16,
+    count: usize,
 ) -> Line<'static> {
-    let calls = calls.into_iter().collect::<Vec<_>>();
-    let completed = calls
-        .iter()
-        .filter(|call| matches!(call.status, ToolCallStatus::Completed))
-        .count();
-    let failed = calls
-        .iter()
-        .filter(|call| matches!(call.status, ToolCallStatus::Failed))
-        .count();
-    let running = calls
-        .iter()
-        .filter(|call| matches!(call.status, ToolCallStatus::Streaming))
-        .count();
-    let mut parts = vec![format!(
-        "{} call{}",
-        calls.len(),
-        if calls.len() == 1 { "" } else { "s" }
-    )];
-    if completed > 0 {
-        parts.push(format!("{completed} OK"));
-    }
-    if running > 0 {
-        parts.push(format!("{running} running"));
-    }
-    if failed > 0 {
-        parts.push(format!("{failed} ERR"));
-    }
-    let summary = task::fit(
-        &format!("TOOLS  ·  {}", parts.join(" · ")),
-        width.saturating_sub(4) as usize,
+    let active = matches!(
+        call.status,
+        ToolCallStatus::Preparing | ToolCallStatus::AwaitingPermission | ToolCallStatus::Running
     );
+    let failed = matches!(
+        call.status,
+        ToolCallStatus::Failed
+            | ToolCallStatus::Cancelled
+            | ToolCallStatus::Interrupted
+            | ToolCallStatus::TimedOut
+    );
+    let icon = tool_icon(&call.name);
+    let icon_style = if failed {
+        Style::default().fg(theme::error())
+    } else if active {
+        Style::default().fg(theme::accent())
+    } else {
+        Style::default().fg(theme::muted())
+    };
+    let text_style = if failed {
+        Style::default().fg(theme::error())
+    } else if active {
+        Style::default().fg(theme::text())
+    } else {
+        Style::default().fg(theme::text_dim())
+    };
+    let prefix = format!("    {icon} ");
+    let width = usize::from(width);
+    let prefix = truncate_end(&prefix, width);
+    let remaining = width.saturating_sub(Span::raw(&prefix).width());
+    let detail = if count > 1 {
+        compact_tool_pattern_detail(call)
+    } else {
+        tool_activity_detail(call)
+    };
+    let detail = if count > 1 {
+        format!("{detail} ×{count}")
+    } else {
+        detail
+    };
+    let text = task::fit(&detail, remaining);
     Line::from(vec![
-        Span::styled("  ├─ ", Style::default().fg(theme::BORDER_DIM)),
-        Span::styled(
-            summary,
-            Style::default()
-                .fg(theme::MUTED)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(prefix, icon_style),
+        Span::styled(text, text_style),
     ])
 }
 
-fn tool_class(name: &str) -> &'static str {
-    match name {
-        "read_file" | "read_files" | "read_document" | "read_artifact" | "list_files" => "IO",
-        "search_workspace" | "search_artifact" | "find_capabilities" => "FIND",
-        "apply_file_edits" => "EDIT",
-        "run_shell" | "shell_job" => "EXEC",
-        "web_search" | "web_read" => "NET",
-        "analyze_data" => "DATA",
-        "computer_use" | "desktop_control" => "DESK",
-        "artifact_info" => "META",
-        "activate_capability" => "CAP",
-        _ => "TOOL",
+fn tool_call_status_bucket(call: &crate::model::ConversationToolCall) -> u8 {
+    match call.status {
+        ToolCallStatus::Preparing
+        | ToolCallStatus::AwaitingPermission
+        | ToolCallStatus::Running => 1,
+        ToolCallStatus::Failed
+        | ToolCallStatus::Cancelled
+        | ToolCallStatus::Interrupted
+        | ToolCallStatus::TimedOut => 2,
+        ToolCallStatus::Completed => 0,
+        ToolCallStatus::Suppressed => 3,
     }
 }
 
-fn tool_glyph(name: &str) -> &'static str {
-    match name {
-        "read_file" | "read_files" | "read_document" | "read_artifact" => "▣",
-        "list_files" => "≡",
-        "search_workspace" | "search_artifact" | "find_capabilities" => "⌕",
-        "apply_file_edits" => "✎",
-        "run_shell" => "⌘",
-        "web_search" => "◎",
-        "web_read" => "◉",
-        "analyze_data" => "▦",
-        "artifact_info" => "◫",
-        "activate_capability" => "◇",
-        _ => "⚙",
+const COLLAPSED_TOOL_GROUP_LIMIT: usize = 4;
+
+fn grouped_tool_calls<'a>(
+    calls: &[&'a crate::model::ConversationToolCall],
+    merge_non_adjacent: bool,
+) -> Vec<(&'a crate::model::ConversationToolCall, usize)> {
+    let mut groups: Vec<(&'a crate::model::ConversationToolCall, usize)> = Vec::new();
+    for call in calls {
+        let status_bucket = tool_call_status_bucket(call);
+        if merge_non_adjacent
+            && let Some(index) = groups.iter().position(|(previous, _)| {
+                previous.name == call.name && tool_call_status_bucket(previous) == status_bucket
+            })
+        {
+            groups[index].1 += 1;
+            continue;
+        }
+        if let Some((previous, count)) = groups.last_mut()
+            && previous.name == call.name
+            && tool_call_status_bucket(previous) == status_bucket
+        {
+            *count += 1;
+        } else {
+            groups.push((*call, 1));
+        }
     }
+    groups
 }
 
-fn tool_title(name: &str) -> String {
+fn tool_pattern_label(name: &str) -> String {
     match name {
-        "read_file" => "Read file".into(),
-        "read_files" => "Read files".into(),
-        "list_files" => "List files".into(),
-        "search_workspace" => "Search workspace".into(),
-        "read_document" => "Read document".into(),
-        "analyze_data" => "Analyze data".into(),
-        "artifact_info" => "Inspect artifact".into(),
-        "read_artifact" => "Read artifact".into(),
-        "search_artifact" => "Search artifact".into(),
-        "run_shell" => "Run shell".into(),
         "apply_file_edits" => "Edit files".into(),
-        "find_capabilities" => "Find capabilities".into(),
-        "activate_capability" => "Activate capability".into(),
+        "search_workspace" => "Search files".into(),
+        "search_artifact" => "Search output".into(),
         "web_search" => "Search web".into(),
-        "web_read" => "Read web source".into(),
+        "read_file" | "read_files" => "Read files".into(),
+        "read_artifact" => "Read output".into(),
+        "read_document" => "Read document".into(),
+        "web_read" => "Read web".into(),
+        "run_shell" => "Shell".into(),
+        "list_files" => "List files".into(),
+        "analyze_data" => "Analyze data".into(),
+        "activate_capability" => "Activate capability".into(),
         _ => humanize_tool_name(name),
     }
 }
 
 fn humanize_tool_name(name: &str) -> String {
-    let mut words = name
-        .split('_')
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>();
-    if words.is_empty() {
-        return "Tool".into();
+    let human = name.replace('_', " ").replace('-', " ");
+    let mut chars = human.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+        None => "Tool".into(),
     }
+}
 
-    let first = words.remove(0);
-    let mut title = first.to_owned();
-    if let Some(initial) = title.get_mut(0..1) {
-        initial.make_ascii_uppercase();
+fn compact_tool_pattern_detail(call: &crate::model::ConversationToolCall) -> String {
+    tool_pattern_label(&call.name)
+}
+
+fn tool_icon(name: &str) -> &'static str {
+    match name {
+        "apply_file_edits" => "✎",
+        "search_workspace" | "search_artifact" | "web_search" => "⌕",
+        "read_file" | "read_files" | "read_artifact" | "read_document" | "web_read" => "▤",
+        "run_shell" => "⌘",
+        "list_files" => "≡",
+        "analyze_data" => "▦",
+        "activate_capability" => "◇",
+        _ => "·",
     }
-    if !words.is_empty() {
-        title.push(' ');
-        title.push_str(&words.join(" "));
+}
+
+fn tool_activity_detail(call: &crate::model::ConversationToolCall) -> String {
+    let active = matches!(
+        call.status,
+        ToolCallStatus::Preparing | ToolCallStatus::AwaitingPermission | ToolCallStatus::Running
+    );
+    let failed = matches!(
+        call.status,
+        ToolCallStatus::Failed
+            | ToolCallStatus::Cancelled
+            | ToolCallStatus::Interrupted
+            | ToolCallStatus::TimedOut
+    );
+    let verb = match call.name.as_str() {
+        "apply_file_edits" => {
+            if active {
+                "Editing"
+            } else {
+                "Edited"
+            }
+        }
+        "search_workspace" | "search_artifact" | "web_search" => {
+            if active {
+                "Searching"
+            } else {
+                "Searched"
+            }
+        }
+        "read_file" | "read_files" => {
+            if active {
+                "Reading"
+            } else {
+                "Read"
+            }
+        }
+        "read_artifact" => {
+            if active {
+                "Reading output"
+            } else {
+                "Read output"
+            }
+        }
+        "read_document" => {
+            if active {
+                "Reading document"
+            } else {
+                "Read document"
+            }
+        }
+        "web_read" => {
+            if active {
+                "Reading web source"
+            } else {
+                "Read web source"
+            }
+        }
+        "run_shell" => {
+            if active {
+                "Running command"
+            } else {
+                "Ran command"
+            }
+        }
+        "list_files" => {
+            if active {
+                "Listing files"
+            } else {
+                "Listed files"
+            }
+        }
+        "analyze_data" => {
+            if active {
+                "Analyzing data"
+            } else {
+                "Analyzed data"
+            }
+        }
+        _ => {
+            if active {
+                "Working"
+            } else {
+                "Completed"
+            }
+        }
+    };
+    let detail = match call.name.as_str() {
+        "apply_file_edits" => edit_activity_detail(call),
+        "search_workspace" => search_activity_detail(call),
+        "read_file" | "read_files" => read_activity_detail(call),
+        "read_artifact" | "search_artifact" => String::new(),
+        _ => String::new(),
+    };
+    if failed {
+        if detail.is_empty() {
+            format!("Failed · {verb}")
+        } else {
+            format!("Failed · {detail}")
+        }
+    } else if detail.is_empty() {
+        verb.to_owned()
+    } else {
+        format!("{verb} {detail}")
     }
-    title
+}
+
+fn short_tool_path(path: &str) -> String {
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+        .to_owned()
+}
+
+fn edit_activity_detail(call: &crate::model::ConversationToolCall) -> String {
+    let value = serde_json::from_str::<Value>(&call.arguments).ok();
+    let path = value
+        .as_ref()
+        .and_then(|value| value.get("changes"))
+        .and_then(Value::as_array)
+        .and_then(|changes| changes.first())
+        .and_then(|change| change.get("path"))
+        .and_then(Value::as_str)
+        .map(short_tool_path)
+        .unwrap_or_else(|| "file".into());
+    let (added, removed) = edit_line_delta(call, value.as_ref());
+    match (added, removed) {
+        (0, 0) => path,
+        (added, 0) => format!("{path} +{added}"),
+        (0, removed) => format!("{path} −{removed}"),
+        (added, removed) => format!("{path} +{added} −{removed}"),
+    }
+}
+
+fn edit_line_delta(
+    call: &crate::model::ConversationToolCall,
+    arguments: Option<&Value>,
+) -> (usize, usize) {
+    if let Ok(result) = serde_json::from_str::<Value>(call.result.as_deref().unwrap_or("")) {
+        let mut added = 0;
+        let mut removed = 0;
+        if let Some(files) = result.get("files").and_then(Value::as_array) {
+            for file in files {
+                if let Some(hunks) = file
+                    .get("diff")
+                    .and_then(|diff| diff.get("hunks"))
+                    .and_then(Value::as_array)
+                {
+                    for hunk in hunks {
+                        if let Some(lines) = hunk.get("lines").and_then(Value::as_array) {
+                            for line in lines.iter().filter_map(Value::as_str) {
+                                if line.starts_with('+') {
+                                    added += 1;
+                                }
+                                if line.starts_with('-') {
+                                    removed += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if added > 0 || removed > 0 {
+            return (added, removed);
+        }
+    }
+    let mut added = 0;
+    let mut removed = 0;
+    let Some(changes) = arguments
+        .and_then(|value| value.get("changes"))
+        .and_then(Value::as_array)
+    else {
+        return (0, 0);
+    };
+    for change in changes {
+        if let Some(file_op) = change.get("fileOp").and_then(Value::as_object) {
+            match file_op.get("kind").and_then(Value::as_str) {
+                Some("create") => added += line_count(file_op.get("text")),
+                Some("delete") => removed += 1,
+                _ => {}
+            }
+        }
+        for edit in change
+            .get("edits")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            match edit.get("kind").and_then(Value::as_str) {
+                Some("insert") | Some("insertAfterBlock") => added += line_count(edit.get("text")),
+                Some("delete") | Some("deleteBlock") => {
+                    removed += range_line_count(edit.get("range"))
+                }
+                Some("replace") | Some("replaceBlock") => {
+                    added += line_count(edit.get("text"));
+                    removed += range_line_count(edit.get("range"));
+                }
+                _ => {}
+            }
+        }
+    }
+    (added, removed)
+}
+
+fn line_count(value: Option<&Value>) -> usize {
+    value
+        .and_then(Value::as_str)
+        .map(|text| text.lines().count().max(1))
+        .unwrap_or(0)
+}
+
+fn range_line_count(value: Option<&Value>) -> usize {
+    let Some(range) = value.and_then(Value::as_object) else {
+        return 0;
+    };
+    let start = range.get("start").and_then(Value::as_u64).unwrap_or(0);
+    let end = range.get("end").and_then(Value::as_u64).unwrap_or(start);
+    end.saturating_sub(start).saturating_add(1) as usize
+}
+
+fn search_activity_detail(call: &crate::model::ConversationToolCall) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(&call.arguments) else {
+        return "workspace".into();
+    };
+    let query = value.get("query").and_then(Value::as_str).unwrap_or("");
+    let path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .map(short_tool_path);
+    match (path, query.is_empty()) {
+        (Some(path), false) => format!("{path} for {query}"),
+        (Some(path), true) => path,
+        (None, false) => format!("for {query}"),
+        (None, true) => "workspace".into(),
+    }
+}
+
+fn read_activity_detail(call: &crate::model::ConversationToolCall) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(&call.arguments) else {
+        return "file".into();
+    };
+    if let Some(path) = value.get("path").and_then(Value::as_str) {
+        return short_tool_path(path);
+    }
+    value
+        .get("requests")
+        .and_then(Value::as_array)
+        .and_then(|requests| requests.first())
+        .and_then(|request| request.get("path"))
+        .and_then(Value::as_str)
+        .map(short_tool_path)
+        .unwrap_or_else(|| "file".into())
 }
 
 fn tool_argument_summary(arguments: &str, max_chars: usize) -> Option<String> {
@@ -1383,7 +1540,18 @@ fn tool_argument_summary(arguments: &str, max_chars: usize) -> Option<String> {
     let value: Value = serde_json::from_str(arguments).ok()?;
     let object = value.as_object()?;
 
-    for key in ["path", "query", "capability", "id", "url"] {
+    if let Some(purpose) = object.get("purpose").and_then(Value::as_str) {
+        let clean: String = purpose
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect();
+        let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !clean.is_empty() {
+            return Some(truncate_middle(&clean, max_chars));
+        }
+    }
+
+    for key in ["path", "query", "capability", "url"] {
         if let Some(text) = object
             .get(key)
             .and_then(Value::as_str)
@@ -1410,8 +1578,7 @@ fn tool_argument_summary(arguments: &str, max_chars: usize) -> Option<String> {
         }
     }
 
-    let compact = value.to_string();
-    (compact != "{}").then(|| truncate_middle(&compact, max_chars))
+    None
 }
 
 fn summarize_values(values: &[&str]) -> String {
@@ -1452,879 +1619,482 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 }
 
 #[cfg(test)]
-mod tests {
+mod suggestion_tests {
+    use super::*;
+    use ratatui::{
+        buffer::Buffer,
+        widgets::{ListState, StatefulWidget},
+    };
+
+    #[test]
+    fn selection_highlights_the_whole_row_and_keeps_a_visible_marker() {
+        let suggestions = vec![
+            ("/help".into(), "Show help".into()),
+            ("/models".into(), "Choose model".into()),
+        ];
+        let area = Rect::new(0, 0, 64, 4);
+        let mut buffer = Buffer::empty(area);
+        let mut state = ListState::default().with_selected(Some(1));
+        StatefulWidget::render(suggestion_list(&suggestions), area, &mut buffer, &mut state);
+        assert_eq!(buffer[(2, 2)].symbol(), "›");
+        assert_eq!(buffer[(2, 1)].symbol(), " ");
+        for x in 2..62 {
+            assert_eq!(buffer[(x, 2)].bg, theme::selected_color(), "column {x}");
+            assert_ne!(buffer[(x, 1)].bg, theme::selected_color());
+        }
+    }
+
+    #[test]
+    fn long_commands_have_a_gap_before_the_description_and_selection_scrolls() {
+        let suggestions = vec![
+            ("/help".into(), "Help".into()),
+            ("/long-command-name".into(), "Description".into()),
+        ];
+        let area = Rect::new(0, 0, 64, 3);
+        let mut buffer = Buffer::empty(area);
+        let mut state = ListState::default().with_selected(Some(1));
+        StatefulWidget::render(suggestion_list(&suggestions), area, &mut buffer, &mut state);
+        let row: String = (0..area.width).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert!(row.contains("› /long-command-name  Description"), "{row}");
+        assert_eq!(state.offset(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tool_summary_layout_tests {
+    use super::*;
+
+    fn call(status: ToolCallStatus) -> crate::model::ConversationToolCall {
+        crate::model::ConversationToolCall {
+            id: "summary-test".into(),
+            index: None,
+            call_id: None,
+            name: "run_shell".into(),
+            arguments: r#"{"purpose":"Verify Rust changes","command":"cargo check"}"#.into(),
+            status,
+            label: None,
+            detail: None,
+            started_at: None,
+            ended_at: None,
+            duration_ms: None,
+            attempt: None,
+            parent_call_id: None,
+            parallel_group_id: None,
+            job_id: None,
+            result: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn status_rows_stay_human_readable() {
+        for status in [
+            ToolCallStatus::Running,
+            ToolCallStatus::Completed,
+            ToolCallStatus::Failed,
+            ToolCallStatus::Suppressed,
+        ] {
+            let line = tool_activity_line(&call(status), 100);
+            let text = line.to_string();
+            assert!(text.contains("command"), "{text}");
+            assert!(!text.contains("run_shell"));
+            assert!(!text.contains("cargo check"));
+        }
+    }
+
+    #[test]
+    fn narrow_unicode_summaries_fit_terminal_cells() {
+        let mut call = call(ToolCallStatus::Completed);
+        call.arguments = serde_json::json!({"purpose": "检查界面 🦀 ".repeat(50)}).to_string();
+        for width in [0, 1, 4, 12, 24, 40, 80] {
+            let line = tool_activity_line(&call, width);
+            assert!(line.width() <= usize::from(width));
+        }
+    }
+
+    #[test]
+    fn activity_rows_use_compact_file_language() {
+        let mut edit = call(ToolCallStatus::Completed);
+        edit.name = "apply_file_edits".into();
+        edit.arguments = serde_json::json!({
+            "changes": [{
+                "path": "src/ui.rs",
+                "edits": [{
+                    "kind": "replace",
+                    "range": {"start": 1, "end": 48},
+                    "text": (0..46).map(|_| "line").collect::<Vec<_>>().join("\n")
+                }]
+            }]
+        })
+        .to_string();
+        assert_eq!(
+            tool_activity_line(&edit, 100).to_string(),
+            "    ✎ Edited ui.rs +46 −48"
+        );
+
+        let mut search = call(ToolCallStatus::Completed);
+        search.name = "search_workspace".into();
+        search.arguments = serde_json::json!({
+            "query": "elapsed_ms",
+            "path": "src/ui.rs"
+        })
+        .to_string();
+        assert_eq!(
+            tool_activity_line(&search, 100).to_string(),
+            "    ⌕ Searched ui.rs for elapsed_ms"
+        );
+    }
+}
+
+fn tool_group_lines(
+    app: &App,
+    calls: &[&crate::model::ConversationToolCall],
+    width: u16,
+    expanded: bool,
+) -> Vec<Line<'static>> {
+    let calls = calls
+        .iter()
+        .copied()
+        .filter(|call| !matches!(call.status, ToolCallStatus::Suppressed))
+        .collect::<Vec<_>>();
+    if calls.is_empty() {
+        return Vec::new();
+    }
+
+    let needs_attention = |call: &crate::model::ConversationToolCall| {
+        !matches!(call.status, ToolCallStatus::Completed)
+    };
+    let attention = calls.iter().filter(|call| needs_attention(call)).count();
+    let groups = grouped_tool_calls(&calls, !expanded);
+    let elapsed = tool_group_elapsed(app, &calls);
+
+    let (marker, header_color) = if attention == 0 {
+        ("✓", theme::muted())
+    } else if app.state.is_streaming {
+        (activity_marker(app), activity_marker_color(app))
+    } else {
+        ("!", theme::error())
+    };
+
+    let mut header = format!(
+        "  {marker} Tools · {} call{}",
+        calls.len(),
+        if calls.len() == 1 { "" } else { "s" }
+    );
+    if elapsed > 0 {
+        header.push_str(&format!(" · {}", format_work_elapsed(elapsed)));
+    }
+    let header = truncate_end(&header, usize::from(width));
+    let mut lines = vec![Line::styled(header, Style::default().fg(header_color))];
+
+    let visible_groups = if expanded || attention > 0 {
+        groups.len()
+    } else {
+        groups.len().min(COLLAPSED_TOOL_GROUP_LIMIT)
+    };
+    lines.extend(
+        groups
+            .iter()
+            .take(visible_groups)
+            .map(|(call, count)| tool_activity_line_count(call, width, *count)),
+    );
+
+    let hidden_groups = groups.len().saturating_sub(visible_groups);
+    if hidden_groups > 0 {
+        let overflow = format!(
+            "    … +{hidden_groups} more action{}",
+            if hidden_groups == 1 { "" } else { "s" }
+        );
+        lines.push(Line::styled(
+            truncate_end(&overflow, usize::from(width)),
+            Style::default().fg(theme::muted()),
+        ));
+    }
+
+    lines
+}
+
+fn tool_group_elapsed(app: &App, calls: &[&crate::model::ConversationToolCall]) -> u128 {
+    if app.state.is_streaming {
+        if let Some(elapsed) = app.stream_elapsed() {
+            return elapsed.as_millis();
+        }
+    }
+    let recorded = calls
+        .iter()
+        .filter_map(|call| call.duration_ms)
+        .map(u128::from)
+        .sum::<u128>();
+    if recorded > 0 {
+        recorded
+    } else {
+        app.latest_turn_duration()
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default()
+    }
+}
+
+fn format_work_elapsed(elapsed_ms: u128) -> String {
+    let seconds = elapsed_ms / 1_000;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    }
+}
+
+#[cfg(test)]
+mod compact_tool_group_tests {
     use super::*;
 
     #[test]
-    fn dialogs_render_within_small_and_wide_terminals() {
-        use ratatui::{Terminal, backend::TestBackend};
-        for (width, height) in [(20, 8), (80, 24), (160, 48)] {
-            for mode in [
-                Mode::Chat,
-                Mode::Models,
-                Mode::Sessions,
-                Mode::Reasoning,
-                Mode::Settings,
-                Mode::Status,
-                Mode::Help,
-            ] {
-                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-                let mut app = App {
-                    mode,
-                    ..App::default()
-                };
-                terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-                let popup = centered_rect(76, 74, Rect::new(0, 0, width, height));
-                assert!(popup.right() <= width && popup.bottom() <= height);
-                if mode == Mode::Models {
-                    let buffer = terminal.backend().buffer();
-                    assert_eq!(buffer[(popup.x, popup.y)].bg, theme::SURFACE_RAISED);
-                    assert_eq!(buffer[(popup.x, popup.y)].symbol(), "╔");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn shell_shows_sidebar_only_when_conversation_has_room() {
-        use ratatui::{Terminal, backend::TestBackend};
-        for width in [80, 140] {
-            let mut terminal = Terminal::new(TestBackend::new(width, 32)).unwrap();
-            let mut app = App::default();
-            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-            let buffer = terminal.backend().buffer();
-            let screen: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-            assert_eq!(screen.contains("WORKSPACES"), width >= 110);
-            assert!(screen.contains("NEW DIRECTIVE"));
-            assert!(screen.contains("YEET"));
-            assert!(screen.contains("AWAITING DIRECTIVE"));
-            assert!(screen.contains("Enter send"));
-        }
-    }
-
-    #[test]
-    fn composer_footer_advertises_multiline_shortcut_at_usable_widths() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        for width in [80, 140] {
-            let mut terminal = Terminal::new(TestBackend::new(width, 32)).unwrap();
-            let mut app = App::default();
-            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-            let screen: String = terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect();
-            assert!(
-                screen.contains("Shift+Enter newline"),
-                "{width}-column composer should advertise multiline input: {screen}"
-            );
-            assert!(screen.contains("Type a message"));
-        }
-
-        let mut terminal = Terminal::new(TestBackend::new(80, 32)).unwrap();
-        let mut app = App::default();
-        app.state.is_streaming = true;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(screen.contains("Esc stop"));
-        assert!(screen.contains("Send after reply"));
-        assert!(screen.contains("Shift+Enter newline"));
-        assert!(!screen.contains("Enter queue"));
-        assert!(!screen.contains("UPLINK"));
-
-        let mut terminal = Terminal::new(TestBackend::new(32, 12)).unwrap();
-        let mut app = App::default();
-        app.state.is_streaming = true;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(screen.contains("Esc stop"));
-        assert!(!screen.contains("Enter queue"));
-        assert!(!screen.contains("Enter send"));
-    }
-
-    #[test]
-    fn visual_hierarchy_uses_surface_layers_and_command_modals() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let (width, height) = (140, 32);
-        let bounds = Rect::new(0, 0, width, height);
-        let metrics = responsive::metrics(bounds);
-        let content_x = metrics
-            .sidebar_width
-            .expect("wide layout should expose sidebar");
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut app = App::default();
-
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(content_x, 0)].bg, theme::SURFACE);
+    fn activity_text_morphs_between_live_phases() {
         assert_eq!(
-            buffer[(content_x, metrics.header_height.saturating_sub(1))].fg,
-            theme::BORDER_DIM
+            morph_activity_text("Thinking", "Searching", 0.0),
+            "Thinking"
         );
-
-        app.mode = Mode::Models;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let popup = centered_rect(76, 74, bounds);
-        let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(popup.x, popup.y)].symbol(), "╔");
-        assert_eq!(buffer[(popup.x, popup.y)].bg, theme::SURFACE_RAISED);
-        let title_x = (popup.x..popup.right())
-            .find(|&x| buffer[(x, popup.y)].symbol() == "M")
-            .expect("model modal should render a title");
-        assert_eq!(buffer[(title_x, popup.y)].bg, theme::SURFACE_RAISED);
-    }
-
-    #[test]
-    fn adaptive_window_ratios_render_without_starving_core_surfaces() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        for (width, height) in [(32, 8), (48, 42), (80, 24), (120, 12), (160, 30), (220, 32)] {
-            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            let mut app = App::default();
-            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-            let screen: String = terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect();
-            assert!(screen.contains("YEET"), "missing brand at {width}x{height}");
-            assert!(
-                app.transcript_area.2 > 0 && app.transcript_area.3 > 0,
-                "transcript collapsed at {width}x{height}"
-            );
-
-            app.mode = Mode::Models;
-            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-            let popup = centered_rect(76, 74, Rect::new(0, 0, width, height));
-            assert!(popup.right() <= width && popup.bottom() <= height);
-        }
-    }
-
-    #[test]
-    fn tiny_command_suggestions_keep_composer_cursor_visible() {
-        use ratatui::{
-            Terminal,
-            backend::{Backend, TestBackend},
-        };
-
-        let mut terminal = Terminal::new(TestBackend::new(32, 8)).unwrap();
-        let mut app = App {
-            input: "/".into(),
-            cursor: 1,
-            ..Default::default()
-        };
-
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let cursor = terminal.backend_mut().get_cursor_position().unwrap();
-
-        assert!(
-            cursor.y > 0,
-            "composer cursor should not fall back to terminal origin"
-        );
-    }
-
-    #[test]
-    fn short_terminal_keeps_command_suggestions_when_they_fit() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
-        let mut app = App {
-            input: "/".into(),
-            cursor: 1,
-            ..Default::default()
-        };
-
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-
-        assert!(
-            screen.contains("COMMANDS"),
-            "suggestion popup should remain visible when it fits: {screen:?}"
-        );
-    }
-
-    #[test]
-    fn portrait_welcome_uses_mobile_density() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let (width, height) = (88, 52);
         assert_eq!(
-            responsive::shape(Rect::new(0, 0, width, height)),
-            responsive::Shape::Portrait
+            morph_activity_text("Thinking", "Searching", 1.0),
+            "Searching"
         );
-
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut app = App {
-            follow_tail: false,
-            ..App::default()
-        };
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-
-        assert!(
-            !screen.contains("██"),
-            "portrait welcome should avoid the desktop title"
-        );
-        assert!(!screen.contains("AGENTIC SYSTEMS CORE"));
-        assert!(
-            !screen.contains("History"),
-            "empty mobile sessions should stay at latest"
-        );
-        assert!(screen.contains("AWAITING DIRECTIVE"));
+        let middle = morph_activity_text("Thinking", "Searching", 0.5);
+        assert_ne!(middle, "Thinking");
+        assert_ne!(middle, "Planning");
     }
 
     #[test]
-    fn composer_keeps_end_of_long_draft_visible() {
-        use ratatui::{Terminal, backend::TestBackend};
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        let mut app = App::default();
-        app.input = format!("{}END", "한글 입력 확인 ".repeat(100));
-        app.cursor = app.input.chars().count();
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(screen.contains("END"));
-        app.cursor = 0;
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(!screen.contains("END"));
-        assert!(screen.contains("한"));
-        assert!(screen.contains("글"));
-    }
-
-    #[test]
-    fn status_numbers_keep_useful_precision() {
-        assert_eq!(compact_number(999), "999");
-        assert_eq!(compact_number(1_500), "1.5k");
-        assert_eq!(compact_number(12_000), "12k");
-        assert_eq!(compact_number(1_250_000), "1.2M");
-    }
-
-    #[test]
-    fn bottom_status_keeps_runtime_controls_and_detailed_usage_out() {
-        let mut app = App::default();
-        app.state.active_model = "openai/test".into();
-        app.state.active_model_context_length = Some(128_000);
-        app.state.current_context_tokens = Some(64_000);
-        app.state.token_usage.input_tokens = Some(12_000);
-        app.state.token_usage.output_tokens = Some(3_000);
-        app.state.token_usage.cached_input_tokens = Some(8_000);
-        app.state.token_usage.estimated_cost_usd = Some(1.25);
-        app.state.active_reasoning_level = "high".into();
-
-        let text = status_line(&app, 120)
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        assert!(text.contains("model openai/test"));
-        assert!(text.contains("ctx 64k/128k 50%"));
-        assert!(text.contains("reason high"));
-        assert!(text.contains("perm ask"));
-        assert!(!text.contains("12k"));
-        assert!(!text.contains("3k"));
-        assert!(!text.contains("cache"));
-        assert!(!text.contains("cost"));
-    }
-
-    #[test]
-    fn bottom_status_preserves_runtime_controls_when_narrow() {
-        let mut app = App::default();
-        app.state.active_model = "openai/gpt-5.6-codex".into();
-        app.state.active_model_context_length = Some(128_000);
-        app.state.current_context_tokens = Some(64_000);
-        app.state.token_usage.input_tokens = Some(12_000);
-        app.state.token_usage.output_tokens = Some(3_000);
-        app.state.active_reasoning_level = "high".into();
-
-        let text = status_line(&app, 40)
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        assert!(text.contains("50%"));
-        assert!(text.contains("high") || text.contains("hi"));
-        assert!(text.contains("ask") || text.contains("as"));
-        assert!(text.contains("gpt"));
-        assert!(!text.contains("12k"));
-    }
-
-    #[test]
-    fn bottom_status_uses_explicit_unknown_context_instead_of_fake_telemetry() {
-        let app = App::default();
-        for width in [32, 48, 80] {
-            let text = status_line(&app, width)
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
-            assert!(status_line(&app, width).width() <= width);
-            assert!(
-                !text.contains("?%"),
-                "unexpected fake percent at {width}: {text}"
-            );
-            assert!(
-                !text.contains("···"),
-                "unexpected fake context meter at {width}: {text}"
-            );
-            assert!(!text.contains("model no model"));
-            if width >= 48 {
-                assert!(
-                    text.contains("ctx —") || text.contains("ctx unavailable"),
-                    "unknown context should be explicit at {width}: {text}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn bottom_status_never_exceeds_terminal_width() {
-        let mut app = App::default();
-        app.state.active_model = "provider/a-very-long-model-identifier".into();
-        app.state.active_model_context_length = Some(200_000);
-        app.state.current_context_tokens = Some(123_456);
-        app.state.active_reasoning_level = "medium".into();
-
-        for width in 1..=120 {
-            assert!(status_line(&app, width).width() <= width);
-        }
-    }
-
-    #[test]
-    fn transcript_scrollbar_uses_quiet_single_line_symbols() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let mut terminal = Terminal::new(TestBackend::new(48, 12)).unwrap();
-        let mut app = App::default();
-        app.conversation.push(ConversationEntry {
-            id: "long-response".into(),
-            kind: ConversationKind::Assistant {
-                content: (0..80)
-                    .map(|index| format!("line {index}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                tool_calls: vec![],
-            },
-        });
-
-        terminal
-            .draw(|frame| {
-                draw_transcript(frame, &mut app, frame.area(), responsive::Shape::Compact);
-            })
-            .unwrap();
-        assert!(app.max_scroll > 0);
-
-        let buffer = terminal.backend().buffer();
-        let edge = (1..11)
-            .map(|y| buffer[(47, y)].symbol())
-            .collect::<Vec<_>>();
-        assert!(
-            edge.contains(&"┃"),
-            "scroll thumb should remain visible: {edge:?}"
-        );
-        assert!(
-            edge.contains(&"│"),
-            "scroll track should remain visible: {edge:?}"
-        );
-        assert!(
-            edge.iter().all(|symbol| *symbol != "█" && *symbol != "║"),
-            "scrollbar should not dominate the transcript edge: {edge:?}"
-        );
-    }
-
-    #[test]
-    fn status_dialog_renders_api_usage_headroom() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let mut terminal = Terminal::new(TestBackend::new(110, 30)).unwrap();
-        let mut app = App {
-            mode: Mode::Status,
-            ..App::default()
-        };
-        app.state.active_model = "openai/gpt-5.6-codex".into();
-        app.state.active_model_context_length = Some(128_000);
-        app.state.current_context_tokens = Some(32_000);
-        app.state
-            .auth_providers
-            .push(crate::model::AuthProviderItem {
-                provider: "openai".into(),
-                authenticated: true,
-                method: "oauth".into(),
-                expires_at: None,
-                usage: Some(crate::model::ProviderUsageStatus {
-                    provider: "openai".into(),
-                    available: true,
-                    source: "codex".into(),
-                    fetched_at: "2026-09-09T20:00:00+09:00".into(),
-                    plan: Some("pro".into()),
-                    windows: vec![crate::model::ProviderUsageWindow {
-                        id: "five-hour".into(),
-                        label: "5h".into(),
-                        used_percent: 25,
-                        remaining_percent: 75,
-                        resets_at: None,
-                    }],
-                    message: None,
-                }),
+    fn renders_readable_tool_summary_and_fits_narrow_screens() {
+        let mut calls = (0..8)
+            .map(|index| crate::model::ConversationToolCall {
+                id: index.to_string(),
+                index: None,
+                call_id: None,
+                name: "run_shell".into(),
+                arguments: serde_json::json!({"purpose": format!("Check {index}")}).to_string(),
+                status: ToolCallStatus::Completed,
+                label: None,
+                detail: None,
+                started_at: None,
+                ended_at: None,
+                duration_ms: None,
+                attempt: None,
+                parent_call_id: None,
+                parallel_group_id: None,
+                job_id: None,
+                result: None,
                 error: None,
-            });
-
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
+            })
+            .collect::<Vec<_>>();
+        calls[0].status = ToolCallStatus::Failed;
+        calls[1].status = ToolCallStatus::Running;
+        let refs = calls.iter().collect::<Vec<_>>();
+        let app = App::default();
+        let lines = tool_group_lines(&app, &refs, 100, true);
+        assert_eq!(lines.len(), 4); // header plus one row per status/action group
+        let text = lines
             .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(screen.contains("Usage & provider headroom"));
-        assert!(screen.contains("openai"));
-        assert!(screen.contains("5h 75%"));
-        assert!(screen.contains("Session & permissions"));
-    }
-
-    #[test]
-    fn status_elision_preserves_both_ends() {
-        assert_eq!(
-            truncate_middle("Qwen3.8-27B-UD-IQ4_XS.gguf", 15),
-            "Qwen3.8…XS.gguf"
-        );
-        assert_eq!(truncate_end("provider unavailable", 10), "provider …");
-
-        let wide_middle = truncate_middle("모델/가나다라마바사.gguf", 11);
-        assert_eq!(wide_middle, "모델/….gguf");
-        assert_eq!(cell_width(&wide_middle), 11);
-
-        let wide_end = truncate_end("경로/가나다라마바사", 10);
-        assert_eq!(wide_end, "경로/가나…");
-        assert_eq!(cell_width(&wide_end), 10);
-
-        for width in 0..=16 {
-            assert!(cell_width(&truncate_end("한국어🙂path", width)) <= width);
-            assert!(cell_width(&truncate_middle("한국어🙂path", width)) <= width);
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Tools · 8 calls"));
+        assert!(!text.contains("pattern"));
+        assert!(text.contains("Failed · Ran command"));
+        assert!(text.contains("Running command"));
+        assert!(text.contains("Shell ×6"));
+        // Completed work remains legible after streaming instead of collapsing to counts only.
+        assert_eq!(tool_group_lines(&app, &refs, 100, false).len(), 4);
+        for width in [0, 1, 2, 12, 24, 80] {
+            assert!(
+                tool_group_lines(&app, &refs, width, true)
+                    .iter()
+                    .all(|line| line.width() <= usize::from(width))
+            );
         }
     }
 
     #[test]
-    fn spinner_advances_on_eighty_millisecond_ticks() {
-        assert_ne!(spinner_frame(0), spinner_frame(80));
-        assert_eq!(spinner_frame(0), spinner_frame(800));
-    }
-
-    #[test]
-    fn tool_step_counts_track_completed_and_failed_calls() {
-        let call = |status| crate::model::ConversationToolCall {
-            id: "x".into(),
-            index: Some(0),
+    fn completed_tool_summary_merges_repeated_actions_across_the_turn() {
+        let call = |id: &str, name: &str| crate::model::ConversationToolCall {
+            id: id.into(),
+            index: None,
             call_id: None,
-            name: "run_shell".into(),
+            name: name.into(),
             arguments: "{}".into(),
-            status,
-
-            duration_ms: None,
-
-            result: None,
-            error: None,
-        };
-        let mut app = App::default();
-        app.conversation.push(crate::model::ConversationEntry {
-            id: "a".into(),
-            kind: ConversationKind::ToolCall {
-                tool_call: call(ToolCallStatus::Completed),
-            },
-        });
-        app.conversation.push(crate::model::ConversationEntry {
-            id: "b".into(),
-            kind: ConversationKind::Assistant {
-                content: String::new(),
-                tool_calls: vec![
-                    call(ToolCallStatus::Failed),
-                    call(ToolCallStatus::Streaming),
-                ],
-            },
-        });
-        assert_eq!(tool_step_counts(&app), (1, 1));
-    }
-
-    #[test]
-    fn tool_calls_render_status_title_name_and_argument_detail() {
-        let call = crate::model::ConversationToolCall {
-            id: "ui-call".into(),
-            index: Some(0),
-            call_id: Some("call-1".into()),
-            name: "read_file".into(),
-            arguments: serde_json::json!({
-                "path": "src/ui.rs",
-                "startLine": 100,
-                "endLine": 140
-            })
-            .to_string(),
             status: ToolCallStatus::Completed,
-
+            label: None,
+            detail: None,
+            started_at: None,
+            ended_at: None,
             duration_ms: None,
-
+            attempt: None,
+            parent_call_id: None,
+            parallel_group_id: None,
+            job_id: None,
             result: None,
             error: None,
         };
-
-        let lines = tool_lines(0, &call, 80);
-        let rendered = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(rendered.len(), 2);
-        assert!(rendered[0].contains("✓"));
-        assert!(rendered[0].contains("Read file"));
-        assert!(rendered[0].contains("read_file"));
-        assert!(rendered[1].contains("src/ui.rs"));
-    }
-
-    #[test]
-    fn consecutive_tool_calls_render_under_one_batch_boundary() {
-        let mut app = App::default();
-        app.conversation = vec![
-            ConversationEntry {
-                id: "user".into(),
-                kind: ConversationKind::User {
-                    content: "Inspect the project".into(),
-                },
-            },
-            ConversationEntry {
-                id: "tool-1".into(),
-                kind: ConversationKind::ToolCall {
-                    tool_call: crate::model::ConversationToolCall {
-                        id: "tool-1".into(),
-                        index: Some(0),
-                        call_id: None,
-                        name: "read_file".into(),
-                        arguments: serde_json::json!({"path": "src/ui.rs"}).to_string(),
-                        status: ToolCallStatus::Completed,
-                        duration_ms: None,
-                        result: None,
-                        error: None,
-                    },
-                },
-            },
-            ConversationEntry {
-                id: "tool-2".into(),
-                kind: ConversationKind::ToolCall {
-                    tool_call: crate::model::ConversationToolCall {
-                        id: "tool-2".into(),
-                        index: Some(1),
-                        call_id: None,
-                        name: "read_file".into(),
-                        arguments: serde_json::json!({"path": "src/app.rs"}).to_string(),
-                        status: ToolCallStatus::Completed,
-                        duration_ms: None,
-                        result: None,
-                        error: None,
-                    },
-                },
-            },
+        let calls = [
+            call("1", "web_search"),
+            call("2", "web_read"),
+            call("3", "web_search"),
+            call("4", "web_read"),
         ];
-
-        let text = transcript_text(&app, 80);
-        let rendered = text
-            .lines
-            .iter()
-            .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect::<String>())
-            .collect::<Vec<_>>();
-        assert_eq!(rendered.iter().filter(|line| line.contains("TOOLS")).count(), 1);
-        assert!(rendered.iter().any(|line| line.contains("2 calls")));
-        assert!(rendered.iter().filter(|line| line.contains("Read file")).count() >= 2);
-    }
-
-    #[test]
-    fn tool_argument_rows_respect_cell_width_with_wide_paths() {
-        let call = crate::model::ConversationToolCall {
-            id: "wide-path".into(),
-            index: Some(0),
-            call_id: None,
-            name: "read_file".into(),
-            arguments: serde_json::json!({
-                "path": "자료/가나다라마바사아자차카타파하/화면.rs"
-            })
-            .to_string(),
-            status: ToolCallStatus::Streaming,
-
-            duration_ms: None,
-
-            result: None,
-            error: None,
-        };
-
-        for width in [32, 40, 48, 64] {
-            let lines = tool_lines(0, &call, width);
-            assert!(lines.len() >= 2);
-            assert!(
-                lines.iter().all(|line| line.width() <= width as usize),
-                "tool rows must stay within {width} cells: {lines:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn tool_argument_summary_compacts_multi_file_calls() {
-        let arguments = serde_json::json!({
-            "changes": [
-                {"path": "src/ui.rs"},
-                {"path": "src/backend.rs"},
-                {"path": "src/app.rs"}
-            ]
-        })
-        .to_string();
-
-        let summary = tool_argument_summary(&arguments, 80).unwrap();
-        assert!(summary.contains("src/ui.rs"));
-        assert!(summary.contains("src/backend.rs"));
-        assert!(summary.contains("+1"));
-    }
-
-    #[test]
-    fn wrapped_transcript_lines_keep_message_rails_and_list_indent() {
+        let refs = calls.iter().collect::<Vec<_>>();
         let app = App::default();
-        let entry = ConversationEntry {
-            id: "assistant-wrap".into(),
-            kind: ConversationKind::Assistant {
-                content: "- This deliberately long list item must wrap without escaping its assistant response rail.\n\nThis deliberately long paragraph must also stay inside the response rail.".into(),
-                tool_calls: vec![],
-            },
-        };
-        let lines = entry_lines(&app, &entry, 32);
-        let rendered = lines
+        let text = tool_group_lines(&app, &refs, 100, false)
             .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>();
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        assert!(
-            rendered.len() > 5,
-            "fixture should wrap onto continuation rows"
-        );
-        assert!(
-            rendered.iter().skip(1).all(|line| line.starts_with("┃ ")),
-            "every assistant body row should retain its message rail: {rendered:?}"
-        );
-        let list_rows = rendered
-            .iter()
-            .skip(1)
-            .take_while(|line| line.as_str() != "┃ ")
-            .collect::<Vec<_>>();
-        assert!(list_rows.len() > 1);
-        assert!(
-            list_rows
-                .iter()
-                .skip(1)
-                .all(|line| line.starts_with("┃   ")),
-            "wrapped list rows should use a hanging indent: {list_rows:?}"
-        );
-        assert!(lines.iter().all(|line| line.width() <= 32));
-        let code = markdown_lines(
-            "```rust\nconst VERY_LONG_IDENTIFIER: &str = \"abcdefghijklmnopqrstuvwxyz0123456789\";\n```",
-        )
-        .into_iter()
-        .next()
-        .unwrap();
-        let code_lines = prefixed_wrapped_line(
-            Span::styled("┃ ", Style::default().fg(theme::BORDER)),
-            code,
-            24,
-        );
-        let rendered_code = code_lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>();
-        assert!(rendered_code.len() > 1);
-        assert!(
-            rendered_code.iter().all(|line| line.starts_with("┃   ")),
-            "wrapped code rows should retain code indentation: {rendered_code:?}"
-        );
-        assert!(code_lines.iter().all(|line| line.width() <= 24));
+        assert!(text.contains("Tools · 4 calls"));
+        assert!(text.contains("Search web ×2"));
+        assert!(text.contains("Read web ×2"));
     }
+}
+
+#[cfg(test)]
+mod composer_viewport_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
-    fn wrapped_user_and_reasoning_lines_keep_their_rails_with_wide_text() {
-        let app = App::default();
-        let cases = [
-            (
-                ConversationEntry {
-                    id: "user-wrap".into(),
-                    kind: ConversationKind::User {
-                        content: "긴 사용자 요청은 좁은 터미널에서도 메시지 경계를 유지해야 합니다"
-                            .into(),
-                    },
-                },
-                "┃ ",
-            ),
-            (
-                ConversationEntry {
-                    id: "reasoning-wrap".into(),
-                    kind: ConversationKind::Reasoning {
-                        content: "긴 추론 내용도 여러 줄로 이어질 때 같은 레일 안에 있어야 합니다"
-                            .into(),
-                        summary: None,
-                    },
-                },
-                "┊ ",
-            ),
-        ];
-
-        for (entry, prefix) in cases {
-            let lines = entry_lines(&app, &entry, 18);
-            assert!(lines.len() > 2);
-            assert!(
-                lines.iter().skip(1).all(|line| {
-                    line.spans
-                        .iter()
-                        .map(|span| span.content.as_ref())
-                        .collect::<String>()
-                        .starts_with(prefix)
-                }),
-                "wrapped rows should preserve {prefix:?}"
-            );
-            assert!(lines.iter().skip(1).all(|line| line.width() <= 18));
-        }
-
-        for width in [0, 1, 2, 3] {
-            let tiny = prefixed_wrapped_line(
-                Span::styled("\u{2503} ".to_owned(), Style::default()),
-                Line::from("\u{ac00}\u{b098}\u{b2e4}"),
-                width,
-            );
-            assert!(
-                tiny.iter().all(|line| line.width() <= width as usize),
-                "tiny wide-text rows must fit {width} cells: {tiny:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn transcript_selection_clears_when_viewport_geometry_changes() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    fn long_draft_shows_visible_range_and_follows_cursor() {
         let mut app = App::default();
-        app.conversation.push(crate::model::ConversationEntry {
-            id: "assistant".into(),
-            kind: ConversationKind::Assistant {
-                content: "selection should not retarget after terminal resize".into(),
-                tool_calls: Vec::new(),
-            },
-        });
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let (x, y, _, _) = app.transcript_area;
-        app.selection_start = Some((x, y));
-        app.selection_end = Some((x.saturating_add(8), y));
-
-        terminal.backend_mut().resize(60, 18);
-        terminal.resize(Rect::new(0, 0, 60, 18)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-
-        assert!(app.selection_start.is_none());
-        assert!(app.selection_end.is_none());
-    }
-
-    #[test]
-    fn transcript_context_menu_renders_only_for_chat_selection() {
-        use ratatui::{Terminal, backend::TestBackend};
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        let mut app = App::default();
-        app.conversation.push(crate::model::ConversationEntry {
-            id: "assistant".into(),
-            kind: ConversationKind::Assistant {
-                content: "selectable conversation text".into(),
-                tool_calls: Vec::new(),
-            },
-        });
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let (x, y, _, _) = app.transcript_area;
-        app.selection_start = Some((x, y));
-        app.selection_end = Some((x.saturating_add(5), y));
-        app.transcript_context_menu = Some(crate::app::TranscriptContextMenu {
-            x: x.saturating_add(2),
-            y,
-        });
-
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let screen: String = terminal
+        app.input = (1..=12)
+            .map(|n| format!("draft {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.cursor = app.input.chars().count();
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).unwrap();
+        terminal
+            .draw(|frame| draw_input(frame, &mut app, frame.area()))
+            .unwrap();
+        let contents = terminal
             .backend()
             .buffer()
             .content
             .iter()
             .map(|cell| cell.symbol())
-            .collect();
-        assert!(screen.contains("Copy"));
-        assert!(screen.contains("Clear selection"));
-        assert!(app.transcript_context_menu_area.2 > 0);
-        let (menu_x, menu_y, _, _) = app.transcript_context_menu_area;
-        assert_eq!(
-            terminal.backend().buffer()[(menu_x.saturating_add(1), menu_y.saturating_add(1))].bg,
-            theme::SURFACE
-        );
+            .collect::<String>();
+        assert!(contents.contains("Lines 10–12 of 12"));
+        assert!(contents.contains("draft 12"));
+        app.cursor = 0;
+        terminal
+            .draw(|frame| draw_input(frame, &mut app, frame.area()))
+            .unwrap();
+        let contents = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(contents.contains("Lines 1–3 of 12"));
+        assert!(contents.contains("draft 1"));
+    }
 
-        terminal.backend_mut().resize(17, 3);
-        terminal.resize(Rect::new(0, 0, 17, 3)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    #[test]
+    fn multiline_draft_shows_compact_metadata_when_not_scrolled() {
+        let mut app = App::default();
+        app.input = "alpha\nbeta\ngamma".into();
+        app.cursor = app.input.chars().count();
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).unwrap();
+        terminal
+            .draw(|frame| draw_input(frame, &mut app, frame.area()))
+            .unwrap();
+        let contents = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(contents.contains("3 lines"));
+        assert!(contents.contains("16 chars"));
+    }
+}
+
+#[cfg(test)]
+mod overall_layout_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn history_status_explains_return_shortcut_at_narrow_widths() {
+        let mut app = App::default();
+        app.follow_tail = false;
+        app.max_scroll = 200;
+        app.scroll_y = 40;
+        for width in [20, 40, 80] {
+            let line = status_line(&app, width);
+            assert!(line.to_string().contains("Ctrl+End"));
+            assert!(line.width() <= width);
+        }
+    }
+
+    #[test]
+    fn missing_usage_is_not_shown_as_zero_percent() {
+        let mut app = App::default();
+        app.state.active_model_context_length = Some(100_000);
+        app.state.current_context_tokens = None;
+        assert!(status_line(&app, 120).to_string().contains("unavailable"));
+    }
+
+    #[test]
+    fn auxiliary_status_reports_usage_and_selection_shortcuts() {
+        let mut app = App::default();
+        app.state.token_usage.input_tokens = Some(12_500);
+        app.state.token_usage.output_tokens = Some(2_300);
+        app.state.token_usage.cached_input_tokens = Some(10_000);
+        app.state.token_usage.cache_measured_input_tokens = Some(12_500);
+        app.state.token_usage.model_calls = Some(4);
+
+        let rich = status_aux_line(&app, 120).to_string();
+        assert!(rich.contains("in 12.5k"));
+        assert!(rich.contains("out 2.3k"));
+        assert!(rich.contains("cache 80%"));
+        assert!(rich.contains("calls 4"));
+        for width in [12, 20, 40, 80] {
+            assert!(status_aux_line(&app, width).width() <= width);
+        }
+
+        app.selection_start = Some((1, 1));
+        app.selection_end = Some((2, 1));
+        let selected = status_aux_line(&app, 80).to_string();
+        assert!(selected.contains("Ctrl+C"));
+        assert!(selected.contains("Esc"));
+    }
+
+    #[test]
+    fn responsive_status_uses_second_row_only_when_space_allows() {
         assert_eq!(
-            app.transcript_context_menu_area,
-            (0, 0, 0, 0),
-            "hidden context menu must not retain a clickable hitbox after resize"
+            responsive::metrics(Rect::new(0, 0, 80, 24)).status_height,
+            2
         );
+        assert_eq!(
+            responsive::metrics(Rect::new(0, 0, 60, 14)).status_height,
+            1
+        );
+        assert_eq!(
+            responsive::metrics(Rect::new(0, 0, 180, 40)).status_height,
+            2
+        );
+    }
+
+    #[test]
+    fn shell_renders_from_small_terminal_to_ultrawide() {
+        for (width, height) in [(32, 8), (60, 14), (80, 24), (120, 40), (180, 40)] {
+            let mut app = App::default();
+            app.conversation.push(ConversationEntry {
+                id: "message".into(),
+                kind: ConversationKind::User {
+                    content: "Review these changes".into(),
+                },
+            });
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            assert!(app.transcript_area.3 > 0);
+        }
     }
 }

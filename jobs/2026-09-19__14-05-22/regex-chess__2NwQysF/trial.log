@@ -1,0 +1,8 @@
+Trial regex-chess__2NwQysF failed: Docker compose command failed for environment regex-chess. Command: docker compose --project-name regex-chess__2nwqysf__env --project-directory /Users/kyooni18/.cache/harbor/tasks/XyJK3D4eSbPWgNt9Bw4RyU/regex-chess/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp39k2gu6e/regex-chess__2NwQysF__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpltfs60_e/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpcd398_k3/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network regex-chess__2nwqysf__env_default Creating 
+ Network regex-chess__2nwqysf__env_default Creating 
+ Network regex-chess__2nwqysf__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network regex-chess__2nwqysf__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container regex-chess__2nwqysf__env-main-1 Creating 
+failed to create network regex-chess__2nwqysf__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

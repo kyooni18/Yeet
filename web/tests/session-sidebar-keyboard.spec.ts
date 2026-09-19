@@ -43,3 +43,25 @@ test('workspace navigation supports arrows and Home/End without removing Tab tra
     await expect(buttons.first()).not.toBeFocused()
   }
 })
+
+test('keyboard navigation scrolls offscreen workspaces into view', async ({ page }) => {
+  await page.evaluate(() => {
+    (window as unknown as { __yeetEmit: (message: unknown) => void }).__yeetEmit({
+      type: 'state_update', version: 1, sequence: 2, revision: 2,
+      patch: { known_workspaces: Array.from({ length: 30 }, (_, index) => ({
+        id: `workspace-${index}`, path: `/work/${index}`, display_name: `Workspace ${index}`,
+        session_count: 0, is_current: false,
+      })) },
+    })
+  })
+  const sidebar = await sessionSurface(page)
+  const list = sidebar.getByTestId('workspace-list')
+  await list.locator('button').first().focus()
+  await page.keyboard.press('End')
+  const last = list.locator('button').last()
+  await expect(last).toBeFocused()
+  const bounds = await list.boundingBox()
+  const item = await last.boundingBox()
+  expect(item!.y).toBeGreaterThanOrEqual(bounds!.y)
+  expect(item!.y + item!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height + 1)
+})

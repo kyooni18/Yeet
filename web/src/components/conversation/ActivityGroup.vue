@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import type { ConversationEntry, ConversationToolCall } from '@/remote/protocol'
 import ToolCallCard from './ToolCallCard.vue'
 
@@ -18,8 +18,8 @@ type ActivityRow =
   | { key: string; type: 'activity'; entry: ActivityEntry }
   | { key: string; type: 'tool'; tool: ConversationToolCall }
 
-const open = ref(false)
-const userToggled = ref(false)
+// Keep every call visible unless the user explicitly collapses the group.
+const open = ref(true)
 
 const rows = computed<ActivityRow[]>(() => {
   const result: ActivityRow[] = []
@@ -39,26 +39,22 @@ const rows = computed<ActivityRow[]>(() => {
 })
 
 const toolCount = computed(() => rows.value.filter((row) => row.type === 'tool').length)
-const completedCount = computed(() => rows.value.filter((row) => row.type === 'tool' && row.tool.status === 'completed').length)
-const failedCount = computed(() => rows.value.filter((row) => row.type === 'tool' && row.tool.status === 'failed').length)
-const runningCount = computed(() => rows.value.filter((row) => row.type === 'tool' && row.tool.status === 'streaming').length)
+const failedCount = computed(() => rows.value.filter((row) => row.type === 'tool' && ['failed', 'timed_out'].includes(row.tool.status)).length)
+const waitingCount = computed(() => rows.value.filter((row) => row.type === 'tool' && row.tool.status === 'awaiting_permission').length)
+const preparingCount = computed(() => rows.value.filter((row) => row.type === 'tool' && row.tool.status === 'preparing').length)
+const stoppedCount = computed(() => rows.value.filter((row) => row.type === 'tool' && ['cancelled', 'interrupted'].includes(row.tool.status)).length)
+const runningCount = computed(() => rows.value.filter((row) => row.type === 'tool' && row.tool.status === 'running').length)
 const activeActivity = computed(() => [...rows.value].reverse().find((row) => row.type === 'activity' && !isTerminal(row.entry.kind.activity.phase)) as Extract<ActivityRow, { type: 'activity' }> | undefined)
-const isLive = computed(() => runningCount.value > 0 || Boolean(activeActivity.value))
-
-const title = computed(() => activeActivity.value?.entry.kind.activity.title || (toolCount.value ? 'Tool activity' : 'Activity'))
+const isLive = computed(() => runningCount.value + waitingCount.value + preparingCount.value > 0 || Boolean(activeActivity.value))
+const title = computed(() => activeActivity.value?.entry.kind.activity.title || (toolCount.value ? `${toolCount.value} tool${toolCount.value === 1 ? '' : 's'}` : 'Updates'))
 const summary = computed(() => {
   const parts: string[] = []
-  if (toolCount.value) parts.push(`${toolCount.value} tool call${toolCount.value === 1 ? '' : 's'}`)
-  if (completedCount.value) parts.push(`${completedCount.value} complete`)
+  if (waitingCount.value) parts.push(`${waitingCount.value} awaiting approval`)
+  if (preparingCount.value) parts.push(`${preparingCount.value} preparing`)
+  if (stoppedCount.value) parts.push(`${stoppedCount.value} stopped`)
   if (runningCount.value) parts.push(`${runningCount.value} running`)
   if (failedCount.value) parts.push(`${failedCount.value} failed`)
-  return parts.join(' · ') || 'Task update'
-})
-
-const statusLabel = computed(() => {
-  if (failedCount.value) return 'Needs attention'
-  if (isLive.value) return 'In progress'
-  return 'Complete'
+  return parts.join(' · ')
 })
 
 function isTerminal(phase: unknown) {
@@ -74,16 +70,9 @@ function activityMarker(entry: ActivityEntry) {
 }
 
 function handleToggle(event: Event) {
-  if (event.isTrusted) userToggled.value = true
   open.value = (event.currentTarget as HTMLDetailsElement).open
 }
 
-let wasLive = false
-watch([isLive, failedCount], ([live, failed]) => {
-  if (!userToggled.value && (live || failed > 0)) open.value = true
-  if (!userToggled.value && wasLive && !live && failed === 0) open.value = false
-  wasLive = live
-}, { immediate: true })
 </script>
 
 <template>
@@ -95,22 +84,20 @@ watch([isLive, failedCount], ([live, failed]) => {
     data-testid="activity-group"
     @toggle="handleToggle"
   >
-    <summary :aria-label="`${title}: ${summary}`">
-      <span class="activity-group-icon" aria-hidden="true">{{ isLive ? '⟳' : failedCount ? '!' : '✓' }}</span>
+    <summary :aria-label="summary ? `${title}: ${summary}` : title">
       <span class="activity-group-heading">
         <strong>{{ title }}</strong>
-        <span class="truncate">{{ summary }}</span>
+        <span v-if="summary" class="truncate">{{ summary }}</span>
       </span>
-      <span class="activity-group-status">{{ statusLabel }}</span>
       <span class="activity-group-disclosure" aria-hidden="true">⌄</span>
     </summary>
 
     <div v-if="open" class="activity-group-body">
-      <div v-for="row in rows" :key="row.key" class="activity-group-row">
+      <div v-for="row in rows" :key="row.key" class="activity-group-row" :data-entry-id="row.key">
         <template v-if="row.type === 'activity'">
           <div class="activity-group-activity" :class="{ 'is-live': !isTerminal(row.entry.kind.activity.phase), 'is-error': String(row.entry.kind.activity.phase) === 'failed' }">
             <span aria-hidden="true">{{ activityMarker(row.entry) }}</span>
-            <strong>{{ row.entry.kind.activity.title }}</strong>
+            <strong v-if="row.entry.id !== activeActivity?.entry.id">{{ row.entry.kind.activity.title }}</strong>
             <span v-if="row.entry.kind.activity.detail" class="truncate">{{ row.entry.kind.activity.detail }}</span>
           </div>
         </template>

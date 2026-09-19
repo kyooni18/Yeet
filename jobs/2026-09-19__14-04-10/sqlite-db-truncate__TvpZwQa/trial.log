@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/sqlite-db-truncate:20251031: docker inspect returned 1
+Trial sqlite-db-truncate__TvpZwQa failed: Docker compose command failed for environment sqlite-db-truncate. Command: docker compose --project-name sqlite-db-truncate__tvpzwqa__env --project-directory /Users/kyooni18/.cache/harbor/tasks/2hEZAwigfHAA5cnDNAJvfT/sqlite-db-truncate/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpoltqqgw7/sqlite-db-truncate__TvpZwQa__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpmd5udbbi/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp31bn18_e/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sqlite-db-truncate:20251031 Pulling 
+ Image alexgshaw/sqlite-db-truncate:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

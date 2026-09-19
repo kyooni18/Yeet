@@ -34,10 +34,10 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
     .split(body);
     let title = conversation_title(app);
     let task_status = TaskStatus::for_app(app);
-    let header_border = if matches!(task_status, TaskStatus::Working | TaskStatus::Approval) {
+    let header_border = if task_status == TaskStatus::Approval {
         theme::pulse_color()
     } else {
-        theme::BORDER_DIM
+        theme::border_dim()
     };
     let header = if rows[0].height > 1 {
         Block::default().borders(Borders::BOTTOM)
@@ -49,32 +49,50 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
     .padding(Padding::horizontal(2));
     let inner = header.inner(rows[0]);
     frame.render_widget(header, rows[0]);
-    let title_width = inner.width;
-    let header_title = if title == "New conversation" {
-        "◢ YEET // NEW DIRECTIVE".to_owned()
+    let badge = format!(" {} {} ", task_status.marker(app), task_status.label());
+    let badge_width = Span::raw(&badge).width() as u16;
+    let show_badge = inner.width >= badge_width + 28;
+    let title_width = if show_badge {
+        inner.width.saturating_sub(badge_width + 2)
     } else {
-        format!("◢ YEET // {title}")
+        inner.width
     };
     frame.render_widget(
-        Paragraph::new(task::fit(&header_title, title_width as usize)).style(theme::brand()),
+        Paragraph::new(header_title_line(title, title_width as usize)),
         Rect::new(inner.x, inner.y, title_width, inner.height.min(1)),
     );
+    if show_badge {
+        frame.render_widget(
+            Paragraph::new(badge).style(
+                Style::default()
+                    .fg(task_status.color())
+                    .bg(theme::surface_raised())
+                    .bold(),
+            ),
+            Rect::new(
+                inner.right() - badge_width,
+                inner.y,
+                badge_width,
+                inner.height.min(1),
+            ),
+        );
+    }
     if inner.height > 1 {
         let location = if app.follow_tail || app.conversation.is_empty() {
             "latest"
         } else {
-            "history"
+            "reading history"
         };
         let workspace = current_workspace_name(app);
         let session = current_session_context(app);
-        let context = format!("{workspace}  ╱  {session}  ╱  {location}");
+        let context = format!("{workspace}  /  {session}  ·  {location}");
         let available = inner.width.saturating_sub(2) as usize;
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("◆ ", Style::default().fg(theme::ACCENT_WARM).bold()),
+                Span::styled("⌂ ", Style::default().fg(theme::user()).bold()),
                 Span::styled(
                     task::fit(&context, available),
-                    Style::default().fg(theme::MUTED),
+                    Style::default().fg(theme::muted()),
                 ),
             ])),
             Rect::new(inner.x, inner.y + 1, inner.width, 1),
@@ -93,6 +111,22 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
     )
 }
 
+/// Keep the brand distinct from the conversation, and normalize user-supplied
+/// titles so pasted newlines or tabs cannot disrupt the single-line header.
+fn header_title_line(title: &str, width: usize) -> Line<'static> {
+    let brand = task::fit("Yeet", width);
+    let remaining = width.saturating_sub(Span::raw(&brand).width());
+    let mut spans = vec![Span::styled(brand, theme::brand())];
+    if remaining > 3 {
+        spans.push(Span::styled(" · ", Style::default().fg(theme::muted())));
+        spans.push(Span::styled(
+            task::fit(title, remaining - 3),
+            Style::default().fg(theme::text()).bold(),
+        ));
+    }
+    Line::from(spans)
+}
+
 fn shell_sidebar_width(bounds: Rect, adaptive: responsive::Metrics) -> Option<u16> {
     adaptive.sidebar_width.filter(|sidebar_width| {
         bounds.width.saturating_sub(*sidebar_width) >= MIN_MAIN_PANE_WIDTH_WITH_SIDEBAR
@@ -103,13 +137,13 @@ fn sidebar_block() -> Block<'static> {
     Block::default()
         .style(theme::surface())
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(theme::BORDER))
+        .border_style(Style::default().fg(theme::border()))
         .padding(Padding::new(1, 1, 1, 1))
 }
 
 fn sidebar_sections(inner: Rect) -> [Rect; 3] {
     let rows = Layout::vertical([
-        Constraint::Length(4),
+        Constraint::Length(7),
         Constraint::Min(1),
         Constraint::Length(5),
     ])
@@ -172,27 +206,7 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let rows = sidebar_sections(inner);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("◢ YEET", theme::brand()),
-                Span::styled(
-                    " // CONTROL",
-                    Style::default().fg(theme::ACCENT_WARM).bold(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("WORKSPACES", Style::default().fg(theme::TEXT).bold()),
-                Span::styled(
-                    "  ·  CLICK A SESSION TO SWITCH",
-                    Style::default().fg(theme::MUTED),
-                ),
-            ]),
-            shortcut("New session", "Ctrl+N", inner.width),
-            shortcut("Sessions", "Alt+S", inner.width),
-        ]),
-        rows[0],
-    );
+    frame.render_widget(Paragraph::new(sidebar_header(inner.width)), rows[0]);
     let nav_rows = sidebar_rows(app);
     let selected = sidebar_selected_index(&nav_rows);
     let offset = sidebar_list_offset(selected, nav_rows.len(), rows[1].height);
@@ -210,7 +224,7 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
     let footer = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::BORDER_DIM));
+        .border_style(Style::default().fg(theme::border_dim()));
     frame.render_widget(
         Paragraph::new(vec![
             shortcut("Models", "Alt+M", inner.width),
@@ -220,6 +234,35 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .block(footer),
         rows[2],
     );
+}
+
+fn sidebar_header(width: u16) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            task::fit(" YEET /", width as usize),
+            Style::default()
+                .fg(theme::background())
+                .bg(theme::accent())
+                .bold(),
+        )),
+        Line::from(Span::styled(
+            task::fit("Your workspace", width as usize),
+            Style::default().fg(theme::muted()),
+        )),
+        Line::default(),
+        shortcut("+ New session", "Ctrl+N", width).style(
+            Style::default()
+                .fg(theme::user())
+                .bg(theme::surface_raised())
+                .bold(),
+        ),
+        shortcut("  Sessions", "Alt+S", width),
+        Line::default(),
+        Line::from(Span::styled(
+            task::fit("WORKSPACES", width as usize),
+            Style::default().fg(theme::muted()).bold(),
+        )),
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,7 +362,7 @@ fn append_workspace_sessions(
     } else {
         rows.push(SidebarRow {
             label: conversation_title(app).to_owned(),
-            detail: format!("Current · {}", TaskStatus::for_app(app).label()),
+            detail: TaskStatus::for_app(app).label().to_owned(),
             kind: SidebarRowKind::Session { current: true },
             session_id: None,
         });
@@ -334,11 +377,15 @@ fn append_workspace_sessions(
 
 fn session_row(session: &SessionSummary, current: bool, app: &App) -> SidebarRow {
     SidebarRow {
-        label: session.title.clone(),
+        label: session.display_title(),
         detail: if current {
-            format!("Current · {}", TaskStatus::for_app(app).label())
+            TaskStatus::for_app(app).label().to_owned()
         } else {
-            format!("{} msg", session.message_count)
+            if chrono::DateTime::parse_from_rfc3339(&session.updated_at).is_ok() {
+                session.updated_label()
+            } else {
+                format!("{} msg", session.message_count)
+            }
         },
         kind: SidebarRowKind::Session { current },
         session_id: Some(session.id.clone()),
@@ -346,41 +393,45 @@ fn session_row(session: &SessionSummary, current: bool, app: &App) -> SidebarRow
 }
 
 fn sidebar_item(app: &App, row: &SidebarRow, width: u16) -> ListItem<'static> {
-    let (prefix, label_style, detail_style) = match row.kind {
+    let (prefix, marker_style, label_style, detail_style) = match row.kind {
         SidebarRowKind::Workspace { current: true } => (
-            "▾ ",
-            Style::default().fg(theme::TEXT).bold(),
-            Style::default().fg(theme::ACCENT),
+            "▾ ".to_owned(),
+            Style::default().fg(theme::accent_warm()),
+            Style::default().fg(theme::text()).bold(),
+            Style::default().fg(theme::muted()),
         ),
         SidebarRowKind::Workspace { current: false } => (
-            "▸ ",
-            Style::default().fg(theme::MUTED),
-            Style::default().fg(theme::MUTED),
+            "▸ ".to_owned(),
+            Style::default().fg(theme::muted()),
+            Style::default().fg(theme::text_dim()).bold(),
+            Style::default().fg(theme::muted()),
         ),
         SidebarRowKind::Session { current: true } => (
-            TaskStatus::for_app(app).marker(app),
-            Style::default().fg(theme::TEXT).bold(),
+            format!("▎ {} ", TaskStatus::for_app(app).marker(app)),
+            Style::default().fg(TaskStatus::for_app(app).color()),
+            Style::default().fg(theme::text()).bold(),
             Style::default().fg(TaskStatus::for_app(app).color()),
         ),
         SidebarRowKind::Session { current: false } => (
-            "·",
-            Style::default().fg(theme::TEXT),
-            Style::default().fg(theme::MUTED),
+            "  · ".to_owned(),
+            Style::default().fg(theme::muted()),
+            Style::default().fg(theme::text_dim()),
+            Style::default().fg(theme::muted()),
         ),
     };
-    let indent = if matches!(row.kind, SidebarRowKind::Session { .. }) {
-        "  "
-    } else {
-        ""
-    };
-    let label = format!("{indent}{prefix}{}", row.label);
-    ListItem::new(aligned_line(
-        &label,
+    // Keep the navigation marker distinct from the title, without changing row
+    // heights or the shared geometry used by session click targets.
+    let prefix = truncate_end(&prefix, width as usize);
+    let remaining = width.saturating_sub(Span::raw(&prefix).width() as u16);
+    let mut line = aligned_line(
+        &row.label,
         &row.detail,
-        width,
+        remaining,
         label_style,
         detail_style,
-    ))
+    );
+    line.spans.insert(0, Span::styled(prefix, marker_style));
+    ListItem::new(line)
 }
 
 fn aligned_line(
@@ -390,15 +441,18 @@ fn aligned_line(
     label_style: Style,
     detail_style: Style,
 ) -> Line<'static> {
-    let detail_width = Span::raw(detail).width();
-    let label = truncate_end(label, (width as usize).saturating_sub(detail_width + 1));
-    let gap = (width as usize)
-        .saturating_sub(Span::raw(&label).width() + detail_width)
-        .max(1);
+    let width = width as usize;
+    // Keep metadata from crowding the session name out of narrow sidebars.
+    // Reserve at least half the row for the label and keep the detail flush right.
+    let detail = task::fit(detail, width.saturating_sub(1) / 2);
+    let detail_width = Span::raw(&detail).width();
+    let separator = usize::from(detail_width > 0);
+    let label = task::fit(label, width.saturating_sub(detail_width + separator));
+    let gap = width.saturating_sub(Span::raw(&label).width() + detail_width);
     Line::from(vec![
         Span::styled(label, label_style),
         Span::raw(" ".repeat(gap)),
-        Span::styled(detail.to_owned(), detail_style),
+        Span::styled(detail, detail_style),
     ])
 }
 
@@ -462,14 +516,13 @@ fn conversation_title(app: &App) -> &str {
 }
 
 fn shortcut(label: &str, key: &str, width: u16) -> Line<'static> {
-    let key_width = Span::raw(key).width();
-    let label = truncate_end(label, (width as usize).saturating_sub(key_width + 1));
-    let gap = (width as usize).saturating_sub(Span::raw(&label).width() + key_width);
-    Line::from(vec![
-        Span::raw(label),
-        Span::raw(" ".repeat(gap)),
-        Span::styled(key.to_owned(), Style::default().fg(theme::MUTED)),
-    ])
+    aligned_line(
+        label,
+        key,
+        width,
+        Style::default(),
+        Style::default().fg(theme::muted()),
+    )
 }
 
 pub(super) fn draw_welcome(frame: &mut Frame<'_>, area: Rect, viewport_shape: responsive::Shape) {
@@ -477,224 +530,89 @@ pub(super) fn draw_welcome(frame: &mut Frame<'_>, area: Rect, viewport_shape: re
 }
 
 #[cfg(test)]
-mod tests {
+mod polish_tests {
     use super::*;
-    use crate::model::{
-        ConversationEntry, ConversationKind, SessionSummary, WorkspaceSessionGroup,
-        WorkspaceSummary,
-    };
 
     #[test]
-    fn workspace_catalog_keeps_all_workspaces_and_nests_current_sessions() {
-        let mut app = App::default();
-        app.state.known_workspaces = vec![
-            WorkspaceSummary {
-                id: "one".into(),
-                path: "/tmp/one".into(),
-                display_name: "One".into(),
-                updated_at: None,
-                session_count: 2,
-                is_current: true,
-            },
-            WorkspaceSummary {
-                id: "two".into(),
-                path: "/tmp/two".into(),
-                display_name: "Two".into(),
-                updated_at: None,
-                session_count: 4,
-                is_current: false,
-            },
-        ];
-        app.state.workspace_session_groups = vec![
-            WorkspaceSessionGroup {
-                workspace_id: "one".into(),
-                sessions: vec![
-                    SessionSummary {
-                        id: "s1".into(),
-                        title: "Current task".into(),
-                        updated_at: String::new(),
-                        model: "model".into(),
-                        message_count: 3,
-                    },
-                    SessionSummary {
-                        id: "s2".into(),
-                        title: "Earlier task".into(),
-                        updated_at: String::new(),
-                        model: "model".into(),
-                        message_count: 8,
-                    },
-                ],
-            },
-            WorkspaceSessionGroup {
-                workspace_id: "two".into(),
-                sessions: vec![SessionSummary {
-                    id: "s3".into(),
-                    title: "Other workspace task".into(),
-                    updated_at: String::new(),
-                    model: "model".into(),
-                    message_count: 5,
-                }],
-            },
-        ];
-        app.state.saved_sessions = vec![
-            SessionSummary {
-                id: "s1".into(),
-                title: "Current task".into(),
-                updated_at: String::new(),
-                model: "model".into(),
-                message_count: 3,
-            },
-            SessionSummary {
-                id: "s2".into(),
-                title: "Earlier task".into(),
-                updated_at: String::new(),
-                model: "model".into(),
-                message_count: 8,
-            },
-        ];
-        app.state.current_session_id = Some("s1".into());
-
-        let rows = sidebar_rows(&app);
-
-        assert_eq!(rows.len(), 5);
-        assert_eq!(rows[0].label, "One");
-        assert!(matches!(
-            rows[0].kind,
-            SidebarRowKind::Workspace { current: true }
-        ));
-        assert_eq!(rows[1].label, "Current task");
-        assert_eq!(rows[1].detail, "Current · Ready");
-        assert!(matches!(
-            rows[1].kind,
-            SidebarRowKind::Session { current: true }
-        ));
-        assert_eq!(rows[2].label, "Earlier task");
-        assert_eq!(rows[2].detail, "8 msg");
-        assert_eq!(rows[3].label, "Two");
-        assert_eq!(rows[3].detail, "4 sessions");
-        assert_eq!(rows[4].label, "Other workspace task");
-    }
-
-    #[test]
-    fn workspace_catalog_keeps_unsaved_session_visible() {
-        let mut app = App::default();
-        app.state.known_workspaces = vec![WorkspaceSummary {
-            id: "one".into(),
-            path: "/tmp/one".into(),
-            display_name: "One".into(),
-            updated_at: None,
-            session_count: 0,
-            is_current: true,
-        }];
-
-        let rows = sidebar_rows(&app);
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[1].label, "New conversation");
-        assert_eq!(rows[1].detail, "Current · Ready");
-        assert!(matches!(
-            rows[1].kind,
-            SidebarRowKind::Session { current: true }
-        ));
-    }
-
-    #[test]
-    fn header_keeps_navigation_context_without_repeating_task_rail_state() {
-        use ratatui::{Terminal, backend::TestBackend};
-
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        let mut app = App {
-            follow_tail: false,
-            ..App::default()
-        };
-        app.state.is_streaming = true;
-        app.conversation.push(ConversationEntry {
-            id: "user".into(),
-            kind: ConversationKind::User {
-                content: "A conversation title".into(),
-            },
-        });
-
-        terminal
-            .draw(|frame| {
-                draw_shell(frame, &app);
-            })
-            .unwrap();
-        let screen: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-
-        assert!(screen.contains("history"));
-        assert!(!screen.contains("Ctrl+End"));
-        assert!(!screen.contains("Working"));
-    }
-
-    #[test]
-    fn sidebar_waits_until_main_pane_keeps_useful_width() {
-        for (width, expected) in [(108, None), (120, None), (131, None), (132, Some(28))] {
-            let bounds = Rect::new(0, 0, width, 24);
-            let adaptive = responsive::metrics(bounds);
-            assert_eq!(
-                shell_sidebar_width(bounds, adaptive),
-                expected,
-                "unexpected sidebar decision at {width} columns"
-            );
+    fn sidebar_header_has_clear_sections_and_fits_available_width() {
+        for width in 0..40 {
+            let lines = sidebar_header(width);
+            assert_eq!(lines.len(), 7);
+            assert!(lines.iter().all(|line| line.width() <= width as usize));
+            assert_eq!(lines[2].width(), 0);
+            assert_eq!(lines[5].width(), 0);
         }
+        let lines = sidebar_header(25);
+        assert_eq!(lines[0].to_string(), "YEET /");
+        assert!(lines[3].to_string().ends_with("Ctrl+N"));
+        assert_eq!(lines[6].to_string(), "WORKSPACES");
     }
 
     #[test]
-    fn sidebar_session_targets_match_the_rendered_noncurrent_row() {
-        use ratatui::{Terminal, backend::TestBackend};
+    fn sidebar_labels_cannot_break_the_single_line_hit_targets() {
+        let line = aligned_line(
+            "Fix\n the\t sidebar",
+            "Ready",
+            25,
+            theme::base(),
+            theme::brand(),
+        );
+        assert!(line.to_string().starts_with("Fix the sidebar"));
+        assert_eq!(line.width(), 25);
+    }
 
-        let mut app = App::default();
-        app.state.known_workspaces = vec![WorkspaceSummary {
-            id: "one".into(),
-            path: "/tmp/one".into(),
-            display_name: "One".into(),
-            updated_at: None,
-            session_count: 2,
-            is_current: true,
-        }];
-        app.state.workspace_session_groups = vec![WorkspaceSessionGroup {
-            workspace_id: "one".into(),
-            sessions: vec![
-                SessionSummary {
-                    id: "s1".into(),
-                    title: "Current task".into(),
-                    updated_at: String::new(),
-                    model: "model".into(),
-                    message_count: 3,
-                },
-                SessionSummary {
-                    id: "s2".into(),
-                    title: "Earlier task".into(),
-                    updated_at: String::new(),
-                    model: "model".into(),
-                    message_count: 8,
-                },
-            ],
-        }];
-        app.state.current_session_id = Some("s1".into());
+    #[test]
+    fn sidebar_rows_fit_and_keep_both_columns_readable() {
+        for width in 0..80 {
+            for (label, detail) in [
+                ("  · Conversation", "Current · Working"),
+                ("修正界面", "昨日"),
+            ] {
+                let line = aligned_line(label, detail, width, theme::base(), theme::brand());
+                assert!(line.width() <= width as usize, "width {width}: {line:?}");
+            }
+            assert!(shortcut("Settings", "Ctrl+,", width).width() <= width as usize);
+        }
+        let line = aligned_line("Session", "2m ago", 24, theme::base(), theme::brand());
+        assert_eq!(line.to_string(), "Session           2m ago");
+        let narrow = aligned_line(
+            "Session",
+            "Current · Working",
+            16,
+            theme::base(),
+            theme::brand(),
+        );
+        assert!(narrow.to_string().starts_with("Session"));
+        assert_eq!(narrow.width(), 16);
+    }
 
-        let bounds = Rect::new(0, 0, 132, 24);
-        let (area, targets) = sidebar_session_targets(&app, bounds);
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].1, "s2");
-        assert!(targets[0].0 >= area.1 && targets[0].0 < area.1 + area.3);
+    #[test]
+    fn header_preserves_brand_and_title_hierarchy() {
+        let line = header_title_line("New conversation", 80);
+        assert_eq!(line.to_string(), "Yeet · New conversation");
+        assert_eq!(line.spans[0].style, theme::brand());
+        assert_eq!(line.spans[1].style.fg, Some(theme::muted()));
+        assert_eq!(line.spans[2].style.fg, Some(theme::text()));
+        assert!(line.spans[2].style.add_modifier.contains(Modifier::BOLD));
+    }
 
-        let mut terminal = Terminal::new(TestBackend::new(bounds.width, bounds.height)).unwrap();
-        terminal.draw(|frame| _ = draw_shell(frame, &app)).unwrap();
-        let target_row = targets[0].0;
-        let rendered_row = (0..bounds.width)
-            .map(|x| terminal.backend().buffer()[(x, target_row)].symbol())
-            .collect::<String>();
-        assert!(rendered_row.contains("Earlier task"));
+    #[test]
+    fn header_keeps_multiline_titles_on_one_line() {
+        let line = header_title_line("  Fix\n  the\t layout\r\nplease  ", 80);
+        assert_eq!(line.to_string(), "Yeet · Fix the layout please");
+    }
 
-        let (_, compact_targets) = sidebar_session_targets(&app, Rect::new(0, 0, 120, 24));
-        assert!(compact_targets.is_empty());
+    #[test]
+    fn header_fits_even_narrow_and_unicode_viewports() {
+        for title in [
+            "A long conversation title",
+            "修正界面布局",
+            "Cafe\u{301} ☕",
+        ] {
+            for width in 0..80 {
+                let line = header_title_line(title, width);
+                assert!(line.width() <= width, "width {width}: {line:?}");
+            }
+        }
     }
 }

@@ -3,7 +3,55 @@ use serde_json::Value;
 
 pub use crate::core::{ProviderUsageStatus, ProviderUsageWindow, Usage};
 
-pub const REASONING_LEVELS: &[&str] = &["auto", "low", "medium", "high"];
+pub const REASONING_LEVELS: &[&str] = &["auto", "low", "medium", "high", "xhigh", "max"];
+
+pub fn reasoning_levels_for_model(model: &str) -> &'static [&'static str] {
+    const STANDARD: &[&str] = &["auto", "low", "medium", "high"];
+    const EXTENDED: &[&str] = &["auto", "low", "medium", "high", "xhigh", "max"];
+
+    let (provider, provider_model) = model.split_once('/').unwrap_or(("", model));
+    let routed_model = if matches!(provider, "openrouter" | "opencode" | "opencode-go") {
+        provider_model
+            .split_once('/')
+            .map(|(_, model)| model)
+            .unwrap_or(provider_model)
+    } else {
+        provider_model
+    };
+
+    if let Some(version) = routed_model.strip_prefix("gpt-") {
+        let numeric = version
+            .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+            .next()
+            .unwrap_or_default();
+        let mut parts = numeric.split('.');
+        let major = parts
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        let minor = parts
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0);
+        if major > 5 || (major == 5 && minor >= 6) {
+            return EXTENDED;
+        }
+    }
+
+    if routed_model.starts_with("claude-fable-5")
+        || routed_model.starts_with("claude-mythos-5")
+        || routed_model.starts_with("claude-opus-5")
+        || routed_model.starts_with("claude-sonnet-5")
+        || routed_model.starts_with("claude-opus-4.7")
+        || routed_model.starts_with("claude-opus-4-7")
+        || routed_model.starts_with("claude-opus-4.8")
+        || routed_model.starts_with("claude-opus-4-8")
+    {
+        return EXTENDED;
+    }
+
+    STANDARD
+}
 
 pub fn normalize_reasoning_level(value: &str) -> Option<&'static str> {
     let normalized = value.trim().to_ascii_lowercase();
@@ -68,6 +116,7 @@ pub struct BridgeState {
     pub foundation_memory_connected: bool,
     pub settings_notice: Option<String>,
     pub settings_working: bool,
+    pub runtime_settings: RuntimeSettingsState,
     pub sandbox_settings: Option<SandboxSettingsState>,
     pub sandbox_notice: Option<String>,
     pub sandbox_working: bool,
@@ -119,6 +168,7 @@ impl BridgeState {
             foundation_memory_connected: self.foundation_memory_connected,
             settings_notice: self.settings_notice.clone(),
             settings_working: self.settings_working,
+            runtime_settings: self.runtime_settings.clone(),
             sandbox_settings: self.sandbox_settings.clone(),
             sandbox_notice: self.sandbox_notice.clone(),
             sandbox_working: self.sandbox_working,
@@ -151,6 +201,28 @@ pub struct ModelCatalogItem {
     pub model: String,
     #[serde(default)]
     pub context_length: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RuntimeSettingsState {
+    pub appearance: String,
+    pub theme_dark: String,
+    pub theme_light: String,
+    pub context_length_override: Option<u64>,
+    pub jev_loop_mode: String,
+}
+
+impl Default for RuntimeSettingsState {
+    fn default() -> Self {
+        Self {
+            appearance: "auto".into(),
+            theme_dark: "kanagawa".into(),
+            theme_light: "adwaita".into(),
+            context_length_override: None,
+            jev_loop_mode: "off".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,6 +279,8 @@ pub struct CapabilityToggleItem {
     pub name: String,
     pub description: String,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,6 +311,42 @@ pub struct SessionSummary {
     pub updated_at: String,
     pub model: String,
     pub message_count: usize,
+}
+
+impl SessionSummary {
+    /// A single-line label shared by the session picker and sidebar.
+    pub fn display_title(&self) -> String {
+        let title = self.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        if title.is_empty() {
+            "Untitled session".to_owned()
+        } else {
+            title
+        }
+    }
+
+    pub fn updated_label(&self) -> String {
+        self.updated_label_at(chrono::Utc::now())
+    }
+
+    fn updated_label_at(&self, now: chrono::DateTime<chrono::Utc>) -> String {
+        let Ok(updated) = chrono::DateTime::parse_from_rfc3339(&self.updated_at) else {
+            return "unknown date".to_owned();
+        };
+        let elapsed = now.signed_duration_since(updated);
+        if elapsed.num_seconds() < 0 {
+            updated.format("%Y-%m-%d").to_string()
+        } else if elapsed.num_minutes() < 1 {
+            "now".to_owned()
+        } else if elapsed.num_hours() < 1 {
+            format!("{}m ago", elapsed.num_minutes())
+        } else if elapsed.num_days() < 1 {
+            format!("{}h ago", elapsed.num_hours())
+        } else if elapsed.num_days() < 7 {
+            format!("{}d ago", elapsed.num_days())
+        } else {
+            updated.format("%Y-%m-%d").to_string()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -312,12 +422,38 @@ pub struct ConversationToolCall {
     pub arguments: String,
     pub status: ToolCallStatus,
 
+    /// Backend-authored human-readable operation label. Frontends should not infer semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Optional target/purpose shown beside the operation type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, rename = "startedAt", skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, rename = "endedAt", skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
     #[serde(
         default,
         rename = "durationMs",
         skip_serializing_if = "Option::is_none"
     )]
     pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    #[serde(
+        default,
+        rename = "parentCallId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parent_call_id: Option<String>,
+    #[serde(
+        default,
+        rename = "parallelGroupId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parallel_group_id: Option<String>,
+    #[serde(default, rename = "jobId", skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
@@ -326,11 +462,16 @@ pub struct ConversationToolCall {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
-    Streaming,
+    Preparing,
+    AwaitingPermission,
+    Running,
     Completed,
     Failed,
+    Cancelled,
+    Interrupted,
+    TimedOut,
     Suppressed,
 }
 
@@ -407,6 +548,19 @@ pub enum FrontendCommand {
         id: String,
     },
     RequestSettings,
+    SetAppearance {
+        appearance: String,
+    },
+    SetTheme {
+        mode: String,
+        value: String,
+    },
+    SetContextLength {
+        length: Option<u64>,
+    },
+    SetJevLoopMode {
+        mode: String,
+    },
     SetOpenAiFlex {
         enabled: bool,
     },
@@ -446,77 +600,38 @@ pub enum SandboxAction {
 }
 
 #[cfg(test)]
-mod tests {
+mod reasoning_level_tests {
     use super::*;
 
     #[test]
-    fn conversation_decodes_legacy_swift_camel_case_fields() {
-        let value = serde_json::json!({
-            "id": "entry",
-            "kind": {
-                "type": "assistant",
-                "content": "done",
-                "toolCalls": [{
-                    "id": "visible",
-                    "index": 0,
-                    "callID": "call-1",
-                    "name": "read_file",
-                    "arguments": "{\"path\":\"Cargo.toml\"}",
-                    "status": "completed"
-                }]
-            }
-        });
-        let entry: ConversationEntry = serde_json::from_value(value).unwrap();
-        match entry.kind {
-            ConversationKind::Assistant { tool_calls, .. } => {
-                assert_eq!(tool_calls.len(), 1);
-                assert_eq!(tool_calls[0].call_id.as_deref(), Some("call-1"));
-            }
-            _ => panic!("wrong conversation kind"),
-        }
-    }
-
-    #[test]
-    fn mcp_conversation_uses_is_error_compatibility_key() {
-        let entry = ConversationEntry {
-            id: "entry".into(),
-            kind: ConversationKind::Mcp {
-                server: "local".into(),
-                name: "read".into(),
-                content: "ok".into(),
-                is_error: false,
-            },
-        };
-        let value = serde_json::to_value(entry).unwrap();
-        assert_eq!(value["kind"]["isError"], false);
-        assert!(value["kind"].get("is_error").is_none());
-    }
-
-    #[test]
-    fn compact_bridge_state_keeps_live_stream_fields_without_conversation() {
-        let state = BridgeState {
-            conversation_revision: 7,
-            conversation: Some(vec![ConversationEntry {
-                id: "assistant".into(),
-                kind: ConversationKind::Assistant {
-                    content: "old".into(),
-                    tool_calls: vec![],
-                },
-            }]),
-            active_assistant_entry_id: Some("assistant".into()),
-            active_assistant_text: "streaming".into(),
-            active_reasoning_entry_id: Some("reasoning".into()),
-            active_reasoning_text: "working".into(),
-            active_reasoning_summary: "summary".into(),
-            current_session_id: Some("session".into()),
-            ..BridgeState::default()
-        };
-        let compact = state.without_conversation();
-        assert!(compact.conversation.is_none());
-        assert_eq!(compact.conversation_revision, 7);
-        assert_eq!(compact.active_assistant_text, "streaming");
-        assert_eq!(compact.active_reasoning_text, "working");
-        assert_eq!(compact.active_reasoning_summary, "summary");
-        assert_eq!(compact.current_session_id.as_deref(), Some("session"));
+    fn reasoning_levels_follow_model_capabilities() {
+        assert_eq!(
+            reasoning_levels_for_model("openai/gpt-5.6-sol"),
+            &["auto", "low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            reasoning_levels_for_model("openai/gpt-6-astra"),
+            &["auto", "low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            reasoning_levels_for_model("openrouter/anthropic/claude-sonnet-5"),
+            &["auto", "low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            reasoning_levels_for_model("gemini/gemini-3.8-flash"),
+            &["auto", "low", "medium", "high"]
+        );
+        assert_eq!(
+            reasoning_levels_for_model("anthropic/claude-opus-4.8"),
+            &["auto", "low", "medium", "high", "xhigh", "max"]
+        );
+        assert_eq!(
+            reasoning_levels_for_model("anthropic/claude-sonnet-4-5"),
+            &["auto", "low", "medium", "high"]
+        );
+        assert_eq!(
+            reasoning_levels_for_model("anthropic/claude-sonnet-4-6"),
+            &["auto", "low", "medium", "high"]
+        );
     }
 }

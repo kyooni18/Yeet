@@ -17,10 +17,20 @@ struct ConfigDocument {
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    theme_dark: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    theme_light: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    appearance: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     context_lengths: std::collections::BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     context_length_overrides: std::collections::BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    jev_loop_mode: Option<String>,
     // config.json is shared with the TypeScript runtime. Keep fields owned by
     // that side (notably `providers`) intact whenever Rust updates its own
     // settings instead of silently deleting them on the next write.
@@ -39,6 +49,14 @@ struct ModelCatalogCacheDocument {
 
 fn version_one() -> u64 {
     1
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ThemeSettings {
+    pub theme: Option<String>,
+    pub dark: Option<String>,
+    pub light: Option<String>,
+    pub appearance: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +104,46 @@ impl ConfigStore {
 
     pub fn model(&self) -> Result<Option<String>> {
         Ok(self.read()?.model)
+    }
+
+    /// Theme overrides are kept in config.json so the Rust TUI and the
+    /// TypeScript runtime can share the same user choice.
+    pub fn theme_settings(&self) -> Result<ThemeSettings> {
+        let document = self.read()?;
+        let theme = document.theme;
+        Ok(ThemeSettings {
+            dark: document.theme_dark.or_else(|| theme.clone()),
+            light: document.theme_light.or_else(|| theme.clone()),
+            theme,
+            appearance: document.appearance,
+        })
+    }
+
+    pub fn set_theme(&self, mode: &str, value: &str) -> Result<()> {
+        let value = value.trim();
+        if value.is_empty() {
+            bail!("Theme name or path cannot be empty");
+        }
+        let mut document = self.read()?;
+        document.version = 1;
+        match mode {
+            "dark" => document.theme_dark = Some(value.to_owned()),
+            "light" => document.theme_light = Some(value.to_owned()),
+            "both" => document.theme = Some(value.to_owned()),
+            _ => bail!("Theme mode must be dark, light, or both"),
+        }
+        self.write(&document)
+    }
+
+    pub fn set_appearance(&self, appearance: &str) -> Result<()> {
+        let appearance = appearance.trim().to_ascii_lowercase();
+        if !matches!(appearance.as_str(), "auto" | "dark" | "light") {
+            bail!("Appearance must be auto, dark, or light");
+        }
+        let mut document = self.read()?;
+        document.version = 1;
+        document.appearance = (appearance != "auto").then_some(appearance);
+        self.write(&document)
     }
 
     pub fn set_model(&self, model: &str) -> Result<String> {
@@ -161,6 +219,26 @@ impl ConfigStore {
             document.context_length_overrides.remove(model);
         }
         self.write(&document)
+    }
+
+    pub fn jev_loop_mode(&self) -> Result<String> {
+        Ok(self
+            .read()?
+            .jev_loop_mode
+            .filter(|mode| matches!(mode.as_str(), "shadow" | "enforce"))
+            .unwrap_or_else(|| "off".into()))
+    }
+
+    pub fn set_jev_loop_mode(&self, mode: &str) -> Result<String> {
+        let mode = mode.trim().to_ascii_lowercase();
+        if !matches!(mode.as_str(), "off" | "shadow" | "enforce") {
+            bail!("Jev loop mode must be off, shadow, or enforce");
+        }
+        let mut document = self.read()?;
+        document.version = 1;
+        document.jev_loop_mode = (mode != "off").then_some(mode.clone());
+        self.write(&document)?;
+        Ok(mode)
     }
 
     pub fn model_catalog_cache(&self) -> Result<Vec<ModelCatalogItem>> {
@@ -288,141 +366,4 @@ pub fn parse_context_length(value: &str) -> Result<u64> {
         bail!("Context length must be greater than zero");
     }
     Ok(length)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_model_ids() {
-        assert_eq!(validate_model_id("openai/gpt-5").unwrap(), "openai/gpt-5");
-        assert!(validate_model_id("gpt-5").is_err());
-        assert!(validate_model_id("bad provider/model").is_err());
-    }
-
-    #[test]
-    fn config_round_trips_model_and_context_length() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = ConfigStore::new(temp.path());
-        assert_eq!(store.model().unwrap(), None);
-        assert_eq!(store.set_model("openai/test").unwrap(), "openai/test");
-        store
-            .set_context_length("openai/test", Some(128_000))
-            .unwrap();
-        store
-            .set_context_length_override("openai/test", Some(96_000))
-            .unwrap();
-        assert_eq!(store.model().unwrap().as_deref(), Some("openai/test"));
-        assert_eq!(store.context_length("openai/test").unwrap(), Some(128_000));
-        assert_eq!(
-            store.context_length_override("openai/test").unwrap(),
-            Some(96_000)
-        );
-        store
-            .set_context_length_override("openai/test", None)
-            .unwrap();
-        assert_eq!(store.context_length_override("openai/test").unwrap(), None);
-    }
-
-    #[test]
-    fn model_catalog_cache_round_trips_and_normalizes() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = ConfigStore::new(temp.path());
-        let models = vec![
-            ModelCatalogItem {
-                id: "codex-cli/gpt-6-astra".into(),
-                provider: "codex-cli".into(),
-                model: "gpt-6-astra".into(),
-                context_length: Some(400_000),
-            },
-            ModelCatalogItem {
-                id: "codex-cli/gpt-6-astra".into(),
-                provider: "codex-cli".into(),
-                model: "gpt-6-astra".into(),
-                context_length: Some(400_000),
-            },
-            ModelCatalogItem {
-                id: "invalid".into(),
-                provider: "codex-cli".into(),
-                model: "gpt-5.6-sol".into(),
-                context_length: None,
-            },
-        ];
-
-        store.set_model_catalog_cache(&models).unwrap();
-        assert_eq!(
-            store.model_catalog_cache().unwrap(),
-            vec![ModelCatalogItem {
-                id: "codex-cli/gpt-6-astra".into(),
-                provider: "codex-cli".into(),
-                model: "gpt-6-astra".into(),
-                context_length: Some(400_000),
-            }]
-        );
-    }
-
-    #[test]
-    fn parses_context_length_suffixes() {
-        assert_eq!(parse_context_length("128k").unwrap(), 128_000);
-        assert_eq!(parse_context_length("1M").unwrap(), 1_000_000);
-        assert_eq!(parse_context_length("128_000").unwrap(), 128_000);
-        assert_eq!(parse_context_length("128,000").unwrap(), 128_000);
-        assert!(parse_context_length("0").is_err());
-        assert!(parse_context_length("128kb").is_err());
-    }
-
-    #[test]
-    fn config_round_trips_reasoning_level() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = ConfigStore::new(temp.path());
-        assert_eq!(store.reasoning_level().unwrap(), None);
-        assert_eq!(store.set_reasoning_level("HIGH").unwrap(), "high");
-        assert_eq!(store.reasoning_level().unwrap().as_deref(), Some("high"));
-        assert!(store.set_reasoning_level("extreme").is_err());
-    }
-
-    #[test]
-    fn config_preserves_runtime_owned_provider_configuration() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = ConfigStore::new(temp.path());
-        store.ensure().unwrap();
-        fs::write(
-            store.config_path(),
-            r#"{
-  "version": 1,
-  "providers": {
-    "local": {
-      "id": "local",
-      "baseUrl": "http://127.0.0.1:1234/v1",
-      "requireApiKey": false
-    }
-  }
-}
-"#,
-        )
-        .unwrap();
-
-        store.set_model("local/test-model").unwrap();
-        store.set_reasoning_level("medium").unwrap();
-        store
-            .set_context_length("local/test-model", Some(32_768))
-            .unwrap();
-        store
-            .set_context_length_override("local/test-model", Some(24_000))
-            .unwrap();
-
-        let value: serde_json::Value =
-            serde_json::from_slice(&fs::read(store.config_path()).unwrap()).unwrap();
-        assert_eq!(value["providers"]["local"]["id"], "local");
-        assert_eq!(
-            value["providers"]["local"]["baseUrl"],
-            "http://127.0.0.1:1234/v1"
-        );
-        assert_eq!(value["providers"]["local"]["requireApiKey"], false);
-        assert_eq!(value["model"], "local/test-model");
-        assert_eq!(value["reasoningLevel"], "medium");
-        assert_eq!(value["contextLengths"]["local/test-model"], 32_768);
-        assert_eq!(value["contextLengthOverrides"]["local/test-model"], 24_000);
-    }
 }

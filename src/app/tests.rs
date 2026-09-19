@@ -1,6 +1,7 @@
 //! Tests for the parent module.
 
 use super::*;
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 #[test]
 fn debate_form_selects_each_role_independently_and_restores_saved_models() {
@@ -153,6 +154,7 @@ fn capability_picker_supports_paged_and_boundary_navigation() {
             name: format!("Capability {index}"),
             description: format!("Capability description {index}"),
             enabled: index % 2 == 0,
+            source: None,
         })
         .collect();
     app.popup_index = 10;
@@ -686,6 +688,48 @@ fn terminal_editing_chords_map_without_stealing_empty_input_scroll_keys() {
 }
 
 #[test]
+fn terminal_editing_keeps_grapheme_clusters_atomic_and_supports_word_delete_chords() {
+    let alt = |code| KeyEvent::new(code, KeyModifiers::ALT);
+    let ctrl = |code| KeyEvent::new(code, KeyModifiers::CONTROL);
+    let family = "👨‍👩‍👧‍👦";
+    let family_chars = family.chars().count();
+    let mut app = App {
+        input: format!("A{family}B"),
+        cursor: 1 + family_chars,
+        ..App::default()
+    };
+
+    app.backspace();
+    assert_eq!(app.input, "AB");
+    assert_eq!(app.cursor, 1);
+
+    app.input = format!("A{family}B");
+    app.cursor = 1;
+    app.delete();
+    assert_eq!(app.input, "AB");
+    assert_eq!(app.cursor, 1);
+
+    app.input = format!("A{family}B");
+    app.cursor = 1 + family_chars;
+    assert!(app.handle_chat_editing_key(&ctrl(KeyCode::Char('b'))));
+    assert_eq!(app.cursor, 1);
+    assert!(app.handle_chat_editing_key(&ctrl(KeyCode::Char('f'))));
+    assert_eq!(app.cursor, 1 + family_chars);
+
+    app.input = "one two three".into();
+    app.cursor = "one ".chars().count();
+    assert!(app.handle_chat_editing_key(&alt(KeyCode::Delete)));
+    assert_eq!(app.input, "one  three");
+    assert_eq!(app.cursor, "one ".chars().count());
+
+    app.input = "one two three".into();
+    app.cursor = "one two".chars().count();
+    assert!(app.handle_chat_editing_key(&alt(KeyCode::Backspace)));
+    assert_eq!(app.input, "one  three");
+    assert_eq!(app.cursor, "one ".chars().count());
+}
+
+#[test]
 fn terminal_multiline_navigation_is_line_local_and_unicode_safe() {
     let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
     let mut app = App {
@@ -717,6 +761,37 @@ fn terminal_multiline_navigation_is_line_local_and_unicode_safe() {
 }
 
 #[test]
+fn wrapped_composer_navigation_and_mouse_click_follow_visual_rows() {
+    let plain = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    let mut app = App {
+        input: "abcdefghij".into(),
+        cursor: 2,
+        composer_width: 4,
+        composer_area: (10, 5, 4, 3),
+        ..App::default()
+    };
+
+    assert!(app.handle_chat_editing_key(&plain(KeyCode::Down)));
+    assert_eq!(app.cursor, 6);
+    assert!(app.handle_chat_editing_key(&plain(KeyCode::Home)));
+    assert_eq!(app.cursor, 4);
+    app.cursor = 6;
+    assert!(app.handle_chat_editing_key(&plain(KeyCode::End)));
+    assert_eq!(app.cursor, 7);
+    app.cursor = 6;
+    assert!(app.handle_chat_editing_key(&plain(KeyCode::Up)));
+    assert_eq!(app.cursor, 2);
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 12,
+        row: 6,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.cursor, 6);
+}
+
+#[test]
 fn mouse_wheel_scrolls_the_transcript_and_restores_tail_following() {
     let mut app = App {
         max_scroll: 30,
@@ -743,6 +818,41 @@ fn mouse_wheel_scrolls_the_transcript_and_restores_tail_following() {
     });
     assert_eq!(app.scroll_y, 30);
     assert!(app.follow_tail);
+}
+
+#[test]
+fn modified_mouse_wheel_supports_precise_and_fast_transcript_scrolling() {
+    let mut app = App {
+        max_scroll: 50,
+        follow_tail: true,
+        scroll_y: 50,
+        transcript_area: (0, 0, 80, 20),
+        ..App::default()
+    };
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 4,
+        modifiers: KeyModifiers::SHIFT,
+    });
+    assert_eq!(app.scroll_y, 49);
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 4,
+        modifiers: KeyModifiers::CONTROL,
+    });
+    assert_eq!(app.scroll_y, 39);
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 4,
+        modifiers: KeyModifiers::CONTROL,
+    });
+    assert_eq!(app.scroll_y, 49);
 }
 
 #[test]
@@ -833,6 +943,31 @@ fn transcript_selection_is_scoped_clamped_and_direction_independent() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.selection_end, Some((17, 6)));
+}
+
+#[test]
+fn plain_transcript_click_does_not_leave_a_fake_selection() {
+    let mut app = App {
+        transcript_area: (10, 4, 20, 3),
+        transcript_cells: vec![vec!["x".into(); 20]; 3],
+        ..App::default()
+    };
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 12,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 12,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert!(app.selection_start.is_none());
+    assert!(app.selection_end.is_none());
 }
 
 #[test]

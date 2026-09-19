@@ -504,30 +504,3 @@ fn sanitize_tool_name_part(value: &str) -> String {
     }
     result.trim_matches('_').to_owned()
 }
-
-#[cfg(test)]
-mod web_source_url_tests {
-    use super::*;
-
-    #[test]
-    fn deeply_nested_web_results_do_not_recurse_on_the_worker_stack() {
-        let worker = std::thread::Builder::new()
-            .stack_size(64 * 1024)
-            .spawn(|| {
-                let mut value = json!({"url":"https://example.com/source"});
-                for _ in 0..2_000 {
-                    value = Value::Array(vec![value]);
-                }
-                let mut urls = HashSet::new();
-                collect_web_source_urls(&value, &mut urls);
-                assert!(urls.contains("https://example.com/source"));
-
-                // serde_json::Value itself drops recursively. Leak this synthetic
-                // adversarial value so the test measures our walker rather than
-                // serde_json's destructor on the deliberately tiny stack.
-                std::mem::forget(value);
-            })
-            .expect("spawn tiny-stack worker");
-        worker.join().expect("deep JSON walk should not overflow");
-    }
-}

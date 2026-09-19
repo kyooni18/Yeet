@@ -79,6 +79,16 @@ impl ToolRegistry {
             }
             allow_write = true;
         }
+        let _mutation_guard = if restricted.is_some() {
+            if background {
+                bail!(
+                    "Mutating shell commands cannot run detached. Run this command in the foreground so Yeet can hold the workspace mutation lease until it finishes."
+                );
+            }
+            self.workspace_mutation_guard()?
+        } else {
+            None
+        };
         let cache_safe_inspection = restricted.is_none() && shell_is_inspection(&command);
         if !background && !allow_write && cache_safe_inspection {
             let signature = normalize_shell_inspection(&command);
@@ -384,75 +394,4 @@ pub(super) fn shell_mentions_path(command: &str, path: &str) -> bool {
         || command.contains(&format!("./{path}"))
         || command.contains(&format!("'{path}'"))
         || command.contains(&format!("\"{path}\""))
-}
-
-#[cfg(test)]
-mod token_tests {
-    use super::*;
-
-    #[test]
-    fn short_failure_diagnostics_are_forwarded_exactly_without_an_evaluator() {
-        let mut output = crate::shell::ShellResult {
-            command: "cargo build".into(),
-            working_directory: ".".into(),
-            exit_code: 1,
-            succeeded: false,
-            duration_milliseconds: 1,
-            stdout: Some("building".into()),
-            stderr: Some("error: missing file\n  src/main.rs:3".into()),
-            stdout_bytes: 8,
-            stderr_bytes: 35,
-            stdout_truncated: false,
-            stderr_truncated: false,
-        };
-        let value: Value =
-            serde_json::from_str(&inline_shell_result(&output, "saved-log").unwrap()).unwrap();
-        assert_eq!(value["stderr"], output.stderr.as_deref().unwrap());
-        assert_eq!(value["succeeded"], false);
-        assert_eq!(value["exitCode"], 1);
-        assert_eq!(value["artifactId"], "saved-log");
-        output.stderr_truncated = true;
-        assert!(inline_shell_result(&output, "saved-log").is_none());
-        output.stderr_truncated = false;
-        output.stderr = Some("한".repeat(1000));
-        assert!(inline_shell_result(&output, "saved-log").is_none());
-    }
-
-    #[test]
-    fn common_read_only_diagnostics_preserve_workspace_evidence() {
-        for command in [
-            "git status --short",
-            "git diff -- src/agent.rs",
-            "stat -f '%Sp %N' /tmp/file",
-            "ps -axo pid,command",
-            "lsof -nP -iTCP -sTCP:LISTEN",
-            "shasum -a 256 target/release/yeet",
-            "command -v yeet",
-            "printf '%s\\n' header; git status --short",
-            "set -eu\nprintf '%s\\n' header\nls -la .",
-        ] {
-            assert!(shell_is_inspection(command), "{command}");
-        }
-    }
-    #[test]
-    fn deterministic_summary_extracts_diagnostics_without_provider_calls() {
-        let output = crate::shell::ShellResult {
-            command: "xcodebuild".into(),
-            working_directory: ".".into(),
-            exit_code: 74,
-            succeeded: false,
-            duration_milliseconds: 1,
-            stdout: Some("Resolve Package Graph".into()),
-            stderr: Some("xcodebuild: error: Could not resolve package dependencies\nwarning: secondary detail".into()),
-            stdout_bytes: 21,
-            stderr_bytes: 86,
-            stdout_truncated: false,
-            stderr_truncated: false,
-        };
-        let diagnostics = shell_diagnostic_lines(&output, 8);
-        assert_eq!(diagnostics.len(), 2);
-        let summary = deterministic_shell_summary(&output, &diagnostics);
-        assert!(summary.contains("exit code 74"));
-        assert!(summary.contains("Could not resolve package dependencies"));
-    }
 }

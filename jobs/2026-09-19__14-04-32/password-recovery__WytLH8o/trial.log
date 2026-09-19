@@ -1,0 +1,8 @@
+Trial password-recovery__WytLH8o failed: Docker compose command failed for environment password-recovery. Command: docker compose --project-name password-recovery__wytlh8o__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7w8vEz8xG5Rmh59QkrpMp2/password-recovery/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpb5zbxr2e/password-recovery__WytLH8o__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp029yf27f/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzx8xu__p/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network password-recovery__wytlh8o__env_default Creating 
+ Network password-recovery__wytlh8o__env_default Creating 
+ Network password-recovery__wytlh8o__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network password-recovery__wytlh8o__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container password-recovery__wytlh8o__env-main-1 Creating 
+failed to create network password-recovery__wytlh8o__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

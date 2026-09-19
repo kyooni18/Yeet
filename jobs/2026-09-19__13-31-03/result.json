@@ -1,0 +1,40 @@
+{
+    "id": "d79dd4b9-755a-4d92-a4c7-8423e61e3105",
+    "started_at": "2026-09-19T13:31:04.435905",
+    "updated_at": "2026-09-19T04:31:17.496878Z",
+    "finished_at": null,
+    "n_total_trials": 89,
+    "stats": {
+        "n_completed_trials": 4,
+        "n_errored_trials": 4,
+        "n_running_trials": 4,
+        "n_pending_trials": 81,
+        "n_cancelled_trials": 8,
+        "n_retries": 0,
+        "evals": {
+            "yeet__gpt-5.6-luna__terminal-bench": {
+                "n_trials": 0,
+                "n_errors": 4,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {},
+                "exception_stats": {
+                    "CancelledError": [
+                        "log-summary-date-ranges__vLEyB2U",
+                        "merge-diff-arc-agi-task__RKSjutg",
+                        "write-compressor__CwzR8ak",
+                        "winning-avg-corewars__YLZgyty"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}

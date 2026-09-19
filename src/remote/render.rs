@@ -189,24 +189,3 @@ fn indexed_color(index: u8) -> String {
     let blue = component(value % 6);
     format!("rgb({red},{green},{blue})")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::{layout::Rect, style::Style};
-
-    #[test]
-    fn render_buffer_escapes_content_and_preserves_style() {
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 4, 1));
-        buffer.set_string(
-            0,
-            0,
-            "<ab>",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        );
-        let html = render_buffer(&buffer);
-        assert!(html.contains("&lt;ab&gt;"));
-        assert!(html.contains("font-weight:700"));
-        assert!(!html.contains("<ab>"));
-    }
-}

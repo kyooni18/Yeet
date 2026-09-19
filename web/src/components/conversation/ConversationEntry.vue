@@ -11,6 +11,19 @@ import { copyTextToClipboard } from '@/utils/clipboard'
 const props = defineProps<{ entry: ConversationEntry }>()
 const remote = useRemoteStore()
 
+const messageCopyStatus = ref<'idle' | 'copied' | 'failed'>('idle')
+let messageCopyGeneration = 0
+async function copyMessage() {
+  if (props.entry.kind.type !== 'assistant') return
+  const generation = ++messageCopyGeneration
+  const copied = await copyTextToClipboard(props.entry.kind.content)
+  if (generation !== messageCopyGeneration) return
+  messageCopyStatus.value = copied ? 'copied' : 'failed'
+  window.setTimeout(() => {
+    if (generation === messageCopyGeneration) messageCopyStatus.value = 'idle'
+  }, 1500)
+}
+
 const reasoningOpen = ref(false)
 const semanticOpen = ref(false)
 const showFullMcp = ref(false)
@@ -125,6 +138,12 @@ const mcpCopyAnnouncement = computed(() => {
             <span v-if="entry.uiStreaming" class="stream-caret" aria-label="Streaming"></span>
           </div>
           <ActivityGroup v-if="entry.kind.toolCalls?.length" :tools="entry.kind.toolCalls" />
+          <div v-if="entry.kind.content && !entry.uiStreaming" class="message-actions">
+            <button type="button" aria-label="Copy response" @click="copyMessage">
+              {{ messageCopyStatus === 'copied' ? 'Copied' : messageCopyStatus === 'failed' ? 'Copy failed' : 'Copy response' }}
+            </button>
+            <span class="sr-only" role="status">{{ messageCopyStatus === 'copied' ? 'Response copied' : messageCopyStatus === 'failed' ? 'Response could not be copied' : '' }}</span>
+          </div>
         </div>
       </div>
     </template>
@@ -137,9 +156,8 @@ const mcpCopyAnnouncement = computed(() => {
         @toggle="handleReasoningToggle"
       >
         <summary @keydown="focusDisclosureBody($event, reasoningBodyElement)">
-          <span class="reasoning-symbol" aria-hidden="true">◇</span>
           <span class="reasoning-heading">
-            <strong>{{ entry.uiStreaming ? 'Reasoning' : 'Reasoning trace' }}</strong>
+            <strong>{{ entry.uiStreaming ? 'Thinking' : 'Thoughts' }}</strong>
             <span v-if="reasoningPreview" class="truncate" :title="reasoningPreview">{{ reasoningPreview }}</span>
           </span>
           <span v-if="entry.uiStreaming" class="spinner"></span>

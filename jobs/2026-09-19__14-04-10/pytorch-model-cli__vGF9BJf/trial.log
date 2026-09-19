@@ -1,0 +1,8 @@
+Trial pytorch-model-cli__vGF9BJf failed: Docker compose command failed for environment pytorch-model-cli. Command: docker compose --project-name pytorch-model-cli__vgf9bjf__env --project-directory /Users/kyooni18/.cache/harbor/tasks/cEZY7Ut37eqdNnYKPebgYq/pytorch-model-cli/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsgktp5df/pytorch-model-cli__vGF9BJf__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4c5x4a3s/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp6udvy74z/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network pytorch-model-cli__vgf9bjf__env_default Creating 
+ Network pytorch-model-cli__vgf9bjf__env_default Creating 
+ Network pytorch-model-cli__vgf9bjf__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network pytorch-model-cli__vgf9bjf__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container pytorch-model-cli__vgf9bjf__env-main-1 Creating 
+failed to create network pytorch-model-cli__vgf9bjf__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

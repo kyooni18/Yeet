@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/sam-cell-seg:20251031: docker inspect returned 1
+Trial sam-cell-seg__FmWjuhb failed: Docker compose command failed for environment sam-cell-seg. Command: docker compose --project-name sam-cell-seg__fmwjuhb__env --project-directory /Users/kyooni18/.cache/harbor/tasks/n9EXHRQn8C4KGZQgXQEvZU/sam-cell-seg/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbfzdxegy/sam-cell-seg__FmWjuhb__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppzwdgdf_/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7r2vne3l/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sam-cell-seg:20251031 Pulling 
+ Image alexgshaw/sam-cell-seg:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

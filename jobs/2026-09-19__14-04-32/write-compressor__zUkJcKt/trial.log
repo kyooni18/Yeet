@@ -1,0 +1,8 @@
+Trial write-compressor__zUkJcKt failed: Docker compose command failed for environment write-compressor. Command: docker compose --project-name write-compressor__zukjckt__env --project-directory /Users/kyooni18/.cache/harbor/tasks/MWrHdxDHM3npYpRiLMz3iZ/write-compressor/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxd38aktl/write-compressor__zUkJcKt__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpv_az3d_f/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpivkqvs4z/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network write-compressor__zukjckt__env_default Creating 
+ Network write-compressor__zukjckt__env_default Creating 
+ Network write-compressor__zukjckt__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network write-compressor__zukjckt__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container write-compressor__zukjckt__env-main-1 Creating 
+failed to create network write-compressor__zukjckt__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

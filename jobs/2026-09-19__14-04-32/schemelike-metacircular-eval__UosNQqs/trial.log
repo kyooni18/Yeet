@@ -1,0 +1,7 @@
+Skipping image OS validation for alexgshaw/schemelike-metacircular-eval:20251031: docker inspect returned 1
+Trial schemelike-metacircular-eval__UosNQqs failed: Docker compose command failed for environment schemelike-metacircular-eval. Command: docker compose --project-name schemelike-metacircular-eval__uosnqqs__env --project-directory /Users/kyooni18/.cache/harbor/tasks/YkDjArg6hKdFYEmdiPrztY/schemelike-metacircular-eval/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpuoljpynx/schemelike-metacircular-eval__UosNQqs__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmprrtk06sk/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8z9kgwwg/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/schemelike-metacircular-eval:20251031 Pulling 
+ Image alexgshaw/schemelike-metacircular-eval:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Cleanup interrupted for schemelike-metacircular-eval__UosNQqs, but agent environment stop is shielded and will complete

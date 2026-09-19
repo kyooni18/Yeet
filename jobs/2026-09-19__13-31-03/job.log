@@ -1,0 +1,16 @@
+Skipping image OS validation for alexgshaw/write-compressor:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/merge-diff-arc-agi-task:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/winning-avg-corewars:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/log-summary-date-ranges:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Trial reshard-c4-data__AqzwP2W cancelled
+Trial write-compressor__CwzR8ak cancelled
+Trial log-summary-date-ranges__vLEyB2U cancelled
+Trial gpt2-codegolf__aS9zsB9 cancelled
+Trial break-filter-js-from-html__SoyBVHb cancelled
+Trial merge-diff-arc-agi-task__RKSjutg cancelled
+Trial winning-avg-corewars__YLZgyty cancelled
+Trial llm-inference-batching-scheduler__pi2gspy cancelled

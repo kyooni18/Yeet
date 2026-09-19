@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/git-multibranch:20251031: docker inspect returned 1
+Trial git-multibranch__ae9cVbf failed: Docker compose command failed for environment git-multibranch. Command: docker compose --project-name git-multibranch__ae9cvbf__env --project-directory /Users/kyooni18/.cache/harbor/tasks/kLfrAkLDVW7LCezLUHt4oB/git-multibranch/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpy5q0at5m/git-multibranch__ae9cVbf__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp53jeroh_/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7veab33n/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/git-multibranch:20251031 Pulling 
+ Image alexgshaw/git-multibranch:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

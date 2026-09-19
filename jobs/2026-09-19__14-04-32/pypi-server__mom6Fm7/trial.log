@@ -1,0 +1,8 @@
+Trial pypi-server__mom6Fm7 failed: Docker compose command failed for environment pypi-server. Command: docker compose --project-name pypi-server__mom6fm7__env --project-directory /Users/kyooni18/.cache/harbor/tasks/LEz4caXvpzU9rMBzsJnZA6/pypi-server/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpfyp9wj12/pypi-server__mom6Fm7__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpk3z68yit/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpw7w8_86d/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network pypi-server__mom6fm7__env_default Creating 
+ Network pypi-server__mom6fm7__env_default Creating 
+ Network pypi-server__mom6fm7__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network pypi-server__mom6fm7__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container pypi-server__mom6fm7__env-main-1 Creating 
+failed to create network pypi-server__mom6fm7__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

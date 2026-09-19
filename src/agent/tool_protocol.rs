@@ -21,10 +21,14 @@ pub(super) struct PartialToolCall {
 
 impl PartialToolCall {
     /// Creates an empty partial call using deterministic fallbacks for missing fields.
-    pub(super) fn new(index: usize, id: Option<String>, name: Option<String>) -> Self {
+    pub(super) fn new(_index: usize, id: Option<String>, name: Option<String>) -> Self {
         Self {
-            id: id.unwrap_or_else(|| format!("tool-{index}")),
-            name: name.unwrap_or_else(|| "tool".into()),
+            id: id
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| format!("tool-{}", Uuid::new_v4().simple())),
+            name: name
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "tool".into()),
             arguments: String::new(),
         }
     }
@@ -36,10 +40,10 @@ impl PartialToolCall {
         name: Option<String>,
         delta: Option<String>,
     ) {
-        if let Some(id) = id.filter(|value| !value.is_empty()) {
+        if let Some(id) = id.filter(|value| !value.trim().is_empty()) {
             self.id = id;
         }
-        if let Some(name) = name.filter(|value| !value.is_empty()) {
+        if let Some(name) = name.filter(|value| !value.trim().is_empty()) {
             self.name = name;
         }
         if let Some(delta) = delta {
@@ -334,4 +338,16 @@ pub(super) fn looks_like_malformed_tool_call(text: &str) -> bool {
         || value.starts_with("```tool_call")
         || value.starts_with("<|tool_call|>")
         || (value.contains("<tool_call>") && value.contains("<function="))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_stream_call_ids_are_unique_across_rounds() {
+        let first = PartialToolCall::new(0, None, Some("lookup".into())).finish();
+        let second = PartialToolCall::new(0, None, Some("lookup".into())).finish();
+        assert_ne!(first.id, second.id);
+    }
 }

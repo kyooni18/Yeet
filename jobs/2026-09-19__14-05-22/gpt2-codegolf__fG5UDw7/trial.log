@@ -1,0 +1,8 @@
+Trial gpt2-codegolf__fG5UDw7 failed: Docker compose command failed for environment gpt2-codegolf. Command: docker compose --project-name gpt2-codegolf__fg5udw7__env --project-directory /Users/kyooni18/.cache/harbor/tasks/CGqXnFmcaVcQCTbCZMpg2T/gpt2-codegolf/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpi7_ga8pi/gpt2-codegolf__fG5UDw7__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpumv9ulle/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxzgh518i/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network gpt2-codegolf__fg5udw7__env_default Creating 
+ Network gpt2-codegolf__fg5udw7__env_default Creating 
+ Network gpt2-codegolf__fg5udw7__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network gpt2-codegolf__fg5udw7__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container gpt2-codegolf__fg5udw7__env-main-1 Creating 
+failed to create network gpt2-codegolf__fg5udw7__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

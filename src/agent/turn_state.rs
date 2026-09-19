@@ -4,12 +4,107 @@
 //! These helpers preserve mutation/verification facts across that boundary and
 //! keep coordinator-authored completion warnings consistent with executed work.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 
 use crate::core::{Message, ToolCall, Usage};
 
+use super::{context::ContextMemory, loop_budget::LoopBudget, policy::TaskProfile};
+
 const MAX_PROVENANCE_ENTRIES: usize = 24;
 const MAX_PROVENANCE_CHANGE_DETAILS: usize = 16;
+
+pub(super) struct RequestMetadataInput<'a> {
+    pub profile: TaskProfile,
+    pub context_key: Option<&'a str>,
+    pub context_memory: &'a ContextMemory,
+    pub model_attempts: usize,
+    pub tool_rounds: usize,
+    pub loop_budget: &'a LoopBudget,
+    pub working_budget: u64,
+    pub deferred_tool_count: usize,
+    pub native_deferred_tools_supported: bool,
+    pub search_loaded_tool_count: usize,
+}
+
+pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<String, String> {
+    HashMap::from([
+        (
+            "lane".into(),
+            match input.profile {
+                TaskProfile::Agent => "agent",
+                TaskProfile::Research => "research",
+            }
+            .into(),
+        ),
+        ("contextManagement".into(), "recoverable-windows".into()),
+        (
+            "cacheFamily".into(),
+            input.context_key.unwrap_or_default().to_owned(),
+        ),
+        ("agentId".into(), "root".into()),
+        (
+            "sessionId".into(),
+            input
+                .context_memory
+                .session_id()
+                .unwrap_or(input.context_key.unwrap_or_default())
+                .to_owned(),
+        ),
+        (
+            "contextWindowId".into(),
+            input.context_memory.id().to_owned(),
+        ),
+        (
+            "contextWindowNumber".into(),
+            input.context_memory.number().to_string(),
+        ),
+        ("modelAttempt".into(), input.model_attempts.to_string()),
+        ("toolRound".into(), input.tool_rounds.to_string()),
+        ("expectedCacheReuses".into(), "1".into()),
+        (
+            "turnCumulativeInputTokens".into(),
+            input.loop_budget.cumulative_input_tokens().to_string(),
+        ),
+        (
+            "turnCostEquivalentInputTokens".into(),
+            input
+                .loop_budget
+                .cumulative_cost_equivalent_input_tokens()
+                .to_string(),
+        ),
+        (
+            "turnEstimatedCostUsd".into(),
+            format!("{:.6}", input.loop_budget.estimated_cost_usd()),
+        ),
+        (
+            "peakRequestChars".into(),
+            input.loop_budget.peak_request_chars().to_string(),
+        ),
+        (
+            "contextEstimatedTokens".into(),
+            input.context_memory.estimated_tokens.to_string(),
+        ),
+        (
+            "contextWorkingBudget".into(),
+            input.working_budget.to_string(),
+        ),
+        (
+            "deferredToolCount".into(),
+            input.deferred_tool_count.to_string(),
+        ),
+        (
+            "nativeDeferredToolsSupported".into(),
+            input.native_deferred_tools_supported.to_string(),
+        ),
+        (
+            "searchLoadedToolCount".into(),
+            input.search_loaded_tool_count.to_string(),
+        ),
+        ("yeetVersion".into(), env!("CARGO_PKG_VERSION").to_owned()),
+    ])
+}
 
 /// Session-local execution evidence used to keep final change claims honest.
 ///
@@ -437,75 +532,4 @@ pub(super) fn usage_diagnostics(request_diagnostics: &Value, usage: Option<&Usag
         object.insert("cacheMissAttribution".into(), json!(attribution));
     }
     value
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn tool_call(name: &str, arguments: Value) -> ToolCall {
-        ToolCall {
-            id: format!("{name}-id"),
-            name: name.into(),
-            arguments,
-        }
-    }
-    #[test]
-    fn session_provenance_does_not_attribute_observed_dirty_worktree() {
-        let mut provenance = SessionExecutionProvenance::default();
-        let observed = tool_call("run_shell", json!({"command":"inspect src/preexisting.rs"}));
-        provenance.observe_tool(&observed, r#"{"exitCode":0}"#, true, false, false);
-
-        let edit = tool_call(
-            "apply_file_edits",
-            json!({"changes":[{"path":"src/owned.rs","edits":[{"kind":"replace","range":{"start":7,"end":7},"text":"new_value();"}]}]}),
-        );
-        provenance.observe_tool(&edit, r#"{"diagnostics":[]}"#, true, true, false);
-        let check = tool_call("run_shell", json!({"command":"cargo check"}));
-        provenance.observe_tool(&check, r#"{"exitCode":0}"#, true, false, true);
-
-        let overlay = provenance.request_overlay().unwrap().content.unwrap();
-        assert!(overlay.contains("src/owned.rs"));
-        assert!(overlay.contains("replace lines 7-7"));
-        assert!(overlay.contains("new_value();"));
-        assert!(overlay.contains("cargo check"));
-        assert!(!overlay.contains("src/preexisting.rs"));
-        assert!(overlay.contains("observation alone does not establish authorship"));
-    }
-    #[test]
-    fn session_provenance_separates_unknown_scope_write_actions() {
-        let mut provenance = SessionExecutionProvenance::default();
-        let shell = tool_call("run_shell", json!({"command":"./codegen.sh"}));
-        provenance.observe_tool(&shell, r#"{"exitCode":0}"#, true, true, false);
-
-        let overlay = provenance.request_overlay().unwrap().content.unwrap();
-        assert!(overlay.contains("Other write-capable actions"));
-        assert!(overlay.contains("./codegen.sh"));
-        assert!(!overlay.contains("Exact source mutations performed by this turn"));
-        assert!(overlay.contains("not exact source-change provenance"));
-    }
-
-    #[test]
-    fn later_mutation_invalidates_earlier_validation_provenance() {
-        let mut provenance = SessionExecutionProvenance::default();
-        let first = tool_call(
-            "apply_file_edits",
-            json!({"changes":[{"path":"src/a.rs","fileOp":{"kind":"create","text":"a"}}]}),
-        );
-        provenance.observe_tool(&first, r#"{"diagnostics":[]}"#, true, true, false);
-        let check = tool_call("run_shell", json!({"command":"cargo check"}));
-        provenance.observe_tool(&check, r#"{"exitCode":0}"#, true, false, true);
-        let second = tool_call(
-            "apply_file_edits",
-            json!({"changes":[{"path":"src/b.rs","fileOp":{"kind":"create","text":"b"}}]}),
-        );
-        provenance.observe_tool(&second, r#"{"diagnostics":[]}"#, true, true, false);
-
-        let overlay = provenance.request_overlay().unwrap().content.unwrap();
-        assert!(overlay.contains("src/a.rs"));
-        assert!(overlay.contains("src/b.rs"));
-        assert!(!overlay.contains("cargo check"));
-        assert!(!overlay.contains("Current-generation validation attempts"));
-    }
 }

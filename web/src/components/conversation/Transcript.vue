@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, provide, ref, watch } from 'vue'
 import type { ConversationEntry as ConversationEntryData } from '@/remote/protocol'
 import { useRemoteStore } from '@/stores/remote'
 import YeetMark from '@/components/YeetMark.vue'
 import ConversationEntry from './ConversationEntry.vue'
 import MarkdownDocument from './MarkdownDocument.vue'
 import ActivityGroup from './ActivityGroup.vue'
+import { toolPurpose } from '@/utils/toolPurpose'
 
 const remote = useRemoteStore()
 const scroller = ref<HTMLElement | null>(null)
@@ -22,12 +23,17 @@ type TranscriptBlock =
   | { type: 'activity-group'; entries: ConversationEntryData[] }
 
 const isGroupedEntry = (entry: ConversationEntryData) => entry.kind.type === 'activity' || entry.kind.type === 'toolCall'
+const MAX_COMPACT_ACTIVITY_GROUP_ENTRIES = 12
 
 const transcriptBlocks = computed<TranscriptBlock[]>(() => {
   const blocks: TranscriptBlock[] = []
   let grouped: ConversationEntryData[] = []
   const flush = () => {
-    if (grouped.length) blocks.push({ type: 'activity-group', entries: grouped })
+    if (grouped.length > MAX_COMPACT_ACTIVITY_GROUP_ENTRIES) {
+      for (const entry of grouped) blocks.push({ type: 'entry', entry })
+    } else if (grouped.length) {
+      blocks.push({ type: 'activity-group', entries: grouped })
+    }
     grouped = []
   }
 
@@ -41,15 +47,6 @@ const transcriptBlocks = computed<TranscriptBlock[]>(() => {
   flush()
   return blocks
 })
-
-function plainTaskPreview(value: string) {
-  return value
-    .replace(/```[\s\S]*?```/g, ' code ')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/[*_~#>|]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
 
 const activeTaskReasoning = computed(() => {
   const id = remote.state.active_reasoning_entry_id
@@ -65,24 +62,51 @@ const activeTaskActivity = computed(() => {
   return entry && isActivityEntry(entry) ? entry : null
 })
 
+// Derive history from the transcript so it survives session reloads, rather than
+// keeping only the currently active task in local component state.
+const taskHistory = computed(() => remote.entries.filter(isActivityEntry).filter((entry) =>
+  ['done', 'failed', 'interrupted'].includes(String(entry.kind.activity.phase ?? '')),
+))
+
 const taskStatus = computed(() => {
-  if (!remote.state.is_streaming) return null
+  const turnStart = remote.entries.map((entry) => entry.kind.type).lastIndexOf('user')
+  const turn = remote.entries.slice(Math.max(0, turnStart))
+  const latestActivity = [...turn].reverse().find(isActivityEntry)
+  const phase = latestActivity?.kind.activity.phase
+  const terminalLabel = phase === 'done' ? 'Complete' : phase === 'failed' ? 'Failed' : phase === 'interrupted' ? 'Interrupted' : null
+  if (!remote.state.is_streaming && !terminalLabel) return null
+
+  const tools = turn.flatMap((entry) => entry.kind.type === 'toolCall' ? [entry.kind.toolCall] : [])
+  const completed = tools.filter((tool) => tool.status === 'completed').length
+  const failed = tools.filter((tool) => tool.status === 'failed').length
+  const progress = [completed ? `${completed} OK` : '', failed ? `${failed} ERR` : ''].filter(Boolean).join(' · ')
   const reasoning = activeTaskReasoning.value
   const activity = activeTaskActivity.value
-  const content = remote.state.active_reasoning_text || reasoning?.kind.content || ''
-  const summary = plainTaskPreview(
-    remote.state.active_reasoning_summary || reasoning?.kind.summary || content || activity?.kind.activity.detail || '',
-  )
-
-  if (!reasoning && !activity && !remote.state.active_assistant_entry_id) return null
+  if (!remote.state.is_streaming) {
+    return {
+      label: terminalLabel,
+      content: latestActivity?.kind.activity.detail || '',
+      disclosureLabel: 'Task details',
+      progress,
+      state: phase,
+    }
+  }
+  const content = remote.state.active_reasoning_text || reasoning?.kind.content || remote.state.active_reasoning_summary || reasoning?.kind.summary || activity?.kind.activity.detail || ''
 
   return {
-    label: reasoning ? 'Thinking' : activity?.kind.activity.title || 'Working',
-    summary: summary || (remote.state.active_assistant_entry_id ? 'Writing a response' : 'Latest task update'),
+    label: [...tools].reverse().map((tool) => toolPurpose(tool.arguments)).find(Boolean)
+      || remote.state.active_reasoning_summary || reasoning?.kind.summary
+      || content.trim().split('\n').filter(Boolean).at(-1)?.slice(0, 160)
+      || (remote.state.active_assistant_entry_id ? 'Writing response' : 'Working'),
     content,
     disclosureLabel: reasoning ? 'Latest reasoning' : 'Task details',
+    progress,
+    state: 'working',
   }
 })
+
+// Suppress only the intent currently promoted to the live status, not tool history.
+provide('promotedToolPurpose', computed(() => remote.state.is_streaming ? taskStatus.value?.label || '' : ''))
 
 function handleTaskStatusToggle(event: Event) {
   taskStatusOpen.value = (event.currentTarget as HTMLDetailsElement).open
@@ -101,7 +125,7 @@ const emptyState = computed(() => {
     case 'auth-required':
       return { title: 'Authorization required', detail: 'Authorize this browser to load the conversation.' }
     default:
-      return { title: 'What can Yeet do for you?', detail: 'Ask it to build, investigate, use tools, inspect files, or continue where you left off.' }
+      return { title: 'New conversation', detail: 'Send a message to get started.' }
   }
 })
 
@@ -199,19 +223,32 @@ onMounted(() => void nextTick(() => scrollLatest('auto')))
         <ConversationEntry v-if="block.type === 'entry'" :entry="block.entry" />
         <ActivityGroup v-else :entries="block.entries" />
       </template>
+      <section v-if="taskHistory.length" class="task-history" aria-label="Task history">
+        <h2>Task history</h2>
+        <ul>
+          <li v-for="entry in taskHistory" :key="entry.id" :class="`task-state-${entry.kind.activity.phase}`">
+            <span class="task-status-icon" aria-hidden="true">{{ entry.kind.activity.phase === 'done' ? '✓' : entry.kind.activity.phase === 'failed' ? '×' : '■' }}</span>
+            <span class="task-history-title">{{ entry.kind.activity.title }}</span>
+            <span class="task-status-label">{{ entry.kind.activity.phase === 'done' ? 'Complete' : entry.kind.activity.phase === 'failed' ? 'Failed' : 'Interrupted' }}</span>
+          </li>
+        </ul>
+      </section>
       <details
         v-if="taskStatus"
         class="task-status-card"
-        :class="{ 'is-open': taskStatusOpen }"
+        :class="[{ 'is-open': taskStatusOpen }, `task-state-${taskStatus.state}`]"
         @toggle="handleTaskStatusToggle"
       >
         <summary :aria-label="`Show ${taskStatus.disclosureLabel.toLocaleLowerCase()}`">
-          <span class="task-status-icon" aria-hidden="true"><span class="task-status-pulse"></span></span>
-          <span class="task-status-copy">
-            <strong>{{ taskStatus.label }}</strong>
-            <span class="truncate">{{ taskStatus.summary }}</span>
+          <span class="task-status-icon" aria-hidden="true">
+            <span v-if="taskStatus.state === 'working'" class="task-status-pulse"></span>
+            <span v-else>{{ taskStatus.state === 'done' ? '✓' : taskStatus.state === 'failed' ? '×' : '■' }}</span>
           </span>
-          <span class="task-status-label">{{ taskStatus.disclosureLabel }}</span>
+          <span class="task-status-copy">
+            <strong role="status" aria-live="polite">{{ taskStatus.label }}</strong>
+            <span v-if="taskStatus.content" class="task-status-summary-text">{{ taskStatus.content }}</span>
+          </span>
+          <span class="task-status-label">{{ taskStatus.progress }}</span>
           <span class="task-status-disclosure" aria-hidden="true">⌄</span>
         </summary>
         <div v-if="taskStatusOpen && taskStatus.content" class="task-status-body" tabindex="0" role="group" :aria-label="`${taskStatus.disclosureLabel} details`">
@@ -227,5 +264,38 @@ onMounted(() => void nextTick(() => scrollLatest('auto')))
 .transcript-scroller:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: -2px;
+}
+.task-history {
+  margin-block: 16px;
+}
+.task-history h2 {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+}
+.task-history ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.task-history li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.task-history-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.task-status-summary-text {
+  display: block;
+  min-width: 0;
+  max-width: min(56vw, 680px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
 }
 </style>

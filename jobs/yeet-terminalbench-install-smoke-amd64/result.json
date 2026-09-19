@@ -1,0 +1,33 @@
+{
+    "id": "c9ab2243-fa50-44a6-b8f7-54ba127ab342",
+    "started_at": "2026-09-19T12:16:33.806028",
+    "updated_at": "2026-09-19T12:19:01.516495",
+    "finished_at": "2026-09-19T12:19:01.516495",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "yeet__gpt-5.6-sol__terminal-bench": {
+                "n_trials": 0,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {},
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}

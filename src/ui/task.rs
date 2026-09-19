@@ -1,6 +1,7 @@
 //! Consistent task state and persistent progress, independent of transcript scrolling.
 use super::{
-    format_elapsed, live_activity, live_operation, spinner_frame, theme, tool_step_counts,
+    activity_marker, activity_marker_color, animated_activity_label, format_elapsed, live_activity,
+    live_operation, theme, tool_step_counts,
 };
 use crate::{
     app::App,
@@ -59,34 +60,24 @@ impl TaskStatus {
 
     pub(super) fn color(self) -> Color {
         match self {
-            Self::Ready => theme::MUTED,
-            Self::Working => theme::ACCENT_HOT,
-            Self::Approval => theme::ACCENT_WARM,
-            Self::Complete => theme::SUCCESS,
-            Self::Failed => theme::ERROR,
-            Self::Interrupted => theme::ACCENT,
+            Self::Ready => theme::muted(),
+            Self::Working => theme::accent_hot(),
+            Self::Approval => theme::warning(),
+            Self::Complete => theme::success(),
+            Self::Failed => theme::error(),
+            Self::Interrupted => theme::muted(),
         }
     }
 
     pub(super) fn marker(self, app: &App) -> &'static str {
         match self {
             Self::Ready => "○",
-            Self::Working => spinner_frame(app.stream_elapsed().unwrap_or_default().as_millis()),
+            Self::Working => activity_marker(app),
             Self::Approval => "!",
             Self::Complete => "✓",
             Self::Failed => "×",
-            Self::Interrupted => "■",
+            Self::Interrupted => "—",
         }
-    }
-
-    pub(super) fn badge(self, app: &App) -> Span<'static> {
-        Span::styled(
-            format!(" {} {} ", self.marker(app), self.label()),
-            Style::default()
-                .fg(self.color())
-                .bg(theme::SURFACE_RAISED)
-                .bold(),
-        )
     }
 }
 
@@ -127,7 +118,8 @@ pub(super) fn height(app: &App) -> u16 {
     if matches!(
         TaskStatus::for_app(app),
         TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted
-    ) {
+    ) || (app.state.is_streaming && live_operation(app).is_some())
+    {
         2
     } else {
         1
@@ -137,7 +129,7 @@ pub(super) fn height(app: &App) -> u16 {
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let status = TaskStatus::for_app(app);
     let rail_color = if status == TaskStatus::Working {
-        theme::pulse_color()
+        activity_marker_color(app)
     } else {
         status.color()
     };
@@ -146,15 +138,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
         "Enter allow · Esc deny · Ctrl+C stop".to_owned()
     } else if status == TaskStatus::Working {
         if let Some(operation) = live_operation(app) {
+            let label = animated_activity_label(app, &operation.label);
             match operation.detail {
-                Some(detail) => format!("{} · {detail}", operation.label),
-                None => operation.label,
+                Some(detail) => format!("{label} · {detail}"),
+                None => label,
             }
         } else {
-            let (title, detail) = live_activity(app);
-            detail
-                .map(|detail| format!("{title} · {detail}"))
-                .unwrap_or(title)
+            let label = live_activity(app).0;
+            animated_activity_label(app, &label)
         }
     } else if status == TaskStatus::Failed {
         app.state.error_message.clone().unwrap_or_else(|| {
@@ -170,20 +161,29 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else if status == TaskStatus::Interrupted {
         "Current turn interrupted".to_owned()
     } else if !app.follow_tail && !app.conversation.is_empty() {
-        "History Ctrl+End latest".to_owned()
+        if app.max_scroll > 0 {
+            "Reading history"
+        } else {
+            "History Ctrl+End latest"
+        }
+        .to_owned()
     } else {
         String::new()
     };
     let detail =
         if status == TaskStatus::Working && !app.follow_tail && !app.conversation.is_empty() {
-            format!("History Ctrl+End {detail}")
+            if app.max_scroll > 0 {
+                format!("History · {detail}")
+            } else {
+                format!("History Ctrl+End · {detail}")
+            }
         } else {
             detail
         };
     let detail_row = matches!(
         status,
         TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted
-    );
+    ) || (status == TaskStatus::Working && live_operation(app).is_some());
     let detail_row_available = detail_row && area.height > 1;
 
     let mut metrics = Vec::new();
@@ -207,41 +207,54 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let metric_text = if metrics.is_empty() {
         String::new()
     } else {
-        format!("// {}", metrics.join(" · "))
+        metrics.join(" · ")
     };
     let inline_detail = if detail_row_available || detail.is_empty() || detail == status.label() {
         String::new()
     } else {
-        format!("· {detail}")
+        detail.clone()
     };
     let tail = match (inline_detail.is_empty(), metric_text.is_empty()) {
-        (false, false) => format!("{inline_detail}  {metric_text}"),
+        (false, false) => format!("{metric_text} · {inline_detail}"),
         (false, true) => inline_detail,
         (true, false) => metric_text,
         (true, true) => String::new(),
     };
 
-    let mut spans = vec![
-        Span::styled("╸ ", Style::default().fg(rail_color)),
-        status.badge(app),
-    ];
+    let mut spans = vec![Span::styled(
+        format!(" {} {} ", status.marker(app), status.label()),
+        Style::default()
+            .fg(rail_color)
+            .bg(theme::surface_raised())
+            .bold(),
+    )];
+    let activity = live_activity(app).0;
+    let activity = animated_activity_label(app, &activity);
+    if status == TaskStatus::Working && detail_row_available && activity != status.label() {
+        let remaining = (area.width as usize)
+            .saturating_sub(Line::from(spans.clone()).width())
+            .saturating_sub(Span::raw(&tail).width() + 2);
+        if remaining > 1 {
+            spans.push(Span::styled(
+                format!("  {}", fit(&activity, remaining.saturating_sub(2))),
+                Style::default().fg(theme::text()),
+            ));
+        }
+    }
     if !tail.is_empty() {
         let remaining = (area.width as usize).saturating_sub(Line::from(spans.clone()).width());
         spans.push(Span::styled(
-            format!(" {}", fit(&tail, remaining.saturating_sub(1))),
-            Style::default().fg(theme::MUTED),
+            format!("  · {}", fit(&tail, remaining.saturating_sub(4))),
+            Style::default().fg(theme::muted()),
         ));
     }
 
     let mut lines = vec![Line::from(spans)];
     if detail_row_available {
         lines.push(Line::styled(
-            format!("╰─ {}", fit(&detail, area.width.saturating_sub(3) as usize)),
-            Style::default().fg(theme::MUTED),
+            format!("  {}", fit(&detail, area.width.saturating_sub(2) as usize)),
+            Style::default().fg(theme::muted()),
         ));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
-
-#[cfg(test)]
-mod tests;

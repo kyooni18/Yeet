@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/dna-assembly:20251031: docker inspect returned 1
+Trial dna-assembly__k8FadJ3 failed: Docker compose command failed for environment dna-assembly. Command: docker compose --project-name dna-assembly__k8fadj3__env --project-directory /Users/kyooni18/.cache/harbor/tasks/ArEmuSGC435pAkSA7cv8qw/dna-assembly/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpt71_ywhg/dna-assembly__k8FadJ3__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0yfia9l1/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpmj4ei4sw/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/dna-assembly:20251031 Pulling 
+ Image alexgshaw/dna-assembly:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

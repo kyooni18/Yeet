@@ -1,0 +1,8 @@
+Trial pytorch-model-cli__dVLfhSR failed: Docker compose command failed for environment pytorch-model-cli. Command: docker compose --project-name pytorch-model-cli__dvlfhsr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/cEZY7Ut37eqdNnYKPebgYq/pytorch-model-cli/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptdjei2uo/pytorch-model-cli__dVLfhSR__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp33qhwe_p/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptlvil4xe/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network pytorch-model-cli__dvlfhsr__env_default Creating 
+ Network pytorch-model-cli__dvlfhsr__env_default Creating 
+ Network pytorch-model-cli__dvlfhsr__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network pytorch-model-cli__dvlfhsr__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container pytorch-model-cli__dvlfhsr__env-main-1 Creating 
+failed to create network pytorch-model-cli__dvlfhsr__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

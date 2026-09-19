@@ -11,6 +11,12 @@ const draft = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const composerZone = ref<HTMLElement | null>(null)
 const composing = ref(false)
+const sendHint = computed(() => {
+  if (remote.state.is_streaming) return 'Draft saved · send after reply'
+  if (remote.connection !== 'connected') return 'Draft saved · waiting for connection'
+  if (touchFirst.value) return 'Tap send when ready'
+  return draft.value.includes('\n') ? 'Ctrl/⌘+Enter to send' : 'Enter to send · Shift+Enter for newline'
+})
 let composerHost: HTMLElement | null = null
 let composerResizeObserver: ResizeObserver | null = null
 const draftContextKey = computed(() => JSON.stringify([
@@ -90,9 +96,9 @@ function submit() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.shiftKey || composing.value || draft.value.includes('\n')) return
-  if (event.isComposing) return
-  if (touchFirst.value && !event.metaKey && !event.ctrlKey) return
+  if (event.key !== 'Enter' || event.shiftKey || composing.value || event.isComposing) return
+  const explicitSend = event.metaKey || event.ctrlKey
+  if (!explicitSend && (touchFirst.value || draft.value.includes('\n'))) return
   event.preventDefault()
   submit()
 }
@@ -126,7 +132,8 @@ function onKeydown(event: KeyboardEvent) {
         v-model="draft"
         rows="1"
         aria-label="Message Yeet"
-        placeholder="Ask Yeet to investigate, build, edit, or run something…"
+        :placeholder="remote.state.is_streaming ? 'Draft your next message…' : 'Type a message…'"
+        aria-describedby="composer-hint"
         :enterkeyhint="touchFirst ? 'enter' : 'send'"
         :disabled="remote.connection === 'auth-required'"
         @keydown="onKeydown"
@@ -150,6 +157,7 @@ function onKeydown(event: KeyboardEvent) {
             <span class="composer-permission">· {{ remote.permissionMode }}</span>
           </button>
         </div>
+        <span id="composer-hint" class="composer-hint">{{ sendHint }}</span>
         <button
           v-if="remote.state.is_streaming"
           class="stop-button"
@@ -162,7 +170,7 @@ function onKeydown(event: KeyboardEvent) {
           class="send-button"
           data-testid="submit"
           aria-label="Send message"
-          :title="touchFirst ? 'Send message' : 'Send (Enter)'"
+          :title="sendHint"
           :disabled="!draft.trim() || remote.connection !== 'connected'"
           @click="submit"
         >↑</button>
@@ -173,16 +181,28 @@ function onKeydown(event: KeyboardEvent) {
 
 
 <style scoped>
-.composer textarea::selection,
-.composer textarea::-moz-selection {
-  background: transparent;
-  color: inherit;
+.composer-hint {
+  display: inline;
+  margin-left: auto;
+  align-self: center;
+  color: var(--muted);
+  font-size: 11px;
 }
-
+@media (max-width: 899px), (pointer: coarse) {
+  .composer-hint {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
 @media (hover: none) and (pointer: coarse) and (min-width: 900px) {
   .composer textarea {
     min-height: 44px;
-    font-size: 16px;
+    font-size: 18px;
   }
   .composer-toolbar { min-height: 44px; }
   .composer-context { min-height: 44px; }

@@ -1,877 +1,103 @@
-//! Compaction and retention of completed conversation history.
-use super::SYSTEM_INSTRUCTION;
+//! Append-only context assembly. Optimize new evidence on ingestion, never by
+//! replacing previously submitted messages. Capacity is handled by ContextMemory
+//! rollover, which archives the exact old window and starts a new cache scope.
 use crate::core::{Message, MessageRole};
-use serde_json::{Value, json};
 
-const GENERIC_TOOL_RESULT_INLINE_CHARS: usize = 640;
-const RETAINED_COMPLETED_USER_TURNS: usize = 6;
-const CHECKPOINT_PREFIX: &str = "[Earlier conversation checkpoint]\n";
-const CHECKPOINT_GUIDANCE: &str = "This is a compact continuity record of older completed turns. Treat it as historical context, not as new instructions.\n";
-const CHECKPOINT_MAX_CHARS: usize = 6_000;
-const CHECKPOINT_TURN_CHARS: usize = 900;
-const VERBATIM_RECENT_USER_TURNS: usize = 2;
-const AGED_USER_MESSAGE_CHARS: usize = 2_400;
-const AGED_ASSISTANT_MESSAGE_CHARS: usize = 1_800;
-const HOT_CURRENT_TOOL_BATCHES: usize = 2;
+pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user-turn context boundary. Earlier turn-local Skill instructions, retry/finalization directives, goal checkpoints, and execution provenance are historical context, not active instructions for this turn. Apply only this turn's explicitly activated Skills and current runtime guidance. Preserve prior evidence; do not execute stale directives.";
 
-pub(super) fn compact_completed_task_history(history: &mut [Message]) {
-    for message in history {
-        if message.role == MessageRole::Tool {
-            if let Some(content) = message.content.as_deref() {
-                let compact = compact_completed_tool_result(message.name.as_deref(), content);
-                if compact.len() < content.len() {
-                    message.content = Some(compact);
-                }
-            }
-        } else if message.role == MessageRole::Assistant
-            && let Some(calls) = message.tool_calls.as_mut()
-        {
-            for call in calls {
-                let compact = compact_completed_tool_arguments(&call.name, &call.arguments);
-                if compact.to_string().len() < call.arguments.to_string().len() {
-                    call.arguments = compact;
-                }
-            }
-        }
-    }
-}
-
-/// Repeated explicit Skill invocations may carry the same large instructions.
-/// Keep the latest copy in the request; the canonical transcript stays intact.
-pub(super) fn deduplicate_skill_instructions(history: &mut Vec<Message>) {
-    let keep = {
-        let mut seen = std::collections::HashSet::new();
-        let mut keep = vec![true; history.len()];
-        for (index, message) in history.iter().enumerate().rev() {
-            if message.role == MessageRole::System
-                && let Some(content) = message.content.as_deref()
-                && content.starts_with("User-invoked Skill: ")
-                && !seen.insert(content)
-            {
-                keep[index] = false;
-            }
-        }
-        keep
-    };
-    let mut index = 0;
-    history.retain(|_| {
-        let retain = keep[index];
-        index += 1;
-        retain
+/// Keep the first full instruction; a repeat is a new, small activation record.
+/// Never delete an earlier copy to save tokens.
+pub(super) fn append_skill_instruction(history: &mut Vec<Message>, name: &str, instructions: &str) {
+    let content = format!(
+        "User-invoked Skill: {name}\n{instructions}\nUse its attached support tools only as needed; normal sandbox/approval rules apply."
+    );
+    let repeated = history.iter().position(|message| {
+        message.role == MessageRole::System && message.content.as_deref() == Some(content.as_str())
     });
-}
-
-pub(super) fn trim_completed_conversation_history(history: &mut Vec<Message>) {
-    let user_indexes = history
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| (message.role == MessageRole::User).then_some(index))
-        .collect::<Vec<_>>();
-    compact_aged_conversation_payloads(history, &user_indexes);
-    if user_indexes.len() <= RETAINED_COMPLETED_USER_TURNS {
-        return;
-    }
-
-    let keep_from = user_indexes[user_indexes.len() - RETAINED_COMPLETED_USER_TURNS];
-    let system = history
-        .first()
-        .filter(|message| message.role == MessageRole::System)
-        .cloned()
-        .unwrap_or_else(|| Message::system(SYSTEM_INSTRUCTION));
-    let checkpoint = build_conversation_checkpoint(&history[1..keep_from]);
-    let mut retained = Vec::with_capacity(history.len() - keep_from + 2);
-    retained.push(system);
-    if let Some(checkpoint) = checkpoint {
-        retained.push(Message::system(checkpoint));
-    }
-    retained.extend(history.drain(keep_from..));
-    *history = retained;
-}
-
-/// Keep completed turns verbatim while they fit the cache-aware pressure budget.
-/// Once pressure is real, compact bulky completed tool traces first and only then
-/// checkpoint older turns if the compacted request still exceeds the budget.
-pub(super) fn trim_completed_conversation_history_for_budget(
-    history: &mut Vec<Message>,
-    budget_tokens: u64,
-) -> bool {
-    let estimate = |messages: &[Message]| {
-        serde_json::to_vec(messages)
-            .map(|bytes| (bytes.len() as u64).div_ceil(3))
-            .unwrap_or(u64::MAX)
-    };
-    if estimate(history) <= budget_tokens {
-        return false;
-    }
-
-    compact_completed_task_history(history);
-    if estimate(history) > budget_tokens {
-        trim_completed_conversation_history(history);
-    }
-    true
-}
-
-/// Compact older tool batches inside the *current* user turn in the request
-/// copy while leaving canonical history untouched. Start compaction only when
-/// the whole model-visible history is under meaningful context pressure and
-/// old tool payload is large enough to reclaim. Tool payload or batch count by
-/// itself must not rewrite an otherwise reusable provider-cache prefix. Once
-/// compaction starts, its frontier is fixed for the lifetime of the current
-/// context window so each rebuilt request produces the same compact prefix.
-pub(super) fn compact_older_current_turn_tool_history(
-    history: &mut [Message],
-    current_user_index: usize,
-    working_budget_tokens: u64,
-    context_pressure_threshold_tokens: u64,
-    compaction_end: &mut Option<usize>,
-) -> bool {
-    if current_user_index >= history.len() {
-        return false;
-    }
-
-    let preserve_from = if let Some(preserve_from) = *compaction_end {
-        preserve_from.min(history.len())
+    let activation = if let Some(index) = repeated {
+        format!(
+            "User-invoked Skill: {name}\nReactivated for this turn: use the full instructions at context message {index} (zero-based), retained earlier in this window. Normal sandbox/approval rules apply."
+        )
     } else {
-        let batch_starts = history
-            .iter()
-            .enumerate()
-            .skip(current_user_index.saturating_add(1))
-            .filter_map(|(index, message)| {
-                (message.role == MessageRole::Assistant
-                    && message
-                        .tool_calls
-                        .as_ref()
-                        .is_some_and(|calls| !calls.is_empty()))
-                .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        if batch_starts.len() <= HOT_CURRENT_TOOL_BATCHES {
-            return false;
-        }
-        let estimated_context_tokens = serde_json::to_vec(history)
-            .map(|bytes| (bytes.len() as u64).div_ceil(3))
-            .unwrap_or(u64::MAX);
-        if estimated_context_tokens <= context_pressure_threshold_tokens {
-            return false;
-        }
-        let current_turn_tool_bytes = history[current_user_index + 1..]
-            .iter()
-            .filter(|message| message.role == MessageRole::Tool)
-            .filter_map(|message| message.content.as_deref())
-            .map(str::len)
-            .sum::<usize>();
-        let current_turn_tool_tokens = (current_turn_tool_bytes as u64).div_ceil(3);
-        let reclaimable_tool_threshold = (working_budget_tokens * 8 / 100).max(4_096);
-        if current_turn_tool_tokens <= reclaimable_tool_threshold {
-            return false;
-        }
-        let preserve_from = batch_starts[batch_starts.len() - HOT_CURRENT_TOOL_BATCHES];
-        *compaction_end = Some(preserve_from);
-        preserve_from
+        content
     };
-    if preserve_from <= current_user_index + 1 {
-        return false;
+    history.push(Message::system(activation));
+}
+
+/// Runtime/environment changes belong at the tail, not beside an old user message.
+/// Retain the exact representation after submission, including across user turns.
+pub(super) fn append_context_updates(
+    history: &mut Vec<Message>,
+    previous: &mut Vec<Message>,
+    updates: &[Message],
+) {
+    if previous != updates {
+        history.extend_from_slice(updates);
+        *previous = updates.to_vec();
+    }
+}
+
+#[cfg(test)]
+mod append_only_tests {
+    use super::*;
+    use crate::agent::policy::{TaskProfile, request_history_for_profile_at};
+
+    #[test]
+    fn completed_turns_and_lane_changes_preserve_all_submitted_messages() {
+        let mut history = vec![Message::system("base"), Message::user("first")];
+        append_skill_instruction(&mut history, "example", "skill instructions");
+        history.push(Message::system("retry directive").request_only());
+        history.push(Message::tool(
+            "large result".repeat(20_000),
+            "call",
+            Some("read_file".into()),
+        ));
+        let submitted = request_history_for_profile_at(&history, TaskProfile::Agent, 1);
+        history.push(Message::user("next"));
+        history.push(Message::system(TURN_CONTEXT_BOUNDARY).request_only());
+        for profile in [TaskProfile::Agent, TaskProfile::Research] {
+            let next = request_history_for_profile_at(&history, profile, submitted.len());
+            assert_eq!(&next[..submitted.len()], submitted.as_slice());
+        }
     }
 
-    compact_completed_task_history(&mut history[current_user_index + 1..preserve_from]);
-    for message in &mut history[current_user_index + 1..preserve_from] {
-        if message.role == MessageRole::User
-            && message
+    #[test]
+    fn runtime_changes_append_and_identical_updates_do_not_grow_history() {
+        let mut history = vec![Message::system("base")];
+        let mut previous = Vec::new();
+        let first = vec![Message::system("runtime one").request_only()];
+        append_context_updates(&mut history, &mut previous, &first);
+        let submitted = history.clone();
+        append_context_updates(&mut history, &mut previous, &first);
+        assert_eq!(history, submitted);
+        append_context_updates(
+            &mut history,
+            &mut previous,
+            &[Message::system("runtime two")],
+        );
+        assert_eq!(&history[..submitted.len()], submitted.as_slice());
+        assert_eq!(history.len(), submitted.len() + 1);
+    }
+    #[test]
+    fn repeated_skills_only_shorten_the_new_activation() {
+        let mut history = vec![Message::user("first")];
+        let instructions = "original instructions ".repeat(1000);
+        append_skill_instruction(&mut history, "example", &instructions);
+        let submitted = history.clone();
+        append_skill_instruction(&mut history, "example", "changed instructions");
+        append_skill_instruction(&mut history, "example", &instructions);
+        assert_eq!(&history[..submitted.len()], submitted.as_slice());
+        let activation = history.last().unwrap().content.as_deref().unwrap();
+        assert!(activation.contains("context message 1 (zero-based)"));
+        assert!(activation.len() < 300);
+        let mut new_window = vec![];
+        append_skill_instruction(&mut new_window, "example", &instructions);
+        assert!(
+            new_window[0]
                 .content
                 .as_deref()
-                .is_some_and(|content| content.starts_with("Visual output returned by tool "))
-            && message
-                .images
-                .as_ref()
-                .is_some_and(|images| !images.is_empty())
-        {
-            let count = message.images.as_ref().map(Vec::len).unwrap_or(0);
-            message.images = None;
-            message.content = Some(format!(
-                "[same-turn tool image payload compacted: {count} image(s); exact evidence remains in context_history]"
-            ));
-        }
-    }
-    true
-}
-
-fn compact_aged_conversation_payloads(history: &mut [Message], user_indexes: &[usize]) {
-    if user_indexes.len() <= VERBATIM_RECENT_USER_TURNS {
-        return;
-    }
-    let preserve_from = user_indexes[user_indexes.len() - VERBATIM_RECENT_USER_TURNS];
-    for message in &mut history[..preserve_from] {
-        match message.role {
-            MessageRole::User => {
-                if let Some(content) = message.content.as_deref() {
-                    message.content = Some(truncate_middle_chars(content, AGED_USER_MESSAGE_CHARS));
-                }
-                if let Some(images) = message.images.take()
-                    && !images.is_empty()
-                {
-                    let labels = images
-                        .iter()
-                        .map(|image| {
-                            image
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| image.media_type.clone())
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let note = format!("\n[historical image payload omitted: {labels}]");
-                    message
-                        .content
-                        .get_or_insert_with(String::new)
-                        .push_str(&note);
-                }
-            }
-            MessageRole::Assistant => {
-                if message.tool_calls.as_ref().is_none_or(Vec::is_empty)
-                    && let Some(content) = message.content.as_deref()
-                {
-                    message.content =
-                        Some(truncate_middle_chars(content, AGED_ASSISTANT_MESSAGE_CHARS));
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn build_conversation_checkpoint(messages: &[Message]) -> Option<String> {
-    let previous = messages.iter().find_map(|message| {
-        (message.role == MessageRole::System)
-            .then_some(message.content.as_deref())
-            .flatten()
-            .filter(|content| content.starts_with(CHECKPOINT_PREFIX))
-    });
-
-    let mut turns = Vec::new();
-    let mut current_user: Option<&str> = None;
-    let mut current_assistant: Option<&str> = None;
-    for message in messages {
-        match message.role {
-            MessageRole::User => {
-                if let Some(user) = current_user.take() {
-                    turns.push(compact_checkpoint_turn(user, current_assistant.take()));
-                }
-                current_user = message.content.as_deref();
-                current_assistant = None;
-            }
-            MessageRole::Assistant
-                if current_user.is_some()
-                    && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
-                    && message
-                        .content
-                        .as_deref()
-                        .is_some_and(|content| !content.trim().is_empty()) =>
-            {
-                current_assistant = message.content.as_deref();
-            }
-            _ => {}
-        }
-    }
-    if let Some(user) = current_user {
-        turns.push(compact_checkpoint_turn(user, current_assistant));
-    }
-
-    if previous.is_none() && turns.is_empty() {
-        return None;
-    }
-
-    let mut body = String::new();
-    if let Some(previous) = previous {
-        let previous = previous.strip_prefix(CHECKPOINT_PREFIX).unwrap_or(previous);
-        body.push_str(previous.trim_start_matches(CHECKPOINT_GUIDANCE));
-        if !body.ends_with('\n') {
-            body.push('\n');
-        }
-    }
-    for turn in turns {
-        if !body.is_empty() && !body.ends_with('\n') {
-            body.push('\n');
-        }
-        body.push_str(&turn);
-        body.push('\n');
-    }
-
-    let body = truncate_from_end(&body, CHECKPOINT_MAX_CHARS);
-    Some(format!("{CHECKPOINT_PREFIX}{CHECKPOINT_GUIDANCE}{body}"))
-}
-
-fn compact_checkpoint_turn(user: &str, assistant: Option<&str>) -> String {
-    let mut value = format!("User: {}", compact_whitespace(user));
-    if let Some(assistant) = assistant {
-        value.push_str("\nAssistant: ");
-        value.push_str(&compact_whitespace(assistant));
-    }
-    truncate_chars(&value, CHECKPOINT_TURN_CHARS)
-}
-
-fn compact_whitespace(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn compact_completed_tool_result(name: Option<&str>, content: &str) -> String {
-    let parsed = serde_json::from_str::<Value>(content).ok();
-    match (name, parsed.as_ref()) {
-        (Some("read_file") | Some("read_files"), Some(Value::Object(object))) => {
-            let mut compact = pick_json_fields(
-                object,
-                &[
-                    "path",
-                    "snapshot",
-                    "startLine",
-                    "endLine",
-                    "totalLines",
-                    "fileFullyRead",
-                    "nextStartLine",
-                    "requestedStartLine",
-                    "requestedEndLine",
-                    "incremental",
-                    "reusedCoveredRanges",
-                    "duplicate",
-                    "contentAlreadyReturned",
-                    "externalized",
-                    "artifactId",
-                ],
-            );
-            compact.insert("historical".into(), json!(true));
-            compact.insert("contentOmitted".into(), json!(true));
-            return Value::Object(compact).to_string();
-        }
-        (Some("read_file") | Some("read_files"), Some(Value::Array(values))) => {
-            let compact = values
-                .iter()
-                .take(16)
-                .map(|value| {
-                    let Value::Object(object) = value else {
-                        return value.clone();
-                    };
-                    let mut item = pick_json_fields(
-                        object,
-                        &[
-                            "path",
-                            "snapshot",
-                            "startLine",
-                            "endLine",
-                            "totalLines",
-                            "fileFullyRead",
-                            "nextStartLine",
-                            "requestedStartLine",
-                            "requestedEndLine",
-                            "incremental",
-                            "reusedCoveredRanges",
-                            "duplicate",
-                            "contentAlreadyReturned",
-                            "externalized",
-                            "artifactId",
-                            "error",
-                        ],
-                    );
-                    item.insert("historical".into(), json!(true));
-                    item.insert("contentOmitted".into(), json!(true));
-                    Value::Object(item)
-                })
-                .collect::<Vec<_>>();
-            return Value::Array(compact).to_string();
-        }
-        (Some("read_artifact"), _) => {
-            return json!({"historical":true,"contentOmitted":true,"chars":content.len()})
-                .to_string();
-        }
-        (Some("search_workspace"), Some(Value::Object(object))) => {
-            let matches = object
-                .get("matches")
-                .and_then(Value::as_array)
-                .map(|items| items.len() as u64)
-                .or_else(|| object.get("matchCount").and_then(Value::as_u64))
-                .unwrap_or(0);
-            return json!({
-                "historical": true,
-                "matchCount": matches,
-                "filesScanned": object.get("filesScanned"),
-                "truncated": object.get("truncated"),
-                "duplicate": object.get("duplicate"),
-            })
-            .to_string();
-        }
-        (Some("list_files"), Some(Value::Object(object))) => {
-            let entries = object
-                .get("entries")
-                .and_then(Value::as_array)
-                .map(|items| items.len() as u64)
-                .or_else(|| object.get("entryCount").and_then(Value::as_u64))
-                .unwrap_or(0);
-            return json!({
-                "historical": true,
-                "entryCount": entries,
-                "truncated": object.get("truncated"),
-                "resultLimitReached": object.get("resultLimitReached"),
-                "depthLimited": object.get("depthLimited"),
-                "duplicate": object.get("duplicate"),
-            })
-            .to_string();
-        }
-        (Some("run_shell"), Some(Value::Object(object))) => {
-            let mut compact = pick_json_fields(
-                object,
-                &[
-                    "route",
-                    "command",
-                    "workingDirectory",
-                    "exitCode",
-                    "succeeded",
-                    "durationMilliseconds",
-                    "stdoutBytes",
-                    "stderrBytes",
-                    "stdoutTruncated",
-                    "stderrTruncated",
-                    "summary",
-                    "artifactId",
-                    "error",
-                ],
-            );
-            compact.insert("historical".into(), json!(true));
-            compact.insert("contentOmitted".into(), json!(true));
-            return Value::Object(compact).to_string();
-        }
-        (Some("apply_file_edits"), Some(Value::Object(object))) => {
-            let files = object
-                .get("files")
-                .and_then(Value::as_array)
-                .map(|files| {
-                    files
-                        .iter()
-                        .take(40)
-                        .map(|value| {
-                            value
-                                .as_object()
-                                .map(|file| {
-                                    Value::Object(pick_json_fields(
-                                        file,
-                                        &[
-                                            "path",
-                                            "destination",
-                                            "operation",
-                                            "snapshot",
-                                            "warnings",
-                                        ],
-                                    ))
-                                })
-                                .unwrap_or_else(|| value.clone())
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let diagnostics = object
-                .get("diagnostics")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .take(20)
-                        .map(|value| {
-                            value
-                                .as_object()
-                                .map(|item| {
-                                    Value::Object(pick_json_fields(
-                                        item,
-                                        &[
-                                            "path", "severity", "message", "line", "column",
-                                            "source",
-                                        ],
-                                    ))
-                                })
-                                .unwrap_or_else(|| value.clone())
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            return json!({"files":files,"diagnostics":diagnostics,"historical":true}).to_string();
-        }
-        (Some("web_search"), Some(value)) => {
-            return compact_web_search_result(value).to_string();
-        }
-        (Some("web_read"), Some(value)) => {
-            return compact_web_read_result(value).to_string();
-        }
-        _ => {}
-    }
-    if content.len() <= GENERIC_TOOL_RESULT_INLINE_CHARS {
-        return content.to_owned();
-    }
-    let mut compact = serde_json::Map::new();
-    compact.insert("historical".into(), json!(true));
-    compact.insert("contentOmitted".into(), json!(true));
-    compact.insert("chars".into(), json!(content.len()));
-    if let Some(Value::Object(object)) = parsed {
-        for key in [
-            "error",
-            "artifactId",
-            "summary",
-            "status",
-            "succeeded",
-            "exitCode",
-            "path",
-            "url",
-        ] {
-            if let Some(value) = object.get(key) {
-                compact.insert(key.into(), compact_json_value(value, 500));
-            }
-        }
-    }
-    Value::Object(compact).to_string()
-}
-
-fn compact_json_value(value: &Value, max_chars: usize) -> Value {
-    match value {
-        Value::String(value) => Value::String(truncate_chars(value, max_chars)),
-        Value::Array(_) | Value::Object(_) => {
-            let serialized = value.to_string();
-            if serialized.chars().count() <= max_chars {
-                return value.clone();
-            }
-            json!({"preview":truncate_chars(&serialized, max_chars), "contentOmitted":true})
-        }
-        _ => value.clone(),
-    }
-}
-
-fn compact_completed_tool_arguments(name: &str, value: &Value) -> Value {
-    let Some(object) = value.as_object() else {
-        return value.clone();
-    };
-    match name {
-        "read_file" | "read_files" if object.get("requests").is_some() => {
-            let requests = object
-                .get("requests")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .take(8)
-                        .map(|value| {
-                            value
-                                .as_object()
-                                .map(|item| {
-                                    Value::Object(pick_json_fields(
-                                        item,
-                                        &["path", "startLine", "endLine"],
-                                    ))
-                                })
-                                .unwrap_or_else(|| value.clone())
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            json!({"requests":requests})
-        }
-        "read_file" | "read_files" => {
-            Value::Object(pick_json_fields(object, &["path", "startLine", "endLine"]))
-        }
-        "list_files" => Value::Object(pick_json_fields(
-            object,
-            &["path", "maxResults", "maxDepth"],
-        )),
-        "search_workspace" => Value::Object(pick_json_fields(
-            object,
-            &["query", "path", "maxResults", "caseSensitive", "regex"],
-        )),
-        "read_artifact" => Value::Object(pick_json_fields(
-            object,
-            &["id", "startLine", "endLine", "offset", "maxChars"],
-        )),
-        "search_artifact" => {
-            Value::Object(pick_json_fields(object, &["id", "query", "maxResults"]))
-        }
-        "web_search" => Value::Object(pick_json_fields(
-            object,
-            &[
-                "query",
-                "queries",
-                "language",
-                "category",
-                "timeRange",
-                "page",
-            ],
-        )),
-        "web_read" => Value::Object(pick_json_fields(object, &["url", "maxChars"])),
-        "run_shell" => {
-            let mut compact = pick_json_fields(
-                object,
-                &["purpose", "workingDirectory", "mode", "timeoutSeconds"],
-            );
-            if let Some(command) = object.get("command").and_then(Value::as_str) {
-                compact.insert("command".into(), json!(truncate_chars(command, 400)));
-            }
-            Value::Object(compact)
-        }
-        "apply_file_edits" => {
-            let changes = object
-                .get("changes")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .take(40)
-                        .map(|value| {
-                            let Some(change) = value.as_object() else {
-                                return value.clone();
-                            };
-                            let mut item = pick_json_fields(change, &["path", "snapshot"]);
-                            item.insert(
-                                "editCount".into(),
-                                json!(
-                                    change
-                                        .get("edits")
-                                        .and_then(Value::as_array)
-                                        .map(|items| items.len() as u64)
-                                        .or_else(|| change.get("editCount").and_then(Value::as_u64))
-                                        .unwrap_or(0)
-                                ),
-                            );
-                            if let Some(file_op) = change.get("fileOp").and_then(Value::as_object) {
-                                item.insert(
-                                    "fileOp".into(),
-                                    Value::Object(pick_json_fields(
-                                        file_op,
-                                        &["kind", "destination"],
-                                    )),
-                                );
-                            }
-                            Value::Object(item)
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            json!({"changes":changes,"historical":true})
-        }
-        _ => {
-            let encoded = value.to_string();
-            if encoded.len() <= 1_200 {
-                value.clone()
-            } else {
-                json!({"historical":true,"argumentChars":encoded.len()})
-            }
-        }
-    }
-}
-
-fn compact_web_search_result(value: &Value) -> Value {
-    fn compact_one(value: &Value) -> Value {
-        let Some(object) = value.as_object() else {
-            return value.clone();
-        };
-        let results = object
-            .get("results")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .take(8)
-                    .map(|item| {
-                        item.as_object()
-                            .map(|result| {
-                                Value::Object(pick_json_fields(
-                                    result,
-                                    &["title", "url", "publishedAt"],
-                                ))
-                            })
-                            .unwrap_or_else(|| item.clone())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let mut compact = json!({
-            "query": object.get("query"),
-            "numberOfResults": object.get("numberOfResults"),
-            "results": results,
-            "historical": true,
-            "snippetsOmitted": true,
-        });
-        if let Some(target) = compact.as_object_mut() {
-            for key in [
-                "source",
-                "failed",
-                "error",
-                "fallbackFrom",
-                "fallbackReason",
-            ] {
-                if let Some(value) = object.get(key) {
-                    target.insert(key.into(), value.clone());
-                }
-            }
-        }
-        compact
-    }
-
-    if let Some(searches) = value.get("searches").and_then(Value::as_array) {
-        return json!({"searches": searches.iter().map(compact_one).collect::<Vec<_>>(), "historical": true, "snippetsOmitted": true});
-    }
-    compact_one(value)
-}
-
-fn compact_web_read_result(value: &Value) -> Value {
-    let Some(object) = value.as_object() else {
-        return value.clone();
-    };
-    let mut compact = pick_json_fields(
-        object,
-        &[
-            "url",
-            "source",
-            "status",
-            "contentType",
-            "truncated",
-            "artifactId",
-            "externalized",
-            "fallbackFrom",
-            "fallbackReason",
-            "error",
-        ],
-    );
-    compact.insert("historical".into(), json!(true));
-    if object.get("content").is_some() {
-        compact.insert("contentOmitted".into(), json!(true));
-    }
-    Value::Object(compact)
-}
-
-fn pick_json_fields(
-    object: &serde_json::Map<String, Value>,
-    keys: &[&str],
-) -> serde_json::Map<String, Value> {
-    keys.iter()
-        .filter_map(|key| {
-            object.get(*key).map(|value| {
-                let bounded = match *key {
-                    "summary" | "error" | "message" | "warnings" | "fallbackReason" => {
-                        compact_json_value(value, 500)
-                    }
-                    _ => value.clone(),
-                };
-                ((*key).to_owned(), bounded)
-            })
-        })
-        .collect()
-}
-
-fn truncate_chars(value: &str, limit: usize) -> String {
-    if value.chars().count() <= limit {
-        return value.to_owned();
-    }
-    value
-        .chars()
-        .take(limit.saturating_sub(1))
-        .collect::<String>()
-        + "…"
-}
-
-fn truncate_from_end(value: &str, limit: usize) -> String {
-    let count = value.chars().count();
-    if count <= limit {
-        return value.to_owned();
-    }
-    let keep = limit.saturating_sub(1);
-    let start = count.saturating_sub(keep);
-    "…".to_owned() + &value.chars().skip(start).collect::<String>()
-}
-
-fn truncate_middle_chars(value: &str, limit: usize) -> String {
-    let count = value.chars().count();
-    if count <= limit {
-        return value.to_owned();
-    }
-    if limit < 5 {
-        return value.chars().take(limit).collect();
-    }
-    let head = (limit - 1) * 2 / 3;
-    let tail = limit - 1 - head;
-    let start = value.chars().take(head).collect::<String>();
-    let end = value.chars().skip(count - tail).collect::<String>();
-    format!("{start}…{end}")
-}
-
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
-mod size_tests {
-    use super::*;
-
-    #[test]
-    fn repeated_skills_keep_latest_copy_and_distinct_versions() {
-        let skill = format!(
-            "User-invoked Skill: review.\n{}",
-            "instruction ".repeat(1000)
+                .unwrap()
+                .contains(&instructions)
         );
-        let updated = format!("{skill}\nUpdated requirement");
-        let original = vec![
-            Message::system(SYSTEM_INSTRUCTION),
-            Message::user("first task"),
-            Message::system(&skill),
-            Message::system("Other guidance"),
-            Message::system(&updated),
-            Message::user("second task"),
-            Message::system(&skill),
-        ];
-        let mut working = original.clone();
-        deduplicate_skill_instructions(&mut working);
-        assert_eq!(working.len(), original.len() - 1);
-        assert_eq!(
-            working.last().unwrap().content.as_deref(),
-            Some(skill.as_str())
-        );
-        assert!(
-            working
-                .iter()
-                .any(|m| m.content.as_deref() == Some(updated.as_str()))
-        );
-        assert_eq!(original[2].content.as_deref(), Some(skill.as_str()));
-        assert_eq!(working[2].content.as_deref(), Some("Other guidance"));
-    }
-
-    #[test]
-    fn nested_historical_metadata_is_bounded_without_losing_retrieval_ids() {
-        let original = json!({
-            "error":{"details": "한".repeat(20000)},
-            "summary":["x".repeat(30000)],
-            "artifactId":"exact-artifact-reference", "succeeded":false
-        })
-        .to_string();
-        let compact = compact_completed_tool_result(Some("custom"), &original);
-        assert!(compact.len() < 3000);
-        let value: Value = serde_json::from_str(&compact).unwrap();
-        assert_eq!(value["artifactId"], "exact-artifact-reference");
-        assert_eq!(value["succeeded"], false);
-        assert_eq!(value["error"]["contentOmitted"], true);
-        let edited = json!({"files":[{"path":"src/a.rs","warnings":["w".repeat(20000)]}],"diagnostics":[{"severity":"error","message":"e".repeat(20000)}]}).to_string();
-        let compact = compact_completed_tool_result(Some("apply_file_edits"), &edited);
-        assert!(compact.len() < 2000);
-        assert!(compact.contains("src/a.rs"));
-    }
-
-    #[test]
-    fn historical_artifact_reads_keep_character_page_coordinates() {
-        let args =
-            json!({"id":"artifact", "startLine":1,"endLine":1,"offset":8192,"maxChars":1000});
-        assert_eq!(
-            compact_completed_tool_arguments("read_artifact", &args),
-            args
-        );
-    }
-
-    #[test]
-    fn thinning_does_not_expand_small_tool_results_or_touch_original_evidence() {
-        let original = vec![Message::tool("{}", "call", Some("read_file".into()))];
-        let mut working = original.clone();
-        compact_completed_task_history(&mut working);
-        assert_eq!(working[0].content, original[0].content);
-        let content = json!({"path":"a.rs", "lines":"x".repeat(10000)}).to_string();
-        working[0].content = Some(content.clone());
-        compact_completed_task_history(&mut working);
-        assert!(working[0].content.as_ref().unwrap().len() < content.len());
-        assert_eq!(original[0].content.as_deref(), Some("{}"));
     }
 }

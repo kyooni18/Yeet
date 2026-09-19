@@ -49,3 +49,21 @@ io-harness = "0.83"
 [profile.release]
 lto = "thin"
 strip = true
+
+# Keep development artifacts bounded. Dependency debug information and
+# incremental caches are disproportionately large for this workspace and are
+# not needed for normal local runs or tests. The application crate retains
+# line-level debug information for useful backtraces.
+[profile.dev]
+debug = 1
+incremental = false
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+debug = 1
+incremental = false
+
+[profile.test.package."*"]
+debug = 0

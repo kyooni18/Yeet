@@ -1,0 +1,24 @@
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 415, in run
+    await self._prepare()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 453, in _prepare
+    await self._setup_agent_environment()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1542, in _setup_agent_environment
+    await self._start_agent_environment()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1548, in _start_agent_environment
+    await asyncio.wait_for(
+    ...<4 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 1007, in start
+    await self._run_docker_compose_command(["up", *runtime.up_args])
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 704, in _run_docker_compose_command
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Docker compose command failed for environment nginx-request-logging. Command: docker compose --project-name nginx-request-logging__xwnkxpr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/eUViXxKXCzTue7ywZW59ct/nginx-request-logging/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsny989ke/nginx-request-logging__xwnkXPr__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2y5vcjxl/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp3je74v1p/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/nginx-request-logging:20251031 Pulling 
+ Image alexgshaw/nginx-request-logging:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 

@@ -10,6 +10,7 @@ import type {
   Message,
   ModelInfo,
   ProviderAdapter,
+  ProviderState,
   StreamEvent,
   ToolChoice,
 } from "../types.js";
@@ -35,6 +36,40 @@ function functionNameForToolResult(message: Message): string {
 }
 
 type GeminiFunctionMetadata = { providerId?: string; thoughtSignature?: string };
+
+function stateFunctionMetadata(message: Message, provider: string, model: string): Record<string, GeminiFunctionMetadata> | undefined {
+  const state = message.providerState;
+  if (!state || state.provider !== provider || state.protocol !== "gemini-generate-content") return undefined;
+  if (state.model && state.model !== model) return undefined;
+  const data = state.data as any;
+  return data?.functionMetadata && typeof data.functionMetadata === "object" && !Array.isArray(data.functionMetadata)
+    ? data.functionMetadata as Record<string, GeminiFunctionMetadata>
+    : undefined;
+}
+
+function mergedFunctionMetadata(
+  messages: Message[],
+  runtime: Map<string, GeminiFunctionMetadata>,
+  provider: string,
+  model: string,
+): Map<string, GeminiFunctionMetadata> {
+  const merged = new Map(runtime);
+  for (const message of messages) {
+    const remembered = stateFunctionMetadata(message, provider, model);
+    if (!remembered) continue;
+    for (const [id, metadata] of Object.entries(remembered)) merged.set(id, metadata);
+  }
+  return merged;
+}
+
+function geminiProviderState(
+  functionMetadata: Record<string, GeminiFunctionMetadata>,
+  provider: string,
+  model: string,
+): ProviderState | undefined {
+  if (Object.keys(functionMetadata).length === 0) return undefined;
+  return { provider, protocol: "gemini-generate-content", model, data: { functionMetadata } };
+}
 
 function mapContents(messages: Message[], metadata: Map<string, GeminiFunctionMetadata>): unknown[] {
   return messages.map((message) => {
@@ -239,11 +274,13 @@ function geminiToolSchema(input: Record<string, unknown>): Record<string, unknow
 function bodyFor(
   request: ProviderCallRequest,
   metadata: Map<string, GeminiFunctionMetadata>,
+  providerId = "gemini",
 ): Record<string, unknown> {
   // Preserve only the immutable leading system prefix in systemInstruction.
   // Later coordinator overlays vary per request and must stay at the tail so
   // they do not poison the reusable provider prefix.
   const split = splitLeadingSystem(request.messages, request.system);
+  const effectiveMetadata = mergedFunctionMetadata(split.messages, metadata, providerId, request.model);
   const providerOptions = request.providerOptions ?? {};
   const providerGenerationConfig =
     providerOptions.generationConfig && typeof providerOptions.generationConfig === "object"
@@ -260,7 +297,7 @@ function bodyFor(
   return {
     ...(providerOptions.safetySettings !== undefined ? { safetySettings: providerOptions.safetySettings } : {}),
     ...(typeof providerOptions.cachedContent === "string" ? { cachedContent: providerOptions.cachedContent } : {}),
-    contents: mapContents(split.messages, metadata),
+    contents: mapContents(split.messages, effectiveMetadata),
     ...(split.system ? { systemInstruction: { parts: [{ text: split.system }] } } : {}),
     ...(request.tools?.length
       ? {
@@ -273,7 +310,7 @@ function bodyFor(
               })),
             },
           ],
-          toolConfig: toolConfig(request.toolChoice),
+          ...(request.toolChoice !== undefined ? { toolConfig: toolConfig(request.toolChoice) } : {}),
         }
       : {}),
     ...(Object.keys(providerGenerationConfig).length || request.temperature !== undefined || request.maxTokens !== undefined
@@ -296,10 +333,9 @@ function geminiFinish(value: unknown, hasTools: boolean): ReturnType<typeof norm
   return normalizeFinishReason(value);
 }
 
-function normalizeGeminiTool(part: any, index: number, syntheticSequence = index) {
+function normalizeGeminiTool(part: any, index: number) {
   const name = part.functionCall?.name ?? "unknown";
-  const id = part.functionCall?.id ?? `gemini:${name}:${syntheticSequence}`;
-  return normalizeToolCall(id, name, part.functionCall?.args ?? {}, index);
+  return normalizeToolCall(part.functionCall?.id, name, part.functionCall?.args ?? {}, index);
 }
 
 function geminiReasoningTokens(metadata: any): number | undefined {
@@ -326,7 +362,6 @@ export class GeminiProvider implements ProviderAdapter {
   readonly #fetch: FetchLike | undefined;
   readonly #apiCallLogger: ProviderFetchLogger | undefined;
   readonly #functionMetadata = new Map<string, GeminiFunctionMetadata>();
-  #syntheticFunctionSequence = 0;
 
   constructor(options: GeminiProviderOptions = {}) {
     this.id = options.id ?? "gemini";
@@ -354,23 +389,25 @@ export class GeminiProvider implements ProviderAdapter {
     return model.startsWith("models/") ? model.slice("models/".length) : model;
   }
 
-  #rememberFunctionMetadata(part: any, normalizedId: string): void {
+  #rememberFunctionMetadata(part: any, normalizedId: string): GeminiFunctionMetadata | undefined {
     const providerId = typeof part.functionCall?.id === "string" && part.functionCall.id
       ? part.functionCall.id
       : undefined;
     const thoughtSignature = typeof part.thoughtSignature === "string" && part.thoughtSignature
       ? part.thoughtSignature
       : undefined;
-    if (!providerId && !thoughtSignature) return;
-    this.#functionMetadata.set(normalizedId, {
+    if (!providerId && !thoughtSignature) return undefined;
+    const remembered: GeminiFunctionMetadata = {
       ...(providerId ? { providerId } : {}),
       ...(thoughtSignature ? { thoughtSignature } : {}),
-    });
+    };
+    this.#functionMetadata.set(normalizedId, remembered);
     while (this.#functionMetadata.size > 512) {
       const oldest = this.#functionMetadata.keys().next().value;
       if (typeof oldest !== "string") break;
       this.#functionMetadata.delete(oldest);
     }
+    return remembered;
   }
 
   async embed(request: EmbeddingRequest): Promise<EmbeddingResult> {
@@ -419,7 +456,7 @@ export class GeminiProvider implements ProviderAdapter {
   async complete(request: ProviderCallRequest): Promise<CallResult> {
     const response = await providerFetch(
       `${this.#baseUrl}/models/${encodeURIComponent(this.#modelPath(request.model))}:generateContent`,
-      { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, this.#functionMetadata)) },
+      { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, this.#functionMetadata, this.id)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -437,13 +474,16 @@ export class GeminiProvider implements ProviderAdapter {
       .filter((part: any) => part.thought === true && typeof part.text === "string")
       .map((part: any) => part.text)
       .join("");
+    const turnFunctionMetadata: Record<string, GeminiFunctionMetadata> = {};
     const toolCalls = parts
       .filter((part: any) => part.functionCall)
       .map((part: any, index: number) => {
-        const toolCall = normalizeGeminiTool(part, index, this.#syntheticFunctionSequence++);
-        this.#rememberFunctionMetadata(part, toolCall.id);
+        const toolCall = normalizeGeminiTool(part, index);
+        const metadata = this.#rememberFunctionMetadata(part, toolCall.id);
+        if (metadata) turnFunctionMetadata[toolCall.id] = metadata;
         return toolCall;
       });
+    const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model);
     const normalizedUsage = usage(
       raw.usageMetadata?.promptTokenCount,
       raw.usageMetadata?.candidatesTokenCount,
@@ -460,6 +500,7 @@ export class GeminiProvider implements ProviderAdapter {
       text: parts.filter((part: any) => part.thought !== true && typeof part.text === "string").map((part: any) => part.text).join(""),
       ...(reasoning ? { reasoning } : {}),
       toolCalls,
+      ...(providerState ? { providerState } : {}),
       finishReason: geminiFinish(candidate.finishReason, toolCalls.length > 0),
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
       raw,
@@ -469,7 +510,7 @@ export class GeminiProvider implements ProviderAdapter {
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
     const response = await providerFetch(
       `${this.#baseUrl}/models/${encodeURIComponent(this.#modelPath(request.model))}:streamGenerateContent?alt=sse`,
-      { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, this.#functionMetadata)) },
+      { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, this.#functionMetadata, this.id)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -485,6 +526,7 @@ export class GeminiProvider implements ProviderAdapter {
     let finish = "unknown" as ReturnType<typeof normalizeFinishReason>;
     let finalUsage: ReturnType<typeof usage>;
     let toolIndex = 0;
+    const turnFunctionMetadata: Record<string, GeminiFunctionMetadata> = {};
 
     for await (const event of parseSSE(response)) {
       let raw: any;
@@ -517,8 +559,9 @@ export class GeminiProvider implements ProviderAdapter {
         if (part.functionCall) {
           hasTools = true;
           const index = toolIndex++;
-          const toolCall = normalizeGeminiTool(part, index, this.#syntheticFunctionSequence++);
-          this.#rememberFunctionMetadata(part, toolCall.id);
+          const toolCall = normalizeGeminiTool(part, index);
+          const metadata = this.#rememberFunctionMetadata(part, toolCall.id);
+          if (metadata) turnFunctionMetadata[toolCall.id] = metadata;
           yield { type: "tool-call-delta", index, id: toolCall.id, name: toolCall.name };
           yield { type: "tool-call", index, toolCall };
         }
@@ -527,6 +570,12 @@ export class GeminiProvider implements ProviderAdapter {
       else if (hasTools) finish = "tool_call";
     }
 
-    yield { type: "finish", finishReason: finish, ...(finalUsage ? { usage: finalUsage } : {}) };
+    const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model);
+    yield {
+      type: "finish",
+      finishReason: finish,
+      ...(finalUsage ? { usage: finalUsage } : {}),
+      ...(providerState ? { providerState } : {}),
+    };
   }
 }

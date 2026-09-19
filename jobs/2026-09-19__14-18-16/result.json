@@ -1,0 +1,98 @@
+{
+    "id": "23cd3e93-a832-4b32-8696-3924cdf9d362",
+    "started_at": "2026-09-19T14:18:17.610175",
+    "updated_at": "2026-09-19T05:27:24.140057Z",
+    "finished_at": null,
+    "n_total_trials": 89,
+    "stats": {
+        "n_completed_trials": 29,
+        "n_errored_trials": 29,
+        "n_running_trials": 7,
+        "n_pending_trials": 53,
+        "n_cancelled_trials": 2,
+        "n_retries": 0,
+        "evals": {
+            "yeet__gpt-5.6-luna__terminal-bench": {
+                "n_trials": 28,
+                "n_errors": 29,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "gpt2-codegolf__Q2hExXt",
+                            "break-filter-js-from-html__YpxZmF7",
+                            "llm-inference-batching-scheduler__iT7DQpB",
+                            "log-summary-date-ranges__KTbAYXz",
+                            "winning-avg-corewars__DX6Lksv",
+                            "reshard-c4-data__stApmJC",
+                            "write-compressor__zXKAoNT",
+                            "merge-diff-arc-agi-task__sPsggte",
+                            "largest-eigenval__rNPpAcT",
+                            "portfolio-optimization__5GUhj7b",
+                            "path-tracing-reverse__xbFrNJX",
+                            "password-recovery__cL7eyjR",
+                            "regex-chess__WuVkenw",
+                            "modernize-scientific-stack__BprEYr6",
+                            "path-tracing__CYRnXa4",
+                            "torch-tensor-parallelism__AH9SDP7",
+                            "pytorch-model-cli__L2P39u2",
+                            "feal-linear-cryptanalysis__cmAf69i",
+                            "distribution-search__NbSQ83y",
+                            "caffe-cifar-10__L6YQDqo",
+                            "prove-plus-comm__kXdQhsp",
+                            "pypi-server__RyWaToM",
+                            "configure-git-webserver__8e7anwG",
+                            "crack-7z-hash__MFQWhxv",
+                            "custom-memory-heap-crash__sZhfLVp",
+                            "multi-source-data-merger__YsCgvRT",
+                            "chess-best-move__gV4HSU3",
+                            "cobol-modernization__xVtkAnP"
+                        ]
+                    }
+                },
+                "exception_stats": {
+                    "AgentAuthenticationError": [
+                        "gpt2-codegolf__Q2hExXt",
+                        "break-filter-js-from-html__YpxZmF7",
+                        "llm-inference-batching-scheduler__iT7DQpB",
+                        "log-summary-date-ranges__KTbAYXz",
+                        "winning-avg-corewars__DX6Lksv",
+                        "reshard-c4-data__stApmJC",
+                        "write-compressor__zXKAoNT",
+                        "merge-diff-arc-agi-task__sPsggte",
+                        "largest-eigenval__rNPpAcT",
+                        "portfolio-optimization__5GUhj7b",
+                        "path-tracing-reverse__xbFrNJX",
+                        "password-recovery__cL7eyjR",
+                        "regex-chess__WuVkenw",
+                        "modernize-scientific-stack__BprEYr6",
+                        "path-tracing__CYRnXa4",
+                        "torch-tensor-parallelism__AH9SDP7",
+                        "pytorch-model-cli__L2P39u2",
+                        "feal-linear-cryptanalysis__cmAf69i",
+                        "distribution-search__NbSQ83y",
+                        "caffe-cifar-10__L6YQDqo",
+                        "prove-plus-comm__kXdQhsp",
+                        "pypi-server__RyWaToM",
+                        "configure-git-webserver__8e7anwG",
+                        "crack-7z-hash__MFQWhxv",
+                        "custom-memory-heap-crash__sZhfLVp",
+                        "multi-source-data-merger__YsCgvRT",
+                        "chess-best-move__gV4HSU3",
+                        "cobol-modernization__xVtkAnP",
+                        "compile-compcert__hbbnKph"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}

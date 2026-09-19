@@ -16,6 +16,8 @@ import {
   supportsAnthropicDeferredToolReferences,
   UnknownProviderError,
 } from "../dist/index.js";
+import { withReasoningPolicy } from "../dist/request-policy.js";
+import { normalizeFinishReason, normalizeToolCall } from "../dist/util.js";
 
 test("prompt cache capabilities separate lookup candidates from write slots", () => {
   const modern = promptCacheCapabilities("openai", "gpt-5.6-luna");
@@ -493,7 +495,7 @@ test("missing provider cache details remain explicitly unreported", async () => 
   assert.equal(result.usage.cacheUnreportedInputTokens, 123);
 });
 
-test("Anthropic recoverable agent windows clear only sufficiently old tool context", async () => {
+test("Anthropic recoverable windows keep provider-side context rewriting disabled", async () => {
   let sent;
   let sentHeaders;
   const anthropic = new AnthropicProvider({
@@ -513,15 +515,8 @@ test("Anthropic recoverable agent windows clear only sufficiently old tool conte
       { role: "tool", toolCallId: "call-1", name: "read_file", content: "source" },
     ],
   });
-  assert.equal(sentHeaders["anthropic-beta"], "context-management-2025-06-27");
-  assert.deepEqual(sent.context_management, {
-    edits: [{
-      type: "clear_tool_uses_20250919",
-      trigger: { type: "input_tokens", value: 40_000 },
-      keep: { type: "tool_uses", value: 6 },
-      clear_at_least: { type: "input_tokens", value: 8_000 },
-    }],
-  });
+  assert.equal(sentHeaders["anthropic-beta"], undefined);
+  assert.equal(sent.context_management, undefined);
 });
 
 test("OpenRouter can advance an explicit cache boundary through tool results", async () => {
@@ -789,7 +784,7 @@ test("OpenAI-compatible strict servers translate JSON tool calls into structured
       requests.push(JSON.parse(init.body));
       if (requests.length === 1) {
         return jsonResponse(
-          { error: { code: "unsupported_parameter", message: "request contains an unsupported parameter" } },
+          { error: { code: "unsupported_parameter", param: "tools", message: "tools are not supported" } },
           { status: 400 },
         );
       }
@@ -810,6 +805,7 @@ test("OpenAI-compatible strict servers translate JSON tool calls into structured
     temperature: 0.2,
     maxTokens: 64,
     metadata: { sessionId: "session-1" },
+    providerMetadata: { trace: "wire-1" },
     providerOptions: { reasoning: { effort: "high" } },
     tools: [{ name: "lookup", description: "look up a value", inputSchema: { type: "object" } }],
     toolChoice: "auto",
@@ -819,7 +815,7 @@ test("OpenAI-compatible strict servers translate JSON tool calls into structured
   assert.equal(result.finishReason, "tool_call");
   assert.deepEqual(result.toolCalls, [{ id: "chatcmpl-strict-tool-0", name: "lookup", arguments: { q: "yeet" } }]);
   assert.equal(requests.length, 2);
-  assert.equal(requests[0].metadata.sessionId, "session-1");
+  assert.deepEqual(requests[0].metadata, { trace: "wire-1" });
   assert.equal(requests[0].tools[0].function.name, "lookup");
   assert.equal(requests[1].stream, false);
   assert.equal(requests[1].messages[0].role, "system");
@@ -845,6 +841,48 @@ test("OpenAI-compatible strict servers translate JSON tool calls into structured
 });
 
 
+test("OpenRouter strict fallback keeps selectively suppressing later unsupported parameters", async () => {
+  const requests = [];
+  const provider = new OpenRouterProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      requests.push(body);
+      if (requests.length === 1) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", param: "tools", message: "tools unsupported" } },
+          { status: 400 },
+        );
+      }
+      if (requests.length === 2) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", param: "session_id", message: "session_id unsupported" } },
+          { status: 400 },
+        );
+      }
+      return jsonResponse({
+        id: "strict-after-selective",
+        model: "example/model",
+        choices: [{ message: { role: "assistant", content: '{"final":"ok"}' }, finish_reason: "stop" }],
+      });
+    },
+  });
+  const result = await provider.complete({
+    model: "example/model",
+    contextKey: "context-1",
+    messages: [{ role: "user", content: "hello" }],
+    tools: [{ name: "lookup", inputSchema: { type: "object", properties: { q: { type: "string" } } } }],
+  });
+  assert.equal(result.text, "ok");
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].tools[0].function.name, "lookup");
+  assert.equal(requests[0].session_id, "context-1");
+  assert.equal("tools" in requests[1], false);
+  assert.equal(requests[1].session_id, "context-1");
+  assert.equal("tools" in requests[2], false);
+  assert.equal("session_id" in requests[2], false);
+});
+
 test("OpenAI-compatible strict fallback keeps the current turn final message as user", async () => {
   const requests = [];
   const provider = new OpenAIChatProvider({
@@ -855,7 +893,7 @@ test("OpenAI-compatible strict fallback keeps the current turn final message as 
       requests.push(request);
       if (requests.length === 1) {
         return jsonResponse(
-          { error: { code: "unsupported_parameter", message: "request contains an unsupported parameter" } },
+          { error: { code: "unsupported_parameter", param: "tools", message: "tools are not supported" } },
           { status: 400 },
         );
       }
@@ -909,16 +947,20 @@ test("OpenAI-compatible streaming falls back to structured tool calls on strict 
       requests.push(request);
       if (request.stream === true) {
         return jsonResponse(
-          { error: { code: "unsupported_parameter", message: "streaming is not supported" } },
+          { error: { code: "unsupported_parameter", param: "stream", message: "streaming is not supported" } },
           { status: 400 },
         );
       }
       return jsonResponse({
-        id: "chatcmpl-strict-stream",
+        id: "chatcmpl-native-nonstream",
         model: "cloud-pro",
         choices: [{
-          message: { role: "assistant", content: '{"tool_calls":[{"name":"lookup","arguments":{"q":"stream"}}]}' },
-          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{ id: "call-stream", type: "function", function: { name: "lookup", arguments: '{"q":"stream"}' } }],
+          },
+          finish_reason: "tool_calls",
         }],
       });
     },
@@ -936,8 +978,9 @@ test("OpenAI-compatible streaming falls back to structured tool calls on strict 
 
   assert.equal(requests.length, 2);
   assert.equal(requests[0].stream, true);
-  assert.equal(requests[1].stream, false);
-  assert.equal(requests[1].messages[0].role, "system");
+  assert.equal("stream" in requests[1], false);
+  assert.equal(requests[1].tools[0].function.name, "lookup");
+  assert.deepEqual(requests[1].messages.map((message) => message.role), ["user"]);
   assert.deepEqual(events.map((event) => event.type), ["start", "tool-call", "finish"]);
   assert.equal(events[1].toolCall.name, "lookup");
   assert.deepEqual(events[1].toolCall.arguments, { q: "stream" });
@@ -953,7 +996,7 @@ test("OpenAI-compatible strict tool protocol replays tool history as ordinary me
       requests.push(JSON.parse(init.body));
       if (requests.length === 1) {
         return jsonResponse(
-          { error: { code: "unsupported_parameter", message: "request contains an unsupported parameter" } },
+          { error: { code: "unsupported_parameter", param: "tools", message: "tools are not supported" } },
           { status: 400 },
         );
       }
@@ -984,6 +1027,498 @@ test("OpenAI-compatible strict tool protocol replays tool history as ordinary me
   assert.deepEqual(JSON.parse(requests[1].messages[3].content), {
     tool_result: { name: "lookup", content: '{"value":42}' },
   });
+});
+
+test("OpenAI-compatible selective fallback removes only the rejected parameter", async () => {
+  const requests = [];
+  const provider = new OpenAIChatProvider({
+    id: "selective-chat",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      requests.push(body);
+      if (requests.length === 1) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", param: "metadata", message: "metadata is unsupported" } },
+          { status: 400 },
+        );
+      }
+      return jsonResponse({
+        id: `chatcmpl-${requests.length}`,
+        model: "cloud-pro",
+        choices: [{
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{ id: `call-${requests.length}`, type: "function", function: { name: "lookup", arguments: '{"q":"yeet"}' } }],
+          },
+          finish_reason: "tool_calls",
+        }],
+      });
+    },
+  });
+  const request = {
+    model: "cloud-pro",
+    messages: [{ role: "user", content: "hello" }],
+    maxTokens: 64,
+    providerMetadata: { trace: "wire" },
+    providerOptions: { reasoning: { effort: "high" } },
+    tools: [{ name: "lookup", inputSchema: { type: "object", properties: { q: { type: "string" } } } }],
+    toolChoice: "auto",
+  };
+  const first = await provider.complete(request);
+  assert.equal(first.finishReason, "tool_call");
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].metadata, { trace: "wire" });
+  assert.equal("metadata" in requests[1], false);
+  assert.equal(requests[1].tools[0].function.name, "lookup");
+  assert.equal(requests[1].tool_choice, "auto");
+  assert.equal(requests[1].max_tokens, 64);
+  assert.deepEqual(requests[1].reasoning, { effort: "high" });
+
+  await provider.complete(request);
+  assert.equal(requests.length, 3);
+  assert.equal("metadata" in requests[2], false);
+  assert.equal(requests[2].tools[0].function.name, "lookup");
+});
+
+test("OpenAI-compatible does not suppress required containers for nested unsupported parameters", async () => {
+  const requests = [];
+  const provider = new OpenAIChatProvider({
+    id: "nested-unsupported",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return jsonResponse(
+        {
+          error: {
+            code: "unsupported_parameter",
+            param: "messages[1].reasoning_details",
+            message: "messages[1].reasoning_details is unsupported",
+          },
+        },
+        { status: 400 },
+      );
+    },
+  });
+  let error;
+  try {
+    await provider.complete({
+      model: "reasoning-model",
+      messages: [
+        { role: "user", content: "find" },
+        {
+          role: "assistant",
+          content: "",
+          providerState: {
+            provider: "nested-unsupported",
+            protocol: "openai-chat-completions",
+            model: "reasoning-model",
+            data: { reasoningDetails: [{ type: "reasoning.encrypted", data: "opaque" }] },
+          },
+        },
+      ],
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error instanceof ProviderHTTPError);
+  assert.equal(requests.length, 1);
+  assert.ok(Array.isArray(requests[0].messages));
+  assert.equal(requests[0].messages.length, 2);
+});
+
+test("OpenAI-compatible streaming retries without unsupported stream_options", async () => {
+  const requests = [];
+  const provider = new OpenAIChatProvider({
+    id: "selective-stream",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      requests.push(body);
+      if (requests.length === 1) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", param: "stream_options", message: "stream_options unsupported" } },
+          { status: 400 },
+        );
+      }
+      return sseResponse([
+        { id: "s1", model: "cloud-pro", choices: [{ delta: { content: "ok" }, finish_reason: null }] },
+        { id: "s1", model: "cloud-pro", choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]);
+    },
+  });
+  const events = [];
+  for await (const event of provider.stream({ model: "cloud-pro", messages: [{ role: "user", content: "hello" }] })) events.push(event);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].stream_options, { include_usage: true });
+  assert.equal("stream_options" in requests[1], false);
+  assert.equal(requests[1].stream, true);
+  assert.equal(events.at(-1).finishReason, "stop");
+});
+
+test("OpenAI-compatible streaming treats a started DONE stream without finish_reason as stop", async () => {
+  const provider = new OpenAIChatProvider({
+    id: "missing-finish-reason",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async () => sseResponse([
+      { id: "s-no-finish", model: "cloud-pro", choices: [{ delta: { content: "ok" }, finish_reason: null }] },
+    ]),
+  });
+  const events = [];
+  for await (const event of provider.stream({ model: "cloud-pro", messages: [{ role: "user", content: "hello" }] })) events.push(event);
+  assert.equal(events.find((event) => event.type === "text-delta").delta, "ok");
+  assert.equal(events.at(-1).type, "finish");
+  assert.equal(events.at(-1).finishReason, "stop");
+});
+
+test("OpenAI-compatible replays reasoning_details across provider instances", async () => {
+  const reasoningDetails = [
+    { type: "reasoning.summary", summary: "checked the inputs", id: "rd-1", format: "openai-responses-v1", index: 0 },
+    { type: "reasoning.encrypted", data: "opaque-state", id: "rd-2", format: "openai-responses-v1", index: 1 },
+  ];
+  const firstProvider = new OpenAIChatProvider({
+    id: "openrouter-test",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async () => jsonResponse({
+      id: "chat-rd-1",
+      model: "reasoning-model",
+      choices: [{
+        message: {
+          role: "assistant",
+          content: null,
+          reasoning_details: reasoningDetails,
+          tool_calls: [{ id: "call-rd", type: "function", function: { name: "lookup", arguments: '{"q":"x"}' } }],
+        },
+        finish_reason: "tool_calls",
+      }],
+    }),
+  });
+  const first = await firstProvider.complete({
+    model: "reasoning-model",
+    messages: [{ role: "user", content: "find" }],
+    tools: [{ name: "lookup", inputSchema: { type: "object", properties: { q: { type: "string" } } } }],
+  });
+  assert.equal(first.providerState.protocol, "openai-chat-completions");
+  assert.deepEqual(first.providerState.data.reasoningDetails, reasoningDetails);
+
+  let replayed;
+  const secondProvider = new OpenAIChatProvider({
+    id: "openrouter-test",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async (_url, init) => {
+      replayed = JSON.parse(init.body);
+      return jsonResponse({
+        id: "chat-rd-2",
+        model: "reasoning-model",
+        choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }],
+      });
+    },
+  });
+  await secondProvider.complete({
+    model: "reasoning-model",
+    messages: [
+      { role: "user", content: "find" },
+      { role: "assistant", content: "", toolCalls: first.toolCalls, providerState: first.providerState },
+      { role: "tool", toolCallId: "call-rd", name: "lookup", content: '{"value":42}' },
+    ],
+    tools: [{ name: "lookup", inputSchema: { type: "object", properties: { q: { type: "string" } } } }],
+  });
+  const assistant = replayed.messages.find((message) => message.role === "assistant");
+  assert.deepEqual(assistant.reasoning_details, reasoningDetails);
+});
+
+test("OpenAI-compatible streaming reconstructs reasoning_details logical blocks", async () => {
+  const provider = new OpenAIChatProvider({
+    id: "openrouter-stream-reasoning",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async () => sseResponse([
+      { id: "rd-stream", model: "reasoning-model", choices: [{ delta: { reasoning_details: [{ type: "reasoning.summary", summary: "checking ", format: "openai-responses-v1", index: 0 }] }, finish_reason: null }] },
+      { id: "rd-stream", model: "reasoning-model", choices: [{ delta: { reasoning_details: [{ type: "reasoning.summary", summary: "inputs", id: "summary-1", format: "openai-responses-v1", index: 0 }] }, finish_reason: null }] },
+      { id: "rd-stream", model: "reasoning-model", choices: [{ delta: { reasoning_details: [{ type: "reasoning.encrypted", data: "opaque", id: "encrypted-1", format: "openai-responses-v1", index: 0 }] }, finish_reason: "stop" }] },
+    ]),
+  });
+  const events = [];
+  for await (const event of provider.stream({ model: "reasoning-model", messages: [{ role: "user", content: "think" }] })) events.push(event);
+  const state = events.at(-1).providerState;
+  assert.equal(state.protocol, "openai-chat-completions");
+  assert.deepEqual(state.data.reasoningDetails, [
+    { type: "reasoning.summary", summary: "checking inputs", format: "openai-responses-v1", index: 0, id: "summary-1" },
+    { type: "reasoning.encrypted", data: "opaque", id: "encrypted-1", format: "openai-responses-v1", index: 0 },
+  ]);
+});
+
+test("OpenAI Responses replays durable reasoning items across provider instances", async () => {
+  const reasoningItem = {
+    type: "reasoning",
+    id: "rs_1",
+    summary: [{ type: "summary_text", text: "checked" }],
+    encrypted_content: "opaque-reasoning-state",
+  };
+  const firstProvider = new OpenAIProvider({
+    apiKey: "test",
+    fetch: async () => jsonResponse({
+      id: "resp-1",
+      model: "gpt-test",
+      status: "completed",
+      output: [
+        reasoningItem,
+        { type: "function_call", call_id: "call-1", name: "lookup", arguments: '{"q":"x"}' },
+      ],
+      usage: {},
+    }),
+  });
+  const first = await firstProvider.complete({ model: "gpt-test", messages: [{ role: "user", content: "find" }] });
+  assert.equal(first.providerState.protocol, "openai-responses");
+
+  let replayed;
+  const secondProvider = new OpenAIProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      replayed = JSON.parse(init.body);
+      return jsonResponse({ id: "resp-2", model: "gpt-test", status: "completed", output: [], usage: {} });
+    },
+  });
+  await secondProvider.complete({
+    model: "gpt-test",
+    messages: [
+      { role: "user", content: "find" },
+      { role: "assistant", content: "", toolCalls: first.toolCalls, providerState: first.providerState },
+      { role: "tool", toolCallId: "call-1", name: "lookup", content: '{"value":42}' },
+    ],
+  });
+  assert.ok(replayed.include.includes("reasoning.encrypted_content"));
+  const reasoningIndex = replayed.input.findIndex((item) => item.type === "reasoning");
+  const callIndex = replayed.input.findIndex((item) => item.type === "function_call");
+  assert.ok(reasoningIndex >= 0 && reasoningIndex < callIndex);
+  assert.deepEqual(replayed.input[reasoningIndex], reasoningItem);
+});
+
+test("Anthropic keeps harness metadata private and forwards only provider metadata", async () => {
+  const requests = [];
+  const provider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return jsonResponse({
+        id: `msg-meta-${requests.length}`,
+        model: "claude-sonnet-5",
+        content: [{ type: "text", text: "ok" }],
+        stop_reason: "end_turn",
+        usage: {},
+      });
+    },
+  });
+  await provider.complete({
+    model: "claude-sonnet-5",
+    messages: [{ role: "user", content: "hello" }],
+    metadata: { lane: "lead", sessionId: "internal-session" },
+    providerMetadata: { user_id: "provider-user" },
+  });
+  assert.deepEqual(requests[0].metadata, { user_id: "provider-user" });
+  assert.equal(JSON.stringify(requests[0]).includes("internal-session"), false);
+  assert.equal(JSON.stringify(requests[0]).includes('"lane"'), false);
+
+  await provider.complete({
+    model: "claude-sonnet-5",
+    messages: [{ role: "user", content: "hello again" }],
+    metadata: { lane: "lead", sessionId: "internal-session" },
+  });
+  assert.equal("metadata" in requests[1], false);
+});
+
+test("Anthropic replays thinking signature state across provider instances", async () => {
+  const firstProvider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async () => jsonResponse({
+      id: "msg-1",
+      model: "claude-sonnet-5",
+      content: [
+        { type: "thinking", thinking: "inspect", signature: "sig-claude" },
+        { type: "tool_use", id: "toolu-1", name: "lookup", input: { q: "x" } },
+      ],
+      stop_reason: "tool_use",
+      usage: {},
+    }),
+  });
+  const first = await firstProvider.complete({ model: "claude-sonnet-5", messages: [{ role: "user", content: "find" }] });
+  assert.equal(first.providerState.protocol, "anthropic-messages");
+
+  let replayed;
+  const secondProvider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      replayed = JSON.parse(init.body);
+      return jsonResponse({ id: "msg-2", model: "claude-sonnet-5", content: [{ type: "text", text: "done" }], stop_reason: "end_turn", usage: {} });
+    },
+  });
+  await secondProvider.complete({
+    model: "claude-sonnet-5",
+    messages: [
+      { role: "user", content: "find" },
+      { role: "assistant", content: "", toolCalls: first.toolCalls, providerState: first.providerState },
+      { role: "tool", toolCallId: "toolu-1", name: "lookup", content: '{"value":42}' },
+    ],
+  });
+  const assistant = replayed.messages.find((message) => message.role === "assistant");
+  assert.equal(assistant.content[0].type, "thinking");
+  assert.equal(assistant.content[0].signature, "sig-claude");
+  assert.equal(assistant.content[1].type, "tool_use");
+});
+
+test("Gemini replays thought signatures across provider instances", async () => {
+  const firstProvider = new GeminiProvider({
+    apiKey: "test",
+    fetch: async () => jsonResponse({
+      candidates: [{
+        content: { parts: [{ functionCall: { id: "fc-1", name: "lookup", args: { q: "x" } }, thoughtSignature: "sig-gemini" }] },
+        finishReason: "STOP",
+      }],
+      usageMetadata: {},
+    }),
+  });
+  const first = await firstProvider.complete({ model: "gemini-test", messages: [{ role: "user", content: "find" }] });
+  assert.equal(first.providerState.protocol, "gemini-generate-content");
+
+  let replayed;
+  const secondProvider = new GeminiProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      replayed = JSON.parse(init.body);
+      return jsonResponse({ candidates: [{ content: { parts: [{ text: "done" }] }, finishReason: "STOP" }], usageMetadata: {} });
+    },
+  });
+  await secondProvider.complete({
+    model: "gemini-test",
+    messages: [
+      { role: "user", content: "find" },
+      { role: "assistant", content: "", toolCalls: first.toolCalls, providerState: first.providerState },
+      { role: "tool", toolCallId: "fc-1", name: "lookup", content: '{"value":42}' },
+    ],
+  });
+  const callPart = replayed.contents.find((content) => content.role === "model").parts.find((part) => part.functionCall);
+  assert.equal(callPart.functionCall.id, "fc-1");
+  assert.equal(callPart.thoughtSignature, "sig-gemini");
+});
+
+test("reasoning policy maps levels by routed provider capability", () => {
+  const policy = (model, metadata) => withReasoningPolicy({ model, messages: [{ role: "user", content: "x" }], metadata });
+  assert.equal(policy("openai/gpt-6-astra", { purpose: "context-compaction" }).providerOptions.reasoning.effort, "low");
+  assert.equal(policy("openai/gpt-5.6-sol", { purpose: "context-compaction" }).providerOptions.reasoning.effort, "none");
+  assert.equal(policy("anthropic/claude-sonnet-5", { reasoningLevel: "xhigh" }).providerOptions.output_config.effort, "xhigh");
+  assert.equal(policy("anthropic/claude-sonnet-4-6", { reasoningLevel: "max" }).providerOptions.output_config.effort, "high");
+  assert.equal(policy("opencode/claude-sonnet-5", { reasoningLevel: "high" }).providerOptions.output_config.effort, "high");
+  assert.equal(policy("gemini/gemini-3.8-flash", { reasoningLevel: "xhigh" }).providerOptions.generationConfig.thinkingConfig.thinkingLevel, "high");
+  assert.equal(policy("opencode/gemini-3.8-flash", { reasoningLevel: "medium" }).providerOptions.generationConfig.thinkingConfig.thinkingLevel, "medium");
+  assert.equal(policy("openrouter/openai/gpt-5.6-sol", { reasoningLevel: "max" }).providerOptions.reasoning.effort, "max");
+  assert.equal(policy("openrouter/anthropic/claude-sonnet-5", { reasoningLevel: "high" }).providerOptions.reasoning.effort, "high");
+  assert.equal(policy("local-compatible/reasoner", { reasoningLevel: "medium" }).providerOptions.reasoning.effort, "medium");
+  assert.equal(policy("opencode/anthropic/claude-sonnet-5", { reasoningLevel: "high" }).providerOptions.output_config.effort, "high");
+  assert.equal(policy("opencode/google/gemini-3.8-flash", { reasoningLevel: "medium" }).providerOptions.generationConfig.thinkingConfig.thinkingLevel, "medium");
+  assert.equal(policy("codex-cli/codex-mini-latest", { reasoningLevel: "high" }).providerOptions, undefined);
+});
+
+test("finish normalization and synthetic tool ids preserve protocol semantics", () => {
+  assert.equal(normalizeFinishReason("model_context_window_exceeded"), "context_length");
+  assert.equal(normalizeFinishReason("max_prompt_tokens"), "context_length");
+  assert.equal(normalizeFinishReason("failed"), "error");
+  const first = normalizeToolCall(undefined, "lookup", {}, 0);
+  const second = normalizeToolCall(undefined, "lookup", {}, 0);
+  assert.notEqual(first.id, second.id);
+});
+
+test("compatibility fallback generates unique tool ids when provider omits response ids", async () => {
+  let attempts = 0;
+  const provider = new OpenAIChatProvider({
+    id: "compat-no-id",
+    baseUrl: "https://example.invalid/v1",
+    fetch: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return jsonResponse(
+          { error: { code: "unsupported_parameter", param: "tools", message: "tools unsupported" } },
+          { status: 400 },
+        );
+      }
+      return jsonResponse({
+        model: "cloud-pro",
+        choices: [{
+          message: { role: "assistant", content: '{"tool_calls":[{"name":"lookup","arguments":{"q":"x"}}]}' },
+          finish_reason: "stop",
+        }],
+      });
+    },
+  });
+  const request = {
+    model: "cloud-pro",
+    messages: [{ role: "user", content: "lookup" }],
+    tools: [{ name: "lookup", inputSchema: { type: "object", properties: { q: { type: "string" } } } }],
+  };
+  const first = await provider.complete(request);
+  const second = await provider.complete(request);
+  assert.equal(first.toolCalls.length, 1);
+  assert.equal(second.toolCalls.length, 1);
+  assert.notEqual(first.toolCalls[0].id, second.toolCalls[0].id);
+});
+
+test("Gemini generates unique normalized ids when provider omits function call ids", async () => {
+  const makeProvider = () => new GeminiProvider({
+    apiKey: "test",
+    fetch: async () => jsonResponse({
+      candidates: [{
+        content: { parts: [{ functionCall: { name: "lookup", args: { q: "x" } }, thoughtSignature: "sig" }] },
+        finishReason: "STOP",
+      }],
+      usageMetadata: {},
+    }),
+  });
+  const first = await makeProvider().complete({ model: "gemini-test", messages: [{ role: "user", content: "find" }] });
+  const second = await makeProvider().complete({ model: "gemini-test", messages: [{ role: "user", content: "find" }] });
+  assert.equal(first.toolCalls.length, 1);
+  assert.equal(second.toolCalls.length, 1);
+  assert.notEqual(first.toolCalls[0].id, second.toolCalls[0].id);
+});
+
+test("OpenAI Responses enables strict mode only for strict-compatible tool schemas", async () => {
+  let sent;
+  const provider = new OpenAIProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({ id: "resp-strict", model: "gpt-test", status: "completed", output: [], usage: {} });
+    },
+  });
+  await provider.complete({
+    model: "gpt-test",
+    messages: [{ role: "user", content: "go" }],
+    tools: [
+      {
+        name: "strict_tool",
+        inputSchema: {
+          type: "object",
+          properties: { q: { type: "string" } },
+          required: ["q"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "loose_tool",
+        inputSchema: { type: "object", properties: { q: { type: "string" } } },
+      },
+      {
+        name: "nullable_tool",
+        inputSchema: {
+          type: "object",
+          properties: { q: { type: ["string", "null"] } },
+          required: ["q"],
+          additionalProperties: false,
+        },
+      },
+    ],
+  });
+  assert.equal(sent.tools.find((tool) => tool.name === "strict_tool").strict, true);
+  assert.equal(sent.tools.find((tool) => tool.name === "loose_tool").strict, false);
+  assert.equal(sent.tools.find((tool) => tool.name === "nullable_tool").strict, false);
 });
 
 test("OpenAI OAuth model discovery supplies the ChatGPT client version", async () => {

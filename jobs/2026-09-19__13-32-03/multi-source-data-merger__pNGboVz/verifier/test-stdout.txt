@@ -1,0 +1,41 @@
+Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
+Ign:4 http://deb.debian.org/debian trixie/main amd64 Packages
+Ign:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages
+Ign:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+Ign:4 http://deb.debian.org/debian trixie/main amd64 Packages
+Ign:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages
+Ign:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+Ign:4 http://deb.debian.org/debian trixie/main amd64 Packages
+Ign:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages
+Ign:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+Ign:4 http://deb.debian.org/debian trixie/main amd64 Packages
+Err:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages
+  Could not open file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_main_binary-amd64_Packages.xz - open (30: Read-only file system) [IP: 146.75.50.132 80]
+  404  Not Found [IP: 146.75.50.132 80]
+Err:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+  Could not open file /var/lib/apt/lists/partial/deb.debian.org_debian-security_dists_trixie-security_main_binary-amd64_Packages.xz - open (30: Read-only file system) [IP: 146.75.50.132 80]
+  404  Not Found [IP: 146.75.50.132 80]
+Err:4 http://deb.debian.org/debian trixie/main amd64 Packages
+  Error writing to file - write (30: Read-only file system) [IP: 146.75.50.132 80]
+  Could not open file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz - open (30: Read-only file system) [IP: 146.75.50.132 80]
+  Could not open file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.gz - open (30: Read-only file system) [IP: 146.75.50.132 80]
+Ign:4 http://deb.debian.org/debian trixie/main amd64 Packages
+Err:4 http://deb.debian.org/debian trixie/main amd64 Packages
+  Error writing to file - write (30: Read-only file system) [IP: 146.75.50.132 80]
+  Could not open file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz - open (30: Read-only file system) [IP: 146.75.50.132 80]
+  Could not open file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.gz - open (30: Read-only file system) [IP: 146.75.50.132 80]
+  404  Not Found [IP: 146.75.50.132 80]
+Fetched 231 kB in 14s (17.1 kB/s)
+Reading package lists...
+W: chown to root:root of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - 400::URIFailure (30: Read-only file system)
+W: chmod 0644 of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - 400::URIFailure (30: Read-only file system)
+W: chown to _apt:root of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - Item::QueueURI (30: Read-only file system)
+W: chmod 0600 of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - Item::QueueURI (30: Read-only file system)
+W: chown to root:root of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - 400::URIFailure (30: Read-only file system)
+W: chmod 0644 of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - 400::URIFailure (30: Read-only file system)
+W: chown to _apt:root of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - Item::QueueURI (30: Read-only file system)
+W: chmod 0600 of file /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.xz failed - Item::QueueURI (30: Read-only file system)
+W: chown to 

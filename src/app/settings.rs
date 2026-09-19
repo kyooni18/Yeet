@@ -147,8 +147,52 @@ impl App {
                     backend.send(FrontendCommand::SetFoundationMemory {
                         enabled: !self.state.foundation_memory_enabled,
                     })?;
-                } else {
+                } else if self.popup_index == self.model_settings_row_index() {
+                    self.open_models(backend)?;
+                } else if self.popup_index == self.reasoning_settings_row_index() {
+                    self.open_reasoning();
+                } else if self.popup_index == self.context_settings_row_index() {
+                    let value = self
+                        .state
+                        .runtime_settings
+                        .context_length_override
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "auto".into());
+                    self.open_settings_editor(SettingsEditKind::ContextLength, vec![value]);
+                } else if self.popup_index == self.appearance_settings_row_index() {
+                    let appearance = match self.state.runtime_settings.appearance.as_str() {
+                        "auto" => "dark",
+                        "dark" => "light",
+                        _ => "auto",
+                    };
+                    backend.send(FrontendCommand::SetAppearance {
+                        appearance: appearance.into(),
+                    })?;
+                } else if self.popup_index == self.dark_theme_settings_row_index() {
+                    self.open_settings_editor(
+                        SettingsEditKind::ThemeDark,
+                        vec![self.state.runtime_settings.theme_dark.clone()],
+                    );
+                } else if self.popup_index == self.light_theme_settings_row_index() {
+                    self.open_settings_editor(
+                        SettingsEditKind::ThemeLight,
+                        vec![self.state.runtime_settings.theme_light.clone()],
+                    );
+                } else if self.popup_index == self.jev_settings_row_index() {
+                    let mode = match self.state.runtime_settings.jev_loop_mode.as_str() {
+                        "off" => "shadow",
+                        "shadow" => "enforce",
+                        _ => "off",
+                    };
+                    backend.send(FrontendCommand::SetJevLoopMode { mode: mode.into() })?;
+                } else if self.popup_index == self.sandbox_settings_row_index() {
                     self.open_sandbox_presets();
+                } else if self.popup_index == self.auth_settings_row_index() {
+                    self.open_auth(backend)?;
+                } else if self.popup_index == self.providers_settings_row_index() {
+                    self.open_providers(backend)?;
+                } else if self.popup_index == self.capabilities_settings_row_index() {
+                    self.open_capabilities(backend)?;
                 }
             }
             _ => {}
@@ -163,8 +207,8 @@ impl App {
     ) -> anyhow::Result<()> {
         match event.code {
             KeyCode::Esc => {
-                self.mode = Mode::Settings;
-                self.popup_index = self.sandbox_settings_row_index();
+                self.mode = Mode::Chat;
+                self.popup_index = 0;
             }
             KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down => {
@@ -285,8 +329,20 @@ impl App {
     ) -> anyhow::Result<()> {
         match event.code {
             KeyCode::Esc => {
+                let runtime_editor = matches!(
+                    self.settings_edit_kind,
+                    Some(
+                        SettingsEditKind::ContextLength
+                            | SettingsEditKind::ThemeDark
+                            | SettingsEditKind::ThemeLight
+                    )
+                );
                 self.clear_editor();
-                self.mode = Mode::SandboxPolicy;
+                self.mode = if runtime_editor {
+                    Mode::Settings
+                } else {
+                    Mode::SandboxPolicy
+                };
             }
             KeyCode::Tab | KeyCode::Down if self.editor_fields.len() > 1 => {
                 self.editor_index = (self.editor_index + 1) % self.editor_fields.len();
@@ -355,7 +411,7 @@ impl App {
     pub(super) fn open_reasoning(&mut self) {
         self.mode = Mode::Reasoning;
         self.popup_filter.clear();
-        self.popup_index = REASONING_LEVELS
+        self.popup_index = reasoning_levels_for_model(&self.state.active_model)
             .iter()
             .position(|level| *level == self.state.active_reasoning_level)
             .unwrap_or(0);
@@ -574,15 +630,55 @@ impl App {
     }
 
     pub(crate) fn settings_row_count(&self) -> usize {
-        2 + usize::from(self.openai_provider_active())
+        12 + usize::from(self.openai_provider_active())
     }
 
     pub(super) fn foundation_settings_row_index(&self) -> usize {
         usize::from(self.openai_provider_active())
     }
 
-    pub(super) fn sandbox_settings_row_index(&self) -> usize {
+    pub(super) fn model_settings_row_index(&self) -> usize {
         self.foundation_settings_row_index() + 1
+    }
+
+    pub(super) fn reasoning_settings_row_index(&self) -> usize {
+        self.model_settings_row_index() + 1
+    }
+
+    pub(super) fn context_settings_row_index(&self) -> usize {
+        self.reasoning_settings_row_index() + 1
+    }
+
+    pub(super) fn appearance_settings_row_index(&self) -> usize {
+        self.context_settings_row_index() + 1
+    }
+
+    pub(super) fn dark_theme_settings_row_index(&self) -> usize {
+        self.appearance_settings_row_index() + 1
+    }
+
+    pub(super) fn light_theme_settings_row_index(&self) -> usize {
+        self.dark_theme_settings_row_index() + 1
+    }
+
+    pub(super) fn jev_settings_row_index(&self) -> usize {
+        self.light_theme_settings_row_index() + 1
+    }
+
+    pub(super) fn sandbox_settings_row_index(&self) -> usize {
+        self.jev_settings_row_index() + 1
+    }
+
+    pub(super) fn auth_settings_row_index(&self) -> usize {
+        self.sandbox_settings_row_index() + 1
+    }
+
+    pub(super) fn providers_settings_row_index(&self) -> usize {
+        self.auth_settings_row_index() + 1
+    }
+
+    pub(super) fn capabilities_settings_row_index(&self) -> usize {
+        self.providers_settings_row_index() + 1
     }
 
     pub(super) fn selected_limit(&self) -> Option<(&'static str, u64)> {
@@ -637,6 +733,55 @@ impl App {
         let Some(kind) = self.settings_edit_kind.clone() else {
             return Ok(());
         };
+        match kind {
+            SettingsEditKind::ContextLength => {
+                let value = self
+                    .editor_fields
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("auto")
+                    .trim();
+                let length = if value.is_empty()
+                    || value.eq_ignore_ascii_case("auto")
+                    || value.eq_ignore_ascii_case("reset")
+                {
+                    None
+                } else {
+                    match crate::config::parse_context_length(value) {
+                        Ok(value) => Some(value),
+                        Err(error) => {
+                            self.backend_message = Some(error.to_string());
+                            return Ok(());
+                        }
+                    }
+                };
+                backend.send(FrontendCommand::SetContextLength { length })?;
+                self.clear_editor();
+                self.mode = Mode::Settings;
+                return Ok(());
+            }
+            SettingsEditKind::ThemeDark | SettingsEditKind::ThemeLight => {
+                let value = self.editor_fields.first().cloned().unwrap_or_default();
+                if value.trim().is_empty() {
+                    self.backend_message = Some("Theme name or path cannot be empty".into());
+                    return Ok(());
+                }
+                let mode = if matches!(kind, SettingsEditKind::ThemeDark) {
+                    "dark"
+                } else {
+                    "light"
+                };
+                backend.send(FrontendCommand::SetTheme {
+                    mode: mode.into(),
+                    value,
+                })?;
+                self.clear_editor();
+                self.mode = Mode::Settings;
+                return Ok(());
+            }
+            _ => {}
+        }
+
         let action = match kind {
             SettingsEditKind::WorkspacePath => {
                 let path = self.editor_fields.first().cloned().unwrap_or_default();
@@ -711,6 +856,9 @@ impl App {
                 };
                 SandboxAction::SetLimit { name, value }
             }
+            SettingsEditKind::ContextLength
+            | SettingsEditKind::ThemeDark
+            | SettingsEditKind::ThemeLight => unreachable!(),
         };
         backend.send(FrontendCommand::UpdateSandbox { action })?;
         self.clear_editor();

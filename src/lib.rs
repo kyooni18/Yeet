@@ -21,6 +21,7 @@ pub mod sandbox_cli;
 pub mod session_store;
 pub mod shell;
 pub mod skyline;
+mod text_layout;
 pub mod tools;
 pub mod ui;
 pub mod update;

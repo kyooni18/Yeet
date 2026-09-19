@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/build-cython-ext:20251031: docker inspect returned 1
+Trial build-cython-ext__Gz6v4qs failed: Docker compose command failed for environment build-cython-ext. Command: docker compose --project-name build-cython-ext__gz6v4qs__env --project-directory /Users/kyooni18/.cache/harbor/tasks/GCqHhNMgC2jpcy3h8te5A7/build-cython-ext/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpib5_tm8f/build-cython-ext__Gz6v4qs__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpn_smzkx5/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpio4334z6/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/build-cython-ext:20251031 Pulling 
+ Image alexgshaw/build-cython-ext:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

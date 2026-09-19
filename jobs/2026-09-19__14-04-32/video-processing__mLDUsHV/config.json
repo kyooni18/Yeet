@@ -1,0 +1,18 @@
+{
+    "task": {
+        "path": "video-processing",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "source": "terminal-bench"
+    },
+    "trial_name": "video-processing__mLDUsHV",
+    "trials_dir": "jobs/2026-09-19__14-04-32",
+    "agent": {
+        "name": "benchmarks.terminalbench.yeet_agent:YeetAgent",
+        "model_name": "openai/gpt-5.6-luna",
+        "kwargs": {
+            "reasoning": "high"
+        }
+    },
+    "job_id": "ab6a70c2-843a-46dd-95fe-682e9dca6fe6"
+}

@@ -1,6 +1,6 @@
 import { fetchEmbeddings } from "../embeddings.js";
 import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
 import { ProviderHTTPError } from "../errors.js";
 import type { ProviderFetchLogger } from "../http.js";
@@ -14,6 +14,7 @@ import type {
   Message,
   ModelInfo,
   ProviderAdapter,
+  ProviderState,
   StreamEvent,
   ToolCall,
   ToolChoice,
@@ -64,13 +65,16 @@ function firstString(value: any, keys: string[]): string | undefined {
   return undefined;
 }
 
-function reasoningDetailsText(value: any): string | undefined {
+function reasoningDetailsField(value: any, field: "text" | "summary"): string | undefined {
   if (!Array.isArray(value?.reasoning_details)) return undefined;
   const text = value.reasoning_details
-    .filter((part: any) => part && typeof part === "object" && typeof part.text === "string")
-    .map((part: any) => part.text)
+    .map((part: any) => part && typeof part === "object" && typeof part[field] === "string" ? part[field] : "")
     .join("");
   return text || undefined;
+}
+
+function reasoningDetailsText(value: any): string | undefined {
+  return reasoningDetailsField(value, "text");
 }
 
 function reasoningText(value: any): string | undefined {
@@ -79,7 +83,8 @@ function reasoningText(value: any): string | undefined {
 }
 
 function reasoningSummary(value: any): string | undefined {
-  return firstString(value, ["reasoning_summary", "reasoning_summary_text", "thinking_summary"]);
+  return firstString(value, ["reasoning_summary", "reasoning_summary_text", "thinking_summary"])
+    ?? reasoningDetailsField(value, "summary");
 }
 
 function reasoningTokenCount(value: any): number | undefined {
@@ -120,14 +125,71 @@ function stableSessionId(value: string | undefined): string | undefined {
   return `yeet-${createHash("sha256").update(value).digest("hex")}`;
 }
 
+function chatReasoningDetails(message: Message, provider: string, model: string): any[] {
+  const state = message.providerState;
+  if (!state || state.provider !== provider || state.protocol !== "openai-chat-completions") return [];
+  if (state.model && state.model !== model) return [];
+  const data = state.data as any;
+  return Array.isArray(data?.reasoningDetails) ? data.reasoningDetails : [];
+}
+
+function chatProviderState(reasoningDetails: any[], provider: string, model: string): ProviderState | undefined {
+  if (reasoningDetails.length === 0) return undefined;
+  return {
+    provider,
+    protocol: "openai-chat-completions",
+    model,
+    data: { reasoningDetails },
+  };
+}
+
+function appendReasoningDetails(target: any[], value: unknown): void {
+  if (!Array.isArray(value)) return;
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const detail = { ...raw } as Record<string, any>;
+    const type = typeof detail.type === "string" ? detail.type : undefined;
+    const mergeKey = type === "reasoning.text"
+      ? "text"
+      : type === "reasoning.summary"
+        ? "summary"
+        : undefined;
+    const last = target.at(-1) as Record<string, any> | undefined;
+    if (mergeKey && last && last.type === type && typeof detail[mergeKey] === "string") {
+      last[mergeKey] = `${typeof last[mergeKey] === "string" ? last[mergeKey] : ""}${detail[mergeKey]}`;
+      for (const key of ["signature", "id", "format", "index"]) {
+        if ((last[key] === undefined || last[key] === null || last[key] === "")
+            && detail[key] !== undefined && detail[key] !== null && detail[key] !== "") {
+          last[key] = detail[key];
+        }
+      }
+      continue;
+    }
+    target.push(detail);
+  }
+}
+
 
 function mapMessages(
   messages: Message[],
   explicitSystem?: string,
   useContentCacheBreakpoints = false,
   maxContentCacheBreakpoints = 4,
+  providerId = "openai-compatible",
+  model = "",
 ): ChatMessage[] {
-  const { system, messages: rest } = splitLeadingSystem(messages, explicitSystem);
+  // Flattening leading system messages discards their explicit cache markers
+  // and merges a stable prefix with any changing guidance that follows it.
+  // Preserve those boundaries on explicit-cache routes, sharing the same
+  // marker budget as the rest of the conversation. Keep legacy serialization
+  // when there is no leading boundary to preserve.
+  const leadingSystemCount = messages.findIndex((message) => message.role !== "system");
+  const leadingSystem = messages.slice(0, leadingSystemCount < 0 ? messages.length : leadingSystemCount);
+  const preserveSystemBoundaries = useContentCacheBreakpoints
+    && leadingSystem.some((message) => message.cacheBreakpoint === true);
+  const { system, messages: rest } = preserveSystemBoundaries
+    ? { system: explicitSystem, messages }
+    : splitLeadingSystem(messages, explicitSystem);
   const output: ChatMessage[] = [];
   if (system) output.push({ role: "system", content: system });
   const candidates = useContentCacheBreakpoints
@@ -151,10 +213,14 @@ function mapMessages(
       continue;
     }
 
+    const reasoningDetails = message.role === "assistant"
+      ? chatReasoningDetails(message, providerId, model)
+      : [];
     if (message.role === "assistant" && message.toolCalls?.length) {
       output.push({
         role: "assistant",
         content: message.content ?? null,
+        ...(reasoningDetails.length ? { reasoning_details: reasoningDetails } : {}),
         tool_calls: message.toolCalls.map((tool) => ({
           id: tool.id,
           type: "function",
@@ -167,6 +233,14 @@ function mapMessages(
       continue;
     }
 
+    if (message.role === "assistant") {
+      output.push({
+        role: "assistant",
+        content: chatContent(message, cacheIndexes.has(index)),
+        ...(reasoningDetails.length ? { reasoning_details: reasoningDetails } : {}),
+      });
+      continue;
+    }
     output.push({ role: message.role, content: chatContent(message, cacheIndexes.has(index)) });
   }
 
@@ -179,6 +253,7 @@ function requestBody(
   providerId: string,
   useContextSessionId = false,
   useContentCacheBreakpoints = false,
+  suppressedParameters: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   const cacheCapabilities = promptCacheCapabilities(providerId, request.model);
   const tools = mapTools(request.tools);
@@ -186,7 +261,7 @@ function requestBody(
   const sessionId = useContextSessionId && cacheCapabilities.sessionAffinity !== false
     ? stableSessionId(request.metadata?.sessionId ?? request.contextKey)
     : undefined;
-  return {
+  const body: Record<string, unknown> = {
     ...(request.providerOptions ?? {}),
     model: request.model,
     messages: mapMessages(
@@ -196,26 +271,66 @@ function requestBody(
         && cacheCapabilities.modes.includes("explicit")
         && request.promptCache !== false,
       cacheCapabilities.maxExplicitBreakpoints ?? 4,
+      providerId,
+      request.model,
     ),
     stream,
     ...(stream ? { stream_options: { include_usage: true } } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
-    ...(request.metadata ? { metadata: request.metadata } : {}),
+    ...(request.providerMetadata ? { metadata: request.providerMetadata } : {}),
     ...(sessionId ? { session_id: sessionId } : {}),
     ...(tools?.length ? { tools } : {}),
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
   };
+  for (const parameter of suppressedParameters) {
+    const topLevel = parameter.split(/[.[\]]/, 1)[0]?.trim();
+    if (topLevel) delete body[topLevel];
+  }
+  return body;
 }
 
-function isUnsupportedParameterError(error: unknown): error is ProviderHTTPError {
-  if (!(error instanceof ProviderHTTPError) || error.status !== 400) return false;
-  try {
-    return JSON.parse(error.responseBody ?? "")?.error?.code === "unsupported_parameter";
-  } catch {
-    return /unsupported[_ ]parameter/i.test(error.responseBody ?? "");
+const UNKNOWN_UNSUPPORTED_PARAMETER = "__unknown__";
+const SUPPRESSIBLE_PARAMETERS = new Set([
+  "stream_options",
+  "stream",
+  "metadata",
+  "reasoning",
+  "temperature",
+  "max_tokens",
+  "tool_choice",
+  "tools",
+  "session_id",
+]);
+
+function unsupportedParameter(error: unknown): string | undefined {
+  if (!(error instanceof ProviderHTTPError) || error.status !== 400) return undefined;
+  let payload: any;
+  try { payload = JSON.parse(error.responseBody ?? ""); }
+  catch { payload = undefined; }
+  const message = typeof payload?.error?.message === "string"
+    ? payload.error.message
+    : error.responseBody ?? "";
+  if (payload?.error?.code !== "unsupported_parameter" && !/unsupported[_ ]parameter|not supported/i.test(message)) return undefined;
+  const explicit = payload?.error?.param;
+  if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
+  const known = [...SUPPRESSIBLE_PARAMETERS];
+  const lowered = message.toLowerCase();
+  for (const parameter of known) {
+    const human = parameter.replaceAll("_", " ");
+    if (lowered.includes(parameter) || lowered.includes(human)) return parameter;
   }
+  if (/streaming\s+(?:is\s+)?not\s+supported/i.test(message)) return "stream";
+  const match = /(?:unsupported[_ ]parameter|parameter|param)\s*[`'"=: ]+([A-Za-z0-9_.\-[\]]+)/i.exec(message);
+  return match?.[1] ?? UNKNOWN_UNSUPPORTED_PARAMETER;
 }
+
+function topLevelParameter(parameter: string): string {
+  if (parameter === UNKNOWN_UNSUPPORTED_PARAMETER) return parameter;
+  const topLevel = parameter.split(/[.[\]]/, 1)[0]?.trim() ?? parameter.trim();
+  return SUPPRESSIBLE_PARAMETERS.has(topLevel) ? topLevel : UNKNOWN_UNSUPPORTED_PARAMETER;
+}
+
 
 function strictToolProtocolInstruction(tools: ToolDefinition[] | undefined, choice: ToolChoice | undefined): string | undefined {
   if (!tools?.length || choice === "none") return undefined;
@@ -271,6 +386,7 @@ function strictCompatibilityMessages(messages: Message[]): { messages: Message[]
             arguments: tool.arguments,
           })),
         }),
+        ...(message.providerState ? { providerState: message.providerState } : {}),
       });
       continue;
     }
@@ -278,6 +394,7 @@ function strictCompatibilityMessages(messages: Message[]): { messages: Message[]
       role: message.role,
       content: message.content ?? "",
       ...(message.images?.length ? { images: message.images } : {}),
+      ...(message.providerState ? { providerState: message.providerState } : {}),
     });
   }
   return {
@@ -318,7 +435,7 @@ function strictCompatibilityJsonResponse(
       }
       if (!args || typeof args !== "object" || Array.isArray(args)) return [];
       return [{
-        id: `${responseId ?? "compat"}-tool-${index}`,
+        id: responseId ? `${responseId}-tool-${index}` : `compat-tool-${randomUUID()}`,
         name: call.name,
         arguments: args,
       } satisfies ToolCall];
@@ -347,7 +464,11 @@ function legacyStrictCompatibilityToolCalls(text: string, responseId?: string): 
       const parsedArguments = typeof rawArguments === "string" ? JSON.parse(rawArguments) : rawArguments;
       if (!name || !parsedArguments || typeof parsedArguments !== "object" || Array.isArray(parsedArguments)) continue;
       calls.push({
-        id: typeof value.id === "string" && value.id ? value.id : `${responseId ?? "compat"}-tool-${calls.length}`,
+        id: typeof value.id === "string" && value.id
+          ? value.id
+          : responseId
+            ? `${responseId}-tool-${calls.length}`
+            : `compat-tool-${randomUUID()}`,
         name,
         arguments: parsedArguments,
       });
@@ -373,6 +494,7 @@ function strictCompatibilityRequest(request: ProviderCallRequest): ProviderCallR
     temperature: _temperature,
     maxTokens: _maxTokens,
     metadata: _metadata,
+    providerMetadata: _providerMetadata,
     providerOptions: _providerOptions,
     promptCache: _promptCache,
     ...compatible
@@ -401,6 +523,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
   readonly #apiCallLogger: ProviderFetchLogger | undefined;
   readonly #excludedModels: Set<string>;
   readonly #strictCompatibilityModels = new Set<string>();
+  readonly #unsupportedParameters = new Map<string, { parameters: Set<string>; expiresAt: number }>();
 
   constructor(options: OpenAIChatProviderOptions = {}) {
     this.id = options.id ?? "openai-compatible";
@@ -413,6 +536,24 @@ export class OpenAIChatProvider implements ProviderAdapter {
     this.#excludedModels = new Set((options.excludedModels ?? []).map((model) => model.trim()).filter(Boolean));
     this.#fetch = options.fetch;
     this.#apiCallLogger = options.apiCallLogger;
+  }
+
+  #suppressedParameters(model: string): Set<string> {
+    const current = this.#unsupportedParameters.get(model);
+    if (!current || current.expiresAt <= Date.now()) {
+      if (current) this.#unsupportedParameters.delete(model);
+      return new Set();
+    }
+    return new Set(current.parameters);
+  }
+
+  #rememberUnsupportedParameter(model: string, parameter: string): void {
+    const current = this.#suppressedParameters(model);
+    current.add(parameter);
+    this.#unsupportedParameters.set(model, {
+      parameters: current,
+      expiresAt: Date.now() + 10 * 60 * 1_000,
+    });
   }
 
   #requestHeaders(): Record<string, string> {
@@ -453,7 +594,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
   }
 
   async #complete(request: ProviderCallRequest, strictCompatibility: boolean): Promise<CallResult> {
-    const send = (candidate: ProviderCallRequest) => providerFetch(
+    const send = (candidate: ProviderCallRequest, suppressed: ReadonlySet<string> = new Set()) => providerFetch(
       `${this.#baseUrl}/chat/completions`,
       {
         method: "POST",
@@ -464,6 +605,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
           this.id,
           this.#useContextSessionId,
           this.#useContentCacheBreakpoints,
+          suppressed,
         )),
       },
       {
@@ -475,18 +617,32 @@ export class OpenAIChatProvider implements ProviderAdapter {
         ...(candidate.signal ? { signal: candidate.signal } : {}),
       },
     );
-    let response: Response;
+    let response!: Response;
     let compatibilityAttempts = 0;
     let usedStrictCompatibility = strictCompatibility;
-    try {
-      response = await send(strictCompatibility ? strictCompatibilityRequest(request) : request);
-    } catch (error) {
-      if (strictCompatibility || !isUnsupportedParameterError(error)) throw error;
-      compatibilityAttempts = 1;
-      usedStrictCompatibility = true;
-      response = await send(strictCompatibilityRequest(request));
+    const suppressed = this.#suppressedParameters(request.model);
+    let candidate = strictCompatibility ? strictCompatibilityRequest(request) : request;
+    while (true) {
+      try {
+        response = await send(candidate, suppressed);
+        break;
+      } catch (error) {
+        const unsupported = unsupportedParameter(error);
+        if (!unsupported) throw error;
+        const parameter = topLevelParameter(unsupported);
+        compatibilityAttempts += 1;
+        if (parameter === "tools" && !usedStrictCompatibility) {
+          usedStrictCompatibility = true;
+          this.#strictCompatibilityModels.add(request.model);
+          candidate = strictCompatibilityRequest(request);
+          continue;
+        }
+        if (parameter === "tools" || parameter === UNKNOWN_UNSUPPORTED_PARAMETER) throw error;
+        if (!parameter || suppressed.has(parameter) || compatibilityAttempts >= 6) throw error;
+        suppressed.add(parameter);
+        this.#rememberUnsupportedParameter(request.model, parameter);
+      }
     }
-    if (usedStrictCompatibility) this.#strictCompatibilityModels.add(request.model);
     const transportAttempts = providerFetchAttempts(response) + compatibilityAttempts;
 
     const raw = await readJson<any>(response);
@@ -512,6 +668,9 @@ export class OpenAIChatProvider implements ProviderAdapter {
     );
     const normalizedReasoning = reasoningText(message);
     const normalizedReasoningSummary = reasoningSummary(message);
+    const reasoningDetails: any[] = [];
+    appendReasoningDetails(reasoningDetails, message.reasoning_details);
+    const providerState = chatProviderState(reasoningDetails, this.id, request.model);
     return {
       provider: this.id,
       model: raw.model ?? request.model,
@@ -520,14 +679,15 @@ export class OpenAIChatProvider implements ProviderAdapter {
       ...(normalizedReasoning ? { reasoning: normalizedReasoning } : {}),
       ...(normalizedReasoningSummary ? { reasoningSummary: normalizedReasoningSummary } : {}),
       toolCalls,
+      ...(providerState ? { providerState } : {}),
       finishReason: toolCalls.length ? "tool_call" : normalizeFinishReason(choice?.finish_reason),
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
       raw,
     };
   }
 
-  async *#strictCompatibilityStream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
-    const fallback = await this.#complete(request, true);
+  async *#completeAsStream(request: ProviderCallRequest, strictCompatibility: boolean): AsyncIterable<StreamEvent> {
+    const fallback = await this.#complete(request, strictCompatibility);
     yield {
       type: "start",
       provider: this.id,
@@ -544,8 +704,13 @@ export class OpenAIChatProvider implements ProviderAdapter {
       type: "finish",
       finishReason: fallback.finishReason,
       ...(fallback.usage ? { usage: fallback.usage } : {}),
+      ...(fallback.providerState ? { providerState: fallback.providerState } : {}),
       ...(fallback.raw !== undefined ? { raw: fallback.raw } : {}),
     };
+  }
+
+  async *#strictCompatibilityStream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
+    yield* this.#completeAsStream(request, true);
   }
 
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
@@ -553,41 +718,71 @@ export class OpenAIChatProvider implements ProviderAdapter {
       yield* this.#strictCompatibilityStream(request);
       return;
     }
-    let response: Response;
-    try {
-      response = await providerFetch(
-        `${this.#baseUrl}/chat/completions`,
-        {
-          method: "POST",
-          headers: this.#requestHeaders(),
-          body: JSON.stringify(requestBody(
-            request,
-            true,
-            this.id,
-            this.#useContextSessionId,
-            this.#useContentCacheBreakpoints,
-          )),
-        },
-        {
-          provider: this.id,
-          ...(this.#fetch ? { fetch: this.#fetch } : {}),
-          ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
-          ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
-          ...(request.retry ? { retry: request.retry } : {}),
-          ...(request.signal ? { signal: request.signal } : {}),
-        },
-      );
-    } catch (error) {
-      if (!isUnsupportedParameterError(error)) throw error;
-      yield* this.#strictCompatibilityStream(request);
+    let response!: Response;
+    let compatibilityAttempts = 0;
+    const suppressed = this.#suppressedParameters(request.model);
+    if (suppressed.has("stream")) {
+      yield* this.#completeAsStream(request, false);
       return;
     }
-    const transportAttempts = providerFetchAttempts(response);
+    const send = () => providerFetch(
+      `${this.#baseUrl}/chat/completions`,
+      {
+        method: "POST",
+        headers: this.#requestHeaders(),
+        body: JSON.stringify(requestBody(
+          request,
+          true,
+          this.id,
+          this.#useContextSessionId,
+          this.#useContentCacheBreakpoints,
+          suppressed,
+        )),
+      },
+      {
+        provider: this.id,
+        ...(this.#fetch ? { fetch: this.#fetch } : {}),
+        ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
+        ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+        ...(request.retry ? { retry: request.retry } : {}),
+        ...(request.signal ? { signal: request.signal } : {}),
+      },
+    );
+    while (true) {
+      try {
+        response = await send();
+        break;
+      } catch (error) {
+        const unsupported = unsupportedParameter(error);
+        if (!unsupported) throw error;
+        const parameter = topLevelParameter(unsupported);
+        compatibilityAttempts += 1;
+        if (parameter === "tools") {
+          this.#strictCompatibilityModels.add(request.model);
+          yield* this.#strictCompatibilityStream(request);
+          return;
+        }
+        if (parameter === UNKNOWN_UNSUPPORTED_PARAMETER) throw error;
+        if (!parameter || suppressed.has(parameter) || compatibilityAttempts >= 6) throw error;
+        if (parameter === "stream") {
+          // This endpoint does not accept a stream field at all. Remember the
+          // capability gap and retry non-streaming while preserving native tools.
+          suppressed.add(parameter);
+          this.#rememberUnsupportedParameter(request.model, parameter);
+          yield* this.#completeAsStream(request, false);
+          return;
+        }
+        suppressed.add(parameter);
+        this.#rememberUnsupportedParameter(request.model, parameter);
+      }
+    }
+    const transportAttempts = providerFetchAttempts(response) + compatibilityAttempts;
 
     let started = false;
     let finishReason = normalizeFinishReason(undefined);
     let finalUsage: ReturnType<typeof usage>;
     const tools = new Map<number, { id?: string; name?: string; argumentsText: string }>();
+    const reasoningDetails: any[] = [];
 
     for await (const message of parseSSE(response)) {
       if (message.data === "[DONE]") break;
@@ -624,6 +819,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
       if (!choice) continue;
       if (choice.finish_reason != null) finishReason = normalizeFinishReason(choice.finish_reason);
       const delta = choice.delta ?? {};
+      appendReasoningDetails(reasoningDetails, delta.reasoning_details);
       const reasoning = reasoningText(delta);
       if (reasoning) {
         yield { type: "reasoning-delta", delta: reasoning };
@@ -661,10 +857,17 @@ export class OpenAIChatProvider implements ProviderAdapter {
       };
     }
 
+    const normalizedFinishReason = tools.size > 0
+      ? "tool_call"
+      : finishReason === "unknown" && started
+        ? "stop"
+        : finishReason;
+    const normalizedProviderState = chatProviderState(reasoningDetails, this.id, request.model);
     yield {
       type: "finish",
-      finishReason,
+      finishReason: normalizedFinishReason,
       ...(finalUsage ? { usage: finalUsage } : {}),
+      ...(normalizedProviderState ? { providerState: normalizedProviderState } : {}),
     };
   }
 }

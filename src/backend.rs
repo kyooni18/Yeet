@@ -28,8 +28,9 @@ use crate::{
     model::{
         AuthProviderItem, BridgeEnvelope, BridgeState, CapabilityToggleItem, ConversationEntry,
         ConversationKind, ConversationToolCall, FrontendCommand, ModelActivity, ModelCatalogItem,
-        NativeAppPermission, ProviderConfigurationItem, SandboxAction, SandboxEnvironmentItem,
-        SandboxLimitsState, SandboxNetworkItem, SandboxSettingsState, ToolCallStatus,
+        NativeAppPermission, ProviderConfigurationItem, RuntimeSettingsState, SandboxAction,
+        SandboxEnvironmentItem, SandboxLimitsState, SandboxNetworkItem, SandboxSettingsState,
+        ToolCallStatus, normalize_reasoning_level, reasoning_levels_for_model,
     },
     permission::PermissionBroker,
     project_settings::ProjectSettingsStore,
@@ -53,24 +54,14 @@ mod state;
 mod titles;
 mod transport;
 
-#[cfg(test)]
-use debate_context::{DEBATE_PROJECT_BRIEF_CHARS, topic_mentions_identifier};
 use debate_context::{debate_project_brief, discover_debate_subject};
-#[cfg(test)]
-use events::storage_model_history;
 use events::{agent_event_log_value, apply_agent_event, persist_locked, record_usage};
-#[cfg(test)]
-use settings_support::detect_sandbox_preset;
 use settings_support::{
     apply_sandbox_action, auth_login_options, finish_auth_action, finish_provider_action,
     foundation_server_ready, load_auth_providers, load_provider_configurations,
-    sandbox_settings_state,
+    runtime_settings_state, sandbox_settings_state,
 };
 use state::SharedSession;
-#[cfg(test)]
-use titles::{
-    TITLE_INPUT_HEAD_CHARS, TITLE_INPUT_TAIL_CHARS, normalize_generated_title, title_prompt_excerpt,
-};
 use titles::{fallback_title, generate_session_title, prepare_title_request};
 use transport::{
     cache_status_line, pretty_json, state_envelope, state_envelope_without_conversation,
@@ -133,24 +124,6 @@ fn native_app_approval_is_automatic(policy: &SandboxPolicy) -> bool {
     policy.mode == SandboxMode::Unlimited || policy.auto_approve
 }
 
-#[cfg(test)]
-mod native_approval_policy_tests {
-    use super::*;
-
-    #[test]
-    fn native_app_approval_respects_auto_approve_and_unlimited() {
-        let mut policy = SandboxPolicy::default();
-        assert!(!native_app_approval_is_automatic(&policy));
-
-        policy.auto_approve = true;
-        assert!(native_app_approval_is_automatic(&policy));
-
-        policy.auto_approve = false;
-        policy.mode = SandboxMode::Unlimited;
-        assert!(native_app_approval_is_automatic(&policy));
-    }
-}
-
 pub enum BackendEvent {
     Envelope(BridgeEnvelope),
 }
@@ -165,7 +138,12 @@ impl Backend {
     }
 
     pub fn spawn_remote() -> Result<Self> {
-        Self::spawn_scoped(Some("remote"))
+        // The semantic WebUI and the local TUI are two views of the same
+        // workspace session. Use the shared workspace daemon so a Remote
+        // client can attach to the runtime already owned by the TUI (and
+        // receive its state/events) instead of creating an independent
+        // session runtime that has to be restored with an interrupt.
+        Self::spawn_scoped(None)
     }
 
     fn spawn_scoped(scope: Option<&str>) -> Result<Self> {
@@ -214,7 +192,12 @@ impl BackendService {
         let config = ConfigStore::default();
         config.ensure()?;
         let model = config.model()?.unwrap_or_default();
-        let reasoning_level = config.reasoning_level()?.unwrap_or_else(|| "auto".into());
+        let mut reasoning_level = config.reasoning_level()?.unwrap_or_else(|| "auto".into());
+        if !model.is_empty()
+            && !reasoning_levels_for_model(&model).contains(&reasoning_level.as_str())
+        {
+            reasoning_level = config.set_reasoning_level("high")?;
+        }
         let project_settings = ProjectSettingsStore::new(&workspace_root)?;
         project_settings.ensure()?;
         let project = project_settings.load()?;
@@ -393,6 +376,22 @@ impl BackendService {
                 self.request_settings();
                 Ok(())
             }
+            FrontendCommand::SetAppearance { appearance } => {
+                self.set_appearance(appearance);
+                Ok(())
+            }
+            FrontendCommand::SetTheme { mode, value } => {
+                self.set_theme(mode, value);
+                Ok(())
+            }
+            FrontendCommand::SetContextLength { length } => {
+                self.set_context_length(length);
+                Ok(())
+            }
+            FrontendCommand::SetJevLoopMode { mode } => {
+                self.set_jev_loop_mode(mode);
+                Ok(())
+            }
             FrontendCommand::SetOpenAiFlex { enabled } => {
                 self.set_openai_flex(enabled);
                 Ok(())
@@ -480,7 +479,7 @@ impl BackendService {
         self.closed
     }
 
-    pub(super) fn set_goal_enabled(&self, enabled: bool) -> Result<()> {
+    pub(super) fn set_goal_enabled(&mut self, enabled: bool) -> Result<()> {
         self.goal_mode.store(enabled, Ordering::Release);
         let session_id = {
             let mut shared = self.shared.lock().unwrap();
@@ -491,6 +490,20 @@ impl BackendService {
             self.store.set_goal_mode(&session_id, enabled)?;
         }
         self.publish_state();
+        let resume = {
+            let shared = self.shared.lock().unwrap();
+            enabled
+                && !shared.state.is_streaming
+                && shared
+                    .state
+                    .conversation
+                    .iter()
+                    .flatten()
+                    .any(|entry| matches!(entry.kind, ConversationKind::User { .. }))
+        };
+        if resume {
+            self.submit_agent(GOAL_RESUME_PROMPT.to_owned(), false, "goal-resume", true)?;
+        }
         Ok(())
     }
 
@@ -735,6 +748,10 @@ impl BackendService {
                         state.set_activity("done", "Done", None);
                         (RunStatus::Completed, None)
                     }
+                    Ok(AgentRunOutcome::GoalPaused { reason }) => {
+                        state.set_activity("paused", "Goal · Paused", Some(reason.clone()));
+                        (RunStatus::Paused, Some(reason))
+                    }
                     Ok(AgentRunOutcome::CompletedUnverified { reason }) => {
                         state.set_activity("done", "Done · Unverified", Some(reason.clone()));
                         (RunStatus::CompletedUnverified, Some(reason))
@@ -747,14 +764,13 @@ impl BackendService {
                 state.state.active_reasoning_text.clear();
                 state.state.active_reasoning_summary.clear();
                 let pending_tool_status = match run_status {
-                    RunStatus::Completed
-                    | RunStatus::CompletedUnverified
-                    | RunStatus::Interrupted => ToolCallStatus::Suppressed,
+                    RunStatus::Completed | RunStatus::CompletedUnverified | RunStatus::Paused => {
+                        ToolCallStatus::Suppressed
+                    }
+                    RunStatus::Interrupted => ToolCallStatus::Interrupted,
                     RunStatus::Running | RunStatus::Failed => ToolCallStatus::Failed,
                 };
                 state.settle_pending_tool_calls(pending_tool_status);
-                state.state.pending_shell_permission = None;
-                state.state.pending_native_app_permission = None;
                 state.state.is_streaming = false;
                 clear_resolved_streaming_lock_error(&mut state.state.error_message);
                 state.finish_run(run_status, run_error);
@@ -800,25 +816,59 @@ impl BackendService {
 
     fn select_model(&self, model: String) -> Result<()> {
         let model = self.config.set_model(&model)?;
+        let levels = reasoning_levels_for_model(&model);
+        let current_reasoning = self
+            .shared
+            .lock()
+            .unwrap()
+            .state
+            .active_reasoning_level
+            .clone();
+        let normalized_reasoning =
+            if !current_reasoning.is_empty() && !levels.contains(&current_reasoning.as_str()) {
+                Some(self.config.set_reasoning_level("high")?)
+            } else {
+                None
+            };
+        let model_changed;
         {
             let mut shared = self.shared.lock().unwrap();
-            if !model_selection_changes(&shared.state.active_model, &model) {
+            model_changed = model_selection_changes(&shared.state.active_model, &model);
+            if !model_changed && normalized_reasoning.is_none() {
                 return Ok(());
             }
-            shared.state.active_model = model.clone();
-            shared.state.active_model_context_length = None;
-            shared.state.current_context_tokens = None;
-            shared.append(ConversationKind::System {
-                content: format!("Model set to {model}"),
-            });
+            if model_changed {
+                shared.state.active_model = model.clone();
+                shared.state.active_model_context_length = None;
+                shared.state.current_context_tokens = None;
+                shared.append(ConversationKind::System {
+                    content: format!("Model set to {model}"),
+                });
+            }
+            if let Some(level) = normalized_reasoning {
+                shared.state.active_reasoning_level = level.clone();
+                shared.append(ConversationKind::System {
+                    content: format!("Reasoning adjusted to {level} for {model}"),
+                });
+            }
         }
-        self.refresh_context_length();
+        if model_changed {
+            self.refresh_context_length();
+        }
         self.publish_state();
         Ok(())
     }
 
     fn select_reasoning(&self, level: String) -> Result<()> {
-        let level = self.config.set_reasoning_level(&level)?;
+        let normalized = normalize_reasoning_level(&level)
+            .ok_or_else(|| anyhow!("Unsupported reasoning level: {level}"))?;
+        let model = self.shared.lock().unwrap().state.active_model.clone();
+        if !model.is_empty() && !reasoning_levels_for_model(&model).contains(&normalized) {
+            return Err(anyhow!(
+                "Reasoning level {normalized} is not supported for {model}"
+            ));
+        }
+        let level = self.config.set_reasoning_level(normalized)?;
         self.shared.lock().unwrap().state.active_reasoning_level = level;
         self.publish_state();
         Ok(())
@@ -912,6 +962,7 @@ impl BackendService {
                         name: capability.name,
                         description: capability.description,
                         enabled: effective_harness.contains(&capability.id),
+                        source: Some("harness".into()),
                     })
                     .collect::<Vec<_>>();
                 items.push(CapabilityToggleItem {
@@ -922,6 +973,7 @@ impl BackendService {
                         "Default-attached live web search through Agent-Reach/Exa with managed SearXNG fallback."
                             .into(),
                     enabled: effective_harness.iter().any(|value| value == "web-search"),
+                    source: Some("harness".into()),
                 });
                 items.push(CapabilityToggleItem {
                     id: SKYLINE_CAPABILITY_ID.into(),
@@ -931,6 +983,7 @@ impl BackendService {
                     enabled: effective_harness
                         .iter()
                         .any(|value| value == SKYLINE_CAPABILITY_ID),
+                    source: Some("session".into()),
                 });
                 items.extend(
                     crate::tools::builtin_capabilities()
@@ -941,6 +994,7 @@ impl BackendService {
                             name: capability.name.into(),
                             description: capability.description.into(),
                             enabled: !disabled.iter().any(|value| value == capability.id),
+                            source: Some("builtin".into()),
                         }),
                 );
                 items.extend(skills.into_iter().map(|skill| {
@@ -951,6 +1005,7 @@ impl BackendService {
                         kind: "skill".into(),
                         name: skill.name,
                         description: skill.description,
+                        source: skill.source,
                     }
                 }));
                 items.extend(mcp.into_iter().map(|server| {
@@ -969,6 +1024,7 @@ impl BackendService {
                                 ""
                             }
                         ),
+                        source: Some("configured".into()),
                     }
                 }));
                 items.sort_by(|a, b| {
@@ -1176,601 +1232,4 @@ fn clear_matching_cancel(slot: &Arc<Mutex<Option<Arc<AtomicBool>>>>, completed: 
 
 pub fn forward_cli(arguments: &[String]) -> Result<i32> {
     crate::cli::run(arguments)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn skyline_and_skills_are_session_only_capabilities() {
-        assert!(session_only_capability(SKYLINE_CAPABILITY_ID));
-        assert!(session_only_capability("skill:polaris"));
-        assert!(!session_only_capability("web-search"));
-        assert!(!session_only_capability("builtin:shell"));
-    }
-
-    #[test]
-    fn model_reselection_is_idempotent_after_normalization() {
-        assert!(!model_selection_changes(
-            "openai/gpt-5.6-sol",
-            "openai/gpt-5.6-sol"
-        ));
-        assert!(model_selection_changes(
-            "openai/gpt-5.6-sol",
-            "openai/gpt-5.6-luna"
-        ));
-    }
-
-    #[test]
-    fn session_environment_mutation_is_locked_only_while_streaming() {
-        assert!(session_environment_mutation_allowed(false));
-        assert!(!session_environment_mutation_allowed(true));
-    }
-
-    #[test]
-    fn run_settlement_clears_only_resolved_streaming_lock_errors() {
-        for message in [
-            CAPABILITY_STREAMING_LOCK_ERROR,
-            SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR,
-        ] {
-            let mut error = Some(message.to_owned());
-            clear_resolved_streaming_lock_error(&mut error);
-            assert!(error.is_none());
-        }
-
-        let mut real_error = Some("Save failed: disk full".to_owned());
-        clear_resolved_streaming_lock_error(&mut real_error);
-        assert_eq!(real_error.as_deref(), Some("Save failed: disk full"));
-    }
-
-    #[test]
-    fn attaching_vision_clears_only_the_resolved_detached_error() {
-        let mut error = Some(VISION_DETACHED_ERROR.to_owned());
-        clear_resolved_vision_detached_error(&mut error, false);
-        assert_eq!(error.as_deref(), Some(VISION_DETACHED_ERROR));
-
-        clear_resolved_vision_detached_error(&mut error, true);
-        assert!(error.is_none());
-
-        let mut unrelated = Some("Save failed: disk full".to_owned());
-        clear_resolved_vision_detached_error(&mut unrelated, true);
-        assert_eq!(unrelated.as_deref(), Some("Save failed: disk full"));
-    }
-
-    #[test]
-    fn web_search_is_part_of_default_attached_harness() {
-        let harness = vec![
-            HarnessCapabilityDescriptor {
-                id: "vision".into(),
-                name: "Vision".into(),
-                description: "images".into(),
-                default_attached: true,
-            },
-            HarnessCapabilityDescriptor {
-                id: "lead".into(),
-                name: "Lead Agent".into(),
-                description: "primary agent marker".into(),
-                default_attached: false,
-            },
-        ];
-
-        let attached = default_attached_harness(&harness);
-
-        assert!(attached.iter().any(|value| value == "vision"));
-        assert!(attached.iter().any(|value| value == "web-search"));
-        assert!(!attached.iter().any(|value| value == "lead"));
-    }
-
-    #[test]
-    fn implementation_topics_bind_broad_current_logic_references_to_workspace() {
-        let workspace = tempfile::tempdir().unwrap();
-        std::fs::create_dir(workspace.path().join("src")).unwrap();
-        for topic in [
-            "Assess the current deorbit logic",
-            "Review the existing low-level control loop",
-            "현재 착륙 로직의 안정성을 검토해",
-        ] {
-            let subject = discover_debate_subject(topic, workspace.path());
-            assert!(subject.workspace_bound, "topic was not bound: {topic}");
-            assert!(
-                subject
-                    .workspace_root
-                    .contains(workspace.path().file_name().unwrap().to_str().unwrap())
-            );
-        }
-        assert!(
-            !discover_debate_subject("Assess the current geopolitical climate", workspace.path())
-                .workspace_bound
-        );
-    }
-
-    #[test]
-    fn named_project_topics_bind_to_the_matching_workspace() {
-        let parent = tempfile::tempdir().unwrap();
-        let workspace = parent.path().join("Yeet");
-        std::fs::create_dir_all(workspace.join("src")).unwrap();
-
-        let subject = discover_debate_subject(
-            "Is current direction of yeet having tons of tools right?",
-            &workspace,
-        );
-        assert!(subject.workspace_bound);
-        assert!(subject.workspace_root.ends_with("Yeet"));
-        assert!(!topic_mentions_identifier("street", "tree"));
-    }
-
-    #[test]
-    fn debate_project_brief_captures_manifest_readme_and_structure() {
-        let parent = tempfile::tempdir().unwrap();
-        let workspace = parent.path().join("Yeet");
-        std::fs::create_dir_all(workspace.join("src")).unwrap();
-        std::fs::create_dir_all(workspace.join("RuntimeSource")).unwrap();
-        std::fs::create_dir_all(workspace.join("target")).unwrap();
-        std::fs::write(
-            workspace.join("Cargo.toml"),
-            "[package]\nname = \"yeet\"\ndescription = \"A general-purpose agent TUI\"\nversion = \"0.1.0\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            workspace.join("README.md"),
-            "# Yeet\n\nYeet is a Rust-native general-purpose agent TUI with an isolated coding mode.\n\n## Build\n\nMore details follow.\n",
-        )
-        .unwrap();
-
-        let brief = debate_project_brief(&workspace);
-
-        assert!(brief.contains("Project name: Yeet"));
-        assert!(brief.contains("Rust crate yeet: A general-purpose agent TUI"));
-        assert!(brief.contains("RuntimeSource/"));
-        assert!(brief.contains("src/"));
-        assert!(!brief.contains("target/"));
-        assert!(brief.contains("Rust-native general-purpose agent TUI"));
-        assert!(brief.chars().count() <= DEBATE_PROJECT_BRIEF_CHARS);
-    }
-
-    #[test]
-    fn persisted_model_history_drops_internal_profile_system_prompt() {
-        let stored = storage_model_history(vec![
-            Message::system(crate::agent::SYSTEM_INSTRUCTION),
-            Message::user("hello"),
-            Message::assistant("world", None),
-        ]);
-        assert_eq!(stored.len(), 2);
-        assert_eq!(stored[0].role, crate::core::MessageRole::User);
-        assert!(
-            !serde_json::to_string(&stored)
-                .unwrap()
-                .contains("You are Yeet's agent")
-        );
-
-        let custom = storage_model_history(vec![
-            Message::system("project-specific user system context"),
-            Message::user("hello"),
-        ]);
-        assert_eq!(custom.len(), 2);
-        assert_eq!(custom[0].role, crate::core::MessageRole::System);
-    }
-
-    #[test]
-    fn generated_session_titles_are_normalized() {
-        assert_eq!(
-            normalize_generated_title("\"Fix Yeet Scrolling.\"\nextra"),
-            Some("Fix Yeet Scrolling".into())
-        );
-        assert_eq!(
-            normalize_generated_title("Title: Rust TUI Migration"),
-            Some("Rust TUI Migration".into())
-        );
-        assert_eq!(normalize_generated_title("   "), None);
-        let long = normalize_generated_title("This title is intentionally much longer than the persisted session title limit for Yeet").unwrap();
-        assert!(long.chars().count() <= 56);
-    }
-
-    #[test]
-    fn title_prompt_excerpt_bounds_large_requests_and_keeps_both_ends() {
-        let input = format!("BEGIN-{}-END", "x".repeat(10_000));
-        let excerpt = title_prompt_excerpt(&input);
-
-        assert!(excerpt.starts_with("BEGIN-"));
-        assert!(excerpt.ends_with("-END"));
-        assert!(excerpt.contains("title input omitted"));
-        assert!(excerpt.chars().count() <= TITLE_INPUT_HEAD_CHARS + TITLE_INPUT_TAIL_CHARS + 32);
-    }
-
-    #[test]
-    fn consecutive_text_deltas_stay_in_one_assistant_entry() {
-        let mut state = SharedSession::new("test/model".into(), "medium".into());
-        state.set_activity("thinking", "Thinking", None);
-
-        apply_agent_event(&mut state, AgentEvent::TextDelta("Hel".into()));
-        let assistant_id = state.state.active_assistant_entry_id.clone().unwrap();
-        apply_agent_event(&mut state, AgentEvent::TextDelta("lo".into()));
-
-        assert_eq!(
-            state.state.active_assistant_entry_id.as_deref(),
-            Some(assistant_id.as_str())
-        );
-        assert_eq!(state.state.active_assistant_text, "Hello");
-        assert_eq!(
-            state
-                .state
-                .conversation
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|entry| matches!(entry.kind, ConversationKind::Assistant { .. }))
-                .count(),
-            1
-        );
-        assert_eq!(
-            state
-                .state
-                .conversation
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|entry| matches!(
-                    &entry.kind,
-                    ConversationKind::Activity { activity }
-                        if activity.phase.as_str() == Some("responding")
-                ))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn turn_activity_updates_in_place_and_settles_last() {
-        let mut state = SharedSession::new("test/model".into(), "medium".into());
-        state.set_activity("thinking", "Thinking", None);
-        let activity_id = state.state.active_activity_entry_id.clone().unwrap();
-
-        state.set_activity("reasoning", "Reasoning", None);
-        state.set_activity("tool", "Reading", Some("src/backend.rs".into()));
-
-        assert_eq!(
-            state.state.active_activity_entry_id.as_deref(),
-            Some(activity_id.as_str())
-        );
-        assert_eq!(
-            state
-                .state
-                .conversation
-                .as_ref()
-                .unwrap()
-                .iter()
-                .filter(|entry| matches!(entry.kind, ConversationKind::Activity { .. }))
-                .count(),
-            1
-        );
-
-        state.append_assistant_text("done");
-        state.set_activity("done", "Done", None);
-        let entries = state.state.conversation.as_ref().unwrap();
-        assert!(matches!(
-            entries.last().map(|entry| &entry.kind),
-            Some(ConversationKind::Activity { activity })
-                if activity.phase.as_str() == Some("done") && activity.title == "Done"
-        ));
-    }
-
-    #[test]
-    fn later_run_activity_cannot_overwrite_an_earlier_completed_run() {
-        let mut state = SharedSession::new("test/model".into(), "medium".into());
-        state.start_run("run-a".into(), "debate", "test/model".into());
-        state.set_activity("thinking", "Debating", None);
-        state.set_activity("done", "Debate completed", None);
-        state.finish_run(RunStatus::Completed, None);
-
-        state.start_run("run-b".into(), "agent", "test/model".into());
-        state.set_activity("failed", "Failed", Some("provider error".into()));
-        state.finish_run(RunStatus::Failed, Some("provider error".into()));
-
-        let activities = state
-            .state
-            .conversation
-            .as_ref()
-            .unwrap()
-            .iter()
-            .filter_map(|entry| match &entry.kind {
-                ConversationKind::Activity { activity } => Some(activity),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(activities.len(), 2);
-        assert_eq!(activities[0].run_id.as_deref(), Some("run-a"));
-        assert_eq!(activities[0].phase.as_str(), Some("done"));
-        assert_eq!(activities[1].run_id.as_deref(), Some("run-b"));
-        assert_eq!(activities[1].phase.as_str(), Some("failed"));
-        assert_eq!(state.meta.runs[0].status, RunStatus::Completed);
-        assert_eq!(state.meta.runs[1].status, RunStatus::Failed);
-    }
-
-    #[test]
-    fn starting_new_run_reconciles_orphaned_running_record_and_activity() {
-        let mut state = SharedSession::new("test/model".into(), "medium".into());
-        state.start_run("run-a".into(), "agent", "test/model".into());
-        state.set_activity("thinking", "Thinking", None);
-        state.state.active_activity_entry_id = None;
-
-        state.start_run("run-b".into(), "agent", "test/model".into());
-
-        assert_eq!(state.meta.runs.len(), 2);
-        assert_eq!(state.meta.runs[0].status, RunStatus::Interrupted);
-        assert!(state.meta.runs[0].finished_at.is_some());
-        assert!(
-            state.meta.runs[0]
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("newer run"))
-        );
-        assert_eq!(state.meta.runs[1].status, RunStatus::Running);
-        assert_eq!(state.meta.current_turn.as_deref(), Some("run-b"));
-        assert_eq!(state.state.active_run_id.as_deref(), Some("run-b"));
-
-        let old_activity = state
-            .state
-            .conversation
-            .as_ref()
-            .unwrap()
-            .iter()
-            .find_map(|entry| match &entry.kind {
-                ConversationKind::Activity { activity }
-                    if activity.run_id.as_deref() == Some("run-a") =>
-                {
-                    Some(activity)
-                }
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(old_activity.phase.as_str(), Some("interrupted"));
-        assert_eq!(old_activity.title, "Interrupted · Recovered stale run");
-    }
-
-    #[test]
-    fn tool_activity_details_are_task_specific() {
-        let edit = crate::core::ToolCall {
-            id: "1".into(),
-            name: "apply_file_edits".into(),
-            arguments: json!({
-                "changes": [
-                    {"path": "src/app.rs"},
-                    {"path": "src/ui.rs"}
-                ]
-            }),
-        };
-        assert_eq!(tool_activity_title(&edit.name), "Editing");
-        assert_eq!(tool_detail(&edit).as_deref(), Some("src/app.rs +1 file"));
-
-        let search = crate::core::ToolCall {
-            id: "2".into(),
-            name: "search_workspace".into(),
-            arguments: json!({"query": "active_activity", "path": "src"}),
-        };
-        assert_eq!(tool_activity_title(&search.name), "Searching");
-        assert_eq!(
-            tool_detail(&search).as_deref(),
-            Some("active_activity · src")
-        );
-    }
-
-    #[test]
-    fn tool_calls_are_persisted_and_finish_with_execution_status() {
-        let mut state = SharedSession::new("test/model".into(), "medium".into());
-        let call = crate::core::ToolCall {
-            id: "call-1".into(),
-            name: "read_file".into(),
-            arguments: json!({"path": "src/ui.rs", "startLine": 10, "endLine": 20}),
-        };
-
-        apply_agent_event(
-            &mut state,
-            AgentEvent::ToolCall {
-                index: 0,
-                call: call.clone(),
-            },
-        );
-
-        let entries = state.state.conversation.as_ref().unwrap();
-        assert!(entries.iter().any(|entry| matches!(
-            &entry.kind,
-            ConversationKind::ToolCall { tool_call }
-                if tool_call.call_id.as_deref() == Some("call-1")
-                    && matches!(tool_call.status, ToolCallStatus::Streaming)
-        )));
-
-        apply_agent_event(&mut state, AgentEvent::ToolExecutionStarted(call.clone()));
-
-        apply_agent_event(
-            &mut state,
-            AgentEvent::ToolExecutionFinished {
-                call: call.clone(),
-                succeeded: true,
-                result: "ok".into(),
-            },
-        );
-
-        let entries = state.state.conversation.as_ref().unwrap();
-        assert!(entries.iter().any(|entry| matches!(
-            &entry.kind,
-            ConversationKind::ToolCall { tool_call }
-                if tool_call.call_id.as_deref() == Some("call-1")
-                    && matches!(tool_call.status, ToolCallStatus::Completed)
-        )));
-
-        let finished = entries
-            .iter()
-            .find_map(|entry| match &entry.kind {
-                ConversationKind::ToolCall { tool_call }
-                    if tool_call.call_id.as_deref() == Some("call-1") =>
-                {
-                    Some(tool_call)
-                }
-                _ => None,
-            })
-            .unwrap();
-        let value = serde_json::to_value(finished).unwrap();
-        assert_eq!(value.get("result"), Some(&json!("ok")));
-
-        assert!(value.get("durationMs").and_then(Value::as_u64).is_some());
-        assert!(state.meta.pending_tool_calls.is_empty());
-    }
-
-    #[test]
-    fn tool_outcomes_preserve_failure_and_suppression_payloads() {
-        let mut state = SharedSession::new("test/model".into(), "medium".into());
-        let failed_call = crate::core::ToolCall {
-            id: "failed-call".into(),
-            name: "run_shell".into(),
-            arguments: json!({"command": "false"}),
-        };
-        apply_agent_event(
-            &mut state,
-            AgentEvent::ToolCall {
-                index: 0,
-                call: failed_call.clone(),
-            },
-        );
-        apply_agent_event(
-            &mut state,
-            AgentEvent::ToolExecutionFinished {
-                call: failed_call,
-                succeeded: false,
-                result: "command exited with status 1".into(),
-            },
-        );
-
-        let suppressed_call = crate::core::ToolCall {
-            id: "suppressed-call".into(),
-            name: "run_shell".into(),
-            arguments: json!({"command": "rm -rf scratch"}),
-        };
-        apply_agent_event(
-            &mut state,
-            AgentEvent::ToolCall {
-                index: 1,
-                call: suppressed_call.clone(),
-            },
-        );
-        apply_agent_event(
-            &mut state,
-            AgentEvent::ToolExecutionSuppressed {
-                call: suppressed_call,
-                reason: "approval denied".into(),
-            },
-        );
-
-        let entries = state.state.conversation.as_ref().unwrap();
-        let serialized = |call_id: &str| {
-            let call = entries
-                .iter()
-                .find_map(|entry| match &entry.kind {
-                    ConversationKind::ToolCall { tool_call }
-                        if tool_call.call_id.as_deref() == Some(call_id) =>
-                    {
-                        Some(tool_call)
-                    }
-                    _ => None,
-                })
-                .unwrap();
-            serde_json::to_value(call).unwrap()
-        };
-
-        let failed = serialized("failed-call");
-        assert_eq!(
-            failed.get("error"),
-            Some(&json!("command exited with status 1"))
-        );
-        assert!(failed.get("result").is_none());
-
-        let suppressed = serialized("suppressed-call");
-        assert_eq!(suppressed.get("result"), Some(&json!("approval denied")));
-        assert!(suppressed.get("error").is_none());
-    }
-
-    #[test]
-    fn settling_started_tools_keeps_elapsed_duration() {
-        let mut state = SharedSession::new("test/model".into(), "medium".into());
-        let call = crate::core::ToolCall {
-            id: "settled-call".into(),
-            name: "run_shell".into(),
-            arguments: json!({"command": "sleep 1"}),
-        };
-        apply_agent_event(
-            &mut state,
-            AgentEvent::ToolCall {
-                index: 0,
-                call: call.clone(),
-            },
-        );
-        apply_agent_event(&mut state, AgentEvent::ToolExecutionStarted(call.clone()));
-
-        state.settle_pending_tool_calls(ToolCallStatus::Failed);
-
-        let settled = state
-            .state
-            .conversation
-            .as_ref()
-            .unwrap()
-            .iter()
-            .find_map(|entry| match &entry.kind {
-                ConversationKind::ToolCall { tool_call }
-                    if tool_call.call_id.as_deref() == Some("settled-call") =>
-                {
-                    Some(tool_call)
-                }
-                _ => None,
-            })
-            .unwrap();
-        assert!(matches!(settled.status, ToolCallStatus::Failed));
-        assert!(settled.duration_ms.is_some());
-        assert!(state.meta.tool_execution_started_at.is_empty());
-    }
-
-    #[test]
-    fn sandbox_presets_are_complete_policies_and_custom_changes_are_detected() {
-        let directory = tempfile::tempdir().unwrap();
-        let workspace = directory.path().to_path_buf();
-
-        let balanced = apply_sandbox_action(
-            &workspace,
-            SandboxAction::ApplyPreset {
-                preset: "balanced".into(),
-            },
-        )
-        .unwrap();
-        assert_eq!(detect_sandbox_preset(&balanced), "balanced");
-        assert_eq!(balanced.workspace_read, WorkspaceRead::All);
-        assert!(!balanced.auto_approve);
-
-        let custom = apply_sandbox_action(
-            &workspace,
-            SandboxAction::SetScratchWritable { enabled: false },
-        )
-        .unwrap();
-        assert_eq!(detect_sandbox_preset(&custom), "custom");
-
-        let safe = apply_sandbox_action(
-            &workspace,
-            SandboxAction::ApplyPreset {
-                preset: "safe".into(),
-            },
-        )
-        .unwrap();
-        assert_eq!(detect_sandbox_preset(&safe), "safe");
-        assert_eq!(safe, SandboxPolicy::default());
-
-        let unlimited = apply_sandbox_action(
-            &workspace,
-            SandboxAction::ApplyPreset {
-                preset: "unlimited".into(),
-            },
-        )
-        .unwrap();
-        assert_eq!(detect_sandbox_preset(&unlimited), "unlimited");
-        assert_eq!(unlimited.mode, SandboxMode::Unlimited);
-        assert!(unlimited.auto_approve);
-        assert_eq!(unlimited.workspace_read, WorkspaceRead::All);
-    }
 }

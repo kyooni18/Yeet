@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/qemu-startup:20251031: docker inspect returned 1
+Trial qemu-startup__WzoUte8 failed: Docker compose command failed for environment qemu-startup. Command: docker compose --project-name qemu-startup__wzoute8__env --project-directory /Users/kyooni18/.cache/harbor/tasks/gHS2mTGhPaYTuJWpCkw4J9/qemu-startup/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxi26m8td/qemu-startup__WzoUte8__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_bs8zgtb/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpccrr6i0x/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/qemu-startup:20251031 Pulling 
+ Image alexgshaw/qemu-startup:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

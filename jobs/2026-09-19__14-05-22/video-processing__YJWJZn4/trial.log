@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/video-processing:20251031: docker inspect returned 1
+Trial video-processing__YJWJZn4 failed: Docker compose command failed for environment video-processing. Command: docker compose --project-name video-processing__yjwjzn4__env --project-directory /Users/kyooni18/.cache/harbor/tasks/QU8iD2bMsFXumTCQhnBiGz/video-processing/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpud5yb6_3/video-processing__YJWJZn4__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp5nkcyag_/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppj23iz7k/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/video-processing:20251031 Pulling 
+ Image alexgshaw/video-processing:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

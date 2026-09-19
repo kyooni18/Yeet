@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/bn-fit-modify:20251031: docker inspect returned 1
+Trial bn-fit-modify__WcLADjs failed: Docker compose command failed for environment bn-fit-modify. Command: docker compose --project-name bn-fit-modify__wcladjs__env --project-directory /Users/kyooni18/.cache/harbor/tasks/XX65orYkXVMqTQu7C3JUZY/bn-fit-modify/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7qklvo_t/bn-fit-modify__WcLADjs__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpasoray36/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpjwzfzgtu/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/bn-fit-modify:20251031 Pulling 
+ Image alexgshaw/bn-fit-modify:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

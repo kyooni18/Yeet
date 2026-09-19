@@ -1,0 +1,8 @@
+Trial modernize-scientific-stack__LD6GKnh failed: Docker compose command failed for environment modernize-scientific-stack. Command: docker compose --project-name modernize-scientific-stack__ld6gknh__env --project-directory /Users/kyooni18/.cache/harbor/tasks/n9YQuCoRJFAyCD3Zs6amRV/modernize-scientific-stack/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmps7c0o80q/modernize-scientific-stack__LD6GKnh__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzkd_q717/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0cwjbteu/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network modernize-scientific-stack__ld6gknh__env_default Creating 
+ Network modernize-scientific-stack__ld6gknh__env_default Creating 
+ Network modernize-scientific-stack__ld6gknh__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network modernize-scientific-stack__ld6gknh__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container modernize-scientific-stack__ld6gknh__env-main-1 Creating 
+failed to create network modernize-scientific-stack__ld6gknh__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

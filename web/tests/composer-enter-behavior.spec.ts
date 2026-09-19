@@ -50,3 +50,23 @@ test('touch-first hardware keyboard shortcut can still submit with Control+Enter
   await expect(composer).toHaveValue('')
   await expect.poll(() => submittedTexts(page)).toEqual(['send from hardware keyboard'])
 })
+
+test('explicit send shortcuts submit multiline drafts', async ({ page }) => {
+  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  await composer.fill('first line\nsecond line')
+  const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
+  if (!touchFirst) await expect(page.locator('#composer-hint')).toBeVisible()
+  await composer.press('Control+Enter')
+  await expect(composer).toHaveValue('')
+  await expect.poll(() => submittedTexts(page)).toEqual(['first line\nsecond line'])
+})
+
+test('multiline Enter and Shift+Enter preserve the draft', async ({ page }) => {
+  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  await composer.fill('first line\nsecond line')
+  await composer.press('End')
+  await composer.press('Enter')
+  await composer.press('Shift+Enter')
+  await expect(composer).toHaveValue('first line\nsecond line\n\n')
+  await expect.poll(() => submittedTexts(page)).toEqual([])
+})

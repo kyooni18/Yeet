@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+FROM node:22-bookworm AS node-toolchain
+
+FROM rust:1-bookworm AS build
+COPY --from=node-toolchain /usr/local/ /usr/local/
+WORKDIR /src
+
+ARG RUST_TARGET
+RUN test -n "$RUST_TARGET" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends musl-tools perl make cmake \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add "$RUST_TARGET"
+
+COPY RuntimeSource/package.json RuntimeSource/package-lock.json ./RuntimeSource/
+RUN npm --prefix RuntimeSource ci
+COPY . .
+ENV OPENSSL_STATIC=1 \
+    CC_aarch64_unknown_linux_musl=musl-gcc \
+    CC_x86_64_unknown_linux_musl=musl-gcc
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    npm --prefix RuntimeSource run build \
+    && rm -rf web/dist \
+    && cargo build --locked --release --target "$RUST_TARGET" \
+    && mkdir -p /bundle/runtime \
+    && cp "target/$RUST_TARGET/release/yeet" /bundle/yeet \
+    && cp /usr/local/bin/node /bundle/node \
+    && cp -R RuntimeSource/dist /bundle/runtime/dist \
+    && cp RuntimeSource/package.json /bundle/runtime/package.json \
+    && cp -R RuntimeSource/skills /bundle/runtime/skills
+
+FROM scratch AS bundle
+COPY --from=build /bundle/ /opt/yeet/

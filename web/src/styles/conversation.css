@@ -55,7 +55,7 @@
 .semantic-card summary:hover { background: rgba(255,255,255,.04); }
 .semantic-symbol { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 6px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 9px; }
 .semantic-heading { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
-.semantic-heading strong { flex: 0 0 auto; color: var(--soft); font-size: 11.5px; font-weight: 600; }
+.semantic-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; color: var(--soft); font-size: 11.5px; font-weight: 600; }
 .semantic-heading > span { min-width: 0; color: var(--muted); font-size: 10.5px; }
 .semantic-status { color: var(--dim); font-size: 9.5px; font-style: normal; white-space: nowrap; }
 .semantic-status.is-error { color: #df817a; }
@@ -106,9 +106,11 @@
 .tool-failed .tool-status-icon { background: rgba(225,106,98,.09); color: var(--red); }
 .tool-suppressed .tool-status-icon { background: rgba(255,255,255,.035); color: var(--dim); }
 .tool-status-icon .spinner { width: 11px; height: 11px; border-width: 1.5px; }
-.tool-heading { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
-.tool-heading strong { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; }
+.tool-heading { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; }
+.tool-heading strong { min-width: 0; overflow-wrap: anywhere; font-size: 11.5px; font-weight: 600; }
 .tool-heading span { min-width: 0; color: var(--muted); font-size: 10.5px; }
+.tool-heading > .truncate { white-space: normal; overflow-wrap: anywhere; }
+.tool-kind-glyph { display: inline-block; min-width: 14px; color: var(--soft); text-align: center; }
 .tool-duration { color: var(--dim); font-size: 9.5px; }
 .tool-duration.is-error { color: #df817a; }
 .disclosure { color: var(--dim); font-size: 14px; text-align: center; transition: transform 120ms ease; }
@@ -218,7 +220,7 @@
 .hljs-keyword,.hljs-selector-tag,.hljs-literal { color: #ff9d94; }
 .hljs-string,.hljs-title,.hljs-section { color: #b7dba9; }
 .hljs-number,.hljs-built_in { color: #efb478; }
-.hljs-comment,.hljs-quote { color: #78696a; }
+.hljs-comment,.hljs-quote { color: var(--muted); }
 .hljs-variable,.hljs-template-variable { color: #e8b6a1; }
 .hljs-attribute,.hljs-name { color: #9dd2c0; }
 
@@ -302,9 +304,8 @@
   .activity-group-heading strong { font-size: 13px; }
   .activity-group-heading > span { font-size: 12px; }
   .activity-group-body { padding-left: 30px; }
-  .task-status-card summary { min-height: 48px; grid-template-columns: 24px minmax(0,1fr) 18px; padding: 6px 9px 6px 8px; }
+  .task-status-card summary { min-height: 44px; grid-template-columns: 24px minmax(0,1fr) auto 18px; padding: 6px 9px 6px 8px; }
   .task-status-icon { width: 24px; height: 24px; border-radius: 8px; }
-  .task-status-label { display: none; }
   .task-status-copy { display: flex; align-items: flex-start; flex-direction: column; gap: 2px; }
   .task-status-copy strong { font-size: 13px; }
   .task-status-copy > span { font-size: 12px; }
@@ -325,4 +326,21 @@
   .transcript { padding-top: 74px; padding-bottom: 122px; }
   .markdown-document { font-size: 18px; }
   .jump-latest { bottom: calc(var(--composer-overlay-clearance, 150px) + 10px); }
+}
+
+/* Response actions and narrow-screen reading layout. */
+.message-actions { display: flex; margin-top: 8px; }
+.message-actions button { min-height: 32px; padding: 4px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.message-actions button:hover { background: var(--surface-hover); color: var(--text); }
+@media (max-width: 899px), (pointer: coarse) {
+  .message-actions button { min-height: 44px; }
+}
+@media (max-width: 600px) {
+  .assistant-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .assistant-avatar { width: 24px; height: 24px; }
+  .reasoning-card, .semantic-card, .activity-row, .entry-toolCall > .tool-card,
+  .system-message, .task-status-card, .activity-group { margin-left: 0; }
+  .semantic-heading { flex-direction: column; align-items: stretch; gap: 2px; }
+  .semantic-heading strong, .semantic-heading > span { max-width: 100%; }
+  .markdown-document { font-size: 17px; line-height: 1.65; }
 }

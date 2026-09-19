@@ -110,11 +110,9 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
         AgentEvent::ModelAttemptFinished(..) => {}
         AgentEvent::Start => state.set_activity("thinking", "Thinking", None),
         AgentEvent::ReasoningDelta(delta) => {
-            state.set_activity("reasoning", "Reasoning", None);
             state.append_reasoning(&delta, false);
         }
         AgentEvent::ReasoningSummaryDelta(delta) => {
-            state.set_activity("reasoning", "Reasoning", None);
             state.append_reasoning(&delta, true);
         }
         AgentEvent::TextDelta(delta) => {
@@ -141,10 +139,17 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                         call_id: id.clone(),
                         name: name.clone().unwrap_or_else(|| "tool".into()),
                         arguments: String::new(),
-                        status: ToolCallStatus::Streaming,
+                        status: ToolCallStatus::Preparing,
 
+                        label: None,
+                        detail: None,
+                        started_at: None,
+                        ended_at: None,
                         duration_ms: None,
-
+                        attempt: None,
+                        parent_call_id: None,
+                        parallel_group_id: None,
+                        job_id: None,
                         result: None,
                         error: None,
                     });
@@ -161,7 +166,7 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
             };
             let call_name = rendered.name.clone();
             state.sync_tool_call(rendered);
-            state.set_activity("tool", "Preparing", Some(call_name));
+            state.set_activity("tool", "Preparing", Some(tool_activity_title(&call_name)));
         }
         AgentEvent::ToolCall { index, call } => {
             let rendered = {
@@ -175,10 +180,17 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                         call_id: Some(call.id.clone()),
                         name: call.name.clone(),
                         arguments: String::new(),
-                        status: ToolCallStatus::Streaming,
+                        status: ToolCallStatus::Preparing,
 
+                        label: None,
+                        detail: None,
+                        started_at: None,
+                        ended_at: None,
                         duration_ms: None,
-
+                        attempt: None,
+                        parent_call_id: None,
+                        parallel_group_id: None,
+                        job_id: None,
                         result: None,
                         error: None,
                     });
@@ -186,14 +198,14 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                 pending.call_id = Some(call.id.clone());
                 pending.name = call.name.clone();
                 pending.arguments = pretty_json(&call.arguments);
-                pending.status = ToolCallStatus::Streaming;
+                pending.status = ToolCallStatus::Preparing;
                 pending.clone()
             };
             state.sync_tool_call(rendered);
-            state.set_activity("tool", "Preparing", Some(call.name));
+            state.set_activity("tool", "Preparing", Some(tool_activity_title(&call.name)));
         }
         AgentEvent::ToolExecutionStarted(call) => {
-            state.set_tool_call_execution_status(&call, ToolCallStatus::Streaming, None, None);
+            state.set_tool_call_execution_status(&call, ToolCallStatus::Preparing, None, None);
             state.set_activity("tool", &tool_activity_title(&call.name), tool_detail(&call));
         }
         AgentEvent::ToolExecutionFinished {
@@ -216,13 +228,31 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                 result,
                 error,
             );
+            // Derive presentation from the existing call, without another model turn.
+            // Only successful execution gets a past-tense completion label.
+            let (completed_title, failed_title) = match call.name.rsplit('.').next().unwrap_or("") {
+                "web_search" => ("Searched web", "Web search failed"),
+                "web_read" => ("Read web page", "Web page read failed"),
+                "search_workspace" => ("Searched workspace", "Workspace search failed"),
+                "read_file" => ("Read file", "File read failed"),
+                "apply_file_edits" => ("Applied file edits", "File edits failed"),
+                "run_shell" => ("Ran command", "Command failed"),
+                "list_sessions" => ("Listed sessions", "Session listing failed"),
+                "export_session" => ("Exported session", "Session export failed"),
+                "activate_capability" => ("Activated capability", "Capability activation failed"),
+                _ => ("Tool completed", "Tool failed"),
+            };
             state.set_activity(
                 if succeeded {
                     "tool-complete"
                 } else {
                     "tool-failed"
                 },
-                if succeeded { "Completed" } else { "Failed" },
+                if succeeded {
+                    completed_title
+                } else {
+                    failed_title
+                },
                 tool_detail(&call),
             );
         }
@@ -246,7 +276,11 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
         AgentEvent::GoalJudge { passed, reason } => {
             state.set_activity(
                 "goal",
-                if passed { "Goal · accepted" } else { "Goal · rejected" },
+                if passed {
+                    "Goal · accepted"
+                } else {
+                    "Goal · rejected"
+                },
                 Some(reason),
             );
         }
@@ -257,9 +291,9 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
         } => {
             state.set_activity(
                 "retrying",
-                "Goal · retrying",
+                "API · retrying",
                 Some(format!(
-                    "Attempt {attempt} · retry in {:.1}s · {error}",
+                    "Retry {attempt} of 5 · retry in {:.1}s · {error}",
                     delay_ms as f64 / 1000.0
                 )),
             );

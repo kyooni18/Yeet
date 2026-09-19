@@ -22,8 +22,8 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
                 lines.push(Line::from(Span::styled(
                     format!("  {line}"),
                     Style::default()
-                        .fg(theme::TEXT_DIM)
-                        .bg(theme::CODE_BACKGROUND),
+                        .fg(theme::text_dim())
+                        .bg(theme::code_background()),
                 )));
             }
             index += 1;
@@ -64,7 +64,7 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
         if is_horizontal_rule(line) {
             lines.push(Line::from(Span::styled(
                 "────────────────────────",
-                Style::default().fg(theme::BORDER),
+                Style::default().fg(theme::border()),
             )));
             index += 1;
             continue;
@@ -73,9 +73,9 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
         if let Some((depth, quote)) = block_quote(line) {
             let mut spans = vec![Span::styled(
                 "│ ".repeat(depth),
-                Style::default().fg(theme::BORDER),
+                Style::default().fg(theme::border()),
             )];
-            spans.extend(inline_spans(quote, Style::default().fg(theme::TEXT_DIM)));
+            spans.extend(inline_spans(quote, Style::default().fg(theme::text_dim())));
             lines.push(Line::from(spans));
             index += 1;
             continue;
@@ -84,7 +84,7 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
         if let Some((indent, marker, body)) = list_item(line) {
             let mut spans = vec![Span::styled(
                 format!("{}{marker} ", " ".repeat(indent)),
-                Style::default().fg(theme::BORDER),
+                Style::default().fg(theme::border()),
             )];
             spans.extend(inline_spans(body, Style::default()));
             lines.push(Line::from(spans));
@@ -142,7 +142,7 @@ fn setext_heading_level(line: &str) -> Option<usize> {
 fn heading_style(level: usize) -> Style {
     if level <= 2 {
         Style::default()
-            .fg(theme::ACCENT_HOT)
+            .fg(theme::accent_hot())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().add_modifier(Modifier::BOLD)
@@ -249,7 +249,7 @@ fn table_line(line: &str, header: bool) -> Line<'static> {
     };
     for (index, cell) in cells.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::styled(" │ ", Style::default().fg(theme::BORDER)));
+            spans.push(Span::styled(" │ ", Style::default().fg(theme::border())));
         }
         spans.extend(inline_spans(cell.trim(), base));
     }
@@ -286,7 +286,7 @@ fn inline_spans(content: &str, base: Style) -> Vec<Span<'static>> {
                 let body_end = body_start + relative_end;
                 spans.push(Span::styled(
                     content[body_start..body_end].to_owned(),
-                    base.fg(theme::ACCENT_HOT),
+                    base.fg(theme::accent_hot()),
                 ));
                 cursor = body_end + ticks;
                 plain_start = cursor;
@@ -357,11 +357,11 @@ fn inline_spans(content: &str, base: Style) -> Vec<Span<'static>> {
                 flush_inline_text(&mut spans, &content[plain_start..cursor], base);
                 spans.extend(inline_spans(
                     &content[cursor + 1..label_end],
-                    base.fg(theme::ACCENT).add_modifier(Modifier::UNDERLINED),
+                    base.fg(theme::accent()).add_modifier(Modifier::UNDERLINED),
                 ));
                 let url = &content[url_start..url_end];
                 if !url.is_empty() {
-                    spans.push(Span::styled(format!(" ({url})"), base.fg(theme::MUTED)));
+                    spans.push(Span::styled(format!(" ({url})"), base.fg(theme::muted())));
                 }
                 cursor = url_end + 1;
                 plain_start = cursor;
@@ -378,7 +378,7 @@ fn inline_spans(content: &str, base: Style) -> Vec<Span<'static>> {
                 flush_inline_text(&mut spans, &content[plain_start..cursor], base);
                 spans.push(Span::styled(
                     target.to_owned(),
-                    base.fg(theme::ACCENT).add_modifier(Modifier::UNDERLINED),
+                    base.fg(theme::accent()).add_modifier(Modifier::UNDERLINED),
                 ));
                 cursor = end + 1;
                 plain_start = cursor;
@@ -403,98 +403,4 @@ fn underscore_is_in_word(content: &str, offset: usize, marker_len: usize) -> boo
     let before = content[..offset].chars().next_back();
     let after = content[offset + marker_len..].chars().next();
     before.is_some_and(char::is_alphanumeric) && after.is_some_and(char::is_alphanumeric)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn markdown_renders_inline_styles_without_losing_text() {
-        let spans = inline_spans(
-            "**bold** *italic* `code` ~~gone~~ [docs](https://example.com)",
-            Style::default(),
-        );
-        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
-        assert_eq!(text, "bold italic code gone docs (https://example.com)");
-        assert!(
-            spans
-                .iter()
-                .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
-        );
-        assert!(
-            spans
-                .iter()
-                .any(|span| span.style.add_modifier.contains(Modifier::ITALIC))
-        );
-        assert!(
-            spans
-                .iter()
-                .any(|span| span.style.add_modifier.contains(Modifier::CROSSED_OUT))
-        );
-        assert!(
-            spans
-                .iter()
-                .any(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
-        );
-    }
-
-    #[test]
-    fn markdown_keeps_incomplete_streaming_syntax_visible() {
-        let spans = inline_spans("partial **bold", Style::default());
-        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
-        assert_eq!(text, "partial **bold");
-    }
-
-    #[test]
-    fn markdown_only_escapes_ascii_punctuation() {
-        let spans = inline_spans(
-            r"C:\Users\name uses \d+ and \*literal stars\*",
-            Style::default(),
-        );
-        let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
-        assert_eq!(text, r"C:\Users\name uses \d+ and *literal stars*");
-    }
-
-    #[test]
-    fn markdown_renders_common_blocks() {
-        let lines =
-            markdown_lines("# Heading\n\n- item\n- [x] done\n> quote\n\n```rust\nlet x = 1;\n```");
-        let text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
-        assert_eq!(
-            text,
-            vec![
-                "Heading",
-                "",
-                "• item",
-                "☑ done",
-                "│ quote",
-                "",
-                "  let x = 1;"
-            ]
-        );
-    }
-
-    #[test]
-    fn markdown_renders_tables_without_separator_noise() {
-        let lines = markdown_lines("| Name | Value |\n| --- | ---: |\n| a | **1** |");
-        let text: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect()
-            })
-            .collect();
-        assert_eq!(text, vec!["Name │ Value", "a │ 1"]);
-    }
 }

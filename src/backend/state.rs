@@ -130,7 +130,10 @@ impl SharedSession {
             return;
         }
 
-        self.seal_reasoning_segment();
+        // A changing reasoning title is still the same streamed segment.
+        if phase != "reasoning" {
+            self.seal_reasoning_segment();
+        }
         self.seal_assistant_segment();
         if let Some(id) = self.state.active_activity_entry_id.clone() {
             let terminal = matches!(phase, "done" | "failed" | "interrupted");
@@ -281,9 +284,27 @@ impl SharedSession {
         self.state.conversation_revision = self.state.conversation_revision.wrapping_add(1);
     }
 
-    /// Extends live reasoning text or its summary and mirrors it into the transcript.
+    /// Uses streamed summaries as the current purpose, not concatenated transcript prose.
     pub(super) fn append_reasoning(&mut self, delta: &str, summary: bool) {
         if delta.is_empty() {
+            return;
+        }
+        if summary {
+            self.state.active_reasoning_summary.push_str(delta);
+        } else {
+            self.state.active_reasoning_text.push_str(delta);
+        }
+        let text = if self.state.active_reasoning_summary.is_empty() {
+            &self.state.active_reasoning_text
+        } else {
+            &self.state.active_reasoning_summary
+        };
+        let title = reasoning_status(text, summary).unwrap_or_else(|| "Reasoning".into());
+        self.set_activity("reasoning", &title, None);
+
+        // Codex's title-only reasoning belongs in the live activity row. Keep
+        // actual reasoning prose available for providers that emit it.
+        if summary || reasoning_titles_only(&self.state.active_reasoning_text) {
             return;
         }
         if self.state.active_reasoning_entry_id.is_none() {
@@ -293,21 +314,17 @@ impl SharedSession {
             });
             self.state.active_reasoning_entry_id = Some(id);
         }
-        if summary {
-            self.state.active_reasoning_summary.push_str(delta);
-        } else {
-            self.state.active_reasoning_text.push_str(delta);
-        }
         let id = self.state.active_reasoning_entry_id.clone().unwrap();
-        let content = self.state.active_reasoning_text.clone();
-        let summary = (!self.state.active_reasoning_summary.is_empty())
-            .then(|| self.state.active_reasoning_summary.clone());
+        let content = self.state.active_reasoning_text.replace("****", "**\n\n**");
         if let Some(entry) = self
             .conversation_mut()
             .iter_mut()
             .find(|entry| entry.id == id)
         {
-            entry.kind = ConversationKind::Reasoning { content, summary };
+            entry.kind = ConversationKind::Reasoning {
+                content,
+                summary: None,
+            };
         }
         self.state.conversation_revision = self.state.conversation_revision.wrapping_add(1);
     }
@@ -363,7 +380,12 @@ impl SharedSession {
         result: Option<String>,
         error: Option<String>,
     ) {
-        let duration_ms = if matches!(status, ToolCallStatus::Streaming) {
+        let duration_ms = if matches!(
+            status,
+            ToolCallStatus::Preparing
+                | ToolCallStatus::AwaitingPermission
+                | ToolCallStatus::Running
+        ) {
             self.meta
                 .tool_execution_started_at
                 .entry(call.id.clone())
@@ -375,6 +397,7 @@ impl SharedSession {
                 .remove(&call.id)
                 .map(|started| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX))
         };
+
         let existing_index = self
             .meta
             .pending_tool_calls
@@ -389,23 +412,39 @@ impl SharedSession {
             pending.name = call.name.clone();
             pending.arguments = pretty_json(&call.arguments);
             pending.status = status;
-
             pending.duration_ms = duration_ms;
-
             pending.result = result;
             pending.error = error;
             pending.clone()
         } else {
             ConversationToolCall {
-                id: Uuid::new_v4().to_string(),
+                id: self
+                    .conversation_mut()
+                    .iter()
+                    .rev()
+                    .find_map(|entry| match &entry.kind {
+                        ConversationKind::ToolCall { tool_call }
+                            if tool_call.call_id.as_deref() == Some(call.id.as_str()) =>
+                        {
+                            Some(tool_call.id.clone())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
                 index: None,
                 call_id: Some(call.id.clone()),
                 name: call.name.clone(),
                 arguments: pretty_json(&call.arguments),
                 status,
-
+                label: None,
+                detail: None,
+                started_at: None,
+                ended_at: None,
                 duration_ms,
-
+                attempt: None,
+                parent_call_id: None,
+                parallel_group_id: None,
+                job_id: None,
                 result,
                 error,
             }
@@ -413,14 +452,17 @@ impl SharedSession {
 
         self.sync_tool_call(rendered);
 
-        if !matches!(status, ToolCallStatus::Streaming) {
+        if !matches!(
+            status,
+            ToolCallStatus::Preparing
+                | ToolCallStatus::AwaitingPermission
+                | ToolCallStatus::Running
+        ) {
             self.meta
                 .pending_tool_calls
                 .retain(|_, pending| pending.call_id.as_deref() != Some(call.id.as_str()));
         }
     }
-
-    /// Forces all still-streaming tools into a terminal status at run shutdown.
     pub(super) fn settle_pending_tool_calls(&mut self, status: ToolCallStatus) {
         let calls = self
             .meta
@@ -442,5 +484,111 @@ impl SharedSession {
             self.sync_tool_call(call);
         }
         self.meta.tool_execution_started_at.clear();
+    }
+}
+
+/// Read complete Markdown titles only: token boundaries can split either `**`.
+fn reasoning_status(text: &str, summary: bool) -> Option<String> {
+    let mut rest = text;
+    let mut latest = None;
+    while let Some(start) = rest.find("**") {
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find("**") else { break };
+        let title = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+        if !title.is_empty() {
+            latest = Some(title);
+        }
+        rest = &rest[end + 2..];
+    }
+    if latest.is_none() && summary && !text.contains('*') {
+        latest = text
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "));
+    }
+    latest.map(|title| {
+        if title.chars().count() > 120 {
+            format!("{}…", title.chars().take(119).collect::<String>())
+        } else {
+            title
+        }
+    })
+}
+
+fn reasoning_titles_only(text: &str) -> bool {
+    let mut rest = text.trim();
+    loop {
+        if rest.is_empty() || rest == "*" {
+            return true;
+        }
+        let Some(title) = rest.strip_prefix("**") else {
+            return false;
+        };
+        let Some(end) = title.find("**") else {
+            return true;
+        };
+        rest = title[end + 2..].trim();
+    }
+}
+
+#[cfg(test)]
+mod reasoning_status_tests {
+    use super::*;
+
+    #[test]
+    fn latest_title_wins_without_markdown_seams() {
+        let text = "**Planning PDF generation****Designing equations****Implementing fractions**";
+        assert_eq!(
+            reasoning_status(text, true).as_deref(),
+            Some("Implementing fractions")
+        );
+        assert!(reasoning_titles_only(text));
+    }
+
+    #[test]
+    fn incomplete_title_keeps_previous_purpose() {
+        assert_eq!(
+            reasoning_status("**Planning****Implementing*", true).as_deref(),
+            Some("Planning")
+        );
+        assert_eq!(reasoning_status("**Planning*", true), None);
+        assert!(reasoning_titles_only("**Planning*"));
+    }
+
+    #[test]
+    fn prose_is_not_treated_as_a_title() {
+        assert!(!reasoning_titles_only("**Planning**\nDetailed explanation"));
+        assert_eq!(reasoning_status("Detailed explanation", false), None);
+        assert_eq!(
+            reasoning_status("First step\nCurrent step", true).as_deref(),
+            Some("Current step")
+        );
+    }
+
+    #[test]
+    fn summary_updates_one_activity_and_resets_on_response() {
+        let mut session = SharedSession::new("codex-cli/test".into(), "auto".into());
+        for delta in ["*", "*Planning", "**", "**Implementing", "**"] {
+            session.append_reasoning(delta, true);
+        }
+        assert_eq!(
+            session.state.active_reasoning_summary,
+            "**Planning****Implementing**"
+        );
+        assert!(session.state.active_reasoning_entry_id.is_none());
+        let activities = session
+            .conversation_mut()
+            .iter()
+            .filter_map(|entry| match &entry.kind {
+                ConversationKind::Activity { activity } => Some(activity.title.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(activities, vec!["Implementing"]);
+        session.set_activity("responding", "Responding", None);
+        assert!(session.state.active_reasoning_summary.is_empty());
+        session.append_reasoning("**New purpose**", true);
+        assert_eq!(session.state.active_reasoning_summary, "**New purpose**");
     }
 }

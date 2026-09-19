@@ -1,0 +1,9 @@
+Skipping image OS validation for alexgshaw/chess-best-move:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts

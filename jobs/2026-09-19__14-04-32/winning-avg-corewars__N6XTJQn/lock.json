@@ -1,0 +1,41 @@
+{
+    "schema_version": 2,
+    "task": {
+        "name": "winning-avg-corewars",
+        "type": "git",
+        "digest": "sha256:0007e3c0e9e08b084590d71e494b4ddbe4ae0c591b17939985fe23f46f09734b",
+        "source": "terminal-bench",
+        "path": "winning-avg-corewars",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c"
+    },
+    "install_only": false,
+    "timeout_multiplier": 1.0,
+    "agent": {
+        "name": "benchmarks.terminalbench.yeet_agent:YeetAgent",
+        "model_name": "openai/gpt-5.6-luna",
+        "skills": [],
+        "resume_trajectory": false,
+        "extra_allowed_hosts": [],
+        "kwargs": {
+            "reasoning": "high"
+        },
+        "mcp_servers": []
+    },
+    "bridge_inputs": {},
+    "skills": [],
+    "environment": {
+        "type": "docker",
+        "force_build": false,
+        "delete": true,
+        "cpu_enforcement_policy": "auto",
+        "memory_enforcement_policy": "auto",
+        "extra_docker_compose": [],
+        "kwargs": {},
+        "extra_allowed_hosts": []
+    },
+    "verifier": {
+        "disable": false,
+        "environment_mode": "shared"
+    }
+}

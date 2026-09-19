@@ -9,6 +9,7 @@ web/dist/
 web/*.tsbuildinfo
 web/playwright-report/
 web/test-results/
+web/test-results-*/
 web/.e2e-workspace/
 web/.e2e-config/
 __pycache__/
@@ -17,15 +18,39 @@ __pycache__/
 .yeet/
 third_party/open-computer-use/
 
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Generated benchmark/job output
+/jobs/
+
+# Common local caches and test output
+.cache/
+coverage/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Logs and editor/session leftovers
+*.log
+*.swp
+*.swo
+*~
+
 # Local investigation / coordination scratch
 .tmp-*
+.tmp_*
 .yeet-session-inspect/
-skyline/
+
 # The Skyline coordinator is generated at runtime, but its bundled source
 # must remain in the source distribution for include_bytes! builds.
+skyline/
 !skyline/
 skyline/*
 !skyline/skyline.py
+
 swiftly.pkg
 web/tests/*.tmp.spec.ts
-.tmp_*

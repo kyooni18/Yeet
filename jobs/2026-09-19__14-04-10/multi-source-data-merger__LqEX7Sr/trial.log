@@ -1,0 +1,8 @@
+Trial multi-source-data-merger__LqEX7Sr failed: Docker compose command failed for environment multi-source-data-merger. Command: docker compose --project-name multi-source-data-merger__lqex7sr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/cMPqfgxjNH2qnnDVdWSFb8/multi-source-data-merger/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2x7talf2/multi-source-data-merger__LqEX7Sr__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpokosmr6j/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpp549pbgn/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network multi-source-data-merger__lqex7sr__env_default Creating 
+ Network multi-source-data-merger__lqex7sr__env_default Creating 
+ Network multi-source-data-merger__lqex7sr__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network multi-source-data-merger__lqex7sr__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container multi-source-data-merger__lqex7sr__env-main-1 Creating 
+failed to create network multi-source-data-merger__lqex7sr__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

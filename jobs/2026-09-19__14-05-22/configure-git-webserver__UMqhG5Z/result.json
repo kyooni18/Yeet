@@ -1,0 +1,106 @@
+{
+    "id": "1f7fda31-050d-4230-911e-fec1f0d7cb03",
+    "task_name": "configure-git-webserver",
+    "trial_name": "configure-git-webserver__UMqhG5Z",
+    "trial_uri": "file:///Users/kyooni18/Code/Rust/Yeet/jobs/2026-09-19__14-05-22/configure-git-webserver__UMqhG5Z",
+    "task_id": {
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "path": "configure-git-webserver"
+    },
+    "source": "terminal-bench",
+    "task_checksum": "3ebefab7ff093813f99af237de90b1ed73363a4eb42ea8a17096939922a16bcf",
+    "config": {
+        "task": {
+            "path": "configure-git-webserver",
+            "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+            "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": "terminal-bench"
+        },
+        "trial_name": "configure-git-webserver__UMqhG5Z",
+        "trials_dir": "jobs/2026-09-19__14-05-22",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": null,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": "benchmarks.terminalbench.yeet_agent:YeetAgent",
+            "import_path": null,
+            "model_name": "openai/gpt-5.6-luna",
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {
+                "reasoning": "high"
+            },
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "136b665b-50ab-4019-b1b4-27273081e495",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "yeet",
+        "version": "unknown",
+        "model_info": {
+            "name": "gpt-5.6-luna",
+            "provider": "openai"
+        }
+    },
+    "agent_result": null,
+    "verifier_result": null,
+    "verifier_environment_mode": "shared",
+    "exception_info": {
+        "exception_type": "RuntimeError",
+        "exception_message": "Docker compose command failed for environment configure-git-webserver. Command: docker compose --project-name configure-git-webserver__umqhg5z__env --project-directory /Users/kyooni18/.cache/harbor/tasks/c3FnWBpp4RmfpMvyGn8Wpv/configure-git-webserver/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpj7hfs933/configure-git-webserver__UMqhG5Z__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkxcifztn/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpgz9flh6c/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network configure-git-webserver__umqhg5z__env_default Creating \n Network configure-git-webserver__umqhg5z__env_default Creating \n Network configure-git-webserver__umqhg5z__env_default Error Error response from daemon: all predefined address pools have been fully subnetted\n network:default failed to create network configure-git-webserver__umqhg5z__env_default: Error response from daemon: all predefined address pools have been fully subnetted \n Container configure-git-webserver__umqhg5z__env-main-1 Creating \nfailed to create network configure-git-webserver__umqhg5z__env_default: Error response from daemon: all predefined address pools have been fully subnetted\n. Stderr: None. ",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 415, in run\n    await self._prepare()\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 453, in _prepare\n    await self._setup_agent_environment()\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 1542, in _setup_agent_environment\n    await self._start_agent_environment()\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py\", line 1548, in _start_agent_environment\n    await asyncio.wait_for(\n    ...<4 lines>...\n    )\n  File \"/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py\", line 507, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py\", line 1007, in start\n    await self._run_docker_compose_command([\"up\", *runtime.up_args])\n  File \"/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py\", line 704, in _run_docker_compose_command\n    raise RuntimeError(\n    ...<5 lines>...\n    )\nRuntimeError: Docker compose command failed for environment configure-git-webserver. Command: docker compose --project-name configure-git-webserver__umqhg5z__env --project-directory /Users/kyooni18/.cache/harbor/tasks/c3FnWBpp4RmfpMvyGn8Wpv/configure-git-webserver/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpj7hfs933/configure-git-webserver__UMqhG5Z__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkxcifztn/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpgz9flh6c/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network configure-git-webserver__umqhg5z__env_default Creating \n Network configure-git-webserver__umqhg5z__env_default Creating \n Network configure-git-webserver__umqhg5z__env_default Error Error response from daemon: all predefined address pools have been fully subnetted\n network:default failed to create network configure-git-webserver__umqhg5z__env_default: Error response from daemon: all predefined address pools have been fully subnetted \n Container configure-git-webserver__umqhg5z__env-main-1 Creating \nfailed to create network configure-git-webserver__umqhg5z__env_default: Error response from daemon: all predefined address pools have been fully subnetted\n. Stderr: None. \n",
+        "occurred_at": "2026-09-19T05:05:26.557149Z"
+    },
+    "started_at": "2026-09-19T05:05:26.207752Z",
+    "finished_at": "2026-09-19T05:05:27.198915Z",
+    "environment_setup": {
+        "started_at": "2026-09-19T05:05:26.209199Z",
+        "finished_at": "2026-09-19T05:05:26.556421Z"
+    },
+    "agent_setup": null,
+    "agent_execution": null,
+    "verifier": null,
+    "step_results": null
+}

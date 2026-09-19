@@ -15,6 +15,10 @@ impl BackendService {
         let persisted_goal = self.store.goal_mode(id).unwrap_or(false);
         let resume_goal = persisted_goal
             && stored
+                .runs
+                .last()
+                .is_none_or(|run| run.status == RunStatus::Running)
+            && stored
                 .conversation
                 .iter()
                 .any(|entry| matches!(entry.kind, ConversationKind::User { .. }));
@@ -103,12 +107,7 @@ impl BackendService {
         self.request_sessions();
         self.publish_state();
         if resume_goal {
-            self.submit_agent(
-                GOAL_RESUME_PROMPT.to_owned(),
-                false,
-                "goal-resume",
-                true,
-            )?;
+            self.submit_agent(GOAL_RESUME_PROMPT.to_owned(), false, "goal-resume", true)?;
         }
         Ok(())
     }

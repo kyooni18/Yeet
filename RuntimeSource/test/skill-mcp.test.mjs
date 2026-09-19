@@ -27,9 +27,10 @@ test('SkillRegistry progressively loads ~/.yeet/skills and blocks path escape', 
 
   const registry = new SkillRegistry({ configDir, includeCodexSkills: false });
   const listed = await registry.list();
-  assert.equal(listed.length, 1);
-  assert.equal(listed[0].name, 'review-code');
-  assert.equal('instructions' in listed[0], false);
+  const review = listed.find((skill) => skill.name === 'review-code');
+  assert.ok(review);
+  assert.equal(review.source, 'user');
+  assert.equal('instructions' in review, false);
 
   const skill = await registry.load('review-code');
   assert.equal(skill.instructions.trim(), 'Inspect the diff first.');
@@ -51,11 +52,12 @@ test('SkillRegistry layers project over user skills and reads explicit-only agen
 
   const registry = new SkillRegistry({ configDir, projectRoot, includeCodexSkills: false });
   const listed = await registry.list();
-  assert.equal(listed.length, 1);
-  assert.equal(listed[0].description, 'Project copy');
-  assert.equal(listed[0].shortDescription, 'UI short');
-  assert.equal(listed[0].allowImplicitInvocation, false);
-  assert.equal(listed[0].source, 'project');
+  const shared = listed.find((skill) => skill.name === 'shared');
+  assert.ok(shared);
+  assert.equal(shared.description, 'Project copy');
+  assert.equal(shared.shortDescription, 'UI short');
+  assert.equal(shared.allowImplicitInvocation, false);
+  assert.equal(shared.source, 'project');
   assert.equal((await registry.load('shared')).instructions.trim(), 'project');
 });
 

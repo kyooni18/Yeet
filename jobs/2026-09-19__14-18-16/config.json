@@ -1,0 +1,19 @@
+{
+    "job_name": "2026-09-19__14-18-16",
+    "n_concurrent_trials": 8,
+    "agents": [
+        {
+            "name": "benchmarks.terminalbench.yeet_agent:YeetAgent",
+            "model_name": "openai/gpt-5.6-luna",
+            "kwargs": {
+                "reasoning": "high"
+            }
+        }
+    ],
+    "datasets": [
+        {
+            "name": "terminal-bench",
+            "version": "2.0"
+        }
+    ]
+}

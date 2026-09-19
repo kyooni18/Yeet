@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/circuit-fibsqrt:20251031: docker inspect returned 1
+Trial circuit-fibsqrt__p4DHTUg failed: Docker compose command failed for environment circuit-fibsqrt. Command: docker compose --project-name circuit-fibsqrt__p4dhtug__env --project-directory /Users/kyooni18/.cache/harbor/tasks/dqWUpJXGGPsFGfnuwx6Car/circuit-fibsqrt/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpswh2wsxs/circuit-fibsqrt__p4DHTUg__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkf7qkztm/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpio18xn00/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/circuit-fibsqrt:20251031 Pulling 
+ Image alexgshaw/circuit-fibsqrt:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

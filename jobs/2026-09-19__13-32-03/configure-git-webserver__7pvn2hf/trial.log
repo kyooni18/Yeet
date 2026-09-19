@@ -1,0 +1,22 @@
+Skipping image OS validation for alexgshaw/configure-git-webserver:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command failed
+Trial configure-git-webserver__7pvn2hf failed: Command failed (exit 2): rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+stdout: tar: ./yeet: Cannot write: Read-only file system
+tar: ./yeet: Cannot utime: Read-only file system
+tar: ./yeet: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: ./yeet: Cannot change mode to rwxr-xr-x: Read-only file system
+tar:  ... [76824 chars truncated] ... No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/._requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: .: Cannot utime: Read-only file system
+tar: .: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: .: Cannot change mode to rwx------: Read-only file system
+tar: Exiting with failure status due to previous errors
+
+stderr: None
+Cleanup interrupted for configure-git-webserver__7pvn2hf, but agent environment stop is shielded and will complete

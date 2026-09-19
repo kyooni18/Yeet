@@ -116,7 +116,16 @@ export interface WorkspaceSessionGroup {
   sessions: SessionSummary[]
 }
 
-export type ToolCallStatus = 'streaming' | 'completed' | 'failed' | 'suppressed'
+export type ToolCallStatus =
+  | 'preparing'
+  | 'awaiting_permission'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'timed_out'
+  | 'suppressed'
 
 export interface ConversationToolCall {
   id: string
@@ -125,10 +134,18 @@ export interface ConversationToolCall {
   name: string
   arguments: string
   status: ToolCallStatus
+  /** Backend-authored operation label; clients should not infer semantics. */
+  label?: string | null
   detail?: string | null
+  startedAt?: string | null
+  endedAt?: string | null
+  durationMs?: number | null
+  attempt?: number | null
+  parentCallId?: string | null
+  parallelGroupId?: string | null
+  jobId?: string | null
   result?: unknown
   error?: string | null
-  durationMs?: number | null
 }
 
 export interface ModelActivity {

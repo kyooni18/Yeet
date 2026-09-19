@@ -1,0 +1,8 @@
+Trial path-tracing__uL5UNAS failed: Docker compose command failed for environment path-tracing. Command: docker compose --project-name path-tracing__ul5unas__env --project-directory /Users/kyooni18/.cache/harbor/tasks/9BGkwkiZs6r3NTmoLCLzr9/path-tracing/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2cdwflxo/path-tracing__uL5UNAS__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2mvze68z/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwwai5h4b/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network path-tracing__ul5unas__env_default Creating 
+ Network path-tracing__ul5unas__env_default Creating 
+ Network path-tracing__ul5unas__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network path-tracing__ul5unas__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container path-tracing__ul5unas__env-main-1 Creating 
+failed to create network path-tracing__ul5unas__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

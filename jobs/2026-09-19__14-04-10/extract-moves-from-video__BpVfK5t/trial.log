@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/extract-moves-from-video:20251031: docker inspect returned 1
+Trial extract-moves-from-video__BpVfK5t failed: Docker compose command failed for environment extract-moves-from-video. Command: docker compose --project-name extract-moves-from-video__bpvfk5t__env --project-directory /Users/kyooni18/.cache/harbor/tasks/bDZ3NNHZSFq2MH6CzCTykb/extract-moves-from-video/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvu0mj3wt/extract-moves-from-video__BpVfK5t__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpamnv34p4/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppx2j9580/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/extract-moves-from-video:20251031 Pulling 
+ Image alexgshaw/extract-moves-from-video:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

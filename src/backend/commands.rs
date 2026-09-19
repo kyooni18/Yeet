@@ -9,7 +9,7 @@ impl BackendService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal  /attach ID  /detach ID  /allow  /deny  /clear"),
+            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /permissions  /permission [allow|deny]  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal  /attach ID  /detach ID  /clear"),
             "/new" => self.new_session(),
             "/clear" => {
                 let mut shared = self.shared.lock().unwrap();
@@ -25,8 +25,11 @@ impl BackendService {
                 drop(shared);
                 self.publish_state();
             }
-            "/allow" => { self.permission.resolve(true); self.publish_state(); }
-            "/deny" => { self.permission.resolve(false); self.publish_state(); }
+            "/permission" => match arguments.first().copied() {
+                Some("allow") => { self.permission.resolve(true); self.publish_state(); }
+                Some("deny") => { self.permission.resolve(false); self.publish_state(); }
+                _ => self.append_system("Usage: /permission [allow|deny]"),
+            },
             "/compact" => {
                 let streaming = self.shared.lock().unwrap().state.is_streaming;
                 if streaming {
@@ -333,7 +336,10 @@ impl BackendService {
             "/provider" => self.append_system("Use `yeet provider ...` for custom API endpoints."),
             "/login" => self.append_system("Use `yeet auth ...` for provider authentication."),
             "/settings" => self.append_system(
-                "Open /settings in the interactive TUI to manage runtime and sandbox settings.",
+                "Open /settings in the interactive TUI to manage runtime and application settings. Use /permissions for sandbox and permission settings.",
+            ),
+            "/permissions" => self.append_system(
+                "Open /permissions in the interactive TUI to manage sandbox and permission settings.",
             ),
             "/model" | "/reasoning" | "/sessions" => {},
             _ => self.append_error(format!("Unknown command: {command}. Type /help for commands.")),
@@ -435,10 +441,7 @@ impl BackendService {
             format!("Tokens: input {input} · output {output} · reasoning {reasoning_tokens}"),
             cache_line,
             format!("Reasoning mode: {reasoning_mode}"),
-            format!(
-                "Goal: {}",
-                if state.goal_mode { "ON" } else { "OFF" }
-            ),
+            format!("Goal: {}", if state.goal_mode { "ON" } else { "OFF" }),
             format!("Permission: {permission} · {sandbox_detail}"),
             self.session_environment_report()
                 .unwrap_or_else(|error| format!("Session environment unavailable: {error}")),

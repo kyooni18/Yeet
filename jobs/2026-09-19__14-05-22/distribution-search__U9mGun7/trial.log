@@ -1,0 +1,8 @@
+Trial distribution-search__U9mGun7 failed: Docker compose command failed for environment distribution-search. Command: docker compose --project-name distribution-search__u9mgun7__env --project-directory /Users/kyooni18/.cache/harbor/tasks/PBqbNgPwKfCmnNMFQbSbAJ/distribution-search/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpm9spha5b/distribution-search__U9mGun7__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpb6xd3bd0/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpana2uh8r/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network distribution-search__u9mgun7__env_default Creating 
+ Network distribution-search__u9mgun7__env_default Creating 
+ Network distribution-search__u9mgun7__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network distribution-search__u9mgun7__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container distribution-search__u9mgun7__env-main-1 Creating 
+failed to create network distribution-search__u9mgun7__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

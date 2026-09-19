@@ -37,6 +37,11 @@ const pendingProviderRemoval = ref<string | null>(null)
 const pendingSandboxReset = ref(false)
 const sandboxResetTrigger = ref<HTMLButtonElement | null>(null)
 const sandboxResetCancel = ref<HTMLButtonElement | null>(null)
+const mcpCapabilitiesOpen = ref(false)
+
+function handleMcpCapabilitiesToggle(event: Event) {
+  mcpCapabilitiesOpen.value = (event.currentTarget as HTMLDetailsElement).open
+}
 
 function revealActiveSection() {
   const nav = sectionNav.value
@@ -512,12 +517,15 @@ function messageCountLabel(count: number): string {
               </div>
             </details>
 
-            <details v-if="mcpCapabilities.length" class="capability-group surface-card">
+            <details v-if="mcpCapabilities.length" class="capability-group surface-card" @toggle="handleMcpCapabilitiesToggle">
               <summary>
-                <span><strong>Connected systems</strong><small>MCP servers available to this session</small></span>
+                <span>
+                  <strong>Connected systems</strong>
+                  <small>MCP servers available: <span v-for="capability in mcpCapabilities" :key="capability.id">{{ capability.name }}</span></small>
+                </span>
                 <span class="capability-count">{{ enabledCapabilityCount(mcpCapabilities) }}/{{ mcpCapabilities.length }} enabled</span>
               </summary>
-              <div class="capability-group-body">
+              <div v-if="mcpCapabilitiesOpen" class="capability-group-body">
                 <div v-for="capability in mcpCapabilities" :key="capability.id" class="setting-row capability-row">
                   <div class="capability-copy"><strong>{{ capability.name }}</strong><span>{{ capability.description }}</span></div>
                   <button class="switch-control" type="button" role="switch" :aria-label="capability.name" :disabled="remote.state.is_loading_capabilities || remote.state.is_streaming" :aria-checked="capability.enabled" :class="{ on: capability.enabled }" @click="remote.toggleCapability(capability.id)"><span></span></button>

@@ -5,6 +5,9 @@
 
 use super::*;
 
+const TITLE_MAX_WORDS: usize = 4;
+const TITLE_MAX_CHARS: usize = 32;
+
 pub(super) const TITLE_INPUT_HEAD_CHARS: usize = 1_600;
 pub(super) const TITLE_INPUT_TAIL_CHARS: usize = 800;
 
@@ -28,11 +31,11 @@ pub(super) fn fallback_title(conversation: &[ConversationEntry]) -> String {
             }
         })
         .unwrap_or("New chat");
-    let compact = first.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.chars().count() <= 60 {
-        compact
+    let title = compact_title(first);
+    if title.is_empty() {
+        "New chat".into()
     } else {
-        format!("{}…", compact.chars().take(59).collect::<String>())
+        title
     }
 }
 
@@ -56,8 +59,8 @@ pub(super) fn prepare_title_request(state: &mut SharedSession) -> Option<TitleRe
         })?;
     let compact = user_text.split_whitespace().collect::<Vec<_>>().join(" ");
     state.meta.title_generation_attempted = true;
-    if compact.chars().count() <= 56
-        && compact.split_whitespace().count() <= 8
+    if compact.chars().count() <= TITLE_MAX_CHARS
+        && compact.split_whitespace().count() <= TITLE_MAX_WORDS
         && !compact.contains('{')
         && !compact.contains(';')
     {
@@ -79,7 +82,9 @@ pub(super) fn generate_session_title(
     bridge: &BridgeClient,
     title: &TitleRequest,
 ) -> Result<String> {
-    let system = "Generate a concise title for a saved Yeet coding session. Return exactly one plain-text title and nothing else. Use 2-6 words and at most 56 characters. Capture the user's main task, preserve important project or symbol names, and use the same language as the request when natural. Do not use quotes, Markdown, a trailing period, or a 'Title:' prefix.";
+    let system = format!(
+        "Generate a short label for coding session, not a summary or sentence. Return exactly one plain-text title and nothing else. Aim for 2-3 words; never exceed {TITLE_MAX_WORDS} words or {TITLE_MAX_CHARS} characters. Name only the core task or topic. Start directly with that task or topic, never narration such as 'The user wants a', 'The user asks', or 'I need to'. Omit filler, request phrasing, explanations, and secondary details. Preserve a project or symbol name only when essential, and use the same language as the request when natural. Examples: 'Fix login redirect', 'Shorter session titles', 'Rust TUI migration'. Do not use quotes, Markdown, a trailing period, or a 'Title:' prefix."
+    );
     let excerpt = title_prompt_excerpt(&title.user_text);
     let mut request = CallRequest::simple(
         title.model.clone(),
@@ -134,11 +139,92 @@ pub(super) fn normalize_generated_title(value: &str) -> Option<String> {
         title.pop();
         title = title.trim_end().to_owned();
     }
-    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    if title.is_empty() {
+    // Reject request narration before truncation: otherwise its filler alone
+    // can fill the four-word budget (e.g. "The user wants a"). Returning None
+    // leaves the deterministic user-message fallback in place.
+    let lowercase = title.to_ascii_lowercase();
+    let narration = lowercase.strip_prefix("the ").unwrap_or(&lowercase);
+    if [
+        "user wants",
+        "user needs",
+        "user asks",
+        "user requested",
+        "user is asking",
+        "user would like",
+        "i need to",
+        "we need to",
+    ]
+    .iter()
+    .any(|prefix| {
+        narration == *prefix
+            || narration
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+    }) {
         return None;
     }
-    let mut title: String = title.chars().take(56).collect();
-    title = title.trim().to_owned();
+    let title = compact_title(&title);
     (!title.is_empty()).then_some(title)
+}
+
+/// Enforces the same bounds for generated and fallback labels, keeping whole
+/// words unless a single token exceeds the character budget (e.g. CJK or a path).
+fn compact_title(value: &str) -> String {
+    let mut title = String::new();
+    let mut chars = 0;
+    for word in value.split_whitespace().take(TITLE_MAX_WORDS) {
+        let word_chars = word.chars().count();
+        if title.is_empty() {
+            title.extend(word.chars().take(TITLE_MAX_CHARS));
+            chars = word_chars.min(TITLE_MAX_CHARS);
+        } else if chars + 1 + word_chars <= TITLE_MAX_CHARS {
+            title.push(' ');
+            title.push_str(word);
+            chars += 1 + word_chars;
+        } else {
+            break;
+        }
+    }
+    title
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_title_rejects_request_narration_before_truncation() {
+        for output in [
+            "The user wants a",
+            "The user wants a fix for login redirects.",
+            "Title: THE USER WANTS a shorter session title",
+            "User asks for better title generation",
+            "The user is asking to fix login",
+            "The user would like shorter titles",
+            "I need to generate a concise title",
+            "We need to summarize the request",
+        ] {
+            assert_eq!(normalize_generated_title(output), None, "{output}");
+        }
+    }
+
+    #[test]
+    fn generated_title_keeps_task_labels_and_bounds() {
+        for (output, expected) in [
+            ("Fix login redirect", "Fix login redirect"),
+            ("User preferences", "User preferences"),
+            ("User requests API", "User requests API"),
+            ("Title: Shorter session titles.", "Shorter session titles"),
+            ("\"Rust TUI migration\"", "Rust TUI migration"),
+            (
+                "Fix session title generation regression",
+                "Fix session title generation",
+            ),
+            ("세션 제목 수정", "세션 제목 수정"),
+        ] {
+            assert_eq!(normalize_generated_title(output).as_deref(), Some(expected));
+        }
+        assert_eq!(normalize_generated_title(""), None);
+        assert_eq!(normalize_generated_title("Title: ..."), None);
+    }
 }

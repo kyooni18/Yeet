@@ -1,0 +1,677 @@
+Trial gpt2-codegolf__eTi4yEz failed: Docker compose command failed for environment gpt2-codegolf. Command: docker compose --project-name gpt2-codegolf__eti4yez__env --project-directory /Users/kyooni18/.cache/harbor/tasks/CGqXnFmcaVcQCTbCZMpg2T/gpt2-codegolf/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpcm_upob6/gpt2-codegolf__eTi4yEz__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpiipjdg_x/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpoq_rxp9k/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network gpt2-codegolf__eti4yez__env_default Creating 
+ Network gpt2-codegolf__eti4yez__env_default Creating 
+ Network gpt2-codegolf__eti4yez__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network gpt2-codegolf__eti4yez__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container gpt2-codegolf__eti4yez__env-main-1 Creating 
+failed to create network gpt2-codegolf__eti4yez__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial llm-inference-batching-scheduler__afeqKsh failed: Docker compose command failed for environment llm-inference-batching-scheduler. Command: docker compose --project-name llm-inference-batching-scheduler__afeqksh__env --project-directory /Users/kyooni18/.cache/harbor/tasks/2Fx6Ues7VLnYo5TdH9smXE/llm-inference-batching-scheduler/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmph4fbrs_8/llm-inference-batching-scheduler__afeqKsh__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpuvvovu3r/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2nieq2hq/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network llm-inference-batching-scheduler__afeqksh__env_default Creating 
+ Network llm-inference-batching-scheduler__afeqksh__env_default Creating 
+ Network llm-inference-batching-scheduler__afeqksh__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network llm-inference-batching-scheduler__afeqksh__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container llm-inference-batching-scheduler__afeqksh__env-main-1 Creating 
+failed to create network llm-inference-batching-scheduler__afeqksh__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial break-filter-js-from-html__JpsVSWm failed: Docker compose command failed for environment break-filter-js-from-html. Command: docker compose --project-name break-filter-js-from-html__jpsvswm__env --project-directory /Users/kyooni18/.cache/harbor/tasks/JQfDtvG4qqL3QfwErWynWU/break-filter-js-from-html/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4u3vw68w/break-filter-js-from-html__JpsVSWm__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpw44526lr/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmph7d0a0p5/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network break-filter-js-from-html__jpsvswm__env_default Creating 
+ Network break-filter-js-from-html__jpsvswm__env_default Creating 
+ Network break-filter-js-from-html__jpsvswm__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network break-filter-js-from-html__jpsvswm__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container break-filter-js-from-html__jpsvswm__env-main-1 Creating 
+failed to create network break-filter-js-from-html__jpsvswm__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial reshard-c4-data__YszTVBv failed: Docker compose command failed for environment reshard-c4-data. Command: docker compose --project-name reshard-c4-data__ysztvbv__env --project-directory /Users/kyooni18/.cache/harbor/tasks/fDMeF8ncVH8hFRrdHUkDzM/reshard-c4-data/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpiwe1jjhj/reshard-c4-data__YszTVBv__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmprlr1y7hn/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmph2gqwnji/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network reshard-c4-data__ysztvbv__env_default Creating 
+ Network reshard-c4-data__ysztvbv__env_default Creating 
+ Network reshard-c4-data__ysztvbv__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network reshard-c4-data__ysztvbv__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container reshard-c4-data__ysztvbv__env-main-1 Creating 
+failed to create network reshard-c4-data__ysztvbv__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial write-compressor__Kv7m5k6 failed: Docker compose command failed for environment write-compressor. Command: docker compose --project-name write-compressor__kv7m5k6__env --project-directory /Users/kyooni18/.cache/harbor/tasks/MWrHdxDHM3npYpRiLMz3iZ/write-compressor/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpfrut8_8i/write-compressor__Kv7m5k6__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0h4v7pq2/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpjfdl7nak/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network write-compressor__kv7m5k6__env_default Creating 
+ Network write-compressor__kv7m5k6__env_default Creating 
+ Network write-compressor__kv7m5k6__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network write-compressor__kv7m5k6__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container write-compressor__kv7m5k6__env-main-1 Creating 
+failed to create network write-compressor__kv7m5k6__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial merge-diff-arc-agi-task__MG8KFvr failed: Docker compose command failed for environment merge-diff-arc-agi-task. Command: docker compose --project-name merge-diff-arc-agi-task__mg8kfvr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/Q3LDEno2RovPVJEJXuoivq/merge-diff-arc-agi-task/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbxoilcy6/merge-diff-arc-agi-task__MG8KFvr__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9f6_aquz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpesx5up9n/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network merge-diff-arc-agi-task__mg8kfvr__env_default Creating 
+ Network merge-diff-arc-agi-task__mg8kfvr__env_default Creating 
+ Network merge-diff-arc-agi-task__mg8kfvr__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network merge-diff-arc-agi-task__mg8kfvr__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container merge-diff-arc-agi-task__mg8kfvr__env-main-1 Creating 
+failed to create network merge-diff-arc-agi-task__mg8kfvr__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial winning-avg-corewars__A6Nxvj2 failed: Docker compose command failed for environment winning-avg-corewars. Command: docker compose --project-name winning-avg-corewars__a6nxvj2__env --project-directory /Users/kyooni18/.cache/harbor/tasks/dWGsQxJELwQFMvHVDc5zuS/winning-avg-corewars/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpaxeb6_kg/winning-avg-corewars__A6Nxvj2__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpjhsfjv3k/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1kbloip8/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network winning-avg-corewars__a6nxvj2__env_default Creating 
+ Network winning-avg-corewars__a6nxvj2__env_default Creating 
+ Network winning-avg-corewars__a6nxvj2__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network winning-avg-corewars__a6nxvj2__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container winning-avg-corewars__a6nxvj2__env-main-1 Creating 
+failed to create network winning-avg-corewars__a6nxvj2__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial log-summary-date-ranges__zRBny8U failed: Docker compose command failed for environment log-summary-date-ranges. Command: docker compose --project-name log-summary-date-ranges__zrbny8u__env --project-directory /Users/kyooni18/.cache/harbor/tasks/fqGNZJec57abmbsxYbQAz5/log-summary-date-ranges/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpacymiite/log-summary-date-ranges__zRBny8U__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp42jcm_mn/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsixbo9j8/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network log-summary-date-ranges__zrbny8u__env_default Creating 
+ Network log-summary-date-ranges__zrbny8u__env_default Creating 
+ Network log-summary-date-ranges__zrbny8u__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network log-summary-date-ranges__zrbny8u__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container log-summary-date-ranges__zrbny8u__env-main-1 Creating 
+failed to create network log-summary-date-ranges__zrbny8u__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Trial pytorch-model-cli__vGF9BJf failed: Docker compose command failed for environment pytorch-model-cli. Command: docker compose --project-name pytorch-model-cli__vgf9bjf__env --project-directory /Users/kyooni18/.cache/harbor/tasks/cEZY7Ut37eqdNnYKPebgYq/pytorch-model-cli/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsgktp5df/pytorch-model-cli__vGF9BJf__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4c5x4a3s/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp6udvy74z/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network pytorch-model-cli__vgf9bjf__env_default Creating 
+ Network pytorch-model-cli__vgf9bjf__env_default Creating 
+ Network pytorch-model-cli__vgf9bjf__env_default Error Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+ network:default failed to create network pytorch-model-cli__vgf9bjf__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system 
+ Container pytorch-model-cli__vgf9bjf__env-main-1 Creating 
+failed to create network pytorch-model-cli__vgf9bjf__env_default: Error response from daemon: failed to update bridge store for object type *bridge.networkConfiguration: write /var/lib/docker/network/files/local-kv.db: read-only file system
+. Stderr: None. 
+Trial largest-eigenval__nm8zmuc failed: Docker compose command failed for environment largest-eigenval. Command: docker compose --project-name largest-eigenval__nm8zmuc__env --project-directory /Users/kyooni18/.cache/harbor/tasks/GZXTJdXif2uoqEMrNXfNyB/largest-eigenval/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpe041fua3/largest-eigenval__nm8zmuc__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpw22hljaq/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpskzhzy0u/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network largest-eigenval__nm8zmuc__env_default Creating 
+ Network largest-eigenval__nm8zmuc__env_default Creating 
+ Network largest-eigenval__nm8zmuc__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network largest-eigenval__nm8zmuc__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container largest-eigenval__nm8zmuc__env-main-1 Creating 
+failed to create network largest-eigenval__nm8zmuc__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Trial password-recovery__YcjyWLh failed: Docker compose command failed for environment password-recovery. Command: docker compose --project-name password-recovery__ycjywlh__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7w8vEz8xG5Rmh59QkrpMp2/password-recovery/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0q7p6veh/password-recovery__YcjyWLh__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0mal1zbf/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqehycd0x/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network password-recovery__ycjywlh__env_default Creating 
+ Network password-recovery__ycjywlh__env_default Creating 
+ Network password-recovery__ycjywlh__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network password-recovery__ycjywlh__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container password-recovery__ycjywlh__env-main-1 Creating 
+failed to create network password-recovery__ycjywlh__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial portfolio-optimization__9N9xQu3 failed: Docker compose command failed for environment portfolio-optimization. Command: docker compose --project-name portfolio-optimization__9n9xqu3__env --project-directory /Users/kyooni18/.cache/harbor/tasks/79ekQLXanbbMZMfTk3qzaF/portfolio-optimization/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpy8z54oxy/portfolio-optimization__9N9xQu3__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsbllvpcx/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2ssubr85/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network portfolio-optimization__9n9xqu3__env_default Creating 
+ Network portfolio-optimization__9n9xqu3__env_default Creating 
+ Network portfolio-optimization__9n9xqu3__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network portfolio-optimization__9n9xqu3__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container portfolio-optimization__9n9xqu3__env-main-1 Creating 
+failed to create network portfolio-optimization__9n9xqu3__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial path-tracing-reverse__NQQTfzR failed: Docker compose command failed for environment path-tracing-reverse. Command: docker compose --project-name path-tracing-reverse__nqqtfzr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/5CV2XfZKatcdbEk2ctQQAF/path-tracing-reverse/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp987anu8a/path-tracing-reverse__NQQTfzR__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpynwp5jtu/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkvygsqdi/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network path-tracing-reverse__nqqtfzr__env_default Creating 
+ Network path-tracing-reverse__nqqtfzr__env_default Creating 
+ Network path-tracing-reverse__nqqtfzr__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network path-tracing-reverse__nqqtfzr__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container path-tracing-reverse__nqqtfzr__env-main-1 Creating 
+failed to create network path-tracing-reverse__nqqtfzr__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial regex-chess__7g7ZoBC failed: Docker compose command failed for environment regex-chess. Command: docker compose --project-name regex-chess__7g7zobc__env --project-directory /Users/kyooni18/.cache/harbor/tasks/XyJK3D4eSbPWgNt9Bw4RyU/regex-chess/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0_qwzuyz/regex-chess__7g7ZoBC__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9dnm0l8r/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbccf1w_e/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network regex-chess__7g7zobc__env_default Creating 
+ Network regex-chess__7g7zobc__env_default Creating 
+ Network regex-chess__7g7zobc__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network regex-chess__7g7zobc__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container regex-chess__7g7zobc__env-main-1 Creating 
+failed to create network regex-chess__7g7zobc__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial modernize-scientific-stack__3woPP5s failed: Docker compose command failed for environment modernize-scientific-stack. Command: docker compose --project-name modernize-scientific-stack__3wopp5s__env --project-directory /Users/kyooni18/.cache/harbor/tasks/n9YQuCoRJFAyCD3Zs6amRV/modernize-scientific-stack/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpjmaiwdne/modernize-scientific-stack__3woPP5s__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkd0f0ijx/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpi0i0wwee/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network modernize-scientific-stack__3wopp5s__env_default Creating 
+ Network modernize-scientific-stack__3wopp5s__env_default Creating 
+ Network modernize-scientific-stack__3wopp5s__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network modernize-scientific-stack__3wopp5s__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container modernize-scientific-stack__3wopp5s__env-main-1 Creating 
+failed to create network modernize-scientific-stack__3wopp5s__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial torch-tensor-parallelism__bRKrFgm failed: Docker compose command failed for environment torch-tensor-parallelism. Command: docker compose --project-name torch-tensor-parallelism__brkrfgm__env --project-directory /Users/kyooni18/.cache/harbor/tasks/8njYn5Af8tPLKjM5cFeNvR/torch-tensor-parallelism/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpiz2hlaj7/torch-tensor-parallelism__bRKrFgm__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2codgd7a/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1q665l47/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network torch-tensor-parallelism__brkrfgm__env_default Creating 
+ Network torch-tensor-parallelism__brkrfgm__env_default Creating 
+ Network torch-tensor-parallelism__brkrfgm__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network torch-tensor-parallelism__brkrfgm__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container torch-tensor-parallelism__brkrfgm__env-main-1 Creating 
+failed to create network torch-tensor-parallelism__brkrfgm__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Trial path-tracing__UkXYojB failed: Docker compose command failed for environment path-tracing. Command: docker compose --project-name path-tracing__ukxyojb__env --project-directory /Users/kyooni18/.cache/harbor/tasks/9BGkwkiZs6r3NTmoLCLzr9/path-tracing/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_86b0v22/path-tracing__UkXYojB__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvu_i10sg/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp6vomaoii/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network path-tracing__ukxyojb__env_default Creating 
+ Network path-tracing__ukxyojb__env_default Creating 
+ Network path-tracing__ukxyojb__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network path-tracing__ukxyojb__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container path-tracing__ukxyojb__env-main-1 Creating 
+failed to create network path-tracing__ukxyojb__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial prove-plus-comm__X5zVbWY failed: Docker compose command failed for environment prove-plus-comm. Command: docker compose --project-name prove-plus-comm__x5zvbwy__env --project-directory /Users/kyooni18/.cache/harbor/tasks/djEEswskd9fpNSUidkwrfM/prove-plus-comm/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbjy1kpd8/prove-plus-comm__X5zVbWY__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkixxhi5d/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9qzlpdt_/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network prove-plus-comm__x5zvbwy__env_default Creating 
+ Network prove-plus-comm__x5zvbwy__env_default Creating 
+ Network prove-plus-comm__x5zvbwy__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network prove-plus-comm__x5zvbwy__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container prove-plus-comm__x5zvbwy__env-main-1 Creating 
+failed to create network prove-plus-comm__x5zvbwy__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Trial feal-linear-cryptanalysis__BFuj9aw failed: Docker compose command failed for environment feal-linear-cryptanalysis. Command: docker compose --project-name feal-linear-cryptanalysis__bfuj9aw__env --project-directory /Users/kyooni18/.cache/harbor/tasks/LVyG59RRyF7y2PiCy5VT3B/feal-linear-cryptanalysis/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsc48sl6e/feal-linear-cryptanalysis__BFuj9aw__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpmikqptz0/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpiimu7qph/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network feal-linear-cryptanalysis__bfuj9aw__env_default Creating 
+ Network feal-linear-cryptanalysis__bfuj9aw__env_default Creating 
+ Network feal-linear-cryptanalysis__bfuj9aw__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network feal-linear-cryptanalysis__bfuj9aw__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container feal-linear-cryptanalysis__bfuj9aw__env-main-1 Creating 
+failed to create network feal-linear-cryptanalysis__bfuj9aw__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/mteb-retrieve:20251031: docker inspect returned 1
+Trial caffe-cifar-10__kpVztiT failed: Docker compose command failed for environment caffe-cifar-10. Command: docker compose --project-name caffe-cifar-10__kpvztit__env --project-directory /Users/kyooni18/.cache/harbor/tasks/XUcCMQRrLoqxtCV4Hc9F2a/caffe-cifar-10/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpakp8i2uy/caffe-cifar-10__kpVztiT__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvkchby7g/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpa926bn0g/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network caffe-cifar-10__kpvztit__env_default Creating 
+ Network caffe-cifar-10__kpvztit__env_default Creating 
+ Network caffe-cifar-10__kpvztit__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network caffe-cifar-10__kpvztit__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container caffe-cifar-10__kpvztit__env-main-1 Creating 
+failed to create network caffe-cifar-10__kpvztit__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial distribution-search__uk7YSgR failed: Docker compose command failed for environment distribution-search. Command: docker compose --project-name distribution-search__uk7ysgr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/PBqbNgPwKfCmnNMFQbSbAJ/distribution-search/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsoq94u8x/distribution-search__uk7YSgR__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpfmwc_oog/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0hu27v7_/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network distribution-search__uk7ysgr__env_default Creating 
+ Network distribution-search__uk7ysgr__env_default Creating 
+ Network distribution-search__uk7ysgr__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network distribution-search__uk7ysgr__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container distribution-search__uk7ysgr__env-main-1 Creating 
+failed to create network distribution-search__uk7ysgr__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial mteb-retrieve__ECeZ79k failed: Docker compose command failed for environment mteb-retrieve. Command: docker compose --project-name mteb-retrieve__ecez79k__env --project-directory /Users/kyooni18/.cache/harbor/tasks/J63TLMqMZcCeiRe8KAiy5T/mteb-retrieve/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpuhe97imt/mteb-retrieve__ECeZ79k__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwqa81sku/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppcpudbgm/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/mteb-retrieve:20251031 Pulling 
+ Image alexgshaw/mteb-retrieve:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Trial pypi-server__j7oo59S failed: Docker compose command failed for environment pypi-server. Command: docker compose --project-name pypi-server__j7oo59s__env --project-directory /Users/kyooni18/.cache/harbor/tasks/LEz4caXvpzU9rMBzsJnZA6/pypi-server/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpci4cvnc5/pypi-server__j7oo59S__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptjdcqw5v/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0_0ehwjw/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network pypi-server__j7oo59s__env_default Creating 
+ Network pypi-server__j7oo59s__env_default Creating 
+ Network pypi-server__j7oo59s__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network pypi-server__j7oo59s__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container pypi-server__j7oo59s__env-main-1 Creating 
+failed to create network pypi-server__j7oo59s__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial custom-memory-heap-crash__e8cmwCo failed: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__e8cmwco__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp19p17pct/custom-memory-heap-crash__e8cmwCo__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9r823fr9/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzby7qtwp/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network custom-memory-heap-crash__e8cmwco__env_default Creating 
+ Network custom-memory-heap-crash__e8cmwco__env_default Creating 
+ Network custom-memory-heap-crash__e8cmwco__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network custom-memory-heap-crash__e8cmwco__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container custom-memory-heap-crash__e8cmwco__env-main-1 Creating 
+failed to create network custom-memory-heap-crash__e8cmwco__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Trial adaptive-rejection-sampler__rkYbMKG failed: Docker compose command failed for environment adaptive-rejection-sampler. Command: docker compose --project-name adaptive-rejection-sampler__rkybmkg__env --project-directory /Users/kyooni18/.cache/harbor/tasks/gaFWu2WFUf2THiMG8Ezdxo/adaptive-rejection-sampler/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvr3iyyh_/adaptive-rejection-sampler__rkYbMKG__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzpohq_t2/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbo00_510/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network adaptive-rejection-sampler__rkybmkg__env_default Creating 
+ Network adaptive-rejection-sampler__rkybmkg__env_default Creating 
+ Network adaptive-rejection-sampler__rkybmkg__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network adaptive-rejection-sampler__rkybmkg__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container adaptive-rejection-sampler__rkybmkg__env-main-1 Creating 
+failed to create network adaptive-rejection-sampler__rkybmkg__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Trial multi-source-data-merger__LqEX7Sr failed: Docker compose command failed for environment multi-source-data-merger. Command: docker compose --project-name multi-source-data-merger__lqex7sr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/cMPqfgxjNH2qnnDVdWSFb8/multi-source-data-merger/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2x7talf2/multi-source-data-merger__LqEX7Sr__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpokosmr6j/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpp549pbgn/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network multi-source-data-merger__lqex7sr__env_default Creating 
+ Network multi-source-data-merger__lqex7sr__env_default Creating 
+ Network multi-source-data-merger__lqex7sr__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network multi-source-data-merger__lqex7sr__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container multi-source-data-merger__lqex7sr__env-main-1 Creating 
+failed to create network multi-source-data-merger__lqex7sr__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/chess-best-move:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/cobol-modernization:20251031: docker inspect returned 1
+Trial configure-git-webserver__7F5D2cF failed: Docker compose command failed for environment configure-git-webserver. Command: docker compose --project-name configure-git-webserver__7f5d2cf__env --project-directory /Users/kyooni18/.cache/harbor/tasks/c3FnWBpp4RmfpMvyGn8Wpv/configure-git-webserver/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp73do_438/configure-git-webserver__7F5D2cF__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxsjx1tir/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpb1t46q82/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network configure-git-webserver__7f5d2cf__env_default Creating 
+ Network configure-git-webserver__7f5d2cf__env_default Creating 
+ Network configure-git-webserver__7f5d2cf__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network configure-git-webserver__7f5d2cf__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container configure-git-webserver__7f5d2cf__env-main-1 Creating 
+failed to create network configure-git-webserver__7f5d2cf__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Trial crack-7z-hash__M6KcYjg failed: Docker compose command failed for environment crack-7z-hash. Command: docker compose --project-name crack-7z-hash__m6kcyjg__env --project-directory /Users/kyooni18/.cache/harbor/tasks/MAyhSNHCZegJvZuPyTitjJ/crack-7z-hash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpx0na1f1e/crack-7z-hash__M6KcYjg__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdzwccoj0/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_ug35kod/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network crack-7z-hash__m6kcyjg__env_default Creating 
+ Network crack-7z-hash__m6kcyjg__env_default Creating 
+ Network crack-7z-hash__m6kcyjg__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network crack-7z-hash__m6kcyjg__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container crack-7z-hash__m6kcyjg__env-main-1 Creating 
+failed to create network crack-7z-hash__m6kcyjg__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/overfull-hbox:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/polyglot-rust-c:20251031: docker inspect returned 1
+Trial chess-best-move__df2fYiK failed: Docker compose command failed for environment chess-best-move. Command: docker compose --project-name chess-best-move__df2fyik__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7bFmFkDrFkAzWEnmNWFgw9/chess-best-move/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpp1ig6d0h/chess-best-move__df2fYiK__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpfg9jsf0a/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpohssw_ya/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/chess-best-move:20251031 Pulling 
+ Image alexgshaw/chess-best-move:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Trial cobol-modernization__omUYoYd failed: Docker compose command failed for environment cobol-modernization. Command: docker compose --project-name cobol-modernization__omuyoyd__env --project-directory /Users/kyooni18/.cache/harbor/tasks/SmKKTsxNnHaHqhzng8SrD2/cobol-modernization/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpofm0j6bi/cobol-modernization__omUYoYd__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpv70tcr6k/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpphnbamba/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/cobol-modernization:20251031 Pulling 
+ Image alexgshaw/cobol-modernization:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial overfull-hbox__W4xPbn2 failed: Docker compose command failed for environment overfull-hbox. Command: docker compose --project-name overfull-hbox__w4xpbn2__env --project-directory /Users/kyooni18/.cache/harbor/tasks/ca36CXF7yAdWnRdpyfoihT/overfull-hbox/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpb4pw3tjg/overfull-hbox__W4xPbn2__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpn01eakvn/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpf87gonsm/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/overfull-hbox:20251031 Pulling 
+ Image alexgshaw/overfull-hbox:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial polyglot-rust-c__gAzQHT6 failed: Docker compose command failed for environment polyglot-rust-c. Command: docker compose --project-name polyglot-rust-c__gazqht6__env --project-directory /Users/kyooni18/.cache/harbor/tasks/hf6AShq4ZZHdwGTt8JGpEG/polyglot-rust-c/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp5xllqsx4/polyglot-rust-c__gAzQHT6__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmphf6qppnr/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1yzu4yq0/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/polyglot-rust-c:20251031 Pulling 
+ Image alexgshaw/polyglot-rust-c:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/hf-model-inference:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/compile-compcert:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/db-wal-recovery:20251031: docker inspect returned 1
+Trial hf-model-inference__5gPRBzR failed: Docker compose command failed for environment hf-model-inference. Command: docker compose --project-name hf-model-inference__5gprbzr__env --project-directory /Users/kyooni18/.cache/harbor/tasks/DcF3L5bfEpwdBkhfr3hgHe/hf-model-inference/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4no6wgr5/hf-model-inference__5gPRBzR__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpm91uwqy9/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpij3lf8by/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/hf-model-inference:20251031 Pulling 
+ Image alexgshaw/hf-model-inference:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/headless-terminal:20251031: docker inspect returned 1
+Trial compile-compcert__MdPaurP failed: Docker compose command failed for environment compile-compcert. Command: docker compose --project-name compile-compcert__mdpaurp__env --project-directory /Users/kyooni18/.cache/harbor/tasks/QDMuuRtnbx7cWNzKkXsGhM/compile-compcert/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpo_qdfumd/compile-compcert__MdPaurP__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpnk1qhz8o/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpn_cv2enz/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/compile-compcert:20251031 Pulling 
+ Image alexgshaw/compile-compcert:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/fix-git:20251031: docker inspect returned 1
+Trial db-wal-recovery__Xm4AoJv failed: Docker compose command failed for environment db-wal-recovery. Command: docker compose --project-name db-wal-recovery__xm4aojv__env --project-directory /Users/kyooni18/.cache/harbor/tasks/X4QTPPGhjzjJSVbTTETRUK/db-wal-recovery/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvbt0iqra/db-wal-recovery__Xm4AoJv__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzqh0wve0/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppo3o5pcn/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/db-wal-recovery:20251031 Pulling 
+ Image alexgshaw/db-wal-recovery:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/schemelike-metacircular-eval:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/qemu-startup:20251031: docker inspect returned 1
+Trial headless-terminal__3AST2xC failed: Docker compose command failed for environment headless-terminal. Command: docker compose --project-name headless-terminal__3ast2xc__env --project-directory /Users/kyooni18/.cache/harbor/tasks/KSwQXLapvDLmcHTvZcJVQG/headless-terminal/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpa_uco0vq/headless-terminal__3AST2xC__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpterc6ulo/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpe1y58kvb/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/headless-terminal:20251031 Pulling 
+ Image alexgshaw/headless-terminal:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial fix-git__4qBdm88 failed: Docker compose command failed for environment fix-git. Command: docker compose --project-name fix-git__4qbdm88__env --project-directory /Users/kyooni18/.cache/harbor/tasks/kzqjKVWxvHZxV5xyLNLqJi/fix-git/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpe3_h3awe/fix-git__4qBdm88__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp601o_4xd/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmplt9et12t/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/fix-git:20251031 Pulling 
+ Image alexgshaw/fix-git:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/build-pov-ray:20251031: docker inspect returned 1
+Collecting main service artifacts
+Trial schemelike-metacircular-eval__HhfFNhe failed: Docker compose command failed for environment schemelike-metacircular-eval. Command: docker compose --project-name schemelike-metacircular-eval__hhffnhe__env --project-directory /Users/kyooni18/.cache/harbor/tasks/YkDjArg6hKdFYEmdiPrztY/schemelike-metacircular-eval/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpor1urfdx/schemelike-metacircular-eval__HhfFNhe__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpro4dfl5g/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpn8kej2wq/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/schemelike-metacircular-eval:20251031 Pulling 
+ Image alexgshaw/schemelike-metacircular-eval:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Trial qemu-startup__WzoUte8 failed: Docker compose command failed for environment qemu-startup. Command: docker compose --project-name qemu-startup__wzoute8__env --project-directory /Users/kyooni18/.cache/harbor/tasks/gHS2mTGhPaYTuJWpCkw4J9/qemu-startup/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxi26m8td/qemu-startup__WzoUte8__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_bs8zgtb/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpccrr6i0x/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/qemu-startup:20251031 Pulling 
+ Image alexgshaw/qemu-startup:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial build-pov-ray__AinEDfy failed: Docker compose command failed for environment build-pov-ray. Command: docker compose --project-name build-pov-ray__ainedfy__env --project-directory /Users/kyooni18/.cache/harbor/tasks/H9EGgCK3p6caXKKnhsqu6a/build-pov-ray/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4mf03ttb/build-pov-ray__AinEDfy__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0ah60l_m/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpges7b671/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/build-pov-ray:20251031 Pulling 
+ Image alexgshaw/build-pov-ray:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/git-multibranch:20251031: docker inspect returned 1
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/train-fasttext:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/video-processing:20251031: docker inspect returned 1
+Trial git-multibranch__ae9cVbf failed: Docker compose command failed for environment git-multibranch. Command: docker compose --project-name git-multibranch__ae9cvbf__env --project-directory /Users/kyooni18/.cache/harbor/tasks/kLfrAkLDVW7LCezLUHt4oB/git-multibranch/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpy5q0at5m/git-multibranch__ae9cVbf__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp53jeroh_/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7veab33n/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/git-multibranch:20251031 Pulling 
+ Image alexgshaw/git-multibranch:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/qemu-alpine-ssh:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/kv-store-grpc:20251031: docker inspect returned 1
+Trial train-fasttext__zepDcCk failed: Docker compose command failed for environment train-fasttext. Command: docker compose --project-name train-fasttext__zepdcck__env --project-directory /Users/kyooni18/.cache/harbor/tasks/QUdXqzZFwRrgRZ7SPHyxto/train-fasttext/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpz3ai7pcx/train-fasttext__zepDcCk__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp99wm9pgc/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2hjzltf9/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/train-fasttext:20251031 Pulling 
+ Image alexgshaw/train-fasttext:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/install-windows-3.11:20251031: docker inspect returned 1
+Trial video-processing__n5QBZud failed: Docker compose command failed for environment video-processing. Command: docker compose --project-name video-processing__n5qbzud__env --project-directory /Users/kyooni18/.cache/harbor/tasks/QU8iD2bMsFXumTCQhnBiGz/video-processing/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_2o14xi1/video-processing__n5QBZud__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0byps49t/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpilynqm04/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/video-processing:20251031 Pulling 
+ Image alexgshaw/video-processing:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial qemu-alpine-ssh__fLDBXdY failed: Docker compose command failed for environment qemu-alpine-ssh. Command: docker compose --project-name qemu-alpine-ssh__fldbxdy__env --project-directory /Users/kyooni18/.cache/harbor/tasks/YiQMoSRPZzKeHRDhZkwmyd/qemu-alpine-ssh/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsdebsh3v/qemu-alpine-ssh__fLDBXdY__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpmqdj_5j0/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp11hddaj8/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/qemu-alpine-ssh:20251031 Pulling 
+ Image alexgshaw/qemu-alpine-ssh:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/make-doom-for-mips:20251031: docker inspect returned 1
+Trial kv-store-grpc__HGCBx4R failed: Docker compose command failed for environment kv-store-grpc. Command: docker compose --project-name kv-store-grpc__hgcbx4r__env --project-directory /Users/kyooni18/.cache/harbor/tasks/JGX6wXigbfSgX6m298mcKW/kv-store-grpc/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7vpnkcia/kv-store-grpc__HGCBx4R__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdwwim__u/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpd6q81xig/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/kv-store-grpc:20251031 Pulling 
+ Image alexgshaw/kv-store-grpc:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/torch-pipeline-parallelism:20251031: docker inspect returned 1
+Trial install-windows-3.11__iPdqyga failed: Docker compose command failed for environment install-windows-3.11. Command: docker compose --project-name install-windows-3-11__ipdqyga__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7s8y623XYuDhmBG6ERABwC/install-windows-3.11/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxggdqxcd/install-windows-3.11__iPdqyga__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpm_udkwae/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpnpgpk9tp/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/install-windows-3.11:20251031 Pulling 
+ Image alexgshaw/install-windows-3.11:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Trial make-doom-for-mips__mD6k8Pz failed: Docker compose command failed for environment make-doom-for-mips. Command: docker compose --project-name make-doom-for-mips__md6k8pz__env --project-directory /Users/kyooni18/.cache/harbor/tasks/2gm9aAxh3ufEHTNAcZ8qB3/make-doom-for-mips/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpycj9igiz/make-doom-for-mips__mD6k8Pz__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9_qziisv/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpd28k11q0/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/make-doom-for-mips:20251031 Pulling 
+ Image alexgshaw/make-doom-for-mips:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Trial torch-pipeline-parallelism__wAVcZHh failed: Docker compose command failed for environment torch-pipeline-parallelism. Command: docker compose --project-name torch-pipeline-parallelism__wavczhh__env --project-directory /Users/kyooni18/.cache/harbor/tasks/K56RXLv9fW76nGzkYythKB/torch-pipeline-parallelism/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpz8ibo7uw/torch-pipeline-parallelism__wAVcZHh__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpi_ryornz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmporkw87l9/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/torch-pipeline-parallelism:20251031 Pulling 
+ Image alexgshaw/torch-pipeline-parallelism:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/tune-mjcf:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/extract-moves-from-video:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/gcode-to-text:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/make-mips-interpreter:20251031: docker inspect returned 1
+Trial tune-mjcf__Hh8Hgfa failed: Docker compose command failed for environment tune-mjcf. Command: docker compose --project-name tune-mjcf__hh8hgfa__env --project-directory /Users/kyooni18/.cache/harbor/tasks/jWu5FXBKfqdBD9LqMa9a2N/tune-mjcf/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nlrsgro/tune-mjcf__Hh8Hgfa__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpyqcb42k4/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp5j1rtvhv/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/tune-mjcf:20251031 Pulling 
+ Image alexgshaw/tune-mjcf:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/count-dataset-tokens:20251031: docker inspect returned 1
+Trial extract-moves-from-video__BpVfK5t failed: Docker compose command failed for environment extract-moves-from-video. Command: docker compose --project-name extract-moves-from-video__bpvfk5t__env --project-directory /Users/kyooni18/.cache/harbor/tasks/bDZ3NNHZSFq2MH6CzCTykb/extract-moves-from-video/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvu0mj3wt/extract-moves-from-video__BpVfK5t__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpamnv34p4/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppx2j9580/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/extract-moves-from-video:20251031 Pulling 
+ Image alexgshaw/extract-moves-from-video:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial gcode-to-text__mSsYikt failed: Docker compose command failed for environment gcode-to-text. Command: docker compose --project-name gcode-to-text__mssyikt__env --project-directory /Users/kyooni18/.cache/harbor/tasks/JK5CeLoen6gxrbEkrjQ94D/gcode-to-text/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqt7_vl49/gcode-to-text__mSsYikt__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpb6jxgx62/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwm8xs085/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/gcode-to-text:20251031 Pulling 
+ Image alexgshaw/gcode-to-text:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/circuit-fibsqrt:20251031: docker inspect returned 1
+Trial make-mips-interpreter__Pie9NUS failed: Docker compose command failed for environment make-mips-interpreter. Command: docker compose --project-name make-mips-interpreter__pie9nus__env --project-directory /Users/kyooni18/.cache/harbor/tasks/LeNjAXy6fbV5X852Td8iV9/make-mips-interpreter/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpk_gg1g2q/make-mips-interpreter__Pie9NUS__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwyyygsus/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzcztzu5m/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/make-mips-interpreter:20251031 Pulling 
+ Image alexgshaw/make-mips-interpreter:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/mteb-leaderboard:20251031: docker inspect returned 1
+Trial count-dataset-tokens__QCa2Nzt failed: Docker compose command failed for environment count-dataset-tokens. Command: docker compose --project-name count-dataset-tokens__qca2nzt__env --project-directory /Users/kyooni18/.cache/harbor/tasks/V8M9GUmT67TmSKo9FQTdoC/count-dataset-tokens/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbcqm7_ib/count-dataset-tokens__QCa2Nzt__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp3j5o2ofz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdkr8xnon/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/count-dataset-tokens:20251031 Pulling 
+ Image alexgshaw/count-dataset-tokens:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/mailman:20251031: docker inspect returned 1
+Trial circuit-fibsqrt__p4DHTUg failed: Docker compose command failed for environment circuit-fibsqrt. Command: docker compose --project-name circuit-fibsqrt__p4dhtug__env --project-directory /Users/kyooni18/.cache/harbor/tasks/dqWUpJXGGPsFGfnuwx6Car/circuit-fibsqrt/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpswh2wsxs/circuit-fibsqrt__p4DHTUg__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkf7qkztm/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpio18xn00/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/circuit-fibsqrt:20251031 Pulling 
+ Image alexgshaw/circuit-fibsqrt:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Trial mteb-leaderboard__Ky3vDk8 failed: Docker compose command failed for environment mteb-leaderboard. Command: docker compose --project-name mteb-leaderboard__ky3vdk8__env --project-directory /Users/kyooni18/.cache/harbor/tasks/3aN2GgseP4MfXC7ixV7cXB/mteb-leaderboard/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpl__y9gz5/mteb-leaderboard__Ky3vDk8__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpi5o80kly/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpshns00rr/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/mteb-leaderboard:20251031 Pulling 
+ Image alexgshaw/mteb-leaderboard:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Trial mailman__C4MrRsv failed: Docker compose command failed for environment mailman. Command: docker compose --project-name mailman__c4mrrsv__env --project-directory /Users/kyooni18/.cache/harbor/tasks/oJLBu7weukw33iq9PEf26P/mailman/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmphbl2kd59/mailman__C4MrRsv__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpo8ic_zkz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0cdhs_ap/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/mailman:20251031 Pulling 
+ Image alexgshaw/mailman:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/raman-fitting:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/query-optimize:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/extract-elf:20251031: docker inspect returned 1
+Trial raman-fitting__XPs8Uvn failed: Docker compose command failed for environment raman-fitting. Command: docker compose --project-name raman-fitting__xps8uvn__env --project-directory /Users/kyooni18/.cache/harbor/tasks/kWbDWup9MzjJLPn6gz9P6H/raman-fitting/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwvgy_b1h/raman-fitting__XPs8Uvn__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp365cr_yy/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpicjhi3sm/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/raman-fitting:20251031 Pulling 
+ Image alexgshaw/raman-fitting:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/protein-assembly:20251031: docker inspect returned 1
+Trial query-optimize__QemaAzL failed: Docker compose command failed for environment query-optimize. Command: docker compose --project-name query-optimize__qemaazl__env --project-directory /Users/kyooni18/.cache/harbor/tasks/55spjFHXbhXqhkHUB3xfBL/query-optimize/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdoh37ko9/query-optimize__QemaAzL__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpy8llcigx/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpjvus8evm/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/query-optimize:20251031 Pulling 
+ Image alexgshaw/query-optimize:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/code-from-image:20251031: docker inspect returned 1
+Trial extract-elf__mnnzDc6 failed: Docker compose command failed for environment extract-elf. Command: docker compose --project-name extract-elf__mnnzdc6__env --project-directory /Users/kyooni18/.cache/harbor/tasks/3HV9wmSrWRW9TuYurepoFx/extract-elf/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpy_m61ht6/extract-elf__mnnzDc6__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqvcqcwjo/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdvqvpba3/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/extract-elf:20251031 Pulling 
+ Image alexgshaw/extract-elf:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/fix-code-vulnerability:20251031: docker inspect returned 1
+Trial protein-assembly__VJwdQBG failed: Docker compose command failed for environment protein-assembly. Command: docker compose --project-name protein-assembly__vjwdqbg__env --project-directory /Users/kyooni18/.cache/harbor/tasks/mJUNThPAPTj7sAa9DCoPrh/protein-assembly/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpgc8cu_8b/protein-assembly__VJwdQBG__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptpiy6r0b/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpk_7yz03j/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/protein-assembly:20251031 Pulling 
+ Image alexgshaw/protein-assembly:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/financial-document-processor:20251031: docker inspect returned 1
+Trial code-from-image__mLt8wDu failed: Docker compose command failed for environment code-from-image. Command: docker compose --project-name code-from-image__mlt8wdu__env --project-directory /Users/kyooni18/.cache/harbor/tasks/KRPXswDf2LBuozQgKhCqnG/code-from-image/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqpy37smv/code-from-image__mLt8wDu__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbznln_zo/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpylt_7wrj/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/code-from-image:20251031 Pulling 
+ Image alexgshaw/code-from-image:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/mcmc-sampling-stan:20251031: docker inspect returned 1
+Collecting main service artifacts
+Trial fix-code-vulnerability__YBbjimJ failed: Docker compose command failed for environment fix-code-vulnerability. Command: docker compose --project-name fix-code-vulnerability__ybbjimj__env --project-directory /Users/kyooni18/.cache/harbor/tasks/2XNt9VEmH8r9FJdPeH9UxU/fix-code-vulnerability/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsa2fnfvi/fix-code-vulnerability__YBbjimJ__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpv7x5wo_x/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxwvndc2m/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/fix-code-vulnerability:20251031 Pulling 
+ Image alexgshaw/fix-code-vulnerability:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Trial financial-document-processor__YEg6jr2 failed: Docker compose command failed for environment financial-document-processor. Command: docker compose --project-name financial-document-processor__yeg6jr2__env --project-directory /Users/kyooni18/.cache/harbor/tasks/T9eC49XFCYopUM2bDKgar3/financial-document-processor/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_k9_djvx/financial-document-processor__YEg6jr2__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpst01i3ib/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkx2x5m5e/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/financial-document-processor:20251031 Pulling 
+ Image alexgshaw/financial-document-processor:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial mcmc-sampling-stan__bW3w9AA failed: Docker compose command failed for environment mcmc-sampling-stan. Command: docker compose --project-name mcmc-sampling-stan__bw3w9aa__env --project-directory /Users/kyooni18/.cache/harbor/tasks/jAoUooKp48ZpCL53Ra9yUk/mcmc-sampling-stan/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpnu3ibwug/mcmc-sampling-stan__bW3w9AA__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpk50osk4j/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpafzp9ctt/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/mcmc-sampling-stan:20251031 Pulling 
+ Image alexgshaw/mcmc-sampling-stan:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/regex-log:20251031: docker inspect returned 1
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/filter-js-from-html:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/feal-differential-cryptanalysis:20251031: docker inspect returned 1
+Trial regex-log__EN5iVtX failed: Docker compose command failed for environment regex-log. Command: docker compose --project-name regex-log__en5ivtx__env --project-directory /Users/kyooni18/.cache/harbor/tasks/ByGtvRdgQehLA6H7TL8cfS/regex-log/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppx1o9gd5/regex-log__EN5iVtX__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpt3rxo_pf/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwagpe3km/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/regex-log:20251031 Pulling 
+ Image alexgshaw/regex-log:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/polyglot-c-py:20251031: docker inspect returned 1
+Trial filter-js-from-html__wYZhgG4 failed: Docker compose command failed for environment filter-js-from-html. Command: docker compose --project-name filter-js-from-html__wyzhgg4__env --project-directory /Users/kyooni18/.cache/harbor/tasks/SeKnWxFXAqYwFdRQvLn2Wk/filter-js-from-html/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpicctzsia/filter-js-from-html__wYZhgG4__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvs9nyto2/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp5ztagx76/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/filter-js-from-html:20251031 Pulling 
+ Image alexgshaw/filter-js-from-html:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/cancel-async-tasks:20251031: docker inspect returned 1
+Trial feal-differential-cryptanalysis__bLJJ8CV failed: Docker compose command failed for environment feal-differential-cryptanalysis. Command: docker compose --project-name feal-differential-cryptanalysis__bljj8cv__env --project-directory /Users/kyooni18/.cache/harbor/tasks/RyWCxfjAf9RhapMxS2dMks/feal-differential-cryptanalysis/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbcgz2bwb/feal-differential-cryptanalysis__bLJJ8CV__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptr2t9125/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkqny324f/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/feal-differential-cryptanalysis:20251031 Pulling 
+ Image alexgshaw/feal-differential-cryptanalysis:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/bn-fit-modify:20251031: docker inspect returned 1
+Trial polyglot-c-py__FJccJvT failed: Docker compose command failed for environment polyglot-c-py. Command: docker compose --project-name polyglot-c-py__fjccjvt__env --project-directory /Users/kyooni18/.cache/harbor/tasks/mQoDwFSymGYHYWpETANa3y/polyglot-c-py/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpx8y_02tj/polyglot-c-py__FJccJvT__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_fmwck49/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpi4irldy1/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/polyglot-c-py:20251031 Pulling 
+ Image alexgshaw/polyglot-c-py:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/fix-ocaml-gc:20251031: docker inspect returned 1
+Trial cancel-async-tasks__9CQxty7 failed: Docker compose command failed for environment cancel-async-tasks. Command: docker compose --project-name cancel-async-tasks__9cqxty7__env --project-directory /Users/kyooni18/.cache/harbor/tasks/5pwPaf92MGZBJjvqnuBn9d/cancel-async-tasks/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp863pc2pc/cancel-async-tasks__9CQxty7__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqevbl1yu/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpi18kt35v/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/cancel-async-tasks:20251031 Pulling 
+ Image alexgshaw/cancel-async-tasks:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Skipping image OS validation for alexgshaw/git-leak-recovery:20251031: docker inspect returned 1
+Trial bn-fit-modify__3uWpFUy failed: Docker compose command failed for environment bn-fit-modify. Command: docker compose --project-name bn-fit-modify__3uwpfuy__env --project-directory /Users/kyooni18/.cache/harbor/tasks/XX65orYkXVMqTQu7C3JUZY/bn-fit-modify/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpyien41n0/bn-fit-modify__3uWpFUy__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppzo8zpxz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbj7o5pew/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/bn-fit-modify:20251031 Pulling 
+ Image alexgshaw/bn-fit-modify:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Trial fix-ocaml-gc__odFmnLo failed: Docker compose command failed for environment fix-ocaml-gc. Command: docker compose --project-name fix-ocaml-gc__odfmnlo__env --project-directory /Users/kyooni18/.cache/harbor/tasks/dXxv47w6VWWtstSMMiefPe/fix-ocaml-gc/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0kmznu17/fix-ocaml-gc__odFmnLo__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0pb_iysp/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpgqce3vzb/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/fix-ocaml-gc:20251031 Pulling 
+ Image alexgshaw/fix-ocaml-gc:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial git-leak-recovery__vDJkPdD failed: Docker compose command failed for environment git-leak-recovery. Command: docker compose --project-name git-leak-recovery__vdjkpdd__env --project-directory /Users/kyooni18/.cache/harbor/tasks/mig33pqGgsU4uNZ5dgPebg/git-leak-recovery/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp35910z6g/git-leak-recovery__vDJkPdD__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbwn3tbiz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpujqq86vg/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/git-leak-recovery:20251031 Pulling 
+ Image alexgshaw/git-leak-recovery:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/build-cython-ext:20251031: docker inspect returned 1
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/pytorch-model-recovery:20251031: docker inspect returned 1
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/sam-cell-seg:20251031: docker inspect returned 1
+Trial build-cython-ext__BBWDAUo failed: Docker compose command failed for environment build-cython-ext. Command: docker compose --project-name build-cython-ext__bbwdauo__env --project-directory /Users/kyooni18/.cache/harbor/tasks/GCqHhNMgC2jpcy3h8te5A7/build-cython-ext/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmphau23c92/build-cython-ext__BBWDAUo__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpll2gkrt7/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpu3mrenlr/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/build-cython-ext:20251031 Pulling 
+ Image alexgshaw/build-cython-ext:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/model-extraction-relu-logits:20251031: docker inspect returned 1
+Trial pytorch-model-recovery__Nk5pEE2 failed: Docker compose command failed for environment pytorch-model-recovery. Command: docker compose --project-name pytorch-model-recovery__nk5pee2__env --project-directory /Users/kyooni18/.cache/harbor/tasks/axUgVSxE9sjGUEHETA9Ddx/pytorch-model-recovery/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpx7s1q_x_/pytorch-model-recovery__Nk5pEE2__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsf9j0tp8/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdohiaspw/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/pytorch-model-recovery:20251031 Pulling 
+ Image alexgshaw/pytorch-model-recovery:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/nginx-request-logging:20251031: docker inspect returned 1
+Trial sam-cell-seg__FmWjuhb failed: Docker compose command failed for environment sam-cell-seg. Command: docker compose --project-name sam-cell-seg__fmwjuhb__env --project-directory /Users/kyooni18/.cache/harbor/tasks/n9EXHRQn8C4KGZQgXQEvZU/sam-cell-seg/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbfzdxegy/sam-cell-seg__FmWjuhb__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppzwdgdf_/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7r2vne3l/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sam-cell-seg:20251031 Pulling 
+ Image alexgshaw/sam-cell-seg:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/sparql-university:20251031: docker inspect returned 1
+Trial model-extraction-relu-logits__KghcD3A failed: Docker compose command failed for environment model-extraction-relu-logits. Command: docker compose --project-name model-extraction-relu-logits__kghcd3a__env --project-directory /Users/kyooni18/.cache/harbor/tasks/8WGyid6WdyvC3RsCcr7kLU/model-extraction-relu-logits/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpfci53gxp/model-extraction-relu-logits__KghcD3A__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpezrzxpc5/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmprhng6o41/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/model-extraction-relu-logits:20251031 Pulling 
+ Image alexgshaw/model-extraction-relu-logits:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/large-scale-text-editing:20251031: docker inspect returned 1
+Trial nginx-request-logging__y7ad5VE failed: Docker compose command failed for environment nginx-request-logging. Command: docker compose --project-name nginx-request-logging__y7ad5ve__env --project-directory /Users/kyooni18/.cache/harbor/tasks/eUViXxKXCzTue7ywZW59ct/nginx-request-logging/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpc9jwrj6k/nginx-request-logging__y7ad5VE__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_muxk_cc/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvcs45wy0/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/nginx-request-logging:20251031 Pulling 
+ Image alexgshaw/nginx-request-logging:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Skipping image OS validation for alexgshaw/sqlite-db-truncate:20251031: docker inspect returned 1
+Trial sparql-university__Tx5BguA failed: Docker compose command failed for environment sparql-university. Command: docker compose --project-name sparql-university__tx5bgua__env --project-directory /Users/kyooni18/.cache/harbor/tasks/RNEJHNxbtKQgmztc6q4aKb/sparql-university/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqkged7_6/sparql-university__Tx5BguA__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptfpdvrl6/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0obcdpt7/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sparql-university:20251031 Pulling 
+ Image alexgshaw/sparql-university:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Trial large-scale-text-editing__zBSW7Bh failed: Docker compose command failed for environment large-scale-text-editing. Command: docker compose --project-name large-scale-text-editing__zbsw7bh__env --project-directory /Users/kyooni18/.cache/harbor/tasks/S2VRUfRKCUQ2hWH9KJzsbK/large-scale-text-editing/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp3oelihb9/large-scale-text-editing__zBSW7Bh__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpckpyyj28/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmps68sfy_a/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/large-scale-text-editing:20251031 Pulling 
+ Image alexgshaw/large-scale-text-editing:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial sqlite-db-truncate__TvpZwQa failed: Docker compose command failed for environment sqlite-db-truncate. Command: docker compose --project-name sqlite-db-truncate__tvpzwqa__env --project-directory /Users/kyooni18/.cache/harbor/tasks/2hEZAwigfHAA5cnDNAJvfT/sqlite-db-truncate/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpoltqqgw7/sqlite-db-truncate__TvpZwQa__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpmd5udbbi/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp31bn18_e/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sqlite-db-truncate:20251031 Pulling 
+ Image alexgshaw/sqlite-db-truncate:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/sanitize-git-repo:20251031: docker inspect returned 1
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/build-pmars:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/rstan-to-pystan:20251031: docker inspect returned 1
+Trial sanitize-git-repo__F484ioq failed: Docker compose command failed for environment sanitize-git-repo. Command: docker compose --project-name sanitize-git-repo__f484ioq__env --project-directory /Users/kyooni18/.cache/harbor/tasks/WNjEws4zKtRNWJABpoU892/sanitize-git-repo/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp5dhpnb3j/sanitize-git-repo__F484ioq__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp41o7klcz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmps6gjgotg/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sanitize-git-repo:20251031 Pulling 
+ Image alexgshaw/sanitize-git-repo:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Skipping image OS validation for alexgshaw/sqlite-with-gcov:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/openssl-selfsigned-cert:20251031: docker inspect returned 1
+Trial build-pmars__4ciNbPD failed: Docker compose command failed for environment build-pmars. Command: docker compose --project-name build-pmars__4cinbpd__env --project-directory /Users/kyooni18/.cache/harbor/tasks/TXGXVihdFyGLhhWJdjKoXE/build-pmars/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpznr1hjek/build-pmars__4ciNbPD__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_igjrcd8/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmppnm795cn/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/build-pmars:20251031 Pulling 
+ Image alexgshaw/build-pmars:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial rstan-to-pystan__8mAV23C failed: Docker compose command failed for environment rstan-to-pystan. Command: docker compose --project-name rstan-to-pystan__8mav23c__env --project-directory /Users/kyooni18/.cache/harbor/tasks/869oU8dUyJHL4uUFPzhKJM/rstan-to-pystan/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsujjm7q3/rstan-to-pystan__8mAV23C__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxl0xc6u7/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpn4reu0v2/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/rstan-to-pystan:20251031 Pulling 
+ Image alexgshaw/rstan-to-pystan:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Trial sqlite-with-gcov__MqEyAku failed: Docker compose command failed for environment sqlite-with-gcov. Command: docker compose --project-name sqlite-with-gcov__mqeyaku__env --project-directory /Users/kyooni18/.cache/harbor/tasks/ZDKh9BtehT8SorZTrWLJsn/sqlite-with-gcov/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1tqcqqa5/sqlite-with-gcov__MqEyAku__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8fmaso81/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2gnf4b4r/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sqlite-with-gcov:20251031 Pulling 
+ Image alexgshaw/sqlite-with-gcov:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Trial openssl-selfsigned-cert__T6mtGDg failed: Docker compose command failed for environment openssl-selfsigned-cert. Command: docker compose --project-name openssl-selfsigned-cert__t6mtgdg__env --project-directory /Users/kyooni18/.cache/harbor/tasks/Skg3RaRNtgRKSRBoJaSgjx/openssl-selfsigned-cert/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpt4xjawau/openssl-selfsigned-cert__T6mtGDg__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpf3g245pk/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpofh2j7az/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/openssl-selfsigned-cert:20251031 Pulling 
+ Image alexgshaw/openssl-selfsigned-cert:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/constraints-scheduling:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/dna-insert:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/vulnerable-secret:20251031: docker inspect returned 1
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Trial constraints-scheduling__jHkArgK failed: Docker compose command failed for environment constraints-scheduling. Command: docker compose --project-name constraints-scheduling__jhkargk__env --project-directory /Users/kyooni18/.cache/harbor/tasks/CrxDfvhBFmo3ahvG2RfDM3/constraints-scheduling/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpubbaxy4_/constraints-scheduling__jHkArgK__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpw_edij8z/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpse1bpgjl/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/constraints-scheduling:20251031 Pulling 
+ Image alexgshaw/constraints-scheduling:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial dna-insert__jUyUKNj failed: Docker compose command failed for environment dna-insert. Command: docker compose --project-name dna-insert__juyuknj__env --project-directory /Users/kyooni18/.cache/harbor/tasks/Kk55pgeAWyodY7sZSnMpXw/dna-insert/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmprwr9392r/dna-insert__jUyUKNj__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpae6clqna/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpur1agajc/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/dna-insert:20251031 Pulling 
+ Image alexgshaw/dna-insert:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Trial vulnerable-secret__sYByuax failed: Docker compose command failed for environment vulnerable-secret. Command: docker compose --project-name vulnerable-secret__sybyuax__env --project-directory /Users/kyooni18/.cache/harbor/tasks/RkUWMSfgcaHLyc3cnCt62s/vulnerable-secret/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7gw8fsmg/vulnerable-secret__sYByuax__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptagrfapk/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpuissjczj/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/vulnerable-secret:20251031 Pulling 
+ Image alexgshaw/vulnerable-secret:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/dna-assembly:20251031: docker inspect returned 1
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Trial dna-assembly__moQ4YMz failed: Docker compose command failed for environment dna-assembly. Command: docker compose --project-name dna-assembly__moq4ymz__env --project-directory /Users/kyooni18/.cache/harbor/tasks/ArEmuSGC435pAkSA7cv8qw/dna-assembly/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8rmb_qbp/dna-assembly__moQ4YMz__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpx8w9bh4i/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpedmg6jow/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/dna-assembly:20251031 Pulling 
+ Image alexgshaw/dna-assembly:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Not retrying trial because the maximum number of retries has been reached
+Collecting main service artifacts
+Not retrying trial because the maximum number of retries has been reached

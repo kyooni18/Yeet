@@ -1,0 +1,8 @@
+Trial feal-linear-cryptanalysis__pcQCe8A failed: Docker compose command failed for environment feal-linear-cryptanalysis. Command: docker compose --project-name feal-linear-cryptanalysis__pcqce8a__env --project-directory /Users/kyooni18/.cache/harbor/tasks/LVyG59RRyF7y2PiCy5VT3B/feal-linear-cryptanalysis/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptxsg1v85/feal-linear-cryptanalysis__pcQCe8A__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpzxgvsmre/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2kpao8g4/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network feal-linear-cryptanalysis__pcqce8a__env_default Creating 
+ Network feal-linear-cryptanalysis__pcqce8a__env_default Creating 
+ Network feal-linear-cryptanalysis__pcqce8a__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network feal-linear-cryptanalysis__pcqce8a__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container feal-linear-cryptanalysis__pcqce8a__env-main-1 Creating 
+failed to create network feal-linear-cryptanalysis__pcqce8a__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

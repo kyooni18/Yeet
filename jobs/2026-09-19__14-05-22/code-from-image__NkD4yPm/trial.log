@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/code-from-image:20251031: docker inspect returned 1
+Trial code-from-image__NkD4yPm failed: Docker compose command failed for environment code-from-image. Command: docker compose --project-name code-from-image__nkd4ypm__env --project-directory /Users/kyooni18/.cache/harbor/tasks/KRPXswDf2LBuozQgKhCqnG/code-from-image/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpmga_3cit/code-from-image__NkD4yPm__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmplfdkd_qz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpm731q1ml/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/code-from-image:20251031 Pulling 
+ Image alexgshaw/code-from-image:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

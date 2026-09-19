@@ -21,7 +21,7 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-if [ ! -x "$BINARY" ] || [ ! -f "$RUNTIME/dist/bridge.js" ]; then
+if [ ! -x "$BINARY" ] || [ ! -f "$RUNTIME/dist/bridge.js" ] || [ ! -d "$RUNTIME/skills" ]; then
   echo "This installer must be run from an extracted Yeet release bundle." >&2
   exit 1
 fi
@@ -50,8 +50,9 @@ fi
 
 mkdir -p "$DEST" "$RUNTIME_DEST"
 install -m 755 "$BINARY" "$DEST/yeet"
-rm -rf "$RUNTIME_DEST/dist"
+rm -rf "$RUNTIME_DEST/dist" "$RUNTIME_DEST/skills"
 cp -R "$RUNTIME/dist" "$RUNTIME_DEST/dist"
+cp -R "$RUNTIME/skills" "$RUNTIME_DEST/skills"
 cp "$RUNTIME/package.json" "$RUNTIME_DEST/package.json"
 "$DEST/yeet" skyline setup >/dev/null
 

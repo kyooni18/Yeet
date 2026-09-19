@@ -1,0 +1,8 @@
+Trial custom-memory-heap-crash__PdpA4B4 failed: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__pdpa4b4__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpgkna30zk/custom-memory-heap-crash__PdpA4B4__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp3_acl51x/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpb1ps3n5g/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network custom-memory-heap-crash__pdpa4b4__env_default Creating 
+ Network custom-memory-heap-crash__pdpa4b4__env_default Creating 
+ Network custom-memory-heap-crash__pdpa4b4__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network custom-memory-heap-crash__pdpa4b4__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container custom-memory-heap-crash__pdpa4b4__env-main-1 Creating 
+failed to create network custom-memory-heap-crash__pdpa4b4__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

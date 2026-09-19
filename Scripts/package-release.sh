@@ -40,8 +40,13 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/share/yeet/runtime" "$OUT"
 install -m 755 target/release/yeet "$STAGE/bin/yeet"
 cp -R "$RUNTIME_BUILD/dist" "$STAGE/share/yeet/runtime/dist"
+cp -R RuntimeSource/skills "$STAGE/share/yeet/runtime/skills"
 cp RuntimeSource/package.json "$STAGE/share/yeet/runtime/package.json"
 cp README.md CHANGELOG.md LICENSE.txt "$STAGE/"
+[ -f "$STAGE/share/yeet/runtime/skills/pdf/SKILL.md" ] || {
+  echo "Staged release is missing bundled PDF skill" >&2
+  exit 1
+}
 cp Scripts/install-release.sh "$STAGE/install.sh"
 chmod 755 "$STAGE/install.sh"
 if [ -f docs/PLATFORM_SUPPORT.md ]; then
@@ -77,6 +82,7 @@ case "$TARGET" in
       mkdir -p "$DEB_ROOT/DEBIAN" "$DEB_ROOT/usr/bin" "$DEB_ROOT/usr/share/yeet/runtime" "$DEB_ROOT/usr/share/doc/yeet"
       install -m 755 target/release/yeet "$DEB_ROOT/usr/bin/yeet"
       cp -R "$RUNTIME_BUILD/dist" "$DEB_ROOT/usr/share/yeet/runtime/dist"
+      cp -R RuntimeSource/skills "$DEB_ROOT/usr/share/yeet/runtime/skills"
       cp RuntimeSource/package.json "$DEB_ROOT/usr/share/yeet/runtime/package.json"
       cp README.md CHANGELOG.md LICENSE.txt "$DEB_ROOT/usr/share/doc/yeet/"
       cat > "$DEB_ROOT/DEBIAN/control" <<EOF

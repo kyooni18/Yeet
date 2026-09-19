@@ -94,6 +94,21 @@ pub(super) fn tool_activity_title(name: &str) -> String {
 /// Extracts the most useful short argument for a running tool activity row.
 pub(super) fn tool_detail(call: &ToolCall) -> Option<String> {
     let args = &call.arguments;
+    // Prefer the agent's existing intent over implementation details for every tool.
+    if let Some(purpose) = args.get("purpose").and_then(Value::as_str) {
+        let clean: String = purpose
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect();
+        let clean = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !clean.is_empty() {
+            return Some(if clean.chars().count() > 160 {
+                format!("{}…", clean.chars().take(159).collect::<String>())
+            } else {
+                clean
+            });
+        }
+    }
     match call.name.as_str() {
         "apply_file_edits" => {
             let changes = args.get("changes")?.as_array()?;

@@ -9,6 +9,7 @@ import type {
   Message,
   ModelInfo,
   ProviderAdapter,
+  ProviderState,
   StreamEvent,
   ToolChoice,
 } from "../types.js";
@@ -35,19 +36,10 @@ const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
 const CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
 
 function contextManagementForRequest(request: ProviderCallRequest): unknown | undefined {
-  if (request.providerOptions && Object.prototype.hasOwnProperty.call(request.providerOptions, "context_management")) {
-    return request.providerOptions.context_management;
-  }
-  if (request.metadata?.contextManagement !== "recoverable-windows") return undefined;
-  if (!request.messages.some((message) => message.role === "tool")) return undefined;
-  return {
-    edits: [{
-      type: "clear_tool_uses_20250919",
-      trigger: { type: "input_tokens", value: 40_000 },
-      keep: { type: "tool_uses", value: 6 },
-      clear_at_least: { type: "input_tokens", value: 8_000 },
-    }],
-  };
+  // Recoverable windows own their capacity and immutable history. Provider-side
+  // tool clearing would rewrite that history even though our request is unchanged.
+  if (request.metadata?.contextManagement === "recoverable-windows") return undefined;
+  return request.providerOptions?.context_management;
 }
 
 function blockCacheControl(requested: unknown): Record<string, unknown> {
@@ -134,12 +126,28 @@ function toolResultWithDeferredReferences(
   ];
 }
 
+function anthropicThinkingBlocks(message: Message, provider: string, model: string): any[] {
+  const state = message.providerState;
+  if (!state || state.provider !== provider || state.protocol !== "anthropic-messages") return [];
+  if (state.model && state.model !== model) return [];
+  const data = state.data as any;
+  return Array.isArray(data?.thinkingBlocks) ? data.thinkingBlocks : [];
+}
+
+function anthropicProviderState(blocks: any[], provider: string, model: string): ProviderState | undefined {
+  const thinkingBlocks = blocks.filter((block) => block?.type === "thinking" || block?.type === "redacted_thinking");
+  if (thinkingBlocks.length === 0) return undefined;
+  return { provider, protocol: "anthropic-messages", model, data: { thinkingBlocks } };
+}
+
 function mapMessages(
   messages: Message[],
   promptCacheEnabled: boolean,
   cacheControl: Record<string, unknown>,
   maxExplicitBreakpoints: number,
   deferredToolNames: Set<string>,
+  provider: string,
+  model: string,
 ): unknown[] {
   const breakpointCandidates = promptCacheEnabled
     ? messages
@@ -169,6 +177,7 @@ function mapMessages(
 
     if (message.role === "assistant") {
       const content: any[] = [];
+      content.push(...anthropicThinkingBlocks(message, provider, model));
       if (message.content) content.push({ type: "text", text: message.content });
       for (const tool of message.toolCalls ?? []) {
         content.push({ type: "tool_use", id: tool.id, name: tool.name, input: tool.arguments });
@@ -201,7 +210,7 @@ function mapMessages(
   return output;
 }
 
-function requestBody(request: ProviderCallRequest, stream: boolean): Record<string, unknown> {
+function requestBody(request: ProviderCallRequest, stream: boolean, providerId = "anthropic"): Record<string, unknown> {
   // Only the immutable leading system prefix belongs in Anthropic's top-level
   // system field. Request-local coordinator overlays intentionally remain at
   // the tail, where mapMessages represents them as user guidance. Hoisting
@@ -249,13 +258,15 @@ function requestBody(request: ProviderCallRequest, stream: boolean): Record<stri
       explicitCacheControl,
       maxMessageBreakpoints,
       deferredToolNames,
+      providerId,
+      request.model,
     ),
     stream,
     ...(split.system ? { system: mapSystem(split.system, promptCacheEnabled, explicitCacheControl) } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
     ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice) } : {}),
-    ...(request.metadata ? { metadata: request.metadata } : {}),
+    ...(request.providerMetadata ? { metadata: request.providerMetadata } : {}),
     ...(contextManagement !== undefined ? { context_management: contextManagement } : {}),
     ...(automaticCacheEnabled
       ? { cache_control: blockCacheControl(requestedCacheControl) }
@@ -355,7 +366,7 @@ export class AnthropicProvider implements ProviderAdapter {
   async complete(request: ProviderCallRequest): Promise<CallResult> {
     const response = await providerFetch(
       `${this.#baseUrl}/v1/messages`,
-      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, false)) },
+      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, false, this.id)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -379,6 +390,7 @@ export class AnthropicProvider implements ProviderAdapter {
     const toolCalls = (raw.content ?? [])
       .filter((b: any) => b.type === "tool_use")
       .map((b: any, index: number) => normalizeToolCall(b.id, b.name, b.input, index));
+    const providerState = anthropicProviderState(raw.content ?? [], this.id, request.model);
     const cachedInputTokens = raw.usage?.cache_read_input_tokens;
     const cacheWriteInputTokens = cacheCreationTokens(raw.usage);
     const inputTokens = inclusiveAnthropicInputTokens(
@@ -405,6 +417,7 @@ export class AnthropicProvider implements ProviderAdapter {
       ...(reasoning ? { reasoning } : {}),
       ...(reasoningSummary ? { reasoningSummary } : {}),
       toolCalls,
+      ...(providerState ? { providerState } : {}),
       finishReason: normalizeFinishReason(raw.stop_reason),
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
       raw,
@@ -414,7 +427,7 @@ export class AnthropicProvider implements ProviderAdapter {
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
     const response = await providerFetch(
       `${this.#baseUrl}/v1/messages`,
-      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, true)) },
+      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, true, this.id)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -436,6 +449,7 @@ export class AnthropicProvider implements ProviderAdapter {
     let cacheWriteInputTokens: number | undefined;
     let reasoningTokens: number | undefined;
     const tools = new Map<number, { id?: string; name?: string; json: string }>();
+    const thinkingBlocks = new Map<number, any>();
 
     for await (const event of parseSSE(response)) {
       let raw: any;
@@ -479,10 +493,23 @@ export class AnthropicProvider implements ProviderAdapter {
           ...(raw.content_block.id ? { id: raw.content_block.id } : {}),
           ...(raw.content_block.name ? { name: raw.content_block.name } : {}),
         };
+      } else if (raw.type === "content_block_start"
+          && (raw.content_block?.type === "thinking" || raw.content_block?.type === "redacted_thinking")) {
+        const index = raw.index ?? 0;
+        thinkingBlocks.set(index, { ...raw.content_block });
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "text_delta") {
         if (raw.delta.text) yield { type: "text-delta", delta: raw.delta.text };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "thinking_delta") {
+        const index = raw.index ?? 0;
+        const current = thinkingBlocks.get(index) ?? { type: "thinking", thinking: "" };
+        current.thinking = `${current.thinking ?? ""}${raw.delta.thinking ?? ""}`;
+        thinkingBlocks.set(index, current);
         if (raw.delta.thinking) yield { type: "reasoning-delta", delta: raw.delta.thinking };
+      } else if (raw.type === "content_block_delta" && raw.delta?.type === "signature_delta") {
+        const index = raw.index ?? 0;
+        const current = thinkingBlocks.get(index) ?? { type: "thinking", thinking: "" };
+        current.signature = `${current.signature ?? ""}${raw.delta.signature ?? ""}`;
+        thinkingBlocks.set(index, current);
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "thinking_summary_delta") {
         if (raw.delta.summary) yield { type: "reasoning-summary-delta", delta: raw.delta.summary };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "input_json_delta") {
@@ -524,10 +551,16 @@ export class AnthropicProvider implements ProviderAdapter {
       reasoningTokens,
       transportAttempts,
     );
+    const normalizedProviderState = anthropicProviderState(
+      [...thinkingBlocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => block),
+      this.id,
+      request.model,
+    );
     yield {
       type: "finish",
       finishReason,
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
+      ...(normalizedProviderState ? { providerState: normalizedProviderState } : {}),
     };
   }
 }

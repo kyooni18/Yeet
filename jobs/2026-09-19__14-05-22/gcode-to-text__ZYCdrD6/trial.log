@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/gcode-to-text:20251031: docker inspect returned 1
+Trial gcode-to-text__ZYCdrD6 failed: Docker compose command failed for environment gcode-to-text. Command: docker compose --project-name gcode-to-text__zycdrd6__env --project-directory /Users/kyooni18/.cache/harbor/tasks/JK5CeLoen6gxrbEkrjQ94D/gcode-to-text/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2isjefdl/gcode-to-text__ZYCdrD6__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpc0rzh9xy/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpolp5bwk4/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/gcode-to-text:20251031 Pulling 
+ Image alexgshaw/gcode-to-text:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

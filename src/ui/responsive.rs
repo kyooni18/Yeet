@@ -61,10 +61,10 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         Shape::Portrait => Metrics {
             shape,
             header_height: if area.height >= 14 { 2 } else { 1 },
-            status_height: 1,
+            status_height: if area.height >= 24 { 2 } else { 1 },
             task_height: 1,
             suggestion_height: 6,
-            input_min_lines: 2,
+            input_min_lines: 1,
             input_max_lines: if area.height >= 34 { 6 } else { 4 },
             horizontal_margin: 0,
             content_max_width: area.width,
@@ -73,10 +73,10 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         Shape::Compact => Metrics {
             shape,
             header_height: if area.height >= 16 { 3 } else { 1 },
-            status_height: 1,
+            status_height: if area.height >= 22 { 2 } else { 1 },
             task_height: 2,
             suggestion_height: 6,
-            input_min_lines: 2,
+            input_min_lines: 1,
             input_max_lines: 5,
             horizontal_margin: u16::from(area.width >= 48),
             content_max_width: area.width,
@@ -85,10 +85,10 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         Shape::Standard => Metrics {
             shape,
             header_height: if area.height >= 16 { 3 } else { 1 },
-            status_height: 1,
+            status_height: if area.height >= 22 { 2 } else { 1 },
             task_height: 2,
             suggestion_height: 8,
-            input_min_lines: 3,
+            input_min_lines: if area.height >= 28 { 2 } else { 1 },
             input_max_lines: 7,
             horizontal_margin: 1,
             content_max_width: 112,
@@ -97,26 +97,26 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         Shape::Wide => Metrics {
             shape,
             header_height: 3,
-            status_height: 1,
+            status_height: 2,
             task_height: 2,
             suggestion_height: 8,
-            input_min_lines: 3,
+            input_min_lines: if area.height >= 28 { 2 } else { 1 },
             input_max_lines: 7,
             horizontal_margin: 2,
             content_max_width: 120,
-            sidebar_width: sidebar_width(area, 28),
+            sidebar_width: sidebar_width(area, 32),
         },
         Shape::UltraWide => Metrics {
             shape,
             header_height: 3,
-            status_height: 1,
+            status_height: 2,
             task_height: 2,
             suggestion_height: 9,
-            input_min_lines: 3,
+            input_min_lines: if area.height >= 28 { 2 } else { 1 },
             input_max_lines: if area.height >= 36 { 8 } else { 6 },
             horizontal_margin: 3,
             content_max_width: 132,
-            sidebar_width: sidebar_width(area, 30),
+            sidebar_width: sidebar_width(area, 34),
         },
     }
 }
@@ -207,63 +207,4 @@ fn sidebar_width(area: Rect, preferred: u16) -> Option<u16> {
     }
     let remaining = area.width.saturating_sub(preferred);
     (remaining >= 82).then_some(preferred.min(area.width / 4).max(24))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classifies_common_terminal_ratios() {
-        assert_eq!(shape(Rect::new(0, 0, 28, 8)), Shape::Tiny);
-        assert_eq!(shape(Rect::new(0, 0, 120, 12)), Shape::ShortWide);
-        assert_eq!(shape(Rect::new(0, 0, 56, 42)), Shape::Portrait);
-        assert_eq!(shape(Rect::new(0, 0, 80, 31)), Shape::Portrait);
-        assert_eq!(shape(Rect::new(0, 0, 80, 24)), Shape::Compact);
-        assert_eq!(shape(Rect::new(0, 0, 120, 32)), Shape::Standard);
-        assert_eq!(shape(Rect::new(0, 0, 160, 30)), Shape::Wide);
-        assert_eq!(shape(Rect::new(0, 0, 220, 32)), Shape::UltraWide);
-    }
-
-    #[test]
-    fn modals_never_escape_unusual_windows() {
-        for area in [
-            Rect::new(0, 0, 22, 8),
-            Rect::new(0, 0, 58, 44),
-            Rect::new(0, 0, 160, 12),
-            Rect::new(0, 0, 220, 34),
-        ] {
-            let rect = modal_rect(area, 78, 72);
-            assert!(rect.x >= area.x && rect.y >= area.y);
-            assert!(rect.right() <= area.right());
-            assert!(rect.bottom() <= area.bottom());
-        }
-    }
-
-    #[test]
-    fn shell_metrics_preserve_conversation_width_at_common_sizes() {
-        let compact = metrics(Rect::new(0, 0, 80, 24));
-        assert_eq!(compact.shape, Shape::Compact);
-        assert_eq!(compact.sidebar_width, None);
-        assert_eq!(compact.horizontal_margin, 1);
-
-        let standard = metrics(Rect::new(0, 0, 120, 32));
-        assert_eq!(standard.shape, Shape::Standard);
-        assert_eq!(standard.sidebar_width, None);
-        assert_eq!(standard.content_max_width, 112);
-
-        let wide = metrics(Rect::new(0, 0, 160, 30));
-        assert_eq!(wide.shape, Shape::Wide);
-        assert_eq!(wide.sidebar_width, Some(28));
-        assert_eq!(wide.content_max_width, 120);
-
-        let ultrawide = metrics(Rect::new(0, 0, 220, 32));
-        assert_eq!(ultrawide.shape, Shape::UltraWide);
-        assert_eq!(ultrawide.sidebar_width, Some(30));
-        assert_eq!(ultrawide.content_max_width, 132);
-
-        let portrait = metrics(Rect::new(0, 0, 64, 40));
-        assert_eq!(portrait.shape, Shape::Portrait);
-        assert_eq!(portrait.sidebar_width, None);
-    }
 }

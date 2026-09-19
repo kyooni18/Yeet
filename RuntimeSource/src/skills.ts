@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { defaultConfigDirectory } from "./platform.js";
 
@@ -14,7 +15,7 @@ export interface SkillSummary {
   entrypoint: string;
   shortDescription?: string;
   allowImplicitInvocation?: boolean;
-  source: "project" | "user" | "codex" | "custom";
+  source: "project" | "user" | "bundled" | "codex" | "custom";
 }
 
 export interface Skill extends SkillSummary {
@@ -217,15 +218,17 @@ export class SkillRegistry {
   readonly configDir: string;
   readonly roots: string[];
   readonly userRoot: string;
+  readonly bundledRoot: string;
 
   constructor(options: SkillRegistryOptions = {}) {
     this.configDir = options.configDir ?? defaultConfigDirectory();
     this.userRoot = join(this.configDir, "skills");
+    this.bundledRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "skills");
     if (options.roots?.length) {
       this.roots = options.roots.map((root) => resolve(root));
     } else {
       const projectRoot = resolve(options.projectRoot ?? process.cwd());
-      this.roots = [join(projectRoot, ".yeet", "skills"), this.userRoot];
+      this.roots = [join(projectRoot, ".yeet", "skills"), this.userRoot, this.bundledRoot];
       const includeCodexSkills = options.includeCodexSkills
         ?? /^(1|true|yes)$/i.test(process.env.YEET_CODEX_SKILLS ?? "");
       if (includeCodexSkills) this.roots.push(join(homedir(), ".codex", "skills"));
@@ -260,7 +263,15 @@ export class SkillRegistry {
               ...agentMetadata,
               root: skillRoot,
               entrypoint,
-              source: rootIndex === 0 ? "project" : root === this.userRoot ? "user" : root === join(homedir(), ".codex", "skills") ? "codex" : "custom",
+              source: rootIndex === 0
+                ? "project"
+                : root === this.userRoot
+                  ? "user"
+                  : root === this.bundledRoot
+                    ? "bundled"
+                    : root === join(homedir(), ".codex", "skills")
+                      ? "codex"
+                      : "custom",
             });
           }
         } catch (error) {

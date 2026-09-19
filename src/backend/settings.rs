@@ -208,6 +208,8 @@ impl BackendService {
     pub(super) fn request_settings(&self) {
         let project = self.project_settings.load();
         let sandbox = SandboxStore::new(&self.workspace_root).and_then(|store| store.load());
+        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        let runtime = runtime_settings_state(&self.config, &active_model);
         if let Ok(project) = project.as_ref()
             && let Ok(mut coordinator) = self.coordinator.lock()
         {
@@ -247,6 +249,78 @@ impl BackendService {
                 Err(error) => {
                     shared.state.sandbox_notice =
                         Some(format!("Unable to load sandbox settings: {error}"));
+                }
+            }
+            match runtime {
+                Ok(runtime) => shared.state.runtime_settings = runtime,
+                Err(error) => {
+                    shared.state.settings_notice =
+                        Some(format!("Unable to load runtime settings: {error}"));
+                }
+            }
+        }
+        self.publish_state();
+    }
+
+    pub(super) fn set_appearance(&self, appearance: String) {
+        let result = self.config.set_appearance(&appearance);
+        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        self.finish_runtime_setting(result, &active_model, "Appearance updated.");
+    }
+
+    pub(super) fn set_theme(&self, mode: String, value: String) {
+        let result = self.config.set_theme(&mode, &value);
+        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        self.finish_runtime_setting(result, &active_model, "Theme updated.");
+    }
+
+    pub(super) fn set_context_length(&self, length: Option<u64>) {
+        let model = self.shared.lock().unwrap().state.active_model.clone();
+        let result = if model.is_empty() {
+            Err(anyhow!("Select a model before setting its context window"))
+        } else {
+            self.config.set_context_length_override(&model, length)
+        };
+        if result.is_ok() {
+            if let Some(length) = length {
+                self.shared
+                    .lock()
+                    .unwrap()
+                    .state
+                    .active_model_context_length = Some(length);
+            } else {
+                self.refresh_context_length();
+            }
+        }
+        self.finish_runtime_setting(
+            result,
+            &model,
+            if length.is_some() {
+                "Context override updated."
+            } else {
+                "Context override returned to automatic."
+            },
+        );
+    }
+
+    pub(super) fn set_jev_loop_mode(&self, mode: String) {
+        let result = self.config.set_jev_loop_mode(&mode).map(|_| ());
+        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        self.finish_runtime_setting(result, &active_model, "Jev loop policy updated.");
+    }
+
+    fn finish_runtime_setting(&self, result: Result<()>, active_model: &str, success: &str) {
+        let refresh = result.and_then(|()| runtime_settings_state(&self.config, active_model));
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.state.settings_working = false;
+            match refresh {
+                Ok(runtime) => {
+                    shared.state.runtime_settings = runtime;
+                    shared.state.settings_notice = Some(success.into());
+                }
+                Err(error) => {
+                    shared.state.settings_notice = Some(format!("Unable to save setting: {error}"));
                 }
             }
         }

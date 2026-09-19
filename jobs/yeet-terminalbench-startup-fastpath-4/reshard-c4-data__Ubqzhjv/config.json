@@ -1,0 +1,22 @@
+{
+    "task": {
+        "path": "reshard-c4-data",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "source": "terminal-bench"
+    },
+    "trial_name": "reshard-c4-data__Ubqzhjv",
+    "trials_dir": "jobs/yeet-terminalbench-startup-fastpath-4",
+    "install_only": true,
+    "agent": {
+        "name": "benchmarks.terminalbench.yeet_agent:YeetAgent",
+        "model_name": "openai/gpt-5.6-luna",
+        "kwargs": {
+            "reasoning": "high"
+        }
+    },
+    "verifier": {
+        "disable": true
+    },
+    "job_id": "97f918f5-2fd0-4fd4-aa47-fdea5b63dcfd"
+}

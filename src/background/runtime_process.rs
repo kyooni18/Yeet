@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Write},
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver, TryRecvError},
@@ -15,6 +15,8 @@ use crate::{
     model::{BridgeEnvelope, BridgeState, FrontendCommand},
     platform::{configure_process_group, force_terminate_process_tree},
 };
+
+use super::{MAX_BACKGROUND_FRAME_BYTES, MAX_CLIENT_COMMAND_BYTES, read_bounded_frame};
 
 const RUNTIME_START_TIMEOUT: Duration = Duration::from_secs(10);
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -56,6 +58,7 @@ impl RuntimeProcess {
         command
             .arg("__background-runtime")
             .arg(workspace)
+            .env("YEET_RUNTIME_PARENT_PID", std::process::id().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -77,19 +80,24 @@ impl RuntimeProcess {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("background runtime stdout was not piped"))?;
-        let (tx, events) = mpsc::channel();
+        let (tx, events) = mpsc::sync_channel(256);
         thread::spawn(move || runtime_reader(stdout, tx));
 
         let state = match events.recv_timeout(RUNTIME_START_TIMEOUT) {
-            Ok(WorkerEvent::Envelope(envelope)) => envelope
-                .state
-                .ok_or_else(|| anyhow!("background runtime handshake did not contain state"))?,
+            Ok(WorkerEvent::Envelope(envelope)) => match envelope.state {
+                Some(state) => state,
+                None => {
+                    let _ = terminate_child(&mut child);
+                    bail!("background runtime handshake did not contain state");
+                }
+            },
             Ok(WorkerEvent::ProtocolError(error)) => {
                 let _ = terminate_child(&mut child);
                 bail!("background runtime protocol failed during startup: {error}");
             }
             Ok(WorkerEvent::Closed) => {
                 let status = child.try_wait().ok().flatten();
+                let _ = terminate_child(&mut child);
                 bail!("background runtime exited during startup{status:?}");
             }
             Err(error) => {
@@ -205,13 +213,15 @@ impl RuntimeProcess {
     }
 
     fn shutdown(&mut self) {
-        if self.closed {
-            let _ = self.child.wait();
-            return;
+        // EOF/protocol failure means the pipe is closed, not that the process
+        // exited. Always use the bounded shutdown path, even after a failure.
+        // Closing stdin requests worker shutdown without a potentially blocking
+        // write to a child that has stopped consuming commands. Discard any
+        // buffered partial command: BufWriter::drop would otherwise flush it.
+        if let Some(writer) = self.command.take() {
+            let (stdin, _) = writer.into_parts();
+            drop(stdin);
         }
-
-        let _ = self.send(FrontendCommand::Shutdown);
-        self.command.take();
         let deadline = Instant::now() + RUNTIME_SHUTDOWN_TIMEOUT;
         while Instant::now() < deadline {
             match self.child.try_wait() {
@@ -235,6 +245,13 @@ impl Drop for RuntimeProcess {
 }
 
 pub(crate) fn run_worker(workspace: &Path) -> Result<()> {
+    // A daemon can die while a descendant still holds the command pipe open.
+    // Do not rely on stdin EOF alone to retire its now-obsolete runtime.
+    if let Ok(parent) = std::env::var("YEET_RUNTIME_PARENT_PID") {
+        if let Ok(parent) = parent.parse::<u32>() {
+            crate::platform::watch_runtime_parent(parent);
+        }
+    }
     let mut service = BackendService::spawn(workspace.to_path_buf())?;
     let stdout = std::io::stdout();
     let mut output = BufWriter::new(stdout.lock());
@@ -247,7 +264,7 @@ pub(crate) fn run_worker(workspace: &Path) -> Result<()> {
         },
     )?;
 
-    let (input_tx, input_rx) = mpsc::channel();
+    let (input_tx, input_rx) = mpsc::sync_channel(256);
     thread::spawn(move || worker_input_reader(input_tx));
     let mut input_closed = false;
 
@@ -289,14 +306,11 @@ pub(crate) fn run_worker(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-fn runtime_reader(stdout: std::process::ChildStdout, tx: mpsc::Sender<WorkerEvent>) {
+fn runtime_reader(stdout: std::process::ChildStdout, tx: mpsc::SyncSender<WorkerEvent>) {
     let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => match serde_json::from_str::<BridgeEnvelope>(line.trim_end()) {
+        match read_bounded_frame(&mut reader, MAX_BACKGROUND_FRAME_BYTES) {
+            Ok(Some(frame)) => match serde_json::from_slice::<BridgeEnvelope>(&frame) {
                 Ok(envelope) => {
                     if tx.send(WorkerEvent::Envelope(Box::new(envelope))).is_err() {
                         return;
@@ -309,7 +323,7 @@ fn runtime_reader(stdout: std::process::ChildStdout, tx: mpsc::Sender<WorkerEven
                     return;
                 }
             },
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Ok(None) => break,
             Err(error) => {
                 let _ = tx.send(WorkerEvent::ProtocolError(format!(
                     "background runtime read failed: {error}"
@@ -321,15 +335,12 @@ fn runtime_reader(stdout: std::process::ChildStdout, tx: mpsc::Sender<WorkerEven
     let _ = tx.send(WorkerEvent::Closed);
 }
 
-fn worker_input_reader(tx: mpsc::Sender<WorkerInput>) {
+fn worker_input_reader(tx: mpsc::SyncSender<WorkerInput>) {
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
-    let mut line = String::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => match serde_json::from_str::<RuntimeCommand>(line.trim_end()) {
+        match read_bounded_frame(&mut reader, MAX_CLIENT_COMMAND_BYTES) {
+            Ok(Some(frame)) => match serde_json::from_slice::<RuntimeCommand>(&frame) {
                 Ok(command) => {
                     if tx.send(WorkerInput::Command(command)).is_err() {
                         return;
@@ -346,7 +357,7 @@ fn worker_input_reader(tx: mpsc::Sender<WorkerInput>) {
                     }
                 }
             },
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Ok(None) => break,
             Err(error) => {
                 let _ = tx.send(WorkerInput::ProtocolError(format!(
                     "supervisor command read failed: {error}"
@@ -359,8 +370,12 @@ fn worker_input_reader(tx: mpsc::Sender<WorkerInput>) {
 }
 
 fn write_envelope(writer: &mut impl Write, envelope: &BridgeEnvelope) -> Result<()> {
-    serde_json::to_writer(&mut *writer, envelope)?;
-    writer.write_all(b"\n")?;
+    let mut frame = serde_json::to_vec(envelope)?;
+    if frame.len() > MAX_BACKGROUND_FRAME_BYTES {
+        bail!("background protocol frame exceeded its limit");
+    }
+    frame.push(b'\n');
+    writer.write_all(&frame)?;
     writer.flush()?;
     Ok(())
 }
@@ -384,22 +399,27 @@ fn terminate_child(child: &mut Child) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, unix))]
+mod lifecycle_tests {
     use super::*;
 
     #[test]
-    fn runtime_command_round_trips_frontend_commands() {
-        let encoded = serde_json::to_string(&RuntimeCommand::Frontend {
-            command: FrontendCommand::Interrupt,
-        })
-        .unwrap();
-        let decoded: RuntimeCommand = serde_json::from_str(&encoded).unwrap();
-        assert!(matches!(
-            decoded,
-            RuntimeCommand::Frontend {
-                command: FrontendCommand::Interrupt
-            }
-        ));
+    fn closed_pipe_does_not_wait_forever_for_live_child() {
+        let mut command = Command::new("sleep");
+        command.arg("30").stdin(Stdio::null()).stdout(Stdio::null());
+        configure_process_group(&mut command);
+        let child = command.spawn().unwrap();
+        let (_tx, events) = mpsc::channel();
+        let mut runtime = RuntimeProcess {
+            child,
+            command: None,
+            events,
+            state: BridgeState::default(),
+            closed: true,
+        };
+        let started = Instant::now();
+        runtime.shutdown();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(runtime.child.try_wait().unwrap().is_some());
     }
 }

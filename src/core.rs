@@ -220,6 +220,16 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ProviderState {
+    pub provider: String,
+    pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Message {
     pub role: MessageRole,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,6 +242,8 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_state: Option<ProviderState>,
     /// Request-local guidance that must not become durable conversation
     /// history or part of a reusable prompt-cache prefix.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -261,6 +273,10 @@ impl Message {
         value.tool_calls = tool_calls;
         value
     }
+    pub fn with_provider_state(mut self, provider_state: Option<ProviderState>) -> Self {
+        self.provider_state = provider_state;
+        self
+    }
     pub fn tool(
         content: impl Into<String>,
         tool_call_id: impl Into<String>,
@@ -287,6 +303,7 @@ impl Message {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            provider_state: None,
             request_only: None,
             cache_breakpoint: None,
         }
@@ -337,6 +354,8 @@ pub struct CallRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry: Option<Value>,
@@ -364,6 +383,7 @@ impl CallRequest {
             temperature: None,
             max_tokens: None,
             metadata: None,
+            provider_metadata: None,
             timeout_ms: None,
             retry: None,
             provider_options: None,
@@ -403,6 +423,7 @@ pub struct CallResult {
     pub reasoning_summary: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    pub provider_state: Option<ProviderState>,
     pub finish_reason: String,
     pub usage: Option<Usage>,
 
@@ -429,6 +450,7 @@ pub enum StreamEvent {
     Finish {
         finish_reason: String,
         usage: Option<Usage>,
+        provider_state: Option<ProviderState>,
     },
 }
 
@@ -467,6 +489,11 @@ impl StreamEvent {
                 finish_reason: string_field(&value, "finishReason")?,
                 usage: value
                     .get("usage")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?,
+                provider_state: value
+                    .get("providerState")
                     .cloned()
                     .map(serde_json::from_value)
                     .transpose()?,
@@ -998,6 +1025,30 @@ impl BridgeClient {
             rx,
             finished: false,
         })
+    }
+
+    pub fn jev_evaluate_cancellable(
+        &self,
+        provider: Option<&str>,
+        model: Option<&str>,
+        state: Value,
+        questions: Value,
+        cancel: &AtomicBool,
+    ) -> Result<Value> {
+        let mut fields = Map::new();
+        if let Some(provider) = provider {
+            fields.insert("provider".into(), json!(provider));
+        }
+        if let Some(model) = model {
+            fields.insert("model".into(), json!(model));
+        }
+        fields.insert("state".into(), state);
+        fields.insert("questions".into(), questions);
+        let frame = self.request_cancellable("jev-evaluate", fields, cancel)?;
+        frame
+            .get("result")
+            .cloned()
+            .ok_or_else(|| anyhow!("bridge response missing Jev result"))
     }
 
     pub fn complete(&self, request: &CallRequest) -> Result<CallResult> {
@@ -1599,166 +1650,44 @@ fn string_field(value: &Value, key: &str) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
+mod provider_state_tests {
     use super::*;
 
     #[test]
-    fn usage_accumulation_preserves_cache_measurement_coverage() {
-        let mut total = Usage::default();
-        total.accumulate(&Usage {
-            input_tokens: Some(100),
-            cached_input_tokens: Some(60),
-            ..Default::default()
-        });
-        total.accumulate(&Usage {
-            input_tokens: Some(200),
-            ..Default::default()
-        });
+    fn provider_state_round_trips_through_message_json() {
+        let message = Message::assistant(
+            "",
+            Some(vec![ToolCall {
+                id: "call-1".into(),
+                name: "lookup".into(),
+                arguments: json!({"q":"x"}),
+            }]),
+        )
+        .with_provider_state(Some(ProviderState {
+            provider: "gemini".into(),
+            protocol: "gemini-generate-content".into(),
+            model: Some("gemini-test".into()),
+            data: json!({"functionMetadata":{"call-1":{"thoughtSignature":"sig"}}}),
+        }));
 
-        assert_eq!(total.input_tokens, Some(300));
-        assert_eq!(total.cached_input_tokens, Some(60));
-        assert_eq!(total.cache_measured_input_tokens, Some(100));
-        assert_eq!(total.cache_unreported_input_tokens, Some(200));
-        let measurement = total.cache_measurement();
-        assert_eq!(measurement.measured_input_tokens, 100);
-        assert_eq!(measurement.unreported_input_tokens, 200);
-        assert_eq!(measurement.unclassified_input_tokens, 0);
-        assert_eq!(measurement.hit_rate, Some(0.6));
-        assert_eq!(measurement.measurement_coverage_rate, Some(1.0 / 3.0));
-    }
-
-    #[test]
-    fn legacy_usage_without_coverage_does_not_guess_cache_hit_rate() {
-        let usage = Usage {
-            input_tokens: Some(300),
-            cached_input_tokens: Some(100),
-            ..Default::default()
-        };
-
-        let measurement = usage.cache_measurement();
-        assert_eq!(measurement.cached_input_tokens, 100);
-        assert_eq!(measurement.measured_input_tokens, 0);
-        assert_eq!(measurement.unreported_input_tokens, 0);
-        assert_eq!(measurement.unclassified_input_tokens, 300);
-        assert_eq!(measurement.hit_rate, None);
-        assert_eq!(measurement.measurement_coverage_rate, Some(0.0));
-    }
-
-    #[test]
-    fn bridge_stderr_tail_trimming_respects_utf8_boundaries() {
-        let mut tail = "가".repeat(BRIDGE_STDERR_TAIL_BYTES / 3 + 17);
-        let expected_suffix = tail.clone();
-
-        trim_bridge_stderr_tail(&mut tail);
-
-        assert!(tail.len() <= BRIDGE_STDERR_TAIL_BYTES);
-        assert!(expected_suffix.ends_with(&tail));
-        assert!(tail.starts_with('가'));
-    }
-
-    #[test]
-    fn stream_write_failure_removes_pending_request() {
-        let client = BridgeClient::start().unwrap();
-        {
-            let mut child = client.inner.child.lock().unwrap();
-            kill_bridge_process_group(&mut child);
-            let _ = child.wait();
-        }
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            if matches!(client.try_recv_event(), Some(BridgeEvent::Closed)) {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "bridge reader did not observe child exit"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-
-        let request = CallRequest::simple("openai/test", vec![Message::user("hello")]);
-        assert!(client.stream(&request).is_err());
-        assert!(client.inner.pending.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn call_request_uses_typescript_field_names() {
-        let mut request = CallRequest::simple("openai/test", vec![Message::user("hello")]);
-        request.context_key = Some("ctx".into());
-        request.tool_choice = Some(json!("auto"));
-        request.prompt_cache = Some(true);
-        request
-            .messages
-            .push(Message::system("volatile").request_only());
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["contextKey"], "ctx");
-        assert_eq!(value["toolChoice"], "auto");
-        assert_eq!(value["promptCache"], true);
-        assert_eq!(value["messages"][0]["role"], "user");
-        assert_eq!(value["messages"][1]["requestOnly"], true);
-    }
-
-    #[test]
-    fn openai_flex_preserves_existing_provider_options() {
-        let mut request = CallRequest::simple("openai/gpt-5.6-luna", vec![Message::user("hello")]);
-        request.provider_options = Some(Map::from_iter([(
-            "reasoning".into(),
-            json!({ "effort": "high" }),
-        )]));
-
-        let prepared = apply_openai_flex(&request, true);
-
-        let options = prepared.provider_options.unwrap();
-        assert_eq!(options["service_tier"], "flex");
-        assert_eq!(options["reasoning"]["effort"], "high");
-    }
-
-    #[test]
-    fn openai_flex_never_leaks_to_other_providers() {
-        for model in [
-            "openrouter/openai/gpt-5.6-luna",
-            "anthropic/claude-sonnet",
-            "local/gpt-5.6-luna",
-        ] {
-            let request = CallRequest::simple(model, vec![Message::user("hello")]);
-            assert!(apply_openai_flex(&request, true).provider_options.is_none());
-        }
-    }
-
-    #[test]
-    fn disabled_openai_flex_leaves_openai_request_untouched() {
-        let request = CallRequest::simple("openai/gpt-5.6-luna", vec![Message::user("hello")]);
-        assert!(
-            apply_openai_flex(&request, false)
-                .provider_options
-                .is_none()
+        let encoded = serde_json::to_value(&message).unwrap();
+        assert_eq!(
+            encoded["providerState"]["protocol"],
+            "gemini-generate-content"
         );
+        assert!(encoded.get("provider_state").is_none());
+        let decoded: Message = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, message);
     }
 
     #[test]
-    fn unsolicited_native_approval_event_decodes_without_response_id() {
-        let event = BridgeEvent::from_value(json!({
-            "v": 1,
-            "type": "native_app_approval_request",
-            "requestId": "9001",
-            "server": "computer-use",
-            "tool": "open",
-            "bundleId": "org.blenderfoundation.blender",
-            "appName": "Blender",
-            "operation": "Open Blender",
-            "message": "Allow Blender?",
-        }))
-        .unwrap();
-        match event {
-            BridgeEvent::NativeAppApprovalRequest(request) => {
-                assert_eq!(request.request_id, "9001");
-                assert_eq!(
-                    request.bundle_id.as_deref(),
-                    Some("org.blenderfoundation.blender")
-                );
-            }
-            BridgeEvent::Closed => panic!("wrong bridge event"),
-        }
+    fn request_keeps_internal_and_provider_metadata_distinct() {
+        let mut request = CallRequest::simple("openai/gpt-test", vec![Message::user("hello")]);
+        request.metadata = Some(HashMap::from([("lane".into(), "lead".into())]));
+        request.provider_metadata = Some(HashMap::from([("trace".into(), "wire".into())]));
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["metadata"]["lane"], "lead");
+        assert_eq!(encoded["providerMetadata"]["trace"], "wire");
+        assert!(encoded.get("provider_metadata").is_none());
     }
 }

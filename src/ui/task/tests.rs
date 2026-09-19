@@ -37,9 +37,15 @@ fn tool(status: ToolCallStatus) -> ConversationEntry {
             name: "read_file".into(),
             arguments: json!({"path": "src/ui.rs"}).to_string(),
             status,
-
+            label: None,
+            detail: None,
+            started_at: None,
+            ended_at: None,
             duration_ms: None,
-
+            attempt: None,
+            parent_call_id: None,
+            parallel_group_id: None,
+            job_id: None,
             result: None,
             error: None,
         },
@@ -52,7 +58,7 @@ fn a_new_turn_does_not_inherit_old_progress_or_operations() {
         conversation: vec![
             user(),
             tool(ToolCallStatus::Failed),
-            tool(ToolCallStatus::Streaming),
+            tool(ToolCallStatus::Running),
             activity("failed"),
             user(),
         ],
@@ -185,7 +191,7 @@ fn live_progress_remains_visible_while_reading_history() {
                 content: "Earlier response\n".repeat(60),
                 tool_calls: vec![],
             }),
-            tool(ToolCallStatus::Streaming),
+            tool(ToolCallStatus::Running),
         ];
         assert_eq!(super::height(&app), 1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -226,7 +232,7 @@ fn short_wide_history_keeps_return_to_latest_visible_during_streaming() {
     };
     app.state.is_streaming = true;
     app.state.active_model = "openai/test-model".into();
-    app.conversation = vec![user(), tool(ToolCallStatus::Streaming)];
+    app.conversation = vec![user(), tool(ToolCallStatus::Running)];
 
     let mut terminal = Terminal::new(TestBackend::new(70, 12)).unwrap();
     terminal

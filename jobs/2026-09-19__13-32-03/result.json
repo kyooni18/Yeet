@@ -1,0 +1,83 @@
+{
+    "id": "5157a12f-1ea6-4435-8e2b-0009fa34b462",
+    "started_at": "2026-09-19T13:32:04.810112",
+    "updated_at": "2026-09-19T04:40:49.170227Z",
+    "finished_at": null,
+    "n_total_trials": 89,
+    "stats": {
+        "n_completed_trials": 21,
+        "n_errored_trials": 21,
+        "n_running_trials": 8,
+        "n_pending_trials": 60,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "yeet__gpt-5.6-luna__terminal-bench": {
+                "n_trials": 21,
+                "n_errors": 21,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "reshard-c4-data__uoDfvoY",
+                            "break-filter-js-from-html__KVueNzP",
+                            "gpt2-codegolf__iGvnvLC",
+                            "llm-inference-batching-scheduler__fMhQAdg",
+                            "log-summary-date-ranges__YMVB8EH",
+                            "winning-avg-corewars__Px7CLf9",
+                            "largest-eigenval__T5XE36P",
+                            "portfolio-optimization__vroLzeH",
+                            "path-tracing-reverse__mHHZuSk",
+                            "password-recovery__jBxAsEb",
+                            "write-compressor__2zXvtiD",
+                            "regex-chess__aARBrt9",
+                            "merge-diff-arc-agi-task__rNtVXVj",
+                            "modernize-scientific-stack__64Fg6Np",
+                            "feal-linear-cryptanalysis__Kd5dqPd",
+                            "distribution-search__AP4oKPP",
+                            "path-tracing__eUS8tJK",
+                            "caffe-cifar-10__wyeRCdC",
+                            "torch-tensor-parallelism__FspsGrY",
+                            "prove-plus-comm__Xb47gnm",
+                            "pytorch-model-cli__vv2oZcV"
+                        ]
+                    }
+                },
+                "exception_stats": {
+                    "AgentAuthenticationError": [
+                        "reshard-c4-data__uoDfvoY",
+                        "break-filter-js-from-html__KVueNzP",
+                        "gpt2-codegolf__iGvnvLC",
+                        "llm-inference-batching-scheduler__fMhQAdg",
+                        "log-summary-date-ranges__YMVB8EH",
+                        "winning-avg-corewars__Px7CLf9",
+                        "largest-eigenval__T5XE36P",
+                        "portfolio-optimization__vroLzeH",
+                        "path-tracing-reverse__mHHZuSk",
+                        "password-recovery__jBxAsEb",
+                        "write-compressor__2zXvtiD",
+                        "regex-chess__aARBrt9",
+                        "merge-diff-arc-agi-task__rNtVXVj",
+                        "modernize-scientific-stack__64Fg6Np",
+                        "feal-linear-cryptanalysis__Kd5dqPd",
+                        "distribution-search__AP4oKPP",
+                        "path-tracing__eUS8tJK",
+                        "caffe-cifar-10__wyeRCdC",
+                        "torch-tensor-parallelism__FspsGrY",
+                        "prove-plus-comm__Xb47gnm",
+                        "pytorch-model-cli__vv2oZcV"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}

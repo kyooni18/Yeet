@@ -6,17 +6,17 @@ use std::{
 
 mod selection;
 mod settings;
+#[cfg(test)]
+mod tests;
 pub use selection::TranscriptContextMenu;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-#[cfg(test)]
-use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::{
     backend::Backend,
     model::{
         BridgeState, CapabilityToggleItem, ConversationEntry, FrontendCommand, ModelCatalogItem,
-        ProviderConfigurationItem, REASONING_LEVELS, SandboxAction, SessionSummary,
+        ProviderConfigurationItem, SandboxAction, SessionSummary, reasoning_levels_for_model,
     },
 };
 
@@ -61,6 +61,9 @@ pub enum SettingsSection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsEditKind {
+    ContextLength,
+    ThemeDark,
+    ThemeLight,
     WorkspacePath,
     Network,
     Environment { original_key: Option<String> },
@@ -105,6 +108,9 @@ pub struct App {
     pub scroll_y: u16,
     pub max_scroll: u16,
     pub transcript_area: (u16, u16, u16, u16),
+    pub(crate) composer_area: (u16, u16, u16, u16),
+    pub(crate) composer_width: u16,
+    pub(crate) composer_scroll: usize,
     pub transcript_cells: Vec<Vec<String>>,
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
@@ -118,6 +124,10 @@ pub struct App {
     pub backend_message: Option<String>,
     pub stream_started_at: Option<Instant>,
     pub last_stream_duration: Option<Duration>,
+    pub activity_label_from: String,
+    pub activity_label_to: String,
+    pub activity_label_started_at: Option<Instant>,
+    pub activity_label_transition_ms: u16,
 }
 
 impl Default for App {
@@ -152,6 +162,9 @@ impl Default for App {
             scroll_y: 0,
             max_scroll: 0,
             transcript_area: (0, 0, 0, 0),
+            composer_area: (0, 0, 0, 0),
+            composer_width: 0,
+            composer_scroll: 0,
             transcript_cells: Vec::new(),
             selection_start: None,
             selection_end: None,
@@ -165,17 +178,48 @@ impl Default for App {
             backend_message: None,
             stream_started_at: None,
             last_stream_duration: None,
+            activity_label_from: String::new(),
+            activity_label_to: String::new(),
+            activity_label_started_at: None,
+            activity_label_transition_ms: 420,
         }
     }
 }
 
 impl App {
+    pub fn sync_activity_label(&mut self, label: &str) {
+        if self.activity_label_to == label {
+            return;
+        }
+        let in_transition = self.activity_label_started_at.is_some_and(|started| {
+            started.elapsed().as_millis() < u128::from(self.activity_label_transition_ms)
+        });
+        if in_transition && same_activity_pattern(&self.activity_label_to, label) {
+            // Keep one stable morph window for a family such as
+            // "Reading core.rs" -> "Reading agent.rs" instead of restarting
+            // the animation for every streamed update.
+            self.activity_label_to = label.to_owned();
+            return;
+        }
+        self.activity_label_from = self.activity_label_to.clone();
+        self.activity_label_to = label.to_owned();
+        self.activity_label_transition_ms = if self.activity_label_from.is_empty() {
+            420
+        } else if same_activity_pattern(&self.activity_label_from, label) {
+            900
+        } else {
+            520
+        };
+        self.activity_label_started_at = Some(Instant::now());
+    }
+
     pub fn merge_state(&mut self, mut next: BridgeState) {
         let was_streaming = self.state.is_streaming;
         let is_streaming = next.is_streaming;
         let provider_configurations_changed =
             self.state.provider_configurations != next.provider_configurations;
         let sandbox_settings_changed = self.state.sandbox_settings != next.sandbox_settings;
+        let runtime_settings_changed = self.state.runtime_settings != next.runtime_settings;
         if let Some(conversation) = next.conversation.take() {
             self.conversation = conversation;
             self.clear_transcript_selection();
@@ -186,6 +230,9 @@ impl App {
         }
         if sandbox_settings_changed {
             self.pending_sandbox_reset = false;
+        }
+        if runtime_settings_changed {
+            crate::ui::apply_runtime_theme(&self.state.runtime_settings);
         }
         match (was_streaming, is_streaming) {
             (false, true) => {
@@ -285,10 +332,33 @@ impl App {
 
     pub fn handle_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
         let mut event = event;
-        // macOS uses Command where the TUI's editing and navigation bindings use Control.
-        // Normalize it once so the existing bindings work without treating Cmd+key as text.
+        // Preserve native macOS text-editing semantics before mapping the remaining
+        // Command shortcuts onto the TUI's Control bindings.
         #[cfg(target_os = "macos")]
-        if event.modifiers.contains(KeyModifiers::SUPER) {
+        if event.modifiers == KeyModifiers::SUPER {
+            match event.code {
+                KeyCode::Left => {
+                    event.code = KeyCode::Home;
+                    event.modifiers = KeyModifiers::NONE;
+                }
+                KeyCode::Right => {
+                    event.code = KeyCode::End;
+                    event.modifiers = KeyModifiers::NONE;
+                }
+                KeyCode::Backspace => {
+                    event.code = KeyCode::Char('u');
+                    event.modifiers = KeyModifiers::CONTROL;
+                }
+                KeyCode::Delete => {
+                    event.code = KeyCode::Char('k');
+                    event.modifiers = KeyModifiers::CONTROL;
+                }
+                _ => {
+                    event.modifiers.remove(KeyModifiers::SUPER);
+                    event.modifiers.insert(KeyModifiers::CONTROL);
+                }
+            }
+        } else if event.modifiers.contains(KeyModifiers::SUPER) {
             event.modifiers.remove(KeyModifiers::SUPER);
             event.modifiers.insert(KeyModifiers::CONTROL);
         }
@@ -565,8 +635,13 @@ impl App {
             .filter(|item| {
                 query.is_empty()
                     || item.name.to_ascii_lowercase().contains(&query)
+                    || item.id.to_ascii_lowercase().contains(&query)
                     || item.kind.to_ascii_lowercase().contains(&query)
                     || item.description.to_ascii_lowercase().contains(&query)
+                    || item
+                        .source
+                        .as_deref()
+                        .is_some_and(|source| source.to_ascii_lowercase().contains(&query))
             })
             .collect()
     }
@@ -584,9 +659,15 @@ impl App {
     }
 
     fn handle_chat_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
-        if event.code == KeyCode::Esc && self.transcript_context_menu.is_some() {
-            self.transcript_context_menu = None;
-            return Ok(());
+        if event.code == KeyCode::Esc {
+            if self.transcript_context_menu.is_some() {
+                self.transcript_context_menu = None;
+                return Ok(());
+            }
+            if self.selection_start.is_some() || self.selection_end.is_some() {
+                self.clear_transcript_selection();
+                return Ok(());
+            }
         }
         if self.handle_chat_editing_key(&event) {
             return Ok(());
@@ -692,7 +773,6 @@ impl App {
             KeyCode::Enter if event.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.insert_char('\n');
             }
-            KeyCode::Enter if self.input.contains('\n') => {}
             KeyCode::Enter => {
                 let text = self.input.trim().to_owned();
                 if text.is_empty() {
@@ -721,6 +801,10 @@ impl App {
                     "/sessions" => self.open_sessions(backend)?,
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
+                    "/permissions" => {
+                        self.open_sandbox_presets();
+                        backend.send(FrontendCommand::RequestSandbox)?;
+                    }
                     "/status" => self.open_status(backend)?,
                     "/login" => self.open_auth(backend)?,
                     "/provider" | "/providers" => self.open_providers(backend)?,
@@ -741,9 +825,11 @@ impl App {
             }
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),
-            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Left => {
+                self.cursor = crate::text_layout::previous_grapheme_cursor(&self.input, self.cursor)
+            }
             KeyCode::Right => {
-                self.cursor = cmp::min(self.cursor + 1, self.input.chars().count());
+                self.cursor = crate::text_layout::next_grapheme_cursor(&self.input, self.cursor);
             }
             KeyCode::Home => self.cursor = 0,
             KeyCode::End => self.cursor = self.input.chars().count(),
@@ -765,11 +851,14 @@ impl App {
                 KeyCode::Char('a') => self.cursor = 0,
                 KeyCode::Char('e') => self.cursor = self.input.chars().count(),
                 KeyCode::Char('b') if !self.input.is_empty() => {
-                    self.cursor = self.cursor.saturating_sub(1)
+                    self.cursor =
+                        crate::text_layout::previous_grapheme_cursor(&self.input, self.cursor)
                 }
                 KeyCode::Char('f') if !self.input.is_empty() => {
-                    self.cursor = cmp::min(self.cursor + 1, self.input.chars().count())
+                    self.cursor = crate::text_layout::next_grapheme_cursor(&self.input, self.cursor)
                 }
+                KeyCode::Left if !self.input.is_empty() => self.move_word_left(),
+                KeyCode::Right if !self.input.is_empty() => self.move_word_right(),
                 KeyCode::Char('u') => {
                     self.delete_before_cursor();
                     self.command_index = 0;
@@ -791,24 +880,63 @@ impl App {
             match event.code {
                 KeyCode::Left => self.move_word_left(),
                 KeyCode::Right => self.move_word_right(),
+                KeyCode::Backspace => self.delete_word_before_cursor(),
+                KeyCode::Delete => self.delete_word_after_cursor(),
                 _ => return false,
             }
             return true;
         }
-
         if event.modifiers.is_empty() {
             match event.code {
-                KeyCode::Home if !self.input.is_empty() => self.move_line_start(),
-                KeyCode::End if !self.input.is_empty() => self.move_line_end(),
-                KeyCode::Up
-                    if self.input.contains('\n') && self.command_suggestions().is_empty() =>
-                {
-                    self.move_line_up()
+                KeyCode::Home if !self.input.is_empty() => {
+                    if self.composer_width > 0 {
+                        self.cursor = crate::text_layout::visual_line_edge(
+                            &self.input,
+                            self.cursor,
+                            self.composer_width,
+                            false,
+                        );
+                    } else {
+                        self.move_line_start();
+                    }
+                }
+                KeyCode::End if !self.input.is_empty() => {
+                    if self.composer_width > 0 {
+                        self.cursor = crate::text_layout::visual_line_edge(
+                            &self.input,
+                            self.cursor,
+                            self.composer_width,
+                            true,
+                        );
+                    } else {
+                        self.move_line_end();
+                    }
+                }
+                KeyCode::Up if !self.input.is_empty() && self.command_suggestions().is_empty() => {
+                    if self.composer_width > 0 {
+                        self.cursor = crate::text_layout::move_cursor_vertical(
+                            &self.input,
+                            self.cursor,
+                            self.composer_width,
+                            -1,
+                        );
+                    } else if self.input.contains('\n') {
+                        self.move_line_up();
+                    }
                 }
                 KeyCode::Down
-                    if self.input.contains('\n') && self.command_suggestions().is_empty() =>
+                    if !self.input.is_empty() && self.command_suggestions().is_empty() =>
                 {
-                    self.move_line_down()
+                    if self.composer_width > 0 {
+                        self.cursor = crate::text_layout::move_cursor_vertical(
+                            &self.input,
+                            self.cursor,
+                            self.composer_width,
+                            1,
+                        );
+                    } else if self.input.contains('\n') {
+                        self.move_line_down();
+                    }
                 }
                 _ => return false,
             }
@@ -893,17 +1021,15 @@ impl App {
         event: KeyEvent,
         backend: &mut Backend,
     ) -> anyhow::Result<()> {
+        let levels = reasoning_levels_for_model(&self.state.active_model);
         match event.code {
             KeyCode::Esc | KeyCode::F(4) => self.close_popup(),
             KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down | KeyCode::Right => {
-                self.popup_index = cmp::min(
-                    self.popup_index + 1,
-                    REASONING_LEVELS.len().saturating_sub(1),
-                );
+                self.popup_index = cmp::min(self.popup_index + 1, levels.len().saturating_sub(1));
             }
             KeyCode::Enter => {
-                if let Some(level) = REASONING_LEVELS.get(self.popup_index) {
+                if let Some(level) = levels.get(self.popup_index) {
                     backend.send(FrontendCommand::SelectReasoning {
                         level: (*level).to_owned(),
                     })?;
@@ -1097,6 +1223,9 @@ impl App {
                     })?;
                 }
             }
+            KeyCode::Char('r') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                backend.send(FrontendCommand::RequestCapabilities)?;
+            }
             KeyCode::Backspace => {
                 self.popup_filter.pop();
                 self.popup_index = 0;
@@ -1240,7 +1369,7 @@ impl App {
     fn clamp_popup_selection(&mut self) {
         let count = match self.mode {
             Mode::Models => self.filtered_models().len(),
-            Mode::Reasoning => REASONING_LEVELS.len(),
+            Mode::Reasoning => reasoning_levels_for_model(&self.state.active_model).len(),
             Mode::Goal => 2,
             Mode::Sessions => self.filtered_session_picker_items().len(),
             Mode::Capabilities => self.filtered_capabilities().len(),
@@ -1304,11 +1433,12 @@ impl App {
             return;
         }
         self.reset_history_navigation();
-        let start = byte_index(&self.input, self.cursor - 1);
+        let previous = crate::text_layout::previous_grapheme_cursor(&self.input, self.cursor);
+        let start = byte_index(&self.input, previous);
         let end = byte_index(&self.input, self.cursor);
         self.input.replace_range(start..end, "");
         self.command_index = 0;
-        self.cursor -= 1;
+        self.cursor = previous;
     }
 
     fn delete(&mut self) {
@@ -1316,8 +1446,9 @@ impl App {
             return;
         }
         self.reset_history_navigation();
+        let next = crate::text_layout::next_grapheme_cursor(&self.input, self.cursor);
         let start = byte_index(&self.input, self.cursor);
-        let end = byte_index(&self.input, self.cursor + 1);
+        let end = byte_index(&self.input, next);
         self.input.replace_range(start..end, "");
         self.command_index = 0;
     }
@@ -1394,6 +1525,22 @@ impl App {
         self.move_word_left();
         let start = byte_index(&self.input, self.cursor);
         self.input.replace_range(start..end, "");
+        self.command_index = 0;
+    }
+
+    fn delete_word_after_cursor(&mut self) {
+        let start_cursor = self.cursor.min(self.input.chars().count());
+        if start_cursor >= self.input.chars().count() {
+            return;
+        }
+        self.reset_history_navigation();
+        self.move_word_right();
+        let end_cursor = self.cursor;
+        let start = byte_index(&self.input, start_cursor);
+        let end = byte_index(&self.input, end_cursor);
+        self.input.replace_range(start..end, "");
+        self.cursor = start_cursor;
+        self.command_index = 0;
     }
 
     fn delete_before_cursor(&mut self) {
@@ -1484,6 +1631,15 @@ impl App {
     }
 }
 
+fn same_activity_pattern(left: &str, right: &str) -> bool {
+    left.split_whitespace().next().is_some_and(|left_head| {
+        right
+            .split_whitespace()
+            .next()
+            .is_some_and(|right_head| left_head.eq_ignore_ascii_case(right_head))
+    })
+}
+
 pub const SANDBOX_PRESET_ROW_COUNT: usize = 4;
 
 const COMMANDS: &[(&str, &str)] = &[
@@ -1497,7 +1653,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/login", "Manage provider authentication"),
     ("/provider", "Manage custom API endpoints"),
     ("/providers", "Manage custom API endpoints"),
-    ("/settings", "Runtime and sandbox settings"),
+    ("/settings", "Runtime and application settings"),
+    ("/permissions", "Sandbox and permission settings"),
     ("/sessions", "Browse saved chats"),
     ("/capabilities", "Toggle skills, capabilities, and MCP"),
     ("/skyline", "Attach or detach Skyline coordination"),
@@ -1537,6 +1694,3 @@ fn line_bounds(characters: &[char], cursor: usize) -> (usize, usize) {
         .map_or(characters.len(), |offset| cursor + offset);
     (start, end)
 }
-
-#[cfg(test)]
-mod tests;

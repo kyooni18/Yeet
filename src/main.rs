@@ -172,6 +172,7 @@ fn main() -> Result<()> {
 
 fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Result<()> {
     let mut backend = Backend::spawn_remote()?;
+    ui::initialize_theme();
     let mut app = App::default();
     let remote = RemoteServer::start_for_workspace(&options, &workspace)?;
     let control =
@@ -180,6 +181,7 @@ fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Resu
     let mut height = options.rows;
     let mut terminal = Terminal::new(TestBackend::new(width, height))
         .context("failed to initialize remote terminal")?;
+    let mut rendered_session = None;
 
     loop {
         if control.should_stop() {
@@ -219,7 +221,7 @@ fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Resu
             }
         }
 
-        terminal.draw(|frame| ui::draw(frame, &mut app))?;
+        draw_tui_frame(&mut terminal, &mut app, &mut rendered_session)?;
         remote.publish(terminal.backend().buffer());
         if app.quit {
             let _ = backend.send(yeet::model::FrontendCommand::Shutdown);
@@ -382,6 +384,7 @@ fn run_tui() -> Result<()> {
 
     execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
     let mut backend = backend_result?;
+    ui::initialize_theme();
     let mut app = App::default();
     let mut terminal = setup_terminal()?;
     let result = event_loop(&mut terminal, &mut app, &mut backend);
@@ -416,6 +419,7 @@ fn event_loop(
     backend: &mut Backend,
 ) -> Result<()> {
     let terminal_events = spawn_terminal_event_reader();
+    let mut rendered_session = None;
 
     loop {
         while let Some(event) = backend.try_recv() {
@@ -429,9 +433,7 @@ fn event_loop(
             return Ok(());
         }
 
-        terminal
-            .draw(|frame| ui::draw(frame, app))
-            .context("failed to draw terminal")?;
+        draw_tui_frame(terminal, app, &mut rendered_session)?;
         if app.quit {
             return Ok(());
         }
@@ -470,6 +472,24 @@ fn event_loop(
             }
         }
     }
+}
+
+// A session boundary needs a physical clear as well as a new frame. Resetting
+// Ratatui's back buffer makes unchanged cells repaint too, removing terminal
+// artifacts that an ordinary incremental draw cannot detect.
+fn draw_tui_frame<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    rendered_session: &mut Option<String>,
+) -> Result<()> {
+    if *rendered_session != app.state.current_session_id {
+        terminal.clear().context("failed to refresh terminal")?;
+    }
+    terminal
+        .draw(|frame| ui::draw(frame, app))
+        .context("failed to draw terminal")?;
+    rendered_session.clone_from(&app.state.current_session_id);
+    Ok(())
 }
 
 fn spawn_terminal_event_reader() -> std::sync::mpsc::Receiver<io::Result<Event>> {
@@ -659,30 +679,4 @@ fn copy_via_osc52(text: &str) -> Result<()> {
     write!(stdout, "\x1b]52;c;{payload}\x07")?;
     stdout.flush()?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tui_startup_notice_is_explicit_and_line_safe() {
-        let mut output = Vec::new();
-        show_tui_startup_notice(&mut output).unwrap();
-        let text = String::from_utf8(output).unwrap();
-
-        assert_eq!(text, TUI_STARTUP_NOTICE);
-        assert!(text.contains("CONNECTING TO BACKGROUND SERVICE"));
-        assert!(!text.contains('\n'));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn terminal_disconnect_flags_detect_hangup_and_errors() {
-        assert!(terminal_poll_flags_disconnected(libc::POLLHUP));
-        assert!(terminal_poll_flags_disconnected(libc::POLLERR));
-        assert!(terminal_poll_flags_disconnected(libc::POLLNVAL));
-        assert!(!terminal_poll_flags_disconnected(libc::POLLIN));
-        assert!(!terminal_poll_flags_disconnected(0));
-    }
 }

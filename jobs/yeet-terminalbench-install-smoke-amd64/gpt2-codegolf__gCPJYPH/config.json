@@ -1,0 +1,22 @@
+{
+    "task": {
+        "path": "gpt2-codegolf",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "source": "terminal-bench"
+    },
+    "trial_name": "gpt2-codegolf__gCPJYPH",
+    "trials_dir": "jobs/yeet-terminalbench-install-smoke-amd64",
+    "install_only": true,
+    "agent": {
+        "name": "benchmarks.terminalbench.yeet_agent:YeetAgent",
+        "model_name": "openai/gpt-5.6-sol",
+        "kwargs": {
+            "reasoning": "high"
+        }
+    },
+    "verifier": {
+        "disable": true
+    },
+    "job_id": "c9ab2243-fa50-44a6-b8f7-54ba127ab342"
+}

@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/sqlite-with-gcov:20251031: docker inspect returned 1
+Trial sqlite-with-gcov__MqEyAku failed: Docker compose command failed for environment sqlite-with-gcov. Command: docker compose --project-name sqlite-with-gcov__mqeyaku__env --project-directory /Users/kyooni18/.cache/harbor/tasks/ZDKh9BtehT8SorZTrWLJsn/sqlite-with-gcov/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1tqcqqa5/sqlite-with-gcov__MqEyAku__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8fmaso81/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp2gnf4b4r/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sqlite-with-gcov:20251031 Pulling 
+ Image alexgshaw/sqlite-with-gcov:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

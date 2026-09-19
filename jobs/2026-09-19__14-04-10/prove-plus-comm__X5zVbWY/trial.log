@@ -1,0 +1,8 @@
+Trial prove-plus-comm__X5zVbWY failed: Docker compose command failed for environment prove-plus-comm. Command: docker compose --project-name prove-plus-comm__x5zvbwy__env --project-directory /Users/kyooni18/.cache/harbor/tasks/djEEswskd9fpNSUidkwrfM/prove-plus-comm/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbjy1kpd8/prove-plus-comm__X5zVbWY__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpkixxhi5d/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9qzlpdt_/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network prove-plus-comm__x5zvbwy__env_default Creating 
+ Network prove-plus-comm__x5zvbwy__env_default Creating 
+ Network prove-plus-comm__x5zvbwy__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network prove-plus-comm__x5zvbwy__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container prove-plus-comm__x5zvbwy__env-main-1 Creating 
+failed to create network prove-plus-comm__x5zvbwy__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

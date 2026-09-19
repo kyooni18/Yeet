@@ -47,6 +47,7 @@ RUN if [ "$(id -g node)" != "$YEET_GID" ]; then groupmod --non-unique --gid "$YE
 
 COPY --from=build /tmp/yeet /usr/local/bin/yeet
 COPY --from=build /src/RuntimeSource/dist /usr/local/share/yeet/runtime/dist
+COPY --from=build /src/RuntimeSource/skills /usr/local/share/yeet/runtime/skills
 COPY --from=build /src/RuntimeSource/package.json /usr/local/share/yeet/runtime/package.json
 
 ENV HOME=/home/node \

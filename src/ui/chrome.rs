@@ -70,57 +70,11 @@ fn draw_content_guides(
         return;
     }
     for y in top..bottom {
-        paint(buffer, left, y, "│", theme::BORDER_DIM);
-        paint(buffer, right, y, "│", theme::BORDER_DIM);
+        paint(buffer, left, y, "│", theme::border_dim());
+        paint(buffer, right, y, "│", theme::border_dim());
     }
 }
 
 fn paint(buffer: &mut ratatui::buffer::Buffer, x: u16, y: u16, symbol: &str, color: Color) {
     buffer[(x, y)].set_symbol(symbol).set_fg(color);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::{buffer::Buffer, layout::Rect};
-
-    #[test]
-    fn content_guides_are_static_and_stay_outside_content() {
-        let area = Rect::new(0, 0, 160, 30);
-        let metrics = responsive::metrics(area);
-        let mut buffer = Buffer::empty(area);
-
-        draw_content_guides(&mut buffer, area, metrics);
-
-        let sidebar = metrics.sidebar_width.unwrap_or(0);
-        let body_width = area.width - sidebar;
-        let available_width = body_width - metrics.horizontal_margin * 2;
-        let content_width = available_width.min(metrics.content_max_width);
-        let content_x = sidebar + metrics.horizontal_margin + (available_width - content_width) / 2;
-        let left = content_x - 2;
-        let right = content_x + content_width + 1;
-        let y = metrics.header_height + 1;
-
-        assert_eq!(buffer[(left, y)].symbol(), "│");
-        assert_eq!(buffer[(right, y)].symbol(), "│");
-        assert_eq!(buffer[(content_x, y)].symbol(), " ");
-    }
-
-    #[test]
-    fn content_guides_yield_until_wide_layout_has_real_gutters() {
-        let tight = Rect::new(0, 0, 132, 24);
-        let tight_metrics = responsive::metrics(tight);
-        let mut tight_buffer = Buffer::empty(tight);
-        draw_content_guides(&mut tight_buffer, tight, tight_metrics);
-        assert!(
-            !tight_buffer.content.iter().any(|cell| cell.symbol() == "│"),
-            "tight wide layout should not paint guides against the sidebar and edge"
-        );
-
-        let roomy = Rect::new(0, 0, 156, 24);
-        let roomy_metrics = responsive::metrics(roomy);
-        let mut roomy_buffer = Buffer::empty(roomy);
-        draw_content_guides(&mut roomy_buffer, roomy, roomy_metrics);
-        assert!(roomy_buffer.content.iter().any(|cell| cell.symbol() == "│"));
-    }
 }

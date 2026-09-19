@@ -1,0 +1,2 @@
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Trial reshard-c4-data__AqzwP2W cancelled

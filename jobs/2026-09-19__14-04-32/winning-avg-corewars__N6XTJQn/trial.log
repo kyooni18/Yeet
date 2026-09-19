@@ -1,0 +1,8 @@
+Trial winning-avg-corewars__N6XTJQn failed: Docker compose command failed for environment winning-avg-corewars. Command: docker compose --project-name winning-avg-corewars__n6xtjqn__env --project-directory /Users/kyooni18/.cache/harbor/tasks/dWGsQxJELwQFMvHVDc5zuS/winning-avg-corewars/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmplldfjywq/winning-avg-corewars__N6XTJQn__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1csxgd9w/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpgd_vdgqp/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network winning-avg-corewars__n6xtjqn__env_default Creating 
+ Network winning-avg-corewars__n6xtjqn__env_default Creating 
+ Network winning-avg-corewars__n6xtjqn__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network winning-avg-corewars__n6xtjqn__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container winning-avg-corewars__n6xtjqn__env-main-1 Creating 
+failed to create network winning-avg-corewars__n6xtjqn__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

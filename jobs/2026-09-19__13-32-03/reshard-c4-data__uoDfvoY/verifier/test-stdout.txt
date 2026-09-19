@@ -1,0 +1,96 @@
+Downloading hf-xet (4.3MiB)
+Downloading pyarrow (47.8MiB)
+Downloading pygments (1.2MiB)
+Downloading numpy (15.9MiB)
+Downloading aiohttp (1.7MiB)
+Downloading pandas (10.3MiB)
+ Downloading pygments
+ Downloading aiohttp
+ Downloading hf-xet
+ Downloading numpy
+ Downloading pyarrow
+ Downloading pandas
+Installed 40 packages in 1.14s
+Fatal Python error: Segmentation fault
+
+Current thread 0x0000ffff819c8b80 (most recent call first):
+  File "<frozen importlib._bootstrap>", line 488 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1320 in create_module
+  File "<frozen importlib._bootstrap>", line 813 in module_from_spec
+  File "<frozen importlib._bootstrap>", line 921 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pyarrow/__init__.py", line 59 in <module>
+  File "<frozen importlib._bootstrap>", line 488 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1026 in exec_module
+  File "<frozen importlib._bootstrap>", line 935 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pandas/compat/pyarrow.py", line 12 in <module>
+  File "<frozen importlib._bootstrap>", line 488 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1026 in exec_module
+  File "<frozen importlib._bootstrap>", line 935 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pandas/compat/__init__.py", line 29 in <module>
+  File "<frozen importlib._bootstrap>", line 488 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1026 in exec_module
+  File "<frozen importlib._bootstrap>", line 935 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pandas/__init__.py", line 22 in <module>
+  File "<frozen importlib._bootstrap>", line 488 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1026 in exec_module
+  File "<frozen importlib._bootstrap>", line 935 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/datasets/arrow_dataset.py", line 56 in <module>
+  File "<frozen importlib._bootstrap>", line 488 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1026 in exec_module
+  File "<frozen importlib._bootstrap>", line 935 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/datasets/__init__.py", line 17 in <module>
+  File "<frozen importlib._bootstrap>", line 488 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1026 in exec_module
+  File "<frozen importlib._bootstrap>", line 935 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "/tests/test_outputs.py", line 12 in <module>
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/assertion/rewrite.py", line 186 in exec_module
+  File "<frozen importlib._bootstrap>", line 935 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1331 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1360 in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1387 in _gcd_import
+  File "/usr/local/lib/python3.13/importlib/__init__.py", line 88 in import_module
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/pathlib.py", line 587 in import_path
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/python.py", line 498 in importtestmodule
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/python.py", line 551 in _getobj
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/python.py", line 280 in obj
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/python.py", line 567 in _register_setup_module_fixture
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/python.py", line 554 in collect
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/runner.py", line 389 in collect
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/runner.py", line 344 in from_call
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/runner.py", line 391 in pytest_make_collect_report
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/runner.py", line 567 in collect_one_node
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/main.py", line 839 in _collect_one_node
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/main.py", line 974 in genitems
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/main.py", line 813 in perform_collect
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/main.py", line 353 in pytest_collection
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/main.py", line 342 in _main
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/main.py", line 289 in wrap_session
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/main.py", line 336 in pytest_cmdline_main
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/config/__init__.py", line 175 in main
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/lib/python3.13/site-packages/_pytest/config/__init__.py", line 201 in console_main
+  File "/root/.cache/uv/archive-v0/ZTxl4xpOzQEAvZQyT1QHY/bin/pytest", line 12 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg (total: 2)

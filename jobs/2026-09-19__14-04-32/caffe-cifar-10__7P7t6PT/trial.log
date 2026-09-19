@@ -1,0 +1,8 @@
+Trial caffe-cifar-10__7P7t6PT failed: Docker compose command failed for environment caffe-cifar-10. Command: docker compose --project-name caffe-cifar-10__7p7t6pt__env --project-directory /Users/kyooni18/.cache/harbor/tasks/XUcCMQRrLoqxtCV4Hc9F2a/caffe-cifar-10/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_iu1cge1/caffe-cifar-10__7P7t6PT__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqdsghtw4/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbwvyo7ti/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network caffe-cifar-10__7p7t6pt__env_default Creating 
+ Network caffe-cifar-10__7p7t6pt__env_default Creating 
+ Network caffe-cifar-10__7p7t6pt__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network caffe-cifar-10__7p7t6pt__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container caffe-cifar-10__7p7t6pt__env-main-1 Creating 
+failed to create network caffe-cifar-10__7p7t6pt__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

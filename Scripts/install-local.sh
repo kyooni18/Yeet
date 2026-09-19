@@ -41,8 +41,18 @@ RUNTIME_DEST="$PREFIX/share/yeet/runtime"
 RUNTIME_BUILD="$ROOT/target/install-runtime"
 
 cd "$ROOT"
-YEET_RUNTIME_OUT_DIR="$RUNTIME_BUILD/dist" "$ROOT/Scripts/rebuild-runtime.sh"
-cargo build --release
+# Cargo already builds crates in parallel; make the job count explicit and
+# allow callers to reduce it on memory-constrained machines.
+build_jobs=${CARGO_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || printf '1')}
+printf 'Building Rust release with %s parallel jobs\n' "$build_jobs"
+# These builds have separate outputs; overlap them without changing the install
+# layout or replacing a running installation until both have succeeded.
+YEET_RUNTIME_OUT_DIR="$RUNTIME_BUILD/dist" "$ROOT/Scripts/rebuild-runtime.sh" &
+runtime_pid=$!
+build_status=0
+cargo build --release --jobs "$build_jobs" || build_status=$?
+wait "$runtime_pid" || build_status=$?
+[ "$build_status" -eq 0 ] || exit "$build_status"
 mkdir -p "$DEST" "$RUNTIME_DEST"
 
 RUNNING_MCP_PORTS=""
@@ -59,8 +69,9 @@ if ! cmp -s target/release/yeet "$DEST/yeet"; then
   echo "Installed yeet binary does not match the freshly built Rust release." >&2
   exit 1
 fi
-rm -rf "$RUNTIME_DEST/dist"
+rm -rf "$RUNTIME_DEST/dist" "$RUNTIME_DEST/skills"
 cp -R "$RUNTIME_BUILD/dist" "$RUNTIME_DEST/dist"
+cp -R RuntimeSource/skills "$RUNTIME_DEST/skills"
 cp RuntimeSource/package.json "$RUNTIME_DEST/package.json"
 "$DEST/yeet" skyline setup >/dev/null
 

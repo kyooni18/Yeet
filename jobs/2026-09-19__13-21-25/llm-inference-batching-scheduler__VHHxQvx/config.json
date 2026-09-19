@@ -1,0 +1,14 @@
+{
+    "task": {
+        "path": "llm-inference-batching-scheduler",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "source": "terminal-bench"
+    },
+    "trial_name": "llm-inference-batching-scheduler__VHHxQvx",
+    "trials_dir": "jobs/2026-09-19__13-21-25",
+    "agent": {
+        "name": "benchmarks.terminalbench.yeet_agent:YeetAgent"
+    },
+    "job_id": "b6a62e11-a154-4d54-b99a-d4e298656f48"
+}

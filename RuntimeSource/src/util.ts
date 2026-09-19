@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FinishReason, Message, ModelInfo, ModelPricing, ToolCall, ToolCallResult, Usage } from "./types.js";
 
 export function splitSystem(messages: Message[], explicit?: string): { system?: string; messages: Message[] } {
@@ -70,6 +71,12 @@ export function normalizeFinishReason(value: unknown): FinishReason {
     case "max_tokens":
     case "max_output_tokens":
       return "length";
+    case "model_context_window_exceeded":
+    case "context_length_exceeded":
+    case "context_window_exceeded":
+    case "max_prompt_tokens":
+    case "max_input_tokens":
+      return "context_length";
     case "tool_calls":
     case "tool_use":
       return "tool_call";
@@ -77,6 +84,9 @@ export function normalizeFinishReason(value: unknown): FinishReason {
     case "safety":
     case "recitation":
       return "content_filter";
+    case "error":
+    case "failed":
+      return "error";
     default:
       return "unknown";
   }
@@ -107,7 +117,7 @@ export function usage(
 
 export function normalizeToolCall(id: string | undefined, name: string | undefined, args: unknown, index: number): ToolCall {
   return {
-    id: id ?? `tool-${index}`,
+    id: id ?? `tool-${randomUUID()}`,
     name: name ?? "unknown",
     arguments: args,
   };

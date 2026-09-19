@@ -1,0 +1,8 @@
+Trial portfolio-optimization__3Uh6L5j failed: Docker compose command failed for environment portfolio-optimization. Command: docker compose --project-name portfolio-optimization__3uh6l5j__env --project-directory /Users/kyooni18/.cache/harbor/tasks/79ekQLXanbbMZMfTk3qzaF/portfolio-optimization/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpsr8dplew/portfolio-optimization__3Uh6L5j__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_t4y7l5o/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp55mqc1hd/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network portfolio-optimization__3uh6l5j__env_default Creating 
+ Network portfolio-optimization__3uh6l5j__env_default Creating 
+ Network portfolio-optimization__3uh6l5j__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network portfolio-optimization__3uh6l5j__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container portfolio-optimization__3uh6l5j__env-main-1 Creating 
+failed to create network portfolio-optimization__3uh6l5j__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

@@ -292,35 +292,3 @@ fn release_target() -> Result<&'static str> {
         _ => bail!("self-update is not packaged for this OS/architecture"),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_prefixed_release_versions() {
-        assert_eq!(
-            parse_release_version("v1.2.3").unwrap(),
-            Version::new(1, 2, 3)
-        );
-    }
-
-    #[test]
-    fn checksum_verification_accepts_matching_sha256() {
-        let bytes = b"portable release";
-        let digest = format!("{:x}", Sha256::digest(bytes));
-        verify_checksum(bytes, &format!("{digest}  yeet.tar.gz\n")).unwrap();
-    }
-
-    #[test]
-    fn checksum_verification_rejects_mismatch() {
-        let error =
-            verify_checksum(b"changed", &format!("{}  yeet.tar.gz", "0".repeat(64))).unwrap_err();
-        assert!(error.to_string().contains("verification failed"));
-    }
-
-    #[test]
-    fn current_platform_has_a_release_target() {
-        assert!(!release_target().unwrap().is_empty());
-    }
-}

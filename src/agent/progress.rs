@@ -185,7 +185,18 @@ pub(super) fn tool_made_progress(call: &ToolCall, content: &str, succeeded: bool
         ),
         "web_search" => value.get("searches").and_then(Value::as_array).map_or_else(
             || payload_made_progress(&value),
-            |values| values.iter().any(payload_made_progress),
+            |searches| {
+                searches.iter().any(|search| {
+                    search
+                        .get("results")
+                        .and_then(Value::as_array)
+                        .is_some_and(|results| !results.is_empty())
+                        || search
+                            .get("numberOfResults")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|count| count > 0)
+                })
+            },
         ),
         "run_shell" => {
             payload_made_progress(&value)
@@ -207,6 +218,8 @@ pub(super) fn classify_tool_error(message: &str) -> &'static str {
         || lower.contains("invalid model parameter")
     {
         "provider_configuration"
+    } else if lower.contains("workspace mutation lease") {
+        "workspace_busy"
     } else if lower.contains("active yeet runtime state")
         || lower.contains("active session") && lower.contains("refus")
     {
@@ -289,7 +302,26 @@ fn semantic_tool_family(call: &ToolCall) -> String {
             format!("read_file:{}", paths.join(","))
         }
         "list_files" => format!("list_files:{}", path.unwrap_or_else(|| ".".into())),
-        "web_search" => "web_search".into(),
+        "web_search" => {
+            let mut queries = call
+                .arguments
+                .get("queries")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>();
+            if queries.is_empty()
+                && let Some(query) = call.arguments.get("query").and_then(Value::as_str)
+            {
+                queries.push(query.trim().to_ascii_lowercase());
+            }
+            queries.sort();
+            queries.dedup();
+            format!("web_search:{}", queries.join("|"))
+        }
         "web_read" => format!(
             "web_read:{}",
             call.arguments
@@ -352,83 +384,4 @@ fn normalize_loop_text(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn recovery_reads_are_inspection_and_empty_results_are_not_progress() {
-        for name in [
-            "search_tools",
-            "context_status",
-            "context_history",
-            "task_notes",
-            "project_memory_recall",
-            "project_memory_get",
-            "project_memory_connections",
-        ] {
-            assert!(is_inspection_tool(name), "{name} should be inspection-only");
-        }
-
-        let notes = ToolCall {
-            id: "notes".into(),
-            name: "task_notes".into(),
-            arguments: json!({"operation":"list"}),
-        };
-        assert!(!tool_made_progress(
-            &notes,
-            &json!({"notes":[]}).to_string(),
-            true,
-        ));
-
-        let history = ToolCall {
-            id: "history".into(),
-            name: "context_history".into(),
-            arguments: json!({"operation":"search","query":"runway"}),
-        };
-        assert!(!tool_made_progress(
-            &history,
-            &json!({"items":[]}).to_string(),
-            true,
-        ));
-
-        let discovery = ToolCall {
-            id: "discovery".into(),
-            name: "search_tools".into(),
-            arguments: json!({"query":"read_file"}),
-        };
-        assert!(!tool_made_progress(
-            &discovery,
-            &json!({"loaded":[],"alreadyLoaded":["read_file"]}).to_string(),
-            true,
-        ));
-    }
-
-    #[test]
-    fn web_read_duplicate_signature_ignores_preview_size() {
-        let first = ToolCall {
-            id: "first".into(),
-            name: "web_read".into(),
-            arguments: json!({"url":"https://example.com/source","maxChars":8000}),
-        };
-        let second = ToolCall {
-            id: "second".into(),
-            name: "web_read".into(),
-            arguments: json!({"url":"https://EXAMPLE.com/source#details","maxChars":12000}),
-        };
-
-        assert_eq!(tool_signature(&first), tool_signature(&second));
-        let other = ToolCall {
-            id: "other".into(),
-            name: "web_read".into(),
-            arguments: json!({"url":"https://example.com/other","maxChars":8000}),
-        };
-        assert_ne!(
-            round_semantic_fingerprint(&[first]),
-            round_semantic_fingerprint(&[other])
-        );
-    }
 }

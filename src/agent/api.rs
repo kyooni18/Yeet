@@ -9,7 +9,13 @@ use crate::core::{ImageAttachment, ToolCall, Usage};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentRunOutcome {
     Completed,
-    CompletedUnverified { reason: String },
+    CompletedUnverified {
+        reason: String,
+    },
+    /// The goal remains enabled and can be explicitly resumed without claiming success.
+    GoalPaused {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]

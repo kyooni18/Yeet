@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/install-windows-3.11:20251031: docker inspect returned 1
+Trial install-windows-3.11__ZJGmNu9 failed: Docker compose command failed for environment install-windows-3.11. Command: docker compose --project-name install-windows-3-11__zjgmnu9__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7s8y623XYuDhmBG6ERABwC/install-windows-3.11/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpdz3h8otf/install-windows-3.11__ZJGmNu9__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpcdjzwsp0/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpa0l9q68i/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/install-windows-3.11:20251031 Pulling 
+ Image alexgshaw/install-windows-3.11:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

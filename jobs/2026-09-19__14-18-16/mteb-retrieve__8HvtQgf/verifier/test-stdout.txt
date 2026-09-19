@@ -1,0 +1,16 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [340 kB]
+Fetched 9372 kB in 32s (291 kB/s)
+Reading package lists...
+Reading package lists...
+W: Not using locking for read only lock file /var/lib/dpkg/lock-frontend
+W: Not using locking for read only lock file /var/lib/dpkg/lock
+E: Unable to mkstemp /tmp/clearsigned.message.cc8jot - GetTempFile (30: Read-only file system)
+E: The package lists or status file could not be parsed or opened.
+/tests/test.sh: line 8: curl: command not found
+/tests/test.sh: line 10: /root/.local/bin/env: No such file or directory
+/tests/test.sh: line 19: uvx: command not found
+/tests/test.sh: line 29: /logs/verifier/reward.txt: No space left on device

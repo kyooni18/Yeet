@@ -1,0 +1,8 @@
+Trial break-filter-js-from-html__YYjjb3Y failed: Docker compose command failed for environment break-filter-js-from-html. Command: docker compose --project-name break-filter-js-from-html__yyjjb3y__env --project-directory /Users/kyooni18/.cache/harbor/tasks/JQfDtvG4qqL3QfwErWynWU/break-filter-js-from-html/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8dks5vru/break-filter-js-from-html__YYjjb3Y__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1_ml8jbr/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8x3870ro/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network break-filter-js-from-html__yyjjb3y__env_default Creating 
+ Network break-filter-js-from-html__yyjjb3y__env_default Creating 
+ Network break-filter-js-from-html__yyjjb3y__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network break-filter-js-from-html__yyjjb3y__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container break-filter-js-from-html__yyjjb3y__env-main-1 Creating 
+failed to create network break-filter-js-from-html__yyjjb3y__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

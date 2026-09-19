@@ -1,0 +1,8 @@
+Trial pytorch-model-cli__nER8oqH failed: Docker compose command failed for environment pytorch-model-cli. Command: docker compose --project-name pytorch-model-cli__ner8oqh__env --project-directory /Users/kyooni18/.cache/harbor/tasks/cEZY7Ut37eqdNnYKPebgYq/pytorch-model-cli/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpmvgl5eae/pytorch-model-cli__nER8oqH__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpk3ob19ks/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7vrddr0o/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network pytorch-model-cli__ner8oqh__env_default Creating 
+ Network pytorch-model-cli__ner8oqh__env_default Creating 
+ Network pytorch-model-cli__ner8oqh__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network pytorch-model-cli__ner8oqh__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container pytorch-model-cli__ner8oqh__env-main-1 Creating 
+failed to create network pytorch-model-cli__ner8oqh__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

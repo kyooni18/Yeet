@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/sparql-university:20251031: docker inspect returned 1
+Trial sparql-university__Tx5BguA failed: Docker compose command failed for environment sparql-university. Command: docker compose --project-name sparql-university__tx5bgua__env --project-directory /Users/kyooni18/.cache/harbor/tasks/RNEJHNxbtKQgmztc6q4aKb/sparql-university/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpqkged7_6/sparql-university__Tx5BguA__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmptfpdvrl6/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp0obcdpt7/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/sparql-university:20251031 Pulling 
+ Image alexgshaw/sparql-university:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

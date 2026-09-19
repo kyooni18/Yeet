@@ -1,0 +1,8 @@
+Trial regex-chess__gaesrsU failed: Docker compose command failed for environment regex-chess. Command: docker compose --project-name regex-chess__gaesrsu__env --project-directory /Users/kyooni18/.cache/harbor/tasks/XyJK3D4eSbPWgNt9Bw4RyU/regex-chess/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpt926k6y4/regex-chess__gaesrsU__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp7n9vyden/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpx4pqc7zu/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network regex-chess__gaesrsu__env_default Creating 
+ Network regex-chess__gaesrsu__env_default Creating 
+ Network regex-chess__gaesrsu__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network regex-chess__gaesrsu__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container regex-chess__gaesrsu__env-main-1 Creating 
+failed to create network regex-chess__gaesrsu__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

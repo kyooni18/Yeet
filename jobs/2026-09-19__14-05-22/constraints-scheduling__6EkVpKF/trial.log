@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/constraints-scheduling:20251031: docker inspect returned 1
+Trial constraints-scheduling__6EkVpKF failed: Docker compose command failed for environment constraints-scheduling. Command: docker compose --project-name constraints-scheduling__6ekvpkf__env --project-directory /Users/kyooni18/.cache/harbor/tasks/CrxDfvhBFmo3ahvG2RfDM3/constraints-scheduling/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmprybhmdrg/constraints-scheduling__6EkVpKF__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpo442absd/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpwxeeggrl/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/constraints-scheduling:20251031 Pulling 
+ Image alexgshaw/constraints-scheduling:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

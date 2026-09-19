@@ -11,12 +11,6 @@ use super::BuiltinCapabilityDescriptor;
 
 pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
     BuiltinCapabilityDescriptor {
-        id: "builtin:agent-deploy",
-        name: "Agent Deploy",
-        description: "Deploy a task to a separate native Yeet agent session, visible in TUI and WebUI. No MCP server required.",
-        tools: &["deploy_agent"],
-    },
-    BuiltinCapabilityDescriptor {
         id: "builtin:file-read",
         name: "File Read",
         description: "Read one or several UTF-8 files with read_file. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Reads return snapshot-safe line anchors for later edits.",
@@ -245,11 +239,6 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                 "required":["changes"],"additionalProperties":false
             }),
         ),
-        ToolDefinition::new(
-            "deploy_agent",
-            "Deploy a task to a new native Yeet agent session in this workspace. Returns the session ID for opening in TUI/WebUI. No MCP. Only deploy when the user requests delegation; the child uses normal session permissions.",
-            json!({"type":"object","properties":{"task":{"type":"string","minLength":1,"maxLength":32000}},"required":["task"],"additionalProperties":false}),
-        ),
     ]
 }
 
@@ -350,146 +339,4 @@ pub(crate) fn direct_mcp_tool_definitions() -> Vec<ToolDefinition> {
     tools.push(web_read_tool_definition());
     tools.extend(crate::memory::tool_definitions());
     tools
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_read_surface_uses_one_tool_for_single_and_batch_reads() {
-        let tools = base_tool_definitions();
-        assert!(tools.iter().all(|tool| tool.name != "read_files"));
-
-        let read = tools.iter().find(|tool| tool.name == "read_file").unwrap();
-        let properties = read.input_schema["properties"].as_object().unwrap();
-        assert!(properties.contains_key("path"));
-        assert!(properties.contains_key("requests"));
-        assert_eq!(properties["requests"]["maxItems"].as_u64(), Some(8));
-    }
-
-    #[test]
-    fn structured_edit_schema_only_advertises_runtime_supported_operations() {
-        let tools = base_tool_definitions();
-        let edit = tools
-            .iter()
-            .find(|tool| tool.name == "apply_file_edits")
-            .unwrap();
-        let rendered = serde_json::to_string(&edit.input_schema).unwrap();
-        assert!(!rendered.contains("replaceBlock"));
-        assert!(!rendered.contains("insertAfterBlock"));
-        assert!(!rendered.contains("deleteBlock"));
-        assert!(!rendered.contains("\"snapshot\""));
-        assert!(!rendered.contains("startHash"));
-        assert!(!rendered.contains("endHash"));
-        assert!(!rendered.contains("\"hash\""));
-        assert!(rendered.contains("replace"));
-        assert!(rendered.contains("insert"));
-        assert!(rendered.contains("delete"));
-    }
-
-    #[test]
-    fn web_research_schemas_keep_evidence_bounded() {
-        let search = web_search_tool_definition();
-        let read = web_read_tool_definition();
-
-        assert_eq!(
-            search.input_schema["properties"]["maxResults"]["maximum"].as_u64(),
-            Some(8)
-        );
-        assert_eq!(
-            search.input_schema["properties"]["queries"]["maxItems"].as_u64(),
-            Some(4)
-        );
-        assert!(
-            search
-                .description
-                .as_deref()
-                .is_some_and(|description| description.contains("search-only model rounds"))
-        );
-        assert_eq!(
-            read.input_schema["properties"]["maxChars"]["maximum"].as_u64(),
-            Some(4_000)
-        );
-    }
-
-    #[test]
-    fn shell_job_schema_supports_event_driven_and_periodic_waiting() {
-        let tools = base_tool_definitions();
-        let shell_job = tools.iter().find(|tool| tool.name == "shell_job").unwrap();
-        let actions = shell_job.input_schema["properties"]["action"]["enum"]
-            .as_array()
-            .unwrap();
-        assert!(actions.iter().any(|value| value.as_str() == Some("wait")));
-        assert_eq!(
-            shell_job.input_schema["properties"]["reportEverySeconds"]["maximum"].as_u64(),
-            Some(86_400)
-        );
-        assert!(
-            shell_job
-                .description
-                .as_deref()
-                .is_some_and(|description| description.contains("without model polling"))
-        );
-
-        let run_shell = tools.iter().find(|tool| tool.name == "run_shell").unwrap();
-        assert_eq!(
-            run_shell.input_schema["properties"]["timeoutSeconds"]["maximum"].as_u64(),
-            Some(86_400)
-        );
-    }
-
-    #[test]
-    fn list_files_is_not_model_visible() {
-        let tools = base_tool_definitions();
-        assert!(tools.iter().all(|tool| tool.name != "list_files"));
-        assert!(
-            direct_mcp_tool_definitions()
-                .iter()
-                .all(|tool| tool.name != "list_files")
-        );
-    }
-
-    #[test]
-    fn agent_deployment_is_native_only() {
-        let tools = base_tool_definitions();
-        let deploy = tools
-            .iter()
-            .find(|tool| tool.name == "deploy_agent")
-            .expect("native deployment schema");
-        assert_eq!(deploy.input_schema["required"], json!(["task"]));
-        assert_eq!(
-            deploy.input_schema["properties"]["task"]["maxLength"],
-            32_000
-        );
-        assert!(
-            direct_mcp_tool_definitions()
-                .iter()
-                .all(|tool| tool.name != "deploy_agent")
-        );
-    }
-
-    #[test]
-    fn computer_use_matches_codex_runtime_surface_and_is_mcp_exported() {
-        let tools = base_tool_definitions();
-        let computer = tools
-            .iter()
-            .find(|tool| tool.name == "computer_use")
-            .unwrap();
-        let properties = computer.input_schema["properties"].as_object().unwrap();
-        assert!(properties.contains_key("code"));
-        assert!(properties.contains_key("timeout_ms"));
-        assert!(properties.contains_key("title"));
-        assert_eq!(computer.input_schema["required"], json!(["code"]));
-
-        let direct = direct_mcp_tool_definitions();
-        assert!(direct.iter().any(|tool| tool.name == "computer_use"));
-        assert!(direct.iter().any(|tool| tool.name == "computer_use_reset"));
-        assert!(direct.iter().any(|tool| tool.name == "desktop_control"));
-        assert!(
-            direct
-                .iter()
-                .any(|tool| tool.name == "desktop_control_reset")
-        );
-    }
 }

@@ -1,0 +1,19 @@
+Skipping image OS validation for alexgshaw/llm-inference-batching-scheduler:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/break-filter-js-from-html:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/reshard-c4-data:20251031: docker inspect returned 1
+Running command: apt-get update && apt-get install -y bash tar ca-certificates git procps
+Running command: apt-get update && apt-get install -y bash tar ca-certificates git procps
+Running command: apt-get update && apt-get install -y bash tar ca-certificates git procps
+Running command: apt-get update && apt-get install -y bash tar ca-certificates git procps
+Trial reshard-c4-data__FdPvqVA cancelled
+Trial break-filter-js-from-html__ocCJsNi cancelled
+Trial gpt2-codegolf__ZMHfETs cancelled
+Trial llm-inference-batching-scheduler__VHHxQvx cancelled
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Collecting main service artifacts
+Cleanup interrupted for llm-inference-batching-scheduler__VHHxQvx, but agent environment stop is shielded and will complete
+Cleanup interrupted for reshard-c4-data__FdPvqVA, but agent environment stop is shielded and will complete
+Cleanup interrupted for gpt2-codegolf__ZMHfETs, but agent environment stop is shielded and will complete
+Cleanup interrupted for break-filter-js-from-html__ocCJsNi, but agent environment stop is shielded and will complete

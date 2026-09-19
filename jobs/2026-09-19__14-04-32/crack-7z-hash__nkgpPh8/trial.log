@@ -1,0 +1,8 @@
+Trial crack-7z-hash__nkgpPh8 failed: Docker compose command failed for environment crack-7z-hash. Command: docker compose --project-name crack-7z-hash__nkgpph8__env --project-directory /Users/kyooni18/.cache/harbor/tasks/MAyhSNHCZegJvZuPyTitjJ/crack-7z-hash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbi3afvx5/crack-7z-hash__nkgpPh8__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpnjtymcfl/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpcbehzvof/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network crack-7z-hash__nkgpph8__env_default Creating 
+ Network crack-7z-hash__nkgpph8__env_default Creating 
+ Network crack-7z-hash__nkgpph8__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network crack-7z-hash__nkgpph8__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container crack-7z-hash__nkgpph8__env-main-1 Creating 
+failed to create network crack-7z-hash__nkgpph8__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

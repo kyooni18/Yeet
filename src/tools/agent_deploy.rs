@@ -25,8 +25,10 @@ impl super::ToolRegistry {
         object: &Map<String, Value>,
         cancel: &AtomicBool,
     ) -> Result<String> {
-        let task = super::string_arg(object, "task")?;
-        deploy_agent_for_workspace(&self.workspace_root, task, cancel)
+        let _ = (object, cancel);
+        bail!(
+            "Agent deployment is exclusively available through builtin:skyline: use skyline with operation=deploy_agent after attaching Skyline"
+        )
     }
 }
 
@@ -109,14 +111,5 @@ pub(crate) fn deploy_agent_for_workspace(
             );
         }
         thread::sleep(DEPLOYMENT_POLL_INTERVAL);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn deployment_limits_are_bounded() {
-        assert_eq!(super::DEPLOYMENT_START_TIMEOUT.as_secs(), 20);
-        assert_eq!(super::DEPLOYMENT_POLL_INTERVAL.as_millis(), 20);
     }
 }

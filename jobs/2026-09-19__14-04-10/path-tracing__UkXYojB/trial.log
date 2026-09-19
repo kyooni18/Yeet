@@ -1,0 +1,8 @@
+Trial path-tracing__UkXYojB failed: Docker compose command failed for environment path-tracing. Command: docker compose --project-name path-tracing__ukxyojb__env --project-directory /Users/kyooni18/.cache/harbor/tasks/9BGkwkiZs6r3NTmoLCLzr9/path-tracing/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp_86b0v22/path-tracing__UkXYojB__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpvu_i10sg/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp6vomaoii/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network path-tracing__ukxyojb__env_default Creating 
+ Network path-tracing__ukxyojb__env_default Creating 
+ Network path-tracing__ukxyojb__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network path-tracing__ukxyojb__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container path-tracing__ukxyojb__env-main-1 Creating 
+failed to create network path-tracing__ukxyojb__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

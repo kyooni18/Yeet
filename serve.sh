@@ -67,7 +67,7 @@ ensure_runtime_dependencies() {
 
   require_command npm 'npm is required to install Yeet runtime build dependencies.'
   log 'Synchronizing Yeet runtime dependencies'
-  npm --prefix "$RUNTIME_SOURCE_DIR" ci
+  npm --prefix "$RUNTIME_SOURCE_DIR" ci --prefer-offline --no-audit --no-fund
 }
 
 ensure_web_dependencies() {

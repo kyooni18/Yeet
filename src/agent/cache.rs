@@ -10,9 +10,6 @@ use sha2::{Digest, Sha256};
 use crate::core::Usage;
 use crate::core::{CallRequest, Message, MessageRole, ToolDefinition};
 
-#[cfg(test)]
-mod wire_tests;
-
 /// Tracks whether the durable, non-request-only conversation remains an
 /// append-only prefix across model attempts. Provider caches can reuse beyond
 /// Yeet's explicit breakpoint, so rewriting an older tool result can destroy a
@@ -36,6 +33,7 @@ impl ContinuityTracker {
 
     pub(super) fn diagnostics(&mut self, request: &CallRequest) -> Value {
         let mut value = diagnostics(request);
+        let previous_epoch = self.cache_epoch;
         let window = request
             .metadata
             .as_ref()
@@ -43,13 +41,8 @@ impl ContinuityTracker {
             .cloned()
             .or_else(|| request.context_key.clone())
             .unwrap_or_default();
-        let lane = request
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("lane"))
-            .cloned()
-            .unwrap_or_default();
-        let scope = format!("{lane}:{window}");
+        // A lane switch is not a context rollover and cannot authorize rewrites.
+        let scope = window;
         let current = canonical_history(request);
         let current_wire = canonical_wire_history(request);
         let current_base = canonical_base_prefix(request);
@@ -70,10 +63,6 @@ impl ContinuityTracker {
             prefix_continuity(previous_wire.map(Vec::as_slice), &current_wire);
         let base_prefix_continues =
             previous_base.map(|previous| current_base.as_slice().starts_with(previous.as_slice()));
-        let base_prefix_extended = previous_base.is_some_and(|previous| {
-            current_base.len() > previous.len()
-                && current_base.as_slice().starts_with(previous.as_slice())
-        });
 
         let tool_envelope_hash = value
             .get("toolEnvelopeHash")
@@ -88,17 +77,14 @@ impl ContinuityTracker {
             let base_rewritten = base_prefix_continues == Some(false);
             let history_rewritten = continues == Some(false);
             let wire_history_rewritten = wire_continues == Some(false);
-            // A new turn naturally extends the reusable base while completed-turn
-            // tail evidence and request-only overlays may disappear. That is not a
-            // full reset. Within an unchanged base, either semantic or wire-order
-            // divergence destroys implicit exact-prefix reuse.
-            let cache_relevant_history_rewrite =
-                (history_rewritten || wire_history_rewritten) && !base_prefix_extended;
+            // Extending a breakpoint never excuses deleting or rewriting an
+            // already-submitted suffix, including request-only guidance.
+            let cache_relevant_history_rewrite = history_rewritten || wire_history_rewritten;
             let reason = if tool_changed {
                 "tool-envelope-change"
             } else if base_rewritten {
                 "base-prefix-change"
-            } else if wire_history_rewritten && !history_rewritten && !base_prefix_extended {
+            } else if wire_history_rewritten && !history_rewritten {
                 "wire-history-rewrite"
             } else if cache_relevant_history_rewrite {
                 "history-rewrite"
@@ -159,6 +145,12 @@ impl ContinuityTracker {
             );
             object.insert("cacheEpoch".into(), json!(cache_epoch));
             object.insert("cacheEpochReason".into(), json!(cache_epoch_reason));
+        }
+        // The caller rejects rewrites before dispatch. Do not adopt a rejected
+        // candidate: retrying it must still fail against the last accepted prefix.
+        if wire_continues == Some(false) {
+            self.cache_epoch = previous_epoch;
+            return value;
         }
         self.scope = Some(scope);
         self.previous_history = Some(current);
@@ -259,6 +251,7 @@ pub(super) fn mark_turn_cache_breakpoint(messages: &mut [Message], input: &str) 
 /// repeated tool rounds can still cache large turn-local guidance, but the next
 /// user turn can reuse the earlier canonical prefix after request-only overlays
 /// disappear.
+#[cfg(test)]
 pub(super) fn insert_turn_stable_overlays(
     messages: &mut Vec<Message>,
     input: &str,
@@ -684,4 +677,113 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+mod continuity_guard_tests {
+    use super::*;
+
+    fn request(window: &str, lane: &str, messages: Vec<Message>) -> CallRequest {
+        let mut request = CallRequest::simple("test-model", messages);
+        request.context_key = Some(window.into());
+        request.metadata = Some(
+            [
+                ("contextWindowId".into(), window.into()),
+                ("lane".into(), lane.into()),
+            ]
+            .into(),
+        );
+        request
+    }
+
+    #[test]
+    fn rejected_rewrite_never_becomes_the_accepted_prefix() {
+        let mut tracker = ContinuityTracker::default();
+        let original = request(
+            "window-1",
+            "agent",
+            vec![
+                Message::user("task"),
+                Message::system("submitted guidance").request_only(),
+            ],
+        );
+        tracker.diagnostics(&original);
+        let rewritten = request("window-1", "agent", vec![Message::user("task")]);
+        for _ in 0..2 {
+            let diagnostics = tracker.diagnostics(&rewritten);
+            assert_eq!(diagnostics["wireHistoryPrefixRewriteDetected"], json!(true));
+            assert_eq!(
+                diagnostics["cacheRelevantHistoryRewriteDetected"],
+                json!(true)
+            );
+        }
+        let mut continued = original;
+        continued
+            .messages
+            .push(Message::assistant("new response", None));
+        let diagnostics = tracker.diagnostics(&continued);
+        assert_eq!(diagnostics["wireHistoryPrefixContinues"], json!(true));
+        assert_eq!(diagnostics["cacheEpochReason"], json!("stable"));
+        assert_eq!(diagnostics["cacheEpoch"], json!(1));
+    }
+
+    #[test]
+    fn lane_changes_cannot_hide_a_same_window_rewrite() {
+        let mut tracker = ContinuityTracker::default();
+        tracker.diagnostics(&request(
+            "window-1",
+            "agent",
+            vec![Message::user("original")],
+        ));
+        let diagnostics = tracker.diagnostics(&request(
+            "window-1",
+            "research",
+            vec![Message::user("rewritten")],
+        ));
+        assert_eq!(diagnostics["wireHistoryPrefixRewriteDetected"], json!(true));
+    }
+
+    #[test]
+    fn explicit_window_rollover_allows_a_new_prefix() {
+        let mut tracker = ContinuityTracker::default();
+        tracker.diagnostics(&request(
+            "window-1",
+            "agent",
+            vec![Message::user("original")],
+        ));
+        let next = request("window-2", "agent", vec![Message::user("handoff")]);
+        let diagnostics = tracker.diagnostics(&next);
+        assert_eq!(
+            diagnostics["wireHistoryPrefixRewriteDetected"],
+            json!(false)
+        );
+        assert_eq!(diagnostics["cacheEpochReason"], json!("window-start"));
+        assert_eq!(
+            tracker.diagnostics(&next)["wireHistoryPrefixContinues"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn advancing_breakpoint_does_not_excuse_an_old_tool_result_rewrite() {
+        let mut tracker = ContinuityTracker::default();
+        let mut original = request(
+            "window-1",
+            "agent",
+            vec![
+                Message::user("task"),
+                Message::tool("original evidence", "call-1", Some("read_file".into())),
+            ],
+        );
+        original.messages[0].cache_breakpoint = Some(true);
+        tracker.diagnostics(&original);
+        original.messages[0].cache_breakpoint = None;
+        original.messages[1].cache_breakpoint = Some(true);
+        assert_eq!(
+            tracker.diagnostics(&original)["wireHistoryPrefixContinues"],
+            json!(true)
+        );
+        original.messages[1].content = Some("short summary".into());
+        assert_eq!(
+            tracker.diagnostics(&original)["cacheRelevantHistoryRewriteDetected"],
+            json!(true)
+        );
+    }
+}

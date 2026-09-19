@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/mteb-leaderboard:20251031: docker inspect returned 1
+Trial mteb-leaderboard__fVvJzf3 failed: Docker compose command failed for environment mteb-leaderboard. Command: docker compose --project-name mteb-leaderboard__fvvjzf3__env --project-directory /Users/kyooni18/.cache/harbor/tasks/3aN2GgseP4MfXC7ixV7cXB/mteb-leaderboard/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpl4xu6f5y/mteb-leaderboard__fVvJzf3__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp22d9af2y/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpg7hsoxdm/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/mteb-leaderboard:20251031 Pulling 
+ Image alexgshaw/mteb-leaderboard:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

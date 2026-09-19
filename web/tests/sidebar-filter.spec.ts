@@ -87,7 +87,7 @@ test('filter reveals matching hidden chats and restores normal disclosure behavi
 
   await filter.fill('anotherproject')
   await expect(targetWorkspace).toBeVisible()
-  await expect(targetWorkspace.getByText(matchingSession.title)).toBeHidden()
+  await expect(targetWorkspace.getByText(matchingSession.title)).toBeVisible()
 
   await filter.fill('does-not-exist')
   await expect(surface.getByTestId('workspace-filter-empty')).toHaveText('No matching workspaces or chats.')

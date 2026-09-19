@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/make-doom-for-mips:20251031: docker inspect returned 1
+Trial make-doom-for-mips__mD6k8Pz failed: Docker compose command failed for environment make-doom-for-mips. Command: docker compose --project-name make-doom-for-mips__md6k8pz__env --project-directory /Users/kyooni18/.cache/harbor/tasks/2gm9aAxh3ufEHTNAcZ8qB3/make-doom-for-mips/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpycj9igiz/make-doom-for-mips__mD6k8Pz__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp9_qziisv/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpd28k11q0/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/make-doom-for-mips:20251031 Pulling 
+ Image alexgshaw/make-doom-for-mips:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

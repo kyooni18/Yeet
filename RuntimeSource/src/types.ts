@@ -104,6 +104,13 @@ export interface ImageAttachment {
   name?: string;
 }
 
+export interface ProviderState {
+  provider: ProviderId;
+  protocol: string;
+  model?: string;
+  data: unknown;
+}
+
 export interface Message {
   role: MessageRole;
   content?: string;
@@ -116,6 +123,8 @@ export interface Message {
   toolResult?: ToolCallResult;
   /** Optional host feedback associated with a tool result. */
   toolFeedback?: ToolCallFeedback[];
+  /** Provider-native opaque state required to faithfully continue this assistant turn. */
+  providerState?: ProviderState;
   /** Request-local guidance excluded from durable compaction and cache prefixes. */
   requestOnly?: boolean;
   /** Runtime-internal marker for the final reusable prompt-cache content block. */
@@ -149,6 +158,8 @@ interface CallRequestBase {
   temperature?: number;
   maxTokens?: number;
   metadata?: Record<string, string>;
+  /** Metadata intentionally forwarded to the provider API. Internal runtime metadata stays in `metadata`. */
+  providerMetadata?: Record<string, string>;
   timeoutMs?: number;
   retry?: RetryPolicy;
   signal?: AbortSignal;
@@ -198,7 +209,7 @@ export interface Usage {
   providerComparisonReusableTokens?: number;
 }
 
-export type FinishReason = "stop" | "length" | "tool_call" | "content_filter" | "error" | "unknown";
+export type FinishReason = "stop" | "length" | "context_length" | "tool_call" | "content_filter" | "error" | "unknown";
 
 export type PromptCacheMissReason =
   | "model_changed"
@@ -234,6 +245,8 @@ export interface CallResult {
   toolResults?: ToolCallResult[];
   /** Lifecycle/diagnostic feedback collected during the call. */
   toolFeedback?: ToolCallFeedback[];
+  /** Opaque provider continuation state for this assistant turn. */
+  providerState?: ProviderState;
   finishReason: FinishReason;
   usage?: Usage;
   /** Provider-reported prompt-cache comparison result, when explicitly available. */
@@ -250,7 +263,7 @@ export type StreamEvent =
   | { type: "text-delta"; delta: string }
   | { type: "tool-call-delta"; index: number; id?: string; name?: string; argumentsDelta?: string }
   | { type: "tool-call"; index: number; toolCall: ToolCall }
-  | { type: "finish"; finishReason: FinishReason; usage?: Usage; promptCacheDiagnostics?: PromptCacheDiagnostics; raw?: unknown };
+  | { type: "finish"; finishReason: FinishReason; usage?: Usage; promptCacheDiagnostics?: PromptCacheDiagnostics; providerState?: ProviderState; raw?: unknown };
 
 export interface EmbeddingRequest {
   model: string;

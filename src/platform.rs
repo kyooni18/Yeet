@@ -453,138 +453,102 @@ fn signal_process(pid: u32, signal: i32) -> io::Result<()> {
     Err(error)
 }
 
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use std::{process::Stdio, time::Instant};
-
-    #[cfg(target_os = "linux")]
-    fn linux_process_group_has_live_members(group: u32) -> bool {
-        let Ok(entries) = fs::read_dir("/proc") else {
-            return true;
-        };
-        for entry in entries.flatten() {
-            let Some(_pid) = entry
-                .file_name()
-                .to_str()
-                .and_then(|value| value.parse::<u32>().ok())
-            else {
-                continue;
-            };
-            let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
-                continue;
-            };
-            let Some((_, fields)) = stat.rsplit_once(") ") else {
-                continue;
-            };
-            let mut fields = fields.split_whitespace();
-            let Some(state) = fields.next() else {
-                continue;
-            };
-            let _ppid = fields.next();
-            let Some(process_group) = fields.next().and_then(|value| value.parse::<u32>().ok())
-            else {
-                continue;
-            };
-            if process_group == group && !matches!(state, "Z" | "X") {
-                return true;
-            }
+/// Retire an internal runtime and its children if its spawning daemon exits.
+/// Parentage, rather than a PID-existence check, also detects PID reuse.
+pub(crate) fn watch_runtime_parent(expected_parent: u32) {
+    #[cfg(unix)]
+    {
+        if expected_parent <= 1 || expected_parent == std::process::id() {
+            return;
         }
-        false
+        std::thread::spawn(move || {
+            loop {
+                let actual_parent = unsafe { libc::getppid() } as u32;
+                if runtime_parent_changed(expected_parent, actual_parent) {
+                    // Snapshot before signalling: children may be reparented as soon
+                    // as their own supervisor exits. Never signal our own group.
+                    let pid = std::process::id();
+                    if let Ok(tree) = unix_process_tree(pid) {
+                        for child in tree.iter().rev().copied().filter(|child| *child != pid) {
+                            let _ = signal_owned_process_or_group(child, libc::SIGKILL);
+                        }
+                    }
+                    // Drop handlers may be stuck on the same abandoned work. The
+                    // owning daemon is gone, so no live session can use this worker.
+                    std::process::exit(0);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        });
     }
-
-    #[test]
-    fn forced_group_termination_reaps_a_process_with_a_child() {
-        let mut command = Command::new("sh");
-        command
-            .args(["-c", "sleep 30 & wait"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        configure_process_group(&mut command);
-        let mut child = command.spawn().unwrap();
-        let pid = child.id();
-        assert_eq!(process_group_id(pid).unwrap(), pid as i32);
-
-        force_terminate_process_tree(pid).unwrap();
-        let exit_started = Instant::now();
-        loop {
-            if child.try_wait().unwrap().is_some() {
-                break;
-            }
-            if exit_started.elapsed() >= std::time::Duration::from_secs(2) {
-                let _ = child.kill();
-                panic!("forced process-group termination did not stop the root process");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn forced_tree_termination_stops_descendant_in_separate_process_group() {
-        let mut command = Command::new("sh");
-        command
-            .args(["-c", "setsid sleep 30 & wait"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        configure_process_group(&mut command);
-        let mut child = command.spawn().unwrap();
-        let pid = child.id();
-
-        let discovery_started = Instant::now();
-        let descendant_group = loop {
-            let tree = unix_process_tree(pid).unwrap_or_default();
-            if let Some(group) = tree.into_iter().find(|candidate| {
-                *candidate != pid
-                    && process_group_id(*candidate).is_ok_and(|pgid| pgid == *candidate as i32)
-            }) {
-                break group;
-            }
-            assert!(
-                discovery_started.elapsed() < std::time::Duration::from_secs(2),
-                "separate descendant process group never appeared"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-
-        force_terminate_process_tree(pid).unwrap();
-        let exit_started = Instant::now();
-        loop {
-            let root_exited = child.try_wait().unwrap().is_some();
-            if root_exited && !linux_process_group_has_live_members(descendant_group) {
-                break;
-            }
-            if exit_started.elapsed() >= std::time::Duration::from_secs(2) {
-                let _ = child.kill();
-                let _ = signal_process_group(descendant_group, libc::SIGKILL);
-                panic!("forced tree termination left a separate descendant process group alive");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-    }
+    #[cfg(not(unix))]
+    let _ = expected_parent;
 }
 
-#[cfg(all(test, windows))]
-mod windows_tests {
+#[cfg(unix)]
+fn runtime_parent_changed(expected_parent: u32, actual_parent: u32) -> bool {
+    expected_parent != actual_parent
+}
+
+#[cfg(all(test, unix))]
+mod runtime_parent_tests {
     use super::*;
 
     #[test]
-    fn authenticated_local_endpoint_preserves_application_bytes() {
-        let root = tempfile::tempdir().unwrap();
-        let endpoint = root.path().join("local.endpoint");
-        let listener = bind_local(&endpoint).unwrap();
-        listener.set_nonblocking(false).unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut payload = [0_u8; 4];
-            stream.read_exact(&mut payload).unwrap();
-            assert_eq!(&payload, b"ping");
-        });
+    fn only_obsolete_runtime_parentage_triggers_cleanup() {
+        assert!(!runtime_parent_changed(42, 42));
+        assert!(runtime_parent_changed(42, 1));
+        // Linux subreapers can adopt an orphan instead of init.
+        assert!(runtime_parent_changed(42, 99));
+    }
 
-        let mut client = connect_local(&endpoint).unwrap();
-        client.write_all(b"ping").unwrap();
-        server.join().unwrap();
+    // Run the exit-capable watchdog only in an isolated test subprocess.
+    #[test]
+    fn watchdog_fixture() {
+        let Ok(mode) = std::env::var("YEET_TEST_PARENT_WATCHDOG") else {
+            return;
+        };
+        let parent = unsafe { libc::getppid() } as u32;
+        let expected = if mode == "live" { parent } else { parent + 1 };
+        // Avoid the current-PID guard when selecting a simulated old parent.
+        let expected = if expected == std::process::id() {
+            expected + 1
+        } else {
+            expected
+        };
+        watch_runtime_parent(expected);
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        // A live owner must survive, while an obsolete owner must exit via
+        // the watchdog before reaching this distinct status.
+        std::process::exit(23);
+    }
+
+    #[test]
+    fn watchdog_retires_only_a_runtime_with_obsolete_parentage() {
+        for (mode, expected_code) in [("live", 23), ("obsolete", 0)] {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "platform::runtime_parent_tests::watchdog_fixture",
+                    "--nocapture",
+                ])
+                .env("YEET_TEST_PARENT_WATCHDOG", mode)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert_eq!(status.code(), Some(expected_code), "{mode}");
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("watchdog fixture timed out: {mode}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
     }
 }

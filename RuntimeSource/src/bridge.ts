@@ -349,6 +349,55 @@ async function runComplete(command: Extract<BridgeCommand, { op: "complete" }>):
   }
 }
 
+async function runJev(command: Extract<BridgeCommand, { op: "jev-evaluate" }>): Promise<void> {
+  const controller = new AbortController();
+  active.set(command.id, controller);
+  const timeout = setTimeout(() => controller.abort(new Error("Jev request timed out")), 12_000);
+  try {
+    const provider = command.provider ?? (process.env.JEV_PROVIDER?.trim().toLowerCase() === "openrouter" ? "openrouter" : "typesafe");
+    const credential = provider === "openrouter" ? await auth.resolve("openrouter") : undefined;
+    const resolvedApiKey = provider === "openrouter"
+      ? (apiKey(credential) ?? process.env.OPENROUTER_API_KEY?.trim())
+      : process.env.TYPESAFE_API_KEY?.trim();
+    if (!resolvedApiKey) throw new Error(`${provider === "openrouter" ? "OPENROUTER_API_KEY" : "TYPESAFE_API_KEY"} is not configured`);
+    const openRouter = provider === "openrouter";
+    const response = await fetch(
+      openRouter ? "https://openrouter.ai/api/alpha/decisions" : "https://api.typesafe.ai/v1/systemone",
+      {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${resolvedApiKey}`,
+        "Content-Type": "application/json",
+        ...(openRouter && process.env.OPENROUTER_APP_URL ? { "HTTP-Referer": process.env.OPENROUTER_APP_URL } : {}),
+        ...(openRouter && process.env.OPENROUTER_APP_NAME ? { "X-OpenRouter-Title": process.env.OPENROUTER_APP_NAME } : {}),
+      },
+      body: JSON.stringify({
+        model: command.model ?? (openRouter ? "~typesafe/jev-latest" : "jev-latest"),
+        state: command.state,
+        questions: command.questions,
+      }),
+      signal: controller.signal,
+      },
+    );
+    const body = await response.text();
+    let result: unknown;
+    try {
+      result = JSON.parse(body);
+    } catch {
+      throw new Error(`TypeSafe Jev returned invalid JSON (${response.status})`);
+    }
+    if (!response.ok) {
+      throw new Error(`TypeSafe Jev request failed (${response.status}): ${body.slice(0, 1_000)}`);
+    }
+    write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "jev-result", result });
+  } catch (error) {
+    write(errorMessage(command.id, error));
+  } finally {
+    clearTimeout(timeout);
+    active.delete(command.id);
+  }
+}
+
 async function runStream(command: Extract<BridgeCommand, { op: "stream" }>): Promise<void> {
   const controller = new AbortController();
   active.set(command.id, controller);
@@ -589,6 +638,9 @@ async function handle(command: BridgeCommand): Promise<void> {
       return;
     case "stream":
       void runStream(command);
+      return;
+    case "jev-evaluate":
+      void runJev(command);
       return;
 
     case "skill-list":

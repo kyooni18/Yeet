@@ -1,0 +1,8 @@
+Trial log-summary-date-ranges__UFs7QGY failed: Docker compose command failed for environment log-summary-date-ranges. Command: docker compose --project-name log-summary-date-ranges__ufs7qgy__env --project-directory /Users/kyooni18/.cache/harbor/tasks/fqGNZJec57abmbsxYbQAz5/log-summary-date-ranges/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpakk99lmd/log-summary-date-ranges__UFs7QGY__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpxu_p80qo/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpk79gchbo/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Network log-summary-date-ranges__ufs7qgy__env_default Creating 
+ Network log-summary-date-ranges__ufs7qgy__env_default Creating 
+ Network log-summary-date-ranges__ufs7qgy__env_default Error Error response from daemon: all predefined address pools have been fully subnetted
+ network:default failed to create network log-summary-date-ranges__ufs7qgy__env_default: Error response from daemon: all predefined address pools have been fully subnetted 
+ Container log-summary-date-ranges__ufs7qgy__env-main-1 Creating 
+failed to create network log-summary-date-ranges__ufs7qgy__env_default: Error response from daemon: all predefined address pools have been fully subnetted
+. Stderr: None. 
+Collecting main service artifacts

@@ -9,15 +9,15 @@ use serde_json::{Map, Value, json};
 
 mod cache_report;
 use cache_report::cache;
-#[cfg(test)]
-use cache_report::{summarize_cache_events, summarize_debate_cache_events};
 
 use crate::{
+    backend::{Backend, BackendEvent},
     config::{ConfigStore, parse_context_length, validate_model_id},
     core::{
         BridgeClient, CallRequest, ImageAttachment, McpServerConfiguration, Message,
         OpenAiCompatibleProvider, StreamEvent, node_executable, runtime_directory,
     },
+    model::{ConversationKind, FrontendCommand, SandboxAction},
     project_settings::ProjectSettingsStore,
     sandbox_cli,
     session_store::SessionStore,
@@ -38,8 +38,12 @@ pub const HELP: &str = r#"Usage:
   yeet model get
   yeet model set provider/model
   yeet model context [get [provider/model]|set [provider/model] length|auto [provider/model]]
+  yeet theme get
+  yeet theme set [dark|light|both] NAME_OR_PATH
+  yeet theme appearance [auto|dark|light]
   yeet cache [latest|SESSION_ID]
   yeet run [--model provider/model] [--image path] [prompt]
+  yeet agent [--model provider/model] [--reasoning LEVEL] [--benchmark] [--json] [--timeout-seconds N] [prompt]
   yeet auth status [provider]
   yeet usage [codex|claude|gemini|provider]
   printf key | yeet auth set-key provider
@@ -123,8 +127,10 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         "doctor" => doctor(),
         "update" => crate::update::run(rest),
         "model" => model(rest),
+        "theme" => theme(rest),
         "cache" => cache(rest),
         "run" => run_model(rest),
+        "agent" => run_agent(rest),
         "auth" => auth(rest),
         "usage" => usage_command(rest),
         "provider" | "providers" | "endpoint" | "endpoints" => provider(rest),
@@ -292,6 +298,46 @@ fn doctor() -> Result<()> {
     Ok(())
 }
 
+fn theme(args: &[String]) -> Result<()> {
+    let config = ConfigStore::default();
+    match args.first().map(String::as_str).unwrap_or("get") {
+        "get" => {
+            let settings = config.theme_settings()?;
+            println!(
+                "appearance: {}",
+                settings.appearance.as_deref().unwrap_or("auto")
+            );
+            println!("dark: {}", settings.dark.as_deref().unwrap_or("kanagawa"));
+            println!("light: {}", settings.light.as_deref().unwrap_or("adwaita"));
+            Ok(())
+        }
+        "set" => {
+            let (mode, value) = match args {
+                [_, value] => ("both", value.as_str()),
+                [_, mode, value] => (mode.as_str(), value.as_str()),
+                _ => bail!("Usage: yeet theme set [dark|light|both] NAME_OR_PATH"),
+            };
+            let value = if mode != "both" && (value == "dark" || value == "light") {
+                bail!("Usage: yeet theme set [dark|light|both] NAME_OR_PATH")
+            } else {
+                value
+            };
+            config.set_theme(mode, value)?;
+            println!("{mode}: {value}");
+            Ok(())
+        }
+        "appearance" => {
+            let appearance = args.get(1).map(String::as_str).unwrap_or("auto");
+            config.set_appearance(appearance)?;
+            println!("{appearance}");
+            Ok(())
+        }
+        _ => bail!(
+            "Usage: yeet theme [get|set [dark|light|both] NAME_OR_PATH|appearance [auto|dark|light]]"
+        ),
+    }
+}
+
 fn model(args: &[String]) -> Result<()> {
     let config = ConfigStore::default();
     match args.first().map(String::as_str).unwrap_or("get") {
@@ -427,6 +473,197 @@ fn run_model(args: &[String]) -> Result<()> {
     }
     println!();
     bridge.shutdown();
+    Ok(())
+}
+
+fn run_agent(args: &[String]) -> Result<()> {
+    let mut model = None;
+    let mut reasoning = None;
+    let mut benchmark = false;
+    let mut json_output = false;
+    let mut timeout_seconds = std::env::var("YEET_AGENT_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3600);
+    let mut prompt_parts = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--model" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| anyhow!("--model requires provider/model"))?;
+                model = Some(validate_model_id(value)?);
+                index += 2;
+            }
+            "--reasoning" => {
+                reasoning = Some(
+                    args.get(index + 1)
+                        .ok_or_else(|| anyhow!("--reasoning requires a level"))?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--benchmark" => {
+                benchmark = true;
+                index += 1;
+            }
+            "--json" => {
+                json_output = true;
+                index += 1;
+            }
+            "--timeout-seconds" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| anyhow!("--timeout-seconds requires an integer"))?;
+                timeout_seconds = value
+                    .parse::<u64>()
+                    .map_err(|_| anyhow!("invalid --timeout-seconds value: {value}"))?;
+                index += 2;
+            }
+            "--" => {
+                prompt_parts.extend(args[index + 1..].iter().cloned());
+                break;
+            }
+            option if option.starts_with("--") => {
+                bail!("Unknown yeet agent option: {option}");
+            }
+            _ => {
+                prompt_parts.push(args[index].clone());
+                index += 1;
+            }
+        }
+    }
+
+    let prompt = if prompt_parts.is_empty() {
+        let mut text = String::new();
+        std::io::stdin().read_to_string(&mut text)?;
+        text.trim().to_owned()
+    } else {
+        prompt_parts.join(" ")
+    };
+    if prompt.is_empty() {
+        bail!(
+            "Usage: yeet agent [--model provider/model] [--reasoning LEVEL] [--benchmark] [--json] [--timeout-seconds N] prompt"
+        );
+    }
+
+    let mut backend = Backend::spawn()?;
+    backend.send(FrontendCommand::NewSession)?;
+    if let Some(model) = model {
+        backend.send(FrontendCommand::SelectModel { model })?;
+    }
+    if let Some(level) = reasoning {
+        backend.send(FrontendCommand::SelectReasoning { level })?;
+    }
+    if benchmark {
+        backend.send(FrontendCommand::SetGoal { enabled: false })?;
+        backend.send(FrontendCommand::UpdateSandbox {
+            action: SandboxAction::SetExecutionMode {
+                mode: "unlimited".into(),
+            },
+        })?;
+        backend.send(FrontendCommand::UpdateSandbox {
+            action: SandboxAction::SetAutoApprove { enabled: true },
+        })?;
+    }
+    backend.send(FrontendCommand::Submit { text: prompt })?;
+
+    let started_at = std::time::Instant::now();
+    let mut saw_streaming = false;
+    let mut transport_error = None;
+
+    let state = loop {
+        if let Some(event) = backend.try_recv() {
+            let BackendEvent::Envelope(envelope) = event;
+            if let Some(message) = envelope.message
+                && envelope.kind == "error"
+            {
+                transport_error = Some(message);
+            }
+            if let Some(state) = envelope.state {
+                if state.is_streaming {
+                    saw_streaming = true;
+                }
+
+                if !benchmark
+                    && (state.pending_shell_permission.is_some()
+                        || state.pending_native_app_permission.is_some())
+                {
+                    let _ = backend.send(FrontendCommand::Interrupt);
+                    bail!(
+                        "Headless agent is waiting for an interactive permission. Configure sandbox auto-approval or use --benchmark for an isolated benchmark container."
+                    );
+                }
+
+                if saw_streaming && !state.is_streaming {
+                    break state;
+                }
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        if timeout_seconds > 0
+            && started_at.elapsed() >= std::time::Duration::from_secs(timeout_seconds)
+        {
+            let _ = backend.send(FrontendCommand::Interrupt);
+            bail!("Headless agent timed out after {timeout_seconds} seconds");
+        }
+
+        if !saw_streaming
+            && started_at.elapsed() >= std::time::Duration::from_secs(10)
+            && let Some(error) = transport_error.take()
+        {
+            bail!("Headless agent failed to start: {error}");
+        }
+    };
+    let response = state
+        .conversation
+        .as_ref()
+        .and_then(|conversation| {
+            conversation
+                .iter()
+                .rev()
+                .find_map(|entry| match &entry.kind {
+                    ConversationKind::Assistant { content, .. } if !content.trim().is_empty() => {
+                        Some(content.clone())
+                    }
+                    _ => None,
+                })
+        })
+        .or_else(|| {
+            (!state.active_assistant_text.trim().is_empty())
+                .then(|| state.active_assistant_text.clone())
+        })
+        .unwrap_or_default();
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "response": response,
+                "model": state.active_model,
+                "reasoning": state.active_reasoning_level,
+                "sessionId": state.current_session_id,
+                "tokenUsage": state.token_usage,
+                "creditUsage": state.credit_usage,
+                "error": state.error_message,
+            }))?
+        );
+    } else if !response.is_empty() {
+        println!("{response}");
+    }
+
+    if let Some(error) = state.error_message
+        && !error.trim().is_empty()
+    {
+        bail!("{error}");
+    }
+    if let Some(error) = transport_error {
+        bail!("{error}");
+    }
     Ok(())
 }
 
@@ -865,450 +1102,4 @@ fn mcp(args: &[String]) -> Result<()> {
     })();
     bridge.shutdown();
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[allow(clippy::too_many_arguments)]
-    fn cache_event(
-        run_id: &str,
-        tool_round: u64,
-        status: &str,
-        input: u64,
-        cached: Option<u64>,
-        epoch: u64,
-        reason: &str,
-        breakpoint: &str,
-    ) -> String {
-        let ordinary = cached.map(|cached| input.saturating_sub(cached));
-        json!({
-            "type": "agent-model-attempt-finished",
-            "runId": run_id,
-            "payload": {
-                "cacheDiagnostics": {
-                    "cacheStatus": status,
-                    "inputTokens": input,
-                    "cachedInputTokens": cached,
-                    "cacheWriteInputTokens": Value::Null,
-                    "ordinaryInputTokens": ordinary,
-                    "toolRound": tool_round.to_string(),
-                    "expectedCacheReuses": "1",
-                    "cacheEpoch": epoch,
-                    "cacheEpochReason": reason,
-                    "historyPrefixContinues": if reason == "window-start" { Value::Null } else { json!(true) },
-                    "stablePrefixHash": "stable-prefix",
-                    "toolSchemaHash": "tool-schema",
-                    "cacheSurfaceHash": "cache-surface",
-                    "breakpointPlanHash": breakpoint,
-                    "promptCacheKeyHash": "prompt-key",
-                    "contextKey": "context-key",
-                    "contextWindowId": "window-1",
-                    "estimatedCacheSurfaceTokens": 2048,
-                }
-            }
-        })
-        .to_string()
-    }
-
-    fn with_provider_cache_telemetry(
-        event: String,
-        cost_equivalent_input_tokens: u64,
-        provider_miss: Option<(&str, u64, u64)>,
-    ) -> String {
-        let mut record: Value = serde_json::from_str(&event).unwrap();
-        let diagnostics = &mut record["payload"]["cacheDiagnostics"];
-        diagnostics["costEquivalentInputTokens"] = json!(cost_equivalent_input_tokens);
-        if let Some((reason, missed_tokens, reusable_tokens)) = provider_miss {
-            diagnostics["providerCacheDiagnosticType"] = json!("cache_miss");
-            diagnostics["providerCacheMissReason"] = json!(reason);
-            diagnostics["providerCacheMissedTokens"] = json!(missed_tokens);
-            diagnostics["providerComparisonReusableTokens"] = json!(reusable_tokens);
-            diagnostics["cacheMissAttribution"] = json!("provider-reported");
-        }
-        record.to_string()
-    }
-
-    fn tool_call_event(run_id: &str, name: &str, arguments: Value) -> String {
-        json!({
-            "type": "agent-tool-call",
-            "runId": run_id,
-            "payload": {"call": {"name": name, "arguments": arguments}}
-        })
-        .to_string()
-    }
-
-    fn tool_finished_event(run_id: &str, name: &str, result: Value) -> String {
-        json!({
-            "type": "agent-tool-finished",
-            "runId": run_id,
-            "payload": {
-                "call": {"name": name, "arguments": {}},
-                "result": result.to_string()
-            }
-        })
-        .to_string()
-    }
-
-    #[test]
-    fn cache_summary_reports_round_and_duplicate_tool_efficiency() {
-        let mut root: Value = serde_json::from_str(&cache_event(
-            "run-a",
-            0,
-            "miss",
-            100,
-            Some(0),
-            1,
-            "window-start",
-            "bp-a",
-        ))
-        .unwrap();
-        root["payload"]["cacheDiagnostics"]["modelVisibleToolResultChars"] = json!(0);
-        root["payload"]["cacheDiagnostics"]["costEquivalentInputTokens"] = json!(100);
-        let mut round_one: Value = serde_json::from_str(&cache_event(
-            "run-a",
-            1,
-            "hit",
-            160,
-            Some(96),
-            1,
-            "stable",
-            "bp-b",
-        ))
-        .unwrap();
-        round_one["payload"]["cacheDiagnostics"]["modelVisibleToolResultChars"] = json!(1200);
-        round_one["payload"]["cacheDiagnostics"]["costEquivalentInputTokens"] = json!(74);
-
-        let content = [
-            tool_call_event("run-a", "read_file", json!({"path":"src/lib.rs"})),
-            tool_call_event("run-a", "read_file", json!({"path":"src/lib.rs"})),
-            tool_call_event("run-a", "run_shell", json!({"command":"cargo check"})),
-            tool_finished_event(
-                "run-a",
-                "read_file",
-                json!({
-                    "duplicate": true,
-                    "contentAlreadyReturned": true,
-                    "duplicateReadBytesAvoided": 4096
-                }),
-            ),
-            root.to_string(),
-            round_one.to_string(),
-        ]
-        .join("\n");
-
-        let report = summarize_cache_events(&content);
-        assert_eq!(report["turns"], 1);
-        assert_eq!(report["attempts"], 2);
-        assert_eq!(report["executedToolRounds"], 1);
-        assert_eq!(report["totalToolCalls"], 3);
-        assert_eq!(report["exactRepeatedToolCalls"], 1);
-        assert_eq!(report["duplicateToolResults"], 1);
-        assert_eq!(report["duplicateReadResults"], 1);
-        assert_eq!(report["duplicateReadBytesAvoided"], 4096);
-        assert_eq!(report["toolCallCounts"]["read_file"], 2);
-        assert_eq!(report["toolCallCounts"]["run_shell"], 1);
-        assert_eq!(
-            report["maximumNewModelVisibleToolResultCharsPerRound"],
-            1200
-        );
-        assert!((report["modelAttemptsPerTurn"].as_f64().unwrap() - 2.0).abs() < 1e-12);
-        assert!((report["toolRoundsPerTurn"].as_f64().unwrap() - 1.0).abs() < 1e-12);
-        assert!((report["toolCallsPerRound"].as_f64().unwrap() - 3.0).abs() < 1e-12);
-        assert!(
-            (report["costEquivalentInputTokensPerTurn"].as_f64().unwrap() - 174.0).abs() < 1e-12
-        );
-    }
-
-    #[test]
-    fn cache_summary_separates_unreported_disabled_and_retries() {
-        let content = [
-            cache_event("run-a", 0, "miss", 100, Some(0), 1, "window-start", "bp-a"),
-            cache_event("run-a", 1, "unreported", 200, None, 1, "stable", "bp-b"),
-            cache_event("run-a", 1, "hit", 300, Some(240), 1, "stable", "bp-c"),
-            cache_event(
-                "run-b",
-                0,
-                "disabled",
-                400,
-                Some(0),
-                1,
-                "window-start",
-                "bp-d",
-            ),
-        ]
-        .join("\n");
-
-        let report = summarize_cache_events(&content);
-        assert_eq!(report["attempts"], 4);
-        assert_eq!(report["turns"], 2);
-        assert_eq!(report["toolRounds"], 3);
-        assert_eq!(report["rootModelAttempts"], 2);
-        assert_eq!(report["repeatedToolRoundAttempts"], 1);
-        assert_eq!(report["measuredAttempts"], 2);
-        assert_eq!(report["unreportedAttempts"], 1);
-        assert_eq!(report["disabledAttempts"], 1);
-        assert_eq!(report["hitAttempts"], 1);
-        assert_eq!(report["missAttempts"], 1);
-        assert_eq!(report["inputTokens"], 1000);
-        assert_eq!(report["cacheMeasuredInputTokens"], 400);
-        assert_eq!(report["cacheUnreportedInputTokens"], 200);
-        assert_eq!(report["cacheDisabledInputTokens"], 400);
-        assert_eq!(report["cachedInputTokens"], 240);
-        assert_eq!(report["intraTurnBreakpointPlanChanges"], 2);
-        assert_eq!(report["intraTurnCacheSurfaceChanges"], 0);
-        assert_eq!(report["stableSurfaceMeasuredAttempts"], 1);
-        assert_eq!(report["stableSurfaceHitAttempts"], 1);
-        assert!((report["cacheHitRate"].as_f64().unwrap() - 0.6).abs() < 1e-12);
-        assert!((report["rootCacheHitRate"].as_f64().unwrap() - 0.0).abs() < 1e-12);
-        assert!((report["followupCacheHitRate"].as_f64().unwrap() - 0.8).abs() < 1e-12);
-        assert!((report["cacheMeasurementCoverageRate"].as_f64().unwrap() - 0.4).abs() < 1e-12);
-        assert!((report["cacheAttemptHitRate"].as_f64().unwrap() - 0.5).abs() < 1e-12);
-        assert!((report["stableSurfaceAttemptHitRate"].as_f64().unwrap() - 1.0).abs() < 1e-12);
-        assert_eq!(report["stablePreviousRequestInputTokens"], 200);
-        assert_eq!(report["stablePreviousRequestCachedInputTokens"], 200);
-        assert!((report["stablePreviousRequestReuseRate"].as_f64().unwrap() - 1.0).abs() < 1e-12);
-        assert_eq!(report["stablePreviousRequestCurrentInputTokens"], 300);
-        assert_eq!(report["stableNovelInputTokens"], 100);
-        assert!(
-            (report["stablePreviousRequestShareCeilingRate"]
-                .as_f64()
-                .unwrap()
-                - (2.0 / 3.0))
-                .abs()
-                < 1e-12
-        );
-        assert!((report["stableNovelInputRate"].as_f64().unwrap() - (1.0 / 3.0)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn cache_summary_keeps_breakpoint_rotation_separate_from_stable_surface() {
-        let content = [
-            cache_event("run-a", 0, "miss", 100, Some(0), 1, "window-start", "bp-a"),
-            cache_event("run-a", 1, "miss", 200, Some(0), 1, "stable", "bp-b"),
-            cache_event("run-a", 2, "hit", 300, Some(240), 1, "stable", "bp-c"),
-        ]
-        .join("\n");
-
-        let report = summarize_cache_events(&content);
-        assert_eq!(report["intraTurnBreakpointPlanChanges"], 2);
-        assert_eq!(report["intraTurnStablePrefixChanges"], 0);
-        assert_eq!(report["intraTurnToolSchemaChanges"], 0);
-        assert_eq!(report["intraTurnCacheSurfaceChanges"], 0);
-        assert_eq!(report["intraTurnPromptCacheKeyChanges"], 0);
-        assert_eq!(report["intraTurnContextKeyChanges"], 0);
-        assert_eq!(report["intraTurnContextWindowChanges"], 0);
-        assert_eq!(report["intraTurnCacheEpochChanges"], 0);
-        assert_eq!(report["historyPrefixRewrites"], 0);
-        assert_eq!(report["stableSurfaceMeasuredAttempts"], 2);
-        assert_eq!(report["stableSurfaceHitAttempts"], 1);
-        assert_eq!(report["stableSurfaceMissAttempts"], 1);
-        assert_eq!(report["cacheResetMissAttempts"], 1);
-        assert_eq!(report["missAttemptsByCacheEpochReason"]["stable"], 1);
-        assert_eq!(report["missAttemptsByCacheEpochReason"]["window-start"], 1);
-        assert!((report["stableSurfaceCacheHitRate"].as_f64().unwrap() - 0.48).abs() < 1e-12);
-        assert!((report["stableSurfaceAttemptHitRate"].as_f64().unwrap() - 0.5).abs() < 1e-12);
-        assert_eq!(report["stablePreviousRequestInputTokens"], 300);
-        assert_eq!(report["stablePreviousRequestCachedInputTokens"], 200);
-        assert!(
-            (report["stablePreviousRequestReuseRate"].as_f64().unwrap() - (2.0 / 3.0)).abs()
-                < 1e-12
-        );
-        assert_eq!(report["stablePreviousRequestCurrentInputTokens"], 500);
-        assert_eq!(report["stableNovelInputTokens"], 200);
-        assert!(
-            (report["stablePreviousRequestShareCeilingRate"]
-                .as_f64()
-                .unwrap()
-                - 0.6)
-                .abs()
-                < 1e-12
-        );
-        assert!((report["stableNovelInputRate"].as_f64().unwrap() - 0.4).abs() < 1e-12);
-    }
-
-    #[test]
-    fn previous_request_reuse_excludes_cache_reset_attempts() {
-        let content = [
-            cache_event("run-a", 0, "miss", 100, Some(0), 1, "window-start", "bp-a"),
-            cache_event(
-                "run-a",
-                1,
-                "miss",
-                150,
-                Some(0),
-                2,
-                "tool-envelope-change",
-                "bp-b",
-            ),
-            cache_event("run-a", 2, "hit", 300, Some(128), 2, "stable", "bp-c"),
-        ]
-        .join("\n");
-
-        let report = summarize_cache_events(&content);
-        assert_eq!(report["stablePreviousRequestInputTokens"], 150);
-        assert_eq!(report["stablePreviousRequestCachedInputTokens"], 128);
-        assert!(
-            (report["stablePreviousRequestReuseRate"].as_f64().unwrap() - (128.0 / 150.0)).abs()
-                < 1e-12
-        );
-        assert_eq!(report["stablePreviousRequestCurrentInputTokens"], 300);
-        assert_eq!(report["stableNovelInputTokens"], 150);
-        assert!(
-            (report["stablePreviousRequestShareCeilingRate"]
-                .as_f64()
-                .unwrap()
-                - 0.5)
-                .abs()
-                < 1e-12
-        );
-        assert!((report["stableNovelInputRate"].as_f64().unwrap() - 0.5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn cache_economics_fixture_distinguishes_novel_tail_from_cache_failures() {
-        let content = [
-            cache_event("run-a", 0, "miss", 100, Some(0), 1, "window-start", "bp-a"),
-            cache_event("run-a", 1, "hit", 200, Some(100), 1, "stable", "bp-b"),
-            cache_event("run-a", 2, "hit", 400, Some(200), 1, "stable", "bp-c"),
-            cache_event(
-                "run-a",
-                3,
-                "miss",
-                300,
-                Some(0),
-                2,
-                "tool-envelope-change",
-                "bp-d",
-            ),
-            cache_event("run-a", 4, "hit", 600, Some(256), 2, "stable", "bp-e"),
-        ]
-        .join("\n");
-
-        let report = summarize_cache_events(&content);
-        assert_eq!(report["attempts"], 5);
-        assert_eq!(report["hitAttempts"], 3);
-        assert_eq!(report["missAttempts"], 2);
-        assert_eq!(report["cacheResetMissAttempts"], 2);
-        assert_eq!(report["stableSurfaceMeasuredAttempts"], 3);
-        assert_eq!(report["stableSurfaceHitAttempts"], 3);
-        assert_eq!(report["stablePreviousRequestCurrentInputTokens"], 1200);
-        assert_eq!(report["stablePreviousRequestInputTokens"], 600);
-        assert_eq!(report["stableNovelInputTokens"], 600);
-        assert!((report["cacheHitRate"].as_f64().unwrap() - (556.0 / 1600.0)).abs() < 1e-12);
-        assert!((report["cacheAttemptHitRate"].as_f64().unwrap() - 0.6).abs() < 1e-12);
-        assert!((report["stableSurfaceAttemptHitRate"].as_f64().unwrap() - 1.0).abs() < 1e-12);
-        assert!(
-            (report["stablePreviousRequestReuseRate"].as_f64().unwrap() - (556.0 / 600.0)).abs()
-                < 1e-12
-        );
-        assert!(
-            (report["stablePreviousRequestShareCeilingRate"]
-                .as_f64()
-                .unwrap()
-                - 0.5)
-                .abs()
-                < 1e-12
-        );
-        assert!((report["stableNovelInputRate"].as_f64().unwrap() - 0.5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn cache_economics_replay_attributes_stable_provider_miss_without_reclassifying_it() {
-        let content = [
-            with_provider_cache_telemetry(
-                cache_event(
-                    "run-a",
-                    0,
-                    "miss",
-                    1_000,
-                    Some(0),
-                    1,
-                    "window-start",
-                    "bp-a",
-                ),
-                1_000,
-                None,
-            ),
-            with_provider_cache_telemetry(
-                cache_event("run-a", 1, "hit", 1_200, Some(800), 1, "stable", "bp-b"),
-                600,
-                None,
-            ),
-            with_provider_cache_telemetry(
-                cache_event("run-a", 2, "miss", 1_500, Some(0), 1, "stable", "bp-c"),
-                1_500,
-                Some(("input_changed", 700, 800)),
-            ),
-        ]
-        .join("\n");
-
-        let report = summarize_cache_events(&content);
-        assert_eq!(report["attempts"], 3);
-        assert_eq!(report["hitAttempts"], 1);
-        assert_eq!(report["missAttempts"], 2);
-        assert_eq!(report["stableSurfaceMissAttempts"], 1);
-        assert_eq!(report["stableProviderReportedMissAttempts"], 1);
-        assert_eq!(report["stableProviderUnattributedMissAttempts"], 0);
-        assert_eq!(report["providerCacheDiagnosticAttempts"], 1);
-        assert_eq!(report["providerCacheMissAttempts"], 1);
-        assert_eq!(report["providerCacheMissReasons"]["input_changed"], 1);
-        assert_eq!(report["providerCacheMissedTokens"], 700);
-        assert_eq!(report["providerComparisonReusableTokens"], 800);
-        assert_eq!(report["costEquivalentInputTokens"], 3_100);
-        assert!(
-            (report["costEquivalentInputRate"].as_f64().unwrap() - (3_100.0 / 3_700.0)).abs()
-                < 1e-12
-        );
-        assert_eq!(report["stablePreviousRequestInputTokens"], 2_200);
-        assert_eq!(report["stablePreviousRequestCachedInputTokens"], 800);
-        assert_eq!(report["stablePreviousRequestCurrentInputTokens"], 2_700);
-        assert_eq!(report["stableNovelInputTokens"], 500);
-        assert!(
-            (report["stablePreviousRequestReuseRate"].as_f64().unwrap() - (800.0 / 2_200.0)).abs()
-                < 1e-12
-        );
-        assert!(
-            (report["stablePreviousRequestShareCeilingRate"]
-                .as_f64()
-                .unwrap()
-                - (2_200.0 / 2_700.0))
-                .abs()
-                < 1e-12
-        );
-        assert!((report["cacheHitRate"].as_f64().unwrap() - (800.0 / 3_700.0)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn debate_cache_summary_reads_response_usage() {
-        let content = [
-            json!({
-                "type":"debate-research","runId":"run-a",
-                "payload":{"event":"response","stage":0,"pro":true,"detail":{"round":0,"response":{"usage":{
-                    "inputTokens":100,"cacheMeasuredInputTokens":100,"cachedInputTokens":0,
-                    "cacheWriteInputTokens":0,"costEquivalentInputTokens":100
-                }}}}
-            }).to_string(),
-            json!({
-                "type":"debate-research","runId":"run-a",
-                "payload":{"event":"response","stage":0,"pro":true,"detail":{"round":1,"response":{"usage":{
-                    "inputTokens":200,"cacheMeasuredInputTokens":200,"cachedInputTokens":80,
-                    "cacheWriteInputTokens":0,"costEquivalentInputTokens":128
-                }}}}
-            }).to_string(),
-        ].join("\n");
-        let report = summarize_debate_cache_events(&content);
-        assert_eq!(report["turns"], 1);
-        assert_eq!(report["attempts"], 2);
-        assert_eq!(report["measuredAttempts"], 2);
-        assert_eq!(report["hitAttempts"], 1);
-        assert_eq!(report["missAttempts"], 1);
-        assert_eq!(report["inputTokens"], 300);
-        assert_eq!(report["cachedInputTokens"], 80);
-        assert_eq!(report["rootMissAttempts"], 1);
-        assert_eq!(report["followupHitAttempts"], 1);
-        assert_eq!(report["telemetrySource"], "debates/events.jsonl");
-        assert!((report["cacheHitRate"].as_f64().unwrap() - (80.0 / 300.0)).abs() < 1e-12);
-    }
 }

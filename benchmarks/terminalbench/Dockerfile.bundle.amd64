@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+# Build the x86_64 Yeet binary on the native build CPU. This avoids running
+# rustc under QEMU on Apple Silicon while still producing an amd64/musl binary.
+FROM --platform=$BUILDPLATFORM node:22-bookworm AS runtime-build
+WORKDIR /src/RuntimeSource
+COPY RuntimeSource/package.json RuntimeSource/package-lock.json ./
+RUN npm ci
+COPY RuntimeSource/ ./
+RUN npm run build
+
+FROM --platform=$BUILDPLATFORM messense/rust-musl-cross:x86_64-musl AS rust-build
+WORKDIR /src
+COPY . .
+# The benchmark bundle does not need embedded WebUI assets.
+RUN rm -rf web/dist
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/src/target \
+    cargo build --locked --release --target x86_64-unknown-linux-musl \
+    && mkdir -p /bundle/runtime \
+    && cp target/x86_64-unknown-linux-musl/release/yeet /bundle/yeet \
+    && cp -R RuntimeSource/skills /bundle/runtime/skills \
+    && cp RuntimeSource/package.json /bundle/runtime/package.json
+COPY --from=runtime-build /src/RuntimeSource/dist /bundle/runtime/dist
+
+# We only copy files out of this stage; no amd64 program is executed at build time.
+FROM --platform=linux/amd64 node:22-bookworm AS target-node
+
+FROM scratch AS bundle
+COPY --from=rust-build /bundle/ /opt/yeet/
+COPY --from=target-node /usr/local/bin/node /opt/yeet/node

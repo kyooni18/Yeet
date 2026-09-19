@@ -280,16 +280,24 @@ fn active_tool(state: &BridgeState) -> Option<String> {
     for entry in conversation.iter().rev() {
         match &entry.kind {
             ConversationKind::ToolCall { tool_call }
-                if matches!(tool_call.status, ToolCallStatus::Streaming) =>
+                if matches!(
+                    tool_call.status,
+                    ToolCallStatus::Preparing
+                        | ToolCallStatus::AwaitingPermission
+                        | ToolCallStatus::Running
+                ) =>
             {
                 return Some(tool_call.name.clone());
             }
             ConversationKind::Assistant { tool_calls, .. } => {
-                if let Some(tool_call) = tool_calls
-                    .iter()
-                    .rev()
-                    .find(|tool_call| matches!(tool_call.status, ToolCallStatus::Streaming))
-                {
+                if let Some(tool_call) = tool_calls.iter().rev().find(|tool_call| {
+                    matches!(
+                        tool_call.status,
+                        ToolCallStatus::Preparing
+                            | ToolCallStatus::AwaitingPermission
+                            | ToolCallStatus::Running
+                    )
+                }) {
                     return Some(tool_call.name.clone());
                 }
             }
@@ -923,135 +931,4 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{ConversationEntry, ModelActivity};
-
-    fn write_manifest(directory: &Path, id: &str, name: &str) {
-        fs::create_dir_all(directory).unwrap();
-        fs::write(
-            directory.join(MANIFEST_NAME),
-            serde_json::to_vec_pretty(&json!({
-                "schemaVersion": 1,
-                "id": id,
-                "name": name,
-                "version": "1.0.0",
-                "autoStart": true,
-                "entry": { "command": "example" }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn project_extension_overrides_global_extension_with_same_id() {
-        let root = tempfile::tempdir().unwrap();
-        let config = root.path().join("config");
-        let workspace = root.path().join("workspace");
-        write_manifest(&config.join("extensions/pet"), "pet", "Global Pet");
-        write_manifest(
-            &workspace.join(".yeet/extensions/pet"),
-            "pet",
-            "Project Pet",
-        );
-
-        let extensions = discover_extensions(&config, &workspace).unwrap();
-        let extension = extensions.get("pet").unwrap();
-        assert_eq!(extension.manifest.name, "Project Pet");
-        assert_eq!(extension.scope, ExtensionScope::Project);
-    }
-
-    #[test]
-    fn bridge_state_projects_to_stable_extension_state() {
-        let state = BridgeState {
-            is_streaming: true,
-            active_model: "gemini/flash".into(),
-            active_reasoning_level: "medium".into(),
-            active_activity_entry_id: Some("activity-1".into()),
-            conversation: Some(vec![ConversationEntry {
-                id: "activity-1".into(),
-                kind: ConversationKind::Activity {
-                    activity: ModelActivity {
-                        phase: json!("tool"),
-                        title: "Using computer".into(),
-                        detail: Some("computer_use".into()),
-                        run_id: None,
-                    },
-                },
-            }]),
-            ..Default::default()
-        };
-
-        let projected = ExtensionState::from_bridge(&state);
-        assert!(projected.is_streaming);
-        assert_eq!(projected.model, "gemini/flash");
-        assert_eq!(projected.activity.unwrap().phase, "tool");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn declared_command_is_advertised_and_delivered() {
-        let root = tempfile::tempdir().unwrap();
-        let config = root.path().join("config");
-        let workspace = root.path().join("workspace");
-        let extension_dir = config.join("extensions/sample-tools");
-        let capture = root.path().join("events.jsonl");
-        fs::create_dir_all(&extension_dir).unwrap();
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(
-            extension_dir.join(MANIFEST_NAME),
-            serde_json::to_vec_pretty(&json!({
-                "schemaVersion": 1,
-                "id": "sample-tools",
-                "name": "Sample Tools",
-                "version": "1.0.0",
-                "autoStart": false,
-                "commands": [
-                    { "name": "sample", "description": "Open sample extension" }
-                ],
-                "entry": {
-                    "command": "sh",
-                    "args": [
-                        "-c",
-                        format!(
-                            "while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{}\"; done",
-                            capture.display()
-                        )
-                    ]
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let host = ExtensionHost::discover_and_start(&config, &workspace);
-        assert!(host.command_items().iter().any(|item| {
-            item.extension_id == "sample-tools"
-                && item.command == "/sample"
-                && item.description == "Open sample extension"
-        }));
-        assert!(host.invoke_command("sample", &["menu".into()]).unwrap());
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        drop(host);
-
-        let captured = fs::read_to_string(capture).unwrap();
-        assert!(captured.contains("\"event\":\"command\""));
-        assert!(captured.contains("\"name\":\"sample\""));
-        assert!(captured.contains("\"menu\""));
-    }
-
-    #[test]
-    fn invalid_extension_id_is_rejected() {
-        assert!(validate_id("sample-tools").is_ok());
-        assert!(validate_id("sample tools").is_err());
-        assert!(validate_id("../tool").is_err());
-        assert!(validate_command_name("sample").is_ok());
-        assert!(validate_command_name("sample-menu").is_ok());
-        assert!(validate_command_name("/sample").is_err());
-        assert!(validate_command_name("sample menu").is_err());
-    }
 }

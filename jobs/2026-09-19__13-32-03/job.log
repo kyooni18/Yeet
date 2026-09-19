@@ -1,0 +1,519 @@
+Skipping image OS validation for alexgshaw/write-compressor:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/merge-diff-arc-agi-task:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/winning-avg-corewars:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/log-summary-date-ranges:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Command outputs captured
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Command outputs captured
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Collecting main service artifacts
+Collecting main service artifacts
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/pytorch-model-cli:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Skipping image OS validation for alexgshaw/largest-eigenval:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/password-recovery:20251031: docker inspect returned 1
+Skipping image OS validation for alexgshaw/portfolio-optimization:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/path-tracing-reverse:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Collecting main service artifacts
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Collecting main service artifacts
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/regex-chess:20251031: docker inspect returned 1
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/modernize-scientific-stack:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/torch-tensor-parallelism:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/path-tracing:20251031: docker inspect returned 1
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/prove-plus-comm:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/feal-linear-cryptanalysis:20251031: docker inspect returned 1
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/caffe-cifar-10:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/distribution-search:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Collecting main service artifacts
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/mteb-retrieve:20251031: docker inspect returned 1
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/pypi-server:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/custom-memory-heap-crash:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/adaptive-rejection-sampler:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/multi-source-data-merger:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/configure-git-webserver:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/crack-7z-hash:20251031: docker inspect returned 1
+Exception AgentAuthenticationError is in exclude_exceptions, not retrying
+Not retrying trial because the exception is not in include_exceptions or the maximum number of retries has been reached
+Skipping image OS validation for alexgshaw/chess-best-move:20251031: docker inspect returned 1
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Command outputs captured
+Running command: mkdir -p /tmp/yeet-terminalbench-config /logs/agent && yeet agent --benchmark --json --model openai/gpt-5.6-luna --reasoning high --timeout-seconds 0 < /tmp/yeet-terminalbench-instruction.txt 2>&1 | tee /logs/agent/yeet.jsonl
+Command failed
+Classified failed command as AgentAuthenticationError (pattern: '\\binvalid_api_key\\b|Invalid API key\\b|API key is invalid\\b|Incorrect API key provided\\b|unexpected status 401 Unauthorized\\b')
+Collecting main service artifacts
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Running command: /opt/yeet/node --version && YEET_RUNTIME_DIR=/opt/yeet/runtime YEET_NODE=/opt/yeet/node yeet --version
+Running command: rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+Command outputs captured
+Trial pypi-server__mCx2pmb failed: No reward file found at jobs/2026-09-19__13-32-03/pypi-server__mCx2pmb/verifier/reward.txt or jobs/2026-09-19__13-32-03/pypi-server__mCx2pmb/verifier/reward.json
+Skipping exception record because trial already has exception_info
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 418, in run
+    await self._run()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 52, in _run
+    await self._run_verifier()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 106, in _run_verifier
+    self.result.verifier_result = await self._run_shared_verifier(
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+    ^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 783, in _run_shared_verifier
+    return await asyncio.wait_for(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+        verifier.verify(), timeout=timeout_sec
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/verifier/verifier.py", line 262, in verify
+    raise RewardFileNotFoundError(
+    ...<3 lines>...
+    )
+harbor.verifier.verifier.RewardFileNotFoundError: No reward file found at jobs/2026-09-19__13-32-03/pypi-server__mCx2pmb/verifier/reward.txt or jobs/2026-09-19__13-32-03/pypi-server__mCx2pmb/verifier/reward.json
+docker compose cp failed; retrying upload with tar stream: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__ou5seze__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8ey92oy1/custom-memory-heap-crash__ou5seze__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4udpvqvw/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nmibj6v/docker-compose-mounts.json cp /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt main:/tmp/yeet-terminalbench-instruction.txt. Return code: 1. Stdout:  custom-memory-heap-crash__ou5seze__env-main-1 Copying /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt to custom-memory-heap-crash__ou5seze__env-main-1:/tmp/yeet-terminalbench-instruction.txt
+Error response from daemon: chown /var/lib/docker/containers/bf27ef8125b33da588755e2bb56f001c35ef784c4e97cef2030d044c0a9c2a0a/resolv.conf: read-only file system
+. Stderr: None. 
+Command failed
+Trial crack-7z-hash__uaA2FFt failed: Command failed (exit 2): rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+stdout: tar: ./node: Cannot write: Read-only file system
+tar: ./node: Cannot utime: Read-only file system
+tar: ./node: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: ./node: Cannot change mode to rwxr-xr-x: Read-only file system
+tar:  ... [76726 chars truncated] ... No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/._requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: .: Cannot utime: Read-only file system
+tar: .: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: .: Cannot change mode to rwx------: Read-only file system
+tar: Exiting with failure status due to previous errors
+
+stderr: None
+Trial custom-memory-heap-crash__ou5seze failed: Docker compose cp failed, and tar upload fallback also failed. cp error: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__ou5seze__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8ey92oy1/custom-memory-heap-crash__ou5seze__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4udpvqvw/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nmibj6v/docker-compose-mounts.json cp /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt main:/tmp/yeet-terminalbench-instruction.txt. Return code: 1. Stdout:  custom-memory-heap-crash__ou5seze__env-main-1 Copying /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt to custom-memory-heap-crash__ou5seze__env-main-1:/tmp/yeet-terminalbench-instruction.txt
+Error response from daemon: chown /var/lib/docker/containers/bf27ef8125b33da588755e2bb56f001c35ef784c4e97cef2030d044c0a9c2a0a/resolv.conf: read-only file system
+. Stderr: None. . tar error: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__ou5seze__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8ey92oy1/custom-memory-heap-crash__ou5seze__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4udpvqvw/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nmibj6v/docker-compose-mounts.json exec -T -u root main mkdir -p /tmp. Return code: 128. Stdout: OCI runtime exec failed: open /tmp/runc-process2418991609: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Failed to write artifacts manifest
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker_unix.py", line 144, in upload_file
+    await self._env._run_docker_compose_command(
+    ...<2 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 704, in _run_docker_compose_command
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__ou5seze__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8ey92oy1/custom-memory-heap-crash__ou5seze__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4udpvqvw/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nmibj6v/docker-compose-mounts.json cp /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt main:/tmp/yeet-terminalbench-instruction.txt. Return code: 1. Stdout:  custom-memory-heap-crash__ou5seze__env-main-1 Copying /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt to custom-memory-heap-crash__ou5seze__env-main-1:/tmp/yeet-terminalbench-instruction.txt
+Error response from daemon: chown /var/lib/docker/containers/bf27ef8125b33da588755e2bb56f001c35ef784c4e97cef2030d044c0a9c2a0a/resolv.conf: read-only file system
+. Stderr: None. 
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker_unix.py", line 135, in _fallback_to_tar
+    await operation()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker_unix.py", line 120, in _upload_file_with_tar
+    await self._extract_tar(self._tar_file(source_path, target_name), target_dir)
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker_unix.py", line 81, in _extract_tar
+    await self._env._run_docker_compose_command(
+    ...<11 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 704, in _run_docker_compose_command
+    raise RuntimeError(
+    ...<5 lines>...
+    )
+RuntimeError: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__ou5seze__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8ey92oy1/custom-memory-heap-crash__ou5seze__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4udpvqvw/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nmibj6v/docker-compose-mounts.json exec -T -u root main mkdir -p /tmp. Return code: 128. Stdout: OCI runtime exec failed: open /tmp/runc-process2418991609: read-only file system
+. Stderr: None. 
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 418, in run
+    await self._run()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 41, in _run
+    await self._run_agent()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 77, in _run_agent
+    await self._run_agent_phase(
+    ...<5 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 554, in _run_agent_phase
+    await asyncio.wait_for(
+    ...<6 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py", line 186, in wrapper
+    return await fn(self, instruction, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/Code/Rust/Yeet/benchmarks/terminalbench/yeet_agent.py", line 148, in run
+    await self._upload_instruction(environment, instruction)
+  File "/Users/kyooni18/Code/Rust/Yeet/benchmarks/terminalbench/yeet_agent.py", line 122, in _upload_instruction
+    await environment.upload_file(local_path, self._REMOTE_PROMPT)
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker.py", line 1124, in upload_file
+    await self._platform.upload_file(source_path, target_path)
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker_unix.py", line 149, in upload_file
+    await self._fallback_to_tar(
+        cp_error, lambda: self._upload_file_with_tar(source_path, target_path)
+    )
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker_unix.py", line 137, in _fallback_to_tar
+    raise RuntimeError(
+    ...<2 lines>...
+    ) from tar_error
+RuntimeError: Docker compose cp failed, and tar upload fallback also failed. cp error: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__ou5seze__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8ey92oy1/custom-memory-heap-crash__ou5seze__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4udpvqvw/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nmibj6v/docker-compose-mounts.json cp /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt main:/tmp/yeet-terminalbench-instruction.txt. Return code: 1. Stdout:  custom-memory-heap-crash__ou5seze__env-main-1 Copying /var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/yeet-terminalbench-jkpcyzcv/instruction.txt to custom-memory-heap-crash__ou5seze__env-main-1:/tmp/yeet-terminalbench-instruction.txt
+Error response from daemon: chown /var/lib/docker/containers/bf27ef8125b33da588755e2bb56f001c35ef784c4e97cef2030d044c0a9c2a0a/resolv.conf: read-only file system
+. Stderr: None. . tar error: Docker compose command failed for environment custom-memory-heap-crash. Command: docker compose --project-name custom-memory-heap-crash__ou5seze__env --project-directory /Users/kyooni18/.cache/harbor/tasks/7C9njxdDNTb4APfNTmNsi5/custom-memory-heap-crash/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp8ey92oy1/custom-memory-heap-crash__ou5seze__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp4udpvqvw/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp1nmibj6v/docker-compose-mounts.json exec -T -u root main mkdir -p /tmp. Return code: 128. Stdout: OCI runtime exec failed: open /tmp/runc-process2418991609: read-only file system
+. Stderr: None. 
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/artifact_handler.py", line 417, in _write_manifest
+    manifest_path.write_text(json.dumps(manifest.to_json_data(), indent=2))
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_local.py", line 555, in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_abc.py", line 651, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_local.py", line 537, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 28] No space left on device: 'jobs/2026-09-19__13-32-03/custom-memory-heap-crash__ou5seze/artifacts/manifest.json'
+Collecting main service artifacts
+Failed to write artifacts manifest
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 415, in run
+    await self._prepare()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 459, in _prepare
+    await self._setup_agent()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1574, in _setup_agent
+    await asyncio.wait_for(
+    ...<2 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py", line 1050, in setup
+    await self.install(environment)
+  File "/Users/kyooni18/Code/Rust/Yeet/benchmarks/terminalbench/yeet_agent.py", line 96, in install
+    await self.exec_as_root(
+    ...<10 lines>...
+    )
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py", line 982, in exec_as_root
+    return await self._exec(
+           ^^^^^^^^^^^^^^^^^
+        environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py", line 962, in _exec
+    raise self._classify_exec_error(command, result)
+harbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 2): rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+stdout: tar: ./node: Cannot write: Read-only file system
+tar: ./node: Cannot utime: Read-only file system
+tar: ./node: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: ./node: Cannot change mode to rwxr-xr-x: Read-only file system
+tar:  ... [76726 chars truncated] ... No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/._requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: .: Cannot utime: Read-only file system
+tar: .: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: .: Cannot change mode to rwx------: Read-only file system
+tar: Exiting with failure status due to previous errors
+
+stderr: None
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/artifact_handler.py", line 417, in _write_manifest
+    manifest_path.write_text(json.dumps(manifest.to_json_data(), indent=2))
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_local.py", line 555, in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_abc.py", line 651, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/pathlib/_local.py", line 537, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 28] No space left on device: 'jobs/2026-09-19__13-32-03/crack-7z-hash__uaA2FFt/artifacts/manifest.json'
+Command failed
+Trial configure-git-webserver__7pvn2hf failed: Command failed (exit 2): rm -rf /opt/yeet && mkdir -p /opt/yeet && tar -xzf /tmp/yeet-terminalbench-bundle.tar.gz -C /opt/yeet && chmod 0755 /opt/yeet/yeet /opt/yeet/node && ln -sf /opt/yeet/yeet /usr/local/bin/yeet
+stdout: tar: ./yeet: Cannot write: Read-only file system
+tar: ./yeet: Cannot utime: Read-only file system
+tar: ./yeet: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: ./yeet: Cannot change mode to rwxr-xr-x: Read-only file system
+tar:  ... [76824 chars truncated] ... No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/._requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: ./runtime/dist/compact: Cannot mkdir: No such file or directory
+tar: ./runtime/dist/compact/requestCompactor.d.ts.map: Cannot open: No such file or directory
+tar: .: Cannot utime: Read-only file system
+tar: .: Cannot change ownership to uid 502, gid 50: Read-only file system
+tar: .: Cannot change mode to rwx------: Read-only file system
+tar: Exiting with failure status due to previous errors
+
+stderr: None
+Trial multi-source-data-merger__pNGboVz failed: No reward file found at jobs/2026-09-19__13-32-03/multi-source-data-merger__pNGboVz/verifier/reward.txt or jobs/2026-09-19__13-32-03/multi-source-data-merger__pNGboVz/verifier/reward.json
+Skipping exception record because trial already has exception_info
+Traceback (most recent call last):
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 418, in run
+    await self._run()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 52, in _run
+    await self._run_verifier()
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 106, in _run_verifier
+    self.result.verifier_result = await self._run_shared_verifier(
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+    ^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 783, in _run_shared_verifier
+    return await asyncio.wait_for(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+        verifier.verify(), timeout=timeout_sec
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/kyooni18/.local/share/uv/python/cpython-3.13.14-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/verifier/verifier.py", line 262, in verify
+    raise RewardFileNotFoundError(
+    ...<3 lines>...
+    )
+harbor.verifier.verifier.RewardFileNotFoundError: No reward file found at jobs/2026-09-19__13-32-03/multi-source-data-merger__pNGboVz/verifier/reward.txt or jobs/2026-09-19__13-32-03/multi-source-data-merger__pNGboVz/verifier/reward.json

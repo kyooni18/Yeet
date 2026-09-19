@@ -1,0 +1,40 @@
+{
+    "id": "b6a62e11-a154-4d54-b99a-d4e298656f48",
+    "started_at": "2026-09-19T13:21:32.527032",
+    "updated_at": "2026-09-19T04:23:32.610150Z",
+    "finished_at": null,
+    "n_total_trials": 89,
+    "stats": {
+        "n_completed_trials": 4,
+        "n_errored_trials": 4,
+        "n_running_trials": 0,
+        "n_pending_trials": 85,
+        "n_cancelled_trials": 4,
+        "n_retries": 0,
+        "evals": {
+            "yeet__terminal-bench": {
+                "n_trials": 0,
+                "n_errors": 4,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {},
+                "exception_stats": {
+                    "CancelledError": [
+                        "llm-inference-batching-scheduler__VHHxQvx",
+                        "reshard-c4-data__FdPvqVA",
+                        "gpt2-codegolf__ZMHfETs",
+                        "break-filter-js-from-html__ocCJsNi"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}

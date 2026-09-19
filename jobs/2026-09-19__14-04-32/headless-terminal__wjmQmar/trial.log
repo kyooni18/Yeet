@@ -1,0 +1,7 @@
+Skipping image OS validation for alexgshaw/headless-terminal:20251031: docker inspect returned 1
+Trial headless-terminal__wjmQmar failed: Docker compose command failed for environment headless-terminal. Command: docker compose --project-name headless-terminal__wjmqmar__env --project-directory /Users/kyooni18/.cache/harbor/tasks/KSwQXLapvDLmcHTvZcJVQG/headless-terminal/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp68hfylhm/headless-terminal__wjmQmar__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpyf1g6nm5/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpujqthtq5/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/headless-terminal:20251031 Pulling 
+ Image alexgshaw/headless-terminal:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts
+Cleanup interrupted for headless-terminal__wjmQmar, but agent environment stop is shielded and will complete

@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/large-scale-text-editing:20251031: docker inspect returned 1
+Trial large-scale-text-editing__zBSW7Bh failed: Docker compose command failed for environment large-scale-text-editing. Command: docker compose --project-name large-scale-text-editing__zbsw7bh__env --project-directory /Users/kyooni18/.cache/harbor/tasks/S2VRUfRKCUQ2hWH9KJzsbK/large-scale-text-editing/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp3oelihb9/large-scale-text-editing__zBSW7Bh__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpckpyyj28/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmps68sfy_a/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/large-scale-text-editing:20251031 Pulling 
+ Image alexgshaw/large-scale-text-editing:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

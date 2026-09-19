@@ -1,6 +1,6 @@
 //! Conversation-view mouse selection, scoped context menu, and clipboard requests.
 
-use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use super::{App, Mode};
 
@@ -13,6 +13,19 @@ pub struct TranscriptContextMenu {
 impl App {
     pub fn handle_mouse(&mut self, event: MouseEvent) {
         if self.mode != Mode::Chat {
+            return;
+        }
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.point_in_composer(event.column, event.row)
+        {
+            self.clear_transcript_selection();
+            let (x, y, _, _) = self.composer_area;
+            let row = self
+                .composer_scroll
+                .saturating_add(event.row.saturating_sub(y) as usize);
+            let column = event.column.saturating_sub(x) as usize;
+            self.cursor =
+                crate::text_layout::cursor_for_point(&self.input, self.composer_width, row, column);
             return;
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
@@ -41,8 +54,13 @@ impl App {
                 self.selection_end = Some(self.clamp_to_transcript(event.column, event.row));
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if self.selection_start.is_some() {
-                    self.selection_end = Some(self.clamp_to_transcript(event.column, event.row));
+                if let Some(start) = self.selection_start {
+                    let end = self.clamp_to_transcript(event.column, event.row);
+                    if end == start {
+                        self.clear_transcript_selection();
+                    } else {
+                        self.selection_end = Some(end);
+                    }
                 }
             }
             MouseEventKind::Down(MouseButton::Right) if inside => {
@@ -51,8 +69,12 @@ impl App {
                     y: event.row,
                 });
             }
-            MouseEventKind::ScrollUp if inside => self.scroll_up(3),
-            MouseEventKind::ScrollDown if inside => self.scroll_down(3),
+            MouseEventKind::ScrollUp if inside => {
+                self.scroll_up(mouse_scroll_amount(event.modifiers))
+            }
+            MouseEventKind::ScrollDown if inside => {
+                self.scroll_down(mouse_scroll_amount(event.modifiers))
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 self.transcript_context_menu = None;
             }
@@ -150,6 +172,16 @@ impl App {
             .find_map(|(target_row, session_id)| (*target_row == row).then(|| session_id.clone()))
     }
 
+    fn point_in_composer(&self, column: u16, row: u16) -> bool {
+        let (x, y, width, height) = self.composer_area;
+        width > 0
+            && height > 0
+            && column >= x
+            && column < x.saturating_add(width)
+            && row >= y
+            && row < y.saturating_add(height)
+    }
+
     fn point_in_transcript(&self, column: u16, row: u16) -> bool {
         let (x, y, width, height) = self.transcript_area;
         width > 0
@@ -201,5 +233,15 @@ impl App {
             2 => self.clear_transcript_selection(),
             _ => {}
         }
+    }
+}
+
+fn mouse_scroll_amount(modifiers: KeyModifiers) -> u16 {
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        10
+    } else if modifiers.contains(KeyModifiers::SHIFT) {
+        1
+    } else {
+        3
     }
 }

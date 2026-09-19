@@ -55,7 +55,8 @@ if ($Uninstall) {
 }
 
 if (-not (Test-Path $SourceBinary -PathType Leaf) -or
-    -not (Test-Path (Join-Path $SourceRuntime "dist\bridge.js") -PathType Leaf)) {
+    -not (Test-Path (Join-Path $SourceRuntime "dist\bridge.js") -PathType Leaf) -or
+    -not (Test-Path (Join-Path $SourceRuntime "skills") -PathType Container)) {
     throw "This installer must be run from an extracted Yeet release bundle."
 }
 
@@ -74,8 +75,11 @@ New-Item -ItemType Directory -Force $Destination | Out-Null
 New-Item -ItemType Directory -Force $RuntimeDestination | Out-Null
 Copy-Item -Force $SourceBinary $InstalledBinary
 $InstalledDist = Join-Path $RuntimeDestination "dist"
+$InstalledSkills = Join-Path $RuntimeDestination "skills"
 if (Test-Path $InstalledDist) { Remove-Item -Recurse -Force $InstalledDist }
+if (Test-Path $InstalledSkills) { Remove-Item -Recurse -Force $InstalledSkills }
 Copy-Item -Recurse -Force (Join-Path $SourceRuntime "dist") $InstalledDist
+Copy-Item -Recurse -Force (Join-Path $SourceRuntime "skills") $InstalledSkills
 Copy-Item -Force (Join-Path $SourceRuntime "package.json") (Join-Path $RuntimeDestination "package.json")
 & $InstalledBinary skyline setup | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Skyline setup failed." }

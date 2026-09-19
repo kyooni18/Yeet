@@ -1,0 +1,6 @@
+Skipping image OS validation for alexgshaw/git-leak-recovery:20251031: docker inspect returned 1
+Trial git-leak-recovery__vDJkPdD failed: Docker compose command failed for environment git-leak-recovery. Command: docker compose --project-name git-leak-recovery__vdjkpdd__env --project-directory /Users/kyooni18/.cache/harbor/tasks/mig33pqGgsU4uNZ5dgPebg/git-leak-recovery/environment -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmp35910z6g/git-leak-recovery__vDJkPdD__env-docker-compose-resources.json -f /Users/kyooni18/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpbwn3tbiz/docker-compose-environment.json -f /private/var/folders/94/4dkhkjbj2c1515zym0htkt9w0000gp/T/tmpujqq86vg/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  Image alexgshaw/git-leak-recovery:20251031 Pulling 
+ Image alexgshaw/git-leak-recovery:20251031 Error error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+Error response from daemon: error creating temporary lease: write /var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db: read-only file system
+. Stderr: None. 
+Collecting main service artifacts

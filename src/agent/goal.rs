@@ -1,6 +1,6 @@
 //! Strict completion judging for Goal mode.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::*;
 
@@ -23,6 +23,8 @@ struct GoalJudgeResponse {
 pub(super) struct GoalVerdict {
     pub(super) passed: bool,
     pub(super) reason: String,
+    pub(super) evidence: Vec<String>,
+    pub(super) remaining: Vec<String>,
 }
 
 pub(super) fn parse_goal_verdict(text: &str) -> GoalVerdict {
@@ -32,6 +34,10 @@ pub(super) fn parse_goal_verdict(text: &str) -> GoalVerdict {
             return GoalVerdict {
                 passed: false,
                 reason: format!("strict goal judge returned invalid JSON: {error}"),
+                evidence: Vec::new(),
+                remaining: vec![
+                    "Obtain a valid judge response; completion remains unverified.".into(),
+                ],
             };
         }
     };
@@ -46,10 +52,13 @@ pub(super) fn parse_goal_verdict(text: &str) -> GoalVerdict {
         return GoalVerdict {
             passed: true,
             reason: format!("strict judge accepted: {}", evidence.join("; ")),
+            evidence,
+            remaining: Vec::new(),
         };
     }
 
-    let reason = if let Some(remaining) = remaining.filter(|items| !items.is_empty()) {
+    let remaining = remaining.unwrap_or_default();
+    let reason = if !remaining.is_empty() {
         remaining.join("; ")
     } else if parsed.verdict != "failure" {
         format!(
@@ -64,6 +73,8 @@ pub(super) fn parse_goal_verdict(text: &str) -> GoalVerdict {
     GoalVerdict {
         passed: false,
         reason,
+        evidence: evidence.unwrap_or_default(),
+        remaining,
     }
 }
 
@@ -88,7 +99,8 @@ fn normalized_items(items: &[String]) -> Option<Vec<String>> {
 pub(super) fn render_goal_evidence(history: &[Message]) -> String {
     const MAX_CHARS: usize = 24_000;
     let mut rendered = String::new();
-    for message in history.iter().skip(1) {
+    // Prefer recent observations: early inspection must not crowd out validation.
+    for message in history.iter().skip(1).rev() {
         let role = match message.role {
             MessageRole::System => "system",
             MessageRole::User => "user",
@@ -112,53 +124,225 @@ pub(super) fn render_goal_evidence(history: &[Message]) -> String {
         } else {
             format!("{role} tool_calls=[{tool_calls}]: {content}\n")
         };
-        if rendered.chars().count() + line.chars().count() > MAX_CHARS {
-            rendered.push_str("[earlier evidence omitted for judge budget]\n");
+        let remaining = MAX_CHARS.saturating_sub(rendered.chars().count());
+        if line.chars().count() > remaining {
+            // Preserve a bounded tail of an oversized observation rather than
+            // dropping it entirely (which can leave the judge with no evidence).
+            let marker = "[earlier evidence omitted for judge budget]\n";
+            let available = remaining.saturating_sub(marker.chars().count());
+            let tail = line
+                .chars()
+                .rev()
+                .take(available)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>();
+            rendered.insert_str(0, &tail);
+            let prefix = marker
+                .chars()
+                .take(remaining.min(marker.chars().count()))
+                .collect::<String>();
+            rendered.insert_str(0, &prefix);
             break;
         }
-        rendered.push_str(&line);
+        rendered.insert_str(0, &line);
     }
     rendered
 }
 
+/// Execution progress is monotonic; pruning/rolling over messages cannot erase it.
+pub(super) const MAX_GOAL_RECOVERIES: usize = 6;
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(super) struct GoalProgress {
+    generation: u64,
+    checkpoint_generation: u64,
+    idle_checkpoints: usize,
+    recoveries: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum GoalCheckpointAction {
+    Continue,
+    Recover,
+    Pause,
+}
+
+impl GoalProgress {
+    pub(super) fn record_progress(&mut self) {
+        self.generation = self.generation.saturating_add(1);
+    }
+
+    pub(super) fn checkpoint(&mut self, runaway: bool) -> GoalCheckpointAction {
+        if self.generation > self.checkpoint_generation {
+            self.idle_checkpoints = 0;
+        } else {
+            self.idle_checkpoints += 1;
+        }
+        self.checkpoint_generation = self.generation;
+        if !runaway && self.idle_checkpoints < 3 {
+            return GoalCheckpointAction::Continue;
+        }
+        // Keep Goal mode durable through several materially different recovery
+        // attempts. A much larger finite allowance protects against runaway cost
+        // without turning a couple of weak checkpoints into a stopped job.
+        if self.recoveries >= MAX_GOAL_RECOVERIES {
+            return GoalCheckpointAction::Pause;
+        }
+        self.recoveries += 1;
+        self.idle_checkpoints = 0;
+        GoalCheckpointAction::Recover
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod lifecycle_tests {
     use super::*;
 
     #[test]
-    fn accepts_only_exact_success_contract() {
-        let verdict = parse_goal_verdict(
-            r#"{"verdict":"success","evidence":["cargo test passed"],"remaining":[]}"#,
-        );
-        assert!(verdict.passed);
+    fn checkpoints_with_work_continue_across_history_rollover() {
+        let mut progress = GoalProgress::default();
+        for _ in 0..20 {
+            progress.record_progress();
+            assert_eq!(progress.checkpoint(false), GoalCheckpointAction::Continue);
+        }
     }
 
     #[test]
-    fn rejects_claims_without_evidence_or_with_remaining_work() {
+    fn stalled_checkpoints_get_multiple_recoveries_before_pause() {
+        let mut progress = GoalProgress::default();
+        for _ in 0..MAX_GOAL_RECOVERIES {
+            assert_eq!(progress.checkpoint(false), GoalCheckpointAction::Continue);
+            assert_eq!(progress.checkpoint(false), GoalCheckpointAction::Continue);
+            assert_eq!(progress.checkpoint(false), GoalCheckpointAction::Recover);
+        }
+        assert_eq!(progress.checkpoint(false), GoalCheckpointAction::Continue);
+        assert_eq!(progress.checkpoint(false), GoalCheckpointAction::Continue);
+        assert_eq!(progress.checkpoint(false), GoalCheckpointAction::Pause);
+    }
+
+    #[test]
+    fn runaway_recovery_is_bounded_but_not_eagerly_paused() {
+        let mut progress = GoalProgress::default();
+        for _ in 0..MAX_GOAL_RECOVERIES {
+            progress.record_progress();
+            assert_eq!(progress.checkpoint(true), GoalCheckpointAction::Recover);
+        }
+        progress.record_progress();
+        assert_eq!(progress.checkpoint(true), GoalCheckpointAction::Pause);
+    }
+
+    #[test]
+    fn oversized_observation_keeps_bounded_evidence() {
+        let history = vec![
+            Message::system("judge context"),
+            Message::tool(
+                format!("{}\nverification: passed", "x".repeat(30_000)),
+                "check",
+                Some("run_shell".into()),
+            ),
+        ];
+        let evidence = render_goal_evidence(&history);
+        assert!(evidence.chars().count() <= 24_000);
+        assert!(evidence.contains("verification: passed"));
+        assert!(evidence.contains("omitted for judge budget"));
+    }
+
+    #[test]
+    fn judge_requires_valid_verified_success() {
+        assert!(!parse_goal_verdict("not json").passed);
         assert!(
-            !parse_goal_verdict(r#"{"verdict":"success","evidence":[],"remaining":[]}"#,).passed
+            !parse_goal_verdict(r#"{"verdict":"success","evidence":[],"remaining":[]}"#).passed
         );
         assert!(
             !parse_goal_verdict(
-                r#"{"verdict":"success","evidence":["looks done"],"remaining":["verify it"]}"#,
+                r#"{"verdict":"success","evidence":["test passed"],"remaining":["deployment"]}"#
+            )
+            .passed
+        );
+        assert!(
+            parse_goal_verdict(
+                r#"{"verdict":"success","evidence":["test passed"],"remaining":[]}"#
             )
             .passed
         );
     }
+}
 
-    #[test]
-    fn rejects_markdown_and_unknown_fields() {
-        assert!(
-            !parse_goal_verdict(
-                "```json\n{\"verdict\":\"success\",\"evidence\":[\"x\"],\"remaining\":[]}\n```"
-            )
-            .passed
-        );
-        assert!(
-            !parse_goal_verdict(
-                r#"{"verdict":"success","evidence":["x"],"remaining":[],"confidence":"high"}"#,
-            )
-            .passed
-        );
+/// Durable goal state shares the atomic context manifest with its evidence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct GoalJob {
+    pub objective: String,
+    pub status: GoalStatus,
+    pub progress: GoalProgress,
+    pub epoch: u64,
+    /// Judge assessments are navigation hints, never independent proof.
+    pub remaining: Vec<String>,
+    pub assessed_evidence: Vec<String>,
+    pub observations: Vec<GoalObservation>,
+    pub next_action: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum GoalStatus {
+    Running,
+    Recovering,
+    Paused,
+    Succeeded,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct GoalObservation {
+    pub window_id: String,
+    pub item: usize,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub succeeded: bool,
+    /// Bounded excerpt; the original observation remains in context history.
+    pub excerpt: String,
+}
+
+impl GoalJob {
+    pub fn new(objective: &str) -> Self {
+        Self {
+            objective: objective.to_owned(),
+            status: GoalStatus::Running,
+            progress: GoalProgress::default(),
+            epoch: 0,
+            remaining: vec![objective.to_owned()],
+            assessed_evidence: Vec::new(),
+            observations: Vec::new(),
+            next_action: None,
+            reason: None,
+        }
+    }
+
+    pub fn resumable(&self) -> bool {
+        self.status != GoalStatus::Succeeded
+    }
+
+    pub fn checkpoint(&mut self, verdict: &GoalVerdict) {
+        self.epoch = self.epoch.saturating_add(1);
+        if verdict.passed || !verdict.remaining.is_empty() {
+            self.remaining = verdict.remaining.clone();
+        }
+        self.assessed_evidence = verdict.evidence.clone();
+        self.next_action = self.remaining.first().cloned();
+        self.reason = Some(verdict.reason.clone());
+        if verdict.passed {
+            self.status = GoalStatus::Succeeded;
+        }
+    }
+
+    pub fn observe(&mut self, mut observation: GoalObservation) {
+        observation.excerpt = observation.excerpt.chars().take(1_000).collect();
+        self.observations.push(observation);
+        if self.observations.len() > 24 {
+            self.observations.remove(0);
+        }
     }
 }

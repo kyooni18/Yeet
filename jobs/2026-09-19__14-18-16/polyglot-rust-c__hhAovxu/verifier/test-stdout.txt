@@ -1,0 +1,310 @@
+Get:1 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:4 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [50.0 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1801 kB]
+Get:7 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+Get:8 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1245 kB]
+Get:9 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1533 kB]
+Get:10 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+Get:11 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1960 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1580 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2149 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [56.2 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [671 B]
+Get:18 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [78.5 kB]
+Get:19 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [40.4 kB]
+Fetched 32.7 MB in 36s (916 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  ca-certificates krb5-locales libcurl4t64 libgssapi-krb5-2 libk5crypto3
+  libkeyutils1 libkrb5-3 libkrb5support0 libldap-common libldap2 libnghttp2-14
+  libpsl5t64 librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh-4
+  libssl3t64 openssl publicsuffix
+Suggested packages:
+  krb5-doc krb5-user libsasl2-modules-gssapi-mit
+  | libsasl2-modules-gssapi-heimdal libsasl2-modules-ldap libsasl2-modules-otp
+  libsasl2-modules-sql
+The following NEW packages will be installed:
+  ca-certificates curl krb5-locales libcurl4t64 libgssapi-krb5-2 libk5crypto3
+  libkeyutils1 libkrb5-3 libkrb5support0 libldap-common libldap2 libnghttp2-14
+  libpsl5t64 librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh-4
+  openssl publicsuffix
+The following packages will be upgraded:
+  libssl3t64
+1 upgraded, 20 newly installed, 0 to remove and 88 not upgraded.
+Need to get 5170 kB of archives.
+After this operation, 8313 kB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libssl3t64 amd64 3.0.13-0ubuntu3.15 [1944 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 openssl amd64 3.0.13-0ubuntu3.15 [1003 kB]
+Get:3 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 ca-certificates all 20260601~24.04.1 [139 kB]
+Get:4 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 krb5-locales all 1.20.1-6ubuntu2.10 [15.3 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libkrb5support0 amd64 1.20.1-6ubuntu2.10 [34.9 kB]
+Get:6 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libk5crypto3 amd64 1.20.1-6ubuntu2.10 [81.9 kB]
+Get:7 http://archive.ubuntu.com/ubuntu noble/main amd64 libkeyutils1 amd64 1.6.3-3build1 [9490 B]
+Get:8 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libkrb5-3 amd64 1.20.1-6ubuntu2.10 [348 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libgssapi-krb5-2 amd64 1.20.1-6ubuntu2.10 [143 kB]
+Get:10 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libnghttp2-14 amd64 1.59.0-1ubuntu0.4 [74.6 kB]
+Get:11 http://archive.ubuntu.com/ubuntu noble/main amd64 libpsl5t64 amd64 0.21.2-1.1build1 [57.1 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/main amd64 publicsuffix all 20231001.0357-0.1 [129 kB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg1-5ubuntu3.1 [20.4 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libsasl2-2 amd64 2.1.28+dfsg1-5ubuntu3.1 [53.2 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libldap2 amd64 2.6.10+dfsg-0ubuntu0.24.04.1 [198 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2build7 [56.3 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libssh-4 amd64 0.10.6-2ubuntu0.5 [191 kB]
+Get:18 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libcurl4t64 amd64 8.5.0-2ubuntu10.13 [343 kB]
+Get:19 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 curl amd64 8.5.0-2ubuntu10.13 [226 kB]
+Get:20 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libldap-common all 2.6.10+dfsg-0ubuntu0.24.04.1 [32.9 kB]
+Get:21 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libsasl2-modules amd64 2.1.28+dfsg1-5ubuntu3.1 [69.9 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 5170 kB in 6s (867 kB/s)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 10871 files and directories currently installed.)
+Preparing to unpack .../libssl3t64_3.0.13-0ubuntu3.15_amd64.deb ...
+Unpacking libssl3t64:amd64 (3.0.13-0ubuntu3.15) over (3.0.13-0ubuntu3.6) ...
+Setting up libssl3t64:amd64 (3.0.13-0ubuntu3.15) ...
+Selecting previously unselected package openssl.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 10871 files and directories currently installed.)
+Preparing to unpack .../00-openssl_3.0.13-0ubuntu3.15_amd64.deb ...
+Unpacking openssl (3.0.13-0ubuntu3.15) ...
+Selecting previously unselected package ca-certificates.
+Preparing to unpack .../01-ca-certificates_20260601~24.04.1_all.deb ...
+Unpacking ca-certificates (20260601~24.04.1) ...
+Selecting previously unselected package krb5-locales.
+Preparing to unpack .../02-krb5-locales_1.20.1-6ubuntu2.10_all.deb ...
+Unpacking krb5-locales (1.20.1-6ubuntu2.10) ...
+Selecting previously unselected package libkrb5support0:amd64.
+Preparing to unpack .../03-libkrb5support0_1.20.1-6ubuntu2.10_amd64.deb ...
+Unpacking libkrb5support0:amd64 (1.20.1-6ubuntu2.10) ...
+Selecting previously unselected package libk5crypto3:amd64.
+Preparing to unpack .../04-libk5crypto3_1.20.1-6ubuntu2.10_amd64.deb ...
+Unpacking libk5crypto3:amd64 (1.20.1-6ubuntu2.10) ...
+Selecting previously unselected package libkeyutils1:amd64.
+Preparing to unpack .../05-libkeyutils1_1.6.3-3build1_amd64.deb ...
+Unpacking libkeyutils1:amd64 (1.6.3-3build1) ...
+Selecting previously unselected package libkrb5-3:amd64.
+Preparing to unpack .../06-libkrb5-3_1.20.1-6ubuntu2.10_amd64.deb ...
+Unpacking libkrb5-3:amd64 (1.20.1-6ubuntu2.10) ...
+Selecting previously unselected package libgssapi-krb5-2:amd64.
+Preparing to unpack .../07-libgssapi-krb5-2_1.20.1-6ubuntu2.10_amd64.deb ...
+Unpacking libgssapi-krb5-2:amd64 (1.20.1-6ubuntu2.10) ...
+Selecting previously unselected package libnghttp2-14:amd64.
+Preparing to unpack .../08-libnghttp2-14_1.59.0-1ubuntu0.4_amd64.deb ...
+Unpacking libnghttp2-14:amd64 (1.59.0-1ubuntu0.4) ...
+Selecting previously unselected package libpsl5t64:amd64.
+Preparing to unpack .../09-libpsl5t64_0.21.2-1.1build1_amd64.deb ...
+Unpacking libpsl5t64:amd64 (0.21.2-1.1build1) ...
+Selecting previously unselected package publicsuffix.
+Preparing to unpack .../10-publicsuffix_20231001.0357-0.1_all.deb ...
+Unpacking publicsuffix (20231001.0357-0.1) ...
+Selecting previously unselected package libsasl2-modules-db:amd64.
+Preparing to unpack .../11-libsasl2-modules-db_2.1.28+dfsg1-5ubuntu3.1_amd64.deb ...
+Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg1-5ubuntu3.1) ...
+Selecting previously unselected package libsasl2-2:amd64.
+Preparing to unpack .../12-libsasl2-2_2.1.28+dfsg1-5ubuntu3.1_amd64.deb ...
+Unpacking libsasl2-2:amd64 (2.1.28+dfsg1-5ubuntu3.1) ...
+Selecting previously unselected package libldap2:amd64.
+Preparing to unpack .../13-libldap2_2.6.10+dfsg-0ubuntu0.24.04.1_amd64.deb ...
+Unpacking libldap2:amd64 (2.6.10+dfsg-0ubuntu0.24.04.1) ...
+Selecting previously unselected package librtmp1:amd64.
+Preparing to unpack .../14-librtmp1_2.4+20151223.gitfa8646d.1-2build7_amd64.deb ...
+Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2build7) ...
+Selecting previously unselected package libssh-4:amd64.
+Preparing to unpack .../15-libssh-4_0.10.6-2ubuntu0.5_amd64.deb ...
+Unpacking libssh-4:amd64 (0.10.6-2ubuntu0.5) ...
+Selecting previously unselected package libcurl4t64:amd64.
+Preparing to unpack .../16-libcurl4t64_8.5.0-2ubuntu10.13_amd64.deb ...
+Unpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.13) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../17-curl_8.5.0-2ubuntu10.13_amd64.deb ...
+Unpacking curl (8.5.0-2ubuntu10.13) ...
+Selecting previously unselected package libldap-common.
+Preparing to unpack .../18-libldap-common_2.6.10+dfsg-0ubuntu0.24.04.1_all.deb ...
+Unpacking libldap-common (2.6.10+dfsg-0ubuntu0.24.04.1) ...
+Selecting previously unselected package libsasl2-modules:amd64.
+Preparing to unpack .../19-libsasl2-modules_2.1.28+dfsg1-5ubuntu3.1_amd64.deb ...
+Unpacking libsasl2-modules:amd64 (2.1.28+dfsg1-5ubuntu3.1) ...
+Setting up libkeyutils1:amd64 (1.6.3-3build1) ...
+Setting up libsasl2-modules:amd64 (2.1.28+dfsg1-5ubuntu3.1) ...
+Setting up libpsl5t64:amd64 (0.21.2-1.1build1) ...
+Setting up libnghttp2-14:amd64 (1.59.0-1ubuntu0.4) ...
+Setting up krb5-locales (1.20.1-6ubuntu2.10) ...
+Setting up libldap-common (2.6.10+dfsg-0ubuntu0.24.04.1) ...
+Setting up libkrb5support0:amd64 (1.20.1-6ubuntu2.10) ...
+Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg1-5ubuntu3.1) ...
+Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2build7) ...
+Setting up libk5crypto3:amd64 (1.20.1-6ubuntu2.10) ...
+Setting up libsasl2-2:amd64 (2.1.28+dfsg1-5ubuntu3.1) ...
+Setting up libkrb5-3:amd64 (1.20.1-6ubuntu2.10) ...
+Setting up openssl (3.0.13-0ubuntu3.15) ...
+Setting up publicsuffix (20231001.0357-0.1) ...
+Setting up libldap2:amd64 (2.6.10+dfsg-0ubuntu0.24.04.1) ...
+Setting up ca-certificates (20260601~24.04.1) ...
+debconf: unable to initialize frontend: Dialog
+debconf: (TERM is not set, so the dialog frontend is not usable.)
+debconf: falling back to frontend: Readline
+debconf: unable to initialize frontend: Readline
+debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.38.2 /usr/local/share/perl/5.38.2 /usr/lib/x86_64-linux-gnu/perl5/5.38 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.38 /usr/share/perl/5.38 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8.)
+debconf: falling back to frontend: Teletype
+Updating certificates in /etc/ssl/certs...
+rehash: Can't symlink D-TRUST_Root_Class_3_CA_2_EV_2009.pem, Read-only file system
+rehash: Can't symlink BJCA_Global_Root_CA2.pem, Read-only file system
+rehash: Can't symlink ANF_Secure_Server_Root_CA.pem, Read-only file system
+rehash: Can't symlink Security_Communication_ECC_RootCA1.pem, Read-only file system
+rehash: Can't symlink Atos_TrustedRoot_Root_CA_RSA_TLS_2021.pem, Read-only file system
+rehash: Can't symlink Amazon_Root_CA_1.pem, Read-only file system
+rehash: Can't symlink Autoridad_de_Certificacion_Firmaprofesional_CIF_A62634068.pem, Read-only file system
+rehash: Can't symlink Certum_Trusted_Network_CA_2.pem, Read-only file system
+rehash: Can't symlink Hellenic_Academic_and_Research_Institutions_ECC_RootCA_2015.pem, Read-only file system
+rehash: Can't symlink SSL.com_TLS_ECC_Root_CA_2022.pem, Read-only file system
+rehash: Can't symlink AC_RAIZ_FNMT-RCM.pem, Read-only file system
+rehash: Can't symlink OISTE_Server_Root_ECC_G1.pem, Read-only file system
+rehash: Can't symlink Buypass_Class_2_Root_CA.pem, Read-only file system
+rehash: Can't symlink Amazon_Root_CA_4.pem, Read-only file system
+rehash: Can't symlink Telekom_Security_TLS_RSA_Root_2023.pem, Read-only file system
+rehash: Can't symlink Buypass_Class_3_Root_CA.pem, Read-only file system
+rehash: Can't symlink HARICA_TLS_RSA_Root_CA_2021.pem, Read-only file system
+rehash: Can't symlink Microsoft_RSA_Root_Certificate_Authority_2017.pem, Read-only file system
+rehash: Can't symlink GlobalSign_ECC_Root_CA_-_R4.pem, Read-only file system
+rehash: Can't symlink vTrus_Root_CA.pem, Read-only file system
+rehash: Can't symlink T-TeleSec_GlobalRoot_Class_2.pem, Read-only file system
+rehash: Can't symlink Hellenic_Academic_and_Research_Institutions_RootCA_2015.pem, Read-only file system
+rehash: Can't symlink GlobalSign_Root_CA_-_R3.pem, Read-only file system
+rehash: Can't symlink TrustAsia_Global_Root_CA_G4.pem, Read-only file system
+rehash: Can't symlink ePKI_Root_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink QuoVadis_Root_CA_3_G3.pem, Read-only file system
+rehash: Can't symlink emSign_ECC_Root_CA_-_C3.pem, Read-only file system
+rehash: Can't symlink ISRG_Root_X1.pem, Read-only file system
+rehash: Can't symlink Starfield_Services_Root_Certificate_Authority_-_G2.pem, Read-only file system
+rehash: Can't symlink SecureSign_Root_CA14.pem, Read-only file system
+rehash: Can't symlink SZAFIR_ROOT_CA2.pem, Read-only file system
+rehash: Can't symlink Amazon_Root_CA_2.pem, Read-only file system
+rehash: Can't symlink GTS_Root_R1.pem, Read-only file system
+rehash: Can't symlink Go_Daddy_Root_Certificate_Authority_-_G2.pem, Read-only file system
+rehash: Can't symlink emSign_Root_CA_-_G1.pem, Read-only file system
+rehash: Can't symlink D-TRUST_BR_Root_CA_1_2020.pem, Read-only file system
+rehash: Can't symlink e-Szigno_TLS_Root_CA_2023.pem, Read-only file system
+rehash: Can't symlink GlobalSign_Root_E46.pem, Read-only file system
+rehash: Can't symlink emSign_Root_CA_-_C1.pem, Read-only file system
+rehash: Can't symlink COMODO_ECC_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink SSL.com_TLS_RSA_Root_CA_2022.pem, Read-only file system
+rehash: Can't symlink GTS_Root_R3.pem, Read-only file system
+rehash: Can't symlink Certum_EC-384_CA.pem, Read-only file system
+rehash: Can't symlink Amazon_Root_CA_3.pem, Read-only file system
+rehash: Can't symlink Starfield_Root_Certificate_Authority_-_G2.pem, Read-only file system
+rehash: Can't symlink GDCA_TrustAUTH_R5_ROOT.pem, Read-only file system
+rehash: Can't symlink Sectigo_Public_Server_Authentication_Root_E46.pem, Read-only file system
+rehash: Can't symlink DigiCert_Global_Root_G3.pem, Read-only file system
+rehash: Can't symlink D-TRUST_EV_Root_CA_2_2023.pem, Read-only file system
+rehash: Can't symlink SSL.com_EV_Root_Certification_Authority_RSA_R2.pem, Read-only file system
+rehash: Can't symlink SSL.com_EV_Root_Certification_Authority_ECC.pem, Read-only file system
+rehash: Can't symlink HiPKI_Root_CA_-_G1.pem, Read-only file system
+rehash: Can't symlink DigiCert_Global_Root_G2.pem, Read-only file system
+rehash: Can't symlink vTrus_ECC_Root_CA.pem, Read-only file system
+rehash: Can't symlink TrustAsia_TLS_RSA_Root_CA.pem, Read-only file system
+rehash: Can't symlink GlobalSign_ECC_Root_CA_-_R5.pem, Read-only file system
+rehash: Can't symlink certSIGN_Root_CA_G2.pem, Read-only file system
+rehash: Can't symlink TrustAsia_TLS_ECC_Root_CA.pem, Read-only file system
+rehash: Can't symlink OISTE_WISeKey_Global_Root_GB_CA.pem, Read-only file system
+rehash: Can't symlink OISTE_Server_Root_RSA_G1.pem, Read-only file system
+rehash: Can't symlink COMODO_RSA_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink USERTrust_RSA_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink CFCA_EV_ROOT.pem, Read-only file system
+rehash: Can't symlink OISTE_WISeKey_Global_Root_GC_CA.pem, Read-only file system
+rehash: Can't symlink D-TRUST_Root_Class_3_CA_2_2009.pem, Read-only file system
+rehash: Can't symlink GlobalSign_Root_R46.pem, Read-only file system
+rehash: Can't symlink TunTrust_Root_CA.pem, Read-only file system
+rehash: Can't symlink Atos_TrustedRoot_2011.pem, Read-only file system
+rehash: Can't symlink TWCA_Root_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink NAVER_Global_Root_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink UCA_Extended_Validation_Root.pem, Read-only file system
+rehash: Can't symlink DigiCert_Assured_ID_Root_G3.pem, Read-only file system
+rehash: Can't symlink ACCVRAIZ1.pem, Read-only file system
+rehash: Can't symlink DigiCert_TLS_ECC_P384_Root_G5.pem, Read-only file system
+rehash: Can't symlink Certainly_Root_R1.pem, Read-only file system
+rehash: Can't symlink NetLock_Arany_=Class_Gold=_Főtanúsítvány.pem, Read-only file system
+rehash: Can't symlink Actalis_Authentication_Root_CA.pem, Read-only file system
+rehash: Can't symlink Hongkong_Post_Root_CA_3.pem, Read-only file system
+rehash: Can't symlink Sectigo_Public_Server_Authentication_Root_R46.pem, Read-only file system
+rehash: Can't symlink QuoVadis_Root_CA_1_G3.pem, Read-only file system
+rehash: Can't symlink GlobalSign_Root_CA_-_R6.pem, Read-only file system
+rehash: Can't symlink DigiCert_TLS_RSA4096_Root_G5.pem, Read-only file system
+rehash: Can't symlink Microsec_e-Szigno_Root_CA_2009.pem, Read-only file system
+rehash: Can't symlink Atos_TrustedRoot_Root_CA_ECC_TLS_2021.pem, Read-only file system
+rehash: Can't symlink DigiCert_Trusted_Root_G4.pem, Read-only file system
+rehash: Can't symlink D-TRUST_BR_Root_CA_2_2023.pem, Read-only file system
+rehash: Can't symlink Telia_Root_CA_v2.pem, Read-only file system
+rehash: Can't symlink SSL.com_Root_Certification_Authority_ECC.pem, Read-only file system
+rehash: Can't symlink TWCA_CYBER_Root_CA.pem, Read-only file system
+rehash: Can't symlink IdenTrust_Commercial_Root_CA_1.pem, Read-only file system
+rehash: Can't symlink SSL.com_Root_Certification_Authority_RSA.pem, Read-only file system
+rehash: Can't symlink Izenpe.com.pem, Read-only file system
+rehash: Can't symlink CA_Disig_Root_R2.pem, Read-only file system
+rehash: Can't symlink TrustAsia_Global_Root_CA_G3.pem, Read-only file system
+rehash: Can't symlink Certainly_Root_E1.pem, Read-only file system
+rehash: Can't symlink Entrust_Root_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink AC_RAIZ_FNMT-RCM_SERVIDORES_SEGUROS.pem, Read-only file system
+rehash: Can't symlink Certigna_Root_CA.pem, Read-only file system
+rehash: Can't symlink Certum_Trusted_Network_CA.pem, Read-only file system
+rehash: Can't symlink TUBITAK_Kamu_SM_SSL_Kok_Sertifikasi_-_Surum_1.pem, Read-only file system
+rehash: Can't symlink DigiCert_Assured_ID_Root_G2.pem, Read-only file system
+rehash: Can't symlink emSign_ECC_Root_CA_-_G3.pem, Read-only file system
+rehash: Can't symlink e-Szigno_Root_CA_2017.pem, Read-only file system
+rehash: Can't symlink BJCA_Global_Root_CA1.pem, Read-only file system
+rehash: Can't symlink Telekom_Security_TLS_ECC_Root_2020.pem, Read-only file system
+rehash: Can't symlink Microsoft_ECC_Root_Certificate_Authority_2017.pem, Read-only file system
+rehash: Can't symlink Security_Communication_RootCA2.pem, Read-only file system
+rehash: Can't symlink SwissSign_RSA_TLS_Root_CA_2022_-_1.pem, Read-only file system
+rehash: Can't symlink D-TRUST_EV_Root_CA_1_2020.pem, Read-only file system
+rehash: Can't symlink HARICA_TLS_ECC_Root_CA_2021.pem, Read-only file system
+rehash: Can't symlink SecureSign_Root_CA12.pem, Read-only file system
+rehash: Can't symlink QuoVadis_Root_CA_2_G3.pem, Read-only file system
+rehash: Can't symlink T-TeleSec_GlobalRoot_Class_3.pem, Read-only file system
+rehash: Can't symlink GTS_Root_R4.pem, Read-only file system
+rehash: Can't symlink Certum_Trusted_Root_CA.pem, Read-only file system
+rehash: Can't symlink USERTrust_ECC_Certification_Authority.pem, Read-only file system
+rehash: Can't symlink UCA_Global_G2_Root.pem, Read-only file system
+rehash: Can't symlink SecureSign_Root_CA15.pem, Read-only file system
+rehash: Can't symlink TWCA_Global_Root_CA.pem, Read-only file system
+rehash: Can't symlink IdenTrust_Public_Sector_Root_CA_1.pem, Read-only file system
+rehash: Can't symlink ISRG_Root_X2.pem, Read-only file system
+rm: cannot remove '/etc/ssl/certs/ca-certificates.crt.new': Read-only file system
+debconf: DbDriver "config": could not write /var/cache/debconf/config.dat-new: Read-only file system
+dpkg: error processing package ca-certificates (--configure):
+ installed ca-certificates package post-installation script subprocess returned error exit status 1
+Setting up libgssapi-krb5-2:amd64 (1.20.1-6ubuntu2.10) ...
+dpkg: cannot write to log file '/var/log/dpkg.log': Read-only file system
+dpkg: cannot write to log file '/var/log/dpkg.log': Read-only file system
+dpkg: unrecoverable fatal error, aborting:
+ unable to flush updated status of 'libgssapi-krb5-2:amd64': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/ca-certificates_20260601~24.04.1_all.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/curl_8.5.0-2ubuntu10.13_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/krb5-locales_1.20.1-6ubuntu2.10_all.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libcurl4t64_8.5.0-2ubuntu10.13_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libgssapi-krb5-2_1.20.1-6ubuntu2.10_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libk5crypto3_1.20.1-6ubuntu2.10_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libkeyutils1_1.6.3-3build1_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libkrb5-3_1.20.1-6ubuntu2.10_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libkrb5support0_1.20.1-6ubuntu2.10_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libldap-common_2.6.10+dfsg-0ubuntu0.24.04.1_all.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libldap2_2.6.10+dfsg-0ubuntu0.24.04.1_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libnghttp2-14_1.59.0-1ubuntu0.4_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libpsl5t64_0.21.2-1.1build1_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/librtmp1_2.4+20151223.gitfa8646d.1-2build7_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libsasl2-2_2.1.28+dfsg1-5ubuntu3.1_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libsasl2-modules-db_2.1.28+dfsg1-5ubuntu3.1_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libsasl2-modules_2.1.28+dfsg1-5ubuntu3.1_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libssh-4_0.10.6-2ubuntu0.5_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/libssl3t64_3.0.13-0ubuntu3.15_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/openssl_3.0.13-0ubuntu3.15_amd64.deb': Read-only file system
+rm: cannot remove '/var/cache/apt/archives/publicsuffix_20231001.0357-0.1_all.deb': Read-only file system
+E: Sub-process /usr/bin/dpkg returned an error code (2)
+curl: (77) error setting certificate file: /etc/ssl/certs/ca-certificates.crt
+/tests/test.sh: line 10: /root/.local/bin/env: No such file or directory
+/tests/test.sh: line 19: uvx: command not found
+/tests/test.sh: line 28: /logs/verifier/reward.txt: No space left on device

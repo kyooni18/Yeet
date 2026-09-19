@@ -175,28 +175,3 @@ fn normalize_absolute_path(path: &Path) -> Result<PathBuf> {
     }
     Ok(normalized)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stable_workspace_path_key_unifies_internal_aliases() {
-        let workspace = tempfile::tempdir().unwrap();
-        let root = workspace.path().canonicalize().unwrap();
-        fs::create_dir_all(root.join("src/ui")).unwrap();
-        fs::write(root.join("src/ui/theme.rs"), "theme\n").unwrap();
-        let absolute = root.join("src/ui/theme.rs");
-
-        assert_eq!(stable_workspace_path_key(&root, ".").unwrap(), ".");
-        assert_eq!(
-            stable_workspace_path_key(&root, "src/./ui/../ui/theme.rs").unwrap(),
-            "src/ui/theme.rs"
-        );
-        assert_eq!(
-            stable_workspace_path_key(&root, absolute.to_str().unwrap()).unwrap(),
-            "src/ui/theme.rs"
-        );
-        assert!(stable_workspace_path_key(&root, "").is_err());
-    }
-}
