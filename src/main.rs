@@ -1,7 +1,6 @@
 use std::{
     io,
     io::{IsTerminal, Write},
-    path::PathBuf,
     process,
     time::Duration,
 };
@@ -37,7 +36,8 @@ use yeet::{
     remote::{
         RemoteControl, RemoteInput, RemoteOptions, RemoteServer, clear_remote_access_key,
         clear_remote_passkeys, generate_remote_access_key, remote_auth_status, remote_browser_url,
-        remote_status, request_remote_passkey_enrollment, set_remote_access_key, stop_remote,
+        remote_status, request_remote_passkey_enrollment, set_remote_access_key,
+        start_remote_background, stop_remote,
     },
     ui,
 };
@@ -122,16 +122,21 @@ fn main() -> Result<()> {
         }
     }
     if let Some(options) = RemoteOptions::parse(&arguments)? {
-        let workspace = resolve_remote_workspace(options.workspace.clone())?;
         if let Some(status) = remote_status()? {
             let browser_url = remote_browser_url(&status)?;
             println!("Yeet remote UI already running: {browser_url}");
             return Ok(());
         }
+        if options.background {
+            let status = start_remote_background(&options)?;
+            println!("Yeet remote UI: {}", remote_browser_url(&status)?);
+            println!("Running in background");
+            return Ok(());
+        }
         return if options.legacy_tui {
-            run_remote_tui(options, workspace)
+            run_remote_tui(options)
         } else {
-            run_remote_web(options, workspace)
+            run_remote_web(options)
         };
     }
     if !arguments.is_empty() {
@@ -141,11 +146,11 @@ fn main() -> Result<()> {
     run_tui()
 }
 
-fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Result<()> {
+fn run_remote_tui(options: RemoteOptions) -> Result<()> {
     let mut backend = Backend::spawn_remote()?;
     ui::initialize_theme();
     let mut app = App::default();
-    let remote = RemoteServer::start_for_workspace(&options, &workspace)?;
+    let remote = RemoteServer::start(&options)?;
     let control = RemoteControl::start(remote.address(), remote.auth_handle(), true)?;
     let mut width = options.cols;
     let mut height = options.rows;
@@ -201,8 +206,8 @@ fn run_remote_tui(options: RemoteOptions, workspace: std::path::PathBuf) -> Resu
     }
 }
 
-fn run_remote_web(options: RemoteOptions, workspace: std::path::PathBuf) -> Result<()> {
-    let remote = RemoteServer::start_for_workspace(&options, &workspace)?;
+fn run_remote_web(options: RemoteOptions) -> Result<()> {
+    let remote = RemoteServer::start(&options)?;
     let control = RemoteControl::start(remote.address(), remote.auth_handle(), false)?;
     println!("Yeet remote UI: http://{}", remote.address());
     while !control.should_stop() {
@@ -302,33 +307,6 @@ fn read_remote_access_key() -> Result<String> {
         anyhow::bail!("remote access key cannot be empty");
     }
     Ok(key)
-}
-
-fn resolve_remote_workspace(workspace: Option<PathBuf>) -> Result<PathBuf> {
-    let home = dirs::home_dir().context("home directory is unavailable")?;
-    let path = match workspace {
-        None => home,
-        Some(path) if path == PathBuf::from("~") => home,
-        Some(path) if path.is_absolute() => path,
-        Some(path) => {
-            let value = path.to_string_lossy();
-            if let Some(relative) = value
-                .strip_prefix("~/")
-                .or_else(|| value.strip_prefix("~\\"))
-            {
-                home.join(relative)
-            } else {
-                home.join(path)
-            }
-        }
-    };
-    let path = path
-        .canonicalize()
-        .with_context(|| format!("resolve remote workspace {}", path.display()))?;
-    if !path.is_dir() {
-        anyhow::bail!("remote workspace is not a directory: {}", path.display());
-    }
-    Ok(path)
 }
 
 const TUI_STARTUP_NOTICE: &str = "YEET // STARTING RUNTIME...";

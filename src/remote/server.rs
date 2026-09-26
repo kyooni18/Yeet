@@ -1,6 +1,5 @@
 use std::{
     net::TcpListener,
-    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -58,7 +57,6 @@ pub(crate) fn serve(
     input_tx: Sender<RemoteInput>,
     frame: Arc<Mutex<FrameSnapshot>>,
     auth: Arc<RemoteAuthRuntime>,
-    workspace: PathBuf,
     legacy_tui: bool,
     running: Arc<AtomicBool>,
 ) {
@@ -84,7 +82,7 @@ pub(crate) fn serve(
             input_tx,
             frame,
             auth,
-            hub: Arc::new(RemoteHub::new(workspace)),
+            hub: Arc::new(RemoteHub::new()),
             key_verification_slots: Arc::new(tokio::sync::Semaphore::new(
                 MAX_CONCURRENT_KEY_VERIFICATIONS,
             )),

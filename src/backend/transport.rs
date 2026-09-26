@@ -26,8 +26,11 @@ impl Backend {
     }
 
     pub fn spawn_remote() -> anyhow::Result<Self> {
-        // Legacy remote rendering also stays inside the owning Yeet process.
-        Self::spawn()
+        let workspace =
+            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("home directory is unavailable"))?;
+        Ok(Self {
+            harness: Harness::embedded(workspace)?,
+        })
     }
 
     pub fn send(&mut self, command: FrontendCommand) -> anyhow::Result<()> {

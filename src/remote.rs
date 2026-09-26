@@ -11,6 +11,7 @@ use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::{Shutdown, SocketAddr, TcpListener},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -34,8 +35,8 @@ use webauthn_rs::prelude::{
 use crate::{
     config::ConfigStore,
     platform::{
-        bind_local, connect_local, replace_file, set_private_directory, set_private_file,
-        tracked_children_snapshot,
+        bind_local, configure_detached, connect_local, replace_file, set_private_directory,
+        set_private_file, tracked_children_snapshot,
     },
 };
 
@@ -49,6 +50,8 @@ const MAX_ROWS: u16 = 120;
 const REMOTE_STOP_RETRIES: usize = 80;
 const REMOTE_STOP_DELAY: Duration = Duration::from_millis(50);
 const REMOTE_CONTROL_TIMEOUT: Duration = Duration::from_millis(600);
+const REMOTE_BACKGROUND_START_RETRIES: usize = 100;
+const REMOTE_BACKGROUND_START_DELAY: Duration = Duration::from_millis(50);
 const AUTH_SESSION_SECONDS: u64 = 12 * 60 * 60;
 const PASSKEY_ENROLL_SECONDS: u64 = 10 * 60;
 const MAX_AUTH_SESSIONS: usize = 256;
@@ -63,7 +66,7 @@ pub struct RemoteOptions {
     pub cols: u16,
     pub rows: u16,
     pub origin: Option<String>,
-    pub workspace: Option<PathBuf>,
+    pub background: bool,
     pub legacy_tui: bool,
 }
 
@@ -74,7 +77,7 @@ impl Default for RemoteOptions {
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             origin: None,
-            workspace: None,
+            background: false,
             legacy_tui: false,
         }
     }
@@ -118,22 +121,11 @@ impl RemoteOptions {
                             .ok_or_else(|| anyhow!("remote mode requires a URL after --origin"))?,
                     );
                 }
+                "--background" => {
+                    options.background = true;
+                }
                 "--legacy-tui" => {
                     options.legacy_tui = true;
-                }
-                "--workspace" => {
-                    index += 1;
-                    let path =
-                        PathBuf::from(arguments.get(index).ok_or_else(|| {
-                            anyhow!("remote mode requires a path after --workspace")
-                        })?);
-                    if options.workspace.replace(path).is_some() {
-                        bail!("remote workspace was specified more than once");
-                    }
-                }
-                "-h" | "--help" => bail!(remote_help()),
-                value if !value.starts_with('-') && options.workspace.is_none() => {
-                    options.workspace = Some(PathBuf::from(value));
                 }
                 value => bail!("unknown remote option: {value}\n\n{}", remote_help()),
             }
@@ -144,7 +136,7 @@ impl RemoteOptions {
 }
 
 pub fn remote_help() -> &'static str {
-    "Yeet remote mode\n\n  yeet remote [--workspace PATH] [--bind ADDRESS] [--origin URL] [--legacy-tui]\n  yeet remote status\n  yeet remote stop\n  yeet remote auth status\n  yeet remote auth key generate|set|clear\n  yeet remote auth passkey add|clear\n  yeet --remote [--workspace PATH] [--bind ADDRESS] [--origin URL]\n\nDefaults:\n  initial client workspace: home directory (WebUI clients may switch to any workspace)\n  --bind 0.0.0.0:7331\n  frontend: semantic WebUI\n\nOptions:\n  --workspace PATH   seed the initial client workspace; it does not scope Remote itself\n  --legacy-tui       serve the previous browser-rendered Ratatui frontend\n  --size COLSxROWS   terminal size for --legacy-tui (default 120x40)\n\n`yeet remote` runs Remote directly in the current Yeet process. It does not spawn a separate Remote service and does not derive its workspace from the shell current directory. WebUI clients may switch to any valid workspace path. The production WebUI is served directly by Yeet and does not require a Node development server. WebAuthn credentials remain scoped to the configured relying-party origin as required by WebAuthn. Network tunneling and port forwarding are intentionally outside Yeet."
+    "Yeet remote mode\n\n  yeet remote [--background] [--bind ADDRESS] [--origin URL] [--legacy-tui]\n  yeet remote status\n  yeet remote stop\n  yeet remote auth status\n  yeet remote auth key generate|set|clear\n  yeet remote auth passkey add|clear\n  yeet --remote [--background] [--bind ADDRESS] [--origin URL]\n\nDefaults:\n  client workspace: restored per browser client, otherwise home directory\n  --bind 0.0.0.0:7331\n  frontend: semantic WebUI\n\nOptions:\n  --background       detach one Remote process; no launchd/systemd service is installed\n  --legacy-tui       serve the previous browser-rendered Ratatui frontend\n  --size COLSxROWS   terminal size for --legacy-tui (default 120x40)\n\n`yeet remote` is workspace-neutral: the Remote server itself owns no project directory and never derives one from the shell current directory. Each WebUI client restores or selects its own workspace; a new client starts at the home directory and may switch to any valid workspace path. `--background` only detaches the current Remote process; it does not register a supervisor or restart policy, so a killed Remote stays dead. The production WebUI is served directly by Yeet and does not require a Node development server. WebAuthn credentials remain scoped to the configured relying-party origin as required by WebAuthn. Network tunneling and port forwarding are intentionally outside Yeet."
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,21 +399,6 @@ impl RemoteAuthRuntime {
                 authentications: HashMap::new(),
             })),
         })
-    }
-
-    fn disabled() -> Self {
-        Self {
-            cookie_name: "yeet_remote_session".into(),
-            webauthn: None,
-            public_origin: None,
-            state: Arc::new(Mutex::new(RemoteAuthState {
-                document: RemoteAuthDocument::default(),
-                sessions: HashMap::new(),
-                enrollments: HashMap::new(),
-                registrations: HashMap::new(),
-                authentications: HashMap::new(),
-            })),
-        }
     }
 
     fn reload_document(&self) -> Result<()> {
@@ -839,6 +816,64 @@ pub fn remote_browser_url(status: &RemoteStatus) -> Result<String> {
     Ok(remote_origin()?.unwrap_or_else(|| status.address.clone()))
 }
 
+pub fn start_remote_background(options: &RemoteOptions) -> Result<RemoteStatus> {
+    if options.legacy_tui {
+        bail!("--background is only supported by the semantic Remote WebUI");
+    }
+    if remote_status()?.is_some() {
+        bail!("Yeet Remote is already running");
+    }
+
+    let executable = std::env::current_exe().context("locate Yeet executable")?;
+    let home = dirs::home_dir().context("home directory is unavailable")?;
+    let paths = RemoteControlPaths::new()?;
+    let directory = paths
+        .socket
+        .parent()
+        .ok_or_else(|| anyhow!("Remote control path has no parent directory"))?;
+    let log_path = directory.join("background.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("open Remote background log {}", log_path.display()))?;
+    set_private_file(&log_path)?;
+    let log_err = log.try_clone()?;
+
+    let mut command = Command::new(executable);
+    command
+        .arg("remote")
+        .arg("--bind")
+        .arg(&options.bind)
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+    if let Some(origin) = &options.origin {
+        command.arg("--origin").arg(origin);
+    }
+    configure_detached(&mut command);
+
+    let mut child = command.spawn().context("start Yeet Remote in background")?;
+    for _ in 0..REMOTE_BACKGROUND_START_RETRIES {
+        if let Some(status) = remote_status()? {
+            return Ok(status);
+        }
+        if let Some(exit) = child.try_wait()? {
+            bail!(
+                "Yeet Remote background process exited during startup ({exit}); see {}",
+                log_path.display()
+            );
+        }
+        thread::sleep(REMOTE_BACKGROUND_START_DELAY);
+    }
+
+    bail!(
+        "Yeet Remote background process did not become ready; see {}",
+        log_path.display()
+    )
+}
+
 fn remote_control_request(command: &str) -> Result<Option<String>> {
     let paths = RemoteControlPaths::new()?;
     let mut stream = match connect_local(&paths.socket) {
@@ -1172,11 +1207,7 @@ pub struct RemoteServer {
 
 impl RemoteServer {
     pub fn start(options: &RemoteOptions) -> Result<Self> {
-        Self::start_inner(options, None, None)
-    }
-
-    pub fn start_for_workspace(options: &RemoteOptions, workspace: &Path) -> Result<Self> {
-        Self::start_inner(options, Some(workspace), None)
+        Self::start_inner(options, None)
     }
 
     #[cfg(test)]
@@ -1184,12 +1215,11 @@ impl RemoteServer {
         options: &RemoteOptions,
         document: RemoteAuthDocument,
     ) -> Result<Self> {
-        Self::start_inner(options, None, Some(document))
+        Self::start_inner(options, Some(document))
     }
 
     fn start_inner(
         options: &RemoteOptions,
-        workspace: Option<&Path>,
         auth_document: Option<RemoteAuthDocument>,
     ) -> Result<Self> {
         let listener = TcpListener::bind(&options.bind)
@@ -1198,16 +1228,10 @@ impl RemoteServer {
             .set_nonblocking(true)
             .context("failed to configure Yeet remote listener")?;
         let address = listener.local_addr()?;
-        let auth = Arc::new(match (workspace, auth_document) {
-            (Some(_), None) => RemoteAuthRuntime::for_remote(options, address)?,
-            (None, Some(document)) => RemoteAuthRuntime::from_document(document, options, address)?,
-            (None, None) => RemoteAuthRuntime::disabled(),
-            (Some(_), Some(_)) => unreachable!("workspace and test auth document are exclusive"),
+        let auth = Arc::new(match auth_document {
+            Some(document) => RemoteAuthRuntime::from_document(document, options, address)?,
+            None => RemoteAuthRuntime::for_remote(options, address)?,
         });
-        let semantic_workspace = match workspace {
-            Some(workspace) => workspace.to_path_buf(),
-            None => dirs::home_dir().ok_or_else(|| anyhow!("home directory is unavailable"))?,
-        };
         let (input_tx, input_rx) = mpsc::channel();
         let frame = Arc::new(Mutex::new(FrameSnapshot::new(options.cols, options.rows)));
         let running = Arc::new(AtomicBool::new(true));
@@ -1223,7 +1247,6 @@ impl RemoteServer {
                     input_tx,
                     server_frame,
                     server_auth,
-                    semantic_workspace,
                     legacy_tui,
                     server_running,
                 )

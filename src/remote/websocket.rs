@@ -53,16 +53,13 @@ struct PendingRemoteAttachment {
 }
 
 pub(crate) struct RemoteHub {
-    default_workspace: PathBuf,
     clients: Mutex<HashMap<ClientRuntimeKey, Arc<RemoteClientRuntime>>>,
     attachments: Mutex<HashMap<String, PendingRemoteAttachment>>,
 }
 
 impl RemoteHub {
-    pub(crate) fn new(workspace: PathBuf) -> Self {
-        let workspace = workspace.canonicalize().unwrap_or(workspace);
+    pub(crate) fn new() -> Self {
         Self {
-            default_workspace: workspace,
             clients: Mutex::new(HashMap::new()),
             attachments: Mutex::new(HashMap::new()),
         }
@@ -170,21 +167,18 @@ impl RemoteHub {
 
     fn resolve_workspace(&self, requested: Option<&str>) -> Result<PathBuf> {
         let requested = requested.map(str::trim).filter(|value| !value.is_empty());
+        let home = dirs::home_dir().ok_or_else(|| {
+            anyhow!("home directory is unavailable; use an absolute workspace path")
+        })?;
         let mut path = match requested {
-            None => self.default_workspace.clone(),
-            Some("~") => dirs::home_dir().ok_or_else(|| {
-                anyhow!("home directory is unavailable; use an absolute workspace path")
-            })?,
+            None | Some("~") => home.clone(),
             Some(value) if value.starts_with("~/") || value.starts_with("~\\") => {
-                let home = dirs::home_dir().ok_or_else(|| {
-                    anyhow!("home directory is unavailable; use an absolute workspace path")
-                })?;
                 home.join(&value[2..])
             }
             Some(value) => PathBuf::from(value),
         };
         if !path.is_absolute() {
-            path = self.default_workspace.join(path);
+            path = home.join(path);
         }
         let path = path
             .canonicalize()
@@ -1246,4 +1240,21 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
         }
     }
     runtime.touch();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteHub;
+
+    #[test]
+    fn workspace_fallback_is_home_not_process_cwd() {
+        let home = dirs::home_dir()
+            .expect("home directory")
+            .canonicalize()
+            .expect("canonical home directory");
+        let hub = RemoteHub::new();
+
+        assert_eq!(hub.resolve_workspace(None).unwrap(), home);
+        assert_eq!(hub.resolve_workspace(Some(".")).unwrap(), home);
+    }
 }

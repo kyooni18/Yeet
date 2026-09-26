@@ -27,12 +27,12 @@ use crate::{
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const HELP: &str = r#"Usage:
-  yeet remote [WORKSPACE] [--workspace PATH] [--bind ADDRESS] [--size COLSxROWS] [--origin URL]
-  yeet remote status [WORKSPACE|--workspace PATH]
-  yeet remote stop [WORKSPACE|--workspace PATH]
-  yeet remote auth status [WORKSPACE|--workspace PATH]
-  yeet remote auth key generate|set|clear [WORKSPACE|--workspace PATH]
-  yeet remote auth passkey add|clear [WORKSPACE|--workspace PATH]
+  yeet remote [--background] [--bind ADDRESS] [--size COLSxROWS] [--origin URL]
+  yeet remote status
+  yeet remote stop
+  yeet remote auth status
+  yeet remote auth key generate|set|clear
+  yeet remote auth passkey add|clear
   yeet doctor
   yeet install [binary|runtime|foundation|web|mcp|remote|all]...
   yeet uninstall [binary|runtime|foundation|web|mcp|remote|all]...
@@ -102,11 +102,13 @@ Runtime:
   and requires Node.js 20+. Set YEET_RUNTIME_DIR and YEET_NODE to override paths.
 
 Remote:
-  Remote mode is opt-in and runs in the current Yeet process. It serves the
-  semantic WebUI on 0.0.0.0:7331 by default; each client workspace backend is
-  kept in-process, while provider/edit/search sidecars start only when needed.
-  Access keys and WebAuthn passkeys are optional. Port forwarding and tunneling
-  are user-managed."#;
+  Remote mode is opt-in, workspace-neutral, and runs in the current Yeet process.
+  Add --background to detach one Remote process without installing a supervisor or
+  restart policy. It serves the semantic WebUI on 0.0.0.0:7331 by default. Each
+  browser client restores or selects its own workspace; a new client falls back to
+  the home directory. Client backends stay in-process, while provider/edit/search
+  sidecars start only when needed. Access keys and WebAuthn passkeys are optional.
+  Port forwarding and tunneling are user-managed."#;
 
 pub fn run(arguments: &[String]) -> Result<i32> {
     let command = arguments.first().map(String::as_str).unwrap_or("help");
