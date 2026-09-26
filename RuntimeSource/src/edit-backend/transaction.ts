@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { access, chmod, link, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, link, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { configDirectory } from "./config.js";
 
 export interface PlannedFileState {
@@ -93,6 +93,41 @@ async function fsyncDir(directory: string): Promise<void> {
   }
 }
 
+async function fsyncFile(file: string): Promise<void> {
+  const handle = await open(file, "r");
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+async function createRollbackBackup(target: string, backup: string): Promise<void> {
+  try {
+    // Same-directory hard links are O(1), retain the old inode/metadata, and
+    // keep the live target visible until the staged rename commits.
+    await link(target, backup);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EXDEV"].includes(code ?? "")) throw error;
+    // Filesystems that disallow hard links still get a durable rollback copy.
+    await copyFile(target, backup);
+  }
+  await fsyncFile(backup);
+}
+
+async function assertTargetUnchangedBeforeMutation(record: JournalRecord): Promise<void> {
+  if (!record.hadOriginal) return;
+  if (!await exists(record.target)) {
+    // The transaction has not touched this target yet. Preserve an external
+    // deletion instead of letting rollback resurrect the preflight contents.
+    await rm(record.backup, { force: true });
+    throw new Error("Target disappeared before commit: " + record.target);
+  }
+  if (record.expectedDigest) {
+    const actual = await sha256File(record.target);
+    if (actual !== record.expectedDigest) {
+      throw new Error("Target changed immediately before commit: " + record.target);
+    }
+  }
+}
+
 export class TransactionalWriter {
   readonly journalDir: string;
 
@@ -175,35 +210,66 @@ export class TransactionalWriter {
 
     let committed = false;
     try {
+      // Validate the complete transaction before mutating any target. This keeps
+      // failures in later records from needlessly disturbing earlier files.
       for (const record of records) {
         const existsNow = await exists(record.target);
         if (record.expectMissing && existsNow) throw new Error(`Target was created concurrently: ${record.target}`);
         if (record.hadOriginal !== existsNow) throw new Error(`Target existence changed concurrently: ${record.target}`);
-        if (record.hadOriginal) {
-          await rename(record.target, record.backup);
-          if (record.expectedDigest) {
-            const actual = await sha256File(record.backup);
-            if (actual !== record.expectedDigest) throw new Error(`Target changed after preflight: ${record.target}`);
+        if (record.hadOriginal && record.expectedDigest) {
+          const actual = await sha256File(record.target);
+          if (actual !== record.expectedDigest) throw new Error(`Target changed after preflight: ${record.target}`);
+        }
+      }
+
+      // Keep the live pathname in place while creating rollback state. The old
+      // implementation renamed target -> backup here, leaving a visible ENOENT
+      // window before the staged replacement was installed.
+      for (const record of records) {
+        if (!record.hadOriginal) continue;
+        await createRollbackBackup(record.target, record.backup);
+        if (record.expectedDigest) {
+          const [targetDigest, backupDigest] = await Promise.all([
+            sha256File(record.target),
+            sha256File(record.backup),
+          ]);
+          if (targetDigest !== record.expectedDigest || backupDigest !== record.expectedDigest) {
+            throw new Error(`Target changed while preparing rollback state: ${record.target}`);
           }
         }
       }
+      for (const directory of new Set(records.filter(record => record.hadOriginal).map(record => path.dirname(record.target)))) {
+        await fsyncDir(directory);
+      }
+
+      // Install staged contents first. Replacing an existing target with a
+      // same-directory rename is atomic at the pathname level; create targets
+      // retain no-clobber semantics through link().
       for (const record of records) {
         if (!record.stage) continue;
         if (record.expectMissing) {
-          // rename() replaces an existing target. A hard-link install gives
-          // create and move destinations the required no-clobber semantics.
           await link(record.stage, record.target);
-          record.installed = true;
-          await atomicWriteJson(journalPath, journal);
-          await fsyncDir(this.journalDir);
           await rm(record.stage, { force: true });
         } else {
+          await assertTargetUnchangedBeforeMutation(record);
           await rename(record.stage, record.target);
-          record.installed = true;
-          await atomicWriteJson(journalPath, journal);
-          await fsyncDir(this.journalDir);
         }
+        record.installed = true;
+        await atomicWriteJson(journalPath, journal);
+        await fsyncDir(this.journalDir);
       }
+
+      // Deletions (including move sources) are deliberately last so a move can
+      // transiently duplicate data but never transiently lose both pathnames.
+      for (const record of records) {
+        if (record.stage || !record.hadOriginal) continue;
+        await assertTargetUnchangedBeforeMutation(record);
+        await rm(record.target);
+        record.installed = true;
+        await atomicWriteJson(journalPath, journal);
+        await fsyncDir(this.journalDir);
+      }
+
       for (const directory of new Set(records.map(record => path.dirname(record.target)))) await fsyncDir(directory);
       journal.state = "committed";
       await atomicWriteJson(journalPath, journal);
@@ -238,22 +304,34 @@ export class TransactionalWriter {
     for (const record of [...journal.records].reverse()) {
       const backupExists = await exists(record.backup);
       const targetExists = await exists(record.target);
-      if (backupExists) {
-        if (targetExists) {
-          const installed = record.installed || (record.installedDigest && await this.#matchesDigest(record.target, record.installedDigest));
-          // Do not delete a target that appeared while this transaction was
-          // preparing. It may belong to another writer.
-          if (!installed) continue;
+      const targetIsInstalled = targetExists
+        && record.installedDigest !== undefined
+        && await this.#matchesDigest(record.target, record.installedDigest);
+
+      if (record.hadOriginal && backupExists) {
+        if (!targetExists) {
+          // A delete was applied (or an older writer had already moved the
+          // original aside). Restore the durable rollback copy.
+          await rename(record.backup, record.target);
+        } else if (targetIsInstalled) {
+          // Our staged replacement is still present. Replace it with the old
+          // file. Never use the journal flag alone here: another process may
+          // have modified the target after our rename.
           await rm(record.target, { force: true });
+          await rename(record.backup, record.target);
+        } else {
+          // The original target is still visible, or another writer changed it.
+          // Preserve that live file and discard only our redundant rollback copy.
+          await rm(record.backup, { force: true });
         }
-        await rename(record.backup, record.target);
-      } else if (!record.hadOriginal && targetExists) {
-        const installed = record.installed
-          || (!record.stage && record.installedDigest && await this.#matchesDigest(record.target, record.installedDigest))
-          || (record.stage && await this.#sameFile(record.stage, record.target));
-        if (installed) await rm(record.target, { force: true });
+      } else if (!record.hadOriginal && targetIsInstalled) {
+        // Roll back a create only when the live target is byte-for-byte the
+        // content this transaction installed. Never remove a concurrent writer.
+        await rm(record.target, { force: true });
       }
+
       if (record.stage) await rm(record.stage, { force: true });
+      if (await exists(record.backup)) await rm(record.backup, { force: true });
     }
     await rm(journalPath, { force: true });
   }
@@ -261,15 +339,6 @@ export class TransactionalWriter {
   async #matchesDigest(file: string, expected: string): Promise<boolean> {
     try {
       return await sha256File(file) === expected;
-    } catch {
-      return false;
-    }
-  }
-
-  async #sameFile(left: string, right: string): Promise<boolean> {
-    try {
-      const [leftStat, rightStat] = await Promise.all([stat(left), stat(right)]);
-      return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
     } catch {
       return false;
     }

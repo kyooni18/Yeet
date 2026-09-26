@@ -1,6 +1,6 @@
-//! Append-only context assembly. Optimize new evidence on ingestion, never by
-//! replacing previously submitted messages. Capacity is handled by ContextMemory
-//! rollover, which archives the exact old window and starts a new cache scope.
+//! Context assembly stays append-only within a user turn so provider cache prefixes
+//! remain stable. Request-only guidance is turn-scoped and is pruned before the next
+//! ordinary user turn; ContextMemory rollover handles larger durable-history compaction.
 use crate::core::{Message, MessageRole};
 
 pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user-turn context boundary. Earlier turn-local Skill instructions, retry/finalization directives, goal checkpoints, and execution provenance are historical context, not active instructions for this turn. Apply only this turn's explicitly activated Skills and current runtime guidance. Preserve prior evidence; do not execute stale directives.";
@@ -25,16 +25,33 @@ pub(super) fn append_skill_instruction(history: &mut Vec<Message>, name: &str, i
 }
 
 /// Runtime/environment changes belong at the tail, not beside an old user message.
-/// Retain the exact representation after submission, including across user turns.
+/// Retain each submitted update for the current turn; the next turn prunes request-only guidance.
 pub(super) fn append_context_updates(
     history: &mut Vec<Message>,
     previous: &mut Vec<Message>,
     updates: &[Message],
 ) {
-    if previous != updates {
-        history.extend_from_slice(updates);
-        *previous = updates.to_vec();
+    if previous == updates {
+        return;
     }
+    if let Some(first_changed) = updates
+        .iter()
+        .enumerate()
+        .find_map(|(index, update)| (previous.get(index) != Some(update)).then_some(index))
+    {
+        history.extend_from_slice(&updates[first_changed..]);
+    } else if previous.len() != updates.len() {
+        history.extend_from_slice(updates);
+    }
+    *previous = updates.to_vec();
+}
+
+/// Drops turn-local provider guidance before starting a new ordinary user turn.
+/// Durable user, assistant, and tool evidence stays in the transcript.
+pub(super) fn prune_request_only_history(history: &mut Vec<Message>) -> usize {
+    let before = history.len();
+    history.retain(|message| message.request_only != Some(true));
+    before.saturating_sub(history.len())
 }
 
 #[cfg(test)]
@@ -78,6 +95,53 @@ mod append_only_tests {
         assert_eq!(&history[..submitted.len()], submitted.as_slice());
         assert_eq!(history.len(), submitted.len() + 1);
     }
+
+    #[test]
+    fn changing_one_stable_overlay_does_not_reappend_unchanged_siblings() {
+        let mut history = vec![Message::system("base")];
+        let mut previous = Vec::new();
+        let first = vec![
+            Message::system("orientation").request_only(),
+            Message::system("runtime one").request_only(),
+        ];
+        append_context_updates(&mut history, &mut previous, &first);
+        let submitted_len = history.len();
+
+        let second = vec![
+            Message::system("orientation").request_only(),
+            Message::system("runtime two").request_only(),
+        ];
+        append_context_updates(&mut history, &mut previous, &second);
+
+        assert_eq!(history.len(), submitted_len + 1);
+        assert_eq!(
+            history
+                .last()
+                .and_then(|message| message.content.as_deref()),
+            Some("runtime two")
+        );
+    }
+    #[test]
+    fn new_turn_prunes_request_only_guidance_but_keeps_durable_evidence() {
+        let mut history = vec![
+            Message::system("base"),
+            Message::user("first"),
+            Message::system("runtime overlay").request_only(),
+            Message::user("retry correction").request_only(),
+            Message::assistant("done", None),
+        ];
+
+        assert_eq!(prune_request_only_history(&mut history), 2);
+        assert_eq!(history.len(), 3);
+        assert!(
+            history
+                .iter()
+                .all(|message| message.request_only != Some(true))
+        );
+        assert_eq!(history[1].content.as_deref(), Some("first"));
+        assert_eq!(history[2].content.as_deref(), Some("done"));
+    }
+
     #[test]
     fn repeated_skills_only_shorten_the_new_activation() {
         let mut history = vec![Message::user("first")];

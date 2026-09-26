@@ -7,11 +7,12 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('focused mobile controls cannot scroll the document or pan the picker shell', async ({ page }, testInfo) => {
+test('focused mobile controls keep the document fixed while the model sheet pans internally', async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith('mobile-'))
 
-  const textarea = page.getByRole('textbox', { name: 'Message Yeet' })
+  const textarea = page.getByRole('textbox', { name: 'Message' })
   await textarea.focus()
+
   await page.evaluate(() => {
     window.scrollTo(0, 200)
     document.documentElement.scrollTop = 200
@@ -21,16 +22,32 @@ test('focused mobile controls cannot scroll the document or pan the picker shell
   await expect.poll(() => page.evaluate(() => ({
     scrollX: window.scrollX,
     scrollY: window.scrollY,
-    htmlPosition: getComputedStyle(document.documentElement).position,
-    bodyPosition: getComputedStyle(document.body).position,
-    appPosition: getComputedStyle(document.querySelector('#app')!).position,
-  }))).toEqual({ scrollX: 0, scrollY: 0, htmlPosition: 'fixed', bodyPosition: 'fixed', appPosition: 'fixed' })
+    htmlOverflow: getComputedStyle(document.documentElement).overflow,
+    bodyOverflow: getComputedStyle(document.body).overflow,
+  }))).toEqual({
+    scrollX: 0,
+    scrollY: 0,
+    htmlOverflow: 'hidden',
+    bodyOverflow: 'hidden',
+  })
 
-  const picker = page.locator('.top-bar').getByTestId('model-picker')
-  await picker.getByTestId('model-picker-trigger').click()
-  await expect(picker.getByTestId('model-search')).toBeFocused()
-  await expect.poll(() => picker.evaluate((root) => ({
-    pickerTouchAction: getComputedStyle(root).touchAction,
-    listTouchAction: getComputedStyle(root.querySelector('.model-picker-list')!).touchAction,
-  }))).toEqual({ pickerTouchAction: 'none', listTouchAction: 'pan-y' })
+  await page.getByRole('button', { name: /Choose model, current/ }).click()
+  const dialog = page.getByRole('dialog', { name: 'Choose model' })
+  const search = dialog.getByPlaceholder('Search models')
+  await expect(dialog).toBeVisible()
+  await expect(search).toBeFocused()
+
+  await expect.poll(() => dialog.evaluate((root) => ({
+    sheetTouchAction: getComputedStyle(root).touchAction,
+    listTouchAction: getComputedStyle(root.querySelector('.model-sheet__scroll')!).touchAction,
+    searchFontSize: Number.parseFloat(getComputedStyle(root.querySelector<HTMLInputElement>('input[placeholder="Search models"]')!).fontSize),
+  }))).toEqual({
+    sheetTouchAction: 'pinch-zoom',
+    listTouchAction: 'pan-y pinch-zoom',
+    searchFontSize: 16,
+  })
+
+  const viewport = page.viewportSize()!
+  const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth)
+  expect(documentWidth).toBeLessThanOrEqual(viewport.width)
 })

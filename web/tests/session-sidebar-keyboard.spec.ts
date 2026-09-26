@@ -1,14 +1,13 @@
 import { expect, test, type Page } from '@playwright/test'
 import { installMockRemote } from './mockRemote'
 
-async function sessionSurface(page: Page) {
-  const persistent = page.locator('.desktop-session-sidebar')
-  if (await persistent.isVisible()) return persistent
+type Hooks = { __yeetEmit: (message: Record<string, unknown>) => void }
 
-  await page.getByTestId('open-sessions').click()
-  const drawer = page.locator('.session-sidebar.is-drawer')
-  await expect(drawer).toBeVisible()
-  return drawer
+async function openSessions(page: Page) {
+  await page.getByRole('button', { name: 'Open sidebar' }).click()
+  const sidebar = page.locator('.remote-sidebar')
+  await expect(sidebar).toBeVisible()
+  return sidebar
 }
 
 test.beforeEach(async ({ page }) => {
@@ -17,51 +16,51 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('workspace navigation supports arrows and Home/End without removing Tab traversal', async ({ page }) => {
-  const sidebar = await sessionSurface(page)
-  const list = sidebar.getByTestId('workspace-list')
-  const buttons = list.locator('button:not(:disabled):visible')
-  const count = await buttons.count()
-  expect(count).toBeGreaterThanOrEqual(3)
+test('session drawer follows normal keyboard traversal and Escape dismissal', async ({ page }) => {
+  const sidebar = await openSessions(page)
+  const workspace = sidebar.locator('.workspace-picker__button')
+  await workspace.focus()
+  await expect(workspace).toBeFocused()
 
-  await buttons.first().focus()
-  await page.keyboard.press('ArrowDown')
-  await expect(buttons.nth(1)).toBeFocused()
-  await page.keyboard.press('ArrowDown')
-  await expect(buttons.nth(2)).toBeFocused()
-  await page.keyboard.press('ArrowUp')
-  await expect(buttons.nth(1)).toBeFocused()
+  await page.keyboard.press('Tab')
+  const focusedInside = await sidebar.evaluate((element) => element.contains(document.activeElement))
+  expect(focusedInside).toBe(true)
 
-  await page.keyboard.press('End')
-  await expect(buttons.nth(count - 1)).toBeFocused()
-  await page.keyboard.press('Home')
-  await expect(buttons.first()).toBeFocused()
-
-  const finePointer = await page.evaluate(() => matchMedia('(hover: hover) and (pointer: fine)').matches)
-  if (finePointer) {
-    await page.keyboard.press('Tab')
-    await expect(buttons.first()).not.toBeFocused()
-  }
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.remote-sidebar')).not.toHaveClass(/is-open/)
 })
 
-test('keyboard navigation scrolls offscreen workspaces into view', async ({ page }) => {
+test('keyboard focus can reach the end of a large scrollable workspace menu', async ({ page }) => {
   await page.evaluate(() => {
-    (window as unknown as { __yeetEmit: (message: unknown) => void }).__yeetEmit({
+    const emit = (window as unknown as Hooks).__yeetEmit
+    emit({
       type: 'state_update', version: 1, sequence: 2, revision: 2,
-      patch: { known_workspaces: Array.from({ length: 30 }, (_, index) => ({
-        id: `workspace-${index}`, path: `/work/${index}`, display_name: `Workspace ${index}`,
-        session_count: 0, is_current: false,
-      })) },
+      patch: {
+        known_workspaces: Array.from({ length: 30 }, (_, index) => ({
+          id: index === 0 ? '/Users/test/Code/Rust/Yeet' : `/work/${index}`,
+          path: index === 0 ? '/Users/test/Code/Rust/Yeet' : `/work/${index}`,
+          display_name: index === 0 ? 'Yeet' : `Workspace ${index}`,
+          session_count: 0,
+          is_current: index === 0,
+        })),
+      },
     })
   })
-  const sidebar = await sessionSurface(page)
-  const list = sidebar.getByTestId('workspace-list')
-  await list.locator('button').first().focus()
-  await page.keyboard.press('End')
-  const last = list.locator('button').last()
+
+  const sidebar = await openSessions(page)
+  await sidebar.locator('.workspace-picker__button').click()
+  const menu = sidebar.locator('.workspace-menu')
+  const buttons = menu.getByRole('button')
+  await expect(buttons).toHaveCount(30)
+
+  const last = buttons.last()
+  await last.focus()
   await expect(last).toBeFocused()
-  const bounds = await list.boundingBox()
+
+  const bounds = await menu.boundingBox()
   const item = await last.boundingBox()
+  expect(bounds).not.toBeNull()
+  expect(item).not.toBeNull()
   expect(item!.y).toBeGreaterThanOrEqual(bounds!.y)
   expect(item!.y + item!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height + 1)
 })

@@ -5,6 +5,449 @@
 
 use super::*;
 
+use std::fs;
+
+use regex::RegexBuilder;
+use sha2::{Digest, Sha256};
+
+use crate::edit::{ListFilesResult, ReadResult, SearchMatch, SearchResult, WorkspaceEntry};
+
+const WORKSPACE_IGNORED_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".yeet",
+    ".transactions",
+    ".build",
+    ".swiftpm",
+    ".cache",
+    ".next",
+    ".venv",
+    ".astro",
+    ".turbo",
+    ".vite",
+    "node_modules",
+    "dist",
+    "build",
+    "built",
+    "out",
+    "coverage",
+    "DerivedData",
+    "Pods",
+    "target",
+    "vendor",
+    "venv",
+];
+const WORKSPACE_SOURCE_DIRECTORIES: &[&str] = &[
+    "src",
+    "source",
+    "sources",
+    "packages",
+    "tests",
+    "test",
+    "runtimesource",
+];
+const WORKSPACE_SEARCH_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const WORKSPACE_SEARCH_MAX_FILES: usize = 10_000;
+
+fn normalize_edit_text(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw.as_ref());
+    raw.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn addressable_lines(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = text.split('\n').collect::<Vec<_>>();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    lines
+}
+
+fn local_snapshot_handle(text: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(text.as_bytes());
+    format!("r_{:x}", digest.finalize())
+}
+
+pub(super) fn is_local_snapshot(snapshot: &str) -> bool {
+    snapshot.starts_with("r_")
+}
+
+pub(super) fn local_snapshot_handle_for_path(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    Ok(local_snapshot_handle(&normalize_edit_text(&bytes)))
+}
+
+fn anchored_line(line_number: usize, line: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(line.as_bytes());
+    let hash = format!("{:x}", digest.finalize());
+    format!("{line_number}:{}|{line}", &hash[..4])
+}
+
+pub(super) fn read_file_in_process(
+    path: &Path,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> Result<ReadResult> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let text = normalize_edit_text(&bytes);
+    let lines = addressable_lines(&text);
+    let snapshot = local_snapshot_handle(&text);
+    if lines.is_empty() {
+        return Ok(ReadResult {
+            path: path.to_string_lossy().into_owned(),
+            snapshot,
+            start_line: 1,
+            end_line: 0,
+            total_lines: 0,
+            content: String::new(),
+            numbered: String::new(),
+            anchored: String::new(),
+        });
+    }
+
+    let start_line = start_line.unwrap_or(1);
+    let requested_end = end_line.unwrap_or_else(|| start_line.saturating_add(159));
+    if start_line < 1 || start_line > lines.len() || requested_end < start_line {
+        bail!(
+            "Invalid read range {start_line}..{requested_end}; file has {} lines.",
+            lines.len()
+        );
+    }
+    let end_line = requested_end.min(lines.len());
+    let selected = &lines[start_line - 1..end_line];
+    let content = selected.join("\n");
+    let numbered = selected
+        .iter()
+        .enumerate()
+        .map(|(offset, line)| format!("{}:{line}", start_line + offset))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let anchored = selected
+        .iter()
+        .enumerate()
+        .map(|(offset, line)| anchored_line(start_line + offset, line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ReadResult {
+        path: path.to_string_lossy().into_owned(),
+        snapshot,
+        start_line,
+        end_line,
+        total_lines: lines.len(),
+        content,
+        numbered,
+        anchored,
+    })
+}
+
+fn ignored_workspace_directory(name: &str) -> bool {
+    WORKSPACE_IGNORED_DIRECTORIES.contains(&name)
+}
+
+fn requested_path_hits_ignored_directory(path: &str) -> bool {
+    path.split(|character| character == '/' || character == '\\')
+        .any(ignored_workspace_directory)
+}
+
+fn workspace_entry_priority(name: &str) -> u8 {
+    let normalized = name.to_ascii_lowercase();
+    if WORKSPACE_SOURCE_DIRECTORIES.contains(&normalized.as_str()) {
+        0
+    } else if matches!(normalized.as_str(), "docs" | "examples") {
+        1
+    } else {
+        2
+    }
+}
+
+fn sorted_directory_entries(path: &Path) -> Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("read directory {}", path.display()))?
+        .filter_map(std::result::Result::ok)
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        let left_name = left.file_name().to_string_lossy().into_owned();
+        let right_name = right.file_name().to_string_lossy().into_owned();
+        workspace_entry_priority(&left_name)
+            .cmp(&workspace_entry_priority(&right_name))
+            .then_with(|| left_name.cmp(&right_name))
+    });
+    Ok(entries)
+}
+
+fn stable_display_path(root: &Path, path: &Path) -> Result<String> {
+    super::paths::stable_workspace_path_key(root, &path.to_string_lossy())
+}
+
+fn list_files_in_process(
+    root: &Path,
+    start: &Path,
+    max_results: usize,
+    max_depth: usize,
+) -> Result<ListFilesResult> {
+    fn walk(
+        root: &Path,
+        path: &Path,
+        depth: usize,
+        max_depth: usize,
+        max_results: usize,
+        entries: &mut Vec<WorkspaceEntry>,
+        result_limit_reached: &mut bool,
+        depth_limited: &mut bool,
+    ) -> Result<()> {
+        if *result_limit_reached {
+            return Ok(());
+        }
+        let metadata =
+            fs::symlink_metadata(path).with_context(|| format!("inspect {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Ok(());
+        }
+        if metadata.is_file() {
+            if entries.len() >= max_results {
+                *result_limit_reached = true;
+            } else {
+                entries.push(WorkspaceEntry {
+                    path: stable_display_path(root, path)?,
+                    kind: "file".into(),
+                });
+            }
+            return Ok(());
+        }
+        if !metadata.is_dir() {
+            return Ok(());
+        }
+
+        for entry in sorted_directory_entries(path)? {
+            if *result_limit_reached {
+                break;
+            }
+            let file_type = match entry.file_type() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() && ignored_workspace_directory(&name) {
+                continue;
+            }
+            let child = entry.path();
+            if entries.len() >= max_results {
+                *result_limit_reached = true;
+                break;
+            }
+            entries.push(WorkspaceEntry {
+                path: stable_display_path(root, &child)?,
+                kind: if file_type.is_dir() {
+                    "directory"
+                } else {
+                    "file"
+                }
+                .into(),
+            });
+            if file_type.is_dir() {
+                if depth < max_depth {
+                    walk(
+                        root,
+                        &child,
+                        depth + 1,
+                        max_depth,
+                        max_results,
+                        entries,
+                        result_limit_reached,
+                        depth_limited,
+                    )?;
+                } else if fs::read_dir(&child)
+                    .ok()
+                    .and_then(|mut entries| entries.next())
+                    .is_some()
+                {
+                    *depth_limited = true;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut entries = Vec::new();
+    let mut result_limit_reached = false;
+    let mut depth_limited = false;
+    walk(
+        root,
+        start,
+        0,
+        max_depth,
+        max_results,
+        &mut entries,
+        &mut result_limit_reached,
+        &mut depth_limited,
+    )?;
+    Ok(ListFilesResult {
+        entries,
+        truncated: result_limit_reached || depth_limited,
+        result_limit_reached,
+        depth_limited,
+    })
+}
+
+fn search_workspace_in_process(
+    root: &Path,
+    start: &Path,
+    query: &str,
+    max_results: usize,
+    case_sensitive: bool,
+    regex: bool,
+) -> Result<SearchResult> {
+    let expression = if regex {
+        if query.len() > 1024 {
+            bail!("Search regex is too long (maximum 1024 characters).");
+        }
+        Some(
+            RegexBuilder::new(query)
+                .case_insensitive(!case_sensitive)
+                .build()
+                .map_err(|error| anyhow!("Invalid search regex: {error}"))?,
+        )
+    } else {
+        None
+    };
+    let needle = if case_sensitive {
+        query.to_owned()
+    } else {
+        query.to_lowercase()
+    };
+    let mut matches = Vec::new();
+    let mut files_scanned = 0usize;
+    let mut truncated = false;
+
+    fn walk(
+        root: &Path,
+        path: &Path,
+        expression: Option<&regex::Regex>,
+        needle: &str,
+        case_sensitive: bool,
+        max_results: usize,
+        matches: &mut Vec<SearchMatch>,
+        files_scanned: &mut usize,
+        truncated: &mut bool,
+    ) -> Result<()> {
+        if *truncated {
+            return Ok(());
+        }
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(value) => value,
+            Err(_) => return Ok(()),
+        };
+        if metadata.file_type().is_symlink() {
+            return Ok(());
+        }
+        if metadata.is_file() {
+            if *files_scanned >= WORKSPACE_SEARCH_MAX_FILES || matches.len() >= max_results {
+                *truncated = true;
+                return Ok(());
+            }
+            if metadata.len() > WORKSPACE_SEARCH_MAX_FILE_BYTES {
+                return Ok(());
+            }
+            *files_scanned += 1;
+            let bytes = match fs::read(path) {
+                Ok(value) => value,
+                Err(_) => return Ok(()),
+            };
+            if bytes.contains(&0) {
+                return Ok(());
+            }
+            let text = normalize_edit_text(&bytes);
+            for (index, line) in text.split('\n').enumerate() {
+                let matched = if let Some(expression) = expression {
+                    expression.is_match(line)
+                } else if case_sensitive {
+                    line.contains(needle)
+                } else {
+                    line.to_lowercase().contains(needle)
+                };
+                if !matched {
+                    continue;
+                }
+                let text = if line.chars().count() <= 320 {
+                    line.to_owned()
+                } else {
+                    format!("{}...", line.chars().take(317).collect::<String>())
+                };
+                matches.push(SearchMatch {
+                    path: stable_display_path(root, path)?,
+                    line: index + 1,
+                    text,
+                });
+                if matches.len() >= max_results {
+                    *truncated = true;
+                    break;
+                }
+            }
+            return Ok(());
+        }
+        if !metadata.is_dir() {
+            return Ok(());
+        }
+        for entry in sorted_directory_entries(path)? {
+            if *truncated {
+                break;
+            }
+            let file_type = match entry.file_type() {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() && ignored_workspace_directory(&name) {
+                continue;
+            }
+            walk(
+                root,
+                &entry.path(),
+                expression,
+                needle,
+                case_sensitive,
+                max_results,
+                matches,
+                files_scanned,
+                truncated,
+            )?;
+        }
+        Ok(())
+    }
+
+    walk(
+        root,
+        start,
+        expression.as_ref(),
+        &needle,
+        case_sensitive,
+        max_results,
+        &mut matches,
+        &mut files_scanned,
+        &mut truncated,
+    )?;
+    matches.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.line.cmp(&right.line))
+    });
+    Ok(SearchResult {
+        matches,
+        files_scanned,
+        truncated,
+    })
+}
+
 impl ToolRegistry {
     /// Reads one bounded file range or dispatches a small batch of independent reads.
     pub(super) fn read_file(&mut self, object: &Map<String, Value>) -> Result<String> {
@@ -27,8 +470,6 @@ impl ToolRegistry {
             .into_owned();
         self.ensure_file_scope(&path, false)?;
         let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
-        let unsafe_access =
-            SandboxStore::new(&self.workspace_root)?.load()?.mode == SandboxMode::Unlimited;
         let requested_start = usize_arg(object, "startLine").unwrap_or(1).max(1);
         let explicit_end = usize_arg(object, "endLine");
         if explicit_end.is_some_and(|end| end < requested_start) {
@@ -60,13 +501,8 @@ impl ToolRegistry {
         let covered_before = covered_ranges_within(&cached_before, requested_start, bounded_end);
 
         if refresh {
-            let mut read = self.edit_mut()?.read(
-                &path,
-                Some(requested_start),
-                Some(requested_end),
-                unsafe_access,
-            )?;
-            self.sync_edit_state();
+            let mut read =
+                read_file_in_process(Path::new(&path), Some(requested_start), Some(requested_end))?;
             read.path = cache_path.clone();
             let refreshed_snapshot = read.snapshot.clone();
             let refreshed_total = read.total_lines;
@@ -91,7 +527,12 @@ impl ToolRegistry {
                 }
                 return Ok(duplicate.to_string());
             }
-            return self.externalize_if_large(payload, threshold, Some(&read));
+            let result = self.externalize_if_large(payload, threshold, Some(&read))?;
+            if result.contains("\"externalized\":true") {
+                trim_cache_to_preview(&mut self.read_cache, &cache_path, &result);
+            }
+            self.record_edit_read_coverage(&cache_path, &read.snapshot);
+            return Ok(result);
         }
 
         let missing = uncovered_ranges(requested_start, bounded_end, &covered_before);
@@ -110,10 +551,7 @@ impl ToolRegistry {
                 }
                 end = end.min(total);
             }
-            let mut read = self
-                .edit_mut()?
-                .read(&path, Some(start), Some(end), unsafe_access)?;
-            self.sync_edit_state();
+            let mut read = read_file_in_process(Path::new(&path), Some(start), Some(end))?;
             read.path = cache_path.clone();
             total = Some(read.total_lines);
             new_entries.push(cache_read_result(&mut self.read_cache, read));
@@ -140,7 +578,12 @@ impl ToolRegistry {
                     object.insert("hint".into(), json!("Only previously unseen source is returned. Reuse the covered ranges already present in context."));
                 }
             }
-            return self.externalize_if_large(payload, threshold, None);
+            let result = self.externalize_if_large(payload, threshold, None)?;
+            if result.contains("\"externalized\":true") {
+                trim_cache_to_preview(&mut self.read_cache, &cache_path, &result);
+            }
+            self.record_edit_read_coverage(&cache_path, &entry.snapshot);
+            return Ok(result);
         }
 
         let entries = self
@@ -167,7 +610,14 @@ impl ToolRegistry {
             "nextStartLine": next_uncovered(total, entries),
             "hint": "Only previously unseen source segments are returned. Reuse covered ranges already present in context."
         });
-        self.externalize_if_large(payload, threshold, None)
+        let result = self.externalize_if_large(payload, threshold, None)?;
+        if result.contains("\"externalized\":true") {
+            trim_cache_to_preview(&mut self.read_cache, &cache_path, &result);
+        }
+        if let Some(snapshot) = new_entries.last().map(|entry| entry.snapshot.clone()) {
+            self.record_edit_read_coverage(&cache_path, &snapshot);
+        }
+        Ok(result)
     }
 
     /// Executes up to eight independent file reads and returns one batched result.
@@ -205,6 +655,9 @@ impl ToolRegistry {
     pub(super) fn list_files(&mut self, object: &Map<String, Value>) -> Result<String> {
         let requested_path =
             root_capable_workspace_path(object.get("path").and_then(Value::as_str));
+        if requested_path_hits_ignored_directory(requested_path) {
+            bail!("List path points into generated or internal workspace state.");
+        }
         let path = self
             .resolve_session_path(requested_path)?
             .to_string_lossy()
@@ -217,21 +670,26 @@ impl ToolRegistry {
         if !self.listings.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This directory listing was already returned. Reuse it or expand a different subtree."}).to_string());
         }
-        let result = self
-            .edit_mut()?
-            .list_files(Some(&path), max_results, max_depth)?;
-        self.sync_edit_state();
+        let result = list_files_in_process(
+            &self.workspace_root,
+            Path::new(&path),
+            max_results,
+            max_depth,
+        )?;
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
     /// Searches workspace text with bounded results and duplicate-query suppression.
     pub(super) fn search_workspace(&mut self, object: &Map<String, Value>) -> Result<String> {
-        let query = string_arg(object, "query")?;
+        let query = string_arg(object, "query")?.trim();
         if query.is_empty() {
             bail!("search_workspace requires query");
         }
         let requested_path =
             root_capable_workspace_path(object.get("path").and_then(Value::as_str));
+        if requested_path_hits_ignored_directory(requested_path) {
+            bail!("Search path points into generated or internal workspace state.");
+        }
         let path = self
             .resolve_session_path(requested_path)?
             .to_string_lossy()
@@ -252,10 +710,14 @@ impl ToolRegistry {
         if !self.searches.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This search was already returned. Reuse it or change query/path."}).to_string());
         }
-        let result =
-            self.edit_mut()?
-                .search(query, Some(&path), max_results, case_sensitive, regex)?;
-        self.sync_edit_state();
+        let result = search_workspace_in_process(
+            &self.workspace_root,
+            Path::new(&path),
+            query,
+            max_results,
+            case_sensitive,
+            regex,
+        )?;
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
@@ -265,6 +727,9 @@ impl ToolRegistry {
         object: &Map<String, Value>,
         cancel: &AtomicBool,
     ) -> Result<String> {
+        if self.web_backend == ServiceBackend::Mcp {
+            return self.web_search_mcp(object, cancel);
+        }
         let queries = web_search_queries(object)?;
         let requested_max_results = usize_arg(object, "maxResults").unwrap_or(4);
         // Discovery snippets are only a source-selection surface. Bound the total
@@ -358,34 +823,146 @@ impl ToolRegistry {
         self.externalize_if_large(result, 16 * 1024, None)
     }
 
+    fn web_search_mcp(
+        &mut self,
+        object: &Map<String, Value>,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let server = self
+            .web_server
+            .clone()
+            .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
+        if self.capability_disabled("mcp", &server) {
+            bail!("MCP server {server} is disabled for this session");
+        }
+        let result = self.bridge_client()?.call_mcp_tool_cancellable(
+            &server,
+            "web_search",
+            object,
+            cancel,
+        )?;
+        if result.get("isError").and_then(Value::as_bool) == Some(true) {
+            bail!(
+                "Web MCP {server}/web_search: {}",
+                foundation_tool_result_text(&result)
+            );
+        }
+        collect_web_source_urls(&result, &mut self.web_sources);
+        let text = foundation_tool_result_text(&result);
+        if let Ok(payload) = serde_json::from_str::<Value>(&text) {
+            collect_web_source_urls(&payload, &mut self.web_sources);
+            return self.externalize_if_large(payload, 16 * 1024, None);
+        }
+        Ok(text)
+    }
+
     /// Reads a full source page only when it was discovered by the current web search task.
     pub(super) fn web_read(
         &mut self,
         object: &Map<String, Value>,
         cancel: &AtomicBool,
     ) -> Result<String> {
+        if self.web_backend == ServiceBackend::Mcp {
+            return self.web_read_mcp(object, cancel);
+        }
         let url = string_arg(object, "url")?.trim();
         if url.is_empty() {
             bail!("web_read requires a non-empty URL");
         }
         let source_key = canonical_web_source_key(url);
         if !self.web_sources.contains(&source_key) {
-            bail!(
+            let message = if self.artifacts_enabled {
                 "web_read may only open URLs returned by web_search in the current research task; search for this source first"
-            );
+            } else {
+                "web action=read may only open URLs returned by web action=search in the current research task; search for this source first"
+            };
+            bail!("{message}");
         }
         if self.web_reads.contains(&source_key) {
-            return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse its prior preview/artifact evidence instead of reopening it."}).to_string());
+            return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the evidence already returned instead of reopening it."}).to_string());
         }
         let max_chars = usize_arg(object, "maxChars")
             .unwrap_or(3_000)
             .clamp(2_000, 4_000);
-        // Fetch enough source text to preserve useful follow-up evidence, but
-        // expose only a bounded preview to the model. Larger fetched text is
-        // stored once as a session artifact instead of being replayed verbatim
-        // through every subsequent agent round.
+        // Fetch enough source text to preserve useful evidence while returning a
+        // bounded preview. Interactive sessions may retain the remainder as an
+        // artifact; direct MCP runtimes disable artifact storage.
         let result = self.web_search.read_url(url, 48_000, cancel)?;
         let rendered = self.bound_web_read_evidence(url, result, max_chars)?;
+        self.web_reads.insert(source_key);
+        Ok(rendered)
+    }
+
+    fn web_read_mcp(&mut self, object: &Map<String, Value>, cancel: &AtomicBool) -> Result<String> {
+        let url = string_arg(object, "url")?.trim();
+        if url.is_empty() {
+            bail!("web_read requires a non-empty URL");
+        }
+        crate::web_search::validate_public_http_url(url)?;
+        let source_key = canonical_web_source_key(url);
+        if !self.web_sources.contains(&source_key) {
+            let message = if self.artifacts_enabled {
+                "web_read may only open URLs returned by web_search in the current research task; search for this source first"
+            } else {
+                "web action=read may only open URLs returned by web action=search in the current research task; search for this source first"
+            };
+            bail!("{message}");
+        }
+        if self.web_reads.contains(&source_key) {
+            return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the evidence already returned instead of reopening it."}).to_string());
+        }
+        let server = self
+            .web_server
+            .clone()
+            .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
+        if self.capability_disabled("mcp", &server) {
+            bail!("MCP server {server} is disabled for this session");
+        }
+        let result = self
+            .bridge_client()?
+            .call_mcp_tool_cancellable(&server, "web_read", object, cancel)?;
+        if result.get("isError").and_then(Value::as_bool) == Some(true) {
+            bail!(
+                "Web MCP {server}/web_read: {}",
+                foundation_tool_result_text(&result)
+            );
+        }
+        let text = foundation_tool_result_text(&result);
+        let max_chars = usize_arg(object, "maxChars")
+            .unwrap_or(3_000)
+            .clamp(2_000, 4_000);
+        let rendered = if let Ok(payload) = serde_json::from_str::<Value>(&text) {
+            self.bound_web_read_evidence(url, payload, max_chars)?
+        } else {
+            let total_chars = text.chars().count();
+            if total_chars <= max_chars {
+                text
+            } else {
+                let preview = text.chars().take(max_chars).collect::<String>();
+                if self.artifacts_enabled {
+                    let artifact = self.artifacts.store(&text)?;
+                    json!({
+                        "url": url,
+                        "content": preview,
+                        "artifactId": artifact,
+                        "externalized": true,
+                        "characters": total_chars,
+                        "previewChars": max_chars,
+                        "previewTruncated": true
+                    })
+                    .to_string()
+                } else {
+                    json!({
+                        "url": url,
+                        "content": preview,
+                        "characters": total_chars,
+                        "previewChars": max_chars,
+                        "previewTruncated": true
+                    })
+                    .to_string()
+                }
+            }
+        };
         self.web_reads.insert(source_key);
         Ok(rendered)
     }
@@ -411,35 +988,41 @@ impl ToolRegistry {
             return Ok(serde_json::to_string(&result)?);
         }
 
-        let artifact = self.artifacts.store(&content)?;
         let preview = content.chars().take(max_chars).collect::<String>();
         object.insert("content".into(), json!(preview));
-        object.insert("artifactId".into(), json!(artifact));
-        object.insert("externalized".into(), json!(true));
         object.insert("characters".into(), json!(total_chars));
         object.insert("previewChars".into(), json!(max_chars));
         object.insert("previewTruncated".into(), json!(true));
-        object.insert(
-            "hint".into(),
-            json!("The fetched source text is stored as an artifact. Reuse this preview; use a narrow read_artifact range for a specific missing section, and search_artifact only when its location is unknown."),
-        );
+        if self.artifacts_enabled {
+            let artifact = self.artifacts.store(&content)?;
+            object.insert("artifactId".into(), json!(artifact));
+            object.insert("externalized".into(), json!(true));
+            object.insert(
+                "hint".into(),
+                json!("The fetched source text is stored as an artifact. Reuse this preview; retrieve the artifact only for a specific missing section."),
+            );
+        }
         object.entry("url").or_insert_with(|| json!(url));
         Ok(serde_json::to_string(&result)?)
     }
 
-    /// Extracts a supported document and stores the full text as a typed artifact.
+    /// Extracts a supported document and returns bounded readable content.
     pub(super) fn read_document_tool(&mut self, object: &Map<String, Value>) -> Result<String> {
         let path = string_arg(object, "path")?;
         self.ensure_file_scope(path, false)?;
         let resolved = self.resolve_local_path(path)?;
         let document = general::read_document(&resolved)?;
-        let artifact = self.artifacts.store_typed(
-            &document.text,
-            &document.kind,
-            &document.media_type,
-            Some(path),
-            document.metadata.clone(),
-        )?;
+        let artifact = if self.artifacts_enabled {
+            Some(self.artifacts.store_typed(
+                &document.text,
+                &document.kind,
+                &document.media_type,
+                Some(path),
+                document.metadata.clone(),
+            )?)
+        } else {
+            None
+        };
         let max_chars = usize_arg(object, "maxChars")
             .unwrap_or(8_000)
             .clamp(1_000, 64_000);
@@ -450,27 +1033,34 @@ impl ToolRegistry {
         } else {
             document.text.clone()
         };
-        Ok(json!({
-            "path":path,"artifactId":artifact,"artifactKind":document.kind,"mediaType":document.media_type,
-            "metadata":document.metadata,"characters":total_chars,"content":content,"truncated":truncated,
-            "hint":if truncated { "The full extracted document is stored as a typed artifact. Use a narrow read_artifact range for additional sections, and search_artifact only when a section's location is unknown." } else { "The extracted document is also stored as a typed artifact for follow-up inspection." }
-        }).to_string())
+        let mut payload = json!({
+            "path":path,"artifactKind":document.kind,"mediaType":document.media_type,
+            "metadata":document.metadata,"characters":total_chars,"content":content,"truncated":truncated
+        });
+        if let Some(artifact) = artifact
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert("artifactId".into(), json!(artifact));
+        }
+        Ok(payload.to_string())
     }
 
-    /// Runs a bounded data-analysis operation and stores its full result as JSON artifact.
+    /// Runs a bounded data-analysis operation.
     pub(super) fn analyze_data_tool(&mut self, object: &Map<String, Value>) -> Result<String> {
         let path = string_arg(object, "path")?;
         self.ensure_file_scope(path, false)?;
         let resolved = self.resolve_local_path(path)?;
         let result = general::analyze_data(&resolved, object)?;
-        let rendered = serde_json::to_string_pretty(&result)?;
-        let artifact = self.artifacts.store_typed(&rendered, "data-analysis", "application/json", Some(path), json!({
-            "operation":object.get("operation").and_then(Value::as_str).unwrap_or("describe"),"sheet":object.get("sheet"),
-        }))?;
         let mut payload = result.as_object().cloned().unwrap_or_default();
         payload.insert("path".into(), json!(path));
-        payload.insert("artifactId".into(), json!(artifact));
-        payload.insert("artifactKind".into(), json!("data-analysis"));
+        if self.artifacts_enabled {
+            let rendered = serde_json::to_string_pretty(&result)?;
+            let artifact = self.artifacts.store_typed(&rendered, "data-analysis", "application/json", Some(path), json!({
+                "operation":object.get("operation").and_then(Value::as_str).unwrap_or("describe"),"sheet":object.get("sheet"),
+            }))?;
+            payload.insert("artifactId".into(), json!(artifact));
+            payload.insert("artifactKind".into(), json!("data-analysis"));
+        }
         self.externalize_if_large(Value::Object(payload), 12 * 1024, None)
     }
 
@@ -491,7 +1081,7 @@ impl ToolRegistry {
         if !relative.starts_with("scripts/") {
             bail!("Skill script path must be under scripts/");
         }
-        let skill = self.bridge.load_skill(skill_name)?;
+        let skill = self.bridge_client()?.load_skill(skill_name)?;
         if !skill.files.iter().any(|path| path == relative) {
             bail!("Unknown script for Skill {skill_name}: {relative}");
         }
@@ -581,4 +1171,53 @@ fn effective_web_search_max_results(requested: usize, query_count: usize) -> usi
     let requested = requested.clamp(1, 8);
     let per_query_budget = (8 / query_count.max(1)).max(1);
     requested.min(per_query_budget)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_workspace_tools_do_not_start_sidecars() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        fs::write(root.join("src/example.rs"), "hello world\nsecond line\n").unwrap();
+        fs::write(root.join("node_modules/pkg/hidden.js"), "hello hidden\n").unwrap();
+
+        let workers = WorkerRegistry::new(Vec::new()).unwrap();
+        let mut registry = ToolRegistry::new_with_bridge_handle(
+            BridgeHandle::lazy_for_workspace(root.clone()),
+            root,
+            workers,
+            PermissionBroker::default(),
+        )
+        .unwrap();
+
+        let read = json!({"path":"src/example.rs","startLine":1,"endLine":1});
+        let read = registry.read_file(read.as_object().unwrap()).unwrap();
+        assert!(read.contains("hello world"), "{read}");
+        assert!(!registry.bridge.is_started());
+        assert!(!registry.is_edit_started());
+
+        let list = json!({"path":".","maxDepth":3,"maxResults":100});
+        let list = registry.list_files(list.as_object().unwrap()).unwrap();
+        assert!(list.contains("src/example.rs"), "{list}");
+        assert!(!list.contains("node_modules"), "{list}");
+        assert!(!registry.bridge.is_started());
+        assert!(!registry.is_edit_started());
+
+        let search = json!({"path":".","query":"hel.o world","regex":true});
+        let search = registry
+            .search_workspace(search.as_object().unwrap())
+            .unwrap();
+        assert!(search.contains("src/example.rs"), "{search}");
+        assert!(!search.contains("hidden.js"), "{search}");
+        assert!(!registry.bridge.is_started());
+        assert!(!registry.is_edit_started());
+
+        let generated = json!({"path":"node_modules"});
+        assert!(registry.list_files(generated.as_object().unwrap()).is_err());
+    }
 }

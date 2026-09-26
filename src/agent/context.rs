@@ -18,12 +18,27 @@ struct Window {
     number: usize,
 }
 #[derive(Clone, Serialize, Deserialize)]
+struct AgentCheckpoint {
+    objective: String,
+    phase: String,
+    successful_mutations: usize,
+    unresolved_failed_mutation: bool,
+    verification_attempted: bool,
+    verification_succeeded: bool,
+    last_validation: Option<String>,
+    recent_evidence: Vec<String>,
+    workspace_state: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct State {
     windows: Vec<Window>,
     notes: BTreeMap<String, String>,
     active: Vec<Message>,
     #[serde(default)]
     goal: Option<super::goal::GoalJob>,
+    #[serde(default)]
+    agent_checkpoint: Option<AgentCheckpoint>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -35,6 +50,7 @@ impl Default for State {
             notes: BTreeMap::new(),
             active: Vec::new(),
             goal: None,
+            agent_checkpoint: None,
         }
     }
 }
@@ -57,6 +73,75 @@ impl ContextMemory {
     pub fn goal_mut(&mut self) -> Option<&mut super::goal::GoalJob> {
         self.dirty = true;
         self.state.goal.as_mut()
+    }
+
+    pub(super) fn set_agent_checkpoint(
+        &mut self,
+        objective: &str,
+        phase: &str,
+        successful_mutations: usize,
+        unresolved_failed_mutation: bool,
+        verification_attempted: bool,
+        verification_succeeded: bool,
+        last_validation: Option<&str>,
+        recent_evidence: &[String],
+        workspace_state: Option<&str>,
+    ) {
+        let evidence_start = recent_evidence.len().saturating_sub(8);
+        self.state.agent_checkpoint = Some(AgentCheckpoint {
+            objective: bounded(objective, 768),
+            phase: phase.to_owned(),
+            successful_mutations,
+            unresolved_failed_mutation,
+            verification_attempted,
+            verification_succeeded,
+            last_validation: last_validation.map(|value| bounded(value, 768)),
+            recent_evidence: recent_evidence[evidence_start..]
+                .iter()
+                .map(|value| bounded(value, 768))
+                .collect(),
+            workspace_state: workspace_state.map(|value| bounded(value, 6 * 1024)),
+        });
+        self.dirty = true;
+    }
+
+    pub(super) fn agent_checkpoint_summary(&self) -> Option<String> {
+        let checkpoint = self.state.agent_checkpoint.as_ref()?;
+        let mut lines = vec![
+            "Durable agent checkpoint (coordinator-observed state):".to_owned(),
+            format!("objective={:?}", checkpoint.objective),
+            format!(
+                "phase={} successfulWorkspaceMutations={} unresolvedFailedMutation={} verificationAttempted={} verificationSucceeded={}",
+                checkpoint.phase,
+                checkpoint.successful_mutations,
+                checkpoint.unresolved_failed_mutation,
+                checkpoint.verification_attempted,
+                checkpoint.verification_succeeded
+            ),
+        ];
+        if let Some(validation) = checkpoint.last_validation.as_deref() {
+            lines.push(format!("lastValidation={validation}"));
+        }
+        if !checkpoint.recent_evidence.is_empty() {
+            lines.push("Recent execution evidence:".to_owned());
+            lines.extend(
+                checkpoint
+                    .recent_evidence
+                    .iter()
+                    .map(|evidence| format!("- {evidence}")),
+            );
+        }
+        if let Some(workspace_state) = checkpoint.workspace_state.as_deref() {
+            lines.push("Workspace evidence captured with checkpoint:".to_owned());
+            lines.push(workspace_state.to_owned());
+        }
+        Some(lines.join("\n"))
+    }
+
+    pub(super) fn clear_agent_checkpoint(&mut self) {
+        if self.state.agent_checkpoint.take().is_some() {
+            self.dirty = true;
+        }
     }
 
     pub fn start_goal(&mut self, objective: &str, continuation: bool) -> String {
@@ -180,13 +265,17 @@ impl ContextMemory {
             self.root.is_some(),
             "Context rollover requires a saved session"
         );
-        write_json(
-            self.root
-                .as_ref()
-                .unwrap()
-                .join(format!("{}.json", self.id())),
-            history,
-        )?;
+        let archive_path = self
+            .root
+            .as_ref()
+            .unwrap()
+            .join(format!("{}.json", self.id()));
+        ensure!(
+            !archive_path.exists(),
+            "Archived context window is immutable and already exists: {}",
+            archive_path.display()
+        );
+        write_json_new(archive_path, history)?;
         let old = self.state.clone();
         self.state.windows.push(Window {
             id: Uuid::new_v4().to_string(),
@@ -228,7 +317,7 @@ impl ContextMemory {
             String::new()
         };
         format!(
-            "Context window: previous={}; current={}; window={}; budget={budget}. The runtime preserves the current context and bounded notes; recover prior session/project context only when the user explicitly asks for it or the runtime reports a rollover.{hint_section}",
+            "Context window: previous={}; current={}; window={}; budget={budget}. Archived windows are immutable. Continue from the current handoff and evidence already visible in this window; context history and task notes are side recovery paths, so open older state only for a specific missing detail.{hint_section}",
             windows
                 .iter()
                 .rev()
@@ -339,6 +428,24 @@ impl ContextMemory {
                     if op == "search" {
                         ensure!(!arg(a, "query")?.is_empty(), "query must not be empty");
                     }
+
+                    let include_tool_messages = a
+                        .get("includeToolMessages")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        || a.get("role").and_then(Value::as_str) == Some("tool")
+                        || a.get("toolName").is_some();
+
+                    let include_assistant_messages = a
+                        .get("includeAssistantMessages")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        || a.get("role").and_then(Value::as_str) == Some("assistant");
+
+                    let include_active_window = a
+                        .get("includeActiveWindow")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     let offset = a.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
                     let mut found = Vec::new();
                     let mut skipped = 0;
@@ -347,6 +454,10 @@ impl ContextMemory {
                             .and_then(Value::as_str)
                             .is_some_and(|id| id != window.id)
                         {
+                            continue;
+                        }
+
+                        if op != "read" && window.id == self.id() && !include_active_window {
                             continue;
                         }
                         let items = if window.id == self.id() {
@@ -360,6 +471,19 @@ impl ContextMemory {
                             )?)?
                         };
                         for (index, item) in items.iter().enumerate() {
+                            if op != "read"
+                                && item.role == MessageRole::Tool
+                                && !include_tool_messages
+                            {
+                                continue;
+                            }
+
+                            if op != "read"
+                                && item.role == MessageRole::Assistant
+                                && !include_assistant_messages
+                            {
+                                continue;
+                            }
                             let serialized = serde_json::to_value(item)?;
                             let text = serde_json::to_string(item)?;
                             if a.get("role")
@@ -444,6 +568,21 @@ fn write_json(path: PathBuf, value: &(impl Serialize + ?Sized)) -> Result<()> {
     fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
+
+fn write_json_new(path: PathBuf, value: &(impl Serialize + ?Sized)) -> Result<()> {
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent)?;
+    set_private_directory(parent)?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    serde_json::to_writer(&mut temp, value)?;
+    temp.flush()?;
+    temp.as_file().sync_all()?;
+    temp.persist_noclobber(&path)?;
+
+    set_private_file(&path)?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
 /// Image bytes are transport payload, not text tokens. Use a conservative
 /// per-image allowance until provider-specific image accounting is available.
 pub(super) fn estimate_messages(messages: &[Message]) -> Result<u64> {
@@ -468,23 +607,23 @@ pub(super) fn tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition::new(
             "context_status",
-            "Show current context window and estimated remaining budget.",
+            "Side context diagnostic: show the current window and estimated remaining budget.",
             json!({"type":"object","properties":{}}),
         ),
         ToolDefinition::new(
             "new_context",
-            "Roll to a new context after this tool batch. Save task_notes first; old evidence remains retrievable.",
+            "Side context control: roll after this tool batch. The archived window becomes immutable; the coordinator carries execution state into the new window.",
             json!({"type":"object","properties":{}}),
         ),
         ToolDefinition::new(
             "task_notes",
-            "Session-local list/read/search/append/replace notes for constraints, decisions, failures, and next steps. Reads page by character offset (8192 chars).",
+            "Side session scratchpad for list/read/search/append/replace of constraints, decisions, failures, and next steps. Reads page by character offset (8192 chars).",
             json!({"type":"object","properties":{"operation":{"type":"string","enum":["list","read","search","append","replace"]},"name":{"type":"string"},"content":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["operation"]}),
         ),
         ToolDefinition::new(
             "context_history",
-            "Read original session history. windows lists windows; list/search return 20 refs; read uses windowId/item and 8192-char paging. Search is literal; role/toolName filters are optional.",
-            json!({"type":"object","properties":{"operation":{"type":"string","enum":["windows","list","search","read"]},"windowId":{"type":"string"},"item":{"type":"integer","minimum":0},"query":{"type":"string"},"role":{"type":"string"},"toolName":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["operation"]}),
+            "Side recovery read of archived immutable session windows. windows lists windows; list/search skip the active model-visible window and recover archived user/system conversational state by default. Assistant history, archived tool output, and active-window lookup are explicit opt-in surfaces via role/includeAssistantMessages/includeToolMessages/includeActiveWindow. read uses a known windowId/item and 8192-char paging. Never use archived assistant/tool output as current workspace source.",
+            json!({"type":"object","properties":{"operation":{"type":"string","enum":["windows","list","search","read"]},"windowId":{"type":"string"},"item":{"type":"integer","minimum":0},"query":{"type":"string"},"role":{"type":"string"},"toolName":{"type":"string"},"includeActiveWindow":{"type":"boolean"},"includeAssistantMessages":{"type":"boolean"},"includeToolMessages":{"type":"boolean"},"offset":{"type":"integer","minimum":0}},"required":["operation"]}),
         ),
     ]
 }
@@ -493,11 +632,11 @@ pub(super) fn tools() -> Vec<ToolDefinition> {
 mod goal_persistence_tests {
     use super::*;
     use crate::agent::goal::{
-        GoalCheckpointAction, GoalObservation, GoalStatus, MAX_GOAL_RECOVERIES, parse_goal_verdict,
+        GoalCheckpointAction, GoalObservation, GoalStatus, parse_goal_verdict,
     };
 
     #[test]
-    fn restart_and_rollover_preserve_goal_and_recovery_budget() -> Result<()> {
+    fn restart_and_rollover_preserve_unbounded_goal_recovery() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("context");
         let mut memory = ContextMemory::default();
@@ -518,6 +657,8 @@ mod goal_persistence_tests {
             tool_call_id: "test-1".into(),
             tool_name: "run_shell".into(),
             succeeded: false,
+            workspace_mutated: false,
+            validation_call: true,
             excerpt: "test failed".into(),
         });
         goal.checkpoint(&parse_goal_verdict(
@@ -547,13 +688,12 @@ mod goal_persistence_tests {
         assert_eq!(goal.remaining, vec!["fix failing test"]);
         assert_eq!(goal.next_action.as_deref(), Some("fix failing test"));
         assert_eq!(goal.observations[0].window_id, window);
-        for _ in RECOVERIES_BEFORE_RESTART..MAX_GOAL_RECOVERIES {
+        for _ in 0..12 {
             assert_eq!(
                 goal.progress.checkpoint(true),
                 GoalCheckpointAction::Recover
             );
         }
-        assert_eq!(goal.progress.checkpoint(true), GoalCheckpointAction::Pause);
         let original: Vec<Message> = serde_json::from_slice(&fs::read(
             directory
                 .path()
@@ -568,11 +708,153 @@ mod goal_persistence_tests {
     }
 
     #[test]
-    fn legacy_context_without_goal_remains_loadable() -> Result<()> {
+    fn rollover_never_overwrites_an_existing_archived_window() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("context");
+        let mut memory = ContextMemory::default();
+        memory.bind(Some(root.clone()));
+        let mut history = vec![Message::system("system"), Message::user("task")];
+        memory.load(&mut history)?;
+
+        let window = memory.id().to_owned();
+        let archive = root.join(format!("{window}.json"));
+        fs::create_dir_all(&root)?;
+        fs::write(&archive, b"immutable sentinel")?;
+
+        let error = memory.rollover(&mut history, None).unwrap_err();
+        assert!(error.to_string().contains("immutable"));
+        assert_eq!(fs::read(&archive)?, b"immutable sentinel");
+        assert_eq!(memory.number(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn context_history_hides_archived_tool_output_by_default() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("context");
+        let mut memory = ContextMemory::default();
+        memory.bind(Some(root));
+        let mut history = vec![
+            Message::system("system"),
+            Message::user("task"),
+            Message::tool(
+                "secret current-source payload",
+                "read-1",
+                Some("read_file".into()),
+            ),
+            Message::assistant("assistant source echo RemoteOptions", None),
+        ];
+        memory.load(&mut history)?;
+        let archived = memory.id().to_owned();
+        memory.rollover(&mut history, Some(&Message::user("continue")))?;
+
+        let default_search = ToolCall {
+            id: "history-1".into(),
+            name: "context_history".into(),
+            arguments: json!({"operation":"search","query":"secret current-source payload"}),
+        };
+        let result: Value = serde_json::from_str(&memory.execute(&default_search)?)?;
+        assert_eq!(result["items"].as_array().map(Vec::len), Some(0));
+
+        let assistant_default = ToolCall {
+            id: "history-assistant-default".into(),
+            name: "context_history".into(),
+            arguments: json!({"operation":"search","query":"RemoteOptions"}),
+        };
+        let result: Value = serde_json::from_str(&memory.execute(&assistant_default)?)?;
+        assert_eq!(result["items"].as_array().map(Vec::len), Some(0));
+
+        let assistant_explicit = ToolCall {
+            id: "history-assistant-explicit".into(),
+            name: "context_history".into(),
+            arguments: json!({
+                "operation":"search",
+                "windowId": archived,
+                "query":"RemoteOptions",
+                "includeAssistantMessages": true
+            }),
+        };
+        let result: Value = serde_json::from_str(&memory.execute(&assistant_explicit)?)?;
+        assert_eq!(result["items"].as_array().map(Vec::len), Some(1));
+
+        let user_search = ToolCall {
+            id: "history-user".into(),
+            name: "context_history".into(),
+            arguments: json!({"operation":"search","query":"task"}),
+        };
+        let result: Value = serde_json::from_str(&memory.execute(&user_search)?)?;
+        let items = result["items"].as_array().expect("history items");
+        assert!(items.iter().any(|item| item["role"] == json!("user")));
+        assert!(
+            items
+                .iter()
+                .all(|item| matches!(item["role"].as_str(), Some("user" | "system")))
+        );
+
+        let explicit_search = ToolCall {
+            id: "history-2".into(),
+            name: "context_history".into(),
+            arguments: json!({
+                "operation":"search",
+                "windowId": archived,
+                "query":"secret current-source payload",
+                "includeToolMessages": true
+            }),
+        };
+        let result: Value = serde_json::from_str(&memory.execute(&explicit_search)?)?;
+        assert_eq!(result["items"].as_array().map(Vec::len), Some(1));
+        Ok(())
+    }
+    #[test]
+    fn legacy_context_without_goal_or_agent_checkpoint_remains_loadable() -> Result<()> {
         let mut value = serde_json::to_value(State::default())?;
-        value.as_object_mut().unwrap().remove("goal");
+        let object = value.as_object_mut().unwrap();
+        object.remove("goal");
+        object.remove("agent_checkpoint");
         let state: State = serde_json::from_value(value)?;
         assert!(state.goal.is_none());
+        assert!(state.agent_checkpoint.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn agent_checkpoint_survives_session_restart() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("context");
+        let mut memory = ContextMemory::default();
+        memory.bind(Some(root.clone()));
+        let mut history = vec![
+            Message::system("system"),
+            Message::user("fix cache behavior"),
+        ];
+        memory.load(&mut history)?;
+        memory.set_agent_checkpoint(
+            "fix cache behavior",
+            "verify",
+            2,
+            false,
+            true,
+            false,
+            Some("cargo test failed in cache_test"),
+            &["apply_file_edits [src/cache.rs]: succeeded=true".into()],
+            Some("Source coverage:\nsrc/cache.rs total=400 covered=1-220"),
+        );
+        memory.sync(&history)?;
+        memory.flush()?;
+        drop(memory);
+
+        let mut restored = ContextMemory::default();
+        restored.bind(Some(root));
+        let mut restored_history = Vec::new();
+        restored.load(&mut restored_history)?;
+        let summary = restored
+            .agent_checkpoint_summary()
+            .expect("durable checkpoint");
+        assert!(summary.contains("objective=\"fix cache behavior\""));
+        assert!(summary.contains("phase=verify"));
+        assert!(summary.contains("successfulWorkspaceMutations=2"));
+        assert!(summary.contains("cargo test failed in cache_test"));
+        assert!(summary.contains("src/cache.rs"));
         Ok(())
     }
 }

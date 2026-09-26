@@ -14,15 +14,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::ConfigStore;
+use crate::{
+    config::ConfigStore,
+    core::BridgeClient,
+    platform::{TrackedChild, configure_process_group},
+    project_settings::{ProjectSettingsStore, ServiceBackend},
+};
 
 pub const CAPABILITY_ID: &str = "web-search";
 const DEFAULT_URL: &str = "http://127.0.0.1:8888";
@@ -152,7 +154,7 @@ impl SearchPaths {
 
 #[derive(Debug, Default)]
 struct ProcessState {
-    child: Option<Child>,
+    child: Option<TrackedChild>,
     base_url: Option<String>,
     restart_not_before: Option<Instant>,
 }
@@ -505,16 +507,7 @@ impl WebSearchClient {
         if let Some(config) = invocation.config.as_ref() {
             command.env("MCPORTER_CONFIG", config);
         }
-        #[cfg(unix)]
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) == 0 {
-                    Ok(())
-                } else {
-                    Err(std::io::Error::last_os_error())
-                }
-            });
-        }
+        configure_process_group(&mut command);
         let mut child = command
             .spawn()
             .with_context(|| format!("run Agent-Reach Exa {operation} through mcporter"))?;
@@ -526,6 +519,7 @@ impl WebSearchClient {
             .stderr
             .take()
             .context("Agent-Reach stderr unavailable")?;
+        let mut child = TrackedChild::new(child, "agent-reach");
         let stdout_thread = thread::spawn(move || {
             let mut bytes = Vec::new();
             let _ = stdout.read_to_end(&mut bytes);
@@ -638,7 +632,8 @@ impl WebSearchClient {
             .append(true)
             .open(&self.paths.log)?;
         let stderr = stdout.try_clone()?;
-        let child = Command::new(self.paths.python())
+        let mut command = Command::new(self.paths.python());
+        command
             .arg("-m")
             .arg("searx.webapp")
             .current_dir(&self.paths.source)
@@ -648,9 +643,10 @@ impl WebSearchClient {
             .env("SEARXNG_BASE_URL", format!("{DEFAULT_URL}/"))
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn();
-        let mut child = match child {
+            .stderr(Stdio::from(stderr));
+        configure_process_group(&mut command);
+        let child = command.spawn();
+        let child = match child {
             Ok(child) => child,
             Err(error) => {
                 state.restart_not_before = Some(Instant::now() + RESTART_BACKOFF);
@@ -659,6 +655,7 @@ impl WebSearchClient {
                 });
             }
         };
+        let mut child = TrackedChild::new(child, "searxng");
 
         let started = Instant::now();
         while started.elapsed() < STARTUP_TIMEOUT {
@@ -720,7 +717,7 @@ fn rotate_search_log(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_public_http_url(url: &str) -> Result<()> {
+pub(crate) fn validate_public_http_url(url: &str) -> Result<()> {
     let parsed = Url::parse(url.trim()).context("web_read received an invalid URL")?;
     ensure_public_url(&parsed)
 }
@@ -920,12 +917,90 @@ impl Drop for WebSearchClient {
 
 pub fn run_cli(args: &[String]) -> Result<String> {
     match args.first().map(String::as_str).unwrap_or("status") {
-        "install" => install(args.get(1).map(String::as_str).unwrap_or("all")),
-        "status" => status(),
+        "backend" => {
+            let workspace = env::current_dir()?.canonicalize()?;
+            let settings = ProjectSettingsStore::new(&workspace)?;
+            let project = settings.load()?;
+            match args.get(1).map(String::as_str) {
+                None => Ok(format!(
+                    "{}{}",
+                    project.web.backend.as_str(),
+                    if project.web.backend == ServiceBackend::Mcp {
+                        format!(" {}", project.web.server)
+                    } else {
+                        String::new()
+                    }
+                )),
+                Some(value) => {
+                    if args.len() > 3 {
+                        bail!("Usage: yeet search backend [builtin|mcp [SERVER]]");
+                    }
+                    let backend = ServiceBackend::parse(value)?;
+                    settings.save_web_backend(backend, args.get(2).map(String::as_str))?;
+                    let saved = settings.load()?;
+                    Ok(format!(
+                        "web backend={}{}",
+                        saved.web.backend.as_str(),
+                        if saved.web.backend == ServiceBackend::Mcp {
+                            format!(" server={}", saved.web.server)
+                        } else {
+                            String::new()
+                        }
+                    ))
+                }
+            }
+        }
+        "install" => {
+            let workspace = env::current_dir()?.canonicalize()?;
+            let settings = ProjectSettingsStore::new(&workspace)?;
+            if settings.load()?.web.backend == ServiceBackend::Mcp {
+                bail!("yeet search install is only available with backend=builtin");
+            }
+            install(args.get(1).map(String::as_str).unwrap_or("all"))
+        }
+        "status" => {
+            let workspace = env::current_dir()?.canonicalize()?;
+            let settings = ProjectSettingsStore::new(&workspace)?;
+            let project = settings.load()?;
+            let value = match project.web.backend {
+                ServiceBackend::Builtin => {
+                    let mut value =
+                        serde_json::from_str::<Value>(&status()?).unwrap_or_else(|_| json!({}));
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("backend".into(), json!("builtin"));
+                        object.insert("server".into(), json!(project.web.server));
+                    }
+                    value
+                }
+                ServiceBackend::Mcp => {
+                    let bridge = BridgeClient::start()?;
+                    let tools = bridge.list_mcp_tools(Some(&project.web.server));
+                    let connected = tools.as_ref().is_ok_and(|tools| {
+                        tools.iter().any(|tool| tool.name == "web_search")
+                            && tools.iter().any(|tool| tool.name == "web_read")
+                    });
+                    bridge.shutdown();
+                    json!({
+                        "backend": "mcp",
+                        "server": project.web.server,
+                        "connected": connected,
+                        "requiredTools": ["web_search", "web_read"]
+                    })
+                }
+            };
+            Ok(serde_json::to_string_pretty(&value)?)
+        }
         "path" => Ok(SearchPaths::discover().root.display().to_string()),
-        "remove" | "uninstall" => remove(args.get(1).map(String::as_str).unwrap_or("all")),
+        "remove" | "uninstall" => {
+            let workspace = env::current_dir()?.canonicalize()?;
+            let settings = ProjectSettingsStore::new(&workspace)?;
+            if settings.load()?.web.backend == ServiceBackend::Mcp {
+                bail!("yeet search remove is only available with backend=builtin");
+            }
+            remove(args.get(1).map(String::as_str).unwrap_or("all"))
+        }
         _ => bail!(
-            "Usage: yeet search [install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]"
+            "Usage: yeet search [backend [builtin|mcp [SERVER]]|install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]"
         ),
     }
 }

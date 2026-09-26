@@ -56,8 +56,8 @@ pub(super) fn status_line(app: &App, width: usize) -> Line<'static> {
         .map(|settings| settings.permission_mode())
         .unwrap_or("ask");
     let current = compact_number(current_tokens);
-    let prefix = if width >= 2 { "  " } else { "" };
-    let available = width.saturating_sub(prefix.chars().count());
+    let prefix = if width >= 4 { "  \u{25c8} " } else { "" };
+    let available = width.saturating_sub(Span::raw(prefix).width());
     let model_full = if app.state.active_model.is_empty() {
         "no model".to_owned()
     } else {
@@ -74,6 +74,63 @@ pub(super) fn status_line(app: &App, width: usize) -> Line<'static> {
             .unwrap_or(app.state.active_model.as_str());
         truncate_middle(short, 18)
     };
+
+    if width >= 76
+        && let Some(total) = total_tokens.filter(|total| *total > 0)
+    {
+        let ratio = current_tokens as f64 / total as f64;
+        let pressure = if ratio >= 0.95 {
+            theme::error()
+        } else if ratio >= 0.80 {
+            theme::warning()
+        } else {
+            theme::user()
+        };
+        let percent = format!("{:.0}%", ratio * 100.0);
+        let meter = context_meter(current_tokens, total_tokens, 7);
+        let line = Line::from(vec![
+            Span::styled(
+                prefix,
+                Style::default()
+                    .fg(theme::accent())
+                    .bg(theme::surface_raised())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{model_short} "),
+                Style::default()
+                    .fg(theme::accent())
+                    .bg(theme::surface_raised())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  │  ", Style::default().fg(theme::border_dim())),
+            Span::styled("CTX ", Style::default().fg(theme::muted())),
+            Span::styled(
+                format!("{percent} "),
+                Style::default().fg(pressure).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(meter, Style::default().fg(pressure)),
+            Span::styled("  │  ", Style::default().fg(theme::border_dim())),
+            Span::styled("THINK ", Style::default().fg(theme::muted())),
+            Span::styled(
+                reasoning.to_owned(),
+                Style::default()
+                    .fg(theme::accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  │  ", Style::default().fg(theme::border_dim())),
+            Span::styled("MODE ", Style::default().fg(theme::muted())),
+            Span::styled(
+                permission.to_owned(),
+                Style::default()
+                    .fg(theme::text_dim())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        if line.width() <= width {
+            return line;
+        }
+    }
     let model_tiny = truncate_middle(&model_short, 11);
     let reasoning_short = match reasoning {
         "medium" => "med",
@@ -92,12 +149,12 @@ pub(super) fn status_line(app: &App, width: usize) -> Line<'static> {
         let meter = context_meter(current_tokens, total_tokens, 7);
         vec![
             format!(
-                "model {model_full} │ ctx {current}/{total_label} {percent} {meter} │ reason {reasoning} │ perm {permission}"
+                "{model_full}  ·  ctx {current}/{total_label} {percent} {meter}  ·  think {reasoning}  ·  {permission}"
             ),
-            format!("{model_short} │ ctx {percent} {meter} │ {reasoning} │ {permission}"),
-            format!("{model_short} · {percent} context · {permission_short}"),
-            format!("{model_tiny} · {percent} context"),
-            format!("{percent} context"),
+            format!("{model_short}  ·  ctx {percent} {meter}  ·  {reasoning}  ·  {permission}"),
+            format!("{model_short}  ·  {percent} ctx  ·  {permission_short}"),
+            format!("{model_tiny}  ·  {percent} ctx"),
+            format!("{percent} ctx"),
         ]
     } else {
         let model_label = if app.state.active_model.is_empty() {
@@ -106,9 +163,9 @@ pub(super) fn status_line(app: &App, width: usize) -> Line<'static> {
             format!("model {model_full}")
         };
         vec![
-            format!("{model_label} │ ctx unavailable │ reason {reasoning} │ perm {permission}"),
-            format!("{model_short} │ ctx — │ {reasoning} │ {permission}"),
-            format!("{model_short} · ctx — · {reasoning_short}/{permission_short}"),
+            format!("{model_label}  ·  ctx unavailable  ·  think {reasoning}  ·  {permission}"),
+            format!("{model_short}  ·  ctx —  ·  {reasoning}  ·  {permission}"),
+            format!("{model_short}  ·  ctx —  ·  {reasoning_short}/{permission_short}"),
             format!("{model_tiny} · {permission_short}"),
             model_tiny.clone(),
         ]
@@ -123,34 +180,42 @@ pub(super) fn status_line(app: &App, width: usize) -> Line<'static> {
         vec![Span::styled(
             prefix,
             Style::default()
-                .fg(theme::accent_warm())
+                .fg(theme::accent())
+                .bg(theme::surface_raised())
                 .add_modifier(Modifier::BOLD),
         )]
         .into_iter()
         .chain(
-            text.split_inclusive('│')
+            text.split_inclusive('·')
                 .enumerate()
                 .map(|(index, segment)| {
-                    Span::styled(
-                        segment.to_owned(),
-                        Style::default().fg(match index {
-                            0 => theme::accent_warm(),
-                            1 if total_tokens.is_some_and(|total| {
-                                total > 0 && current_tokens as f64 / total as f64 >= 0.95
-                            }) =>
-                            {
-                                theme::error()
-                            }
-                            1 if total_tokens.is_some_and(|total| {
-                                total > 0 && current_tokens as f64 / total as f64 >= 0.80
-                            }) =>
-                            {
-                                theme::warning()
-                            }
-                            1 => theme::user(),
-                            _ => theme::muted(),
-                        }),
-                    )
+                    let fg = match index {
+                        0 => theme::accent(),
+                        1 if total_tokens.is_some_and(|total| {
+                            total > 0 && current_tokens as f64 / total as f64 >= 0.95
+                        }) =>
+                        {
+                            theme::error()
+                        }
+                        1 if total_tokens.is_some_and(|total| {
+                            total > 0 && current_tokens as f64 / total as f64 >= 0.80
+                        }) =>
+                        {
+                            theme::warning()
+                        }
+                        1 if total_tokens.is_some_and(|total| total > 0) => theme::user(),
+                        1 => theme::muted(),
+                        _ => theme::muted(),
+                    };
+                    let mut style = Style::default().fg(fg);
+                    if index == 0 {
+                        style = style
+                            .bg(theme::surface_raised())
+                            .add_modifier(Modifier::BOLD);
+                    } else if index == 1 && total_tokens.is_some_and(|total| total > 0) {
+                        style = style.bg(theme::code_background());
+                    }
+                    Span::styled(segment.to_owned(), style)
                 }),
         )
         .collect::<Vec<_>>(),
@@ -161,13 +226,13 @@ pub(super) fn status_aux_line(app: &App, width: usize) -> Line<'static> {
     if width == 0 {
         return Line::default();
     }
-    let prefix = if width >= 2 { "  " } else { "" };
+    let prefix = if width >= 4 { "  ╰ " } else { "" };
     let available = width.saturating_sub(Span::raw(prefix).width());
 
     let (candidates, color) = if app.selection_start.is_some() || app.selection_end.is_some() {
         (
             vec![
-                "selection │ Ctrl+C copy │ Esc clear".to_owned(),
+                "selection · Ctrl+C copy · Esc clear".to_owned(),
                 "selected · Ctrl+C copy · Esc clear".to_owned(),
                 "Ctrl+C copy · Esc clear".to_owned(),
                 "Esc clear".to_owned(),
@@ -190,7 +255,7 @@ pub(super) fn status_aux_line(app: &App, width: usize) -> Line<'static> {
                 .unwrap_or_else(|| "—".to_owned());
             (
                 vec![
-                    format!("session in {input} │ out {output} │ cache {cache} │ calls {calls}"),
+                    format!("session  in {input} · out {output} · cache {cache} · calls {calls}"),
                     format!("in {input} · out {output} · cache {cache} · {calls} calls"),
                     format!("in {input} · out {output} · cache {cache}"),
                     format!("in {input} · out {output}"),
@@ -201,7 +266,7 @@ pub(super) fn status_aux_line(app: &App, width: usize) -> Line<'static> {
         } else {
             (
                 vec![
-                    "Ctrl+N new │ Alt+M model │ Alt+S sessions │ ? help".to_owned(),
+                    "Ctrl+N new · Alt+M model · Alt+S sessions · ? help".to_owned(),
                     "Ctrl+N new · Alt+M model · ? help".to_owned(),
                     "? help · /status".to_owned(),
                 ],

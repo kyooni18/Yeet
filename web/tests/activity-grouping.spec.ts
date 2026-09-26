@@ -5,25 +5,26 @@ type TestHooks = {
   __yeetEmit: (message: Record<string, unknown>) => void
 }
 
-function toolEntry(id: string, status: 'completed' | 'running' | 'failed') {
+function toolEntry(id: string, status: 'completed' | 'running' | 'failed', name = 'read_file') {
   return {
-    type: 'conversation_entry',
-    version: 1,
-    sequence: Number(id.replace('tool-', '')) + 2,
-    revision: Number(id.replace('tool-', '')) + 2,
-    entry: {
-      id,
-      kind: {
-        type: 'toolCall',
-        toolCall: {
-          id,
-          name: 'read_file',
-          arguments: JSON.stringify({ path: `src/file-${id}.rs` }),
-          status,
-        },
+    id,
+    kind: {
+      type: 'toolCall',
+      toolCall: {
+        id,
+        name,
+        arguments: JSON.stringify({ path: `src/file-${id}.rs` }),
+        status,
       },
     },
   }
+}
+
+async function resetConversation(page: Parameters<typeof installMockRemote>[0], conversation: Record<string, unknown>[]) {
+  await page.evaluate((entries) => {
+    const emit = (window as unknown as TestHooks).__yeetEmit
+    emit({ type: 'conversation_reset', version: 1, sequence: 2, revision: 2, conversation: entries })
+  }, conversation)
 }
 
 test.beforeEach(async ({ page }) => {
@@ -32,34 +33,79 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('groups consecutive completed tool calls into one user-collapsible transcript block', async ({ page }) => {
-  const entries = ['tool-1', 'tool-2', 'tool-3'].map((id) => toolEntry(id, 'completed'))
-  await page.evaluate((entries) => {
-    const emit = (window as unknown as TestHooks).__yeetEmit
-    emit({ type: 'conversation_reset', version: 1, sequence: 2, revision: 2, conversation: entries.map((message) => message.entry) })
-  }, entries)
+test('short completed activity stays collapsed until requested', async ({ page }) => {
+  await resetConversation(page, ['tool-1', 'tool-2', 'tool-3'].map((id) => toolEntry(id, 'completed')))
 
-  const group = page.getByTestId('activity-group')
+  const group = page.locator('.activity-group')
+  const header = group.locator('.activity-group__header')
   await expect(group).toHaveCount(1)
-  await expect(group.locator('summary')).toContainText('3 tools')
-  await expect(group.locator('.tool-card')).toHaveCount(3)
-  await group.locator('summary').click()
-  await expect(group.locator('.tool-card')).toHaveCount(0)
-  await group.locator('summary').click()
-  await expect(group.locator('.tool-card')).toHaveCount(3)
+  await expect(header).toContainText('Activity')
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
+  await expect(group.locator('.activity-group__events')).toHaveCount(0)
+
+  await header.click()
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
+  await expect(group.locator('.activity-group__event')).toHaveCount(3)
+  await expect(group.locator('.trace-disclosure__row')).toHaveCount(3)
+
+  await header.click()
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
+  await expect(group.locator('.activity-group__events')).toHaveCount(0)
 })
 
-test('keeps a live tool group open and promotes failures in the summary', async ({ page }) => {
-  const entries = [toolEntry('tool-4', 'running'), toolEntry('tool-5', 'failed')]
-  await page.evaluate((entries) => {
-    const emit = (window as unknown as TestHooks).__yeetEmit
-    emit({ type: 'conversation_reset', version: 1, sequence: 2, revision: 2, conversation: entries.map((message) => message.entry) })
-  }, entries)
+test('failures auto-open while running activity remains visibly active', async ({ page }) => {
+  await resetConversation(page, [
+    toolEntry('tool-4', 'running'),
+    toolEntry('tool-5', 'failed'),
+  ])
 
-  const group = page.getByTestId('activity-group')
-  await expect(group).toHaveClass(/is-live/)
-  await expect(group).toHaveClass(/is-error/)
-  await expect(group.locator('summary')).toContainText('1 running')
-  await expect(group.locator('summary')).toContainText('1 failed')
-  await expect(group.locator('.tool-card')).toHaveCount(2)
+  const group = page.locator('.activity-group')
+  const header = group.locator('.activity-group__header')
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
+  await expect(group.locator('.activity-group__summary')).toHaveClass(/is-active/)
+  await expect(group.locator('.activity-group__event')).toHaveCount(2)
+
+  const rows = group.locator('.trace-disclosure__row')
+  await expect(rows.nth(0)).toContainText(/Reading file|Read file/)
+  await expect(rows.nth(1)).toContainText('Failed')
+})
+
+test('long completed runs remain compact by default', async ({ page }) => {
+  const entries = Array.from({ length: 13 }, (_, index) => toolEntry(`tool-${index + 10}`, 'completed'))
+  await resetConversation(page, entries)
+
+  const group = page.locator('.activity-group')
+  const header = group.locator('.activity-group__header')
+  await expect(group).toHaveCount(1)
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
+  await expect(group.locator('.activity-group__events')).toHaveCount(0)
+})
+
+test('reasoning and tools preserve transcript order and strip markdown from summaries', async ({ page }) => {
+  await resetConversation(page, [
+    {
+      id: 'reasoning-1',
+      kind: { type: 'reasoning', content: '', summary: '**Checking sources**' },
+    },
+    toolEntry('tool-20', 'completed', 'read_file'),
+    {
+      id: 'reasoning-2',
+      kind: { type: 'reasoning', content: '', summary: '**Cross-checking claims**' },
+    },
+    toolEntry('tool-21', 'completed', 'run_shell'),
+  ])
+
+  const group = page.locator('.activity-group')
+  const header = group.locator('.activity-group__header')
+  await expect(header).toContainText('Cross-checking claims')
+  await expect(header).not.toContainText('**')
+
+  await header.click()
+  const rows = group.locator('.activity-group__event')
+  await expect(rows).toHaveCount(4)
+  await expect(rows.nth(0)).toContainText('Checking sources')
+  await expect(rows.nth(1)).toContainText('Read file')
+  await expect(rows.nth(2)).toContainText('Cross-checking claims')
+  await expect(rows.nth(3)).toContainText(/Command|Run shell/)
+  await expect(group).not.toContainText('**')
 })

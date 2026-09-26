@@ -132,6 +132,7 @@ test("OpenCode Zen and Go share OPENCODE_API_KEY and stored credentials", async 
   }
 });
 
+
 test("OpenRouter browser auth performs PKCE and stores the exchanged user key", async () => {
   const configDir = await temporaryConfig();
   let exchangeBody;
@@ -211,61 +212,113 @@ test("OpenAI browser auth performs Codex OAuth PKCE and stores ChatGPT tokens", 
   assert.ok(credential.expiresAt);
 });
 
-test("Gemini browser auth stores OAuth tokens and GeminiProvider sends bearer auth", async () => {
+test("Gemini browser auth performs built-in Google PKCE, onboards Code Assist, and sends wrapped requests", async () => {
   const configDir = await temporaryConfig();
-  let tokenExchangeBody = "";
+  const clientId = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+  let tokenExchangeBody;
+  let loadBody;
+  let onboardBody;
+
   const auth = new AuthManager({
     configDir,
     openBrowser: callbackOpener((authorize) => {
       assert.equal(authorize.origin, "https://accounts.google.com");
+      assert.equal(authorize.searchParams.get("client_id"), clientId);
+      assert.equal(authorize.searchParams.get("response_type"), "code");
+      assert.equal(authorize.searchParams.get("access_type"), "offline");
+      assert.equal(authorize.searchParams.get("prompt"), "consent");
+      assert.equal(authorize.searchParams.get("code_challenge_method"), "S256");
+      assert.ok(authorize.searchParams.get("code_challenge"));
+      const scopes = new Set((authorize.searchParams.get("scope") ?? "").split(" "));
+      assert.ok(scopes.has("https://www.googleapis.com/auth/cloud-platform"));
+      assert.ok(scopes.has("https://www.googleapis.com/auth/userinfo.email"));
+      assert.ok(scopes.has("https://www.googleapis.com/auth/userinfo.profile"));
       const callback = new URL(authorize.searchParams.get("redirect_uri"));
+      assert.equal(callback.hostname, "127.0.0.1");
       callback.searchParams.set("code", "google-code");
       callback.searchParams.set("state", authorize.searchParams.get("state"));
       return callback.toString();
     }),
     fetch: async (input, init) => {
-      assert.equal(String(input), "https://oauth2.googleapis.com/token");
-      tokenExchangeBody = String(init?.body ?? "");
-      return new Response(JSON.stringify({
-        access_token: "google-access",
-        refresh_token: "google-refresh",
-        expires_in: 3600,
-        token_type: "Bearer",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      const url = String(input);
+      if (url === "https://oauth2.googleapis.com/token") {
+        tokenExchangeBody = new URLSearchParams(String(init?.body));
+        assert.equal(tokenExchangeBody.get("client_id"), clientId);
+        assert.equal(tokenExchangeBody.get("code"), "google-code");
+        assert.equal(tokenExchangeBody.get("grant_type"), "authorization_code");
+        assert.ok((tokenExchangeBody.get("code_verifier") ?? "").length > 40);
+        assert.equal(tokenExchangeBody.get("client_secret"), null);
+        return new Response(JSON.stringify({
+          access_token: "google-access",
+          refresh_token: "google-refresh",
+          expires_in: 3600,
+          token_type: "Bearer",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer google-access");
+      if (url === "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist") {
+        loadBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({
+          allowedTiers: [{ id: "free-tier", isDefault: true }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url === "https://cloudcode-pa.googleapis.com/v1internal:onboardUser") {
+        onboardBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({
+          done: true,
+          response: { cloudaicompanionProject: { id: "managed-project" } },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
     },
   });
 
-  const status = await auth.loginInBrowser("gemini-web", {
-    clientId: "desktop-client-id",
-    clientSecret: "desktop-secret",
-    projectId: "project-123",
-    timeoutMs: 5_000,
-  });
+  const status = await auth.loginInBrowser("gemini-web");
   assert.equal(status.method, "browser");
-  assert.match(tokenExchangeBody, /code=google-code/);
+  assert.ok(tokenExchangeBody);
+  assert.equal(loadBody.metadata.pluginType, "GEMINI");
+  assert.equal(onboardBody.tierId, "free-tier");
+  assert.equal("cloudaicompanionProject" in onboardBody, false);
+
   const credential = await auth.resolve("gemini-web");
   assert.equal(credential.kind, "oauth");
   assert.equal(credential.accessToken, "google-access");
-  assert.equal(credential.projectId, "project-123");
+  assert.equal(credential.projectId, "managed-project");
 
-  let headers;
+  let requestUrl;
+  let requestHeaders;
+  let requestBody;
   const provider = new GeminiProvider({
+    id: "gemini-web",
+    codeAssist: true,
     accessToken: credential.accessToken,
     projectId: credential.projectId,
-    fetch: async (_input, init) => {
-      headers = init.headers;
+    fetch: async (input, init) => {
+      requestUrl = String(input);
+      requestHeaders = new Headers(init?.headers);
+      requestBody = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({
-        candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        response: {
+          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        },
       }), { status: 200, headers: { "content-type": "application/json" } });
     },
   });
   const result = await provider.complete({ model: "gemini-test", messages: [{ role: "user", content: "hi" }] });
   assert.equal(result.text, "ok");
-  assert.equal(headers.authorization, "Bearer google-access");
-  assert.equal(headers["x-goog-user-project"], "project-123");
+  assert.equal(requestUrl, "https://cloudcode-pa.googleapis.com/v1internal:generateContent");
+  assert.equal(requestHeaders.get("authorization"), "Bearer google-access");
+  assert.equal(requestHeaders.get("x-goog-user-project"), null);
+  assert.equal(requestBody.model, "gemini-test");
+  assert.equal(requestBody.project, "managed-project");
+  assert.equal(typeof requestBody.user_prompt_id, "string");
+  assert.equal(requestBody.request.contents[0].parts[0].text, "hi");
 
   const persisted = JSON.parse(await readFile(path.join(configDir, "credentials.json"), "utf8"));
-  assert.equal(persisted.oauthClients["gemini-web"].clientId, "desktop-client-id");
+  assert.equal(persisted.oauthClients["gemini-web"].clientId, clientId);
+  assert.equal(persisted.oauthClients["gemini-web"].projectId, "managed-project");
   assert.equal(persisted.providers["gemini-web"].refreshToken, "google-refresh");
 });
 
@@ -279,12 +332,81 @@ test("Gemini API-key and web-login credentials remain separate", async () => {
       callback.searchParams.set("state", authorize.searchParams.get("state"));
       return callback.toString();
     }),
-    fetch: async () => new Response(JSON.stringify({ access_token: "google-access", refresh_token: "google-refresh", expires_in: 3600 }), { status: 200 }),
+    fetch: async (input) => {
+      const url = String(input);
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({
+          access_token: "google-access",
+          refresh_token: "google-refresh",
+          expires_in: 3600,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      assert.equal(url, "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist");
+      return new Response(JSON.stringify({
+        currentTier: { id: "free-tier" },
+        cloudaicompanionProject: { id: "managed-project" },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
   });
   await auth.setApiKey("gemini", "gemini-api-key");
-  await auth.loginInBrowser("gemini-web", { clientId: "desktop-client-id", timeoutMs: 5_000 });
+  await auth.loginInBrowser("gemini-web");
   assert.deepEqual(await auth.resolve("gemini"), { kind: "api-key", value: "gemini-api-key", source: "stored" });
   assert.equal((await auth.resolve("gemini-web")).accessToken, "google-access");
+});
+
+test("Gemini web OAuth refresh uses the built-in installed-app client without opening a browser", async () => {
+  const configDir = await temporaryConfig();
+  const clientId = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+  let refreshBody;
+  const auth = new AuthManager({
+    configDir,
+    openBrowser: async () => {
+      throw new Error("refresh must not open a browser");
+    },
+    fetch: async (input, init) => {
+      assert.equal(String(input), "https://oauth2.googleapis.com/token");
+      refreshBody = new URLSearchParams(String(init?.body));
+      assert.equal(refreshBody.get("client_id"), clientId);
+      assert.equal(refreshBody.get("refresh_token"), "google-refresh");
+      assert.equal(refreshBody.get("grant_type"), "refresh_token");
+      assert.equal(refreshBody.get("client_secret"), null);
+      return new Response(JSON.stringify({
+        access_token: "refreshed-google-access",
+        expires_in: 3600,
+        token_type: "Bearer",
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  await auth.ensure();
+  await writeFile(path.join(configDir, "credentials.json"), JSON.stringify({
+    version: 1,
+    oauthClients: {
+      "gemini-web": {
+        clientId,
+        projectId: "managed-project",
+      },
+    },
+    providers: {
+      "gemini-web": {
+        type: "oauth",
+        source: "browser",
+        accessToken: "expired-google-access",
+        refreshToken: "google-refresh",
+        expiresAt: "2000-01-01T00:00:00.000Z",
+        createdAt: "2000-01-01T00:00:00.000Z",
+      },
+    },
+  }));
+
+  const credential = await auth.resolve("gemini-web");
+  assert.ok(refreshBody);
+  assert.equal(credential.kind, "oauth");
+  assert.equal(credential.accessToken, "refreshed-google-access");
+  assert.equal(credential.projectId, "managed-project");
+
+  const persisted = JSON.parse(await readFile(path.join(configDir, "credentials.json"), "utf8"));
+  assert.equal(persisted.providers["gemini-web"].accessToken, "refreshed-google-access");
+  assert.equal(persisted.providers["gemini-web"].refreshToken, "google-refresh");
 });
 
 test("Claude web login uses Claude Code auth and stays separate from the Anthropic API key", async () => {

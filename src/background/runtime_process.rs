@@ -1,425 +1,265 @@
 use std::{
-    io::{BufReader, BufWriter, Write},
+    panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender, TryRecvError},
+    },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+use anyhow::{Result, anyhow};
 
+use super::Wake;
 use crate::{
-    backend::{BackendEvent, BackendService},
+    backend::{BackendEvent, BackendService, SessionCatalog},
     model::{BridgeEnvelope, BridgeState, FrontendCommand},
-    platform::{configure_process_group, force_terminate_process_tree},
 };
 
-use super::{MAX_BACKGROUND_FRAME_BYTES, MAX_CLIENT_COMMAND_BYTES, read_bounded_frame};
+const RUNTIME_IDLE_WAIT: Duration = Duration::from_millis(50);
+const RUNTIME_START_TIMEOUT: Duration = Duration::from_secs(30);
 
-const RUNTIME_START_TIMEOUT: Duration = Duration::from_secs(10);
-const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
-const ABANDON_SETTLE_TIMEOUT: Duration = Duration::from_millis(750);
-const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(8);
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
 enum RuntimeCommand {
-    Frontend { command: FrontendCommand },
-    AbandonStuckRun { reason: String },
+    Frontend(FrontendCommand),
+    AdoptCatalog(SessionCatalog),
+    AbandonStuckRun(String),
 }
 
-enum WorkerEvent {
-    Envelope(Box<BridgeEnvelope>),
-    ProtocolError(String),
-    Closed,
-}
-
-enum WorkerInput {
-    Command(RuntimeCommand),
-    ProtocolError(String),
-    Closed,
-}
-
+/// Daemon-side handle for one semantic backend runtime.
+///
+/// BackendService deliberately lives on a dedicated worker thread. The background
+/// daemon owns socket acceptance, client routing, heartbeats, and runtime fan-out;
+/// none of those operations may ever wait on backend mutexes, provider work,
+/// persistence, session scans, or a slow command.
+///
+/// The daemon only touches an unbounded command sender, an event receiver, atomics,
+/// and the last fully published semantic state cached below. This keeps one
+/// unhealthy or busy session from stalling every Remote/TUI client in a workspace.
 pub(super) struct RuntimeProcess {
-    child: Child,
-    command: Option<BufWriter<ChildStdin>>,
-    events: Receiver<WorkerEvent>,
-    state: BridgeState,
-    closed: bool,
+    command_tx: Sender<RuntimeCommand>,
+    command_wake: Wake,
+    events: Receiver<BridgeEnvelope>,
+    failed: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
+    last_state: BridgeState,
 }
 
 impl RuntimeProcess {
-    pub(super) fn spawn(workspace: &Path, scope: Option<&str>) -> Result<Self> {
-        let executable =
-            std::env::current_exe().context("locate yeet executable for background runtime")?;
-        let mut command = Command::new(executable);
-        command
-            .arg("__background-runtime")
-            .arg(workspace)
-            .env("YEET_RUNTIME_PARENT_PID", std::process::id().to_string())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-        if let Some(scope) = scope {
-            command.env("YEET_BACKGROUND_SCOPE", scope);
-        } else {
-            command.env_remove("YEET_BACKGROUND_SCOPE");
-        }
-        configure_process_group(&mut command);
-        let mut child = command
-            .spawn()
-            .context("start Yeet background runtime process")?;
+    pub(super) fn spawn(workspace: &Path, _scope: Option<&str>, daemon_wake: Wake) -> Result<Self> {
+        let workspace = workspace.to_path_buf();
+        let runtime_wake = Wake::new();
+        let command_wake = runtime_wake.clone();
+        let (command_tx, command_rx) = mpsc::channel::<RuntimeCommand>();
+        let (event_tx, events) = mpsc::channel::<BridgeEnvelope>();
+        let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<BridgeState, String>>(1);
+        let failed = Arc::new(AtomicBool::new(false));
+        let closed = Arc::new(AtomicBool::new(false));
+        let worker_failed = failed.clone();
+        let worker_closed = closed.clone();
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("background runtime stdin was not piped"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("background runtime stdout was not piped"))?;
-        let (tx, events) = mpsc::sync_channel(256);
-        thread::spawn(move || runtime_reader(stdout, tx));
+        thread::Builder::new()
+            .name("yeet-backend-runtime".into())
+            .spawn(move || {
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    let mut service =
+                        match BackendService::spawn(workspace, Some(runtime_wake.clone())) {
+                            Ok(service) => service,
+                            Err(error) => {
+                                let _ = startup_tx.send(Err(error.to_string()));
+                                return;
+                            }
+                        };
 
-        let state = match events.recv_timeout(RUNTIME_START_TIMEOUT) {
-            Ok(WorkerEvent::Envelope(envelope)) => match envelope.state {
-                Some(state) => state,
-                None => {
-                    let _ = terminate_child(&mut child);
-                    bail!("background runtime handshake did not contain state");
+                    let initial_state = service.state_snapshot();
+                    if startup_tx.send(Ok(initial_state)).is_err() {
+                        return;
+                    }
+
+                    loop {
+                        let mut command_channel_open = true;
+                        loop {
+                            match command_rx.try_recv() {
+                                Ok(command) => {
+                                    if !handle_runtime_command(
+                                        &mut service,
+                                        command,
+                                        &event_tx,
+                                        &daemon_wake,
+                                    ) {
+                                        return;
+                                    }
+                                    // Commands often publish state synchronously. Forward
+                                    // that state before accepting the next command so the
+                                    // daemon routing cache cannot lag semantic transitions.
+                                    drain_backend_events(&service, &event_tx, &daemon_wake);
+                                }
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => {
+                                    command_channel_open = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        drain_backend_events(&service, &event_tx, &daemon_wake);
+
+                        if service.is_closed() || !command_channel_open {
+                            return;
+                        }
+
+                        runtime_wake.wait_timeout(RUNTIME_IDLE_WAIT);
+                    }
+                }));
+
+                if outcome.is_err() {
+                    eprintln!("yeet: background session runtime worker panicked; retiring it");
+                    worker_failed.store(true, Ordering::Release);
                 }
-            },
-            Ok(WorkerEvent::ProtocolError(error)) => {
-                let _ = terminate_child(&mut child);
-                bail!("background runtime protocol failed during startup: {error}");
-            }
-            Ok(WorkerEvent::Closed) => {
-                let status = child.try_wait().ok().flatten();
-                let _ = terminate_child(&mut child);
-                bail!("background runtime exited during startup{status:?}");
-            }
-            Err(error) => {
-                let _ = terminate_child(&mut child);
-                return Err(anyhow!("background runtime did not become ready: {error}"));
-            }
-        };
+                worker_closed.store(true, Ordering::Release);
+                daemon_wake.notify();
+            })
+            .map_err(|error| anyhow!("spawn background session runtime worker: {error}"))?;
+
+        let last_state = startup_rx
+            .recv_timeout(RUNTIME_START_TIMEOUT)
+            .map_err(|_| anyhow!("background session runtime did not become ready within 30s"))?
+            .map_err(|message| anyhow!(message))?;
 
         Ok(Self {
-            child,
-            command: Some(BufWriter::new(stdin)),
+            command_tx,
+            command_wake,
             events,
-            state,
-            closed: false,
+            failed,
+            closed,
+            last_state,
         })
     }
 
     pub(super) fn send(&mut self, command: FrontendCommand) -> Result<()> {
-        self.send_runtime_command(&RuntimeCommand::Frontend { command })
+        self.enqueue(RuntimeCommand::Frontend(command))
     }
 
-    pub(super) fn try_recv(&mut self) -> Option<BackendEvent> {
+    pub(super) fn try_recv(&mut self) -> Option<BridgeEnvelope> {
         match self.events.try_recv() {
-            Ok(WorkerEvent::Envelope(envelope)) => {
-                self.observe_envelope(&envelope);
-                Some(BackendEvent::Envelope(*envelope))
-            }
-            Ok(WorkerEvent::ProtocolError(error)) => {
-                self.closed = true;
-                Some(BackendEvent::Envelope(error_envelope(error)))
-            }
-            Ok(WorkerEvent::Closed) | Err(TryRecvError::Disconnected) => {
-                self.closed = true;
-                None
+            Ok(envelope) => {
+                if let Some(state) = envelope.state.as_ref() {
+                    let mut published = state.clone();
+                    // Streaming envelopes intentionally omit the transcript on most
+                    // tokens. Keep the last complete conversation in the daemon cache
+                    // so reconnects always receive a complete semantic snapshot.
+                    if published.conversation.is_none() {
+                        published.conversation = self.last_state.conversation.clone();
+                    }
+                    self.last_state = published;
+                }
+                Some(envelope)
             }
             Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                if !self.closed.load(Ordering::Acquire) {
+                    self.failed.store(true, Ordering::Release);
+                }
+                None
+            }
         }
     }
 
     pub(super) fn state_snapshot(&self) -> BridgeState {
-        self.state.clone()
+        self.last_state.clone()
     }
 
     pub(super) fn is_streaming(&self) -> bool {
-        self.state.is_streaming
+        self.last_state.is_streaming
     }
 
     pub(super) fn current_session_id(&self) -> Option<String> {
-        self.state.current_session_id.clone()
+        self.last_state.current_session_id.clone()
     }
 
     pub(super) fn is_closed(&self) -> bool {
-        self.closed
+        self.failed.load(Ordering::Acquire) || self.closed.load(Ordering::Acquire)
     }
 
-    pub(super) fn abandon_stuck_run(&mut self, reason: &str) -> Result<()> {
-        self.send_runtime_command(&RuntimeCommand::AbandonStuckRun {
-            reason: reason.to_owned(),
-        })?;
-        let deadline = Instant::now() + ABANDON_SETTLE_TIMEOUT;
-        while Instant::now() < deadline && !self.closed && self.state.is_streaming {
-            match self.events.recv_timeout(Duration::from_millis(20)) {
-                Ok(WorkerEvent::Envelope(envelope)) => self.observe_envelope(&envelope),
-                Ok(WorkerEvent::ProtocolError(error)) => {
-                    self.closed = true;
-                    return Err(anyhow!(error));
-                }
-                Ok(WorkerEvent::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.closed = true;
-                    break;
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-            }
+    pub(super) fn adopt_session_catalog(&self, catalog: &SessionCatalog) {
+        let _ = self.enqueue(RuntimeCommand::AdoptCatalog(catalog.clone()));
+    }
+
+    pub(super) fn abandon_stuck_run(&self, reason: &str) -> Result<()> {
+        self.enqueue(RuntimeCommand::AbandonStuckRun(reason.to_owned()))
+    }
+
+    fn enqueue(&self, command: RuntimeCommand) -> Result<()> {
+        if self.is_closed() {
+            return Err(anyhow!("background session runtime is no longer available"));
         }
+        self.command_tx
+            .send(command)
+            .map_err(|_| anyhow!("background session runtime command channel closed"))?;
+        self.command_wake.notify();
         Ok(())
-    }
-
-    fn observe_envelope(&mut self, envelope: &BridgeEnvelope) {
-        if let Some(state) = envelope.state.as_ref() {
-            self.state = state.clone();
-        }
-    }
-
-    fn send_runtime_command(&mut self, command: &RuntimeCommand) -> Result<()> {
-        if self.closed {
-            bail!("background runtime process is closed");
-        }
-        let mut frame = serde_json::to_vec(command)?;
-        frame.push(b'\n');
-        let write_result = {
-            let writer = self
-                .command
-                .as_mut()
-                .ok_or_else(|| anyhow!("background runtime command pipe is closed"))?;
-            writer.write_all(&frame).and_then(|()| writer.flush())
-        };
-        if let Err(error) = write_result {
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::NotConnected
-                    | std::io::ErrorKind::UnexpectedEof
-            ) {
-                self.closed = true;
-                self.command.take();
-                bail!("background runtime closed while sending command: {error}");
-            }
-            return Err(error.into());
-        }
-        Ok(())
-    }
-
-    fn shutdown(&mut self) {
-        // EOF/protocol failure means the pipe is closed, not that the process
-        // exited. Always use the bounded shutdown path, even after a failure.
-        // Closing stdin requests worker shutdown without a potentially blocking
-        // write to a child that has stopped consuming commands. Discard any
-        // buffered partial command: BufWriter::drop would otherwise flush it.
-        if let Some(writer) = self.command.take() {
-            let (stdin, _) = writer.into_parts();
-            drop(stdin);
-        }
-        let deadline = Instant::now() + RUNTIME_SHUTDOWN_TIMEOUT;
-        while Instant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(Some(_)) => {
-                    self.closed = true;
-                    return;
-                }
-                Ok(None) => thread::sleep(Duration::from_millis(10)),
-                Err(_) => break,
-            }
-        }
-        let _ = terminate_child(&mut self.child);
-        self.closed = true;
     }
 }
 
 impl Drop for RuntimeProcess {
     fn drop(&mut self) {
-        self.shutdown();
+        // Preserve command ordering: a queued abandon/interrupt is observed before
+        // shutdown. Retirement itself already happens off the daemon thread.
+        let _ = self
+            .command_tx
+            .send(RuntimeCommand::Frontend(FrontendCommand::Shutdown));
+        self.command_wake.notify();
     }
 }
 
-pub(crate) fn run_worker(workspace: &Path) -> Result<()> {
-    // A daemon can die while a descendant still holds the command pipe open.
-    // Do not rely on stdin EOF alone to retire its now-obsolete runtime.
-    if let Ok(parent) = std::env::var("YEET_RUNTIME_PARENT_PID") {
-        if let Ok(parent) = parent.parse::<u32>() {
-            crate::platform::watch_runtime_parent(parent);
-        }
-    }
-    let mut service = BackendService::spawn(workspace.to_path_buf())?;
-    let stdout = std::io::stdout();
-    let mut output = BufWriter::new(stdout.lock());
-    write_envelope(
-        &mut output,
-        &BridgeEnvelope {
-            kind: "state".into(),
-            state: Some(service.state_snapshot()),
-            message: None,
-        },
-    )?;
-
-    let (input_tx, input_rx) = mpsc::sync_channel(256);
-    thread::spawn(move || worker_input_reader(input_tx));
-    let mut input_closed = false;
-
-    loop {
-        while let Ok(input) = input_rx.try_recv() {
-            match input {
-                WorkerInput::Command(RuntimeCommand::Frontend { command }) => {
-                    if let Err(error) = service.send(command) {
-                        write_envelope(&mut output, &error_envelope(error.to_string()))?;
-                    }
-                }
-                WorkerInput::Command(RuntimeCommand::AbandonStuckRun { reason }) => {
-                    if let Err(error) = service.abandon_stuck_run(&reason) {
-                        write_envelope(&mut output, &error_envelope(error.to_string()))?;
-                    }
-                }
-                WorkerInput::ProtocolError(error) => {
-                    write_envelope(&mut output, &error_envelope(error))?;
-                }
-                WorkerInput::Closed => input_closed = true,
+fn handle_runtime_command(
+    service: &mut BackendService,
+    command: RuntimeCommand,
+    event_tx: &Sender<BridgeEnvelope>,
+    daemon_wake: &Wake,
+) -> bool {
+    let result = match command {
+        RuntimeCommand::Frontend(FrontendCommand::Shutdown) => {
+            let result = service.send(FrontendCommand::Shutdown);
+            if let Err(error) = result {
+                send_runtime_error(event_tx, daemon_wake, error);
             }
+            return false;
         }
+        RuntimeCommand::Frontend(command) => service.send(command),
+        RuntimeCommand::AdoptCatalog(catalog) => {
+            service.adopt_session_catalog(&catalog);
+            Ok(())
+        }
+        RuntimeCommand::AbandonStuckRun(reason) => service.abandon_stuck_run(&reason),
+    };
 
-        if input_closed && !service.is_closed() {
-            let _ = service.send(FrontendCommand::Shutdown);
-        }
-
-        while let Some(event) = service.try_recv() {
-            let BackendEvent::Envelope(envelope) = event;
-            write_envelope(&mut output, &envelope)?;
-        }
-
-        if service.is_closed() {
-            break;
-        }
-        thread::sleep(WORKER_POLL_INTERVAL);
+    if let Err(error) = result {
+        send_runtime_error(event_tx, daemon_wake, error);
     }
-
-    Ok(())
+    true
 }
 
-fn runtime_reader(stdout: std::process::ChildStdout, tx: mpsc::SyncSender<WorkerEvent>) {
-    let mut reader = BufReader::new(stdout);
-    loop {
-        match read_bounded_frame(&mut reader, MAX_BACKGROUND_FRAME_BYTES) {
-            Ok(Some(frame)) => match serde_json::from_slice::<BridgeEnvelope>(&frame) {
-                Ok(envelope) => {
-                    if tx.send(WorkerEvent::Envelope(Box::new(envelope))).is_err() {
-                        return;
-                    }
-                }
-                Err(error) => {
-                    let _ = tx.send(WorkerEvent::ProtocolError(format!(
-                        "invalid background runtime frame: {error}"
-                    )));
-                    return;
-                }
-            },
-            Ok(None) => break,
-            Err(error) => {
-                let _ = tx.send(WorkerEvent::ProtocolError(format!(
-                    "background runtime read failed: {error}"
-                )));
-                return;
-            }
+fn drain_backend_events(
+    service: &BackendService,
+    event_tx: &Sender<BridgeEnvelope>,
+    daemon_wake: &Wake,
+) {
+    while let Some(event) = service.try_recv() {
+        let BackendEvent::Envelope(envelope) = event;
+        if event_tx.send(envelope).is_err() {
+            return;
         }
+        daemon_wake.notify();
     }
-    let _ = tx.send(WorkerEvent::Closed);
 }
 
-fn worker_input_reader(tx: mpsc::SyncSender<WorkerInput>) {
-    let stdin = std::io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    loop {
-        match read_bounded_frame(&mut reader, MAX_CLIENT_COMMAND_BYTES) {
-            Ok(Some(frame)) => match serde_json::from_slice::<RuntimeCommand>(&frame) {
-                Ok(command) => {
-                    if tx.send(WorkerInput::Command(command)).is_err() {
-                        return;
-                    }
-                }
-                Err(error) => {
-                    if tx
-                        .send(WorkerInput::ProtocolError(format!(
-                            "invalid supervisor command: {error}"
-                        )))
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            },
-            Ok(None) => break,
-            Err(error) => {
-                let _ = tx.send(WorkerInput::ProtocolError(format!(
-                    "supervisor command read failed: {error}"
-                )));
-                return;
-            }
-        }
-    }
-    let _ = tx.send(WorkerInput::Closed);
-}
-
-fn write_envelope(writer: &mut impl Write, envelope: &BridgeEnvelope) -> Result<()> {
-    let mut frame = serde_json::to_vec(envelope)?;
-    if frame.len() > MAX_BACKGROUND_FRAME_BYTES {
-        bail!("background protocol frame exceeded its limit");
-    }
-    frame.push(b'\n');
-    writer.write_all(&frame)?;
-    writer.flush()?;
-    Ok(())
-}
-
-fn error_envelope(message: String) -> BridgeEnvelope {
-    BridgeEnvelope {
+fn send_runtime_error(event_tx: &Sender<BridgeEnvelope>, daemon_wake: &Wake, error: anyhow::Error) {
+    let _ = event_tx.send(BridgeEnvelope {
         kind: "error".into(),
         state: None,
-        message: Some(message),
-    }
-}
-
-fn terminate_child(child: &mut Child) -> Result<()> {
-    if child.try_wait()?.is_none() {
-        let pid = child.id();
-        if force_terminate_process_tree(pid).is_err() {
-            let _ = child.kill();
-        }
-    }
-    let _ = child.wait();
-    Ok(())
-}
-
-#[cfg(all(test, unix))]
-mod lifecycle_tests {
-    use super::*;
-
-    #[test]
-    fn closed_pipe_does_not_wait_forever_for_live_child() {
-        let mut command = Command::new("sleep");
-        command.arg("30").stdin(Stdio::null()).stdout(Stdio::null());
-        configure_process_group(&mut command);
-        let child = command.spawn().unwrap();
-        let (_tx, events) = mpsc::channel();
-        let mut runtime = RuntimeProcess {
-            child,
-            command: None,
-            events,
-            state: BridgeState::default(),
-            closed: true,
-        };
-        let started = Instant::now();
-        runtime.shutdown();
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(runtime.child.try_wait().unwrap().is_some());
-    }
+        message: Some(error.to_string()),
+    });
+    daemon_wake.notify();
 }

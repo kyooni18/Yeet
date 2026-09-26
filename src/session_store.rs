@@ -31,6 +31,9 @@ const OBJECTS_DIR: &str = ".objects";
 const MANIFEST_FILE: &str = ".current.json";
 const GOAL_STATE_FILE: &str = ".goal.json";
 const LEGACY_GOAL_STATE_FILE: &str = ".infinity.json";
+const WORKSPACE_REGISTRY_FILE: &str = "workspaces.json";
+const WORKSPACE_MARKER_DIR: &str = ".yeet";
+const WORKSPACE_MARKER_FILE: &str = "workspace.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,7 +45,12 @@ pub struct StoredSession {
     pub title: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Last known location only. Identity is `workspace_id`, which lives in
+    /// the workspace itself so sessions follow the folder when it moves.
     pub workspace_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Stored relative to the workspace root when inside it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -77,6 +85,12 @@ pub struct StoredRun {
     pub finished_at: Option<DateTime<Utc>>,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_start: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_start: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_entry_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -108,6 +122,8 @@ struct SessionListMetadata {
     title: String,
     updated_at: DateTime<Utc>,
     workspace_root: String,
+    #[serde(default)]
+    workspace_id: Option<String>,
     model: String,
     #[serde(default)]
     message_count: Option<usize>,
@@ -118,6 +134,7 @@ struct SessionListRecord {
     title: String,
     updated_at: DateTime<Utc>,
     workspace_root: String,
+    workspace_id: Option<String>,
     model: String,
     message_count: usize,
 }
@@ -190,6 +207,7 @@ impl SessionStore {
             return Ok(());
         };
         self.migrate_legacy_layouts();
+        self.backfill_workspace_ids();
         cleanup_stale_materialization_links_in_store(&self.directory)
     }
 
@@ -407,15 +425,81 @@ impl SessionStore {
     }
 
     pub fn list(&self, workspace_root: &Path) -> Result<Vec<SessionSummary>> {
-        self.serialized(false, || self.list_unlocked(workspace_root))
+        self.serialized(false, || {
+            let records = self.scan_records()?;
+            let mut resolver = WorkspaceResolver::new(self, workspace_root)?;
+            let current = resolver.current_id.clone();
+            let sessions = session_summaries(&records, &mut resolver, &current);
+            resolver.finish()?;
+            Ok(sessions)
+        })
     }
 
-    fn list_unlocked(&self, workspace_root: &Path) -> Result<Vec<SessionSummary>> {
+    pub fn list_workspaces(&self, current_workspace: &Path) -> Result<Vec<WorkspaceSummary>> {
+        Ok(self.list_workspace_catalog(current_workspace)?.0)
+    }
+
+    /// Groups sessions by workspace identity rather than absolute path, so a
+    /// moved workspace keeps its sessions and a deleted one drops out.
+    pub fn list_workspace_catalog(
+        &self,
+        current_workspace: &Path,
+    ) -> Result<(Vec<WorkspaceSummary>, Vec<WorkspaceSessionGroup>)> {
+        self.serialized(false, || {
+            let records = self.scan_records()?;
+            let mut resolver = WorkspaceResolver::new(self, current_workspace)?;
+            let mut grouped: BTreeMap<String, (PathBuf, Option<DateTime<Utc>>, usize)> =
+                BTreeMap::new();
+            grouped.insert(
+                resolver.current_id.clone(),
+                (resolver.current_path.clone(), None, 0),
+            );
+            for record in &records {
+                let Some((id, path)) = resolver.resolve(record) else {
+                    continue;
+                };
+                let (_, latest, count) = grouped.entry(id).or_insert((path, None, 0));
+                *count += 1;
+                match latest {
+                    Some(existing) if *existing >= record.updated_at => {}
+                    _ => *latest = Some(record.updated_at),
+                }
+            }
+            let current_id = resolver.current_id.clone();
+            let mut workspaces = grouped
+                .into_iter()
+                .map(|(id, (path, updated_at, session_count))| WorkspaceSummary {
+                    is_current: id == current_id,
+                    id,
+                    path: path.to_string_lossy().into_owned(),
+                    display_name: workspace_display_name(&path),
+                    updated_at: updated_at.map(|value| value.to_rfc3339()),
+                    session_count,
+                })
+                .collect::<Vec<_>>();
+            workspaces.sort_by(|lhs, rhs| {
+                rhs.is_current
+                    .cmp(&lhs.is_current)
+                    .then_with(|| rhs.updated_at.cmp(&lhs.updated_at))
+                    .then_with(|| lhs.display_name.cmp(&rhs.display_name))
+                    .then_with(|| lhs.path.cmp(&rhs.path))
+            });
+            let session_groups = workspaces
+                .iter()
+                .map(|workspace| WorkspaceSessionGroup {
+                    workspace_id: workspace.id.clone(),
+                    sessions: session_summaries(&records, &mut resolver, &workspace.id),
+                })
+                .collect();
+            resolver.finish()?;
+            Ok((workspaces, session_groups))
+        })
+    }
+
+    fn scan_records(&self) -> Result<Vec<SessionListRecord>> {
         self.ensure()?;
-        let canonical = workspace_root
-            .canonicalize()
-            .unwrap_or_else(|_| workspace_root.to_path_buf());
         let mut result = Vec::new();
+        let mut seen = HashSet::new();
         for entry in fs::read_dir(&self.directory)? {
             let entry = entry?;
             let path = entry.path();
@@ -429,10 +513,10 @@ impl SessionStore {
             let Some(id) = id.and_then(|v| v.to_str()) else {
                 continue;
             };
-            if result.iter().any(|s: &SessionSummary| s.id == id) {
+            if validate_id(id).is_err() || !seen.insert(id.to_owned()) {
                 continue;
             }
-            let summary = if path.is_dir()
+            let record = if path.is_dir()
                 && (path.join(MANIFEST_FILE).is_file() || path.join("metadata.json").is_file())
             {
                 let manifest = fs::read(path.join(MANIFEST_FILE))
@@ -445,10 +529,9 @@ impl SessionStore {
                 } else {
                     fs::read(path.join("metadata.json")).ok()
                 };
-                let Some(metadata) = metadata else {
-                    continue;
-                };
-                let Ok(metadata) = serde_json::from_slice::<SessionListMetadata>(&metadata) else {
+                let Some(metadata) = metadata
+                    .and_then(|bytes| serde_json::from_slice::<SessionListMetadata>(&bytes).ok())
+                else {
                     continue;
                 };
                 let message_count = metadata.message_count.unwrap_or_else(|| {
@@ -470,6 +553,7 @@ impl SessionStore {
                     title: metadata.title,
                     updated_at: metadata.updated_at,
                     workspace_root: metadata.workspace_root,
+                    workspace_id: metadata.workspace_id,
                     model: metadata.model,
                     message_count,
                 }
@@ -482,139 +566,21 @@ impl SessionStore {
                     title: session.title,
                     updated_at: session.updated_at,
                     workspace_root: session.workspace_root,
+                    workspace_id: session.workspace_id,
                     model: session.model,
                     message_count: session.conversation.len(),
                 }
             };
-            let root = PathBuf::from(&summary.workspace_root)
-                .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(&summary.workspace_root));
-            if root != canonical {
-                continue;
-            }
-            result.push(SessionSummary {
-                id: summary.id,
-                title: summary.title,
-                updated_at: summary.updated_at.to_rfc3339(),
-                model: summary.model,
-                message_count: summary.message_count,
-            });
+            result.push(record);
         }
-        result.sort_by(|lhs, rhs| rhs.updated_at.cmp(&lhs.updated_at));
         Ok(result)
     }
 
-    pub fn list_workspaces(&self, current_workspace: &Path) -> Result<Vec<WorkspaceSummary>> {
-        self.serialized(false, || self.list_workspaces_unlocked(current_workspace))
-    }
-
-    fn list_workspaces_unlocked(&self, current_workspace: &Path) -> Result<Vec<WorkspaceSummary>> {
-        self.ensure()?;
-        let current = current_workspace
-            .canonicalize()
-            .unwrap_or_else(|_| current_workspace.to_path_buf());
-        let mut grouped: BTreeMap<PathBuf, (Option<DateTime<Utc>>, usize)> = BTreeMap::new();
-        grouped.insert(current.clone(), (None, 0));
-        let mut seen_ids = HashSet::new();
-
-        for entry in fs::read_dir(&self.directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            let id = if path.is_dir() {
-                path.file_name()
-            } else if path.extension().and_then(|value| value.to_str()) == Some("json") {
-                path.file_stem()
-            } else {
-                None
-            };
-            let Some(id) = id.and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if !seen_ids.insert(id.to_owned()) {
-                continue;
-            }
-
-            let workspace = if path.is_dir()
-                && (path.join(MANIFEST_FILE).is_file() || path.join("metadata.json").is_file())
-            {
-                let manifest = fs::read(path.join(MANIFEST_FILE))
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<SemanticManifest>(&bytes).ok());
-                let metadata = if let Some(manifest) = manifest.as_ref() {
-                    read_manifest_component(&path, manifest, "metadata.json")
-                        .ok()
-                        .flatten()
-                } else {
-                    fs::read(path.join("metadata.json")).ok()
-                };
-                let Some(metadata) = metadata
-                    .and_then(|bytes| serde_json::from_slice::<SessionListMetadata>(&bytes).ok())
-                else {
-                    continue;
-                };
-                (metadata.workspace_root, metadata.updated_at)
-            } else {
-                let Ok(session) = self.load_unlocked(id) else {
-                    continue;
-                };
-                (session.workspace_root, session.updated_at)
-            };
-
-            let (workspace_root, updated_at) = workspace;
-            let raw_root = PathBuf::from(workspace_root);
-            let root = raw_root.canonicalize().unwrap_or(raw_root);
-            if !root.is_dir() {
-                continue;
-            }
-            let (latest, count) = grouped.entry(root).or_insert((None, 0));
-            *count += 1;
-            match latest {
-                Some(existing) if *existing >= updated_at => {}
-                _ => *latest = Some(updated_at),
-            }
-        }
-
-        let mut result = grouped
-            .into_iter()
-            .map(|(path, (updated_at, session_count))| {
-                let path_string = path.to_string_lossy().into_owned();
-                WorkspaceSummary {
-                    id: path_string.clone(),
-                    path: path_string,
-                    display_name: workspace_display_name(&path),
-                    updated_at: updated_at.map(|value| value.to_rfc3339()),
-                    session_count,
-                    is_current: path == current,
-                }
-            })
-            .collect::<Vec<_>>();
-        result.sort_by(|lhs, rhs| {
-            rhs.is_current
-                .cmp(&lhs.is_current)
-                .then_with(|| rhs.updated_at.cmp(&lhs.updated_at))
-                .then_with(|| lhs.display_name.cmp(&rhs.display_name))
-                .then_with(|| lhs.path.cmp(&rhs.path))
-        });
-        Ok(result)
-    }
-
-    pub fn list_workspace_catalog(
-        &self,
-        current_workspace: &Path,
-    ) -> Result<(Vec<WorkspaceSummary>, Vec<WorkspaceSessionGroup>)> {
-        self.serialized(false, || {
-            let workspaces = self.list_workspaces_unlocked(current_workspace)?;
-            let session_groups = workspaces
-                .iter()
-                .map(|workspace| {
-                    Ok(WorkspaceSessionGroup {
-                        workspace_id: workspace.id.clone(),
-                        sessions: self.list_unlocked(Path::new(&workspace.path))?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok((workspaces, session_groups))
-        })
+    fn registry_path(&self) -> PathBuf {
+        self.directory
+            .parent()
+            .unwrap_or(&self.directory)
+            .join(WORKSPACE_REGISTRY_FILE)
     }
 
     pub fn is_debate_session(&self, id: &str) -> bool {
@@ -958,6 +924,39 @@ impl SessionStore {
                 continue;
             }
             let _ = fs::remove_file(path);
+        }
+    }
+
+    /// Stamps pre-identity sessions with their workspace's identity while the
+    /// recorded folder still exists, so they follow later moves.
+    fn backfill_workspace_ids(&self) {
+        let Ok(records) = self.scan_records() else {
+            return;
+        };
+        for record in records
+            .iter()
+            .filter(|record| record.workspace_id.is_none())
+        {
+            let Ok(root) = Path::new(&record.workspace_root).canonicalize() else {
+                continue;
+            };
+            if !root.is_dir() {
+                continue;
+            }
+            let Ok(workspace_id) = ensure_workspace_id(&root) else {
+                continue;
+            };
+            let Ok(mut session) = self.load_unlocked(&record.id) else {
+                continue;
+            };
+            session.workspace_id = Some(workspace_id);
+            session.working_directory = session
+                .working_directory
+                .map(|path| workspace_relative_path(&root, &path));
+            for path in &mut session.context_roots {
+                *path = workspace_relative_path(&root, path);
+            }
+            let _ = self.save_unlocked(&session);
         }
     }
 
@@ -1367,4 +1366,346 @@ fn workspace_display_name(path: &Path) -> String {
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceRegistry {
+    #[serde(default)]
+    workspaces: BTreeMap<String, RegisteredWorkspace>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisteredWorkspace {
+    path: String,
+    last_seen: DateTime<Utc>,
+}
+
+/// Maps workspace identities to their current location for one listing pass.
+/// A workspace is found at its registered path or the session's last known
+/// path, but only if the marker there still carries the same identity.
+/// Entries whose folder vanished are pruned; the sessions themselves are kept
+/// and reappear once the workspace is opened from its new location.
+struct WorkspaceResolver {
+    registry_path: PathBuf,
+    registry: WorkspaceRegistry,
+    dirty: bool,
+    current_id: String,
+    current_path: PathBuf,
+    located: BTreeMap<String, Option<PathBuf>>,
+    legacy: BTreeMap<PathBuf, Option<String>>,
+}
+
+impl WorkspaceResolver {
+    fn new(store: &SessionStore, current: &Path) -> Result<Self> {
+        let current_path = current
+            .canonicalize()
+            .unwrap_or_else(|_| current.to_path_buf());
+        let current_id = ensure_workspace_id(&current_path)?;
+        let registry_path = store.registry_path();
+        let mut registry = fs::read(&registry_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<WorkspaceRegistry>(&bytes).ok())
+            .unwrap_or_default();
+        let current_string = current_path.to_string_lossy().into_owned();
+        // Whatever used to live at this path has been replaced by the current
+        // workspace, so no other identity may keep claiming it.
+        registry
+            .workspaces
+            .retain(|id, entry| *id == current_id || entry.path != current_string);
+        registry.workspaces.insert(
+            current_id.clone(),
+            RegisteredWorkspace {
+                path: current_string,
+                last_seen: Utc::now(),
+            },
+        );
+        let mut located = BTreeMap::new();
+        located.insert(current_id.clone(), Some(current_path.clone()));
+        Ok(Self {
+            registry_path,
+            registry,
+            dirty: true,
+            current_id,
+            current_path,
+            located,
+            legacy: BTreeMap::new(),
+        })
+    }
+
+    fn resolve(&mut self, record: &SessionListRecord) -> Option<(String, PathBuf)> {
+        let hint = PathBuf::from(&record.workspace_root);
+        let id = match &record.workspace_id {
+            Some(id) => id.clone(),
+            None => self.legacy_id(&hint)?,
+        };
+        let path = self.locate(&id, &hint)?;
+        Some((id, path))
+    }
+
+    fn legacy_id(&mut self, root: &Path) -> Option<String> {
+        let root = root.canonicalize().ok()?;
+        if let Some(cached) = self.legacy.get(&root) {
+            return cached.clone();
+        }
+        let id = root
+            .is_dir()
+            .then(|| ensure_workspace_id(&root).ok())
+            .flatten();
+        self.legacy.insert(root, id.clone());
+        id
+    }
+
+    fn locate(&mut self, id: &str, hint: &Path) -> Option<PathBuf> {
+        if let Some(cached) = self.located.get(id) {
+            return cached.clone();
+        }
+        let registered = self
+            .registry
+            .workspaces
+            .get(id)
+            .map(|entry| PathBuf::from(&entry.path));
+        let found = registered
+            .iter()
+            .map(PathBuf::as_path)
+            .chain([hint])
+            .filter_map(|candidate| candidate.canonicalize().ok())
+            .find(|candidate| read_workspace_id(candidate).as_deref() == Some(id));
+        match &found {
+            Some(path) if registered.as_ref() != Some(path) => {
+                let last_seen = self
+                    .registry
+                    .workspaces
+                    .get(id)
+                    .map_or_else(Utc::now, |entry| entry.last_seen);
+                self.registry.workspaces.insert(
+                    id.to_owned(),
+                    RegisteredWorkspace {
+                        path: path.to_string_lossy().into_owned(),
+                        last_seen,
+                    },
+                );
+                self.dirty = true;
+            }
+            None if registered.is_some() => {
+                self.registry.workspaces.remove(id);
+                self.dirty = true;
+            }
+            _ => {}
+        }
+        self.located.insert(id.to_owned(), found.clone());
+        found
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.dirty {
+            write_private_replace(
+                &self.registry_path,
+                &serde_json::to_vec_pretty(&self.registry)?,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn session_summaries(
+    records: &[SessionListRecord],
+    resolver: &mut WorkspaceResolver,
+    workspace_id: &str,
+) -> Vec<SessionSummary> {
+    let mut result = records
+        .iter()
+        .filter(|record| {
+            resolver
+                .resolve(record)
+                .is_some_and(|(id, _)| id == workspace_id)
+        })
+        .map(|record| SessionSummary {
+            id: record.id.clone(),
+            title: record.title.clone(),
+            updated_at: record.updated_at.to_rfc3339(),
+            model: record.model.clone(),
+            message_count: record.message_count,
+        })
+        .collect::<Vec<_>>();
+    result.sort_by(|lhs, rhs| rhs.updated_at.cmp(&lhs.updated_at));
+    result
+}
+
+fn workspace_marker_path(root: &Path) -> PathBuf {
+    root.join(WORKSPACE_MARKER_DIR).join(WORKSPACE_MARKER_FILE)
+}
+
+/// Reads the stable identity stored inside a workspace, if it has one.
+pub fn read_workspace_id(root: &Path) -> Option<String> {
+    let bytes = fs::read(workspace_marker_path(root)).ok()?;
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
+    let id = value.get("id")?.as_str()?;
+    Uuid::parse_str(id).ok()?;
+    Some(id.to_owned())
+}
+
+/// Returns the workspace's identity, creating `.yeet/workspace.json` on first use.
+pub fn ensure_workspace_id(root: &Path) -> Result<String> {
+    use std::io::Write;
+    if let Some(id) = read_workspace_id(root) {
+        return Ok(id);
+    }
+    let marker = workspace_marker_path(root);
+    let directory = marker.parent().context("workspace marker has no parent")?;
+    ensure!(
+        !directory.is_symlink(),
+        "Refusing to use symlinked workspace directory {}",
+        directory.display()
+    );
+    create_private_dir(directory)?;
+    let id = Uuid::new_v4().to_string();
+    let data = serde_json::to_vec_pretty(&serde_json::json!({ "id": id }))?;
+    // create_new so concurrent first opens agree on one identity.
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    match options.open(&marker) {
+        Ok(mut file) => {
+            file.write_all(&data)?;
+            file.sync_all()?;
+            Ok(id)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_workspace_id(root).context("workspace marker exists but is unreadable")
+        }
+        Err(error) => Err(error).context("create workspace marker"),
+    }
+}
+
+/// Stores `path` relative to `root` when it lives inside the workspace, so the
+/// session stays valid after the workspace moves.
+pub fn workspace_relative_path(root: &Path, path: &str) -> String {
+    match Path::new(path).strip_prefix(root) {
+        Ok(relative) if relative.as_os_str().is_empty() => ".".into(),
+        Ok(relative) => relative.to_string_lossy().into_owned(),
+        Err(_) => path.to_owned(),
+    }
+}
+
+/// Resolves a stored session path against the workspace's current root.
+/// Legacy absolute paths under the session's old root are rebased as well.
+pub fn resolve_workspace_path(root: &Path, stored_root: &str, path: &str) -> String {
+    let stored = Path::new(path);
+    let resolved = if stored.is_relative() {
+        root.join(stored)
+    } else if let Some(relative) = (!stored_root.is_empty())
+        .then(|| stored.strip_prefix(stored_root).ok())
+        .flatten()
+    {
+        root.join(relative)
+    } else {
+        stored.to_path_buf()
+    };
+    normalize_lexical(&resolved).to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(id: &str, root: &Path, workspace_id: Option<String>) -> StoredSession {
+        StoredSession {
+            debate: None,
+            version: SESSION_LAYOUT_VERSION,
+            id: id.into(),
+            title: id.into(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            workspace_root: root.display().to_string(),
+            workspace_id,
+            working_directory: Some("src".into()),
+            context_roots: vec![".".into()],
+            model: "test".into(),
+            token_usage: Usage::default(),
+            credit_usage: 0,
+            conversation: Vec::new(),
+            model_history: Vec::new(),
+            runs: Vec::new(),
+            retained_debate_knowledge: Vec::new(),
+            attached_harness_capabilities: None,
+            disabled_capabilities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sessions_follow_moved_workspace_and_drop_deleted_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let store = SessionStore::new(&config);
+        let original = temp.path().join("project");
+        let other = temp.path().join("other");
+        fs::create_dir_all(&original).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let original = original.canonicalize().unwrap();
+        let id = ensure_workspace_id(&original).unwrap();
+        store
+            .save(&session("a", &original, Some(id.clone())))
+            .unwrap();
+
+        let moved = temp.path().join("renamed");
+        fs::rename(&original, &moved).unwrap();
+        let moved = moved.canonicalize().unwrap();
+        assert!(store.list(&other).unwrap().is_empty());
+        let listed = store.list(&moved).unwrap();
+        assert_eq!(listed.len(), 1);
+
+        let (workspaces, groups) = store.list_workspace_catalog(&other).unwrap();
+        let entry = workspaces.iter().find(|w| w.id == id).unwrap();
+        assert_eq!(Path::new(&entry.path), moved);
+        assert!(
+            groups
+                .iter()
+                .any(|g| g.workspace_id == id && g.sessions.len() == 1)
+        );
+
+        fs::remove_dir_all(&moved).unwrap();
+        let (workspaces, _) = store.list_workspace_catalog(&other).unwrap();
+        assert!(workspaces.iter().all(|w| w.id != id));
+    }
+
+    #[test]
+    fn legacy_sessions_are_adopted_by_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(&temp.path().join("config"));
+        let root = temp.path().join("legacy");
+        fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let mut legacy = session("b", &root, None);
+        legacy.working_directory = Some(root.join("src").display().to_string());
+        store.save(&legacy).unwrap();
+        store.prepare().unwrap();
+        let loaded = store.load("b").unwrap();
+        assert_eq!(loaded.workspace_id, read_workspace_id(&root));
+        assert_eq!(loaded.working_directory.as_deref(), Some("src"));
+
+        let moved = temp.path().join("moved");
+        fs::rename(&root, &moved).unwrap();
+        assert_eq!(store.list(&moved).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn stored_paths_rebase_onto_current_root() {
+        let root = Path::new("/new/place");
+        assert_eq!(
+            resolve_workspace_path(root, "/old", "src"),
+            "/new/place/src"
+        );
+        assert_eq!(resolve_workspace_path(root, "/old", "."), "/new/place");
+        assert_eq!(
+            resolve_workspace_path(root, "/old", "/old/lib"),
+            "/new/place/lib"
+        );
+        assert_eq!(
+            resolve_workspace_path(root, "/old", "/elsewhere"),
+            "/elsewhere"
+        );
+        assert_eq!(workspace_relative_path(root, "/new/place"), ".");
+        assert_eq!(workspace_relative_path(root, "/new/place/a/b"), "a/b");
+    }
 }

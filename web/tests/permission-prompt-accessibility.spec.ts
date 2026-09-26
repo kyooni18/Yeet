@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('permission alertdialog takes keyboard focus and restores the prior control after resolution', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.focus()
 
   await emit(page, {
@@ -76,7 +76,7 @@ test('permission alertdialog takes keyboard focus and restores the prior control
 })
 
 test('a replacement permission is re-announced from the dialog root without losing the original return target', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.focus()
 
   await emit(page, {
@@ -138,7 +138,7 @@ test('a replacement permission is re-announced from the dialog root without losi
 })
 
 test('permission resolution does not steal focus back after the user deliberately moves elsewhere', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.focus()
 
   await emit(page, {

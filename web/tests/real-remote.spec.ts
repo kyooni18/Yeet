@@ -35,8 +35,18 @@ test('negotiates the real semantic Remote protocol without legacy frame polling'
   await page.goto('/')
   expect((await page.request.get('/api/frame')).status()).toBe(404)
   expect((await page.request.post('/api/input', { data: {} })).status()).toBe(404)
-  await expect(page.locator('.desktop-status').first()).toContainText('connected')
-  await expect(page.getByTestId('composer')).toBeVisible()
+  await expect(page.locator('.connection-toast')).toHaveCount(0)
+  await expect(page.locator('.composer-shell')).toBeVisible()
+
+  const usageButton = page.locator('.usage-control > button')
+  await expect(usageButton).toBeVisible()
+  await usageButton.click()
+  await expect(usageButton).toHaveAttribute('aria-expanded', 'true')
+  const usagePopover = page.locator('#provider-usage-popover')
+  await expect(usagePopover).toBeVisible()
+  await expect(usagePopover).toHaveAttribute('data-positioned', 'true')
+  await page.keyboard.press('Escape')
+  await expect(usagePopover).toHaveCount(0)
 
   await expect.poll(() => remoteSocketUrl).toContain('/api/ws')
   await expect.poll(() => sentFrames.some((frame) => {
@@ -87,7 +97,8 @@ test('negotiates the real semantic Remote protocol without legacy frame polling'
   expect(firstClientId).toBeTruthy()
 
   await page.reload()
-  await expect(page.locator('.desktop-status').first()).toContainText('connected')
+  await expect(page.locator('.composer-shell')).toBeVisible()
+  await expect(page.locator('.connection-toast')).toHaveCount(0)
   const secondResume = await page.evaluate(() => sessionStorage.getItem('yeet.remote.resume.v1'))
   expect(JSON.parse(secondResume || '{}').clientId).toBe(firstClientId)
 
@@ -149,7 +160,7 @@ test('handles fatal Remote handshake errors without WebSocket console exceptions
   })
 
   await page.goto('/')
-  await expect(page.locator('.desktop-status').first()).toContainText('failed')
+  await expect(page.getByRole('alert', { name: 'Connection failed' })).toBeVisible()
   await expect.poll(() => socketClosed).toBe(true)
 
   expect(socketErrors).toEqual([])

@@ -1,45 +1,40 @@
 import { expect, test } from '@playwright/test'
 import { installMockRemote } from './mockRemote'
 
-test('leaving Settings does not trap browser history on the Settings route', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop')
-
+test.beforeEach(async ({ page }) => {
   await installMockRemote(page)
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Settings' }).click()
-  await expect(page).toHaveURL(/\/settings/)
-
-  await page.getByRole('button', { name: 'Back to conversation' }).click()
-  await expect(page).toHaveURL(/\/$/)
-
-  await page.goBack()
-  await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByRole('textbox', { name: 'Message Yeet' })).toBeVisible()
 })
 
-test('direct Settings entry still returns safely to the conversation', async ({ page }) => {
-  await installMockRemote(page)
-  await page.goto('/settings/runtime')
-  await expect(page.getByRole('heading', { name: 'Runtime' })).toBeVisible()
+async function openSettings(page: Parameters<typeof installMockRemote>[0]) {
+  const sidebar = page.locator('.remote-sidebar')
+  const isOpen = (await sidebar.getAttribute('class'))?.includes('is-open') ?? false
+  if (!isOpen) {
+    await page.getByRole('button', { name: 'Open sidebar' }).click()
+    await expect(sidebar).toHaveClass(/is-open/)
+    await sidebar.evaluate(async (element) => {
+      await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined)))
+    })
+  }
+  await sidebar.getByRole('button', { name: 'Settings', exact: true }).click()
+  const settings = page.getByRole('dialog', { name: 'Settings' })
+  await expect(settings).toBeVisible()
+  return settings
+}
 
-  await page.getByRole('button', { name: 'Back to conversation' }).click()
-  await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByRole('textbox', { name: 'Message Yeet' })).toBeVisible()
-})
+test('Settings is an in-place sheet that can be dismissed and reopened without history changes', async ({ page }) => {
+  const before = await page.evaluate(() => ({ href: location.href, length: history.length }))
 
+  let settings = await openSettings(page)
+  await settings.getByRole('button', { name: 'Close' }).click()
+  await expect(settings).toHaveCount(0)
 
-test('invalid Settings section deep links canonicalize to Runtime without adding a history trap', async ({ page }) => {
-  await installMockRemote(page)
-  await page.goto('/')
-  await expect(page.getByText('Interface ready')).toBeVisible()
-  await page.goto('/settings/not-a-real-section')
+  settings = await openSettings(page)
+  await page.keyboard.press('Escape')
+  await expect(settings).toHaveCount(0)
 
-  await expect(page.getByRole('heading', { name: 'Runtime' })).toBeVisible()
-  await expect(page).toHaveURL(/\/settings\/runtime$/)
-
-  await page.goBack()
-  await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByRole('textbox', { name: 'Message Yeet' })).toBeVisible()
+  const after = await page.evaluate(() => ({ href: location.href, length: history.length }))
+  expect(after).toEqual(before)
+  await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible()
 })

@@ -8,13 +8,14 @@ pub(super) const SEARCH_TOOL: &str = "search_tools";
 const STABLE_INSPECTION_TOOLS: [&str; 2] = ["read_file", "search_workspace"];
 const STABLE_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
 const STABLE_BOUNDED_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
-const ARTIFACT_RECOVERY_TOOLS: [&str; 3] = ["artifact_info", "read_artifact", "search_artifact"];
 
 // These capabilities are recovery/context lookups, not ordinary workspace
 // evidence. A fuzzy search_tools query must not attach them just because their
 // descriptions contain generic words such as "project", "source", or
 // "history". Exact tool-name queries remain allowed for genuine recovery.
-const FUZZY_DISCOVERY_BLOCKED_TOOLS: [&str; 8] = [
+const FUZZY_DISCOVERY_BLOCKED_TOOLS: [&str; 10] = [
+    "context_status",
+    "new_context",
     "context_history",
     "task_notes",
     "project_memory_recall",
@@ -25,12 +26,12 @@ const FUZZY_DISCOVERY_BLOCKED_TOOLS: [&str; 8] = [
     "search_artifact",
 ];
 
-fn blocked_from_fuzzy_discovery(name: &str) -> bool {
+pub(super) fn is_side_tool(name: &str) -> bool {
     FUZZY_DISCOVERY_BLOCKED_TOOLS.contains(&name)
 }
 
-fn artifact_recovery_is_ready(loaded: &HashSet<String>) -> bool {
-    loaded.contains("read_artifact")
+fn blocked_from_fuzzy_discovery(name: &str) -> bool {
+    is_side_tool(name)
 }
 
 pub(super) struct ToolDiscovery {
@@ -62,7 +63,6 @@ impl ToolDiscovery {
         discovery.search_enabled = false;
         discovery.load(STABLE_INSPECTION_TOOLS);
         discovery.load(STABLE_EXECUTION_TOOLS);
-        discovery.load(["deploy_agent"]);
         discovery
     }
 
@@ -115,8 +115,8 @@ impl ToolDiscovery {
         discovery
     }
 
-    /// Enable schema discovery after the request has established a concrete
-    /// reason to use a non-core capability (or after an artifact exists).
+    /// Enable one inference of schema discovery after the request has
+    /// established a concrete reason to use a non-core capability.
     pub fn enable_search(&mut self) {
         self.search_enabled = true;
     }
@@ -124,12 +124,11 @@ impl ToolDiscovery {
     pub fn search_enabled(&self) -> bool {
         self.search_enabled
     }
-
-    /// Preserve the canonical promotion order observed when an Agent turn moves
-    /// into web research. Reusing this exact suffix on a related next turn keeps
-    /// the provider-visible tool ABI byte-stable instead of bouncing 15 -> 12 -> 15.
+    /// Preserve only the web schemas when an Agent turn actually needs web
+    /// research. Capability activation is unrelated and remains discoverable on
+    /// demand instead of becoming permanent prompt overhead.
     pub fn carry_web_research_surface(&mut self) {
-        self.load(["web_search", "web_read", "activate_capability"]);
+        self.load(["web_search", "web_read"]);
     }
 
     /// Promote obvious specialized built-ins directly from request intent. This
@@ -164,7 +163,9 @@ impl ToolDiscovery {
         .iter()
         .any(|term| value.contains(term))
         {
-            self.load(["artifact_info", "read_artifact", "search_artifact"]);
+            // Artifact recovery is a side path. Make the discovery gateway
+            // available, but do not place readers in the foreground tool set.
+            self.enable_search();
         }
 
         let document_request = [
@@ -227,24 +228,25 @@ impl ToolDiscovery {
     }
 
     pub fn attached(&self, catalog: &[ToolDefinition]) -> Vec<ToolDefinition> {
-        let mut tools = Vec::new();
-        if self.search_enabled {
-            tools.push(ToolDefinition::new(
-                SEARCH_TOOL,
-                "Load missing tool schemas. Prefer exact tool names. Keyword discovery only attaches strong matches (a name match or multiple meaningful description terms), so generic words do not silently expand the provider-visible tool envelope. For Skills/MCP/Workers, load find_capabilities and activate_capability first.",
-                json!({"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
-            ));
-        }
         let catalog_by_name: HashMap<_, _> = catalog
             .iter()
             .map(|tool| (tool.name.as_str(), tool))
             .collect();
-        tools.extend(
-            self.loaded_order
-                .iter()
-                .filter_map(|name| catalog_by_name.get(name.as_str()).copied())
-                .cloned(),
-        );
+        let mut tools = self
+            .loaded_order
+            .iter()
+            .filter_map(|name| catalog_by_name.get(name.as_str()).copied())
+            .cloned()
+            .collect::<Vec<_>>();
+        if self.search_enabled {
+            // Keep discovery behind the foreground tools. Recovery/context
+            // schemas are side tools: attach them only after an exact request.
+            tools.push(ToolDefinition::new(
+                SEARCH_TOOL,
+                "Side-tool discovery. Load an auxiliary schema only for a concrete missing capability or recovery need. Recovery tools such as read_artifact, context_history, task_notes, and project_memory_recall are intentionally outside the foreground tool order; request them by exact name and reuse current evidence first. For Skills/MCP/Workers, load find_capabilities and activate_capability first.",
+                json!({"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
+            ));
+        }
         tools
     }
 
@@ -285,12 +287,6 @@ impl ToolDiscovery {
             .filter_map(|tool| {
                 let name = tool.name.to_lowercase();
                 let description = tool.description.as_deref().unwrap_or("").to_lowercase();
-                if ARTIFACT_RECOVERY_TOOLS.contains(&name.as_str())
-                    && !artifact_recovery_is_ready(&self.loaded)
-                    && !self.loaded.contains(&name)
-                {
-                    return None;
-                }
                 if exact_list && !words.contains(name.as_str()) {
                     return None;
                 }
@@ -419,5 +415,59 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"read_document".to_owned()));
         assert!(names.contains(&"analyze_data".to_owned()));
+    }
+
+    #[test]
+    fn artifact_recovery_stays_behind_trailing_side_discovery() {
+        let catalog = vec![
+            tool("read_file"),
+            tool("search_workspace"),
+            tool("run_shell"),
+            tool("read_artifact"),
+        ];
+        let mut discovery = ToolDiscovery::bounded_analysis();
+        discovery.promote_for_input("Inspect artifact id artifact-1");
+
+        let names = discovery
+            .attached(&catalog)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["read_file", "search_workspace", "run_shell", SEARCH_TOOL,]
+        );
+
+        let result: Value =
+            serde_json::from_str(&discovery.search(&json!({"query":"read_artifact"}), &catalog))
+                .unwrap();
+        assert_eq!(result["loaded"], json!(["read_artifact"]));
+
+        let names = discovery
+            .attached(&catalog)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "read_file",
+                "search_workspace",
+                "run_shell",
+                "read_artifact",
+                SEARCH_TOOL,
+            ]
+        );
+
+        // Once promoted, auxiliary schemas and discovery stay attached for the
+        // rest of this user turn so the provider-visible tool envelope remains
+        // append-only. A new turn gets a fresh ToolDiscovery instead.
+        let next_turn = ToolDiscovery::bounded_analysis();
+        let names = next_turn
+            .attached(&catalog)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["read_file", "search_workspace", "run_shell"]);
     }
 }

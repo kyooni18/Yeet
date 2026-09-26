@@ -142,7 +142,7 @@ test("OpenAI ChatGPT OAuth uses the Codex backend and account-scoped headers", a
   assert.equal(requestHeaders.originator, "codex_cli_rs");
 });
 
-test("OpenAI cache affinity stays stable within a context family and changes across windows", async () => {
+test("OpenAI cache affinity stays stable across recoverable windows and changes across families", async () => {
   const requests = [];
   const headers = [];
   const provider = new OpenAIProvider({
@@ -165,18 +165,18 @@ test("OpenAI cache affinity stays stable within a context family and changes acr
     messages: [{ role: "user", content: "hello" }],
     promptCache: true,
   };
-  const windowA = { sessionId: "session-a", contextWindowId: "window-a", cacheFamily: "window-a" };
-  await provider.complete({ ...base, contextKey: "window-a", metadata: windowA });
+  const familyA = { sessionId: "session-a", contextWindowId: "window-a", cacheFamily: "family-a" };
+  await provider.complete({ ...base, contextKey: "family-a", metadata: familyA });
   await provider.complete({
     ...base,
     tools: [...base.tools, { name: "run_shell", inputSchema: { type: "object" } }],
-    contextKey: "window-a",
-    metadata: windowA,
+    contextKey: "family-a",
+    metadata: { ...familyA, contextWindowId: "window-b" },
   });
   await provider.complete({
     ...base,
-    contextKey: "window-b",
-    metadata: { sessionId: "session-b", contextWindowId: "window-b", cacheFamily: "window-b" },
+    contextKey: "family-b",
+    metadata: { sessionId: "session-b", contextWindowId: "window-c", cacheFamily: "family-b" },
   });
 
   assert.match(requests[0].prompt_cache_key, /^yeet-v2-[0-9a-f]{48}$/);
@@ -186,9 +186,9 @@ test("OpenAI cache affinity stays stable within a context family and changes acr
   assert.equal(headers[1]["session-id"], "session-a");
   assert.equal(headers[2]["session-id"], "session-b");
   assert.notEqual(headers[0]["session-id"], requests[0].prompt_cache_key);
-  assert.equal(headers[0]["thread-id"], "window-a");
-  assert.equal(headers[1]["thread-id"], "window-a");
-  assert.equal(headers[2]["thread-id"], "window-b");
+  assert.equal(headers[0]["thread-id"], "family-a");
+  assert.equal(headers[1]["thread-id"], "family-a");
+  assert.equal(headers[2]["thread-id"], "family-b");
 });
 
 test("OpenAI recoverable windows preserve lookup breakpoints beyond the write budget", async () => {
@@ -546,6 +546,61 @@ test("OpenRouter can advance an explicit cache boundary through tool results", a
   assert.equal(sent.messages[2].content[0].text, "large source evidence");
 });
 
+test("OpenRouter lowers Gemini tool schemas without changing other model families", async () => {
+  const sent = [];
+  const provider = new OpenRouterProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent.push(JSON.parse(init.body));
+      return jsonResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
+    },
+  });
+  const complexSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["action"],
+    properties: {
+      action: {
+        oneOf: [
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["kind", "text"],
+            properties: { kind: { const: "replace" }, text: { type: "string" } },
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            required: ["kind"],
+            properties: { kind: { const: "delete" } },
+          },
+        ],
+      },
+    },
+  };
+  const request = {
+    messages: [{ role: "user", content: "edit" }],
+    tools: [{ name: "apply_file_edits", inputSchema: complexSchema }],
+  };
+
+  await provider.complete({ ...request, model: "google/gemini-3.8-flash" });
+  await provider.complete({ ...request, model: "openai/gpt-5.6-luna" });
+
+  const geminiSchema = sent[0].tools[0].function.parameters;
+  const serializedGemini = JSON.stringify(geminiSchema);
+  assert.ok(!serializedGemini.includes("oneOf"));
+  assert.ok(!serializedGemini.includes("const"));
+  assert.ok(!serializedGemini.includes("additionalProperties"));
+  assert.deepEqual(geminiSchema.required, ["action"]);
+  assert.deepEqual(geminiSchema.properties.action.required, ["kind"]);
+  assert.deepEqual(geminiSchema.properties.action.properties.kind.enum.sort(), ["delete", "replace"]);
+
+  const nonGeminiSchema = sent[1].tools[0].function.parameters;
+  assert.equal(nonGeminiSchema.additionalProperties, false);
+  assert.ok(JSON.stringify(nonGeminiSchema).includes("oneOf"));
+  assert.ok(JSON.stringify(nonGeminiSchema).includes("const"));
+});
+
 test("Anthropic maps Yeet deferred search results to native tool references", async () => {
   let sent;
   const provider = new AnthropicProvider({
@@ -587,6 +642,42 @@ test("Anthropic maps Yeet deferred search results to native tool references", as
     .flatMap((message) => Array.isArray(message.content) ? message.content : [])
     .find((part) => part.type === "tool_result");
   assert.deepEqual(toolResult.content[0], { type: "tool_reference", tool_name: deferred.name });
+});
+
+
+test("Anthropic removes unsupported root tool-schema unions while preserving nested schemas", async () => {
+  let sent;
+  const provider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({ model: "claude-haiku-4-5-20251001", content: [{ type: "text", text: "hello" }], stop_reason: "end_turn", usage: {} });
+    },
+  });
+  await provider.complete({
+    model: "claude-haiku-4-5-20251001",
+    messages: [{ role: "user", content: "hello" }],
+    tools: [{
+      name: "read_file",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          selector: { oneOf: [{ type: "string" }, { type: "integer" }] },
+        },
+        oneOf: [{ required: ["path"] }, { required: ["requests"] }],
+        anyOf: [{ required: ["path"] }],
+        allOf: [{ type: "object" }],
+      },
+    }],
+  });
+
+  const schema = sent.tools[0].input_schema;
+  assert.equal(schema.type, "object");
+  assert.equal(schema.oneOf, undefined);
+  assert.equal(schema.anyOf, undefined);
+  assert.equal(schema.allOf, undefined);
+  assert.deepEqual(schema.properties.selector.oneOf, [{ type: "string" }, { type: "integer" }]);
 });
 
 test("Anthropic and Gemini keep volatile coordinator overlays behind the stable system prefix", async () => {
@@ -1568,6 +1659,40 @@ test("provider HTTP calls emit redacted structured attempt logs", async () => {
   assert.ok(!JSON.stringify(logs).includes("secret"));
 });
 
+test("provider HTTP honors Google RetryInfo delays embedded in 429 bodies", async () => {
+  const logs = [];
+  let calls = 0;
+  const response = await providerFetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/test:generateContent",
+    { method: "POST" },
+    {
+      provider: "gemini",
+      retry: { maxAttempts: 2, baseDelayMs: 0, jitter: 0 },
+      fetch: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response(JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              details: [{
+                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                retryDelay: "0.001s",
+              }],
+            },
+          }), { status: 429, headers: { "content-type": "application/json" } });
+        }
+        return new Response("ok", { status: 200 });
+      },
+      apiCallLogger: (entry) => logs.push(entry),
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(logs[0].outcome, "retry");
+  assert.equal(logs[0].retryDelayMs, 1);
+});
+
 test("provider HTTP logs transport failures with a stable error name", async () => {
   const logs = [];
   await assert.rejects(
@@ -2036,6 +2161,44 @@ test("Gemini replays function call ids and thought signatures on tool results", 
   assert.equal(sent[1].contents[2].parts[0].functionResponse.id, "fc-17");
 });
 
+test("Gemini preserves text thought signatures across provider instances", async () => {
+  const firstProvider = new GeminiProvider({
+    apiKey: "test",
+    fetch: async () => jsonResponse({
+      candidates: [{
+        content: { parts: [{ text: "first answer", thoughtSignature: "sig-text" }] },
+        finishReason: "STOP",
+      }],
+    }),
+  });
+  const first = await firstProvider.complete({
+    model: "gemini-3.8-flash",
+    messages: [{ role: "user", content: "first" }],
+  });
+  assert.equal(first.providerState.data.textThoughtSignature, "sig-text");
+
+  let sent;
+  const secondProvider = new GeminiProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({
+        candidates: [{ content: { parts: [{ text: "second answer" }] }, finishReason: "STOP" }],
+      });
+    },
+  });
+  await secondProvider.complete({
+    model: "gemini-3.8-flash",
+    messages: [
+      { role: "user", content: "first" },
+      { role: "assistant", content: first.text, providerState: first.providerState },
+      { role: "user", content: "second" },
+    ],
+  });
+
+  assert.equal(sent.contents[1].parts[0].thoughtSignature, "sig-text");
+});
+
 test("Gemini validates named tool choice and filters provider options", async () => {
   let sent;
   const provider = new GeminiProvider({
@@ -2068,6 +2231,62 @@ test("Gemini validates named tool choice and filters provider options", async ()
   assert.equal(sent.unknownRootOption, undefined);
   assert.equal(sent.generationConfig.topP, 0.8);
   assert.equal(sent.generationConfig.temperature, 0.2);
+});
+
+test("Gemini 3.8 strips deprecated generation parameters and migrates legacy thinking", async () => {
+  let sent;
+  const provider = new GeminiProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({
+        candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+      });
+    },
+  });
+
+  await provider.complete({
+    model: "gemini-3.8-flash",
+    messages: [{ role: "user", content: "go" }],
+    temperature: 0.2,
+    providerOptions: {
+      generationConfig: {
+        candidateCount: 2,
+        temperature: 0.9,
+        topP: 0.8,
+        topK: 20,
+        thinkingConfig: { thinkingBudget: 8_192 },
+        stopSequences: ["END"],
+      },
+    },
+  });
+
+  assert.equal(sent.generationConfig.candidateCount, undefined);
+  assert.equal(sent.generationConfig.temperature, undefined);
+  assert.equal(sent.generationConfig.topP, undefined);
+  assert.equal(sent.generationConfig.topK, undefined);
+  assert.equal(sent.generationConfig.thinkingConfig.thinkingBudget, undefined);
+  assert.equal(sent.generationConfig.thinkingConfig.thinkingLevel, "medium");
+  assert.deepEqual(sent.generationConfig.stopSequences, ["END"]);
+});
+
+test("Gemini 3.8 normalizes unsupported minimal thinking to low", async () => {
+  let sent;
+  const provider = new GeminiProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({
+        candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+      });
+    },
+  });
+  await provider.complete({
+    model: "models/gemini-3.8-flash",
+    messages: [{ role: "user", content: "go" }],
+    providerOptions: { generationConfig: { thinkingConfig: { thinkingLevel: "minimal" } } },
+  });
+  assert.equal(sent.generationConfig.thinkingConfig.thinkingLevel, "low");
 });
 
 test("Gemini derives reasoning tokens from total usage when thoughtsTokenCount is omitted", async () => {
@@ -2499,6 +2718,65 @@ test("Gemini stream emits text and function calls", async () => {
   assert.equal(events.at(-1).usage.reasoningTokens, 4);
 });
 
+test("Gemini Code Assist discovers quota models and unwraps streamed responses", async () => {
+  const calls = [];
+  const provider = new GeminiProvider({
+    id: "gemini-web",
+    codeAssist: true,
+    accessToken: "oauth-token",
+    projectId: "managed-project",
+    fetch: async (input, init = {}) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.endsWith(":retrieveUserQuota")) {
+        return jsonResponse({
+          buckets: [
+            { modelId: "models/gemini-code-pro" },
+            { model_id: "gemini-code-flash" },
+            { modelId: "models/gemini-code-pro" },
+          ],
+        });
+      }
+      if (url.endsWith(":streamGenerateContent?alt=sse")) {
+        return sseResponse([
+          { response: { candidates: [{ content: { parts: [{ text: "hello" }] } }] } },
+          {
+            response: {
+              candidates: [{ content: { parts: [] }, finishReason: "STOP" }],
+              usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 3, totalTokenCount: 5 },
+            },
+          },
+        ]);
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    },
+  });
+
+  assert.deepEqual(await provider.listModelInfo(), [
+    { id: "gemini-code-pro" },
+    { id: "gemini-code-flash" },
+  ]);
+
+  const events = [];
+  for await (const event of provider.stream({
+    model: "gemini-code-pro",
+    messages: [{ role: "user", content: "go" }],
+  })) events.push(event);
+
+  assert.ok(events.some((event) => event.type === "text-delta" && event.delta === "hello"));
+  assert.equal(events.at(-1).finishReason, "stop");
+  assert.equal(events.at(-1).usage.totalTokens, 5);
+
+  const quotaCall = calls.find((call) => call.url.endsWith(":retrieveUserQuota"));
+  assert.deepEqual(JSON.parse(String(quotaCall.init.body)), { project: "managed-project" });
+  const streamCall = calls.find((call) => call.url.endsWith(":streamGenerateContent?alt=sse"));
+  const body = JSON.parse(String(streamCall.init.body));
+  assert.equal(body.model, "gemini-code-pro");
+  assert.equal(body.project, "managed-project");
+  assert.equal(body.request.contents[0].parts[0].text, "go");
+  assert.equal(new Headers(streamCall.init.headers).get("authorization"), "Bearer oauth-token");
+});
+
 test("Gemini stream separates thought parts from assistant text", async () => {
   const provider = new GeminiProvider({
     apiKey: "test",
@@ -2510,6 +2788,26 @@ test("Gemini stream separates thought parts from assistant text", async () => {
   for await (const event of provider.stream({ model: "gemini-test", messages: [{ role: "user", content: "go" }] })) events.push(event);
   assert.ok(events.some((event) => event.type === "reasoning-delta" && event.delta === "reasoning"));
   assert.ok(events.some((event) => event.type === "text-delta" && event.delta === "answer"));
+});
+
+test("Gemini stream preserves text thought signatures in provider state", async () => {
+  const provider = new GeminiProvider({
+    apiKey: "test",
+    fetch: async () => sseResponse([
+      {
+        candidates: [{
+          content: { parts: [{ text: "answer", thoughtSignature: "sig-stream" }] },
+          finishReason: "STOP",
+        }],
+      },
+    ]),
+  });
+  const events = [];
+  for await (const event of provider.stream({
+    model: "gemini-3.8-flash",
+    messages: [{ role: "user", content: "go" }],
+  })) events.push(event);
+  assert.equal(events.at(-1).providerState.data.textThoughtSignature, "sig-stream");
 });
 
 for (const error of [
@@ -2538,6 +2836,48 @@ for (const error of [
     assert.deepEqual(logs.map((entry) => entry.outcome), ["error"]);
   });
 }
+
+test("Google daily Gemini quota exhaustion fails immediately even with RetryInfo", async () => {
+  let attempts = 0;
+  const body = JSON.stringify({
+    error: {
+      code: 429,
+      status: "RESOURCE_EXHAUSTED",
+      details: [
+        {
+          "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+          violations: [{
+            quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+            quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+          }],
+        },
+        {
+          "@type": "type.googleapis.com/google.rpc.RetryInfo",
+          retryDelay: "52s",
+        },
+      ],
+    },
+  });
+
+  await assert.rejects(() => providerFetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+    {},
+    {
+      provider: "gemini",
+      fetch: async () => {
+        attempts += 1;
+        return new Response(body, { status: 429 });
+      },
+      retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
+    },
+  ), (failure) => {
+    assert.ok(failure instanceof ProviderHTTPError);
+    assert.equal(failure.retryable, false);
+    assert.match(failure.message, /quota or credits exhausted/);
+    return true;
+  });
+  assert.equal(attempts, 1);
+});
 
 for (const body of [JSON.stringify({ error: { code: "rate_limit_exceeded" } }), "busy", "null"]) {
   test(`temporary 429 remains retryable: ${body}`, async () => {
@@ -2575,7 +2915,7 @@ test("Codex OAuth sends subscription-compatible bodies for complete and stream",
   const request = {
     model: "gpt-5.6-sol", temperature: 0.5, maxTokens: 100,
     contextKey: "window-cache-key",
-    metadata: { label: "test", sessionId: "stable-session-id", contextWindowId: "context-window-id" },
+    metadata: { label: "test", sessionId: "stable-session-id", contextWindowId: "context-window-id", cacheFamily: "stable-cache-family" },
     messages: [{ role: "user", content: "hi", cacheBreakpoint: true }],
     providerOptions: { store: true, top_p: 0.9, service_tier: "flex", reasoning: { effort: "low" } },
   };
@@ -2588,8 +2928,8 @@ test("Codex OAuth sends subscription-compatible bodies for complete and stream",
   assert.equal(requests.length, 2);
   for (const { headers, body } of requests) {
     assert.equal(headers["session-id"], "stable-session-id");
-    assert.equal(headers["thread-id"], "context-window-id");
-    assert.equal(headers["x-client-request-id"], "context-window-id");
+    assert.equal(headers["thread-id"], "stable-cache-family");
+    assert.equal(headers["x-client-request-id"], "stable-cache-family");
     assert.match(body.prompt_cache_key, /^yeet-v2-[0-9a-f]{48}$/);
     assert.notEqual(body.prompt_cache_key, headers["session-id"]);
     assert.equal(body.store, false);

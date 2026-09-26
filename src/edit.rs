@@ -1,7 +1,7 @@
 use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{ChildStdin, ChildStdout, Command, Stdio},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::core::{edit_daemon_script, node_executable};
+use crate::{
+    core::{edit_daemon_script, node_executable},
+    platform::{TrackedChild, configure_process_group},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,7 +90,7 @@ pub struct ApplyResult {
 
 pub struct EditClient {
     root: PathBuf,
-    child: Child,
+    child: TrackedChild,
     stdin: BufWriter<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     broken: bool,
@@ -98,14 +101,17 @@ impl EditClient {
     pub fn start(root: &Path) -> Result<Self> {
         let node = node_executable()?;
         let script = edit_daemon_script()?;
-        let mut child = Command::new(node)
+        let mut command = Command::new(node);
+        command
             .arg(script)
             .arg("--root")
             .arg(root)
             .arg("--allow-outside")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        configure_process_group(&mut command);
+        let mut child = command
             .spawn()
             .context("failed to start Yeet edit daemon")?;
         let stdin = child
@@ -116,6 +122,7 @@ impl EditClient {
             .stdout
             .take()
             .context("edit daemon stdout unavailable")?;
+        let child = TrackedChild::new(child, "edit-daemon");
         let mut client = Self {
             root: root.to_path_buf(),
             child,
@@ -179,6 +186,16 @@ impl EditClient {
             params.insert("unsafe".into(), json!(true));
         }
         self.call_recoverable("read", Value::Object(params))
+    }
+
+    pub fn snapshot_text(&mut self, snapshot: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct SnapshotTextResult {
+            text: String,
+        }
+        let result: SnapshotTextResult =
+            self.call("snapshotText", json!({ "snapshot": snapshot }))?;
+        Ok(result.text)
     }
 
     pub fn search(

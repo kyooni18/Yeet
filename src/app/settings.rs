@@ -147,6 +147,28 @@ impl App {
                     backend.send(FrontendCommand::SetFoundationMemory {
                         enabled: !self.state.foundation_memory_enabled,
                     })?;
+                } else if self.popup_index == self.memory_backend_settings_row_index() {
+                    let backend_name = if self.state.foundation_memory_backend == "mcp" {
+                        "builtin"
+                    } else {
+                        "mcp"
+                    };
+                    backend.send(FrontendCommand::SetServiceBackend {
+                        service: "memory".into(),
+                        backend: backend_name.into(),
+                        server: Some(self.state.foundation_memory_server.clone()),
+                    })?;
+                } else if self.popup_index == self.web_backend_settings_row_index() {
+                    let backend_name = if self.state.web_backend == "mcp" {
+                        "builtin"
+                    } else {
+                        "mcp"
+                    };
+                    backend.send(FrontendCommand::SetServiceBackend {
+                        service: "web".into(),
+                        backend: backend_name.into(),
+                        server: Some(self.state.web_server.clone()),
+                    })?;
                 } else if self.popup_index == self.model_settings_row_index() {
                     self.open_models(backend)?;
                 } else if self.popup_index == self.reasoning_settings_row_index() {
@@ -630,15 +652,23 @@ impl App {
     }
 
     pub(crate) fn settings_row_count(&self) -> usize {
-        12 + usize::from(self.openai_provider_active())
+        14 + usize::from(self.openai_provider_active())
     }
 
     pub(super) fn foundation_settings_row_index(&self) -> usize {
         usize::from(self.openai_provider_active())
     }
 
-    pub(super) fn model_settings_row_index(&self) -> usize {
+    pub(super) fn memory_backend_settings_row_index(&self) -> usize {
         self.foundation_settings_row_index() + 1
+    }
+
+    pub(super) fn web_backend_settings_row_index(&self) -> usize {
+        self.memory_backend_settings_row_index() + 1
+    }
+
+    pub(super) fn model_settings_row_index(&self) -> usize {
+        self.web_backend_settings_row_index() + 1
     }
 
     pub(super) fn reasoning_settings_row_index(&self) -> usize {

@@ -19,11 +19,38 @@ pub struct ProjectCapabilities {
     pub disabled: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceBackend {
+    #[default]
+    Builtin,
+    Mcp,
+}
+
+impl ServiceBackend {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "builtin" | "internal" | "native" => Ok(Self::Builtin),
+            "mcp" | "external" => Ok(Self::Mcp),
+            other => bail!("Unknown backend '{other}'; expected builtin or mcp"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Builtin => "builtin",
+            Self::Mcp => "mcp",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FoundationMemorySettings {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub backend: ServiceBackend,
     #[serde(default = "default_foundation_server")]
     pub server: String,
 }
@@ -31,8 +58,27 @@ pub struct FoundationMemorySettings {
 impl Default for FoundationMemorySettings {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
+            backend: ServiceBackend::Builtin,
             server: default_foundation_server(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebBackendSettings {
+    #[serde(default)]
+    pub backend: ServiceBackend,
+    #[serde(default = "default_web_server")]
+    pub server: String,
+}
+
+impl Default for WebBackendSettings {
+    fn default() -> Self {
+        Self {
+            backend: ServiceBackend::Builtin,
+            server: default_web_server(),
         }
     }
 }
@@ -87,6 +133,8 @@ pub struct ProjectSettings {
     #[serde(default, rename = "memory", alias = "foundationMemory")]
     pub foundation_memory: FoundationMemorySettings,
     #[serde(default)]
+    pub web: WebBackendSettings,
+    #[serde(default)]
     pub context: ContextSettings,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
@@ -106,6 +154,7 @@ impl Default for ProjectSettings {
             openai_flex: true,
             foundation_memory: FoundationMemorySettings::default(),
             context: ContextSettings::default(),
+            web: WebBackendSettings::default(),
             project_id: None,
             extra: BTreeMap::new(),
         }
@@ -122,6 +171,10 @@ fn default_true() -> bool {
 
 fn default_foundation_server() -> String {
     "foundation".into()
+}
+
+fn default_web_server() -> String {
+    "web".into()
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +240,7 @@ impl ProjectSettingsStore {
         }
         normalize_capabilities(&mut settings.capabilities);
         normalize_foundation_memory(&mut settings.foundation_memory);
+        normalize_web_backend(&mut settings.web);
         settings.context.validate()?;
         Ok(settings)
     }
@@ -201,6 +255,7 @@ impl ProjectSettingsStore {
         normalized.version = 1;
         normalize_capabilities(&mut normalized.capabilities);
         normalize_foundation_memory(&mut normalized.foundation_memory);
+        normalize_web_backend(&mut normalized.web);
         normalized.context.validate()?;
         let tmp = self.directory().join(format!(
             ".settings.json.{}.{}.tmp",
@@ -242,6 +297,30 @@ impl ProjectSettingsStore {
         self.save(&settings)
     }
 
+    pub fn save_foundation_backend(
+        &self,
+        backend: ServiceBackend,
+        server: Option<&str>,
+    ) -> Result<()> {
+        let mut settings = self.load()?;
+        settings.foundation_memory.backend = backend;
+        if let Some(server) = server {
+            settings.foundation_memory.server = server.to_owned();
+        }
+        normalize_foundation_memory(&mut settings.foundation_memory);
+        self.save(&settings)
+    }
+
+    pub fn save_web_backend(&self, backend: ServiceBackend, server: Option<&str>) -> Result<()> {
+        let mut settings = self.load()?;
+        settings.web.backend = backend;
+        if let Some(server) = server {
+            settings.web.server = server.to_owned();
+        }
+        normalize_web_backend(&mut settings.web);
+        self.save(&settings)
+    }
+
     pub fn project_identity(&self) -> Result<String> {
         let mut settings = self.load()?;
         if let Some(existing) = settings
@@ -271,13 +350,19 @@ impl ProjectSettingsStore {
 
 fn normalize_capabilities(capabilities: &mut ProjectCapabilities) {
     if let Some(attached) = capabilities.attached.as_mut() {
-        attached.retain(|value| value != "lead");
+        attached.retain(|value| !retired_capability(value));
         attached.sort();
         attached.dedup();
     }
-    capabilities.disabled.retain(|value| value != "lead");
+    capabilities
+        .disabled
+        .retain(|value| !retired_capability(value));
     capabilities.disabled.sort();
     capabilities.disabled.dedup();
+}
+
+fn retired_capability(value: &str) -> bool {
+    matches!(value, "lead" | "context-mode" | "builtin:artifacts")
 }
 
 fn normalize_foundation_memory(settings: &mut FoundationMemorySettings) {
@@ -287,10 +372,102 @@ fn normalize_foundation_memory(settings: &mut FoundationMemorySettings) {
     }
 }
 
+fn normalize_web_backend(settings: &mut WebBackendSettings) {
+    settings.server = settings.server.trim().to_owned();
+    if settings.server.is_empty() {
+        settings.server = default_web_server();
+    }
+}
+
 fn reject_symlink(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         bail!("Refusing project settings symlink: {}", path.display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn service_backend_parse_accepts_aliases() {
+        assert_eq!(
+            ServiceBackend::parse("builtin").unwrap(),
+            ServiceBackend::Builtin
+        );
+        assert_eq!(
+            ServiceBackend::parse("internal").unwrap(),
+            ServiceBackend::Builtin
+        );
+        assert_eq!(
+            ServiceBackend::parse("native").unwrap(),
+            ServiceBackend::Builtin
+        );
+        assert_eq!(ServiceBackend::parse("mcp").unwrap(), ServiceBackend::Mcp);
+        assert_eq!(
+            ServiceBackend::parse("external").unwrap(),
+            ServiceBackend::Mcp
+        );
+        assert!(ServiceBackend::parse("remote-http").is_err());
+    }
+
+    #[test]
+    fn legacy_project_settings_default_services_to_builtin() {
+        let directory = tempdir().unwrap();
+        let store = ProjectSettingsStore::new(directory.path()).unwrap();
+        fs::create_dir_all(store.directory()).unwrap();
+        fs::write(
+            store.path(),
+            serde_json::to_vec_pretty(&json!({
+                "version": 1,
+                "foundationMemory": {
+                    "enabled": true,
+                    "server": " foundation "
+                },
+                "context": ContextSettings::default()
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let settings = store.load().unwrap();
+        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Builtin);
+        assert_eq!(settings.foundation_memory.server, "foundation");
+        assert_eq!(settings.web.backend, ServiceBackend::Builtin);
+        assert_eq!(settings.web.server, "web");
+    }
+
+    #[test]
+    fn service_backend_selection_round_trips_and_preserves_other_settings() {
+        let directory = tempdir().unwrap();
+        let store = ProjectSettingsStore::new(directory.path()).unwrap();
+        store.ensure().unwrap();
+
+        let mut initial = store.load().unwrap();
+        initial
+            .extra
+            .insert("customFeature".into(), json!({"enabled": true}));
+        store.save(&initial).unwrap();
+
+        store
+            .save_foundation_backend(ServiceBackend::Mcp, Some(" foundation-external "))
+            .unwrap();
+        store
+            .save_web_backend(ServiceBackend::Mcp, Some(" web-external "))
+            .unwrap();
+
+        let settings = store.load().unwrap();
+        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Mcp);
+        assert_eq!(settings.foundation_memory.server, "foundation-external");
+        assert_eq!(settings.web.backend, ServiceBackend::Mcp);
+        assert_eq!(settings.web.server, "web-external");
+        assert_eq!(
+            settings.extra.get("customFeature"),
+            Some(&json!({"enabled": true}))
+        );
+    }
 }

@@ -812,7 +812,11 @@ impl App {
                         if let Some((command, args)) = self.extension_command_invocation(&text) {
                             backend.send(FrontendCommand::ExtensionCommand { command, args })?;
                         } else {
-                            backend.send(FrontendCommand::Submit { text })?;
+                            backend.send(FrontendCommand::Submit {
+                                text,
+                                images: Vec::new(),
+                                attachment_ids: Vec::new(),
+                            })?;
                         }
                     }
                 }

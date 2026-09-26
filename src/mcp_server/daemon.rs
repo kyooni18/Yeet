@@ -29,6 +29,7 @@ use crate::{
     config::ConfigStore,
     platform::{
         bind_local, configure_detached, connect_local, set_private_directory, set_private_file,
+        systemd_managed_process, tracked_children_snapshot,
     },
 };
 
@@ -37,7 +38,6 @@ const DEFAULT_BIND: &str = "127.0.0.1";
 const CONTROL_TIMEOUT: Duration = Duration::from_millis(750);
 const START_RETRIES: usize = 80;
 const START_DELAY: Duration = Duration::from_millis(50);
-const SUPERVISOR_RESTART_DELAY: Duration = Duration::from_millis(250);
 
 pub(super) const HELP: &str = r#"Yeet MCP server
 
@@ -61,13 +61,16 @@ Defaults:
   port: 7332
   auth: key (a key is generated automatically on first start)
 
-HTTP MCP is served at /mcp. OAuth can be enabled alongside the existing primary
-auth mode and implements protected-resource and authorization-server discovery,
-authorization-code + PKCE, CIMD, and legacy dynamic client registration. The
-legacy `--auth oauth` mode remains supported. For reverse proxies or non-loopback
-binds, set --public-url to the externally reachable MCP URL (for example
-https://host.example/mcp). Multiple daemon instances can run on different ports;
-daemon config and authentication are isolated per port."#;
+HTTP MCP is served at /mcp. `start` self-daemonizes for ordinary terminal use. For
+service managers such as systemd, use `run` as ExecStart so the service manager owns
+the Yeet PID directly; `start` also detects a systemd service environment and stays
+in the foreground rather than creating a redundant daemon child. OAuth can be enabled
+alongside the existing primary auth mode and implements protected-resource and
+authorization-server discovery, authorization-code + PKCE, CIMD, and legacy dynamic
+client registration. The legacy `--auth oauth` mode remains supported. For reverse
+proxies or non-loopback binds, set --public-url to the externally reachable MCP URL
+(for example https://host.example/mcp). Multiple daemon instances can run on different
+ports; daemon config and authentication are isolated per port."#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -130,6 +133,8 @@ struct DaemonStatus {
     pid: Option<u32>,
     #[serde(default)]
     binary_sha256: Option<String>,
+    #[serde(default)]
+    owned_children: Vec<String>,
 }
 
 struct DaemonPaths {
@@ -178,13 +183,19 @@ pub(super) fn run_cli(args: &[String]) -> Result<String> {
         "list" => list_command(&args[1..]),
         "config" => config_command(&args[1..]),
         "auth" => auth_command(&args[1..]),
-        "__supervisor" => supervisor_child_command(&args[1..]),
-        "__daemon" => daemon_child_command(&args[1..]),
+        // Compatibility for older launchers: both internal entry points now run
+        // the daemon directly. There is no separate Yeet supervisor process.
+        "__supervisor" | "__daemon" => daemon_child_command(&args[1..]),
         other => bail!("unknown mcpserver command: {other}\n\n{HELP}"),
     }
 }
 
 fn start_command(args: &[String]) -> Result<String> {
+    if systemd_managed_process() {
+        // systemd is already the supervisor. Keep this exact Yeet PID in the
+        // foreground so cgroup lifetime/restart semantics stay correct.
+        return run_command(args);
+    }
     let overrides = parse_server_overrides(args)?;
     let port = overrides.port.unwrap_or(DEFAULT_PORT);
     let has_runtime_overrides = overrides.bind_host.is_some()
@@ -207,10 +218,10 @@ fn start_command(args: &[String]) -> Result<String> {
         let _ = stop_daemon(port)?;
     }
     let paths = DaemonPaths::new(port)?;
-    if supervisor_is_running(&paths)? {
+    if daemon_owner_is_running(&paths)? {
         if has_runtime_overrides {
             bail!(
-                "Yeet MCP supervisor is already active on port {port}; use `yeet mcpserver restart --port {port} ...` to change its configuration"
+                "Yeet MCP daemon is already starting on port {port}; use `yeet mcpserver restart --port {port} ...` to change its configuration"
             );
         }
         let mut still_running = true;
@@ -218,7 +229,7 @@ fn start_command(args: &[String]) -> Result<String> {
             if let Some(status) = daemon_status(port)? {
                 return Ok(format_launch(&status, None, true));
             }
-            if !supervisor_is_running(&paths)? {
+            if !daemon_owner_is_running(&paths)? {
                 still_running = false;
                 break;
             }
@@ -226,7 +237,7 @@ fn start_command(args: &[String]) -> Result<String> {
         }
         if still_running {
             bail!(
-                "Yeet MCP supervisor is already active on port {port}, but its daemon did not become ready; see {}",
+                "Yeet MCP daemon owns port {port}, but it did not become ready; see {}",
                 paths.log.display()
             );
         }
@@ -254,7 +265,7 @@ fn start_command(args: &[String]) -> Result<String> {
     let mut command = Command::new(executable);
     command
         .arg("mcpserver")
-        .arg("__supervisor")
+        .arg("__daemon")
         .arg("--port")
         .arg(port.to_string())
         .stdin(Stdio::null())
@@ -270,7 +281,7 @@ fn start_command(args: &[String]) -> Result<String> {
             if let Some(status) = daemon_status(port)? {
                 return Ok(format_launch(&status, generated_key.as_deref(), true));
             }
-            if supervisor_is_running(&paths)? {
+            if daemon_owner_is_running(&paths)? {
                 thread::sleep(START_DELAY);
                 continue;
             }
@@ -291,7 +302,7 @@ fn run_command(args: &[String]) -> Result<String> {
     let overrides = parse_server_overrides(args)?;
     let port = overrides.port.unwrap_or(DEFAULT_PORT);
     let paths = DaemonPaths::new(port)?;
-    if daemon_status(port)?.is_some() || supervisor_is_running(&paths)? {
+    if daemon_status(port)?.is_some() || daemon_owner_is_running(&paths)? {
         bail!("an MCP daemon is already managed on port {port}; stop it before foreground run");
     }
     let mut config = load_daemon_config(port)?.unwrap_or(DaemonConfig::default_for(port)?);
@@ -500,45 +511,11 @@ fn daemon_child_command(args: &[String]) -> Result<String> {
     Ok(String::new())
 }
 
-fn supervisor_child_command(args: &[String]) -> Result<String> {
-    let port = parse_port_only(args)?;
-    let paths = DaemonPaths::new(port)?;
-    let _supervisor = SupervisorLock::acquire(&paths.supervisor_lock, port)?;
-    let executable = std::env::current_exe().context("locate Yeet executable")?;
-    loop {
-        let config = load_daemon_config(port)?
-            .ok_or_else(|| anyhow!("MCP daemon config for port {port} does not exist"))?;
-        ensure_bind_available(&config.bind_host, config.port).with_context(|| {
-            format!(
-                "Yeet MCP supervisor cannot bind {}:{}; another process already owns the endpoint",
-                config.bind_host, config.port
-            )
-        })?;
-        let status = Command::new(&executable)
-            .arg("mcpserver")
-            .arg("__daemon")
-            .arg("--port")
-            .arg(port.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .context("start supervised Yeet MCP daemon")?;
-        if status.success() {
-            return Ok(String::new());
-        }
-        eprintln!(
-            "yeet mcpserver: daemon on port {port} exited unexpectedly ({status}); restarting"
-        );
-        thread::sleep(SUPERVISOR_RESTART_DELAY);
-    }
-}
-
-struct SupervisorLock {
+struct DaemonOwnerLock {
     file: fs::File,
 }
 
-impl SupervisorLock {
+impl DaemonOwnerLock {
     fn acquire(path: &Path, port: u16) -> Result<Self> {
         let file = OpenOptions::new()
             .create(true)
@@ -546,25 +523,25 @@ impl SupervisorLock {
             .read(true)
             .write(true)
             .open(path)
-            .with_context(|| format!("open MCP supervisor lock {}", path.display()))?;
+            .with_context(|| format!("open MCP daemon owner lock {}", path.display()))?;
         set_private_file(path)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Self { file }),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                bail!("another Yeet MCP supervisor is already active on port {port}")
+                bail!("another Yeet MCP daemon is already active on port {port}")
             }
-            Err(error) => Err(error).context("lock Yeet MCP supervisor"),
+            Err(error) => Err(error).context("lock Yeet MCP daemon owner"),
         }
     }
 }
 
-impl Drop for SupervisorLock {
+impl Drop for DaemonOwnerLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();
     }
 }
 
-fn supervisor_is_running(paths: &DaemonPaths) -> Result<bool> {
+fn daemon_owner_is_running(paths: &DaemonPaths) -> Result<bool> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -573,7 +550,7 @@ fn supervisor_is_running(paths: &DaemonPaths) -> Result<bool> {
         .open(&paths.supervisor_lock)
         .with_context(|| {
             format!(
-                "open MCP supervisor lock {}",
+                "open MCP daemon owner lock {}",
                 paths.supervisor_lock.display()
             )
         })?;
@@ -584,11 +561,13 @@ fn supervisor_is_running(paths: &DaemonPaths) -> Result<bool> {
             Ok(false)
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(true),
-        Err(error) => Err(error).context("inspect Yeet MCP supervisor lock"),
+        Err(error) => Err(error).context("inspect Yeet MCP daemon owner lock"),
     }
 }
 
 fn run_daemon(port: u16) -> Result<()> {
+    let paths = DaemonPaths::new(port)?;
+    let _owner = DaemonOwnerLock::acquire(&paths.supervisor_lock, port)?;
     let config = load_daemon_config(port)?
         .ok_or_else(|| anyhow!("MCP daemon config for port {port} does not exist"))?;
     validate_security(&config)?;
@@ -603,7 +582,6 @@ fn run_daemon(port: u16) -> Result<()> {
         },
         auth_store.clone(),
     )?;
-    let paths = DaemonPaths::new(port)?;
     let auth = auth_store.status()?;
     let executable = std::env::current_exe().context("locate Yeet executable")?;
     let startup_sha256 = binary_sha256(&executable)?;
@@ -619,6 +597,7 @@ fn run_daemon(port: u16) -> Result<()> {
         log: paths.log.display().to_string(),
         pid: Some(std::process::id()),
         binary_sha256: Some(startup_sha256.clone()),
+        owned_children: Vec::new(),
     };
     let stop = Arc::new(AtomicBool::new(false));
     let control = DaemonControl::start(port, status, Arc::clone(&stop))?;
@@ -863,13 +842,13 @@ fn binary_sha256(path: &Path) -> Result<String> {
 fn stop_daemon(port: u16) -> Result<bool> {
     let paths = DaemonPaths::new(port)?;
     let mut stop_requested = false;
-    let mut saw_managed_server = supervisor_is_running(&paths)?;
+    let mut saw_managed_server = daemon_owner_is_running(&paths)?;
     for _ in 0..START_RETRIES {
         if !stop_requested && control_request(port, "stop")?.is_some() {
             stop_requested = true;
             saw_managed_server = true;
         }
-        let supervisor_running = supervisor_is_running(&paths)?;
+        let supervisor_running = daemon_owner_is_running(&paths)?;
         if !supervisor_running && daemon_status(port)?.is_none() {
             if stop_requested || saw_managed_server {
                 return Ok(true);
@@ -950,6 +929,10 @@ impl DaemonControl {
                                         current.key_enabled = auth.key_enabled;
                                         current.oauth_enabled = auth.oauth_enabled;
                                     }
+                                    current.owned_children = tracked_children_snapshot()
+                                        .into_iter()
+                                        .map(|child| format!("{}:{}", child.role, child.pid))
+                                        .collect();
                                     let status_json = serde_json::to_string(&current)
                                         .unwrap_or_else(|_| "{}".into());
                                     let _ = writeln!(stream, "{status_json}");
@@ -991,8 +974,13 @@ impl Drop for DaemonControl {
 }
 
 fn format_status(status: &DaemonStatus, already_running: bool) -> String {
+    let children = if status.owned_children.is_empty() {
+        "none".to_owned()
+    } else {
+        status.owned_children.join(", ")
+    };
     let mut value = format!(
-        "Yeet MCP daemon{}\nURL: {}\nBind: {}\nPort: {}\nWorkspace: {}\nWorkspace restriction: {}\nAuth: {}\nOAuth: {}\nLog: {}",
+        "Yeet MCP daemon{}\nURL: {}\nBind: {}\nPort: {}\nWorkspace: {}\nWorkspace restriction: {}\nAuth: {}\nOAuth: {}\nOwned children: {}\nLog: {}",
         if already_running {
             " already running"
         } else {
@@ -1013,6 +1001,7 @@ fn format_status(status: &DaemonStatus, already_running: bool) -> String {
         } else {
             "disabled"
         },
+        children,
         status.log
     );
     if let Some(pid) = status.pid {

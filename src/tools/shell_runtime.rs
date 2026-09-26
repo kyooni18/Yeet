@@ -139,8 +139,14 @@ impl ToolRegistry {
             )?;
             self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
             self.invalidate_workspace_cache();
-            return Ok(json!({"jobId":id,"status":"running","command":command,
-                "hint":"Use shell_job action=wait to suspend until completion without model polling. Set reportEverySeconds only when periodic monitoring is useful; use check only for an immediate snapshot."}).to_string());
+            let hint = if self.artifacts_enabled {
+                "Use shell_job action=wait to suspend until completion without model polling. Set reportEverySeconds only when periodic monitoring is useful; use check only for an immediate snapshot."
+            } else {
+                "Use run_shell with job:{action:\"wait\",jobId:<id>} to suspend until completion without model polling. Add reportEverySeconds only when periodic monitoring is useful."
+            };
+            return Ok(
+                json!({"jobId":id,"status":"running","command":command,"hint":hint}).to_string(),
+            );
         }
         let output = run_shell_cancellable(ShellExecutionRequest {
             command: &command,
@@ -161,7 +167,7 @@ impl ToolRegistry {
         }
         if !actor {
             let value = serde_json::to_value(&output)?;
-            if output.stdout_bytes + output.stderr_bytes > 6 * 1024 {
+            if self.artifacts_enabled && output.stdout_bytes + output.stderr_bytes > 6 * 1024 {
                 let raw = format!(
                     "$ {}\n{}{}",
                     command,
@@ -181,7 +187,7 @@ impl ToolRegistry {
         self.evaluate_shell_output(&command, output)
     }
 
-    /// Summarizes noisy shell output locally while retaining raw output as an artifact.
+    /// Summarizes noisy shell output locally and retains raw output only when artifacts are enabled.
     ///
     /// Actor mode used to make a second provider request here. Besides spending
     /// tokens on data we already had, that request could fail when the selected
@@ -192,6 +198,27 @@ impl ToolRegistry {
         command: &str,
         output: crate::shell::ShellResult,
     ) -> Result<String> {
+        if !self.artifacts_enabled {
+            let bytes = output.stdout.as_ref().map_or(0, String::len)
+                + output.stderr.as_ref().map_or(0, String::len);
+            if bytes <= 2048 && !output.stdout_truncated && !output.stderr_truncated {
+                return Ok(json!({
+                    "route":"actor", "command":output.command,
+                    "workingDirectory":output.working_directory, "exitCode":output.exit_code,
+                    "succeeded":output.succeeded, "stdout":output.stdout, "stderr":output.stderr
+                })
+                .to_string());
+            }
+            let diagnostics = shell_diagnostic_lines(&output, 8);
+            let summary = deterministic_shell_summary(&output, &diagnostics);
+            return Ok(json!({
+                "route":"actor","command":command,"workingDirectory":output.working_directory,"exitCode":output.exit_code,
+                "succeeded":output.succeeded,"durationMilliseconds":output.duration_milliseconds,"stdoutBytes":output.stdout_bytes,
+                "stderrBytes":output.stderr_bytes,"stdoutTruncated":output.stdout_truncated,"stderrTruncated":output.stderr_truncated,
+                "summary":summary,"diagnostics":diagnostics
+            }).to_string());
+        }
+
         let raw = format!(
             "COMMAND: {command}\nEXIT: {}\nSTDOUT:\n{}\nSTDERR:\n{}",
             output.exit_code,

@@ -519,6 +519,28 @@ pub(super) fn diagnostics(request: &CallRequest) -> Value {
                 .and_then(|metadata| metadata.get("turnCumulativeInputTokens"))
         ),
     );
+
+    for key in [
+        "turnCumulativeRequestChars",
+        "turnCostEquivalentInputTokens",
+        "turnInputTokensSinceRollover",
+        "turnRolloverCount",
+        "turnBudgetStage",
+        "windowModelCalls",
+        "searchLoadedToolCount",
+        "deferredToolCount",
+        "nativeDeferredToolsSupported",
+    ] {
+        result.insert(
+            key.into(),
+            json!(
+                request
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get(key))
+            ),
+        );
+    }
     result.insert(
         "turnEstimatedCostUsd".into(),
         json!(
@@ -691,6 +713,32 @@ mod continuity_guard_tests {
             .into(),
         );
         request
+    }
+
+    #[test]
+    fn window_lifecycle_metadata_is_preserved_in_attempt_diagnostics() {
+        let mut request = request("window-2", "agent", vec![Message::user("task")]);
+        let metadata = request.metadata.as_mut().expect("metadata");
+        for (key, value) in [
+            ("turnCumulativeRequestChars", "768000"),
+            ("turnCostEquivalentInputTokens", "260000"),
+            ("turnInputTokensSinceRollover", "42000"),
+            ("turnRolloverCount", "3"),
+            ("turnBudgetStage", "window-growing"),
+            ("windowModelCalls", "6"),
+            ("searchLoadedToolCount", "4"),
+            ("deferredToolCount", "1"),
+            ("nativeDeferredToolsSupported", "true"),
+        ] {
+            metadata.insert(key.into(), value.into());
+        }
+
+        let diagnostics = diagnostics(&request);
+        assert_eq!(diagnostics["turnBudgetStage"], json!("window-growing"));
+        assert_eq!(diagnostics["turnRolloverCount"], json!("3"));
+        assert_eq!(diagnostics["turnCumulativeRequestChars"], json!("768000"));
+        assert_eq!(diagnostics["windowModelCalls"], json!("6"));
+        assert_eq!(diagnostics["searchLoadedToolCount"], json!("4"));
     }
 
     #[test]

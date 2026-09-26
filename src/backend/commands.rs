@@ -9,10 +9,53 @@ impl BackendService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model  /login  /provider  /settings  /permissions  /permission [allow|deny]  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal  /attach ID  /detach ID  /clear"),
+            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /attach ID  /detach ID  /clear"),
             "/new" => self.new_session(),
+            "/model" => {
+                if arguments.is_empty() {
+                    self.request_models();
+                    let current = self.shared.lock_or_recover().state.active_model.clone();
+                    self.append_system(&format!(
+                        "Current model: {}. Use /model MODEL_ID to change it.",
+                        if current.is_empty() { "none" } else { &current }
+                    ));
+                } else {
+                    self.select_model(arguments.join(" "))?;
+                }
+            }
+            "/reasoning" => {
+                if let Some(level) = arguments.first().copied() {
+                    self.select_reasoning(level.to_owned())?;
+                    self.append_system(&format!("Reasoning: {level}"));
+                } else {
+                    let current = self.shared.lock_or_recover().state.active_reasoning_level.clone();
+                    self.append_system(&format!(
+                        "Current reasoning: {}. Use /reasoning [auto|low|medium|high].",
+                        if current.is_empty() { "auto" } else { &current }
+                    ));
+                }
+            }
+            "/sessions" => {
+                self.request_sessions();
+                let count = self.shared.lock_or_recover().state.saved_sessions.len();
+                self.append_system(&format!("Sessions refreshed: {count} saved."));
+            }
+            "/providers" => {
+                self.request_providers();
+                self.append_system("Provider list refresh requested.");
+            }
+            "/allow" => {
+                self.permission.resolve(true);
+                self.publish_state();
+                self.append_system("Pending permission allowed once.");
+            }
+            "/deny" => {
+                self.permission.resolve(false);
+                self.publish_state();
+                self.append_system("Pending permission denied.");
+            }
             "/clear" => {
-                let mut shared = self.shared.lock().unwrap();
+                let mut shared = self.shared.lock_or_recover();
                 if let Some(entries) = shared.state.conversation.as_mut()
                     && let Some(index) = entries
                         .iter()
@@ -31,16 +74,16 @@ impl BackendService {
                 _ => self.append_system("Usage: /permission [allow|deny]"),
             },
             "/compact" => {
-                let streaming = self.shared.lock().unwrap().state.is_streaming;
+                let streaming = self.shared.lock_or_recover().state.is_streaming;
                 if streaming {
-                    self.shared.lock().unwrap().meta.pending_compaction = true;
+                    self.shared.lock_or_recover().meta.pending_compaction = true;
                     self.append_system("Context compaction queued for the end of the current response.");
                 } else {
                     self.compact_context()?;
                 }
             }
             "/context" => {
-                let model = self.shared.lock().unwrap().state.active_model.clone();
+                let model = self.shared.lock_or_recover().state.active_model.clone();
                 if model.is_empty() {
                     self.append_error("No model is selected.".into());
                     return Ok(());
@@ -48,7 +91,7 @@ impl BackendService {
                 match arguments.first().copied() {
                     None => {
                         let override_length = self.config.context_length_override(&model)?;
-                        let effective = self.shared.lock().unwrap().state.active_model_context_length;
+                        let effective = self.shared.lock_or_recover().state.active_model_context_length;
                         let message = match (override_length, effective) {
                             (Some(value), _) => format!("Context length for {model}: {value} tokens (manual override)."),
                             (None, Some(value)) => format!("Context length for {model}: {value} tokens (automatic)."),
@@ -64,7 +107,7 @@ impl BackendService {
                     Some(value) => {
                         let length = parse_context_length(value)?;
                         self.config.set_context_length_override(&model, Some(length))?;
-                        self.shared.lock().unwrap().state.active_model_context_length = Some(length);
+                        self.shared.lock_or_recover().state.active_model_context_length = Some(length);
                         self.append_system(&format!("Context length for {model} set to {length} tokens."));
                     }
                 }
@@ -187,15 +230,36 @@ impl BackendService {
                 }
             }
             "/status" => self.append_system(&self.status_report()),
-            "/goal" => self.append_system("Open /goal in the interactive TUI. Goal mode continues until the strict success judge accepts concrete evidence."),
+            "/goal" => {
+                let current = self.shared.lock_or_recover().state.goal_mode;
+                match arguments.first().copied() {
+                    None | Some("toggle") => {
+                        let enabled = !current;
+                        self.set_goal_enabled(enabled)?;
+                        self.append_system(&format!("Goal: {}", if enabled { "ON" } else { "OFF" }));
+                    }
+                    Some("on") | Some("enable") => {
+                        self.set_goal_enabled(true)?;
+                        self.append_system("Goal: ON");
+                    }
+                    Some("off") | Some("disable") => {
+                        self.set_goal_enabled(false)?;
+                        self.append_system("Goal: OFF");
+                    }
+                    Some("status") => {
+                        self.append_system(&format!("Goal: {}", if current { "ON" } else { "OFF" }));
+                    }
+                    Some(_) => self.append_system("Usage: /goal [on|off|toggle|status]"),
+                }
+            }
             "/image" => {
                 let Some(argument) = arguments.first().copied() else {
-                    let count = self.shared.lock().unwrap().meta.pending_images.len();
+                    let count = self.shared.lock_or_recover().meta.pending_images.len();
                     self.append_system(&format!("{count} image{} queued for the next turn. Use /image PATH to add one or /image clear to remove them.", if count == 1 { "" } else { "s" }));
                     return Ok(());
                 };
                 if argument == "clear" {
-                    self.shared.lock().unwrap().meta.pending_images.clear();
+                    self.shared.lock_or_recover().meta.pending_images.clear();
                     self.append_system("Cleared queued images.");
                     return Ok(());
                 }
@@ -213,7 +277,7 @@ impl BackendService {
                 };
                 let image = ImageAttachment::from_file(&path)?;
                 let name = image.name.clone().unwrap_or_else(|| path.display().to_string());
-                let mut shared = self.shared.lock().unwrap();
+                let mut shared = self.shared.lock_or_recover();
                 shared.meta.pending_images.push(image);
                 let count = shared.meta.pending_images.len();
                 drop(shared);
@@ -231,8 +295,7 @@ impl BackendService {
                 };
                 let attached = self
                     .shared
-                    .lock()
-                    .unwrap()
+                    .lock_or_recover()
                     .meta
                     .attached_capabilities
                     .as_deref()
@@ -251,7 +314,7 @@ impl BackendService {
             "/capabilities" => {
                 self.reload_project_capabilities()?;
                 let capabilities = self.bridge.list_harness_capabilities()?;
-                let attached = self.shared.lock().unwrap().meta.attached_capabilities.clone();
+                let attached = self.shared.lock_or_recover().meta.attached_capabilities.clone();
                 let effective: Vec<String> =
                     attached.unwrap_or_else(|| default_attached_harness(&capabilities));
                 let mut lines = capabilities.into_iter().map(|capability| format!("{} [{}] — {}", capability.id, if effective.contains(&capability.id) { "attached" } else { "detached" }, capability.description)).collect::<Vec<_>>();
@@ -266,8 +329,7 @@ impl BackendService {
                 if *id == SKYLINE_CAPABILITY_ID {
                     let attached = self
                         .shared
-                        .lock()
-                        .unwrap()
+                        .lock_or_recover()
                         .meta
                         .attached_capabilities
                         .as_deref()
@@ -284,8 +346,7 @@ impl BackendService {
                 if *id != "web-search" && !capabilities.iter().any(|capability| capability.id == *id) { self.append_error(format!("Unknown capability: {id}")); return Ok(()); }
                 let attached = self
                     .shared
-                    .lock()
-                    .unwrap()
+                    .lock_or_recover()
                     .meta
                     .attached_capabilities
                     .clone()
@@ -303,8 +364,7 @@ impl BackendService {
                 if *id == SKYLINE_CAPABILITY_ID {
                     let attached = self
                         .shared
-                        .lock()
-                        .unwrap()
+                        .lock_or_recover()
                         .meta
                         .attached_capabilities
                         .as_deref()
@@ -320,8 +380,7 @@ impl BackendService {
                 let capabilities = self.bridge.list_harness_capabilities()?;
                 let attached = self
                     .shared
-                    .lock()
-                    .unwrap()
+                    .lock_or_recover()
                     .meta
                     .attached_capabilities
                     .clone()
@@ -341,7 +400,6 @@ impl BackendService {
             "/permissions" => self.append_system(
                 "Open /permissions in the interactive TUI to manage sandbox and permission settings.",
             ),
-            "/model" | "/reasoning" | "/sessions" => {},
             _ => self.append_error(format!("Unknown command: {command}. Type /help for commands.")),
         }
         Ok(())
@@ -349,7 +407,7 @@ impl BackendService {
 
     pub(super) fn guard_session_environment_mutation(&self) -> bool {
         let allowed =
-            session_environment_mutation_allowed(self.shared.lock().unwrap().state.is_streaming);
+            session_environment_mutation_allowed(self.shared.lock_or_recover().state.is_streaming);
         if !allowed {
             self.append_error(SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR.into());
         }
@@ -386,7 +444,7 @@ impl BackendService {
             let (cwd, roots) = coordinator.session_environment();
             (cwd, roots, coordinator.model_history())
         };
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock_or_recover();
         shared.meta.working_directory = Some(cwd);
         shared.meta.context_roots = roots;
         persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
@@ -394,7 +452,7 @@ impl BackendService {
     }
 
     pub(super) fn status_report(&self) -> String {
-        let state = self.shared.lock().unwrap().state.without_conversation();
+        let state = self.shared.lock_or_recover().state.without_conversation();
         let current_context = state.current_context_tokens.unwrap_or(0);
         let context = match state.active_model_context_length {
             Some(total) if total > 0 => format!(
@@ -501,7 +559,7 @@ impl BackendService {
 
     pub(super) fn request_models(&self) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             if shared.state.is_loading_models {
                 return;
             }

@@ -15,6 +15,25 @@ impl AgentCoordinator {
         self.history.clone()
     }
 
+    pub fn prepare_turn_history_checkpoint(&mut self) -> usize {
+        if history::prune_request_only_history(&mut self.history) > 0 {
+            self.cache_continuity = Default::default();
+        }
+        self.history.len()
+    }
+
+    pub fn rewind_model_history(&mut self, len: usize) -> Result<()> {
+        if len == 0 || len > self.history.len() {
+            bail!("invalid model history checkpoint {len}");
+        }
+        self.history.truncate(len);
+        self.context_memory = context::ContextMemory::default();
+        self.cache_continuity = cache::ContinuityTracker::default();
+        self.previous_turn_working_state = None;
+        self.context_key = Uuid::new_v4().to_string();
+        Ok(())
+    }
+
     pub fn replace_model_history(&mut self, restored: Vec<Message>) {
         let body = if restored
             .first()
@@ -131,7 +150,7 @@ impl AgentCoordinator {
         self.context_memory.load(&mut self.history)?;
         let before = self.history.len();
         self.context_memory.rollover(&mut self.history, None)?;
-        self.context_key = self.context_memory.id().to_owned();
+        self.registry.reset_model_evidence_window();
         self.cache_continuity = cache::ContinuityTracker::default();
         Ok((before, self.history.len()))
     }
@@ -176,11 +195,20 @@ impl AgentCoordinator {
     pub fn configure_foundation_memory(
         &mut self,
         enabled: bool,
+        backend: crate::project_settings::ServiceBackend,
         server: impl Into<String>,
         project: impl Into<String>,
     ) {
         self.registry
-            .configure_foundation_memory(enabled, server, project);
+            .configure_foundation_memory(enabled, backend, server, project);
+    }
+
+    pub fn configure_web_backend(
+        &mut self,
+        backend: crate::project_settings::ServiceBackend,
+        server: impl Into<String>,
+    ) {
+        self.registry.configure_web_backend(backend, server);
     }
 
     pub fn set_retained_debate_knowledge(
@@ -188,7 +216,6 @@ impl AgentCoordinator {
         knowledge: Vec<crate::debate::RetainedDebateKnowledge>,
     ) {
         self.retained_debate_knowledge = knowledge;
-        self.context_key = Uuid::new_v4().to_string();
         self.cache_continuity = cache::ContinuityTracker::default();
     }
 }

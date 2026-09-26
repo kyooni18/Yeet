@@ -10,7 +10,6 @@ TARGET=$(rustc -vV | sed -n 's/^host: //p')
 NAME="yeet-$VERSION-$TARGET"
 STAGE_BASE="$ROOT/target/package-stage"
 STAGE="$STAGE_BASE/$NAME"
-RUNTIME_BUILD="$ROOT/target/release-runtime-$TARGET"
 
 checksum() {
   file=$1
@@ -24,22 +23,15 @@ checksum() {
 
 cd "$ROOT"
 npm --prefix RuntimeSource ci
-if command -v pnpm >/dev/null 2>&1; then
-  pnpm --dir web install --frozen-lockfile
-elif command -v corepack >/dev/null 2>&1; then
-  corepack pnpm --dir web install --frozen-lockfile
-else
-  echo "pnpm or Corepack is required to install the locked Remote WebUI dependencies." >&2
-  exit 1
-fi
-YEET_RUNTIME_OUT_DIR="$RUNTIME_BUILD/dist" "$ROOT/Scripts/rebuild-runtime.sh"
-"$ROOT/Scripts/build-remote-web.sh"
+npm --prefix web ci
+npm --prefix RuntimeSource run build
+npm --prefix web run build
 cargo build --release
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/share/yeet/runtime" "$OUT"
 install -m 755 target/release/yeet "$STAGE/bin/yeet"
-cp -R "$RUNTIME_BUILD/dist" "$STAGE/share/yeet/runtime/dist"
+cp -R RuntimeSource/dist "$STAGE/share/yeet/runtime/dist"
 cp -R RuntimeSource/skills "$STAGE/share/yeet/runtime/skills"
 cp RuntimeSource/package.json "$STAGE/share/yeet/runtime/package.json"
 cp README.md CHANGELOG.md LICENSE.txt "$STAGE/"
@@ -47,8 +39,6 @@ cp README.md CHANGELOG.md LICENSE.txt "$STAGE/"
   echo "Staged release is missing bundled PDF skill" >&2
   exit 1
 }
-cp Scripts/install-release.sh "$STAGE/install.sh"
-chmod 755 "$STAGE/install.sh"
 if [ -f docs/PLATFORM_SUPPORT.md ]; then
   mkdir -p "$STAGE/docs"
   cp docs/PLATFORM_SUPPORT.md "$STAGE/docs/PLATFORM_SUPPORT.md"
@@ -57,10 +47,10 @@ fi
 SMOKE_CONFIG="$ROOT/target/release-smoke-config-$TARGET"
 rm -rf "$SMOKE_CONFIG"
 ACTUAL_VERSION=$("$STAGE/bin/yeet" --version)
-if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+[ "$ACTUAL_VERSION" = "$VERSION" ] || {
   echo "Staged Yeet version $ACTUAL_VERSION does not match release version $VERSION" >&2
   exit 1
-fi
+}
 YEET_CONFIG_DIR="$SMOKE_CONFIG" "$STAGE/bin/yeet" doctor >/dev/null
 rm -rf "$SMOKE_CONFIG"
 
@@ -81,21 +71,21 @@ case "$TARGET" in
       rm -rf "$DEB_ROOT"
       mkdir -p "$DEB_ROOT/DEBIAN" "$DEB_ROOT/usr/bin" "$DEB_ROOT/usr/share/yeet/runtime" "$DEB_ROOT/usr/share/doc/yeet"
       install -m 755 target/release/yeet "$DEB_ROOT/usr/bin/yeet"
-      cp -R "$RUNTIME_BUILD/dist" "$DEB_ROOT/usr/share/yeet/runtime/dist"
+      cp -R RuntimeSource/dist "$DEB_ROOT/usr/share/yeet/runtime/dist"
       cp -R RuntimeSource/skills "$DEB_ROOT/usr/share/yeet/runtime/skills"
       cp RuntimeSource/package.json "$DEB_ROOT/usr/share/yeet/runtime/package.json"
       cp README.md CHANGELOG.md LICENSE.txt "$DEB_ROOT/usr/share/doc/yeet/"
-      cat > "$DEB_ROOT/DEBIAN/control" <<EOF
+      cat > "$DEB_ROOT/DEBIAN/control" <<CONTROL
 Package: yeet
 Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: $DEB_ARCH
-Depends: nodejs (>= 20)
+Depends: nodejs
 Maintainer: Yeet contributors
 Description: Native multiplatform agent CLI and remote UI
  Yeet is a Rust CLI/TUI with a TypeScript provider and tool runtime.
-EOF
+CONTROL
       DEB="$OUT/yeet_${VERSION}_${DEB_ARCH}.deb"
       rm -f "$DEB" "$DEB.sha256"
       dpkg-deb --root-owner-group --build "$DEB_ROOT" "$DEB"

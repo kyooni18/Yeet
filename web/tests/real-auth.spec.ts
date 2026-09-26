@@ -52,7 +52,7 @@ test.describe.serial('real Remote authentication', () => {
 
     await accessKeyInput.fill(accessKey)
     await authorizeButton.click()
-    await expect(page.locator('.desktop-status').first()).toContainText('connected')
+    await expect(page.locator('.desktop-status').first()).toHaveAttribute('aria-label', /Connection: connected/i)
 
     const status = await page.request.get('/api/auth/status')
     await expect(status.json()).resolves.toMatchObject({ required: true, authenticated: true, key: true })
@@ -70,7 +70,7 @@ test.describe.serial('real Remote authentication', () => {
     expect(wrongOrigin.status()).toBe(403)
 
     await page.reload()
-    await expect(page.locator('.desktop-status').first()).toContainText('connected')
+    await expect(page.locator('.desktop-status').first()).toHaveAttribute('aria-label', /Connection: connected/i)
 
     // Reloading Remote auth invalidates all issued sessions. This exercises the
     // browser behavior of a no-longer-valid session without waiting 12 hours.
@@ -104,7 +104,7 @@ test.describe.serial('real Remote authentication', () => {
       await expect(page.getByRole('heading', { name: 'Register a passkey' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Register passkey' })).toBeFocused()
       await page.getByRole('button', { name: 'Register passkey' }).click()
-      await expect(page.locator('.desktop-status').first()).toContainText('connected')
+      await expect(page.locator('.desktop-status').first()).toHaveAttribute('aria-label', /Connection: connected/i)
 
       await context.clearCookies()
       const duplicateOutput = authCommand(['passkey', 'add'])
@@ -115,7 +115,7 @@ test.describe.serial('real Remote authentication', () => {
       await expect(page.getByRole('heading', { name: 'Register a passkey' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Register passkey' })).toBeFocused()
       await page.getByRole('button', { name: 'Register passkey' }).click()
-      await expect(page.locator('.desktop-status').first()).toContainText('connected')
+      await expect(page.locator('.desktop-status').first()).toHaveAttribute('aria-label', /Connection: connected/i)
 
       // A duplicate enrollment on the same authenticator falls back to the
       // already-registered passkey and consumes the one-time enrollment URL.
@@ -128,7 +128,7 @@ test.describe.serial('real Remote authentication', () => {
       await expect(page.getByRole('button', { name: 'Use a passkey' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Use a passkey' })).toBeFocused()
       await page.getByRole('button', { name: 'Use a passkey' }).click()
-      await expect(page.locator('.desktop-status').first()).toContainText('connected')
+      await expect(page.locator('.desktop-status').first()).toHaveAttribute('aria-label', /Connection: connected/i)
 
       // Enrollment tokens are one-time. Reusing the consumed URL must fail
       // closed with the same browser treatment as an expired enrollment.

@@ -5,16 +5,16 @@ type TestHooks = {
   __yeetEmit: (message: Record<string, unknown>) => void
 }
 
-async function emitEntry(page: Page, sequence: number, entry: Record<string, unknown>) {
-  await page.evaluate(({ sequence, entry }) => {
+async function setConversation(page: Page, conversation: Array<Record<string, unknown>>) {
+  await page.evaluate((value) => {
     ;(window as unknown as TestHooks).__yeetEmit({
-      type: 'conversation_entry',
+      type: 'state_update',
       version: 1,
-      sequence,
-      revision: sequence,
-      entry,
+      sequence: 2,
+      revision: 2,
+      patch: { conversation: value },
     })
-  }, { sequence, entry })
+  }, conversation)
 }
 
 async function addOverflowingEntries(page: Page) {
@@ -29,41 +29,50 @@ async function addOverflowingEntries(page: Page) {
   })
   const toolResult = Array.from({ length: 220 }, (_, index) => `Tool line ${index}: ${'result '.repeat(12)}`).join('\n')
 
-  await emitEntry(page, 2, {
-    id: 'overflow-reasoning',
-    kind: { type: 'reasoning', content: reasoningContent, summary: 'Long reasoning' },
-  })
-  await emitEntry(page, 3, {
-    id: 'overflow-skill',
-    kind: { type: 'skill', name: 'overflow-skill', status: 'loaded', content: skillContent },
-  })
-  await emitEntry(page, 4, {
-    id: 'overflow-mcp',
-    kind: { type: 'mcp', server: 'Audit', name: 'long_output', content: mcpContent, isError: false },
-  })
-  await emitEntry(page, 5, {
-    id: 'overflow-tool',
-    kind: {
-      type: 'toolCall',
-      toolCall: {
-        id: 'overflow-tool',
-        name: 'overflow_tool',
-        arguments: toolArguments,
-        status: 'completed',
-        result: toolResult,
+  await setConversation(page, [
+    {
+      id: 'overflow-reasoning',
+      kind: { type: 'reasoning', content: reasoningContent, summary: 'Long reasoning' },
+    },
+    {
+      id: 'overflow-skill',
+      kind: { type: 'skill', name: 'overflow-skill', status: 'loaded', content: skillContent },
+    },
+    {
+      id: 'overflow-mcp',
+      kind: { type: 'mcp', server: 'Audit', name: 'long_output', content: mcpContent, isError: false },
+    },
+    {
+      id: 'overflow-tool-entry',
+      kind: {
+        type: 'toolCall',
+        toolCall: {
+          id: 'overflow-tool',
+          name: 'overflow_tool',
+          arguments: toolArguments,
+          status: 'completed',
+          result: toolResult,
+        },
       },
     },
-  })
+  ])
+
+  const group = page.locator('.activity-group').last()
+  const header = group.locator('.activity-group__header')
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
+  await header.click()
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
+  return group
 }
 
-async function expectKeyboardScrollable(page: Page, viewport: Locator, label: string, previousControl: Locator) {
-  await viewport.scrollIntoViewIfNeeded()
-  await expect(viewport).toBeVisible()
-  await expect(viewport).toHaveAttribute('tabindex', '0')
-  await expect(viewport).toHaveAttribute('role', 'group')
-  await expect(viewport).toHaveAttribute('aria-label', label)
+async function expectScrollableRegion(page: Page, region: Locator, label: string) {
+  await region.scrollIntoViewIfNeeded()
+  await expect(region).toBeVisible()
+  await expect(region).toHaveAttribute('tabindex', '0')
+  await expect(region).toHaveAttribute('role', 'region')
+  await expect(region).toHaveAttribute('aria-label', label)
 
-  const dimensions = await viewport.evaluate((element) => ({
+  const dimensions = await region.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
     clientWidth: element.clientWidth,
@@ -74,55 +83,71 @@ async function expectKeyboardScrollable(page: Page, viewport: Locator, label: st
     `${label} should overflow in this regression fixture`,
   ).toBe(true)
 
-  await previousControl.focus()
-  await page.keyboard.press('Tab')
-  await expect(viewport).toBeFocused()
-
-  const before = await viewport.evaluate((element) => element.scrollTop)
+  const before = await region.evaluate((element) => element.scrollTop)
   await page.keyboard.press('PageDown')
-  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(before)
+  await expect.poll(() => region.evaluate((element) => element.scrollTop)).toBeGreaterThan(before)
 
-  const accessibilityTree = await viewport.ariaSnapshot()
+  const accessibilityTree = await region.ariaSnapshot()
   expect(accessibilityTree).toContain(label)
+}
 
-
-  await page.keyboard.press('Shift+Tab')
-  await expect(previousControl).toBeFocused()
+async function openTrace(group: Locator, text: string) {
+  const trace = group.locator('.trace-disclosure').filter({ hasText: text }).first()
+  const row = trace.locator('.trace-disclosure__row')
+  await expect(row).toHaveAttribute('aria-expanded', 'false')
+  await row.click()
+  await expect(row).toHaveAttribute('aria-expanded', 'true')
+  return { trace, row }
 }
 
 test.beforeEach(async ({ page }) => {
   await installMockRemote(page)
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
-  await addOverflowingEntries(page)
 })
 
-test('expanded reasoning, skill, and MCP output panes support keyboard scrolling', async ({ page }) => {
-  const reasoning = page.locator('[data-entry-id="overflow-reasoning"]')
-  const reasoningSummary = reasoning.locator('summary')
-  await reasoningSummary.click()
-  await expectKeyboardScrollable(page, reasoning.locator('.reasoning-body'), 'Reasoning details', reasoningSummary)
+test('expanded reasoning, skill, and MCP details support keyboard scrolling', async ({ page }) => {
+  const group = await addOverflowingEntries(page)
+  const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
 
-  const skill = page.locator('[data-entry-id="overflow-skill"]')
-  const skillSummary = skill.locator('summary')
-  await skillSummary.click()
-  await expectKeyboardScrollable(page, skill.locator('.semantic-card-body'), 'Skill overflow-skill output', skillSummary)
-
-  const mcp = page.locator('[data-entry-id="overflow-mcp"]')
-  const mcpSummary = mcp.locator('summary')
-  await mcpSummary.click()
-  await expectKeyboardScrollable(page, mcp.locator('.semantic-output'), 'MCP output', mcpSummary)
+  for (const fixture of [
+    { text: 'Reasoning', label: 'Reasoning details' },
+    { text: 'overflow-skill', label: 'Skill details' },
+    { text: 'Audit · long_output', label: 'MCP details' },
+  ]) {
+    const { trace, row } = await openTrace(group, fixture.text)
+    const region = trace.getByRole('region', { name: fixture.label })
+    await row.focus()
+    await page.keyboard.press('Tab')
+    await expect(region).toBeFocused()
+    await expectScrollableRegion(page, region, fixture.label)
+    if (!touchFirst) {
+      await page.keyboard.press('Shift+Tab')
+      await expect(row).toBeFocused()
+    }
+  }
 })
 
-test('expanded tool argument and result panes support keyboard scrolling', async ({ page }) => {
-  const tool = page.locator('[data-entry-id="overflow-tool"]')
-  await tool.locator('[data-tool-toggle]').click()
-  const panes = tool.locator('.tool-card-details pre')
-  await expect(panes).toHaveCount(2)
+test('expanded tool input and result panes support keyboard scrolling', async ({ page }) => {
+  const group = await addOverflowingEntries(page)
+  const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
+  const { trace, row } = await openTrace(group, 'overflow tool')
+  const input = trace.getByRole('region', { name: 'Input details' })
+  const result = trace.getByRole('region', { name: 'Result details' })
 
-  const argumentCopy = tool.getByRole('button', { name: 'Copy tool arguments' })
-  await expectKeyboardScrollable(page, panes.nth(0), 'Tool arguments', argumentCopy)
+  await row.focus()
+  await page.keyboard.press('Tab')
+  await expect(input).toBeFocused()
+  await expectScrollableRegion(page, input, 'Input details')
 
-  const resultCopy = tool.getByRole('button', { name: 'Copy tool result' })
-  await expectKeyboardScrollable(page, panes.nth(1), 'Tool result', resultCopy)
+  await page.keyboard.press('Tab')
+  await expect(result).toBeFocused()
+  await expectScrollableRegion(page, result, 'Result details')
+
+  if (!touchFirst) {
+    await page.keyboard.press('Shift+Tab')
+    await expect(input).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(row).toBeFocused()
+  }
 })

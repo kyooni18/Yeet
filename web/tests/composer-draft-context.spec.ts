@@ -24,12 +24,11 @@ async function sentCommands(page: Page) {
     .map((message) => message.command as Record<string, unknown>))
 }
 
-async function sessionList(page: Page) {
-  if ((page.viewportSize()?.width ?? 0) < 900) {
-    await page.getByTestId('open-sessions').click()
-    return page.getByTestId('session-drawer')
-  }
-  return page.locator('.desktop-session-sidebar')
+async function openSessions(page: Page) {
+  await page.getByRole('button', { name: 'Open sidebar' }).click()
+  const sidebar = page.locator('.remote-sidebar')
+  await expect(sidebar).toHaveClass(/is-open/)
+  return sidebar
 }
 
 test.beforeEach(async ({ page }) => {
@@ -39,7 +38,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('drafts stay with their session instead of following navigation', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
 
   await composer.fill('unfinished note for session A')
   await emitState(page, 2, { current_session_id: 'session-b' })
@@ -54,7 +53,7 @@ test('drafts stay with their session instead of following navigation', async ({ 
 })
 
 test('draft identity includes the workspace even when session ids collide', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
 
   await composer.fill('Yeet workspace draft')
   await emitState(page, 2, {
@@ -78,13 +77,13 @@ test('draft identity includes the workspace even when session ids collide', asyn
 })
 
 test('sending clears only the active context draft', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
 
   await composer.fill('keep this in session A')
   await emitState(page, 2, { current_session_id: 'session-b' })
   await expect(composer).toHaveValue('')
   await composer.fill('send from session B')
-  await page.getByTestId('submit').click()
+  await page.getByRole('button', { name: 'Send' }).click()
   await expect(composer).toHaveValue('')
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'submit', text: 'send from session B' }),
@@ -94,13 +93,12 @@ test('sending clears only the active context draft', async ({ page }) => {
   await expect(composer).toHaveValue('keep this in session A')
 })
 
-
-test('real session navigation swaps drafts on both sidebar and drawer layouts', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
-
+test('real sidebar session navigation swaps drafts', async ({ page }) => {
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.fill('draft that belongs to session A')
-  let sessions = await sessionList(page)
-  await sessions.locator('[data-session-id="session-b"]').click()
+
+  let sidebar = await openSessions(page)
+  await sidebar.locator('.sidebar-session').filter({ hasText: 'Protocol review' }).click()
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'load_session', session_id: 'session-b' }),
   ]))
@@ -108,8 +106,8 @@ test('real session navigation swaps drafts on both sidebar and drawer layouts', 
   await expect(composer).toHaveValue('')
 
   await composer.fill('draft that belongs to session B')
-  sessions = await sessionList(page)
-  await sessions.locator('[data-session-id="session-a"]').click()
+  sidebar = await openSessions(page)
+  await sidebar.locator('.sidebar-session').filter({ hasText: 'Remote WebUI' }).click()
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'load_session', session_id: 'session-a' }),
   ]))
@@ -118,44 +116,44 @@ test('real session navigation swaps drafts on both sidebar and drawer layouts', 
 })
 
 test('connection loss and reconnect do not disturb the active draft', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.fill('keep while reconnecting')
 
   await page.evaluate(() => window.dispatchEvent(new Event('offline')))
-  await expect(page.getByText('Offline', { exact: true })).toBeVisible()
   await expect(composer).toHaveValue('keep while reconnecting')
+  await expect(composer).toBeEnabled()
 
   await page.evaluate(() => window.dispatchEvent(new Event('online')))
   await expect(composer).toHaveValue('keep while reconnecting')
 })
 
-
 test('starting another unsaved chat clears the previous unsent draft', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await emitState(page, 2, { current_session_id: null })
   await expect(composer).toHaveValue('')
   await composer.fill('abandoned unsaved draft')
 
-  const sessions = await sessionList(page)
-  await sessions.getByTestId('new-session').click()
+  const sidebar = await openSessions(page)
+  await sidebar.getByRole('button', { name: 'New session' }).click()
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'new_session' }),
   ]))
+  await expect(composer).toHaveValue('')
 
   await emitState(page, 3, { current_session_id: null, conversation: [] })
   await expect(composer).toHaveValue('')
 })
 
-
 test('opening Settings and returning keeps the active draft', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.fill('draft survives settings')
 
-  const sessions = await sessionList(page)
-  await sessions.getByRole('button', { name: 'Settings' }).click()
-  await expect(page).toHaveURL(/\/settings/)
+  const sidebar = await openSessions(page)
+  await sidebar.getByRole('button', { name: 'Settings' }).click()
+  const settings = page.getByRole('dialog', { name: 'Settings' })
+  await expect(settings).toBeVisible()
+  await settings.getByRole('button', { name: 'Close' }).click()
+  await expect(settings).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Back to conversation' }).click()
-  await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByRole('textbox', { name: 'Message Yeet' })).toHaveValue('draft survives settings')
+  await expect(composer).toHaveValue('draft survives settings')
 })

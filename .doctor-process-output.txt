@@ -1,0 +1,6 @@
+yeet 0.1.0
+node: node
+runtime: /Users/kyooni18/Code/Yeet/RuntimeSource
+config: /Users/kyooni18/.yeet
+providers: openai, anthropic, gemini, opencode, opencode-go, openrouter, codex-cli, claude, gemini-web, claude-api
+owned children: provider-bridge:52956

@@ -15,22 +15,50 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
 
         if let Some((marker, minimum_len)) = code_fence {
             if is_closing_fence(line, marker, minimum_len) {
-                code_fence = None;
-            } else {
-                // Give code rows a distinct background so the remote renderer can
-                // keep the whole fenced block together as a selectable code panel.
                 lines.push(Line::from(Span::styled(
-                    format!("  {line}"),
+                    "╰─",
                     Style::default()
-                        .fg(theme::text_dim())
+                        .fg(theme::border_dim())
                         .bg(theme::code_background()),
                 )));
+                code_fence = None;
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "│ ",
+                        Style::default()
+                            .fg(theme::border_dim())
+                            .bg(theme::code_background()),
+                    ),
+                    Span::styled(
+                        line.to_owned(),
+                        Style::default()
+                            .fg(theme::text_dim())
+                            .bg(theme::code_background()),
+                    ),
+                ]));
             }
             index += 1;
             continue;
         }
 
-        if let Some((marker, length)) = opening_fence(line) {
+        if let Some((marker, length, info)) = opening_fence(line) {
+            let label = fence_label(info);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "╭─ ",
+                    Style::default()
+                        .fg(theme::border_dim())
+                        .bg(theme::code_background()),
+                ),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .fg(theme::accent())
+                        .bg(theme::code_background())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
             code_fence = Some((marker, length));
             index += 1;
             continue;
@@ -38,8 +66,7 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
 
         if index + 1 < source.len() {
             if let Some(level) = setext_heading_level(source[index + 1]) {
-                let style = heading_style(level);
-                lines.push(Line::from(inline_spans(line.trim(), style)));
+                lines.push(heading_line(level, line.trim()));
                 index += 2;
                 continue;
             }
@@ -56,24 +83,27 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
         }
 
         if let Some((level, heading)) = atx_heading(line) {
-            lines.push(Line::from(inline_spans(heading, heading_style(level))));
+            lines.push(heading_line(level, heading));
             index += 1;
             continue;
         }
 
         if is_horizontal_rule(line) {
-            lines.push(Line::from(Span::styled(
-                "────────────────────────",
-                Style::default().fg(theme::border()),
-            )));
+            lines.push(Line::from(vec![
+                Span::styled("◇ ", Style::default().fg(theme::accent_warm())),
+                Span::styled(
+                    "──────────────────────",
+                    Style::default().fg(theme::border_dim()),
+                ),
+            ]));
             index += 1;
             continue;
         }
 
         if let Some((depth, quote)) = block_quote(line) {
             let mut spans = vec![Span::styled(
-                "│ ".repeat(depth),
-                Style::default().fg(theme::border()),
+                "▎ ".repeat(depth),
+                Style::default().fg(theme::accent_warm()),
             )];
             spans.extend(inline_spans(quote, Style::default().fg(theme::text_dim())));
             lines.push(Line::from(spans));
@@ -99,14 +129,30 @@ pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
     lines
 }
 
-fn opening_fence(line: &str) -> Option<(char, usize)> {
+fn opening_fence(line: &str) -> Option<(char, usize, &str)> {
     let trimmed = line.trim_start();
     let marker = trimmed.chars().next()?;
     if marker != '`' && marker != '~' {
         return None;
     }
     let length = trimmed.chars().take_while(|value| *value == marker).count();
-    (length >= 3).then_some((marker, length))
+    if length < 3 {
+        return None;
+    }
+    Some((marker, length, trimmed[length..].trim()))
+}
+
+fn fence_label(info: &str) -> String {
+    let label = info
+        .split_whitespace()
+        .next()
+        .unwrap_or("code")
+        .trim_matches(|character| matches!(character, '{' | '}' | '.'));
+    if label.is_empty() {
+        "code".to_owned()
+    } else {
+        label.to_owned()
+    }
 }
 
 fn is_closing_fence(line: &str, marker: char, minimum_len: usize) -> bool {
@@ -140,13 +186,36 @@ fn setext_heading_level(line: &str) -> Option<usize> {
 }
 
 fn heading_style(level: usize) -> Style {
-    if level <= 2 {
+    let color = match level {
+        1 => theme::accent_hot(),
+        2 => theme::accent_warm(),
+        3 => theme::accent(),
+        _ => theme::text_dim(),
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+fn heading_line(level: usize, heading: &str) -> Line<'static> {
+    let marker = match level {
+        1 => "◆ ",
+        2 => "◇ ",
+        3 => "› ",
+        _ => "· ",
+    };
+    let marker_color = match level {
+        1 => theme::accent_hot(),
+        2 => theme::accent_warm(),
+        3 => theme::accent(),
+        _ => theme::border(),
+    };
+    let mut spans = vec![Span::styled(
+        marker,
         Style::default()
-            .fg(theme::accent_hot())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().add_modifier(Modifier::BOLD)
-    }
+            .fg(marker_color)
+            .add_modifier(Modifier::BOLD),
+    )];
+    spans.extend(inline_spans(heading, heading_style(level)));
+    Line::from(spans)
 }
 
 fn is_horizontal_rule(line: &str) -> bool {
@@ -403,4 +472,45 @@ fn underscore_is_in_word(content: &str, offset: usize, marker_len: usize) -> boo
     let before = content[..offset].chars().next_back();
     let after = content[offset + marker_len..].chars().next();
     before.is_some_and(char::is_alphanumeric) && after.is_some_and(char::is_alphanumeric)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fenced_code_renders_as_a_labeled_terminal_panel() {
+        let lines = markdown_lines("~~~rust\nlet value = 42;\n~~~");
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].to_string(), "╭─ rust");
+        assert_eq!(lines[1].to_string(), "│ let value = 42;");
+        assert_eq!(lines[2].to_string(), "╰─");
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .all(|span| { span.style.bg == Some(theme::code_background()) })
+        );
+        assert_eq!(lines[0].spans[1].style.fg, Some(theme::accent()));
+    }
+
+    #[test]
+    fn unfinished_fence_preserves_streaming_code_without_fake_closure() {
+        let lines = markdown_lines("~~~{.swift}\n**not markdown yet**");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].to_string(), "╭─ swift");
+        assert_eq!(lines[1].to_string(), "│ **not markdown yet**");
+    }
+
+    #[test]
+    fn headings_quotes_and_rules_share_the_yeet_visual_grammar() {
+        let lines = markdown_lines("# Surface\n## Rhythm\n### Motion\n> restraint\n***");
+        assert_eq!(lines[0].to_string(), "◆ Surface");
+        assert_eq!(lines[1].to_string(), "◇ Rhythm");
+        assert_eq!(lines[2].to_string(), "› Motion");
+        assert_eq!(lines[3].to_string(), "▎ restraint");
+        assert!(lines[4].to_string().starts_with("◇ ─"));
+        assert_eq!(lines[0].spans[0].style.fg, Some(theme::accent_hot()));
+        assert_eq!(lines[1].spans[0].style.fg, Some(theme::accent_warm()));
+    }
 }

@@ -238,7 +238,14 @@ impl SharedSession {
     }
 
     /// Registers a new persisted run and marks it active in the UI state.
-    pub(super) fn start_run(&mut self, id: String, kind: &str, model: String) {
+    pub(super) fn start_run(
+        &mut self,
+        id: String,
+        kind: &str,
+        model: String,
+        history_start: usize,
+        conversation_start: usize,
+    ) {
         self.reconcile_orphaned_runs(
             "A newer run started before the previous persisted run reached a terminal state.",
         );
@@ -251,8 +258,17 @@ impl SharedSession {
             started_at: Utc::now(),
             finished_at: None,
             model,
+            history_start: Some(history_start),
+            conversation_start: Some(conversation_start),
+            user_entry_id: None,
             error: None,
         });
+    }
+
+    pub(super) fn bind_run_user_entry(&mut self, run_id: &str, entry_id: String) {
+        if let Some(run) = self.meta.runs.iter_mut().rev().find(|run| run.id == run_id) {
+            run.user_entry_id = Some(entry_id);
+        }
     }
 
     /// Finalizes the current persisted run with a terminal status.
@@ -284,7 +300,8 @@ impl SharedSession {
         self.state.conversation_revision = self.state.conversation_revision.wrapping_add(1);
     }
 
-    /// Uses streamed summaries as the current purpose, not concatenated transcript prose.
+    /// Uses streamed summaries as the current purpose and persists the readable
+    /// summary so the TUI can keep it with the tool work for this reasoning segment.
     pub(super) fn append_reasoning(&mut self, delta: &str, summary: bool) {
         if delta.is_empty() {
             return;
@@ -302,11 +319,13 @@ impl SharedSession {
         let title = reasoning_status(text, summary).unwrap_or_else(|| "Reasoning".into());
         self.set_activity("reasoning", &title, None);
 
-        // Codex's title-only reasoning belongs in the live activity row. Keep
-        // actual reasoning prose available for providers that emit it.
-        if summary || reasoning_titles_only(&self.state.active_reasoning_text) {
+        let has_summary = !self.state.active_reasoning_summary.trim().is_empty();
+        let has_transcript_prose = !self.state.active_reasoning_text.trim().is_empty()
+            && !reasoning_titles_only(&self.state.active_reasoning_text);
+        if !has_summary && !has_transcript_prose {
             return;
         }
+
         if self.state.active_reasoning_entry_id.is_none() {
             let id = self.append(ConversationKind::Reasoning {
                 content: String::new(),
@@ -314,17 +333,20 @@ impl SharedSession {
             });
             self.state.active_reasoning_entry_id = Some(id);
         }
+
         let id = self.state.active_reasoning_entry_id.clone().unwrap();
-        let content = self.state.active_reasoning_text.replace("****", "**\n\n**");
+        let content = if has_transcript_prose {
+            self.state.active_reasoning_text.replace("****", "**\n\n**")
+        } else {
+            String::new()
+        };
+        let summary = has_summary.then(|| self.state.active_reasoning_summary.clone());
         if let Some(entry) = self
             .conversation_mut()
             .iter_mut()
             .find(|entry| entry.id == id)
         {
-            entry.kind = ConversationKind::Reasoning {
-                content,
-                summary: None,
-            };
+            entry.kind = ConversationKind::Reasoning { content, summary };
         }
         self.state.conversation_revision = self.state.conversation_revision.wrapping_add(1);
     }
@@ -576,7 +598,16 @@ mod reasoning_status_tests {
             session.state.active_reasoning_summary,
             "**Planning****Implementing**"
         );
-        assert!(session.state.active_reasoning_entry_id.is_none());
+        assert!(session.state.active_reasoning_entry_id.is_some());
+        let stored_summary =
+            session
+                .conversation_mut()
+                .iter()
+                .find_map(|entry| match &entry.kind {
+                    ConversationKind::Reasoning { summary, .. } => summary.as_deref(),
+                    _ => None,
+                });
+        assert_eq!(stored_summary, Some("**Planning****Implementing**"));
         let activities = session
             .conversation_mut()
             .iter()

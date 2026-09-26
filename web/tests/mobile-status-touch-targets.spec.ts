@@ -1,133 +1,100 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { installMockRemote } from './mockRemote'
 
-async function openSessionControls(page: Page, width: number, height: number) {
+async function expectMinHeight(locator: Locator, height = 44) {
+  const sizes = await locator.evaluateAll((elements) => elements.map((element) => ({
+    label: element.getAttribute('aria-label') || element.textContent?.trim() || element.className,
+    height: element.getBoundingClientRect().height,
+  })))
+  expect(sizes.length).toBeGreaterThan(0)
+  for (const item of sizes) expect(Math.round(item.height), String(item.label)).toBeGreaterThanOrEqual(height)
+}
+
+async function openQuickPanel(page: Page, width: number, height: number) {
   await page.setViewportSize({ width, height })
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
-  const topStatus = page.getByTestId('open-status')
-  if (await topStatus.isVisible()) await topStatus.click()
-  else await page.getByRole('button', { name: /^Session controls:/ }).click()
-  const panel = page.getByTestId('session-controls')
-  await expect(panel).toBeVisible()
+  await page.getByRole('button', { name: 'Quick settings' }).click()
+  const panel = page.locator('.quick-panel')
+  await expect(panel).toHaveClass(/is-open/)
   return panel
-}
-
-async function expectButtonsAtLeast(panel: ReturnType<Page['getByTestId']>, height: number) {
-  const sizes = await panel.locator('button:visible').evaluateAll((buttons) => buttons.map((button) => {
-    const rect = button.getBoundingClientRect()
-    return { label: button.getAttribute('aria-label') || button.textContent || '', height: Math.round(rect.height) }
-  }))
-  expect(sizes.length).toBeGreaterThan(0)
-  for (const button of sizes) expect(button.height, button.label).toBeGreaterThanOrEqual(height)
 }
 
 test.beforeEach(async ({ page }) => {
   await installMockRemote(page)
 })
 
-
-test('phone session-controls opener is touch-sized', async ({ page }) => {
+test('phone Quick Settings opener remains touch-sized', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
 
-  const opener = page.getByRole('button', { name: /^Session controls:/ })
+  const opener = page.getByRole('button', { name: 'Quick settings' })
   const box = await opener.boundingBox()
   expect(box).not.toBeNull()
   expect(box!.width).toBeGreaterThanOrEqual(44)
   expect(box!.height).toBeGreaterThanOrEqual(44)
 })
 
-
-test('wide session-controls opener adapts to pointer type', async ({ page }) => {
-  const viewport = page.viewportSize()
-  test.skip(!viewport || viewport.width < 900)
-  await page.goto('/')
-  await expect(page.getByText('Interface ready')).toBeVisible()
-
+test('phone QuickPanel keeps interactive rows and dismissal touch-sized', async ({ page }) => {
   const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
-  const opener = page.getByRole('button', { name: /^Session controls:/ })
-  const box = await opener.boundingBox()
-  expect(box).not.toBeNull()
-  if (touchFirst) {
-    expect(box!.width).toBeGreaterThanOrEqual(44)
-    expect(box!.height).toBeGreaterThanOrEqual(44)
-  } else {
-    expect(box!.height).toBeLessThan(44)
-  }
+  test.skip(!touchFirst, 'Touch-first behavior only')
+
+  const panel = await openQuickPanel(page, 390, 844)
+  await expectMinHeight(panel.locator('.quick-row:visible'))
+  await expectMinHeight(panel.locator('.quick-workspace:visible'))
+  await expectMinHeight(panel.locator('.quick-settings-button:visible'))
+
+  const close = panel.getByRole('button', { name: 'Close controls' })
+  const closeBox = await close.boundingBox()
+  expect(closeBox).not.toBeNull()
+  expect(Math.round(closeBox!.width)).toBeGreaterThanOrEqual(44)
+  expect(Math.round(closeBox!.height)).toBeGreaterThanOrEqual(44)
 })
 
-test('phone session controls keep every visible action touch-sized', async ({ page }) => {
-  const panel = await openSessionControls(page, 390, 844)
-  await expectButtonsAtLeast(panel, 44)
-  await expect(panel.getByRole('button', { name: 'high', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(panel.getByRole('button', { name: 'OFF', exact: true })).toHaveAttribute('aria-pressed', 'true')
-})
-
-test('short landscape session controls fit the viewport and remain touch-sized', async ({ page }) => {
-  const panel = await openSessionControls(page, 852, 393)
-  await expectButtonsAtLeast(panel, 44)
+test('short landscape QuickPanel stays inside the viewport and scrolls internally', async ({ page }) => {
+  const panel = await openQuickPanel(page, 852, 393)
   const box = await panel.boundingBox()
   expect(box).not.toBeNull()
   expect(box!.y).toBeGreaterThanOrEqual(0)
   expect(box!.y + box!.height).toBeLessThanOrEqual(393)
+
+  const scroll = panel.locator('.quick-panel__scroll')
+  const metrics = await scroll.evaluate((element) => ({
+    overflowY: getComputedStyle(element).overflowY,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  expect(['auto', 'scroll']).toContain(metrics.overflowY)
+  expect(metrics.scrollHeight).toBeGreaterThanOrEqual(metrics.clientHeight)
+
+  const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
+  if (touchFirst) await expectMinHeight(panel.locator('.quick-row:visible'))
 })
 
-test('wide session controls adapt action density to pointer type', async ({ page }) => {
-  const viewport = page.viewportSize()
-  test.skip(!viewport || viewport.width < 900)
-
-  const panel = await openSessionControls(page, viewport.width, viewport.height)
-  const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
-  if (touchFirst) {
-    await expectButtonsAtLeast(panel, 44)
-    return
-  }
-
-  const closeBox = await panel.getByRole('button', { name: 'Close session controls' }).boundingBox()
-  const permissionBox = await panel.getByRole('button', { name: /Ask first/ }).boundingBox()
-  expect(closeBox).not.toBeNull()
-  expect(permissionBox).not.toBeNull()
-  expect(closeBox!.height).toBeLessThan(44)
-  expect(permissionBox!.height).toBeLessThan(44)
-})
-
-
-test('wide touch session controls keep model search and provider filters touch-sized', async ({ page }) => {
+test('wide touch QuickPanel opens the touch-safe Model sheet', async ({ page }) => {
   const viewport = page.viewportSize()
   const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
-  test.skip(!touchFirst || !viewport || viewport.width < 900)
+  test.skip(!touchFirst || !viewport || viewport.width < 900, 'Wide touch behavior only')
 
-  const panel = await openSessionControls(page, viewport.width, viewport.height)
-  await page.evaluate(() => {
-    ;(window as unknown as { __yeetEmit: (message: Record<string, unknown>) => void }).__yeetEmit({
-      type: 'state_update', version: 1, sequence: 2, revision: 2,
-      patch: {
-        active_model: 'openai/gpt-5.6-sol',
-        available_models: [
-          'openai/gpt-5.6-sol',
-          'anthropic/claude-opus-4.1',
-          'google/gemini-3-pro',
-          'xai/grok-4',
-        ],
-      },
-    })
+  const panel = await openQuickPanel(page, viewport.width, viewport.height)
+  const model = panel.getByRole('button', { name: /Model/ })
+  const modelBox = await model.boundingBox()
+  expect(modelBox).not.toBeNull()
+  expect(modelBox!.height).toBeGreaterThanOrEqual(44)
+
+  await model.click()
+  const dialog = page.getByRole('dialog', { name: 'Choose model' })
+  const search = dialog.getByPlaceholder('Search models')
+  await expect(search).toBeFocused()
+  await dialog.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined)))
   })
-  await panel.getByTestId('model-picker-trigger').click()
 
-  const search = panel.getByTestId('model-search')
-  await expect(search).toBeVisible()
-  const searchBox = await search.boundingBox()
+  const searchBox = await dialog.locator('.sheet-search').boundingBox()
   expect(searchBox).not.toBeNull()
   expect(searchBox!.height).toBeGreaterThanOrEqual(44)
+  await expect.poll(() => search.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16)
 
-  const providerButtons = panel.locator('.model-picker-providers button:visible')
-  expect(await providerButtons.count()).toBeGreaterThan(0)
-  for (const button of await providerButtons.all()) {
-    const box = await button.boundingBox()
-    expect(box).not.toBeNull()
-    expect(box!.width).toBeGreaterThanOrEqual(44)
-    expect(box!.height).toBeGreaterThanOrEqual(44)
-  }
+  await expectMinHeight(dialog.locator('.model-row'))
 })

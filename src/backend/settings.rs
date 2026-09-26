@@ -9,7 +9,7 @@ impl BackendService {
     /// Refreshes the authentication providers exposed by the runtime bridge.
     pub(super) fn request_auth(&self) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.auth_working = true;
             shared.state.auth_notice = None;
         }
@@ -82,7 +82,7 @@ impl BackendService {
     /// Marks authentication UI state busy before an asynchronous operation.
     fn start_auth_action(&self, message: String) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.auth_working = true;
             shared.state.auth_notice = Some(message);
         }
@@ -92,7 +92,7 @@ impl BackendService {
     /// Refreshes custom provider configurations.
     pub(super) fn request_providers(&self) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.providers_working = true;
             shared.state.providers_notice = None;
         }
@@ -119,7 +119,7 @@ impl BackendService {
     /// Creates or updates an OpenAI-compatible provider configuration.
     pub(super) fn save_provider(&self, id: String, base_url: String, require_api_key: bool) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.providers_working = true;
             shared.state.providers_notice = Some(format!("Saving {id}…"));
         }
@@ -162,7 +162,7 @@ impl BackendService {
     /// Removes a custom provider configuration.
     pub(super) fn remove_provider(&self, id: String) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.providers_working = true;
             shared.state.providers_notice = Some(format!("Removing {id}…"));
         }
@@ -188,7 +188,7 @@ impl BackendService {
     pub(super) fn request_sandbox(&self) {
         let result = SandboxStore::new(&self.workspace_root).and_then(|store| store.load());
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.sandbox_working = false;
             match result {
                 Ok(policy) => {
@@ -208,31 +208,42 @@ impl BackendService {
     pub(super) fn request_settings(&self) {
         let project = self.project_settings.load();
         let sandbox = SandboxStore::new(&self.workspace_root).and_then(|store| store.load());
-        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        let active_model = self.shared.lock_or_recover().state.active_model.clone();
         let runtime = runtime_settings_state(&self.config, &active_model);
         if let Ok(project) = project.as_ref()
             && let Ok(mut coordinator) = self.coordinator.lock()
         {
             coordinator.configure_foundation_memory(
                 project.foundation_memory.enabled,
+                project.foundation_memory.backend,
                 project.foundation_memory.server.clone(),
                 self.project_identity.clone(),
             );
+            coordinator.configure_web_backend(project.web.backend, project.web.server.clone());
         }
         let foundation_connected = project.as_ref().ok().is_some_and(|project| {
             project.foundation_memory.enabled
-                && foundation_server_ready(&self.bridge, &project.foundation_memory.server)
+                && foundation_server_ready(
+                    &self.bridge,
+                    project.foundation_memory.backend,
+                    &project.foundation_memory.server,
+                )
         });
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.settings_working = false;
             shared.state.sandbox_working = false;
             match project {
                 Ok(project) => {
                     shared.state.openai_flex = project.openai_flex;
                     shared.state.foundation_memory_enabled = project.foundation_memory.enabled;
-                    shared.state.foundation_memory_server = project.foundation_memory.server;
+                    shared.state.foundation_memory_backend =
+                        project.foundation_memory.backend.as_str().into();
+                    shared.state.foundation_memory_server =
+                        project.foundation_memory.server.clone();
                     shared.state.foundation_memory_connected = foundation_connected;
+                    shared.state.web_backend = project.web.backend.as_str().into();
+                    shared.state.web_server = project.web.server.clone();
                     shared.state.settings_notice = None;
                     self.bridge.set_openai_flex(project.openai_flex);
                 }
@@ -264,18 +275,18 @@ impl BackendService {
 
     pub(super) fn set_appearance(&self, appearance: String) {
         let result = self.config.set_appearance(&appearance);
-        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        let active_model = self.shared.lock_or_recover().state.active_model.clone();
         self.finish_runtime_setting(result, &active_model, "Appearance updated.");
     }
 
     pub(super) fn set_theme(&self, mode: String, value: String) {
         let result = self.config.set_theme(&mode, &value);
-        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        let active_model = self.shared.lock_or_recover().state.active_model.clone();
         self.finish_runtime_setting(result, &active_model, "Theme updated.");
     }
 
     pub(super) fn set_context_length(&self, length: Option<u64>) {
-        let model = self.shared.lock().unwrap().state.active_model.clone();
+        let model = self.shared.lock_or_recover().state.active_model.clone();
         let result = if model.is_empty() {
             Err(anyhow!("Select a model before setting its context window"))
         } else {
@@ -284,8 +295,7 @@ impl BackendService {
         if result.is_ok() {
             if let Some(length) = length {
                 self.shared
-                    .lock()
-                    .unwrap()
+                    .lock_or_recover()
                     .state
                     .active_model_context_length = Some(length);
             } else {
@@ -305,14 +315,14 @@ impl BackendService {
 
     pub(super) fn set_jev_loop_mode(&self, mode: String) {
         let result = self.config.set_jev_loop_mode(&mode).map(|_| ());
-        let active_model = self.shared.lock().unwrap().state.active_model.clone();
+        let active_model = self.shared.lock_or_recover().state.active_model.clone();
         self.finish_runtime_setting(result, &active_model, "Jev loop policy updated.");
     }
 
     fn finish_runtime_setting(&self, result: Result<()>, active_model: &str, success: &str) {
         let refresh = result.and_then(|()| runtime_settings_state(&self.config, active_model));
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.settings_working = false;
             match refresh {
                 Ok(runtime) => {
@@ -330,7 +340,7 @@ impl BackendService {
     /// Enables or disables Foundation memory for this workspace.
     pub(super) fn set_foundation_memory(&self, enabled: bool) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.settings_working = true;
             shared.state.settings_notice = None;
         }
@@ -343,20 +353,30 @@ impl BackendService {
         {
             coordinator.configure_foundation_memory(
                 project.foundation_memory.enabled,
+                project.foundation_memory.backend,
                 project.foundation_memory.server.clone(),
                 self.project_identity.clone(),
             );
+            coordinator.configure_web_backend(project.web.backend, project.web.server.clone());
         }
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.settings_working = false;
             match refreshed {
                 Ok(project) => {
                     shared.state.foundation_memory_enabled = project.foundation_memory.enabled;
+                    shared.state.foundation_memory_backend =
+                        project.foundation_memory.backend.as_str().into();
                     shared.state.foundation_memory_server =
                         project.foundation_memory.server.clone();
-                    shared.state.foundation_memory_connected =
-                        foundation_server_ready(&self.bridge, &project.foundation_memory.server);
+                    shared.state.foundation_memory_connected = project.foundation_memory.enabled
+                        && foundation_server_ready(
+                            &self.bridge,
+                            project.foundation_memory.backend,
+                            &project.foundation_memory.server,
+                        );
+                    shared.state.web_backend = project.web.backend.as_str().into();
+                    shared.state.web_server = project.web.server.clone();
                     shared.state.settings_notice = Some(format!(
                         "Foundation memory {}.",
                         if enabled { "enabled" } else { "disabled" }
@@ -371,10 +391,59 @@ impl BackendService {
         self.publish_state();
     }
 
+    pub(super) fn set_service_backend(
+        &self,
+        service: String,
+        backend: String,
+        server: Option<String>,
+    ) {
+        let service = service.trim().to_ascii_lowercase();
+        {
+            let mut shared = self.shared.lock_or_recover();
+            shared.state.settings_working = true;
+            shared.state.settings_notice = None;
+        }
+        self.publish_state();
+
+        let result = ServiceBackend::parse(&backend).and_then(|backend| match service.as_str() {
+            "memory" | "foundation" => self
+                .project_settings
+                .save_foundation_backend(backend, server.as_deref()),
+            "web" | "search" => self
+                .project_settings
+                .save_web_backend(backend, server.as_deref()),
+            other => Err(anyhow!("Unknown service '{other}'; expected memory or web")),
+        });
+        if let Err(error) = result {
+            let mut shared = self.shared.lock_or_recover();
+            shared.state.settings_working = false;
+            shared.state.settings_notice = Some(format!("Unable to save service backend: {error}"));
+            drop(shared);
+            self.publish_state();
+            return;
+        }
+
+        self.request_settings();
+        let mut shared = self.shared.lock_or_recover();
+        let selected = if matches!(service.as_str(), "memory" | "foundation") {
+            shared.state.foundation_memory_backend.clone()
+        } else {
+            shared.state.web_backend.clone()
+        };
+        let label = if matches!(service.as_str(), "memory" | "foundation") {
+            "Memory"
+        } else {
+            "Web"
+        };
+        shared.state.settings_notice = Some(format!("{label} backend set to {selected}."));
+        drop(shared);
+        self.publish_state();
+    }
+
     /// Enables or disables OpenAI Flex requests for this workspace.
     pub(super) fn set_openai_flex(&self, enabled: bool) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.settings_working = true;
             shared.state.settings_notice = None;
         }
@@ -382,7 +451,7 @@ impl BackendService {
 
         let result = self.project_settings.save_openai_flex(enabled);
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.settings_working = false;
             match result {
                 Ok(()) => {
@@ -405,14 +474,14 @@ impl BackendService {
     /// Applies one sandbox mutation and publishes the resulting policy.
     pub(super) fn update_sandbox(&self, action: SandboxAction) {
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.sandbox_working = true;
             shared.state.sandbox_notice = None;
         }
         self.publish_state();
         let result = apply_sandbox_action(&self.workspace_root, action);
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.state.sandbox_working = false;
             match result {
                 Ok(policy) => shared.state.sandbox_settings = Some(sandbox_settings_state(&policy)),

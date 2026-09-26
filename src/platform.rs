@@ -1,7 +1,10 @@
 use std::{
+    collections::BTreeMap,
     fs, io,
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command},
+    sync::{Mutex, OnceLock},
 };
 
 #[cfg(windows)]
@@ -9,7 +12,6 @@ use std::{
     collections::HashSet,
     io::{Read, Write},
     net::{SocketAddr, TcpListener},
-    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
@@ -237,9 +239,109 @@ pub(crate) fn replace_file(source: &Path, destination: &Path) -> io::Result<()> 
     fs::rename(source, destination)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedChildInfo {
+    pub pid: u32,
+    pub role: &'static str,
+}
+
+static OWNED_CHILDREN: OnceLock<Mutex<BTreeMap<u32, &'static str>>> = OnceLock::new();
+
+fn owned_children() -> &'static Mutex<BTreeMap<u32, &'static str>> {
+    OWNED_CHILDREN.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[derive(Debug)]
+pub(crate) struct TrackedChild {
+    child: Child,
+    pid: u32,
+}
+
+impl TrackedChild {
+    pub(crate) fn new(child: Child, role: &'static str) -> Self {
+        let pid = child.id();
+        if let Ok(mut children) = owned_children().lock() {
+            children.insert(pid, role);
+        }
+        Self { child, pid }
+    }
+
+    pub(crate) fn kill(&mut self) -> io::Result<()> {
+        force_terminate_process_tree(self.pid)
+    }
+}
+
+impl Deref for TrackedChild {
+    type Target = Child;
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+
+impl DerefMut for TrackedChild {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
+}
+
+impl Drop for TrackedChild {
+    fn drop(&mut self) {
+        let still_running = self
+            .child
+            .try_wait()
+            .map(|status| status.is_none())
+            .unwrap_or(true);
+        if still_running {
+            if self.kill().is_err() {
+                let _ = self.child.kill();
+            }
+            let _ = self.child.wait();
+        } else {
+            #[cfg(unix)]
+            {
+                // The group leader may have exited after starting background
+                // descendants. Its PGID remains addressable even though the
+                // original PID no longer exists.
+                let _ = signal_process_group(self.pid, libc::SIGKILL);
+            }
+        }
+        if let Ok(mut children) = owned_children().lock() {
+            children.remove(&self.pid);
+        }
+    }
+}
+
+pub(crate) fn tracked_children_snapshot() -> Vec<OwnedChildInfo> {
+    owned_children()
+        .lock()
+        .map(|children| {
+            children
+                .iter()
+                .map(|(&pid, &role)| OwnedChildInfo { pid, role })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn systemd_managed_process() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // systemd keeps descendants in the unit cgroup even after setsid().
+        return std::env::var_os("INVOCATION_ID").is_some()
+            || std::env::var_os("NOTIFY_SOCKET").is_some();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
 pub(crate) fn configure_detached(command: &mut Command) {
     #[cfg(unix)]
     {
+        if systemd_managed_process() {
+            return;
+        }
         use std::os::unix::process::CommandExt;
         unsafe {
             command.pre_exec(|| {
@@ -265,10 +367,26 @@ pub(crate) fn configure_process_group(command: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        #[cfg(target_os = "linux")]
+        let owner_pid = std::process::id() as libc::pid_t;
         unsafe {
-            command.pre_exec(|| {
+            command.pre_exec(move || {
                 if libc::setpgid(0, 0) == -1 {
                     return Err(io::Error::last_os_error());
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    // Owned sidecars must not outlive Yeet if the parent dies
+                    // without running Rust destructors. This is intentionally
+                    // absent from configure_detached(): daemons own themselves.
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    // Close the fork -> prctl race. If the original parent died
+                    // before PDEATHSIG was armed, refuse to start the orphan.
+                    if libc::getppid() != owner_pid {
+                        return Err(io::Error::from_raw_os_error(libc::ECHILD));
+                    }
                 }
                 Ok(())
             });
@@ -453,102 +571,53 @@ fn signal_process(pid: u32, signal: i32) -> io::Result<()> {
     Err(error)
 }
 
-/// Retire an internal runtime and its children if its spawning daemon exits.
-/// Parentage, rather than a PID-existence check, also detects PID reuse.
-pub(crate) fn watch_runtime_parent(expected_parent: u32) {
-    #[cfg(unix)]
-    {
-        if expected_parent <= 1 || expected_parent == std::process::id() {
-            return;
-        }
-        std::thread::spawn(move || {
-            loop {
-                let actual_parent = unsafe { libc::getppid() } as u32;
-                if runtime_parent_changed(expected_parent, actual_parent) {
-                    // Snapshot before signalling: children may be reparented as soon
-                    // as their own supervisor exits. Never signal our own group.
-                    let pid = std::process::id();
-                    if let Ok(tree) = unix_process_tree(pid) {
-                        for child in tree.iter().rev().copied().filter(|child| *child != pid) {
-                            let _ = signal_owned_process_or_group(child, libc::SIGKILL);
-                        }
-                    }
-                    // Drop handlers may be stuck on the same abandoned work. The
-                    // owning daemon is gone, so no live session can use this worker.
-                    std::process::exit(0);
-                }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        });
-    }
-    #[cfg(not(unix))]
-    let _ = expected_parent;
-}
-
-#[cfg(unix)]
-fn runtime_parent_changed(expected_parent: u32, actual_parent: u32) -> bool {
-    expected_parent != actual_parent
-}
-
 #[cfg(all(test, unix))]
-mod runtime_parent_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn only_obsolete_runtime_parentage_triggers_cleanup() {
-        assert!(!runtime_parent_changed(42, 42));
-        assert!(runtime_parent_changed(42, 1));
-        // Linux subreapers can adopt an orphan instead of init.
-        assert!(runtime_parent_changed(42, 99));
-    }
-
-    // Run the exit-capable watchdog only in an isolated test subprocess.
-    #[test]
-    fn watchdog_fixture() {
-        let Ok(mode) = std::env::var("YEET_TEST_PARENT_WATCHDOG") else {
-            return;
-        };
-        let parent = unsafe { libc::getppid() } as u32;
-        let expected = if mode == "live" { parent } else { parent + 1 };
-        // Avoid the current-PID guard when selecting a simulated old parent.
-        let expected = if expected == std::process::id() {
-            expected + 1
-        } else {
-            expected
-        };
-        watch_runtime_parent(expected);
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        // A live owner must survive, while an obsolete owner must exit via
-        // the watchdog before reaching this distinct status.
-        std::process::exit(23);
-    }
-
-    #[test]
-    fn watchdog_retires_only_a_runtime_with_obsolete_parentage() {
-        for (mode, expected_code) in [("live", 23), ("obsolete", 0)] {
-            let mut child = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "platform::runtime_parent_tests::watchdog_fixture",
-                    "--nocapture",
-                ])
-                .env("YEET_TEST_PARENT_WATCHDOG", mode)
-                .stdout(std::process::Stdio::null())
-                .spawn()
-                .unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    assert_eq!(status.code(), Some(expected_code), "{mode}");
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!("watchdog fixture timed out: {mode}");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+    fn process_tree_is_bounded_and_cycle_safe() {
+        for (pairs, expected) in [
+            (
+                vec![(11, 10), (12, 10), (21, 11), (22, 11), (31, 21), (99, 1)],
+                vec![10, 11, 12, 21, 22, 31],
+            ),
+            (vec![(11, 10), (10, 11), (12, 11)], vec![10, 11, 12]),
+        ] {
+            assert_eq!(process_tree_from_pairs(10, &pairs), expected);
         }
+    }
+
+    fn process_group_exists(pgid: u32) -> bool {
+        let result = unsafe { libc::kill(-(pgid as i32), 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    #[test]
+    fn tracked_child_drop_kills_group_after_leader_exits() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("background.pid");
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("trap '' HUP; sleep 30 & echo $! > \"$YEET_TEST_PID_FILE\"")
+            .env("YEET_TEST_PID_FILE", &pid_file)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        configure_process_group(&mut command);
+        let raw_child = command.spawn().unwrap();
+        let pgid = raw_child.id();
+        let mut child = TrackedChild::new(raw_child, "test-background");
+        child.wait().unwrap();
+
+        assert!(process_group_exists(pgid));
+        drop(child);
+        for _ in 0..40 {
+            if !process_group_exists(pgid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!process_group_exists(pgid));
     }
 }

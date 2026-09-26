@@ -11,14 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
 use anyhow::{Context, Result, bail};
 #[cfg(target_os = "linux")]
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::platform::{TrackedChild, configure_process_group};
 use crate::sandbox::{
     SandboxMode, SandboxPolicy, SandboxStore, WorkspaceRead, validate_relative_path,
 };
@@ -446,16 +444,7 @@ pub fn run_shell_cancellable_with_progress(
         scratch = Some(directory);
         value
     };
-    #[cfg(unix)]
-    unsafe {
-        launch.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
-    }
+    configure_process_group(&mut launch);
     let _scratch = scratch;
     let mut child = launch
         .current_dir(&cwd)
@@ -473,6 +462,7 @@ pub fn run_shell_cancellable_with_progress(
     let stderr_limit = capture_limit.min(effective.limits.max_stderr_bytes);
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
+    let mut child = TrackedChild::new(child, "shell");
     let stdout_progress = progress.clone();
     let stderr_progress = progress;
     let stdout_thread = thread::spawn(move || {
@@ -484,7 +474,7 @@ pub fn run_shell_cancellable_with_progress(
     let start = Instant::now();
     // `unrestricted` controls filesystem/network policy, not execution lifetime.
     // Always honor the caller's deadline so an unlimited workspace cannot pin an
-    // MCP stdio runtime forever. In sandboxed mode `effective` already applies
+    // MCP runtime lane forever. In sandboxed mode `effective` already applies
     // the tighter policy wall-time cap above.
     let timeout_seconds = if unrestricted {
         timeout_seconds.clamp(1, 86_400)

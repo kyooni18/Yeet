@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     env, fs,
     io::{BufRead, BufReader, BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -13,10 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
-use crate::platform::force_terminate_process_tree;
+use crate::platform::{TrackedChild, configure_process_group, force_terminate_process_tree};
+use crate::sandbox::SandboxStore;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -26,6 +24,7 @@ use uuid::Uuid;
 pub const BRIDGE_PROTOCOL_VERSION: u64 = 1;
 const BRIDGE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const BRIDGE_SHUTDOWN_POLL: Duration = Duration::from_millis(20);
+const BRIDGE_STARTUP_PING_TIMEOUT: Duration = Duration::from_secs(3);
 const BRIDGE_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -173,14 +172,37 @@ pub struct ImageAttachment {
 }
 
 impl ImageAttachment {
+    pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+    pub fn from_bytes(
+        media_type: impl Into<String>,
+        bytes: &[u8],
+        name: Option<String>,
+    ) -> Result<Self> {
+        if bytes.len() > Self::MAX_IMAGE_BYTES {
+            bail!("Image is larger than 20 MiB");
+        }
+        let media_type = media_type.into();
+        if !matches!(
+            media_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+        ) {
+            bail!("Unsupported image media type: {media_type}");
+        }
+        Ok(Self {
+            media_type,
+            data: BASE64.encode(bytes),
+            name,
+        })
+    }
+
     pub fn from_file(path: &std::path::Path) -> Result<Self> {
-        const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
         let metadata = fs::metadata(path)
             .with_context(|| format!("read image metadata {}", path.display()))?;
         if !metadata.is_file() {
             bail!("Image path is not a file: {}", path.display());
         }
-        if metadata.len() > MAX_IMAGE_BYTES {
+        if metadata.len() > Self::MAX_IMAGE_BYTES as u64 {
             bail!("Image is larger than 20 MiB: {}", path.display());
         }
         let extension = path
@@ -199,14 +221,13 @@ impl ImageAttachment {
             ),
         };
         let bytes = fs::read(path).with_context(|| format!("read image {}", path.display()))?;
-        Ok(Self {
-            media_type: media_type.into(),
-            data: BASE64.encode(bytes),
-            name: path
-                .file_name()
+        Self::from_bytes(
+            media_type,
+            &bytes,
+            path.file_name()
                 .and_then(|value| value.to_str())
                 .map(str::to_owned),
-        })
+        )
     }
 }
 
@@ -668,7 +689,7 @@ pub struct McpServerConfiguration {
 
 #[derive(Debug)]
 struct BridgeInner {
-    child: Mutex<Child>,
+    child: Mutex<TrackedChild>,
     stdin: Mutex<BufWriter<ChildStdin>>,
     pending: Mutex<HashMap<String, mpsc::Sender<Value>>>,
     stderr_tail: Arc<Mutex<String>>,
@@ -683,10 +704,19 @@ struct BridgeInner {
 /// Synchronous client for the long-lived RuntimeSource bridge process and request protocol.
 pub struct BridgeClient {
     inner: Arc<BridgeInner>,
+    workspace: Option<PathBuf>,
 }
 
 impl BridgeClient {
     pub fn start() -> Result<Self> {
+        Self::start_with_workspace(None)
+    }
+
+    pub fn start_for_workspace(workspace: &Path) -> Result<Self> {
+        Self::start_with_workspace(Some(workspace))
+    }
+
+    fn start_with_workspace(workspace: Option<&Path>) -> Result<Self> {
         let node = node_executable()?;
         let script = bridge_script()?;
         let mut command = Command::new(node);
@@ -695,18 +725,13 @@ impl BridgeClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        #[cfg(unix)]
-        unsafe {
-            // Keep the provider bridge and every MCP subprocess it starts in
-            // one killable process group. This prevents a forced bridge
-            // shutdown from leaving MCP servers orphaned behind it.
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+        if let Some(workspace) = workspace {
+            command.current_dir(workspace);
+            apply_workspace_env(&mut command, workspace)?;
         }
+        // Keep the provider bridge and every MCP subprocess it starts in one
+        // owned process group. Linux additionally arms parent-death cleanup.
+        configure_process_group(&mut command);
         let mut child = command
             .spawn()
             .context("failed to start Node provider bridge")?;
@@ -722,6 +747,7 @@ impl BridgeClient {
             .stderr
             .take()
             .context("provider bridge stderr unavailable")?;
+        let child = TrackedChild::new(child, "provider-bridge");
         let pending: Mutex<HashMap<String, mpsc::Sender<Value>>> = Mutex::new(HashMap::new());
         let stderr_tail = Arc::new(Mutex::new(String::new()));
         let (event_tx, event_rx) = mpsc::channel();
@@ -780,9 +806,26 @@ impl BridgeClient {
             }
         });
 
-        let client = Self { inner };
-        let pong = client.request("ping", Map::new())?;
+        let client = Self {
+            inner,
+            workspace: workspace.map(Path::to_path_buf),
+        };
+        let pong =
+            match client.request_with_timeout("ping", Map::new(), BRIDGE_STARTUP_PING_TIMEOUT) {
+                Ok(pong) => pong,
+                Err(error) => {
+                    if let Ok(mut child) = client.inner.child.lock() {
+                        kill_bridge_process_group(&mut *child);
+                        let _ = child.wait();
+                    }
+                    return Err(error);
+                }
+            };
         if pong.get("type").and_then(Value::as_str) != Some("pong") {
+            if let Ok(mut child) = client.inner.child.lock() {
+                kill_bridge_process_group(&mut *child);
+                let _ = child.wait();
+            }
             bail!("provider bridge did not answer ping");
         }
         Ok(client)
@@ -806,7 +849,7 @@ impl BridgeClient {
                 .lock()
                 .map_err(|_| anyhow!("bridge child lock poisoned"))?;
             if child.try_wait()?.is_none() {
-                kill_bridge_process_group(&mut child);
+                kill_bridge_process_group(&mut *child);
                 let _ = child.wait();
             }
         }
@@ -819,15 +862,11 @@ impl BridgeClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        #[cfg(unix)]
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+        if let Some(workspace) = &self.workspace {
+            command.current_dir(workspace);
+            apply_workspace_env(&mut command, workspace)?;
         }
+        configure_process_group(&mut command);
         let mut child = command
             .spawn()
             .context("failed to restart Node provider bridge")?;
@@ -843,6 +882,7 @@ impl BridgeClient {
             .stderr
             .take()
             .context("provider bridge stderr unavailable after restart")?;
+        let child = TrackedChild::new(child, "provider-bridge");
 
         {
             let mut bridge_stdin = self
@@ -908,8 +948,22 @@ impl BridgeClient {
             }
         });
 
-        let pong = self.request("ping", Map::new())?;
+        let pong = match self.request_with_timeout("ping", Map::new(), BRIDGE_STARTUP_PING_TIMEOUT)
+        {
+            Ok(pong) => pong,
+            Err(error) => {
+                if let Ok(mut child) = self.inner.child.lock() {
+                    kill_bridge_process_group(&mut child);
+                    let _ = child.wait();
+                }
+                return Err(error);
+            }
+        };
         if pong.get("type").and_then(Value::as_str) != Some("pong") {
+            if let Ok(mut child) = self.inner.child.lock() {
+                kill_bridge_process_group(&mut child);
+                let _ = child.wait();
+            }
             bail!("restarted provider bridge did not answer ping");
         }
         Ok(())
@@ -934,6 +988,48 @@ impl BridgeClient {
             .recv()
             .context("provider bridge closed before response")?;
         self.inner.pending.lock().ok().map(|mut p| p.remove(&id));
+        ensure_success(frame)
+    }
+
+    fn request_with_timeout(
+        &self,
+        op: &str,
+        mut fields: Map<String, Value>,
+        timeout: Duration,
+    ) -> Result<Value> {
+        let id = Uuid::new_v4().to_string();
+        let (tx, rx) = mpsc::channel();
+        self.inner
+            .pending
+            .lock()
+            .map_err(|_| anyhow!("bridge pending lock poisoned"))?
+            .insert(id.clone(), tx);
+        fields.insert("v".into(), json!(BRIDGE_PROTOCOL_VERSION));
+        fields.insert("id".into(), json!(id));
+        fields.insert("op".into(), json!(op));
+        if let Err(error) = self.write_value(&Value::Object(fields)) {
+            self.remove_pending(&id);
+            return Err(error);
+        }
+        let frame = match rx.recv_timeout(timeout) {
+            Ok(frame) => frame,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.remove_pending(&id);
+                let tail = self.stderr_tail();
+                if tail.trim().is_empty() {
+                    bail!("provider bridge {op} timed out after {timeout:?}");
+                }
+                bail!(
+                    "provider bridge {op} timed out after {timeout:?}; stderr: {}",
+                    tail.trim()
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.remove_pending(&id);
+                bail!("provider bridge closed before {op} response");
+            }
+        };
+        self.remove_pending(&id);
         ensure_success(frame)
     }
 
@@ -1188,6 +1284,14 @@ impl BridgeClient {
         fields.insert("server".into(), serde_json::to_value(server)?);
         self.request_typed("mcp-set-server", fields, "server")
     }
+    pub fn set_runtime_mcp_server(
+        &self,
+        server: &McpServerConfiguration,
+    ) -> Result<McpServerConfiguration> {
+        let mut fields = Map::new();
+        fields.insert("server".into(), serde_json::to_value(server)?);
+        self.request_typed("mcp-set-runtime-server", fields, "server")
+    }
     pub fn remove_mcp_server(&self, server: &str) -> Result<bool> {
         let frame = self.request("mcp-remove-server", field("server", server))?;
         Ok(frame
@@ -1376,6 +1480,15 @@ impl BridgeClient {
         stdin.flush()?;
         Ok(())
     }
+}
+
+fn apply_workspace_env(command: &mut Command, workspace: &Path) -> Result<()> {
+    let policy = SandboxStore::new(workspace)
+        .context("resolve workspace sandbox settings for provider bridge")?
+        .load()
+        .context("load workspace sandbox environment for provider bridge")?;
+    command.envs(policy.environment);
+    Ok(())
 }
 
 fn kill_bridge_process_group(child: &mut Child) {

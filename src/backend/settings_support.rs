@@ -6,7 +6,7 @@
 use super::*;
 
 /// Loads runtime authentication status for every known provider.
-pub(super) fn load_auth_providers(bridge: &BridgeClient) -> Result<Vec<AuthProviderItem>> {
+pub(super) fn load_auth_providers(bridge: &BridgeHandle) -> Result<Vec<AuthProviderItem>> {
     let mut providers = bridge.list_providers()?;
     providers.sort();
     Ok(providers
@@ -43,23 +43,18 @@ pub(super) fn auth_login_options(provider: &str) -> Option<Value> {
     if provider != "gemini" && provider != "gemini-web" {
         return None;
     }
-    let client_id = std::env::var("GEMINI_OAUTH_CLIENT_ID")
-        .ok()
-        .or_else(|| std::env::var("GOOGLE_CLIENT_ID").ok());
-    let client_secret = std::env::var("GEMINI_OAUTH_CLIENT_SECRET")
-        .ok()
-        .or_else(|| std::env::var("GOOGLE_CLIENT_SECRET").ok());
     let project_id = std::env::var("GEMINI_PROJECT_ID")
         .ok()
-        .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT").ok());
-    Some(json!({"clientId":client_id,"clientSecret":client_secret,"projectId":project_id}))
+        .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT").ok())
+        .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT_ID").ok());
+    Some(json!({"projectId":project_id}))
 }
 
 /// Completes an asynchronous auth mutation and refreshes UI state.
 pub(super) fn finish_auth_action(
-    bridge: &BridgeClient,
+    bridge: &BridgeHandle,
     shared: &Arc<Mutex<SharedSession>>,
-    tx: &Sender<BackendEvent>,
+    tx: &EventSender,
     action_result: Result<String>,
 ) {
     let refresh = load_auth_providers(bridge);
@@ -79,7 +74,7 @@ pub(super) fn finish_auth_action(
 
 /// Loads persisted OpenAI-compatible provider configurations for the UI.
 pub(super) fn load_provider_configurations(
-    bridge: &BridgeClient,
+    bridge: &BridgeHandle,
 ) -> Result<Vec<ProviderConfigurationItem>> {
     let mut items = bridge
         .list_provider_configurations()?
@@ -97,9 +92,9 @@ pub(super) fn load_provider_configurations(
 
 /// Completes a provider mutation and refreshes provider configuration state.
 pub(super) fn finish_provider_action(
-    bridge: &BridgeClient,
+    bridge: &BridgeHandle,
     shared: &Arc<Mutex<SharedSession>>,
-    tx: &Sender<BackendEvent>,
+    tx: &EventSender,
     action_result: Result<String>,
 ) {
     let refresh = load_provider_configurations(bridge);
@@ -117,9 +112,24 @@ pub(super) fn finish_provider_action(
     }
 }
 
-/// Reports whether the configured Foundation memory store can be opened.
-pub(super) fn foundation_server_ready(_bridge: &BridgeClient, _server: &str) -> bool {
-    crate::memory::MemoryStore::default().status().is_ok()
+/// Reports whether the configured Foundation memory backend is ready.
+pub(super) fn foundation_server_ready(
+    bridge: &BridgeHandle,
+    backend: ServiceBackend,
+    server: &str,
+) -> bool {
+    let Ok(client) = bridge.client() else {
+        return false;
+    };
+    match backend {
+        ServiceBackend::Builtin => {
+            crate::foundation_backend::ensure_builtin_foundation(&client).is_ok()
+        }
+        ServiceBackend::Mcp => client
+            .list_mcp_tools(Some(server))
+            .map(|tools| crate::foundation_backend::has_required_project_scoped_tools(&tools))
+            .unwrap_or(false),
+    }
 }
 
 /// Loads persistent runtime preferences that historically required the CLI.
@@ -128,10 +138,22 @@ pub(super) fn runtime_settings_state(
     active_model: &str,
 ) -> Result<RuntimeSettingsState> {
     let theme = config.theme_settings()?;
+    let dark = theme.dark.unwrap_or_else(|| "kanagawa".into());
+    let light = theme.light.unwrap_or_else(|| "adwaita".into());
+    let dark_resolved = crate::theme::resolve_palette(crate::theme::Appearance::Dark, Some(&dark));
+    let light_resolved =
+        crate::theme::resolve_palette(crate::theme::Appearance::Light, Some(&light));
     Ok(RuntimeSettingsState {
         appearance: theme.appearance.unwrap_or_else(|| "auto".into()),
-        theme_dark: theme.dark.unwrap_or_else(|| "kanagawa".into()),
-        theme_light: theme.light.unwrap_or_else(|| "adwaita".into()),
+        theme_dark: dark,
+        theme_light: light,
+        theme_dark_resolved: dark_resolved.resolved,
+        theme_light_resolved: light_resolved.resolved,
+        theme_dark_palette: dark_resolved.palette.into(),
+        theme_light_palette: light_resolved.palette.into(),
+        theme_catalog: crate::theme::catalog(),
+        theme_dark_warning: dark_resolved.warning,
+        theme_light_warning: light_resolved.warning,
         context_length_override: if active_model.is_empty() {
             None
         } else {

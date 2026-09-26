@@ -1,18 +1,21 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use axum::extract::ws::{Message, WebSocket};
-use serde_json::{Map, Value};
-use tokio::sync::broadcast;
+use serde_json::{Map, Value, json};
+use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    background::BackgroundConnection,
+    backend::{BackendEvent, BackendService},
+    background::Wake,
+    core::ImageAttachment,
     model::{BridgeEnvelope, BridgeState, ConversationEntry, ConversationKind, FrontendCommand},
 };
 
@@ -23,17 +26,36 @@ use super::protocol::{
 
 const EVENT_HISTORY_LIMIT: usize = 1024;
 const CLIENT_RUNTIME_TTL: Duration = Duration::from_secs(15 * 60);
-// Each retained semantic client owns a BackgroundConnection plus a dedicated
-// runtime thread, so client-supplied IDs must not make this registry unbounded.
-const MAX_CLIENT_RUNTIMES: usize = 64;
 const CLIENT_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_secs(2);
+const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(8);
+const BACKEND_COMMAND_DELIVERY_TIMEOUT: Duration = Duration::from_secs(12);
+const SESSION_AFFINITY_TIMEOUT: Duration = Duration::from_secs(10);
+// Commands and backend events wake the runtime loop directly; this only bounds
+// idle polling when no work is pending.
+const RUNTIME_LOOP_IDLE_WAIT: Duration = Duration::from_millis(100);
+const ATTACHMENT_TTL: Duration = Duration::from_secs(15 * 60);
+const MAX_PENDING_ATTACHMENTS: usize = 64;
+const MAX_PENDING_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_SUBMIT: usize = 8;
+pub(crate) const MAX_REMOTE_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024;
+const MAX_SUBMIT_ATTACHMENT_BYTES: usize = MAX_REMOTE_ATTACHMENT_BYTES;
+const REMOTE_FILE_CONTEXT_OPEN: &str = "\n\n<yeet_remote_files>";
+const REMOTE_FILE_CONTEXT_CLOSE: &str = "</yeet_remote_files>";
 
 type ClientRuntimeKey = (PathBuf, String);
+
+struct PendingRemoteAttachment {
+    media_type: String,
+    bytes: Vec<u8>,
+    name: Option<String>,
+    byte_len: usize,
+    created_at: Instant,
+}
 
 pub(crate) struct RemoteHub {
     default_workspace: PathBuf,
     clients: Mutex<HashMap<ClientRuntimeKey, Arc<RemoteClientRuntime>>>,
+    attachments: Mutex<HashMap<String, PendingRemoteAttachment>>,
 }
 
 impl RemoteHub {
@@ -42,7 +64,108 @@ impl RemoteHub {
         Self {
             default_workspace: workspace,
             clients: Mutex::new(HashMap::new()),
+            attachments: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn store_attachment(
+        &self,
+        media_type: String,
+        bytes: Vec<u8>,
+        name: Option<String>,
+    ) -> Result<String> {
+        let byte_len = bytes.len();
+        if byte_len > MAX_REMOTE_ATTACHMENT_BYTES {
+            return Err(anyhow!("attachment exceeds the 20 MiB limit"));
+        }
+
+        let now = Instant::now();
+        let mut attachments = self
+            .attachments
+            .lock()
+            .map_err(|_| anyhow!("remote attachment store lock poisoned"))?;
+        prune_attachments(&mut attachments, now);
+
+        loop {
+            let total = attachments
+                .values()
+                .map(|value| value.byte_len)
+                .sum::<usize>();
+            if attachments.len() < MAX_PENDING_ATTACHMENTS
+                && total.saturating_add(byte_len) <= MAX_PENDING_ATTACHMENT_BYTES
+            {
+                break;
+            }
+
+            let Some(oldest) = attachments
+                .iter()
+                .min_by_key(|(_, value)| value.created_at)
+                .map(|(id, _)| id.clone())
+            else {
+                return Err(anyhow!("remote attachment cache capacity exceeded"));
+            };
+            attachments.remove(&oldest);
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        attachments.insert(
+            id.clone(),
+            PendingRemoteAttachment {
+                media_type,
+                bytes,
+                name,
+                byte_len,
+                created_at: now,
+            },
+        );
+        Ok(id)
+    }
+
+    pub(crate) fn remove_attachment(&self, id: &str) -> Result<bool> {
+        let mut attachments = self
+            .attachments
+            .lock()
+            .map_err(|_| anyhow!("remote attachment store lock poisoned"))?;
+        prune_attachments(&mut attachments, Instant::now());
+        Ok(attachments.remove(id).is_some())
+    }
+
+    fn take_attachments(&self, ids: &[String]) -> Result<Vec<(String, PendingRemoteAttachment)>> {
+        if ids.len() > MAX_ATTACHMENTS_PER_SUBMIT {
+            return Err(anyhow!(
+                "at most {MAX_ATTACHMENTS_PER_SUBMIT} attachments may be attached to one message"
+            ));
+        }
+
+        let mut seen = HashSet::new();
+        if ids.iter().any(|id| !seen.insert(id.as_str())) {
+            return Err(anyhow!("duplicate Remote attachment ID"));
+        }
+
+        let mut attachments = self
+            .attachments
+            .lock()
+            .map_err(|_| anyhow!("remote attachment store lock poisoned"))?;
+        prune_attachments(&mut attachments, Instant::now());
+
+        let mut total = 0usize;
+        for id in ids {
+            let Some(value) = attachments.get(id) else {
+                return Err(anyhow!("Remote attachment is missing or expired: {id}"));
+            };
+            total = total.saturating_add(value.byte_len);
+        }
+        if total > MAX_SUBMIT_ATTACHMENT_BYTES {
+            return Err(anyhow!("combined attachments exceed 20 MiB"));
+        }
+
+        let mut resolved = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(value) = attachments.remove(id) {
+                resolved.push((id.clone(), value));
+            }
+        }
+        Ok(resolved)
     }
 
     fn resolve_workspace(&self, requested: Option<&str>) -> Result<PathBuf> {
@@ -76,45 +199,44 @@ impl RemoteHub {
     }
 
     fn runtime(&self, workspace: &Path, client_id: &str) -> Result<Arc<RemoteClientRuntime>> {
-        let now = Instant::now();
-        let mut clients = self
-            .clients
-            .lock()
-            .map_err(|_| anyhow!("remote client registry lock poisoned"))?;
-        clients.retain(|_, runtime| {
-            Arc::strong_count(runtime) > 1
-                || runtime.is_streaming()
-                || now.duration_since(runtime.last_touched()) < CLIENT_RUNTIME_TTL
-        });
         let key = (workspace.to_path_buf(), client_id.to_owned());
-        if let Some(runtime) = clients.get(&key) {
-            runtime.touch();
-            return Ok(Arc::clone(runtime));
+        {
+            let now = Instant::now();
+            let mut clients = self.lock_clients();
+            clients.retain(|_, runtime| {
+                Arc::strong_count(runtime) > 1
+                    || runtime.is_streaming()
+                    || now.duration_since(runtime.last_touched()) < CLIENT_RUNTIME_TTL
+            });
+            if let Some(runtime) = clients.get(&key) {
+                runtime.touch();
+                return Ok(Arc::clone(runtime));
+            }
         }
-        make_room_for_client_runtime(&mut clients)?;
+        // Backend construction can touch workspace/session metadata. Keep it
+        // outside the client registry lock so one new client never stalls others.
         let runtime = Arc::new(RemoteClientRuntime::spawn(workspace)?);
+        let mut clients = self.lock_clients();
+        if let Some(existing) = clients.get(&key) {
+            // A concurrent reconnect of the same client won the race.
+            existing.touch();
+            return Ok(Arc::clone(existing));
+        }
         clients.insert(key, Arc::clone(&runtime));
         Ok(runtime)
     }
+
+    fn lock_clients(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<ClientRuntimeKey, Arc<RemoteClientRuntime>>> {
+        self.clients
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
-fn make_room_for_client_runtime(
-    clients: &mut HashMap<ClientRuntimeKey, Arc<RemoteClientRuntime>>,
-) -> Result<()> {
-    while clients.len() >= MAX_CLIENT_RUNTIMES {
-        let candidate = clients
-            .iter()
-            .filter(|(_, runtime)| Arc::strong_count(runtime) == 1 && !runtime.is_streaming())
-            .min_by_key(|(_, runtime)| runtime.last_touched())
-            .map(|(key, _)| key.clone());
-        let Some(candidate) = candidate else {
-            return Err(anyhow!(
-                "Remote client runtime capacity reached ({MAX_CLIENT_RUNTIMES}); close an existing Remote client or retry after one becomes idle"
-            ));
-        };
-        clients.remove(&candidate);
-    }
-    Ok(())
+fn prune_attachments(attachments: &mut HashMap<String, PendingRemoteAttachment>, now: Instant) {
+    attachments.retain(|_, value| now.duration_since(value.created_at) < ATTACHMENT_TTL);
 }
 
 struct RuntimeShared {
@@ -125,7 +247,10 @@ struct RuntimeShared {
 }
 
 enum RuntimeControl {
-    Command(FrontendCommand),
+    Command {
+        command: FrontendCommand,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -141,19 +266,19 @@ struct ResumePlan {
 struct RemoteClientRuntime {
     shared: Arc<Mutex<RuntimeShared>>,
     commands: mpsc::Sender<RuntimeControl>,
+    wake: Wake,
     events: broadcast::Sender<ServerMessage>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl RemoteClientRuntime {
     fn spawn(workspace: &Path) -> Result<Self> {
-        // WebUI clients share the workspace daemon with the TUI. The daemon
-        // will rebind this connection to an existing runtime when the client
-        // selects the same session, so loading a session is a handoff rather
-        // than a second backend that interrupts the first one.
-        let mut connection = BackgroundConnection::connect(workspace)
-            .context("connect semantic Remote client to Yeet background service")?;
-        let initial_state = wait_for_initial_state(&mut connection)?;
+        // Remote is itself the long-lived owner. Keep each client backend inside
+        // this PID; external provider/edit/MCP sidecars remain lazy and appear
+        // only when that client actually invokes a capability that needs one.
+        let wake = Wake::new();
+        let service = BackendService::spawn(workspace.to_path_buf(), Some(wake.clone()))?;
+        let initial_state = service.state_snapshot();
         let shared = Arc::new(Mutex::new(RuntimeShared {
             state: initial_state,
             sequence: 0,
@@ -164,15 +289,23 @@ impl RemoteClientRuntime {
         let (commands, command_rx) = mpsc::channel();
         let thread_shared = Arc::clone(&shared);
         let thread_events = events.clone();
+        let thread_wake = wake.clone();
         let thread = thread::Builder::new()
             .name("yeet-remote-semantic-client".into())
             .spawn(move || {
-                runtime_loop(connection, command_rx, thread_shared, thread_events);
+                runtime_loop(
+                    service,
+                    command_rx,
+                    thread_shared,
+                    thread_events,
+                    thread_wake,
+                );
             })
             .context("start semantic Remote client runtime")?;
         Ok(Self {
             shared,
             commands,
+            wake,
             events,
             thread: Mutex::new(Some(thread)),
         })
@@ -202,11 +335,27 @@ impl RemoteClientRuntime {
         self.events.subscribe()
     }
 
-    fn send_command(&self, command: FrontendCommand) -> Result<()> {
+    async fn send_command(&self, command: FrontendCommand) -> Result<()> {
         self.touch();
+        let (completion, result) = oneshot::channel();
         self.commands
-            .send(RuntimeControl::Command(command))
-            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))
+            .send(RuntimeControl::Command {
+                command,
+                completion,
+            })
+            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))?;
+        self.wake.notify();
+
+        match tokio::time::timeout(BACKEND_COMMAND_DELIVERY_TIMEOUT, result).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(anyhow!(error)),
+            Ok(Err(_)) => Err(anyhow!(
+                "semantic Remote runtime stopped before confirming command delivery"
+            )),
+            Err(_) => Err(anyhow!(
+                "timed out delivering Remote command to the in-process backend"
+            )),
+        }
     }
 
     async fn ensure_session(&self, session_id: Option<&str>) -> Result<()> {
@@ -218,7 +367,8 @@ impl RemoteClientRuntime {
         }
         self.send_command(FrontendCommand::LoadSession {
             session_id: session_id.to_owned(),
-        })?;
+        })
+        .await?;
         let deadline = tokio::time::Instant::now() + SESSION_AFFINITY_TIMEOUT;
         loop {
             if self.current_session_id().as_deref() == Some(session_id) {
@@ -245,7 +395,7 @@ impl RemoteClientRuntime {
         let shared = self
             .shared
             .lock()
-            .expect("remote runtime state lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let requested_sequence = last_sequence.unwrap_or(shared.sequence.saturating_add(1));
         let exact_revision = if requested_sequence == shared.sequence {
             Some(shared.state.conversation_revision)
@@ -298,60 +448,36 @@ impl RemoteClientRuntime {
 impl Drop for RemoteClientRuntime {
     fn drop(&mut self) {
         let _ = self.commands.send(RuntimeControl::Shutdown);
+        self.wake.notify();
         // Eviction runs while the hub's client registry is locked. The worker
-        // may still be blocked on backend I/O or reconnecting, so joining here
-        // can stall every client (and gateway shutdown). Shutdown is cooperative:
-        // detach the handle and let the worker release its connection on exit.
+        // may still be finishing backend work, so joining here can stall every
+        // client. Shutdown is cooperative; the worker owns and drops its backend.
         if let Ok(mut handle) = self.thread.lock() {
             drop(handle.take());
         }
     }
 }
 
-fn wait_for_initial_state(connection: &mut BackgroundConnection) -> Result<BridgeState> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if let Some(envelope) = connection.try_recv() {
-            if envelope.kind == "state"
-                && let Some(state) = envelope.state
-            {
-                return Ok(state);
-            }
-            if envelope.kind == "error" {
-                return Err(anyhow!(
-                    "background service rejected semantic Remote connection: {}",
-                    envelope.message.unwrap_or_else(|| "unknown error".into())
-                ));
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(anyhow!(
-                "timed out waiting for initial semantic Remote state"
-            ));
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-}
-
 fn runtime_loop(
-    mut connection: BackgroundConnection,
+    mut service: BackendService,
     commands: mpsc::Receiver<RuntimeControl>,
     shared: Arc<Mutex<RuntimeShared>>,
     events: broadcast::Sender<ServerMessage>,
+    wake: Wake,
 ) {
     let mut shutdown = false;
     while !shutdown {
         while let Ok(control) = commands.try_recv() {
             match control {
-                RuntimeControl::Command(command) => {
-                    if let Err(error) = connection.send(&command) {
-                        let _ = events.send(ServerMessage::error(
-                            "backend_command_failed",
-                            error.to_string(),
-                            false,
-                            None,
-                        ));
+                RuntimeControl::Command {
+                    command,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
                     }
+                    let result = service.send(command).map_err(|error| format!("{error:#}"));
+                    let _ = completion.send(result);
                 }
                 RuntimeControl::Shutdown => {
                     shutdown = true;
@@ -359,11 +485,12 @@ fn runtime_loop(
                 }
             }
         }
-        while let Some(envelope) = connection.try_recv() {
+        while let Some(event) = service.try_recv() {
+            let BackendEvent::Envelope(envelope) = event;
             process_envelope(&shared, &events, envelope);
         }
         if !shutdown {
-            thread::sleep(Duration::from_millis(10));
+            wake.wait_timeout(RUNTIME_LOOP_IDLE_WAIT);
         }
     }
 }
@@ -398,18 +525,20 @@ fn process_state_update(
     events: &broadcast::Sender<ServerMessage>,
     mut update: BridgeState,
 ) {
-    let mut shared = match shared.lock() {
-        Ok(shared) => shared,
-        Err(_) => return,
-    };
-    let previous = shared.state.clone();
+    let mut shared = shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Move the old state out instead of cloning it. Compact streaming updates
+    // intentionally omit conversation history; moving that history into the new
+    // state avoids copying the full transcript on every token/reasoning delta.
+    let mut previous = std::mem::take(&mut shared.state);
     let had_conversation = update.conversation.is_some();
-    if update.conversation.is_none() {
-        update.conversation = previous.conversation.clone();
+    let session_changed = previous.current_session_id != update.current_session_id;
+    if update.conversation.is_none() && !session_changed {
+        update.conversation = previous.conversation.take();
     }
     let next = update;
     let revision = next.conversation_revision;
-    let session_changed = previous.current_session_id != next.current_session_id;
     let mut outgoing = Vec::new();
 
     if session_changed {
@@ -619,7 +748,9 @@ fn text_delta(
 }
 
 fn entry_changed(previous: &ConversationEntry, next: &ConversationEntry) -> bool {
-    serde_json::to_value(previous).ok() != serde_json::to_value(next).ok()
+    // Byte comparison avoids building two `Value` trees per transcript entry
+    // on every committed update of a long session.
+    serde_json::to_vec(previous).ok() != serde_json::to_vec(next).ok()
 }
 
 fn state_patch(previous: &BridgeState, next: &BridgeState) -> Map<String, Value> {
@@ -669,18 +800,144 @@ fn command_allowed(command: &FrontendCommand) -> bool {
     !matches!(command, FrontendCommand::Shutdown)
 }
 
+fn resolve_remote_attachments(
+    hub: &RemoteHub,
+    workspace: &Path,
+    command: &mut FrontendCommand,
+) -> Result<()> {
+    let FrontendCommand::Submit {
+        text,
+        images,
+        attachment_ids,
+        ..
+    } = command
+    else {
+        return Ok(());
+    };
+
+    if !images.is_empty() {
+        return Err(anyhow!(
+            "inline Remote images are not accepted; upload them through /api/attachments"
+        ));
+    }
+    if attachment_ids.is_empty() {
+        return Ok(());
+    }
+
+    let resolved = hub.take_attachments(attachment_ids)?;
+    let mut files = Vec::new();
+
+    for (id, attachment) in resolved {
+        if matches!(
+            attachment.media_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+        ) {
+            images.push(ImageAttachment::from_bytes(
+                attachment.media_type,
+                &attachment.bytes,
+                attachment.name,
+            )?);
+            continue;
+        }
+
+        files.push(materialize_remote_file(workspace, &id, attachment)?);
+    }
+
+    if !files.is_empty() {
+        let payload = serde_json::to_string(&json!({ "files": files }))?;
+        text.push_str(REMOTE_FILE_CONTEXT_OPEN);
+        text.push_str(&payload);
+        text.push_str(REMOTE_FILE_CONTEXT_CLOSE);
+    }
+
+    attachment_ids.clear();
+    Ok(())
+}
+
+fn materialize_remote_file(
+    workspace: &Path,
+    id: &str,
+    attachment: PendingRemoteAttachment,
+) -> Result<Value> {
+    let root = workspace.join(".yeet").join("remote-attachments");
+    fs::create_dir_all(&root).context("create Remote attachment directory")?;
+    let root = root
+        .canonicalize()
+        .context("canonicalize Remote attachment directory")?;
+
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    if !root.starts_with(&workspace) {
+        bail!("Remote attachment directory escapes the active workspace");
+    }
+
+    let directory = root.join(id);
+    fs::create_dir_all(&directory).context("create Remote attachment item directory")?;
+    let directory = directory
+        .canonicalize()
+        .context("canonicalize Remote attachment item directory")?;
+    if !directory.starts_with(&root) {
+        bail!("Remote attachment item directory escapes its storage root");
+    }
+
+    let name = sanitize_remote_attachment_name(attachment.name.as_deref());
+    let path = directory.join(&name);
+    fs::write(&path, &attachment.bytes).context("write Remote file attachment")?;
+
+    let relative = path
+        .strip_prefix(&workspace)
+        .context("Remote file attachment is outside the active workspace")?
+        .to_string_lossy()
+        .into_owned();
+
+    Ok(json!({
+        "name": name,
+        "media_type": attachment.media_type,
+        "size": attachment.byte_len,
+        "path": relative,
+    }))
+}
+
+fn sanitize_remote_attachment_name(name: Option<&str>) -> String {
+    let fallback = "attachment.bin";
+    let basename = name
+        .and_then(|value| Path::new(value).file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or(fallback);
+
+    let sanitized = basename
+        .chars()
+        .map(|character| {
+            if character.is_control() || matches!(character, '/' | '\\') {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+
+    let trimmed = sanitized.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        fallback.to_owned()
+    } else {
+        trimmed.chars().take(160).collect()
+    }
+}
+
+async fn send_ws(socket: &mut WebSocket, message: Message) -> Result<()> {
+    tokio::time::timeout(WEBSOCKET_SEND_TIMEOUT, socket.send(message))
+        .await
+        .map_err(|_| anyhow!("Remote WebSocket send timed out"))?
+        .map_err(|error| anyhow!(error.to_string()))
+}
+
 async fn send_json(socket: &mut WebSocket, message: &ServerMessage) -> Result<()> {
     let fatal = matches!(message, ServerMessage::Error { fatal: true, .. });
     let text = serde_json::to_string(message)?;
-    socket
-        .send(Message::Text(text.into()))
-        .await
-        .map_err(|error| anyhow!(error.to_string()))?;
+    send_ws(socket, Message::Text(text.into())).await?;
     if fatal {
-        socket
-            .send(Message::Close(None))
-            .await
-            .map_err(|error| anyhow!(error.to_string()))?;
+        send_ws(socket, Message::Close(None)).await?;
     }
     Ok(())
 }
@@ -802,7 +1059,7 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
         Ok(Err(error)) => {
             let _ = send_json(
                 &mut socket,
-                &ServerMessage::error("backend_unavailable", error.to_string(), true, None),
+                &ServerMessage::error("backend_unavailable", format!("{error:#}"), true, None),
             )
             .await;
             return;
@@ -913,7 +1170,7 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     break;
                                 }
                             }
-                            ClientMessage::Command { request_id, command, .. } => {
+                            ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
                                         "command_forbidden",
@@ -923,7 +1180,15 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     )).await;
                                     continue;
                                 }
-                                match runtime.send_command(command) {
+                                if let Err(error) =
+                                    resolve_remote_attachments(&hub, &workspace, &mut command)
+                                {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "attachment_invalid", error.to_string(), false, request_id,
+                                    )).await;
+                                    continue;
+                                }
+                                match runtime.send_command(command).await {
                                     Ok(()) => {
                                         if send_json(&mut socket, &ServerMessage::Ack {
                                             version: REMOTE_PROTOCOL_VERSION,
@@ -942,7 +1207,7 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                         }
                     }
                     Message::Ping(payload) => {
-                        if socket.send(Message::Pong(payload)).await.is_err() {
+                        if send_ws(&mut socket, Message::Pong(payload)).await.is_err() {
                             break;
                         }
                     }

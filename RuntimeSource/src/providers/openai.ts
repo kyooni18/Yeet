@@ -410,12 +410,11 @@ export class OpenAIProvider implements ProviderAdapter {
     const realSessionId = this.#accessToken
       ? (request?.metadata?.sessionId ?? request?.contextKey)
       : undefined;
-    // ChatGPT's Codex transport keeps conversation/session identity separate
-    // from prompt-cache affinity. Keep the real session in session-id and the
-    // recoverable context/window in thread-id; bodyFor() independently sends
-    // prompt_cache_key when Yeet has a stable cache family.
+    // Keep Codex thread affinity on the stable cache/conversation family. A
+    // recoverable contextWindowId is a Yeet compaction boundary, not a new
+    // provider conversation, so rotating it must not repartition implicit cache.
     const threadId = this.#accessToken
-      ? (request?.metadata?.threadId ?? request?.metadata?.contextWindowId ?? request?.contextKey)
+      ? (request?.metadata?.threadId ?? request?.metadata?.cacheFamily ?? request?.contextKey ?? request?.metadata?.sessionId)
       : undefined;
     return {
       authorization: `Bearer ${token}`,

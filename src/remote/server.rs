@@ -11,11 +11,11 @@ use std::{
 
 use axum::{
     Json, Router,
-    body::Body,
-    extract::{DefaultBodyLimit, Path as AxumPath, Query, State, WebSocketUpgrade},
+    body::{Body, to_bytes},
+    extract::{DefaultBodyLimit, Path as AxumPath, Query, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, delete, get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,12 +24,14 @@ use super::{
     AuthenticationFinishRequest, EnrollmentBeginRequest, FrameSnapshot, KeyLoginRequest,
     RegistrationFinishRequest, RemoteAuthRuntime, RemoteInput, WireInput,
     assets::{LEGACY_REMOTE_PAGE, WEBUI_AVAILABLE, webui_asset},
-    protocol::{REMOTE_PROTOCOL_MAX_VERSION, REMOTE_PROTOCOL_MIN_VERSION, REMOTE_PROTOCOL_VERSION},
-    websocket::{RemoteHub, serve_socket},
+    protocol::{
+        REMOTE_PROTOCOL_FEATURES, REMOTE_PROTOCOL_MAX_VERSION, REMOTE_PROTOCOL_MIN_VERSION,
+        REMOTE_PROTOCOL_VERSION,
+    },
+    websocket::{MAX_REMOTE_ATTACHMENT_BYTES, RemoteHub, serve_socket},
 };
 
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 256 * 1024;
-pub(super) const MAX_ACTIVE_WEBSOCKETS: usize = 128;
 const MAX_CONCURRENT_KEY_VERIFICATIONS: usize = 4;
 
 #[derive(Clone)]
@@ -38,13 +40,17 @@ struct GatewayState {
     frame: Arc<Mutex<FrameSnapshot>>,
     auth: Arc<RemoteAuthRuntime>,
     hub: Arc<RemoteHub>,
-    websocket_slots: Arc<tokio::sync::Semaphore>,
     key_verification_slots: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct AuthStatusQuery {
     enroll: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AttachmentUploadQuery {
+    name: Option<String>,
 }
 
 pub(crate) fn serve(
@@ -79,7 +85,6 @@ pub(crate) fn serve(
             frame,
             auth,
             hub: Arc::new(RemoteHub::new(workspace)),
-            websocket_slots: Arc::new(tokio::sync::Semaphore::new(MAX_ACTIVE_WEBSOCKETS)),
             key_verification_slots: Arc::new(tokio::sync::Semaphore::new(
                 MAX_CONCURRENT_KEY_VERIFICATIONS,
             )),
@@ -114,6 +119,8 @@ fn router(state: Arc<GatewayState>, legacy_tui: bool) -> Router {
         .route("/api/auth/key", post(auth_key))
         .route("/api/auth/passkey/begin", post(passkey_begin))
         .route("/api/auth/passkey/finish", post(passkey_finish))
+        .route("/api/attachments", post(upload_attachment))
+        .route("/api/attachments/{id}", delete(delete_attachment))
         .route(
             "/api/auth/passkey/register/begin",
             post(passkey_register_begin),
@@ -204,6 +211,7 @@ async fn protocol_info() -> Response {
             "minVersion": REMOTE_PROTOCOL_MIN_VERSION,
             "maxVersion": REMOTE_PROTOCOL_MAX_VERSION,
             "websocket": "/api/ws",
+            "features": REMOTE_PROTOCOL_FEATURES,
         }),
     )
 }
@@ -323,6 +331,94 @@ async fn passkey_register_finish(
     }
 }
 
+async fn upload_attachment(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<AttachmentUploadQuery>,
+    headers: HeaderMap,
+    request: Request,
+) -> Response {
+    if !state.auth.is_authorized_headers(&headers) {
+        return json_error(StatusCode::UNAUTHORIZED, "authentication required");
+    }
+    if !state.auth.http_auth_origin_allowed(&headers) {
+        return json_error(StatusCode::FORBIDDEN, "browser origin is not allowed");
+    }
+    if let Some(length) = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        && length > MAX_REMOTE_ATTACHMENT_BYTES
+    {
+        return json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "attachment is larger than 20 MiB",
+        );
+    }
+
+    let Some(media_type) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+    else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "attachment Content-Type is required",
+        );
+    };
+
+    let bytes = match to_bytes(request.into_body(), MAX_REMOTE_ATTACHMENT_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return json_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "attachment is larger than 20 MiB",
+            );
+        }
+    };
+    if bytes.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "attachment body is empty");
+    }
+
+    let id =
+        match state
+            .hub
+            .store_attachment(media_type.clone(), bytes.to_vec(), query.name.clone())
+        {
+            Ok(id) => id,
+            Err(error) => return json_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+        };
+    json_response(
+        StatusCode::CREATED,
+        json!({
+            "id": id,
+            "name": query.name,
+            "media_type": media_type,
+            "size": bytes.len(),
+        }),
+    )
+}
+
+async fn delete_attachment(
+    State(state): State<Arc<GatewayState>>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.auth.is_authorized_headers(&headers) {
+        return json_error(StatusCode::UNAUTHORIZED, "authentication required");
+    }
+    if !state.auth.http_auth_origin_allowed(&headers) {
+        return json_error(StatusCode::FORBIDDEN, "browser origin is not allowed");
+    }
+    match state.hub.remove_attachment(&id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "attachment not found"),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()),
+    }
+}
+
 async fn websocket_upgrade(
     State(state): State<Arc<GatewayState>>,
     headers: HeaderMap,
@@ -334,40 +430,17 @@ async fn websocket_upgrade(
     if !state.auth.websocket_origin_allowed(&headers) {
         return json_error(StatusCode::FORBIDDEN, "WebSocket origin is not allowed");
     }
-    let permit = match acquire_websocket_slot(&state.websocket_slots) {
-        Ok(permit) => permit,
-        Err(response) => return *response,
-    };
     let hub = Arc::clone(&state.hub);
     let mut response = ws
         .protocols(["yeet.remote.v1"])
         .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
         .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
-            let _permit = permit;
             serve_socket(socket, hub).await;
         })
         .into_response();
     secure_headers(response.headers_mut(), true);
     response
-}
-
-fn acquire_websocket_slot(
-    slots: &Arc<tokio::sync::Semaphore>,
-) -> std::result::Result<tokio::sync::OwnedSemaphorePermit, Box<Response>> {
-    match Arc::clone(slots).try_acquire_owned() {
-        Ok(permit) => Ok(permit),
-        Err(_) => {
-            let mut response = json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Remote WebSocket capacity reached; retry shortly",
-            );
-            response
-                .headers_mut()
-                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
-            Err(Box::new(response))
-        }
-    }
 }
 
 fn acquire_key_verification_slot(

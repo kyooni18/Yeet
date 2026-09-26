@@ -48,7 +48,7 @@ export class RequestCompactor {
 
     // Compaction must stay on the same provider/model as the foreground request.
     // A separate override can silently route this auxiliary call through a
-    // different credential/provider and make context-mode fail independently.
+    // different credential/provider and make request compaction fail independently.
     const compactModel = request.model;
     const assemblerKey = request.contextKey ? `${request.contextKey}\0${request.model}` : undefined;
     let assembler = assemblerKey ? this.#assemblers.get(assemblerKey) : undefined;

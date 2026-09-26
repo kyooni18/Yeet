@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{ChildStdin, Command, Stdio},
     sync::{
         Mutex,
         atomic::{AtomicU64, Ordering},
@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use crate::{
     config::ConfigStore,
     model::{BridgeState, ConversationKind, ExtensionCommandItem, ToolCallStatus},
-    platform::{configure_process_group, force_terminate_process_tree},
+    platform::{TrackedChild, configure_process_group, force_terminate_process_tree},
 };
 
 pub const EXTENSION_PROTOCOL: &str = "yeet.extension.v1";
@@ -327,7 +327,7 @@ struct ExtensionEnvelope<'a> {
 
 struct RunningExtension {
     manifest: ExtensionManifest,
-    child: Child,
+    child: TrackedChild,
     input: BufWriter<ChildStdin>,
 }
 
@@ -577,6 +577,7 @@ fn spawn_extension(
         .stdout
         .take()
         .ok_or_else(|| anyhow!("extension stdout was not piped"))?;
+    let child = TrackedChild::new(child, "extension");
     spawn_extension_request_reader(extension.manifest.id.clone(), output, request_tx);
     Ok(RunningExtension {
         manifest: extension.manifest.clone(),

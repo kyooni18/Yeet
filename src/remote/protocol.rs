@@ -8,6 +8,7 @@ use crate::model::{
 pub const REMOTE_PROTOCOL_MIN_VERSION: u16 = 1;
 pub const REMOTE_PROTOCOL_MAX_VERSION: u16 = 1;
 pub const REMOTE_PROTOCOL_VERSION: u16 = REMOTE_PROTOCOL_MAX_VERSION;
+pub const REMOTE_PROTOCOL_FEATURES: &[&str] = &["attachments-v1", "files-v1", "turn-replay-v1"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

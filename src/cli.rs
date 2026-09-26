@@ -11,14 +11,14 @@ mod cache_report;
 use cache_report::cache;
 
 use crate::{
-    backend::{Backend, BackendEvent},
     config::{ConfigStore, parse_context_length, validate_model_id},
     core::{
         BridgeClient, CallRequest, ImageAttachment, McpServerConfiguration, Message,
         OpenAiCompatibleProvider, StreamEvent, node_executable, runtime_directory,
     },
+    harness::Harness,
     model::{ConversationKind, FrontendCommand, SandboxAction},
-    project_settings::ProjectSettingsStore,
+    project_settings::{ProjectSettingsStore, ServiceBackend},
     sandbox_cli,
     session_store::SessionStore,
     web_search,
@@ -34,11 +34,15 @@ pub const HELP: &str = r#"Usage:
   yeet remote auth key generate|set|clear [WORKSPACE|--workspace PATH]
   yeet remote auth passkey add|clear [WORKSPACE|--workspace PATH]
   yeet doctor
+  yeet install [binary|runtime|foundation|web|mcp|remote|all]...
+  yeet uninstall [binary|runtime|foundation|web|mcp|remote|all]...
+  yeet install status
   yeet update [check]
   yeet model get
   yeet model set provider/model
   yeet model context [get [provider/model]|set [provider/model] length|auto [provider/model]]
   yeet theme get
+  yeet theme list
   yeet theme set [dark|light|both] NAME_OR_PATH
   yeet theme appearance [auto|dark|light]
   yeet cache [latest|SESSION_ID]
@@ -83,13 +87,9 @@ pub const HELP: &str = r#"Usage:
   yeet memory status
   yeet memory recall <query>
   yeet memory on|off
-  yeet memory models
-  yeet memory model [provider/model]
-  yeet memory reindex [provider/model]
-  yeet memory import-foundation <export.jsonl>
-  yeet memory export-foundation <export.jsonl>
+  yeet memory backend [builtin|mcp [SERVER]]
   yeet sandbox [show|path|reset|scratch|workspace|network|env|secret|limits] ...
-  yeet search [install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]
+  yeet search [backend [builtin|mcp [SERVER]]|install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]
 
 State:
   YEET_CONFIG_DIR overrides the per-user state directory.
@@ -102,11 +102,11 @@ Runtime:
   and requires Node.js 20+. Set YEET_RUNTIME_DIR and YEET_NODE to override paths.
 
 Remote:
-  Remote mode is opt-in and runs as a detached background daemon serving the
-  existing TUI over HTTP. It binds to 0.0.0.0:7331 by default and can target
-  a workspace without changing the terminal's current directory. Access keys
-  and WebAuthn passkeys are optional and scoped per workspace. Port forwarding
-  and tunneling are user-managed."#;
+  Remote mode is opt-in and runs in the current Yeet process. It serves the
+  semantic WebUI on 0.0.0.0:7331 by default; each client workspace backend is
+  kept in-process, while provider/edit/search sidecars start only when needed.
+  Access keys and WebAuthn passkeys are optional. Port forwarding and tunneling
+  are user-managed."#;
 
 pub fn run(arguments: &[String]) -> Result<i32> {
     let command = arguments.first().map(String::as_str).unwrap_or("help");
@@ -125,6 +125,13 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             Ok(())
         }
         "doctor" => doctor(),
+        "install" | "uninstall" => {
+            let output = crate::install::run_cli(rest, command == "uninstall")?;
+            if !output.is_empty() {
+                println!("{output}");
+            }
+            Ok(())
+        }
         "update" => crate::update::run(rest),
         "model" => model(rest),
         "theme" => theme(rest),
@@ -199,77 +206,130 @@ fn skyline(args: &[String]) -> Result<()> {
 fn foundation(args: &[String]) -> Result<()> {
     let workspace = std::env::current_dir()?.canonicalize()?;
     let settings = ProjectSettingsStore::new(&workspace)?;
-    let memory = crate::memory::MemoryStore::default();
     let sub = args.first().map(String::as_str).unwrap_or("status");
     match sub {
         "status" => {
-            let mut status = memory.status()?;
-            status["enabled"] = json!(settings.load()?.foundation_memory.enabled);
+            let project = settings.load()?;
+            let bridge = BridgeClient::start()?;
+            let mut status = match project.foundation_memory.backend {
+                ServiceBackend::Builtin => crate::foundation_backend::builtin_status(&bridge)?,
+                ServiceBackend::Mcp => {
+                    let result = bridge.list_mcp_tools(Some(&project.foundation_memory.server));
+                    let connected = result.is_ok();
+                    let tools = result.unwrap_or_default();
+                    let project_scoped_memory =
+                        crate::foundation_backend::has_required_project_scoped_tools(&tools);
+                    let visible =
+                        crate::foundation_backend::project_scoped_model_tool_names(&tools);
+                    json!({
+                        "storage":"external-mcp",
+                        "connected":connected,
+                        "projectScopedMemory":project_scoped_memory,
+                        "availableToolCount":tools.len(),
+                        "tools":visible,
+                    })
+                }
+            };
+            bridge.shutdown();
+            status["enabled"] = json!(project.foundation_memory.enabled);
+            status["backend"] = json!(project.foundation_memory.backend.as_str());
+            status["server"] = json!(project.foundation_memory.server);
             status["project"] = json!(settings.project_identity()?);
             println!("{}", serde_json::to_string_pretty(&status)?);
         }
+        "backend" => {
+            let project = settings.load()?;
+            match args.get(1).map(String::as_str) {
+                None => println!(
+                    "{}{}",
+                    project.foundation_memory.backend.as_str(),
+                    if project.foundation_memory.backend == ServiceBackend::Mcp {
+                        format!(" {}", project.foundation_memory.server)
+                    } else {
+                        String::new()
+                    }
+                ),
+                Some(value) => {
+                    let backend = ServiceBackend::parse(value)?;
+                    let server = args.get(2).map(String::as_str);
+                    if args.len() > 3 {
+                        bail!("Usage: yeet memory backend [builtin|mcp [SERVER]]");
+                    }
+                    settings.save_foundation_backend(backend, server)?;
+                    let saved = settings.load()?;
+                    println!(
+                        "memory backend={}{}",
+                        saved.foundation_memory.backend.as_str(),
+                        if saved.foundation_memory.backend == ServiceBackend::Mcp {
+                            format!(" server={}", saved.foundation_memory.server)
+                        } else {
+                            String::new()
+                        }
+                    );
+                }
+            }
+        }
         "on" | "off" => {
             if args.len() > 1 {
-                bail!(
-                    "Native memory uses Yeet's API. Select a model with `yeet memory model provider/model` (full re-index)."
-                );
+                bail!("Usage: yeet memory on|off");
             }
-            settings.save_foundation_memory(sub == "on", None)?;
-            println!("{}", if sub == "on" { "enabled" } else { "disabled" });
+            if sub == "on" {
+                let output = crate::install::run_cli(&["foundation".into()], false)?;
+                if !output.is_empty() {
+                    println!("{output}");
+                }
+            } else {
+                settings.save_foundation_memory(false, None)?;
+                println!("disabled");
+            }
         }
-        "model" if args.len() == 1 => {
-            println!(
-                "{}",
-                memory.status()?["embeddingModel"]
-                    .as_str()
-                    .unwrap_or("automatic until first write")
-            );
-        }
-        "export-foundation" => {
-            let path = args
+        "recall" => {
+            let query = args
                 .get(1)
-                .ok_or_else(|| anyhow!("Usage: yeet memory export-foundation <export.jsonl>"))?;
-            let result = memory
-                .export_foundation(std::path::Path::new(path), &settings.project_identity()?)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        "model" | "reindex" | "models" | "import-foundation" | "recall" => {
+                .ok_or_else(|| anyhow!("Usage: yeet memory recall <query>"))?;
+            if args.len() > 2 {
+                bail!("Usage: yeet memory recall <query>");
+            }
+            let project = settings.load()?;
             let bridge = BridgeClient::start()?;
             let cancel = std::sync::atomic::AtomicBool::new(false);
             let result = (|| -> Result<Value> {
-                match sub {
-                    "models" => Ok(json!(bridge.embedding_models(&cancel)?)),
-                    "recall" => {
-                        let query = args
-                            .get(1)
-                            .ok_or_else(|| anyhow!("Usage: yeet memory recall <query>"))?;
-                        memory.call(
-                            "memory_recall",
-                            &settings.project_identity()?,
-                            &json!({"query":query}),
-                            &bridge,
-                            &cancel,
-                        )
-                    }
-                    "import-foundation" => {
-                        let path = args.get(1).ok_or_else(|| {
-                            anyhow!("Usage: yeet memory import-foundation <export.jsonl>")
-                        })?;
-                        memory.import_foundation(
-                            std::path::Path::new(path),
-                            &settings.project_identity()?,
-                            &bridge,
-                            &cancel,
-                        )
-                    }
-                    _ => memory.reindex(args.get(1).map(String::as_str), &bridge, &cancel),
+                let server = crate::foundation_backend::server_for_backend(
+                    &bridge,
+                    project.foundation_memory.backend,
+                    &project.foundation_memory.server,
+                )?;
+                let tools = bridge.list_mcp_tools(Some(&server))?;
+                crate::foundation_backend::validate_project_scoped_tools(
+                    &tools,
+                    &format!("Foundation backend {server}"),
+                )?;
+                let arguments = Map::from_iter([
+                    ("project".into(), json!(settings.project_identity()?)),
+                    ("query".into(), json!(query)),
+                    ("limit".into(), json!(8)),
+                ]);
+                let result = bridge.call_mcp_tool_cancellable(
+                    &server,
+                    "memory_recall",
+                    &arguments,
+                    &cancel,
+                )?;
+                if result.get("isError").and_then(Value::as_bool) == Some(true) {
+                    bail!("Foundation {server}/memory_recall returned an error: {result}");
                 }
+                Ok(result)
             })();
             bridge.shutdown();
             println!("{}", serde_json::to_string_pretty(&result?)?);
         }
+        "models" | "model" | "reindex" | "import-foundation" | "export-foundation" => {
+            bail!(
+                "yeet memory {sub} belonged to the retired native Rust memory store; builtin now runs the managed Foundation backend. Use Foundation's admin/configuration tools instead."
+            )
+        }
         _ => bail!(
-            "Usage: yeet memory [status|on|off|recall <query>|models|model [provider/model]|reindex [provider/model]|import-foundation <export.jsonl>|export-foundation <export.jsonl>]"
+            "Usage: yeet memory [status|on|off|backend [builtin|mcp [SERVER]]|recall <query>]"
         ),
     }
     Ok(())
@@ -311,6 +371,12 @@ fn theme(args: &[String]) -> Result<()> {
             println!("light: {}", settings.light.as_deref().unwrap_or("adwaita"));
             Ok(())
         }
+        "list" => {
+            for theme in crate::theme::catalog() {
+                println!("{}\t{}\t{}", theme.appearance, theme.id, theme.label);
+            }
+            Ok(())
+        }
         "set" => {
             let (mode, value) = match args {
                 [_, value] => ("both", value.as_str()),
@@ -333,7 +399,7 @@ fn theme(args: &[String]) -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "Usage: yeet theme [get|set [dark|light|both] NAME_OR_PATH|appearance [auto|dark|light]]"
+            "Usage: yeet theme [get|list|set [dark|light|both] NAME_OR_PATH|appearance [auto|dark|light]]"
         ),
     }
 }
@@ -549,34 +615,37 @@ fn run_agent(args: &[String]) -> Result<()> {
         );
     }
 
-    let mut backend = Backend::spawn()?;
-    backend.send(FrontendCommand::NewSession)?;
+    let mut harness = Harness::embedded(std::env::current_dir()?)?;
+    harness.send(FrontendCommand::NewSession)?;
     if let Some(model) = model {
-        backend.send(FrontendCommand::SelectModel { model })?;
+        harness.send(FrontendCommand::SelectModel { model })?;
     }
     if let Some(level) = reasoning {
-        backend.send(FrontendCommand::SelectReasoning { level })?;
+        harness.send(FrontendCommand::SelectReasoning { level })?;
     }
     if benchmark {
-        backend.send(FrontendCommand::SetGoal { enabled: false })?;
-        backend.send(FrontendCommand::UpdateSandbox {
+        harness.send(FrontendCommand::SetGoal { enabled: false })?;
+        harness.send(FrontendCommand::UpdateSandbox {
             action: SandboxAction::SetExecutionMode {
                 mode: "unlimited".into(),
             },
         })?;
-        backend.send(FrontendCommand::UpdateSandbox {
+        harness.send(FrontendCommand::UpdateSandbox {
             action: SandboxAction::SetAutoApprove { enabled: true },
         })?;
     }
-    backend.send(FrontendCommand::Submit { text: prompt })?;
+    harness.send(FrontendCommand::Submit {
+        text: prompt,
+        images: Vec::new(),
+        attachment_ids: Vec::new(),
+    })?;
 
     let started_at = std::time::Instant::now();
     let mut saw_streaming = false;
     let mut transport_error = None;
 
     let state = loop {
-        if let Some(event) = backend.try_recv() {
-            let BackendEvent::Envelope(envelope) = event;
+        if let Some(envelope) = harness.try_recv() {
             if let Some(message) = envelope.message
                 && envelope.kind == "error"
             {
@@ -591,7 +660,7 @@ fn run_agent(args: &[String]) -> Result<()> {
                     && (state.pending_shell_permission.is_some()
                         || state.pending_native_app_permission.is_some())
                 {
-                    let _ = backend.send(FrontendCommand::Interrupt);
+                    let _ = harness.send(FrontendCommand::Interrupt);
                     bail!(
                         "Headless agent is waiting for an interactive permission. Configure sandbox auto-approval or use --benchmark for an isolated benchmark container."
                     );
@@ -608,7 +677,7 @@ fn run_agent(args: &[String]) -> Result<()> {
         if timeout_seconds > 0
             && started_at.elapsed() >= std::time::Duration::from_secs(timeout_seconds)
         {
-            let _ = backend.send(FrontendCommand::Interrupt);
+            let _ = harness.send(FrontendCommand::Interrupt);
             bail!("Headless agent timed out after {timeout_seconds} seconds");
         }
 
@@ -772,10 +841,11 @@ fn auth(args: &[String]) -> Result<()> {
                     .get(1)
                     .ok_or_else(|| anyhow::anyhow!("Usage: yeet auth login provider"))?;
                 let options = if provider == "gemini" || provider == "gemini-web" {
-                    let env = std::env::vars().collect::<HashMap<_, _>>();
-                    Some(
-                        json!({"clientId":env.get("GEMINI_OAUTH_CLIENT_ID").or_else(||env.get("GOOGLE_CLIENT_ID")),"clientSecret":env.get("GEMINI_OAUTH_CLIENT_SECRET").or_else(||env.get("GOOGLE_CLIENT_SECRET")),"projectId":env.get("GEMINI_PROJECT_ID").or_else(||env.get("GOOGLE_CLOUD_PROJECT"))}),
-                    )
+                    Some(json!({
+                        "projectId": std::env::var("GEMINI_PROJECT_ID").ok()
+                            .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT").ok())
+                            .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT_ID").ok())
+                    }))
                 } else {
                     None
                 };

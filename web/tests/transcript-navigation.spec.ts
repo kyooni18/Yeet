@@ -92,12 +92,12 @@ test('mobile jump to latest stays reachable above an expanded composer', async (
   const latest = page.getByRole('button', { name: 'Latest' })
   await expect(latest).toBeVisible()
 
-  const composerInput = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composerInput = page.getByRole('textbox', { name: 'Message' })
   await composerInput.fill(Array.from({ length: 14 }, (_, index) => `Draft line ${index + 1}`).join('\n'))
 
   await expect.poll(async () => {
     const latestBox = await latest.boundingBox()
-    const composerBox = await page.getByTestId('composer').boundingBox()
+    const composerBox = await page.locator('.composer-shell').boundingBox()
     if (!latestBox || !composerBox) return -1
     return composerBox.y - (latestBox.y + latestBox.height)
   }).toBeGreaterThanOrEqual(8)

@@ -4,7 +4,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     prelude::*,
-    widgets::{Block, BorderType, Borders, Padding, Paragraph},
+    widgets::{Block, Borders, Padding, Paragraph},
 };
 
 const WORDMARK: [&str; 4] = [
@@ -36,7 +36,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape)
     let mut lines = if wordmark {
         WORDMARK
             .iter()
-            .map(|line| Line::styled(*line, theme::brand()))
+            .enumerate()
+            .map(|(index, line)| {
+                let color = match index {
+                    0 | 1 => theme::accent_hot(),
+                    _ => theme::accent(),
+                };
+                Line::styled(*line, Style::default().fg(color).bold())
+            })
             .collect::<Vec<_>>()
     } else {
         vec![Line::styled("YEET /", theme::brand())]
@@ -48,10 +55,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape)
     ));
     if wordmark {
         lines.push(Line::styled(
-            task::fit(
-                "Describe a task. Ask a question. Start here.",
-                area.width as usize,
-            ),
+            task::fit("Describe the outcome. Stay in flow.", area.width as usize),
             Style::default().fg(theme::muted()),
         ));
     }
@@ -60,7 +64,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape)
         return;
     }
 
-    let cards_width = area.width.min(78);
+    let cards_width = area.width.min(84);
     let cards = Rect::new(
         area.x + (area.width - cards_width) / 2,
         content.y + 9,
@@ -72,29 +76,29 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape)
         Constraint::Ratio(1, 3),
         Constraint::Ratio(1, 3),
     ])
-    .spacing(1)
+    .spacing(2)
     .split(cards);
     for (column, (title, key, description, color)) in columns.iter().zip([
         ("Model", "Alt+M", "Choose your model", theme::accent()),
-        ("Sessions", "Alt+S", "Pick up a thread", theme::user()),
-        ("Commands", "/", "Explore actions", theme::accent_warm()),
+        ("Sessions", "Alt+S", "Pick up a thread", theme::accent_hot()),
+        ("Commands", "/", "Explore actions", theme::accent()),
     ]) {
         let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme::border()))
-            .style(theme::surface())
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(color))
+            .style(theme::modal_surface())
             .padding(Padding::horizontal(1));
         let inner = block.inner(*column);
         frame.render_widget(block, *column);
-        let key_width = key.len();
-        let label = task::fit(title, (inner.width as usize).saturating_sub(key_width + 1));
-        let gap = (inner.width as usize).saturating_sub(label.len() + key_width);
+        let key_width = Span::raw(key).width();
+        let label = task::fit(title, (inner.width as usize).saturating_sub(key_width + 2));
+        let gap = (inner.width as usize).saturating_sub(Span::raw(&label).width() + key_width);
         frame.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
-                    Span::styled(label, Style::default().fg(color).bold()),
-                    Span::raw(" ".repeat(gap)),
+                    Span::styled("› ", Style::default().fg(color).bold()),
+                    Span::styled(label, Style::default().fg(theme::text()).bold()),
+                    Span::raw(" ".repeat(gap.saturating_sub(2))),
                     Span::styled(key, Style::default().fg(color)),
                 ]),
                 Line::styled(

@@ -6,13 +6,11 @@ mod websocket;
 use render::render_buffer;
 
 use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
+    collections::HashMap,
     fs::{self, OpenOptions},
-    hash::{Hash, Hasher},
     io::{self, BufRead, BufReader, Read, Write},
     net::{Shutdown, SocketAddr, TcpListener},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -36,8 +34,8 @@ use webauthn_rs::prelude::{
 use crate::{
     config::ConfigStore,
     platform::{
-        bind_local, configure_detached, connect_local, replace_file, set_private_directory,
-        set_private_file,
+        bind_local, connect_local, replace_file, set_private_directory, set_private_file,
+        tracked_children_snapshot,
     },
 };
 
@@ -48,9 +46,9 @@ const MIN_COLS: u16 = 40;
 const MIN_ROWS: u16 = 12;
 const MAX_COLS: u16 = 300;
 const MAX_ROWS: u16 = 120;
-const DAEMON_START_RETRIES: usize = 80;
-const DAEMON_START_DELAY: Duration = Duration::from_millis(50);
-const DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_millis(600);
+const REMOTE_STOP_RETRIES: usize = 80;
+const REMOTE_STOP_DELAY: Duration = Duration::from_millis(50);
+const REMOTE_CONTROL_TIMEOUT: Duration = Duration::from_millis(600);
 const AUTH_SESSION_SECONDS: u64 = 12 * 60 * 60;
 const PASSKEY_ENROLL_SECONDS: u64 = 10 * 60;
 const MAX_AUTH_SESSIONS: usize = 256;
@@ -146,38 +144,30 @@ impl RemoteOptions {
 }
 
 pub fn remote_help() -> &'static str {
-    "Yeet remote mode\n\n  yeet remote [WORKSPACE] [--workspace PATH] [--bind ADDRESS] [--origin URL] [--legacy-tui]\n  yeet remote status [WORKSPACE|--workspace PATH]\n  yeet remote stop [WORKSPACE|--workspace PATH]\n  yeet remote auth status [WORKSPACE|--workspace PATH]\n  yeet remote auth key generate|set|clear [WORKSPACE|--workspace PATH]\n  yeet remote auth passkey add|clear [WORKSPACE|--workspace PATH]\n  yeet --remote [WORKSPACE] [--bind ADDRESS] [--origin URL]\n\nDefaults:\n  initial workspace: current directory (semantic WebUI clients may switch it)\n  --bind 0.0.0.0:7331\n  frontend: semantic Vue WebUI\n\nOptions:\n  --legacy-tui       serve the previous browser-rendered Ratatui frontend\n  --size COLSxROWS   terminal size for --legacy-tui (default 120x40)\n\nRemote mode runs as a detached background daemon. The production WebUI is served directly by Yeet and does not require a Node development server. Authentication is Remote-wide rather than workspace-bound; WebAuthn credentials remain scoped to the configured relying-party origin as required by WebAuthn. Network tunneling and port forwarding are intentionally outside Yeet."
+    "Yeet remote mode\n\n  yeet remote [--workspace PATH] [--bind ADDRESS] [--origin URL] [--legacy-tui]\n  yeet remote status\n  yeet remote stop\n  yeet remote auth status\n  yeet remote auth key generate|set|clear\n  yeet remote auth passkey add|clear\n  yeet --remote [--workspace PATH] [--bind ADDRESS] [--origin URL]\n\nDefaults:\n  initial client workspace: home directory (WebUI clients may switch to any workspace)\n  --bind 0.0.0.0:7331\n  frontend: semantic WebUI\n\nOptions:\n  --workspace PATH   seed the initial client workspace; it does not scope Remote itself\n  --legacy-tui       serve the previous browser-rendered Ratatui frontend\n  --size COLSxROWS   terminal size for --legacy-tui (default 120x40)\n\n`yeet remote` runs Remote directly in the current Yeet process. It does not spawn a separate Remote service and does not derive its workspace from the shell current directory. WebUI clients may switch to any valid workspace path. The production WebUI is served directly by Yeet and does not require a Node development server. WebAuthn credentials remain scoped to the configured relying-party origin as required by WebAuthn. Network tunneling and port forwarding are intentionally outside Yeet."
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteDaemonStatus {
+pub struct RemoteStatus {
     pub address: String,
+    pub owned_children: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteLaunchResult {
-    pub status: RemoteDaemonStatus,
-    pub already_running: bool,
-}
-
-struct RemoteDaemonPaths {
+struct RemoteControlPaths {
     socket: PathBuf,
-    log: PathBuf,
     legacy_auth: PathBuf,
 }
 
-impl RemoteDaemonPaths {
-    fn new(workspace: &Path) -> Result<Self> {
+impl RemoteControlPaths {
+    fn new() -> Result<Self> {
         let config = ConfigStore::default();
         config.ensure()?;
         let directory = config.directory.join("remote");
         fs::create_dir_all(&directory)?;
         set_private_directory(&directory)?;
-        let key = remote_workspace_key(workspace);
         Ok(Self {
-            socket: directory.join(format!("{key}.sock")),
-            log: directory.join(format!("{key}.log")),
-            legacy_auth: directory.join(format!("{key}.auth.json")),
+            socket: directory.join("control.sock"),
+            legacy_auth: directory.join("daemon.auth.json"),
         })
     }
 }
@@ -189,15 +179,6 @@ fn remote_auth_path() -> Result<PathBuf> {
     fs::create_dir_all(&directory)?;
     set_private_directory(&directory)?;
     Ok(directory.join("auth.json"))
-}
-
-fn remote_workspace_key(workspace: &Path) -> String {
-    let workspace = workspace
-        .canonicalize()
-        .unwrap_or_else(|_| workspace.to_path_buf());
-    let mut hasher = DefaultHasher::new();
-    workspace.to_string_lossy().hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,16 +207,15 @@ pub struct RemoteAuthStatus {
     pub passkey_count: usize,
 }
 
-fn load_remote_auth_document(workspace: &Path) -> Result<RemoteAuthDocument> {
+fn load_remote_auth_document() -> Result<RemoteAuthDocument> {
     let auth_path = remote_auth_path()?;
     match fs::read_to_string(&auth_path) {
         Ok(contents) => serde_json::from_str(&contents)
             .with_context(|| format!("decode remote authentication file {}", auth_path.display())),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            // Remote authentication used to be scoped to the daemon's startup
-            // workspace. Migrate that document once so existing access keys and
-            // passkeys keep working while authentication becomes Remote-wide.
-            let legacy_path = RemoteDaemonPaths::new(workspace)?.legacy_auth;
+            // Migrate the previous Remote auth filename once so existing access
+            // keys and passkeys keep working with the process-wide auth file.
+            let legacy_path = RemoteControlPaths::new()?.legacy_auth;
             match fs::read_to_string(&legacy_path) {
                 Ok(contents) => {
                     let document: RemoteAuthDocument = serde_json::from_str(&contents)
@@ -245,7 +225,7 @@ fn load_remote_auth_document(workspace: &Path) -> Result<RemoteAuthDocument> {
                                 legacy_path.display()
                             )
                         })?;
-                    save_remote_auth_document(workspace, &document)?;
+                    save_remote_auth_document(&document)?;
                     Ok(document)
                 }
                 Err(legacy_error) if legacy_error.kind() == io::ErrorKind::NotFound => {
@@ -258,7 +238,7 @@ fn load_remote_auth_document(workspace: &Path) -> Result<RemoteAuthDocument> {
     }
 }
 
-fn save_remote_auth_document(_workspace: &Path, document: &RemoteAuthDocument) -> Result<()> {
+fn save_remote_auth_document(document: &RemoteAuthDocument) -> Result<()> {
     let auth_path = remote_auth_path()?;
     let parent = auth_path
         .parent()
@@ -288,33 +268,33 @@ fn save_remote_auth_document(_workspace: &Path, document: &RemoteAuthDocument) -
     Ok(())
 }
 
-pub fn remote_auth_status(workspace: &Path) -> Result<RemoteAuthStatus> {
-    let document = load_remote_auth_document(workspace)?;
+pub fn remote_auth_status() -> Result<RemoteAuthStatus> {
+    let document = load_remote_auth_document()?;
     Ok(RemoteAuthStatus {
         key_enabled: document.key_hash.is_some(),
         passkey_count: document.passkeys.len(),
     })
 }
 
-pub fn generate_remote_access_key(workspace: &Path) -> Result<String> {
+pub fn generate_remote_access_key() -> Result<String> {
     let key = format!(
         "yeet_{}{}",
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
-    set_remote_access_key(workspace, &key)?;
+    set_remote_access_key(&key)?;
     Ok(key)
 }
 
-pub fn set_remote_access_key(workspace: &Path, key: &str) -> Result<()> {
+pub fn set_remote_access_key(key: &str) -> Result<()> {
     let key = key.trim();
     if key.len() < 12 {
         bail!("remote access key must be at least 12 characters");
     }
-    let mut document = load_remote_auth_document(workspace)?;
+    let mut document = load_remote_auth_document()?;
     document.key_hash = Some(hash_remote_access_key(key)?);
-    save_remote_auth_document(workspace, &document)?;
-    notify_remote_auth_reload(workspace);
+    save_remote_auth_document(&document)?;
+    notify_remote_auth_reload();
     Ok(())
 }
 
@@ -327,20 +307,20 @@ fn hash_remote_access_key(key: &str) -> Result<String> {
         .to_string())
 }
 
-pub fn clear_remote_access_key(workspace: &Path) -> Result<()> {
-    let mut document = load_remote_auth_document(workspace)?;
+pub fn clear_remote_access_key() -> Result<()> {
+    let mut document = load_remote_auth_document()?;
     document.key_hash = None;
-    save_remote_auth_document(workspace, &document)?;
-    notify_remote_auth_reload(workspace);
+    save_remote_auth_document(&document)?;
+    notify_remote_auth_reload();
     Ok(())
 }
 
-pub fn clear_remote_passkeys(workspace: &Path) -> Result<()> {
-    let mut document = load_remote_auth_document(workspace)?;
+pub fn clear_remote_passkeys() -> Result<()> {
+    let mut document = load_remote_auth_document()?;
     document.passkeys.clear();
     document.passkey_user_id = None;
-    save_remote_auth_document(workspace, &document)?;
-    notify_remote_auth_reload(workspace);
+    save_remote_auth_document(&document)?;
+    notify_remote_auth_reload();
     Ok(())
 }
 
@@ -375,7 +355,6 @@ fn ensure_remote_auth_capacity(kind: &str, current: usize, maximum: usize) -> Re
 
 #[derive(Clone)]
 pub struct RemoteAuthRuntime {
-    workspace: PathBuf,
     cookie_name: String,
     webauthn: Option<Arc<Webauthn>>,
     public_origin: Option<Url>,
@@ -383,17 +362,12 @@ pub struct RemoteAuthRuntime {
 }
 
 impl RemoteAuthRuntime {
-    fn for_workspace(
-        workspace: &Path,
-        options: &RemoteOptions,
-        address: SocketAddr,
-    ) -> Result<Self> {
-        let document = load_remote_auth_document(workspace)?;
-        Self::from_document(workspace.to_path_buf(), document, options, address)
+    fn for_remote(options: &RemoteOptions, address: SocketAddr) -> Result<Self> {
+        let document = load_remote_auth_document()?;
+        Self::from_document(document, options, address)
     }
 
     fn from_document(
-        workspace: PathBuf,
         document: RemoteAuthDocument,
         options: &RemoteOptions,
         address: SocketAddr,
@@ -420,14 +394,9 @@ impl RemoteAuthRuntime {
             );
         }
         Ok(Self {
-            // Authentication belongs to the Remote service, not to whichever
-            // workspace a client selects after it connects.
+            // Authentication belongs to Remote, not to whichever workspace
+            // a client selects after it connects.
             cookie_name: "yeet_remote_session".into(),
-            workspace: if workspace.as_os_str().is_empty() {
-                workspace
-            } else {
-                workspace.canonicalize().unwrap_or(workspace)
-            },
             webauthn,
             public_origin,
             state: Arc::new(Mutex::new(RemoteAuthState {
@@ -442,7 +411,6 @@ impl RemoteAuthRuntime {
 
     fn disabled() -> Self {
         Self {
-            workspace: PathBuf::new(),
             cookie_name: "yeet_remote_session".into(),
             webauthn: None,
             public_origin: None,
@@ -465,10 +433,7 @@ impl RemoteAuthRuntime {
     }
 
     fn reload_document_inner(&self, preserve_sessions: bool) -> Result<()> {
-        if self.workspace.as_os_str().is_empty() {
-            return Ok(());
-        }
-        let document = load_remote_auth_document(&self.workspace)?;
+        let document = load_remote_auth_document()?;
         let mut state = self.state.lock().unwrap();
         state.document = document;
         if !preserve_sessions {
@@ -528,54 +493,12 @@ impl RemoteAuthRuntime {
             .is_some_and(|expires_at| *expires_at > now)
     }
 
-    fn websocket_origin_allowed(&self, headers: &axum::http::HeaderMap) -> bool {
-        self.browser_origin_allowed(headers, true)
+    fn websocket_origin_allowed(&self, _headers: &axum::http::HeaderMap) -> bool {
+        true
     }
 
-    fn http_auth_origin_allowed(&self, headers: &axum::http::HeaderMap) -> bool {
-        self.browser_origin_allowed(headers, false)
-    }
-
-    fn browser_origin_allowed(
-        &self,
-        headers: &axum::http::HeaderMap,
-        require_origin: bool,
-    ) -> bool {
-        let Some(origin) = headers
-            .get(axum::http::header::ORIGIN)
-            .and_then(|value| value.to_str().ok())
-        else {
-            return !require_origin;
-        };
-        let Ok(origin) = Url::parse(origin) else {
-            return false;
-        };
-        if !matches!(origin.scheme(), "http" | "https")
-            || origin.path() != "/"
-            || origin.query().is_some()
-            || origin.fragment().is_some()
-            || !origin.username().is_empty()
-            || origin.password().is_some()
-        {
-            return false;
-        }
-        if let Some(expected) = self.public_origin.as_ref() {
-            return origin == *expected;
-        }
-        let Some(host) = headers
-            .get(axum::http::header::HOST)
-            .and_then(|value| value.to_str().ok())
-        else {
-            return false;
-        };
-        let Some(origin_host) = origin.host_str() else {
-            return false;
-        };
-        let authority = match origin.port() {
-            Some(port) => format!("{origin_host}:{port}"),
-            None => origin_host.to_owned(),
-        };
-        authority.eq_ignore_ascii_case(host)
+    fn http_auth_origin_allowed(&self, _headers: &axum::http::HeaderMap) -> bool {
+        true
     }
 
     fn verify_access_key(&self, key: &str) -> Result<Option<String>> {
@@ -746,9 +669,9 @@ impl RemoteAuthRuntime {
             }
             state.document.passkeys.push(passkey);
             state.enrollments.remove(&pending.enrollment_token);
-            save_remote_auth_document(&self.workspace, &state.document)?;
+            save_remote_auth_document(&state.document)?;
         }
-        notify_other_remote_auth_refresh(&self.workspace);
+        notify_other_remote_auth_refresh();
         Ok(self.issue_session())
     }
 
@@ -826,18 +749,18 @@ impl RemoteAuthRuntime {
                 }
             }
             if !matched {
-                bail!("authenticated passkey is not registered for this Remote service");
+                bail!("authenticated passkey is not registered for this Remote");
             }
             if let Some(token) = enrollment_token {
                 state.enrollments.remove(token);
             }
             if changed {
-                save_remote_auth_document(&self.workspace, &state.document)?;
+                save_remote_auth_document(&state.document)?;
             }
             changed
         };
         if changed {
-            notify_other_remote_auth_refresh(&self.workspace);
+            notify_other_remote_auth_refresh();
         }
         Ok(self.issue_session())
     }
@@ -852,10 +775,6 @@ fn remote_public_origin(options: &RemoteOptions, address: SocketAddr) -> Result<
         return Ok(None);
     };
     Ok(Some(parse_remote_origin(&value)?))
-}
-
-fn normalize_remote_origin(value: &str) -> Result<String> {
-    Ok(parse_remote_origin(value)?.to_string())
 }
 
 fn parse_remote_origin(value: &str) -> Result<Url> {
@@ -895,148 +814,33 @@ fn random_token(prefix: &str) -> String {
     )
 }
 
-fn ensure_remote_bind_available(bind: &str) -> Result<()> {
-    match TcpListener::bind(bind) {
-        Ok(listener) => {
-            drop(listener);
-            Ok(())
-        }
-        Err(error) if error.kind() == io::ErrorKind::AddrInUse => bail!(
-            "cannot start Yeet Remote on {bind}: address is already in use; stop the process or Remote daemon using that address, or choose a different address with --bind"
-        ),
-        Err(error) => {
-            Err(error).with_context(|| format!("check whether Yeet Remote can bind to {bind}"))
-        }
-    }
-}
-
-pub fn launch_remote_daemon(
-    workspace: &Path,
-    options: &RemoteOptions,
-) -> Result<RemoteLaunchResult> {
-    if let Some(status) = remote_daemon_status(workspace)? {
-        if let Some(running_legacy_tui) = remote_daemon_legacy_tui(workspace)?
-            && running_legacy_tui != options.legacy_tui
-        {
-            bail!(
-                "Yeet remote is already running with the {} frontend; stop it before switching to {}",
-                if running_legacy_tui {
-                    "legacy TUI"
-                } else {
-                    "WebUI"
-                },
-                if options.legacy_tui {
-                    "legacy TUI"
-                } else {
-                    "WebUI"
-                }
-            );
-        }
-        let requested = normalize_requested_address(&options.bind);
-        if requested
-            .as_deref()
-            .is_some_and(|value| !status.address.ends_with(value))
-        {
-            bail!(
-                "Yeet remote daemon is already running at {}; stop it before changing --bind",
-                status.address
-            );
-        }
-        if let Some(requested_origin) = options.origin.as_deref() {
-            let requested_origin = normalize_remote_origin(requested_origin)?;
-            let running_origin = remote_daemon_origin(workspace)?.ok_or_else(|| {
-                anyhow!(
-                    "Yeet remote daemon is already running but its WebAuthn origin cannot be inspected; stop it before changing --origin"
-                )
-            })?;
-            if running_origin != requested_origin {
-                bail!(
-                    "Yeet remote daemon is already using WebAuthn origin {running_origin}; stop it before changing --origin to {requested_origin}"
-                );
-            }
-        }
-        return Ok(RemoteLaunchResult {
-            status,
-            already_running: true,
-        });
-    }
-
-    ensure_remote_bind_available(&options.bind)?;
-
-    let workspace = workspace
-        .canonicalize()
-        .unwrap_or_else(|_| workspace.to_path_buf());
-    let paths = RemoteDaemonPaths::new(&workspace)?;
-    let _ = fs::remove_file(&paths.socket);
-    let executable = std::env::current_exe().context("locate Yeet executable")?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&paths.log)
-        .with_context(|| format!("open remote daemon log {}", paths.log.display()))?;
-    let log_err = log.try_clone()?;
-    let mut command = Command::new(executable);
-    command
-        .arg("__remote-daemon")
-        .arg(&workspace)
-        .arg("--bind")
-        .arg(&options.bind)
-        .arg("--size")
-        .arg(format!("{}x{}", options.cols, options.rows));
-    if options.legacy_tui {
-        command.arg("--legacy-tui");
-    }
-    if let Some(origin) = &options.origin {
-        command.arg("--origin").arg(origin);
-    }
-    command
-        .current_dir(&workspace)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err));
-    configure_detached(&mut command);
-    let mut child = command.spawn().context("start Yeet remote daemon")?;
-
-    for _ in 0..DAEMON_START_RETRIES {
-        if let Some(status) = remote_daemon_status(&workspace)? {
-            return Ok(RemoteLaunchResult {
-                status,
-                already_running: false,
-            });
-        }
-        if let Some(exit) = child.try_wait()? {
-            bail!(
-                "Yeet remote daemon exited during startup ({exit}); see {}",
-                paths.log.display()
-            );
-        }
-        thread::sleep(DAEMON_START_DELAY);
-    }
-    bail!(
-        "Yeet remote daemon did not become ready; see {}",
-        paths.log.display()
-    )
-}
-
-pub fn remote_daemon_status(workspace: &Path) -> Result<Option<RemoteDaemonStatus>> {
-    let Some(response) = remote_control_request(workspace, "status")? else {
+pub fn remote_status() -> Result<Option<RemoteStatus>> {
+    let Some(response) = remote_control_request("status")? else {
         return Ok(None);
     };
     let address = response.trim();
     if address.is_empty() || address == "unknown" {
         return Ok(None);
     }
-    Ok(Some(RemoteDaemonStatus {
+    let owned_children = remote_control_request("children")?
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Ok(Some(RemoteStatus {
         address: address.to_owned(),
+        owned_children,
     }))
 }
 
-pub fn remote_daemon_browser_url(workspace: &Path, status: &RemoteDaemonStatus) -> Result<String> {
-    Ok(remote_daemon_origin(workspace)?.unwrap_or_else(|| status.address.clone()))
+pub fn remote_browser_url(status: &RemoteStatus) -> Result<String> {
+    Ok(remote_origin()?.unwrap_or_else(|| status.address.clone()))
 }
 
-fn remote_control_request(workspace: &Path, command: &str) -> Result<Option<String>> {
-    let paths = RemoteDaemonPaths::new(workspace)?;
+fn remote_control_request(command: &str) -> Result<Option<String>> {
+    let paths = RemoteControlPaths::new()?;
     let mut stream = match connect_local(&paths.socket) {
         Ok(stream) => stream,
         Err(error)
@@ -1051,8 +855,8 @@ fn remote_control_request(workspace: &Path, command: &str) -> Result<Option<Stri
         }
         Err(error) => return Err(error.into()),
     };
-    stream.set_read_timeout(Some(DAEMON_CONTROL_TIMEOUT))?;
-    stream.set_write_timeout(Some(DAEMON_CONTROL_TIMEOUT))?;
+    stream.set_read_timeout(Some(REMOTE_CONTROL_TIMEOUT))?;
+    stream.set_write_timeout(Some(REMOTE_CONTROL_TIMEOUT))?;
     stream.write_all(command.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
@@ -1062,8 +866,8 @@ fn remote_control_request(workspace: &Path, command: &str) -> Result<Option<Stri
     Ok(Some(response.trim().to_owned()))
 }
 
-fn remote_daemon_origin(workspace: &Path) -> Result<Option<String>> {
-    let Some(response) = remote_control_request(workspace, "origin")? else {
+fn remote_origin() -> Result<Option<String>> {
+    let Some(response) = remote_control_request("origin")? else {
         return Ok(None);
     };
     let value = response.trim();
@@ -1073,29 +877,14 @@ fn remote_daemon_origin(workspace: &Path) -> Result<Option<String>> {
     Ok(Some(value.to_owned()))
 }
 
-fn remote_daemon_legacy_tui(workspace: &Path) -> Result<Option<bool>> {
-    let Some(response) = remote_control_request(workspace, "frontend")? else {
-        return Ok(None);
-    };
-    match response.trim() {
-        "webui" => Ok(Some(false)),
-        "legacy-tui" => Ok(Some(true)),
-        _ => Ok(None),
-    }
-}
-
-fn notify_remote_auth_reload(workspace: &Path) {
-    let _ = remote_control_request(workspace, "auth-reload");
-    let exclude = RemoteDaemonPaths::new(workspace)
-        .ok()
-        .map(|paths| paths.socket);
+fn notify_remote_auth_reload() {
+    let _ = remote_control_request("auth-reload");
+    let exclude = RemoteControlPaths::new().ok().map(|paths| paths.socket);
     notify_remote_auth_command("auth-reload", exclude.as_deref());
 }
 
-fn notify_other_remote_auth_refresh(workspace: &Path) {
-    let exclude = RemoteDaemonPaths::new(workspace)
-        .ok()
-        .map(|paths| paths.socket);
+fn notify_other_remote_auth_refresh() {
+    let exclude = RemoteControlPaths::new().ok().map(|paths| paths.socket);
     notify_remote_auth_command("auth-refresh", exclude.as_deref());
 }
 
@@ -1122,27 +911,27 @@ fn notify_remote_auth_command(command: &str, exclude: Option<&Path>) {
         let Ok(mut stream) = connect_local(&path) else {
             continue;
         };
-        let _ = stream.set_write_timeout(Some(DAEMON_CONTROL_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(REMOTE_CONTROL_TIMEOUT));
         let _ = stream.write_all(command.as_bytes());
         let _ = stream.write_all(b"\n");
         let _ = stream.flush();
     }
 }
 
-pub fn request_remote_passkey_enrollment(workspace: &Path) -> Result<String> {
-    let response = remote_control_request(workspace, "passkey-add")?
-        .ok_or_else(|| anyhow!("Yeet remote UI is not running for this workspace"))?;
+pub fn request_remote_passkey_enrollment() -> Result<String> {
+    let response = remote_control_request("passkey-add")?
+        .ok_or_else(|| anyhow!("Yeet Remote is not running"))?;
     if let Some(error) = response.strip_prefix("error:") {
         bail!(error.trim().to_owned());
     }
     if !response.starts_with("http://") && !response.starts_with("https://") {
-        bail!("remote daemon returned an invalid passkey enrollment URL");
+        bail!("Yeet Remote returned an invalid passkey enrollment URL");
     }
     Ok(response)
 }
 
-pub fn stop_remote_daemon(workspace: &Path) -> Result<bool> {
-    let paths = RemoteDaemonPaths::new(workspace)?;
+pub fn stop_remote() -> Result<bool> {
+    let paths = RemoteControlPaths::new()?;
     let mut stream = match connect_local(&paths.socket) {
         Ok(stream) => stream,
         Err(error)
@@ -1157,41 +946,32 @@ pub fn stop_remote_daemon(workspace: &Path) -> Result<bool> {
         }
         Err(error) => return Err(error.into()),
     };
-    stream.set_write_timeout(Some(DAEMON_CONTROL_TIMEOUT))?;
+    stream.set_write_timeout(Some(REMOTE_CONTROL_TIMEOUT))?;
     stream.write_all(b"stop\n")?;
     stream.flush()?;
     drop(stream);
-    for _ in 0..DAEMON_START_RETRIES {
-        if remote_daemon_status(workspace)?.is_none() {
+    for _ in 0..REMOTE_STOP_RETRIES {
+        if remote_status()?.is_none() {
             return Ok(true);
         }
-        thread::sleep(DAEMON_START_DELAY);
+        thread::sleep(REMOTE_STOP_DELAY);
     }
-    bail!(
-        "Yeet remote daemon did not stop; see {}",
-        paths.log.display()
-    );
+    bail!("Yeet Remote did not stop");
 }
 
-fn normalize_requested_address(value: &str) -> Option<String> {
-    let address = value.parse::<SocketAddr>().ok()?;
-    (address.port() != 0).then(|| address.to_string())
-}
-
-pub struct RemoteDaemonControl {
+pub struct RemoteControl {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
     thread: Option<JoinHandle<()>>,
 }
 
-impl RemoteDaemonControl {
+impl RemoteControl {
     pub fn start(
-        workspace: &Path,
         address: SocketAddr,
         auth: Arc<RemoteAuthRuntime>,
         legacy_tui: bool,
     ) -> Result<Self> {
-        let paths = RemoteDaemonPaths::new(workspace)?;
+        let paths = RemoteControlPaths::new()?;
         if paths.socket.exists() {
             let _ = fs::remove_file(&paths.socket);
         }
@@ -1207,7 +987,7 @@ impl RemoteDaemonControl {
                 while !thread_stop.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
-                            let _ = stream.set_read_timeout(Some(DAEMON_CONTROL_TIMEOUT));
+                            let _ = stream.set_read_timeout(Some(REMOTE_CONTROL_TIMEOUT));
                             let request = stream
                                 .try_clone()
                                 .ok()
@@ -1237,6 +1017,15 @@ impl RemoteDaemonControl {
                                         "{}",
                                         if legacy_tui { "legacy-tui" } else { "webui" }
                                     );
+                                    let _ = stream.flush();
+                                }
+                                "children" => {
+                                    let children = tracked_children_snapshot()
+                                        .into_iter()
+                                        .map(|child| format!("{}:{}", child.role, child.pid))
+                                        .collect::<Vec<_>>()
+                                        .join(",");
+                                    let _ = writeln!(stream, "{children}");
                                     let _ = stream.flush();
                                 }
                                 "stop" => {
@@ -1303,7 +1092,7 @@ impl RemoteDaemonControl {
     }
 }
 
-impl Drop for RemoteDaemonControl {
+impl Drop for RemoteControl {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
@@ -1410,18 +1199,15 @@ impl RemoteServer {
             .context("failed to configure Yeet remote listener")?;
         let address = listener.local_addr()?;
         let auth = Arc::new(match (workspace, auth_document) {
-            (Some(workspace), None) => {
-                RemoteAuthRuntime::for_workspace(workspace, options, address)?
-            }
-            (None, Some(document)) => {
-                RemoteAuthRuntime::from_document(PathBuf::new(), document, options, address)?
-            }
+            (Some(_), None) => RemoteAuthRuntime::for_remote(options, address)?,
+            (None, Some(document)) => RemoteAuthRuntime::from_document(document, options, address)?,
             (None, None) => RemoteAuthRuntime::disabled(),
             (Some(_), Some(_)) => unreachable!("workspace and test auth document are exclusive"),
         });
-        let semantic_workspace = workspace
-            .map(Path::to_path_buf)
-            .unwrap_or(std::env::current_dir()?);
+        let semantic_workspace = match workspace {
+            Some(workspace) => workspace.to_path_buf(),
+            None => dirs::home_dir().ok_or_else(|| anyhow!("home directory is unavailable"))?,
+        };
         let (input_tx, input_rx) = mpsc::channel();
         let frame = Arc::new(Mutex::new(FrameSnapshot::new(options.cols, options.rows)));
         let running = Arc::new(AtomicBool::new(true));

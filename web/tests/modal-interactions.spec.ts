@@ -7,91 +7,100 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('session controls owns focus, isolates the shell, and restores the invoker', async ({ page }) => {
-  const invoker = page.locator('.composer-context')
-  const panel = page.getByTestId('session-controls')
-  const shell = page.locator('.conversation-pane')
-  const sidebar = page.locator('.desktop-session-sidebar')
-
+test('model sheet traps focus and restores the model trigger on Escape', async ({ page }) => {
+  const invoker = page.getByRole('button', { name: /Choose model, current/ })
   await invoker.focus()
   await invoker.click()
 
-  await expect(panel).toBeVisible()
-  await expect(panel).toBeFocused()
-  await expect(shell).toHaveJSProperty('inert', true)
-  await expect(sidebar).toHaveJSProperty('inert', true)
-  await expect(shell).toHaveAttribute('aria-hidden', 'true')
+  const dialog = page.getByRole('dialog', { name: 'Choose model' })
+  const search = dialog.getByPlaceholder('Search models')
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toHaveAttribute('aria-modal', 'true')
+  await expect(search).toBeFocused()
 
+  const focusables = dialog.locator('button:visible, input:visible')
+  const last = focusables.last()
+  await last.focus()
   await page.keyboard.press('Tab')
-  await expect(panel.getByRole('button', { name: 'Close session controls' })).toBeFocused()
+  await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
 
   await page.keyboard.press('Shift+Tab')
-  await expect(panel.getByRole('button', { name: 'All settings' })).toBeFocused()
-
-  await page.keyboard.press('Tab')
-  await expect(panel.getByRole('button', { name: 'Close session controls' })).toBeFocused()
+  await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
 
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('status-sheet')).toBeHidden()
-  await expect(invoker).toBeFocused()
-  await expect(shell).toHaveJSProperty('inert', false)
-  await expect(shell).not.toHaveAttribute('aria-hidden', 'true')
-})
-
-test('backdrop dismissal restores focus without leaking interaction to the shell', async ({ page }) => {
-  const invoker = page.locator('.composer-context')
-  const layer = page.getByTestId('status-sheet')
-
-  await invoker.click()
-  await expect(page.getByTestId('session-controls')).toBeFocused()
-
-  await layer.click({ position: { x: 2, y: 2 } })
-  await expect(layer).toBeHidden()
+  await expect(dialog).toHaveCount(0)
   await expect(invoker).toBeFocused()
 })
 
-
-test('phone session drawer owns focus, traps navigation, and restores its opener', async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1000) >= 900)
-
-  const invoker = page.getByTestId('open-sessions')
-  const drawer = page.getByTestId('session-drawer')
-  const shell = page.locator('.conversation-pane')
-
+test('model backdrop dismissal restores focus to its invoker', async ({ page }) => {
+  const invoker = page.getByRole('button', { name: /Choose model, current/ })
   await invoker.click()
-  await expect(drawer).toBeVisible()
-  await expect(drawer).toBeFocused()
-  await expect(drawer).toHaveAttribute('role', 'dialog')
-  await expect(drawer).toHaveAttribute('aria-modal', 'true')
-  await expect(shell).toHaveJSProperty('inert', true)
-  await expect(shell).toHaveAttribute('aria-hidden', 'true')
+  const dialog = page.getByRole('dialog', { name: 'Choose model' })
+  await expect(dialog).toBeVisible()
 
-  await page.keyboard.press('Tab')
-  await expect(drawer.getByRole('button', { name: 'Close sessions' })).toBeFocused()
+  await page.locator('.sheet-layer').click({ position: { x: 2, y: 2 } })
+  await expect(dialog).toHaveCount(0)
+  await expect(invoker).toBeFocused()
+})
 
-  await page.keyboard.press('Shift+Tab')
-  await expect(drawer.getByRole('button', { name: 'Settings' })).toBeFocused()
+test('session drawer owns keyboard focus and restores its opener', async ({ page }) => {
+  const desktopDocked = await page.evaluate(() =>
+    matchMedia('(min-width: 1000px) and (hover: hover) and (pointer: fine)').matches
+  )
+  test.skip(desktopDocked, 'Desktop uses a non-modal session dock.')
+  const invoker = page.getByRole('button', { name: 'Open sidebar' })
+  await invoker.click()
 
-  await page.keyboard.press('Tab')
-  await expect(drawer.getByRole('button', { name: 'Close sessions' })).toBeFocused()
+  const dialog = page.getByRole('dialog', { name: 'Sessions' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toHaveAttribute('aria-modal', 'true')
+  await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+
+  for (let index = 0; index < 8; index += 1) {
+    await page.keyboard.press('Tab')
+    await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+  }
 
   await page.keyboard.press('Escape')
-  await expect(drawer).toBeHidden()
+  await expect(page.locator('.remote-sidebar')).not.toHaveClass(/is-open/)
   await expect(invoker).toBeFocused()
-  await expect(shell).toHaveJSProperty('inert', false)
-  await expect(shell).not.toHaveAttribute('aria-hidden', 'true')
 })
 
-test('phone session drawer backdrop closes without stealing return focus', async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1000) >= 900)
-
-  const invoker = page.getByTestId('open-sessions')
-  const drawer = page.getByTestId('session-drawer')
-  const viewport = page.viewportSize()
-
+test('session backdrop closes the drawer and returns focus to its opener', async ({ page }) => {
+  const desktopDocked = await page.evaluate(() =>
+    matchMedia('(min-width: 1000px) and (hover: hover) and (pointer: fine)').matches
+  )
+  test.skip(desktopDocked, 'Desktop uses a non-modal session dock.')
+  const invoker = page.getByRole('button', { name: 'Open sidebar' })
   await invoker.click()
-  await expect(drawer).toBeFocused()
-  await drawer.click({ position: { x: Math.max(1, (viewport?.width ?? 320) - 2), y: 2 } })
-  await expect(drawer).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Sessions' })).toBeVisible()
+
+  const backdrop = page.locator('.sidebar-backdrop')
+  const backdropBox = await backdrop.boundingBox()
+  expect(backdropBox).not.toBeNull()
+  await backdrop.click({ position: { x: backdropBox!.width - 2, y: 2 } })
+  await expect(page.locator('.remote-sidebar')).not.toHaveClass(/is-open/)
+  await expect(invoker).toBeFocused()
+})
+
+test('Settings is a keyboard-contained modal and returns focus to its opener', async ({ page }) => {
+  await page.getByRole('button', { name: 'Quick settings' }).click()
+  const panel = page.locator('.quick-panel')
+  const invoker = panel.getByRole('button', { name: 'Settings', exact: true })
+  await invoker.click()
+
+  const dialog = page.getByRole('dialog', { name: 'Settings' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toHaveAttribute('aria-modal', 'true')
+  await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+
+  const focusables = dialog.locator('button:visible, input:visible, select:visible')
+  const last = focusables.last()
+  await last.focus()
+  await page.keyboard.press('Tab')
+  await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
   await expect(invoker).toBeFocused()
 })

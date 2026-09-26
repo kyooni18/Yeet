@@ -1,0 +1,40 @@
+warning: struct `OwnedChildInfo` is never constructed
+   --> src/platform.rs:243:19
+    |
+243 | pub(crate) struct OwnedChildInfo {
+    |                   ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: static `OWNED_CHILDREN` is never used
+   --> src/platform.rs:248:8
+    |
+248 | static OWNED_CHILDREN: OnceLock<Mutex<BTreeMap<u32, &'static str>>> = OnceLock::new();
+    |        ^^^^^^^^^^^^^^
+
+warning: function `owned_children` is never used
+   --> src/platform.rs:250:4
+    |
+250 | fn owned_children() -> &'static Mutex<BTreeMap<u32, &'static str>> {
+    |    ^^^^^^^^^^^^^^
+
+warning: struct `TrackedChild` is never constructed
+   --> src/platform.rs:255:19
+    |
+255 | pub(crate) struct TrackedChild {
+    |                   ^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/platform.rs:261:19
+    |
+260 | impl TrackedChild {
+    | ----------------- associated function in this implementation
+261 |     pub(crate) fn new(child: Child, role: &'static str) -> Self {
+    |                   ^^^
+
+warning: function `tracked_children_snapshot` is never used
+   --> src/platform.rs:303:15
+    |
+303 | pub(crate) fn tracked_children_snapshot() -> Vec<OwnedChildInfo> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+

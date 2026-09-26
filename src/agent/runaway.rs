@@ -1,23 +1,20 @@
-//! Adaptive detection for runaway agent/tool loops.
+//! Adaptive detection for repetitive agent/tool behavior.
 //!
-//! The detector scores several independent failure signals instead of relying
-//! on a hard round cap. It preserves mutation recovery while finalizing a
-//! confirmed read-only repeated-work spiral.
+//! A detected loop never ends the task. Instead it requests a fresh model window
+//! with a compact evidence handoff so execution can continue with a different
+//! strategy without replaying the same accumulated trace.
 
 use std::collections::{HashSet, VecDeque};
 
 const RUNAWAY_WINDOW: usize = 6;
 const RUNAWAY_WARN_SCORE: i32 = 6;
-pub(super) const RUNAWAY_FINALIZATION_RETRY_LIMIT: usize = 1;
-pub(super) const RUNAWAY_FINALIZE_SCORE: i32 = 12;
+const RUNAWAY_ROLLOVER_SCORE: i32 = 12;
 const RUNAWAY_CONTEXT_CHARS: usize = 64 * 1024;
 
-/// One completed tool round summarized into progress and repetition signals.
 #[derive(Debug, Clone)]
 pub(super) struct RunawayRound {
     pub(super) progressed: bool,
     pub(super) mutated: bool,
-    pub(super) failed_mutation: bool,
     pub(super) duplicate_inspection: bool,
     pub(super) inspection_only: bool,
     pub(super) semantic_fingerprint: String,
@@ -28,15 +25,13 @@ pub(super) struct RunawayRound {
     pub(super) repeated_calls: usize,
 }
 
-/// Action recommended by the runaway detector after observing a round.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RunawayDecision {
     Continue,
     Warn(String),
-    Finalize(String),
+    Rollover(String),
 }
 
-/// Sliding-window detector that accumulates independent runaway signals.
 #[derive(Debug, Default)]
 pub(super) struct RunawayDetector {
     pub(super) score: i32,
@@ -44,16 +39,9 @@ pub(super) struct RunawayDetector {
 }
 
 impl RunawayDetector {
-    /// Observes a tool round and decides whether to continue, warn, or finalize.
-    pub(super) fn observe(
-        &mut self,
-        round: RunawayRound,
-        implementation_requested: bool,
-        implementation_incomplete: bool,
-    ) -> RunawayDecision {
+    pub(super) fn observe(&mut self, round: RunawayRound) -> RunawayDecision {
         if round.mutated {
-            self.score = 0;
-            self.recent.clear();
+            self.reset();
             self.recent.push_back(round);
             return RunawayDecision::Continue;
         }
@@ -165,30 +153,15 @@ impl RunawayDetector {
             self.recent.pop_front();
         }
 
-        // Any unresolved implementation stays recoverable, including a
-        // repeated failed edit. A first failed mutation also gets recovery
-        // grace; only a repeated failure with no remaining implementation
-        // recovery state can be finalized.
-        let implementation_recovery_required = implementation_requested
-            && (implementation_incomplete || (round.failed_mutation && !repeated_failure));
-        if self.score >= RUNAWAY_FINALIZE_SCORE && signal_families >= 2 {
-            if implementation_recovery_required {
-                return RunawayDecision::Warn(format!(
-                    "Runaway pattern detected from multiple independent signals (score={}): {}. Implementation work is still unresolved, so tool access remains available. Stop broad inspection and either perform the smallest justified mutation/verification action now or state a concrete blocker without more inspection.",
-                    self.score,
-                    signal_summary(
-                        !round.progressed,
-                        round.duplicate_inspection || low_novelty,
-                        repeated_pattern,
-                        repeated_failure,
-                        repeated_output,
-                        context_blowup,
-                        inspection_spiral,
-                    )
-                ));
-            }
-            return RunawayDecision::Finalize(format!(
-                "Runaway pattern detected from multiple independent signals (score={}): {}. Stop tool execution and answer from already collected evidence.",
+        let established_low_context_loop = self.recent.len() >= RUNAWAY_WINDOW
+            && (repeated_pattern || inspection_spiral)
+            && (repeated_failure || repeated_output || low_novelty);
+        if self.score >= RUNAWAY_ROLLOVER_SCORE
+            && signal_families >= 2
+            && (context_blowup || established_low_context_loop)
+        {
+            let message = format!(
+                "Structural loop rollover triggered after multiple independent repetition signals were detected (score={}): {}. The runtime is carrying the same task into a fresh working window with compact workspace-evidence state preserved.",
                 self.score,
                 signal_summary(
                     !round.progressed,
@@ -199,11 +172,14 @@ impl RunawayDetector {
                     context_blowup,
                     inspection_spiral,
                 )
-            ));
+            );
+            self.reset();
+            return RunawayDecision::Rollover(message);
         }
+
         if self.score >= RUNAWAY_WARN_SCORE {
             return RunawayDecision::Warn(format!(
-                "Possible tool-loop pattern detected (score={}): {}. Change strategy, reuse existing evidence, and avoid repeating equivalent inspection. Tools remain available because the guard has not established a runaway loop.",
+                "Possible repetitive tool pattern detected (score={}): {}. If repetition persists, the runtime may rotate to a fresh working window without ending the task.",
                 self.score,
                 signal_summary(
                     !round.progressed,
@@ -216,11 +192,16 @@ impl RunawayDetector {
                 )
             ));
         }
+
         RunawayDecision::Continue
+    }
+
+    fn reset(&mut self) {
+        self.score = 0;
+        self.recent.clear();
     }
 }
 
-/// Renders active runaway signals into one compact diagnostic sentence.
 fn signal_summary(
     no_progress: bool,
     low_novelty: bool,
@@ -256,5 +237,101 @@ fn signal_summary(
         "weak anomaly signal".into()
     } else {
         signals.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stalled_inspection() -> RunawayRound {
+        RunawayRound {
+            progressed: false,
+            mutated: false,
+            duplicate_inspection: true,
+            inspection_only: true,
+            semantic_fingerprint: "read_file:src/remote.rs".into(),
+            failure_fingerprints: Vec::new(),
+            output_fingerprints: vec![7],
+            request_context_chars: 70_000,
+            fresh_calls: 0,
+            repeated_calls: 1,
+        }
+    }
+
+    #[test]
+    fn repeated_stall_rotates_context_instead_of_finalizing() {
+        let mut detector = RunawayDetector::default();
+        let mut rolled = false;
+        for _ in 0..8 {
+            if matches!(
+                detector.observe(stalled_inspection()),
+                RunawayDecision::Rollover(_)
+            ) {
+                rolled = true;
+                break;
+            }
+        }
+
+        assert!(rolled);
+        assert_eq!(detector.score, 0);
+        assert!(detector.recent.is_empty());
+    }
+
+    #[test]
+    fn ordinary_early_failures_do_not_destroy_a_small_context_window() {
+        let mut detector = RunawayDetector::default();
+        let failures = ["glob", "timeout", "different-timeout", "permission"];
+        for (index, failure) in failures.into_iter().enumerate() {
+            let decision = detector.observe(RunawayRound {
+                progressed: index == 2,
+                mutated: false,
+                duplicate_inspection: false,
+                inspection_only: false,
+                semantic_fingerprint: format!("shell-attempt-{index}"),
+                failure_fingerprints: vec![failure.into()],
+                output_fingerprints: vec![index as u64 + 100],
+                request_context_chars: 20_000 + index * 2_000,
+                fresh_calls: 1,
+                repeated_calls: 0,
+            });
+            assert!(!matches!(decision, RunawayDecision::Rollover(_)));
+        }
+    }
+
+    #[test]
+    fn mutation_resets_loop_state() {
+        let mut detector = RunawayDetector::default();
+        for _ in 0..3 {
+            let _ = detector.observe(stalled_inspection());
+        }
+
+        let mut mutation = stalled_inspection();
+        mutation.mutated = true;
+        mutation.progressed = true;
+        assert_eq!(detector.observe(mutation), RunawayDecision::Continue);
+        assert_eq!(detector.score, 0);
+        assert_eq!(detector.recent.len(), 1);
+    }
+
+    #[test]
+    fn rollover_reset_allows_the_task_to_continue() {
+        let mut detector = RunawayDetector::default();
+        for _ in 0..8 {
+            if matches!(
+                detector.observe(stalled_inspection()),
+                RunawayDecision::Rollover(_)
+            ) {
+                break;
+            }
+        }
+
+        let mut fresh = stalled_inspection();
+        fresh.duplicate_inspection = false;
+        fresh.repeated_calls = 0;
+        fresh.fresh_calls = 1;
+        fresh.progressed = true;
+        fresh.semantic_fingerprint = "read_file:src/new.rs".into();
+        assert_eq!(detector.observe(fresh), RunawayDecision::Continue);
     }
 }

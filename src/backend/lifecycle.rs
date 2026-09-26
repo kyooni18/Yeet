@@ -10,8 +10,15 @@ impl BackendService {
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
         let stored = self.store.load(id)?;
-        let stored_working_directory = stored.working_directory.clone();
-        let stored_context_roots = stored.context_roots.clone();
+        let rebase = |path: &String| {
+            crate::session_store::resolve_workspace_path(
+                &self.workspace_root,
+                &stored.workspace_root,
+                path,
+            )
+        };
+        let stored_working_directory = stored.working_directory.as_ref().map(rebase);
+        let stored_context_roots = stored.context_roots.iter().map(rebase).collect::<Vec<_>>();
         let persisted_goal = self.store.goal_mode(id).unwrap_or(false);
         let resume_goal = persisted_goal
             && stored
@@ -32,7 +39,7 @@ impl BackendService {
             .lock()
             .map_err(|_| anyhow!("coordinator lock poisoned"))?
             .replace_model_history(stored_history.clone());
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock_or_recover();
         shared.meta.current_turn = None;
         shared.state.is_streaming = false;
         shared.state.active_run_id = None;
@@ -98,7 +105,7 @@ impl BackendService {
             coordinator.session_environment()
         };
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.meta.working_directory = Some(working_directory);
             shared.meta.context_roots = context_roots;
         }
@@ -120,15 +127,27 @@ impl BackendService {
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.replace_model_history(Vec::new());
         }
-        let (model, reasoning_level) = {
-            let shared = self.shared.lock().unwrap();
-            (
-                shared.state.active_model.clone(),
-                shared.state.active_reasoning_level.clone(),
-            )
-        };
+        let previous = self.shared.lock_or_recover().state.without_conversation();
         let project = self.project_settings.load().unwrap_or_default();
-        let mut session = SharedSession::new(model, reasoning_level);
+        let mut session = SharedSession::new(
+            previous.active_model.clone(),
+            previous.active_reasoning_level.clone(),
+        );
+        // Workspace-wide state is not part of a session. Resetting it would
+        // blank the client's session list and model picker until they are
+        // re-requested, and publish an empty catalog to other runtimes.
+        session.state.saved_sessions = previous.saved_sessions;
+        session.state.known_workspaces = previous.known_workspaces;
+        session.state.workspace_session_groups = previous.workspace_session_groups;
+        session.state.available_models = previous.available_models;
+        session.state.model_catalog = previous.model_catalog;
+        session.state.active_model_context_length = previous.active_model_context_length;
+        session.state.openai_flex = previous.openai_flex;
+        session.state.foundation_memory_enabled = previous.foundation_memory_enabled;
+        session.state.foundation_memory_backend = previous.foundation_memory_backend;
+        session.state.foundation_memory_server = previous.foundation_memory_server;
+        session.state.web_backend = previous.web_backend;
+        session.state.web_server = previous.web_server;
         session.meta.working_directory = Some(self.workspace_root.display().to_string());
         session.meta.context_roots = vec![self.workspace_root.display().to_string()];
         session.state.sandbox_settings = SandboxStore::new(&self.workspace_root)
@@ -147,7 +166,7 @@ impl BackendService {
             .into_iter()
             .filter(|value| !session_only_capability(value))
             .collect();
-        *self.shared.lock().unwrap() = session;
+        *self.shared.lock_or_recover() = session;
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.set_protected_write_paths(Vec::<PathBuf>::new());
             coordinator.set_session_runtime(self.store.clone(), None);
@@ -165,7 +184,7 @@ impl BackendService {
             .map_err(|_| anyhow!("coordinator lock poisoned"))?
             .compact_model_history()?;
         {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             shared.meta.pending_compaction = false;
             shared.state.current_context_tokens = None;
             shared.append(ConversationKind::System {
@@ -185,7 +204,7 @@ impl BackendService {
     /// Invalidates a running turn without blocking on its coordinator mutex.
     fn invalidate_active_turn_for_replacement(&self) -> Result<()> {
         let replaced_session_id = {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             if shared.meta.current_turn.is_none() {
                 None
             } else {
@@ -202,7 +221,7 @@ impl BackendService {
                 shared.state.current_session_id.clone()
             }
         };
-        *self.active_cancel.lock().unwrap() = None;
+        *self.active_cancel.lock_or_recover() = None;
         let Some(session_id) = replaced_session_id else {
             return Ok(());
         };
@@ -215,14 +234,14 @@ impl BackendService {
                 .map(|session| session.model_history)
                 .unwrap_or_default()
         };
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock_or_recover();
         persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
         Ok(())
     }
 
     /// Requests cancellation for the active run and pending permission prompt.
     pub(super) fn interrupt(&self) {
-        if let Some(cancel) = self.active_cancel.lock().unwrap().as_ref() {
+        if let Some(cancel) = self.active_cancel.lock_or_recover().as_ref() {
             cancel.store(true, Ordering::Release);
         }
         self.bridge.interrupt_active_requests();
@@ -239,7 +258,7 @@ impl BackendService {
     pub(crate) fn abandon_stuck_run(&self, reason: &str) -> Result<()> {
         self.interrupt();
         let session_id = {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             if shared.meta.current_turn.is_none() {
                 shared.state.is_streaming = false;
                 None
@@ -267,7 +286,7 @@ impl BackendService {
                 shared.state.current_session_id.clone()
             }
         };
-        *self.active_cancel.lock().unwrap() = None;
+        *self.active_cancel.lock_or_recover() = None;
 
         if let Some(session_id) = session_id {
             let history = if let Ok(coordinator) = self.coordinator.try_lock() {
@@ -278,7 +297,7 @@ impl BackendService {
                     .map(|session| session.model_history)
                     .unwrap_or_default()
             };
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock_or_recover();
             persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
         }
         self.publish_state();
@@ -288,8 +307,7 @@ impl BackendService {
     /// Appends a system notice to the active transcript.
     pub(super) fn append_system(&self, text: &str) {
         self.shared
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .append(ConversationKind::System {
                 content: text.into(),
             });
@@ -298,13 +316,13 @@ impl BackendService {
 
     /// Publishes a backend error without mutating model history.
     pub(super) fn append_error(&self, text: String) {
-        self.shared.lock().unwrap().state.error_message = Some(text);
+        self.shared.lock_or_recover().state.error_message = Some(text);
         self.publish_state();
     }
 
     /// Emits the latest bridge state with current permission prompts attached.
     pub(super) fn publish_state(&self) {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock_or_recover();
         state.state.pending_shell_permission = self.permission.pending_shell();
         state.state.pending_native_app_permission = self.permission.pending_native_app();
         let _ = self

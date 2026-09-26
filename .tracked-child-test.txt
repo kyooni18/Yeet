@@ -1,0 +1,84 @@
+warning: use of deprecated method `ratatui::Terminal::<B>::get_cursor`: the method get_cursor_position indicates more clearly what about the cursor to get
+   --> src/ui_parts/../ui/render_tests.rs:240:31
+    |
+240 |         let (x, y) = terminal.get_cursor().unwrap();
+    |                               ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: function `mark_turn_cache_breakpoint` is never used
+   --> src/agent/cache.rs:241:15
+    |
+241 | pub(super) fn mark_turn_cache_breakpoint(messages: &mut [Message], input: &str) {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `insert_turn_stable_overlays` is never used
+   --> src/agent/cache.rs:255:15
+    |
+255 | pub(super) fn insert_turn_stable_overlays(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `usage_diagnostics` is never used
+   --> src/agent/cache.rs:691:15
+    |
+691 | pub(super) fn usage_diagnostics(request_diagnostics: &Value, usage: Option<&Usage>) -> Value {
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: function `request_history_for_profile` is never used
+  --> src/agent/policy.rs:75:15
+   |
+75 | pub(super) fn request_history_for_profile(
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `serve_io` is never used
+   --> src/mcp_server.rs:236:4
+    |
+236 | fn serve_io<R: BufRead, W: Write>(
+    |    ^^^^^^^^
+
+warning: associated function `start_with_auth_document` is never used
+    --> src/remote.rs:1162:8
+     |
+1152 | impl RemoteServer {
+     | ----------------- associated function in this implementation
+...
+1162 |     fn start_with_auth_document(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `retained_bytes` is never used
+    --> src/shell.rs:1221:8
+     |
+1220 | impl BoundedOutput {
+     | ------------------ method in this implementation
+1221 |     fn retained_bytes(&self) -> usize {
+     |        ^^^^^^^^^^^^^^
+
+warning: function `read_bounded` is never used
+    --> src/shell.rs:1293:4
+     |
+1293 | fn read_bounded(reader: impl Read, limit: usize) -> BoundedOutput {
+     |    ^^^^^^^^^^^^
+
+warning: function `path_outside_workspace` is never used
+  --> src/tools/paths.rs:19:15
+   |
+19 | pub(super) fn path_outside_workspace(root: &Path, input: &str) -> Result<bool> {
+   |               ^^^^^^^^^^^^^^^^^^^^^^
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 216 filtered out; finished in 0.01s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+

@@ -16,6 +16,7 @@ export async function installMockRemote(page: Page): Promise<void> {
         minVersion: 1,
         maxVersion: 1,
         websocket: '/api/ws',
+        features: ['attachments-v1', 'files-v1'],
       }),
     })
   })
@@ -54,10 +55,10 @@ export async function installMockRemote(page: Page): Promise<void> {
             toolCall: {
               id: 'tool1',
               name: 'read_file',
-              arguments: '{"path":"web/src/App.vue"}',
+              arguments: '{"path":"web/src/App.tsx"}',
               status: 'completed',
               durationMs: 82,
-              result: 'App.vue loaded successfully',
+              result: 'App.tsx loaded successfully',
             },
           },
         },

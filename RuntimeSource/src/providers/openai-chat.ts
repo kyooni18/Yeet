@@ -21,6 +21,7 @@ import type {
   ToolDefinition,
 } from "../types.js";
 import { normalizeFinishReason, normalizeModelInfo, normalizeToolCall, safeJsonParse, selectStableAndRecentIndexes, splitLeadingSystem, toolResultContent, usage } from "../util.js";
+import { geminiToolSchema } from "./gemini.js";
 
 export interface OpenAIChatProviderOptions {
   id?: string;
@@ -108,13 +109,19 @@ function mapToolChoice(choice: ToolChoice | undefined): unknown {
   return { type: "function", function: { name: choice.name } };
 }
 
-function mapTools(tools: ToolDefinition[] | undefined): unknown[] | undefined {
+function usesGeminiToolSchema(model: string): boolean {
+  const normalized = model.trim().toLowerCase().replace(/^models\//, "");
+  return /(?:^|\/)gemini(?:[-.:/]|$)/.test(normalized);
+}
+
+function mapTools(tools: ToolDefinition[] | undefined, model: string): unknown[] | undefined {
+  const lowerForGemini = usesGeminiToolSchema(model);
   return tools?.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       ...(tool.description ? { description: tool.description } : {}),
-      parameters: tool.inputSchema,
+      parameters: lowerForGemini ? geminiToolSchema(tool.inputSchema) : tool.inputSchema,
     },
   }));
 }
@@ -256,7 +263,7 @@ function requestBody(
   suppressedParameters: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   const cacheCapabilities = promptCacheCapabilities(providerId, request.model);
-  const tools = mapTools(request.tools);
+  const tools = mapTools(request.tools, request.model);
   const toolChoice = mapToolChoice(request.toolChoice);
   const sessionId = useContextSessionId && cacheCapabilities.sessionAffinity !== false
     ? stableSessionId(request.metadata?.sessionId ?? request.contextKey)

@@ -18,7 +18,7 @@ impl ToolRegistry {
         cancel: &AtomicBool,
     ) -> Result<String> {
         let result = self
-            .bridge
+            .bridge_client()?
             .call_computer_use_cancellable("js", object, cancel)?;
         // UI automation can mutate project files indirectly through editors,
         // terminals, or IDEs. Refresh cached source evidence, but do not report
@@ -33,7 +33,7 @@ impl ToolRegistry {
         cancel: &AtomicBool,
     ) -> Result<String> {
         Ok(self
-            .bridge
+            .bridge_client()?
             .call_computer_use_cancellable("js_reset", object, cancel)?
             .to_string())
     }

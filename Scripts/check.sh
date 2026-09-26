@@ -4,11 +4,10 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-./Scripts/rebuild-runtime.sh
-(
-  cd RuntimeSource
-  node --test test/*.test.mjs
-)
+npm --prefix RuntimeSource ci
+npm --prefix web ci
+npm --prefix RuntimeSource run check
+npm --prefix web run typecheck
 cargo test
 
 TMP_YEET=$(mktemp -d)

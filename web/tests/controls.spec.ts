@@ -15,8 +15,17 @@ async function emit(page: Page, message: Record<string, unknown>) {
 async function sentCommands(page: Page) {
   return page.evaluate(() => {
     const sent = (window as unknown as TestHooks).__yeetSent
-    return sent.filter((item) => item.type === 'command').map((item) => item.command as Record<string, unknown>)
+    return sent
+      .filter((item) => item.type === 'command')
+      .map((item) => item.command as Record<string, unknown>)
   })
+}
+
+async function openModelSheet(page: Page) {
+  await page.getByRole('button', { name: /Choose model, current/ }).click()
+  const dialog = page.getByRole('dialog', { name: 'Choose model' })
+  await expect(dialog).toBeVisible()
+  return dialog
 }
 
 test.beforeEach(async ({ page }) => {
@@ -25,11 +34,12 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('model picker prefers structured provider and model metadata', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop')
-
+test('model sheet prefers structured provider/model metadata and context lengths', async ({ page }) => {
   await emit(page, {
-    type: 'state_update', version: 1, sequence: 2, revision: 2,
+    type: 'state_update',
+    version: 1,
+    sequence: 2,
+    revision: 2,
     patch: {
       active_model: 'opaque-a',
       available_models: ['opaque-a', 'opaque-b'],
@@ -40,29 +50,32 @@ test('model picker prefers structured provider and model metadata', async ({ pag
     },
   })
 
-  const picker = page.locator('.top-bar').getByTestId('model-picker')
-  const trigger = picker.getByTestId('model-picker-trigger')
-  await expect(trigger).toHaveAttribute('aria-label', /Model: gpt-5\.6-sol, provider: OpenAI/)
-  await trigger.click()
-  await expect.poll(async () => (await sentCommands(page)).filter((command) => command.type === 'request_models').length).toBeGreaterThanOrEqual(2)
-  await picker.getByTestId('model-search').fill('opus')
-  const option = picker.getByRole('option')
-  await expect(option).toHaveCount(1)
-  await expect(option).toContainText('claude-opus-4.1')
-  await expect(option).toContainText('Claude (Anthropic)')
-  await expect(option).toContainText('180k context')
-  await picker.getByTestId('model-search').press('Enter')
+  const dialog = await openModelSheet(page)
+  await expect(dialog.locator('.active-model-card')).toContainText('gpt-5.6-sol')
+  await expect(dialog.locator('.active-model-card')).toContainText('OpenAI')
+  await expect(dialog.locator('.active-model-card')).toContainText('200k ctx')
 
-  await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'select_model', model: 'opaque-b' }),
-  ]))
+  const search = dialog.getByPlaceholder('Search models')
+  await search.fill('opus')
+  const row = dialog.locator('.model-row')
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText('claude-opus-4.1')
+  await expect(row).toContainText('Anthropic')
+  await expect(row).toContainText('180k ctx')
+  await row.click()
+
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(async () => (await sentCommands(page))
+    .filter((command) => command.type === 'select_model')
+    .at(-1)?.model).toBe('opaque-b')
 })
 
-test('model picker keeps Codex CLI models separate from OpenAI models', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop')
-
+test('model sheet keeps Codex and OpenAI models in separate provider sections', async ({ page }) => {
   await emit(page, {
-    type: 'state_update', version: 1, sequence: 2, revision: 2,
+    type: 'state_update',
+    version: 1,
+    sequence: 2,
+    revision: 2,
     patch: {
       active_model: 'codex-cli/gpt-5.6-codex',
       available_models: ['openai/gpt-5.6-sol', 'codex-cli/gpt-5.6-codex'],
@@ -73,81 +86,76 @@ test('model picker keeps Codex CLI models separate from OpenAI models', async ({
     },
   })
 
-  const picker = page.locator('.top-bar').getByTestId('model-picker')
-  await expect(picker.getByTestId('model-picker-trigger')).toHaveAttribute('aria-label', /provider: Codex CLI/)
-  await picker.getByTestId('model-picker-trigger').click()
-  const popover = picker.getByTestId('model-picker-popover')
-  await expect(popover.getByRole('button', { name: 'OpenAI' })).toBeVisible()
-  await expect(popover.getByRole('button', { name: 'Codex CLI' })).toBeVisible()
-  await expect(picker.getByRole('option', { name: /gpt-5\.6-codex.*Codex CLI/ })).toBeVisible()
+  const dialog = await openModelSheet(page)
+  const sections = dialog.locator('.model-section')
+  await expect(sections.filter({ hasText: 'OpenAI' })).toHaveCount(1)
+  await expect(sections.filter({ hasText: 'Codex' })).toHaveCount(1)
+  await expect(sections.filter({ hasText: 'OpenAI' }).locator('.model-row')).toContainText('gpt-5.6-sol')
+  await expect(sections.filter({ hasText: 'Codex' }).locator('.model-row')).toContainText('gpt-5.6-codex')
 })
 
-test('desktop Goal toggle sends the semantic command and reflects state', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop')
-
-  const toggle = page.getByTestId('toggle-goal')
+test('Goal control sends the semantic command and reflects remote state', async ({ page }) => {
+  const toggle = page.getByRole('button', { name: 'Goal' })
   await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+
   await toggle.click()
-  await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'set_goal', enabled: true }),
-  ]))
+  await expect.poll(async () => (await sentCommands(page))
+    .filter((command) => command.type === 'set_goal')
+    .at(-1)?.enabled).toBe(true)
 
   await emit(page, {
-    type: 'state_update', version: 1, sequence: 2, revision: 2,
+    type: 'state_update',
+    version: 1,
+    sequence: 2,
+    revision: 2,
     patch: { goal_mode: true },
   })
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
 })
 
-test('desktop session controls use a compact dialog and omit unsupported attachments', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop')
-
-  await expect(page.getByLabel('Attach files')).not.toBeAttached()
-  await page.getByRole('button', { name: /^Session controls:/ }).click()
-
-  const panel = page.getByTestId('session-controls')
-  await expect(panel).toBeVisible()
-  await expect(panel).toHaveAttribute('role', 'dialog')
-  await expect(panel.locator('.mobile-sheet')).not.toBeAttached()
+test('QuickPanel presents compact model, reasoning, goal, workspace, and sandbox controls', async ({ page }) => {
+  await page.getByRole('button', { name: 'Quick settings' }).click()
+  const panel = page.locator('.quick-panel')
+  await expect(panel).toHaveClass(/is-open/)
 
   const box = await panel.boundingBox()
   const viewport = page.viewportSize()
   expect(box).not.toBeNull()
   expect(viewport).not.toBeNull()
-  expect(box?.width ?? 999).toBeLessThanOrEqual(430)
-  expect(box?.y ?? 0).toBeGreaterThan(20)
-  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThan((viewport?.height ?? 0) - 20)
+  expect(box!.width).toBeLessThanOrEqual(430)
+  expect(box!.height).toBeLessThanOrEqual(viewport!.height)
 
-  await expect(panel).toContainText('high')
-  await expect(panel).toContainText('Ask first')
+  await expect(panel.getByRole('button', { name: /Model/ })).toBeVisible()
+  await expect(panel.getByRole('combobox', { name: 'Reasoning' })).toBeVisible()
+  await expect(panel.getByRole('switch', { name: 'Goal mode' })).toBeVisible()
+  await expect(panel.getByRole('combobox', { name: 'Workspace' })).toBeVisible()
+
+  const sandboxPreset = panel.getByRole('combobox', { name: 'Sandbox preset' })
+  if (await sandboxPreset.count()) await expect(sandboxPreset).toBeVisible()
 })
 
-test('runtime settings reuse the model picker and gate OpenAI Flex by provider', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop')
+test('Settings sheet sends Remote-backed settings mutations', async ({ page }) => {
+  await page.getByRole('button', { name: 'Quick settings' }).click()
+  const panel = page.locator('.quick-panel')
+  await panel.getByRole('button', { name: 'Settings', exact: true }).click()
 
-  await page.goto('/settings/runtime')
-  await expect(page.getByRole('heading', { name: 'Runtime' })).toBeVisible()
+  const dialog = page.getByRole('dialog', { name: 'Settings' })
+  await expect(dialog).toBeVisible()
 
-  await emit(page, {
-    type: 'state_update', version: 1, sequence: 2, revision: 2,
-    patch: {
-      active_model: 'opaque-b',
-      available_models: ['opaque-a', 'opaque-b'],
-      model_catalog: [
-        { id: 'opaque-a', provider: 'openai', model: 'gpt-5.6-sol', context_length: 200000 },
-        { id: 'opaque-b', provider: 'anthropic', model: 'claude-opus-4.1', context_length: 180000 },
-      ],
-    },
-  })
+  const flex = dialog.getByRole('switch', { name: 'OpenAI Flex' })
+  const memory = dialog.getByRole('switch', { name: 'Foundation Memory' })
+  await expect(flex).toBeEnabled()
+  await expect(memory).toBeEnabled()
 
-  const runtimePicker = page.getByTestId('runtime-model-picker').getByTestId('model-picker-trigger')
-  await expect(runtimePicker).toHaveAttribute('aria-label', /Model: claude-opus-4\.1, provider: Claude \(Anthropic\)/)
-  await expect(page.getByText('OpenAI Flex')).not.toBeAttached()
-  await expect(page.getByRole('button', { name: /ask →/i })).toBeVisible()
+  const flexWasEnabled = await flex.getAttribute('aria-checked') === 'true'
+  await flex.click()
+  await expect.poll(async () => (await sentCommands(page))
+    .filter((command) => command.type === 'set_open_ai_flex')
+    .at(-1)?.enabled).toBe(!flexWasEnabled)
 
-  await emit(page, {
-    type: 'state_update', version: 1, sequence: 3, revision: 3,
-    patch: { active_model: 'opaque-a' },
-  })
-  await expect(page.getByText('OpenAI Flex')).toBeVisible()
+  const memoryWasEnabled = await memory.getAttribute('aria-checked') === 'true'
+  await memory.click()
+  await expect.poll(async () => (await sentCommands(page))
+    .filter((command) => command.type === 'set_foundation_memory')
+    .at(-1)?.enabled).toBe(!memoryWasEnabled)
 })

@@ -5,10 +5,10 @@ test.beforeEach(async ({ page }) => {
   await installMockRemote(page)
 })
 
-test('unknown Remote paths recover to the conversation instead of rendering blank', async ({ page }) => {
+test('unknown Remote paths still render the conversation shell instead of going blank', async ({ page }) => {
   await page.goto('/stale/deep-link')
 
-  await expect(page).toHaveURL(/\/$/)
   await expect(page.getByText('Interface ready')).toBeVisible()
-  await expect(page.getByTestId('composer')).toBeVisible()
+  await expect(page.locator('.composer-shell')).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Message' })).toBeVisible()
 })

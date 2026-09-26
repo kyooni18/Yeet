@@ -139,6 +139,14 @@ pub(super) fn summarize_cache_events(content: &str) -> Value {
     let mut new_visible_tool_result_chars = 0u64;
     let mut max_new_visible_tool_result_chars = 0u64;
 
+    let mut max_turn_cumulative_input_tokens = 0u64;
+    let mut max_turn_cost_equivalent_input_tokens = 0u64;
+    let mut max_turn_cumulative_request_chars = 0u64;
+    let mut max_turn_rollovers = 0u64;
+    let mut max_search_loaded_tool_count = 0u64;
+    let mut max_window_model_calls = 0u64;
+    let mut budget_stage_counts = BTreeMap::<String, u64>::new();
+
     let mut previous_run_id: Option<String> = None;
     let mut previous_stable_prefix: Option<String> = None;
     let mut previous_tool_schema: Option<String> = None;
@@ -239,6 +247,22 @@ pub(super) fn summarize_cache_events(content: &str) -> Value {
         let cache_write = u64_value(diagnostics.get("cacheWriteInputTokens"));
         let ordinary = u64_value(diagnostics.get("ordinaryInputTokens"));
         let cost_equivalent = u64_value(diagnostics.get("costEquivalentInputTokens"));
+
+        max_turn_cumulative_input_tokens = max_turn_cumulative_input_tokens
+            .max(u64_value(diagnostics.get("turnCumulativeInputTokens")).unwrap_or(0));
+        max_turn_cost_equivalent_input_tokens = max_turn_cost_equivalent_input_tokens
+            .max(u64_value(diagnostics.get("turnCostEquivalentInputTokens")).unwrap_or(0));
+        max_turn_cumulative_request_chars = max_turn_cumulative_request_chars
+            .max(u64_value(diagnostics.get("turnCumulativeRequestChars")).unwrap_or(0));
+        max_turn_rollovers =
+            max_turn_rollovers.max(u64_value(diagnostics.get("turnRolloverCount")).unwrap_or(0));
+        max_search_loaded_tool_count = max_search_loaded_tool_count
+            .max(u64_value(diagnostics.get("searchLoadedToolCount")).unwrap_or(0));
+        max_window_model_calls =
+            max_window_model_calls.max(u64_value(diagnostics.get("windowModelCalls")).unwrap_or(0));
+        if let Some(stage) = diagnostics.get("turnBudgetStage").and_then(Value::as_str) {
+            *budget_stage_counts.entry(stage.to_owned()).or_default() += 1;
+        }
         let provider_cache_diagnostic_type = diagnostics
             .get("providerCacheDiagnosticType")
             .and_then(Value::as_str);
@@ -511,6 +535,32 @@ pub(super) fn summarize_cache_events(content: &str) -> Value {
     put!("telemetryAvailable", attempts > 0);
     put!("turns", seen_runs.len() as u64);
     put!("attempts", attempts);
+
+    put!(
+        "maximumTurnCumulativeInputTokens",
+        (attempts > 0).then_some(max_turn_cumulative_input_tokens)
+    );
+    put!(
+        "maximumTurnCostEquivalentInputTokens",
+        (attempts > 0).then_some(max_turn_cost_equivalent_input_tokens)
+    );
+    put!(
+        "maximumTurnCumulativeRequestChars",
+        (attempts > 0).then_some(max_turn_cumulative_request_chars)
+    );
+    put!(
+        "maximumTurnRollovers",
+        (attempts > 0).then_some(max_turn_rollovers)
+    );
+    put!(
+        "maximumSearchLoadedToolCount",
+        (attempts > 0).then_some(max_search_loaded_tool_count)
+    );
+    put!(
+        "maximumWindowModelCalls",
+        (attempts > 0).then_some(max_window_model_calls)
+    );
+    put!("windowLifecycleStageAttemptCounts", budget_stage_counts);
     put!("toolRounds", seen_tool_rounds.len() as u64);
     let executed_tool_rounds = seen_tool_rounds
         .iter()

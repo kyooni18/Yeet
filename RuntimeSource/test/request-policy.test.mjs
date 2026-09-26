@@ -32,11 +32,9 @@ test("ordinary agent requests default to low effort", () => {
 
 
 test("request capability registry exposes no agent hierarchy marker", () => {
-  const capabilities = createRequestCapabilityRegistry({
-    contextLength: async () => 10_000,
-    complete: async () => ({ text: "" }),
-  });
+  const capabilities = createRequestCapabilityRegistry();
   assert.equal(capabilities.list().some((capability) => capability.id === "lead"), false);
+  assert.equal(capabilities.list().some((capability) => capability.id === "context-mode"), false);
 });
 
 test("reasoning policy preserves explicit options and unsupported providers", () => {
@@ -48,42 +46,4 @@ test("reasoning policy preserves explicit options and unsupported providers", ()
 
   const anthropic = request("anthropic/claude-sonnet-4-5", "context-compaction");
   assert.equal(withReasoningPolicy(anthropic), anthropic);
-});
-
-test("context compaction applies the auxiliary reasoning policy before provider dispatch", async () => {
-  const requests = [];
-  const capabilities = createRequestCapabilityRegistry({
-    contextLength: async () => 10_000,
-    complete: async (prepared) => {
-      requests.push(prepared);
-      return {
-        text: JSON.stringify({
-          version: 1,
-          createdAt: "now",
-          goal: null,
-          decisions: [],
-          constraints: [],
-          completed: [],
-          pending: [],
-          files: [],
-          failures: [],
-          summary: "summary",
-        }),
-      };
-    },
-  });
-  const messages = Array.from({ length: 40 }, (_, index) => ({
-    role: index % 2 === 0 ? "user" : "assistant",
-    content: "x".repeat(1_000),
-  }));
-
-  await capabilities.prepare({
-    model: "openai/gpt-5.6",
-    attachedCapabilities: ["context-mode"],
-    messages,
-  });
-
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].metadata?.purpose, "context-compaction");
-  assert.deepEqual(requests[0].providerOptions?.reasoning, { effort: "none", summary: "auto" });
 });

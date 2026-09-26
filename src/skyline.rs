@@ -47,39 +47,6 @@ const WORKER_OPERATIONS: &[&str] = &[
     "status",
 ];
 
-pub(crate) fn direct_mcp_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition::new(
-            "activate_capability",
-            "Attach one explicitly user-invoked lazy Yeet MCP capability by exact capability id. Optional capability-specific state and schemas remain cold until activation.",
-            json!({
-                "type":"object",
-                "properties":{
-                    "capability":{"type":"string","minLength":1},
-                    "explicitUserInvocation":{"type":"boolean"},
-                    "arguments":{"type":"object"}
-                },
-                "required":["capability","explicitUserInvocation"],
-                "additionalProperties":false
-            }),
-        ),
-        ToolDefinition::new(
-            "invoke_capability",
-            "Invoke an already activated lazy Yeet MCP capability through the opaque handle returned by activate_capability.",
-            json!({
-                "type":"object",
-                "properties":{
-                    "handle":{"type":"string","minLength":1},
-                    "operation":{"type":"string","minLength":1},
-                    "arguments":{"type":"object"}
-                },
-                "required":["handle","operation"],
-                "additionalProperties":false
-            }),
-        ),
-    ]
-}
-
 pub(crate) fn tui_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "skyline",

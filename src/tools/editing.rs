@@ -99,6 +99,17 @@ impl ToolRegistry {
                 {
                     object.insert("snapshot".into(), json!(snapshot));
                 }
+                if !is_create
+                    && let Some(snapshot) = object
+                        .get("snapshot")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                    && super::io::is_local_snapshot(&snapshot)
+                {
+                    let daemon_snapshot =
+                        self.rehydrate_local_snapshot(&cache_path, &path, &snapshot, unlimited)?;
+                    object.insert("snapshot".into(), json!(daemon_snapshot));
+                }
                 if !unlimited
                     && !is_create
                     && object.get("snapshot").and_then(Value::as_str).is_none()
@@ -106,6 +117,33 @@ impl ToolRegistry {
                     bail!(
                         "Editing existing file {path} requires fresh read coverage. Call read_file first, then retry apply_file_edits; the runtime attaches the cached snapshot automatically."
                     );
+                }
+                let has_semantic_edits = object
+                    .get("edits")
+                    .and_then(Value::as_array)
+                    .is_some_and(|edits| super::syntax_edit::has_semantic_edits(edits));
+                if has_semantic_edits {
+                    let snapshot_text = if let Some(snapshot) = object
+                        .get("snapshot")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                    {
+                        self.edit_mut()?.snapshot_text(&snapshot).with_context(|| {
+                            format!("load edit snapshot for semantic targeting in {path}")
+                        })?
+                    } else {
+                        std::fs::read_to_string(&path)
+                            .with_context(|| format!("read {path} for semantic targeting"))?
+                    };
+                    let edits = object
+                        .get_mut("edits")
+                        .and_then(Value::as_array_mut)
+                        .expect("semantic edit array exists");
+                    super::syntax_edit::concretize_semantic_edits(
+                        Path::new(&path),
+                        &snapshot_text,
+                        edits,
+                    )?;
                 }
             }
             paths
@@ -146,7 +184,7 @@ impl ToolRegistry {
             changed_paths,
         });
         self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
-        self.externalize_if_large(serde_json::to_value(result)?, 48 * 1024, None)
+        self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
     /// Rejects writes into active Yeet runtime/session state directories.
@@ -216,7 +254,7 @@ impl ToolRegistry {
         read: Option<&ReadResult>,
     ) -> Result<String> {
         let encoded = serde_json::to_string(&value)?;
-        if encoded.len() <= threshold {
+        if encoded.len() <= threshold || !self.artifacts_enabled {
             return Ok(encoded);
         }
         let content = read
@@ -242,17 +280,99 @@ impl ToolRegistry {
         Ok(Value::Object(metadata).to_string())
     }
 
-    /// Returns the newest cached snapshot identifier for one path.
-    fn cached_snapshot(&self, path: &str) -> Option<String> {
-        self.read_cache
+    pub(super) fn record_edit_read_coverage(&mut self, path: &str, snapshot: &str) {
+        let ranges = self
+            .read_cache
             .get(path)
-            .and_then(|entries| entries.last())
-            .map(|entry| entry.snapshot.clone())
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.snapshot == snapshot)
+            .map(|entry| (entry.start, entry.end))
+            .collect::<Vec<_>>();
+        if ranges.is_empty() {
+            return;
+        }
+        let evidence = self
+            .edit_read_coverage
+            .entry(path.to_owned())
+            .or_insert_with(|| EditReadCoverage {
+                snapshot: snapshot.to_owned(),
+                ranges: Vec::new(),
+            });
+        if evidence.snapshot != snapshot {
+            evidence.snapshot = snapshot.to_owned();
+            evidence.ranges.clear();
+        }
+        evidence.ranges.extend(ranges);
+        evidence.ranges = merged_ranges(std::mem::take(&mut evidence.ranges));
+        self.edit_snapshots
+            .insert(path.to_owned(), snapshot.to_owned());
+    }
+
+    fn rehydrate_local_snapshot(
+        &mut self,
+        cache_path: &str,
+        path: &str,
+        snapshot: &str,
+        unsafe_access: bool,
+    ) -> Result<String> {
+        let cached_snapshot = self.cached_snapshot(cache_path).ok_or_else(|| {
+            anyhow!("Snapshot {snapshot} is no longer backed by read_file coverage for {path}; read the file again before editing")
+        })?;
+        if cached_snapshot != snapshot {
+            bail!(
+                "Snapshot {snapshot} is stale for {path}; the newest read snapshot is {cached_snapshot}. Read the file again before editing."
+            );
+        }
+        let current = super::io::local_snapshot_handle_for_path(Path::new(path))?;
+        if current != snapshot {
+            bail!(
+                "File {path} changed after it was read. Call read_file again before applying edits."
+            );
+        }
+        let evidence = self
+            .edit_read_coverage
+            .get(cache_path)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!("Snapshot {snapshot} has no retained read coverage for {path}; read the file again before editing.")
+            })?;
+        if evidence.snapshot != snapshot {
+            bail!("Snapshot {snapshot} is stale for {path}; read the file again before editing.");
+        }
+
+        let mut daemon_snapshot = None::<String>;
+        for (start, end) in evidence.ranges {
+            let read = self
+                .edit_mut()?
+                .read(path, Some(start), Some(end), unsafe_access)?;
+            match daemon_snapshot.as_deref() {
+                Some(existing) if existing != read.snapshot => {
+                    bail!("Edit snapshot changed while rehydrating {path}; read the file again")
+                }
+                Some(_) => {}
+                None => daemon_snapshot = Some(read.snapshot),
+            }
+        }
+        let daemon_snapshot = daemon_snapshot.expect("read coverage is non-empty");
+        self.edit_snapshots
+            .insert(cache_path.to_owned(), daemon_snapshot.clone());
+        Ok(daemon_snapshot)
+    }
+
+    /// Returns the newest snapshot identifier established by read_file.
+    /// This cache is task/edit safety state, not model-visible duplicate coverage.
+    fn cached_snapshot(&self, path: &str) -> Option<String> {
+        self.edit_snapshots.get(path).cloned()
     }
 
     /// Invalidates source/search/list caches affected by known changed paths.
     fn invalidate_workspace_cache_for_paths(&mut self, changed_paths: &HashSet<String>) {
         self.read_cache
+            .retain(|path, _| !changed_paths.contains(path));
+        self.edit_snapshots
+            .retain(|path, _| !changed_paths.contains(path));
+        self.edit_read_coverage
             .retain(|path, _| !changed_paths.contains(path));
         self.searches.clear();
         self.listings.clear();
@@ -263,6 +383,8 @@ impl ToolRegistry {
     /// Invalidates all workspace evidence after a shell mutation with unknown scope.
     pub(super) fn invalidate_workspace_cache(&mut self) {
         self.read_cache.clear();
+        self.edit_snapshots.clear();
+        self.edit_read_coverage.clear();
         self.searches.clear();
         self.listings.clear();
         self.shell_inspections.clear();

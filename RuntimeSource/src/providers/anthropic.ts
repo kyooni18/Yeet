@@ -74,6 +74,22 @@ function mapSystem(
   return [{ type: "text", text: system, cache_control: cacheControl }];
 }
 
+function anthropicToolSchema(input: Record<string, unknown>): Record<string, unknown> {
+  const schema = { ...input };
+  // Anthropic accepts JSON Schema unions below the root, but rejects root-level
+  // oneOf/anyOf/allOf on custom tool input_schema. Yeet validates tool arguments
+  // locally, so keep the descriptive object schema and drop only the unsupported
+  // root combinators instead of weakening nested parameter schemas for Claude.
+  delete schema.oneOf;
+  delete schema.anyOf;
+  delete schema.allOf;
+  if (typeof schema.type !== "string") schema.type = "object";
+  if (schema.type === "object" && (!schema.properties || typeof schema.properties !== "object" || Array.isArray(schema.properties))) {
+    schema.properties = {};
+  }
+  return schema;
+}
+
 function mapTools(
   tools: ProviderCallRequest["tools"],
   deferredTools: NonNullable<ProviderCallRequest["deferredTools"]>,
@@ -83,12 +99,12 @@ function mapTools(
   const loaded = (tools ?? []).map((tool) => ({
     name: tool.name,
     ...(tool.description ? { description: tool.description } : {}),
-    input_schema: tool.inputSchema,
+    input_schema: anthropicToolSchema(tool.inputSchema),
   }));
   const deferred = deferredTools.map((tool) => ({
     name: tool.name,
     ...(tool.description ? { description: tool.description } : {}),
-    input_schema: tool.inputSchema,
+    input_schema: anthropicToolSchema(tool.inputSchema),
     defer_loading: true,
   }));
   const mapped: any[] = [...loaded, ...deferred];

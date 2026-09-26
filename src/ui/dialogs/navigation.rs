@@ -100,7 +100,7 @@ pub(crate) fn draw_models(frame: &mut Frame<'_>, app: &App) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " Search  ",
-                Style::default().fg(theme::accent_warm()).bold(),
+                Style::default().fg(theme::accent()).bold(),
             ),
             Span::styled(query, Style::default().fg(theme::text())),
             Span::styled(
@@ -179,7 +179,7 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
             Line::from(vec![
                 Span::styled(
                     " Goal  ",
-                    Style::default().fg(theme::accent_warm()).bold(),
+                    Style::default().fg(theme::accent()).bold(),
                 ),
                 Span::styled(status, Style::default().fg(theme::text()).bold()),
             ]),
@@ -231,7 +231,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " Search  ",
-                Style::default().fg(theme::accent_warm()).bold(),
+                Style::default().fg(theme::accent()).bold(),
             ),
             Span::styled(filter_label, Style::default().fg(theme::text())),
             Span::styled(
@@ -289,19 +289,19 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
         let title = Line::from(vec![
             Span::styled(
                 format!("{marker} "),
-                Style::default().fg(theme::accent_warm()),
+                Style::default().fg(theme::accent()),
             ),
             Span::styled(
                 truncate_end(&item.session.display_title(), title_budget),
                 Style::default().fg(theme::text()).bold(),
             ),
-            Span::styled(badge, Style::default().fg(theme::accent_warm())),
+            Span::styled(badge, Style::default().fg(theme::accent())),
         ]);
         if !show_details {
             return ListItem::new(title);
         }
         let workspace_style = if item.workspace_current {
-            Style::default().fg(theme::accent_warm())
+            Style::default().fg(theme::accent())
         } else {
             Style::default().fg(theme::muted())
         };

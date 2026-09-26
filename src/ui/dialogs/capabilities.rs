@@ -139,7 +139,7 @@ fn capability_preview(item: &CapabilityToggleItem, streaming: bool) -> Text<'sta
         Line::from(Span::styled(
             "Description",
             Style::default()
-                .fg(theme::accent_warm())
+                .fg(theme::accent())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(item.description.clone()),
@@ -184,7 +184,7 @@ pub(in crate::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " Overview  ",
-                Style::default().fg(theme::accent_warm()).bold(),
+                Style::default().fg(theme::accent()).bold(),
             ),
             Span::styled(
                 capability_summary(app),
@@ -211,7 +211,7 @@ pub(in crate::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " Search  ",
-                Style::default().fg(theme::accent_warm()).bold(),
+                Style::default().fg(theme::accent()).bold(),
             ),
             Span::styled(filter_text, Style::default().fg(theme::text())),
             Span::styled(
@@ -273,7 +273,7 @@ pub(in crate::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
             Span::styled(fit_cell(status, status_width), status_style),
             Span::styled(
                 fit_cell(capability_kind_label(&item.kind), kind_width),
-                Style::default().fg(theme::accent_warm()),
+                Style::default().fg(theme::accent()),
             ),
             Span::styled(
                 fit_cell(&item.name, name_width),

@@ -166,7 +166,6 @@ pub(super) fn append_dynamic_turn_checkpoints(
     provenance: Option<Message>,
     last_provenance_checkpoint: &mut Option<String>,
     retry_instruction: &mut Option<String>,
-    working_state: Option<String>,
     final_consistency_pending: &mut bool,
 ) {
     if let Some(provenance) = provenance
@@ -177,13 +176,16 @@ pub(super) fn append_dynamic_turn_checkpoints(
         history.push(provenance);
     }
     if let Some(correction) = retry_instruction.take() {
-        history.push(Message::user(correction).request_only());
-    }
-    if let Some(state) = working_state {
-        history.push(Message::system(format!("Internal working evidence state for the current user turn only:\n{state}\nReuse covered evidence. Re-read only genuinely missing source; use refresh only to verify a possibly changed edit anchor.")).request_only());
+        let duplicate = history.iter().rev().any(|message| {
+            message.request_only == Some(true)
+                && message.content.as_deref() == Some(correction.as_str())
+        });
+        if !duplicate {
+            history.push(Message::system(correction).request_only());
+        }
     }
     if *final_consistency_pending {
-        history.push(Message::system("Internal final consistency pass for the current user turn only: the requested workspace write succeeded and write validation passed. Do not inspect unrelated repository state. Check the produced deliverable against the request and evidence already collected. If a correction is required, use only apply_file_edits; otherwise provide the final answer now.").request_only());
+        history.push(Message::system("Coordinator state: the requested workspace write succeeded and write validation passed. The current result is eligible for a final consistency review against the user's request and the evidence already collected.").request_only());
         *final_consistency_pending = false;
     }
 }
@@ -240,7 +242,7 @@ pub(super) fn should_inherit_implementation_turn(input: &str, history: &[Message
     let previous_requested_implementation = history[previous_user_index]
         .content
         .as_deref()
-        .is_some_and(super::policy::looks_like_implementation_request);
+        .is_some_and(super::policy::looks_like_coding_implementation_request);
     let previous_structured_edit = history[previous_user_index + 1..current_index]
         .iter()
         .filter(|message| message.role == MessageRole::Assistant)
@@ -336,4 +338,47 @@ pub(super) fn attached_web_search_capability_result(
         _ => {}
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identical_retry_directives_are_not_replayed_in_one_window() {
+        let mut history = Vec::new();
+        let mut provenance = None;
+        let mut retry = Some("same correction".to_owned());
+        let mut final_consistency = false;
+
+        append_dynamic_turn_checkpoints(
+            &mut history,
+            None,
+            &mut provenance,
+            &mut retry,
+            &mut final_consistency,
+        );
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].role, MessageRole::System);
+
+        retry = Some("same correction".to_owned());
+        append_dynamic_turn_checkpoints(
+            &mut history,
+            None,
+            &mut provenance,
+            &mut retry,
+            &mut final_consistency,
+        );
+        assert_eq!(history.len(), 1);
+
+        retry = Some("different correction".to_owned());
+        append_dynamic_turn_checkpoints(
+            &mut history,
+            None,
+            &mut provenance,
+            &mut retry,
+            &mut final_consistency,
+        );
+        assert_eq!(history.len(), 2);
+    }
 }

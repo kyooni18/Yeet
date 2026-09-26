@@ -43,12 +43,6 @@ pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
         tools: &["computer_use", "computer_use_reset"],
     },
     BuiltinCapabilityDescriptor {
-        id: "builtin:artifacts",
-        name: "Artifacts",
-        description: "Inspect large tool results externalized as artifacts with read_artifact/search_artifact instead of replaying the original expensive command or read.",
-        tools: &["artifact_info", "read_artifact", "search_artifact"],
-    },
-    BuiltinCapabilityDescriptor {
         id: "builtin:document-read",
         name: "Document Read",
         description: "Extract readable content from documents without treating them as source code. Supports PDF, DOCX, spreadsheets, CSV/TSV, JSON, Markdown, and UTF-8 text, with large content stored as typed artifacts.",
@@ -118,7 +112,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ToolDefinition::new(
             "read_document",
             "Extract local document content (PDF, DOCX, spreadsheets, CSV/TSV, JSON, Markdown, markup/config text). Full output is stored as a typed artifact for bounded follow-up reads.",
-            json!({"type":"object","properties":{"path":{"type":"string"},"maxChars":{"type":"integer","minimum":1000,"maximum":64000}},"required":["path"],"additionalProperties":false}),
+            json!({"type":"object","properties":{"path":{"type":"string"},"maxChars":{"type":"integer","minimum":1000,"maximum":16000}},"required":["path"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "analyze_data",
@@ -167,12 +161,12 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command from the session cwd by default. workingDirectory may target any active context root; other locations follow approval rules. For builds/tests likely to outlive a normal tool turn, prefer background=true and then shell_job action=wait instead of repeated status checks. Background jobs default to a 4-hour execution window; set timeoutSeconds explicitly for other long jobs. Sandboxed commands still obey the workspace wall-time policy. Unlimited mode uses normal user access. mode=actor summarizes builds/tests/noisy output and stores the bounded captured log.",
+            "Run a shell command from the session cwd. On macOS this is zsh -f: unmatched globs are errors, so optional glob paths need guarding or quoting. Broad recursive scans may exceed foreground timeouts. Use background=true for long work, then shell_job action=wait. mode=actor summarizes noisy output. Paths outside active roots follow approval rules.",
             json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "shell_job",
-            "Check, wait for, list, stop, or forget detached shell jobs. action=wait suspends the model-side tool call until the job terminates without model polling. Set reportEverySeconds only when periodic model wakeups are wanted; cadence stays anchored across repeated waits and interval wakeups include only bounded live stdout/stderr tails plus byte counts. Running is not success; reuse jobId instead of rerunning. Forget only completed jobs.",
+            "Manage detached shell jobs: check, wait, list, stop, or forget. action=wait suspends until termination without polling. Set reportEverySeconds for periodic wakeups. Reuse jobId; forget only completed jobs.",
             json!({"type":"object","properties":{"action":{"type":"string","enum":["check","wait","list","stop","forget"]},"jobId":{"type":"string"},"reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400}},"required":["action"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
@@ -201,7 +195,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "apply_file_edits",
-            "Apply atomic structured file edits. Relative paths resolve from the session cwd. Use JSON edit objects, never patch strings. replace/delete use range:{start,end}; insert uses at:{kind:start|end|before|after,line?}. The runtime binds the cached read snapshot and validates stale edits; reread the necessary range if it rejects an edit. Sandboxed existing files require read_file coverage; creates do not. Paths outside active context roots follow approval rules.",
+            "Apply snapshot-safe structured file edits. Prefer semantic edits for named declarations when supported: replaceNode/replaceBody/deleteNode/insertBefore/insertAfter use target:{name,kind?,container?,signature?} and resolve deterministically against the read snapshot. Semantic targeting is never fuzzy; ambiguous targets fail. Range replace/delete and line insert remain the fallback. replaceBody text replaces the language body node itself, including braces/delimiters where applicable. The runtime binds cached snapshots and validates stale edits/read coverage. Paths outside active context roots follow approval rules.",
             json!({
                 "type":"object",
                 "properties":{
@@ -217,7 +211,12 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                                         "oneOf":[
                                             {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
                                             {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false}
+                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"replaceNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"replaceBody"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"deleteNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false}},"required":["kind","target"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"insertBefore"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"insertAfter"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false}
                                         ]
                                     }
                                 },
@@ -268,8 +267,8 @@ pub(super) fn web_search_tool_definition() -> ToolDefinition {
         json!({
             "type":"object",
             "properties":{
-                "query":{"type":"string","description":"One narrow search query. Prefer queries when multiple complementary searches are already foreseeable."},
-                "queries":{"type":"array","description":"Batch 2-4 complementary searches that are already inferable from the request or current evidence in one tool call; use later searches only for concrete new gaps.","items":{"type":"string"},"minItems":1,"maxItems":4},
+                "query":{"type":"string"},
+                "queries":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":4},
                 "maxResults":{"type":"integer","minimum":1,"maximum":8},
                 "backend":{"type":"string","enum":["auto","agent-reach","searxng"]},
                 "language":{"type":"string"},
@@ -301,42 +300,98 @@ pub(super) fn web_read_tool_definition() -> ToolDefinition {
     )
 }
 
-/// Native Yeet tools exported directly over MCP, excluding lazy extensions.
+fn mcp_read_file_tool_definition() -> ToolDefinition {
+    ToolDefinition::new(
+        "read_file",
+        "Read one UTF-8 file range with line/hash edit anchors and a snapshot. MCP intentionally permits only one file per call. Relative paths resolve from the selected workspace; reuse narrow ranges and use refresh=true only when fresh contents are required.",
+        json!({
+            "type":"object",
+            "properties":{
+                "path":{"type":"string"},
+                "startLine":{"type":"integer","minimum":1},
+                "endLine":{"type":"integer","minimum":1},
+                "refresh":{"type":"boolean"}
+            },
+            "required":["path"],
+            "additionalProperties":false
+        }),
+    )
+}
+
+fn mcp_run_shell_tool_definition() -> ToolDefinition {
+    ToolDefinition::new(
+        "run_shell",
+        "Run a shell command or manage a detached shell job through one MCP tool. Supply command for execution. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
+        json!({
+            "type":"object",
+            "properties":{
+                "command":{"type":"string"},
+                "purpose":{"type":"string"},
+                "workingDirectory":{"type":"string"},
+                "mode":{"type":"string","enum":["auto","direct","actor"]},
+                "timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},
+                "background":{"type":"boolean"},
+                "job":{
+                    "type":"object",
+                    "properties":{
+                        "action":{"type":"string","enum":["check","wait","list","stop","forget"]},
+                        "jobId":{"type":"string"},
+                        "reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400}
+                    },
+                    "required":["action"],
+                    "additionalProperties":false
+                }
+            },
+            "anyOf":[{"required":["command"]},{"required":["job"]}],
+            "additionalProperties":false
+        }),
+    )
+}
+
+fn mcp_web_tool_definition() -> ToolDefinition {
+    ToolDefinition::new(
+        "web",
+        "Search the live web or read one source through one MCP tool. Use action=search with query or queries. Use action=read with a URL returned by a prior search in the same research task.",
+        json!({
+            "type":"object",
+            "properties":{
+                "action":{"type":"string","enum":["search","read"]},
+                "query":{"type":"string"},
+                "queries":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":4},
+                "maxResults":{"type":"integer","minimum":1,"maximum":8},
+                "backend":{"type":"string","enum":["auto","agent-reach","searxng"]},
+                "language":{"type":"string"},
+                "category":{"type":"string"},
+                "timeRange":{"type":"string","enum":["day","month","year"]},
+                "safeSearch":{"type":"integer","minimum":0,"maximum":2},
+                "page":{"type":"integer","minimum":1,"maximum":10},
+                "url":{"type":"string","minLength":1},
+                "maxChars":{"type":"integer","minimum":2000,"maximum":4000}
+            },
+            "required":["action"],
+            "oneOf":[
+                {"properties":{"action":{"const":"search"}},"anyOf":[{"required":["query"]},{"required":["queries"]}]},
+                {"properties":{"action":{"const":"read"}},"required":["url"]}
+            ],
+            "additionalProperties":false
+        }),
+    )
+}
+
+/// Minimal native Yeet tool surface exported directly over MCP.
 pub(crate) fn direct_mcp_tool_definitions() -> Vec<ToolDefinition> {
-    let mut tools = base_tool_definitions()
-        .into_iter()
-        .filter(|tool| {
-            !matches!(
-                tool.name.as_str(),
-                "find_capabilities"
-                    | "activate_capability"
-                    | "request_shell_permission"
-                    | "deploy_agent"
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut aliases = Vec::new();
-    if let Some(tool) = tools
-        .iter()
-        .find(|tool| tool.name == "computer_use")
-        .cloned()
-    {
-        let mut alias = tool;
-        alias.name = "desktop_control".into();
-        aliases.push(alias);
-    }
-    if let Some(tool) = tools
-        .iter()
-        .find(|tool| tool.name == "computer_use_reset")
-        .cloned()
-    {
-        let mut alias = tool;
-        alias.name = "desktop_control_reset".into();
-        aliases.push(alias);
-    }
-    tools.extend(aliases);
-    tools.push(web_search_tool_definition());
-    tools.push(web_read_tool_definition());
-    tools.extend(crate::memory::tool_definitions());
-    tools
+    let base = base_tool_definitions();
+    let definition = |name: &str| {
+        base.iter()
+            .find(|tool| tool.name == name)
+            .cloned()
+            .expect("core MCP tool definition")
+    };
+    vec![
+        mcp_read_file_tool_definition(),
+        definition("apply_file_edits"),
+        mcp_run_shell_tool_definition(),
+        definition("computer_use"),
+        mcp_web_tool_definition(),
+    ]
 }

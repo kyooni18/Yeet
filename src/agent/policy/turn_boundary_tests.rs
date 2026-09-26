@@ -233,20 +233,20 @@ fn research_budget_stops_simple_queries_and_preserves_deep_research_headroom() {
     );
 
     let mut simple = ResearchBudget::for_input("recommend some KSP mods");
-    simple.observe_tool("web_read", true);
-    simple.observe_tool("web_read", true);
+    simple.observe_tool(&web_read_call(0), "", true);
+    simple.observe_tool(&web_read_call(1), "", true);
     assert!(!simple.sufficient(2));
-    simple.observe_tool("web_read", true);
+    simple.observe_tool(&web_read_call(2), "", true);
     assert!(simple.sufficient(2));
     assert!(ResearchBudget::for_input("recommend some KSP mods").sufficient(6));
 
     let mut deep = ResearchBudget::for_input("deep research all KSP performance mods");
-    for _ in 0..3 {
-        deep.observe_tool("web_read", true);
+    for index in 0..3 {
+        deep.observe_tool(&web_read_call(index), "", true);
     }
     assert!(!deep.sufficient(4));
-    for _ in 0..3 {
-        deep.observe_tool("web_read", true);
+    for index in 3..6 {
+        deep.observe_tool(&web_read_call(index), "", true);
     }
     assert!(deep.sufficient(4));
     assert!(ResearchBudget::for_input("deep research all KSP performance mods").sufficient(10));
@@ -298,4 +298,12 @@ fn research_history_is_token_bounded_but_keeps_more_short_context() {
             .map(|bytes| (bytes.len() as u64).div_ceil(3) <= 12_000)
             .unwrap()
     );
+}
+
+fn web_read_call(index: usize) -> ToolCall {
+    ToolCall {
+        id: format!("read-{index}"),
+        name: "web_read".into(),
+        arguments: json!({ "url": format!("https://example.com/source-{index}") }),
+    }
 }

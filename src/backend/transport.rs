@@ -5,10 +5,39 @@
 
 use serde_json::Value;
 
+use super::BackendEvent;
 use crate::{
     core::{ToolCall, Usage},
-    model::{BridgeEnvelope, BridgeState},
+    harness::Harness,
+    model::{BridgeEnvelope, BridgeState, FrontendCommand},
 };
+
+/// Compatibility adapter retained for existing TUI code. New hosts should use
+/// [`crate::harness::Harness`] directly.
+pub struct Backend {
+    harness: Harness,
+}
+
+impl Backend {
+    pub fn spawn() -> anyhow::Result<Self> {
+        Ok(Self {
+            harness: Harness::embedded(std::env::current_dir()?)?,
+        })
+    }
+
+    pub fn spawn_remote() -> anyhow::Result<Self> {
+        // Legacy remote rendering also stays inside the owning Yeet process.
+        Self::spawn()
+    }
+
+    pub fn send(&mut self, command: FrontendCommand) -> anyhow::Result<()> {
+        self.harness.send(command)
+    }
+
+    pub fn try_recv(&mut self) -> Option<BackendEvent> {
+        self.harness.try_recv().map(BackendEvent::Envelope)
+    }
+}
 
 /// Wraps a full bridge state in the standard state envelope.
 pub(super) fn state_envelope(state: &BridgeState) -> BridgeEnvelope {

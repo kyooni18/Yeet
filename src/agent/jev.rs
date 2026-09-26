@@ -110,39 +110,14 @@ impl LoopAdvice {
         if !self.enforced() {
             return None;
         }
-        let behavior = match self.decision.as_str() {
-            "answer_now" if self.force_tool_free() => {
-                "The requested outcome is already sufficiently supported. Return the best answer from the evidence present without another tool call."
-            }
-            "answer_now" => {
-                "Current evidence may be enough, but do not stop merely because a partial useful answer is possible. Use another available tool when it would materially improve correctness, completeness, execution, or verification."
-            }
-            "ask_user" if self.force_tool_free() => {
-                "A genuinely human-only input or permission is required. Ask for exactly that missing input rather than calling another tool."
-            }
-            "ask_user" => {
-                "Ask the user only if the missing requirement is genuinely human-only. Otherwise continue with the available tools to resolve it yourself."
-            }
-            "stop" if self.force_tool_free() => {
-                "Stop safely and explain the concrete blocker or completion reason; further tool calls would not make useful progress."
-            }
-            "stop" => {
-                "Stop only if the task is actually complete, unsafe, or blocked. If an available tool can still make material progress, use it instead."
-            }
-            "use_read_tool" => {
-                "Prefer read-only/context inspection for the next step. Execution or mutation tools remain appropriate when the evidence shows they are needed to complete or verify the user's task."
-            }
-            "use_execute_tool" => {
-                "A command, validation, probe, or other executable tool may be appropriate. Obey Yeet permissions and prefer the least invasive action."
-            }
-            "use_mutating_tool" => {
-                "A mutation-capable tool may be appropriate only when the task requires it. Obey Yeet permissions, make the smallest coherent change, and verify it."
-            }
-            _ => "Continue under the normal Yeet tool policy.",
-        };
         Some(format!(
-            "Internal Jev loop policy: {behavior} Decision={}.",
+            "Jev loop state: decision={}; action={}; confidence={:.3}; probability={:.3}; needsTool={:.3}; destructiveRisk={:.3}.",
             self.decision,
+            self.action.as_str(),
+            self.confidence,
+            self.probability,
+            self.needs_tool,
+            self.destructive_risk,
         ))
     }
 
@@ -186,6 +161,7 @@ pub(super) struct LoopInput<'a> {
     pub research: Option<ResearchLoopState>,
     pub retry_instruction: Option<&'a str>,
     pub recent_evidence: &'a [String],
+    pub consult_jev: bool,
 }
 
 pub(super) struct LoopPolicy {
@@ -195,6 +171,8 @@ pub(super) struct LoopPolicy {
     pub callable_names: HashSet<String>,
     pub instruction: Option<String>,
     pub advice: Option<LoopAdvice>,
+    pub jev_attempted: bool,
+    pub jev_request_chars: usize,
 }
 
 pub(super) fn apply_loop_policy<Defer, ReadOnly>(
@@ -234,7 +212,11 @@ where
         .iter()
         .map(|tool| tool.name.clone())
         .collect::<Vec<_>>();
-    let advice = advise_loop(
+    let LoopAdviceEvaluation {
+        advice,
+        attempted: jev_attempted,
+        request_chars: jev_request_chars,
+    } = advise_loop(
         bridge,
         cancel,
         input,
@@ -271,6 +253,8 @@ where
         callable_names,
         instruction,
         advice,
+        jev_attempted,
+        jev_request_chars,
     }
 }
 
@@ -292,7 +276,13 @@ pub(super) fn append_loop_instruction(
 pub(super) fn write_loop_metadata(
     metadata: &mut HashMap<String, String>,
     advice: Option<&LoopAdvice>,
+    jev_attempted: bool,
+    jev_request_chars: usize,
 ) {
+    metadata.insert("jevLoopConsulted".into(), jev_attempted.to_string());
+    if jev_attempted {
+        metadata.insert("jevLoopRequestChars".into(), jev_request_chars.to_string());
+    }
     if let Some(advice) = advice {
         advice.write_metadata(metadata);
     }
@@ -302,15 +292,40 @@ pub(super) fn forces_tool_free(advice: Option<&LoopAdvice>) -> bool {
     advice.is_some_and(LoopAdvice::force_tool_free)
 }
 
+const LOOP_ADVICE_INTERVAL: usize = 4;
+
+fn loop_advice_due(model_attempts: usize, consecutive_no_progress: usize) -> bool {
+    consecutive_no_progress >= 2
+        && model_attempts >= LOOP_ADVICE_INTERVAL
+        && model_attempts.is_multiple_of(LOOP_ADVICE_INTERVAL)
+}
+
+#[derive(Default)]
+struct LoopAdviceEvaluation {
+    advice: Option<LoopAdvice>,
+    attempted: bool,
+    request_chars: usize,
+}
+
 fn advise_loop(
     bridge: &BridgeClient,
     cancel: &AtomicBool,
     input: LoopInput<'_>,
     available_tools: &[String],
     deferred_tools: &[String],
-) -> Option<LoopAdvice> {
-    let mode = LoopMode::from_env()?;
-    let (provider, model) = provider_config(bridge)?;
+) -> LoopAdviceEvaluation {
+    if !input.consult_jev {
+        return LoopAdviceEvaluation::default();
+    }
+    let Some(mode) = LoopMode::from_env() else {
+        return LoopAdviceEvaluation::default();
+    };
+    if !loop_advice_due(input.model_attempts, input.consecutive_no_progress) {
+        return LoopAdviceEvaluation::default();
+    }
+    let Some((provider, model)) = provider_config(bridge) else {
+        return LoopAdviceEvaluation::default();
+    };
     let state = json!({
         "goal": truncate(input.goal, 2_000),
         "profile": input.profile,
@@ -375,10 +390,26 @@ fn advise_loop(
         }
     });
 
-    let result = bridge
-        .jev_evaluate_cancellable(Some(&provider), Some(&model), state, questions, cancel)
-        .ok()?;
-    parse_loop_advice(&result, mode)
+    let request_chars = serde_json::to_vec(&json!({
+        "provider": &provider,
+        "model": &model,
+        "state": &state,
+        "questions": &questions,
+    }))
+    .map(|serialized| serialized.len())
+    .unwrap_or_default();
+    match bridge.jev_evaluate_cancellable(Some(&provider), Some(&model), state, questions, cancel) {
+        Ok(result) => LoopAdviceEvaluation {
+            advice: parse_loop_advice(&result, mode),
+            attempted: true,
+            request_chars,
+        },
+        Err(_) => LoopAdviceEvaluation {
+            advice: None,
+            attempted: true,
+            request_chars,
+        },
+    }
 }
 
 fn retain_read_only_tools<F>(
@@ -420,6 +451,13 @@ fn builtin_read_only_tool(name: &str) -> bool {
     )
 }
 
+#[derive(Default)]
+pub(super) struct AdviceEvaluation {
+    pub advice: Option<Advice>,
+    pub attempted: bool,
+    pub request_chars: usize,
+}
+
 pub(super) fn advise(
     bridge: &BridgeClient,
     cancel: &AtomicBool,
@@ -427,8 +465,10 @@ pub(super) fn advise(
     failed_tool: &str,
     failure: &str,
     recent_evidence: &[String],
-) -> Option<Advice> {
-    let (provider, model) = provider_config(bridge)?;
+) -> AdviceEvaluation {
+    let Some((provider, model)) = provider_config(bridge) else {
+        return AdviceEvaluation::default();
+    };
     let state = json!({
         "goal": truncate(goal, 2_000),
         "failed_tool": failed_tool,
@@ -457,10 +497,39 @@ pub(super) fn advise(
         }
     });
 
-    let result = bridge
-        .jev_evaluate_cancellable(Some(&provider), Some(&model), state, questions, cancel)
-        .ok()?;
-    let answers = result.get("answers").unwrap_or(&result);
+    let request_chars = serde_json::to_vec(&json!({
+        "provider": &provider,
+        "model": &model,
+        "state": &state,
+        "questions": &questions,
+    }))
+    .map(|serialized| serialized.len())
+    .unwrap_or_default();
+    let result = match bridge.jev_evaluate_cancellable(
+        Some(&provider),
+        Some(&model),
+        state,
+        questions,
+        cancel,
+    ) {
+        Ok(result) => result,
+        Err(_) => {
+            return AdviceEvaluation {
+                advice: None,
+                attempted: true,
+                request_chars,
+            };
+        }
+    };
+    AdviceEvaluation {
+        advice: parse_failure_advice(&result),
+        attempted: true,
+        request_chars,
+    }
+}
+
+fn parse_failure_advice(result: &Value) -> Option<Advice> {
+    let answers = result.get("answers").unwrap_or(result);
     let next_step = answers.get("next_step")?;
     let decision = answer_choice(next_step)?.to_owned();
     let confidence = answer_f64(next_step, &["confidence"]).unwrap_or(0.0);
@@ -634,12 +703,10 @@ mod tests {
         let advice = parse_loop_advice(&result, LoopMode::Enforce).expect("advice");
         assert_eq!(advice.action, LoopAction::NoTools);
         assert!(advice.force_tool_free());
-        assert!(
-            advice
-                .instruction()
-                .unwrap()
-                .contains("without another tool call")
-        );
+        let state = advice.instruction().unwrap();
+        assert!(state.contains("decision=answer_now"));
+        assert!(state.contains("action=no_tools"));
+        assert!(!state.contains("without another tool call"));
     }
 
     #[test]
@@ -656,12 +723,10 @@ mod tests {
         });
         let advice = parse_loop_advice(&result, LoopMode::Enforce).expect("advice");
         assert!(!advice.force_tool_free());
-        assert!(
-            advice
-                .instruction()
-                .unwrap()
-                .contains("materially improve correctness")
-        );
+        let state = advice.instruction().unwrap();
+        assert!(state.contains("decision=answer_now"));
+        assert!(state.contains("action=no_tools"));
+        assert!(!state.contains("Prefer answering now"));
     }
 
     #[test]
@@ -721,5 +786,15 @@ mod tests {
             filtered,
             vec!["read_file", "context_history", "custom_readonly_extension"]
         );
+    }
+    #[test]
+    fn loop_advice_is_sparse_until_progress_stalls() {
+        assert!(!loop_advice_due(1, 0));
+        assert!(!loop_advice_due(2, 2));
+        assert!(!loop_advice_due(4, 0));
+        assert!(!loop_advice_due(4, 1));
+        assert!(loop_advice_due(4, 2));
+        assert!(!loop_advice_due(6, 3));
+        assert!(loop_advice_due(8, 2));
     }
 }

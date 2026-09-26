@@ -1,71 +1,70 @@
 import { expect, test, type Page } from '@playwright/test'
 import { installMockRemote } from './mockRemote'
 
+type Hooks = {
+  __yeetSent: Array<{ command?: { type?: string; session_id?: string } }>
+}
+
+async function openSessions(page: Page) {
+  await page.getByRole('button', { name: 'Open sidebar' }).click()
+  const sidebar = page.locator('.remote-sidebar')
+  await expect(sidebar).toBeVisible()
+  return sidebar
+}
+
+async function sentCommands(page: Page) {
+  return page.evaluate(() => (window as unknown as Hooks).__yeetSent)
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockRemote(page)
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-async function currentSessionSurface(page: Page) {
-  if ((page.viewportSize()?.width ?? 1000) < 900) {
-    await page.getByTestId('open-sessions').click()
-    const drawer = page.getByTestId('session-drawer')
-    await expect(drawer).toBeVisible()
-    return { surface: drawer.locator('.session-sidebar.is-drawer'), drawer }
-  }
-  return { surface: page.locator('.desktop-session-sidebar'), drawer: null }
-}
-
-async function sentCommands(page: Page) {
-  return page.evaluate(() => (
-    (window as unknown as { __yeetSent: Array<{ command?: { type?: string; session_id?: string } }> }).__yeetSent
-  ))
-}
-
-test('current-workspace saved chats are unavailable offline without dismissing navigation', async ({ page }) => {
-  const { surface, drawer } = await currentSessionSurface(page)
-  const target = surface.locator('[data-session-id="session-b"]')
+test('saved chats are unavailable offline without dismissing the drawer', async ({ page }) => {
+  const sidebar = await openSessions(page)
+  const target = sidebar.locator('[data-session-id="session-b"]')
   await expect(target).toBeEnabled()
 
   await page.evaluate(() => window.dispatchEvent(new Event('offline')))
   await expect(target).toBeDisabled()
-  if (drawer) await expect(drawer).toBeVisible()
+  await expect(sidebar).toBeVisible()
 
   await expect.poll(async () => sentCommands(page)).not.toEqual(expect.arrayContaining([
     expect.objectContaining({ command: expect.objectContaining({ type: 'load_session', session_id: 'session-b' }) }),
   ]))
 })
 
-
-test('activating the already-current chat does not reload or interrupt it', async ({ page }) => {
-  const { surface, drawer } = await currentSessionSurface(page)
-  const current = surface.locator('[data-session-id="session-a"]')
+test('activating the already-current chat does not reload it', async ({ page }) => {
+  const sidebar = await openSessions(page)
+  const current = sidebar.locator('[data-session-id="session-a"]')
   await expect(current).toHaveAttribute('aria-current', 'page')
 
-  await page.evaluate(() => {
-    ;(window as unknown as { __yeetEmit: (message: Record<string, unknown>) => void }).__yeetEmit({
-      type: 'state_update', version: 1, sequence: 2, revision: 2,
-      patch: { is_streaming: true, active_run_id: 'run-current-session' },
-    })
-  })
-  const loadCount = () => sentCommands(page).then((items) => items.filter((item) => item.command?.type === 'load_session').length)
+  const loadCount = () => sentCommands(page).then((items) =>
+    items.filter((item) => item.command?.type === 'load_session').length
+  )
   const before = await loadCount()
-
   await current.click()
 
   await expect.poll(loadCount).toBe(before)
-  if (drawer) await expect(drawer).toBeHidden()
+  const desktopDocked = await page.evaluate(() =>
+    matchMedia('(min-width: 1000px) and (hover: hover) and (pointer: fine)').matches
+  )
+  if (desktopDocked) await expect(sidebar).toHaveClass(/is-open/)
+  else await expect(sidebar).not.toHaveClass(/is-open/)
 })
 
-test('successful mobile saved-chat navigation still sends and dismisses the drawer', async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1000) >= 900)
-
-  const { surface, drawer } = await currentSessionSurface(page)
-  await surface.locator('[data-session-id="session-b"]').click()
+test('saved-chat navigation sends once and keeps the PC dock available', async ({ page }) => {
+  const sidebar = await openSessions(page)
+  await sidebar.locator('[data-session-id="session-b"]').click()
 
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
     expect.objectContaining({ command: expect.objectContaining({ type: 'load_session', session_id: 'session-b' }) }),
   ]))
-  await expect(drawer!).toBeHidden()
+  const desktopDocked = await page.evaluate(() =>
+    matchMedia('(min-width: 1000px) and (hover: hover) and (pointer: fine)').matches
+  )
+  if (desktopDocked) await expect(sidebar).toHaveClass(/is-open/)
+  else await expect(sidebar).not.toHaveClass(/is-open/)
 })

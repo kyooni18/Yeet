@@ -12,6 +12,5 @@ pub(super) const IMPLEMENTATION_INSPECTION_CHECKPOINT: usize = 3;
 pub(super) const COMPLETION_GATE_REPAIR_LIMIT: usize = 2;
 pub(super) const MODEL_ATTEMPT_TIMEOUT_MS: u64 = 15 * 60 * 1_000;
 pub(super) const GOAL_CONTINUATION_DELAY: Duration = Duration::from_secs(1);
-pub(super) const GOAL_CONTINUATION_PROMPT: &str =
-    "Resume the existing working state after an interruption. Do not restart completed work.";
-pub(super) const GOAL_JOB_INSTRUCTION: &str = "Goal mode is a continuous job, not a sequence of normal chat completions. Work toward the user's goal using concrete actions and verification. Preserve completed work and choose the next unfinished requirement. Do not produce a normal final-answer summary after each work unit: a tool-free response is a checkpoint for the independent goal judge, not job completion. At checkpoints report only new evidence or a concrete blocker. The runtime owns completion; do not repeat unchanged work or invent additional scope. Permission, cancellation, and safety limits still apply.";
+pub(super) const GOAL_CONTINUATION_PROMPT: &str = "Goal runtime state: an interrupted continuous job is resuming with its existing working state; previously completed work remains part of that state.";
+pub(super) const GOAL_JOB_INSTRUCTION: &str = "Goal runtime state: this request is running as a continuous job. Tool-free responses are checkpoints evaluated by the independent goal judge, and runtime completion depends on concrete evidence for the user's requirements. Permission, cancellation, and safety limits remain in force.";

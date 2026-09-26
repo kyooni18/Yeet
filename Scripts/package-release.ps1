@@ -18,26 +18,17 @@ $Name = "yeet-$Version-$Target"
 $Out = if ($env:YEET_PACKAGE_OUT) { $env:YEET_PACKAGE_OUT } else { Join-Path $Root "target\packages" }
 $StageBase = Join-Path $Root "target\package-stage"
 $Stage = Join-Path $StageBase $Name
-$RuntimeBuild = Join-Path $Root "target\release-runtime-$Target"
-$RuntimeDist = Join-Path $RuntimeBuild "dist"
+$RuntimeDist = Join-Path $Root "RuntimeSource\dist"
 
 Push-Location $Root
 try {
     npm --prefix RuntimeSource ci
     if ($LASTEXITCODE -ne 0) { throw "RuntimeSource dependency install failed." }
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        & pnpm --dir (Join-Path $Root "web") install --frozen-lockfile
-    } elseif (Get-Command corepack -ErrorAction SilentlyContinue) {
-        & corepack pnpm --dir (Join-Path $Root "web") install --frozen-lockfile
-    } else {
-        throw "pnpm or Corepack is required to install the locked Remote WebUI dependencies."
-    }
+    npm --prefix web ci
     if ($LASTEXITCODE -ne 0) { throw "Remote WebUI dependency install failed." }
-
-    $env:YEET_RUNTIME_OUT_DIR = $RuntimeDist
-    & (Join-Path $Root "Scripts\rebuild-runtime.ps1")
+    npm --prefix RuntimeSource run build
     if ($LASTEXITCODE -ne 0) { throw "Runtime build failed." }
-    & (Join-Path $Root "Scripts\build-remote-web.ps1")
+    npm --prefix web run build
     if ($LASTEXITCODE -ne 0) { throw "Remote WebUI build failed." }
     cargo build --release
     if ($LASTEXITCODE -ne 0) { throw "Rust release build failed." }
@@ -73,7 +64,6 @@ try {
     if (-not (Test-Path $BundledPdfSkill -PathType Leaf)) {
         throw "Staged release is missing bundled PDF skill."
     }
-    Copy-Item -Force "Scripts\install-release.ps1" (Join-Path $Stage "install.ps1")
     if (Test-Path "docs\PLATFORM_SUPPORT.md") {
         New-Item -ItemType Directory -Force (Join-Path $Stage "docs") | Out-Null
         Copy-Item -Force "docs\PLATFORM_SUPPORT.md" (Join-Path $Stage "docs\PLATFORM_SUPPORT.md")

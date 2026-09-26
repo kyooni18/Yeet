@@ -72,9 +72,14 @@ pub(super) fn agent_event_log_value(event: &AgentEvent) -> Option<Value> {
             "call":call,
             "reason":reason,
         })),
-        AgentEvent::AuxiliaryUsage(usage) => {
-            Some(json!({"type":"agent-auxiliary-usage", "usage":usage}))
-        }
+        AgentEvent::AuxiliaryUsage {
+            usage,
+            already_counted_calls,
+        } => Some(json!({
+            "type":"agent-auxiliary-usage",
+            "usage":usage,
+            "alreadyCountedCalls":already_counted_calls,
+        })),
         AgentEvent::GoalCheckpoint { epoch, reason } => Some(json!({
             "type":"agent-goal-checkpoint",
             "epoch":epoch,
@@ -265,7 +270,10 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
             );
             state.set_activity("tool-suppressed", "Suppressed", Some(reason));
         }
-        AgentEvent::AuxiliaryUsage(usage) => record_usage(&mut state.state, &usage, 0),
+        AgentEvent::AuxiliaryUsage {
+            usage,
+            already_counted_calls,
+        } => record_usage(&mut state.state, &usage, already_counted_calls),
         AgentEvent::GoalCheckpoint { epoch, reason } => {
             state.set_activity(
                 "goal",
@@ -323,21 +331,31 @@ pub(super) fn record_usage(state: &mut BridgeState, usage: &Usage, already_count
     state.token_usage.accumulate(usage);
 }
 
-/// Persists the current live session while holding its state lock.
-pub(super) fn persist_locked(
+/// Immutable persistence payload prepared while holding the live-state lock.
+///
+/// Constructing this snapshot may clone conversation/model history, but it performs
+/// no filesystem or cross-process lock operations. Latency-sensitive callers can
+/// therefore release SharedSession before committing it to disk.
+pub(super) struct PreparedSessionWrite {
+    session: StoredSession,
+    goal_mode: bool,
+}
+
+pub(super) fn prepare_session_write_locked(
     state: &mut SharedSession,
-    store: &SessionStore,
     workspace: &Path,
+    workspace_id: String,
     history: Vec<Message>,
-) -> Result<()> {
+) -> Option<PreparedSessionWrite> {
     let conversation = state.state.conversation.clone().unwrap_or_default();
     if !conversation
         .iter()
         .any(|entry| matches!(entry.kind, ConversationKind::User { .. }))
         && state.state.current_session_id.is_none()
     {
-        return Ok(());
+        return None;
     }
+
     let id = state
         .state
         .current_session_id
@@ -349,30 +367,70 @@ pub(super) fn persist_locked(
         .title
         .clone()
         .unwrap_or_else(|| fallback_title(&conversation));
+
     state.state.current_session_id = Some(id.clone());
     state.meta.created_at = Some(created_at);
     state.meta.title = Some(title.clone());
-    store.save(&StoredSession {
-        version: 4,
-        debate: state.state.debate.clone(),
-        id: id.clone(),
-        title,
-        created_at,
-        updated_at: Utc::now(),
-        workspace_root: workspace.display().to_string(),
-        working_directory: state.meta.working_directory.clone(),
-        context_roots: state.meta.context_roots.clone(),
-        model: state.state.active_model.clone(),
-        token_usage: state.state.token_usage.clone(),
-        credit_usage: state.state.credit_usage,
-        conversation,
-        model_history: storage_model_history(history),
-        runs: state.meta.runs.clone(),
-        retained_debate_knowledge: state.meta.retained_debate_knowledge.clone(),
-        attached_harness_capabilities: state.meta.attached_capabilities.clone(),
-        disabled_capabilities: state.meta.disabled_capabilities.clone(),
-    })?;
-    store.set_goal_mode(&id, state.state.goal_mode)
+
+    Some(PreparedSessionWrite {
+        session: StoredSession {
+            version: 4,
+            debate: state.state.debate.clone(),
+            id,
+            title,
+            created_at,
+            updated_at: Utc::now(),
+            workspace_root: workspace.display().to_string(),
+            workspace_id: Some(workspace_id),
+            working_directory: state
+                .meta
+                .working_directory
+                .as_deref()
+                .map(|path| crate::session_store::workspace_relative_path(workspace, path)),
+            context_roots: state
+                .meta
+                .context_roots
+                .iter()
+                .map(|path| crate::session_store::workspace_relative_path(workspace, path))
+                .collect(),
+            model: state.state.active_model.clone(),
+            token_usage: state.state.token_usage.clone(),
+            credit_usage: state.state.credit_usage,
+            conversation,
+            model_history: storage_model_history(history),
+            runs: state.meta.runs.clone(),
+            retained_debate_knowledge: state.meta.retained_debate_knowledge.clone(),
+            attached_harness_capabilities: state.meta.attached_capabilities.clone(),
+            disabled_capabilities: state.meta.disabled_capabilities.clone(),
+        },
+        goal_mode: state.state.goal_mode,
+    })
+}
+
+pub(super) fn commit_session_write(
+    store: &SessionStore,
+    prepared: PreparedSessionWrite,
+) -> Result<()> {
+    let id = prepared.session.id.clone();
+    store.save(&prepared.session)?;
+    store.set_goal_mode(&id, prepared.goal_mode)
+}
+
+/// Compatibility wrapper for call sites that still require synchronous
+/// persistence. New latency-sensitive paths should prepare, release the live-state
+/// mutex, and then commit the prepared write.
+pub(super) fn persist_locked(
+    state: &mut SharedSession,
+    store: &SessionStore,
+    workspace: &Path,
+    history: Vec<Message>,
+) -> Result<()> {
+    let workspace_id = crate::session_store::ensure_workspace_id(workspace)?;
+    let Some(prepared) = prepare_session_write_locked(state, workspace, workspace_id, history)
+    else {
+        return Ok(());
+    };
+    commit_session_write(store, prepared)
 }
 
 /// Removes the coordinator's internal coding prompt before session persistence.
@@ -384,4 +442,33 @@ pub(super) fn storage_model_history(mut history: Vec<Message>) -> Vec<Message> {
         history.remove(0);
     }
     history
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auxiliary_usage_does_not_double_count_a_started_model_call() {
+        let mut state = BridgeState {
+            credit_usage: 1,
+            ..BridgeState::default()
+        };
+        let usage = Usage {
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            model_calls: Some(1),
+            ..Usage::default()
+        };
+
+        record_usage(&mut state, &usage, 1);
+        assert_eq!(state.credit_usage, 1);
+        assert_eq!(state.token_usage.input_tokens, Some(100));
+        assert_eq!(state.token_usage.output_tokens, Some(20));
+
+        record_usage(&mut state, &usage, 0);
+        assert_eq!(state.credit_usage, 2);
+        assert_eq!(state.token_usage.input_tokens, Some(200));
+        assert_eq!(state.token_usage.output_tokens, Some(40));
+    }
 }

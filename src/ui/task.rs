@@ -1,13 +1,18 @@
 //! Consistent task state and persistent progress, independent of transcript scrolling.
 use super::{
-    activity_marker, activity_marker_color, animated_activity_label, format_elapsed, live_activity,
+    activity_marker, activity_marker_color, animated_activity_label, format_elapsed,
     live_operation, theme, tool_step_counts,
 };
 use crate::{
     app::App,
     model::{ConversationEntry, ConversationKind},
 };
-use ratatui::{Frame, layout::Rect, prelude::*, widgets::Paragraph};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    prelude::*,
+    widgets::{Block, Paragraph},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TaskStatus {
@@ -115,37 +120,39 @@ pub(super) fn fit(value: &str, width: usize) -> String {
 }
 
 pub(super) fn height(app: &App) -> u16 {
-    if matches!(
-        TaskStatus::for_app(app),
-        TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted
-    ) || (app.state.is_streaming && live_operation(app).is_some())
-    {
-        2
-    } else {
-        1
+    if !app.follow_tail && !app.conversation.is_empty() {
+        return 1;
+    }
+    match TaskStatus::for_app(app) {
+        TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted => 2,
+        TaskStatus::Working => match live_operation(app) {
+            Some(operation) if operation.detail.is_some() => 2,
+            Some(_) => 1,
+            None => 0,
+        },
+        TaskStatus::Ready | TaskStatus::Complete => 0,
     }
 }
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    frame.render_widget(Block::default().style(theme::surface()), area);
     let status = TaskStatus::for_app(app);
     let rail_color = if status == TaskStatus::Working {
         activity_marker_color(app)
     } else {
         status.color()
     };
-    let (done, failed) = tool_step_counts(app);
+    let (done, failed, active_tools) = tool_step_counts(app);
     let detail = if status == TaskStatus::Approval {
         "Enter allow · Esc deny · Ctrl+C stop".to_owned()
     } else if status == TaskStatus::Working {
         if let Some(operation) = live_operation(app) {
-            let label = animated_activity_label(app, &operation.label);
-            match operation.detail {
-                Some(detail) => format!("{label} · {detail}"),
-                None => label,
-            }
+            operation.detail.unwrap_or_default()
         } else {
-            let label = live_activity(app).0;
-            animated_activity_label(app, &label)
+            String::new()
         }
     } else if status == TaskStatus::Failed {
         app.state.error_message.clone().unwrap_or_else(|| {
@@ -187,6 +194,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let detail_row_available = detail_row && area.height > 1;
 
     let mut metrics = Vec::new();
+    if active_tools > 0 {
+        metrics.push(format!("{active_tools} RUN"));
+    }
     if done > 0 {
         metrics.push(format!("{done} OK"));
     }
@@ -221,40 +231,54 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
         (true, true) => String::new(),
     };
 
-    let mut spans = vec![Span::styled(
-        format!(" {} {} ", status.marker(app), status.label()),
-        Style::default()
-            .fg(rail_color)
-            .bg(theme::surface_raised())
-            .bold(),
-    )];
-    let activity = live_activity(app).0;
-    let activity = animated_activity_label(app, &activity);
-    if status == TaskStatus::Working && detail_row_available && activity != status.label() {
-        let remaining = (area.width as usize)
-            .saturating_sub(Line::from(spans.clone()).width())
-            .saturating_sub(Span::raw(&tail).width() + 2);
-        if remaining > 1 {
-            spans.push(Span::styled(
-                format!("  {}", fit(&activity, remaining.saturating_sub(2))),
-                Style::default().fg(theme::text()),
-            ));
-        }
-    }
+    let headline = if status == TaskStatus::Working {
+        live_operation(app)
+            .map(|operation| animated_activity_label(app, &operation.label))
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| status.label().to_owned())
+    } else {
+        status.label().to_owned()
+    };
+    let marker = format!(" {} ", status.marker(app));
+    let headline_width = (area.width as usize)
+        .saturating_sub(Span::raw(&marker).width())
+        .saturating_sub(if tail.is_empty() {
+            0
+        } else {
+            Span::raw(&tail).width() + 3
+        });
+    let mut spans = vec![
+        Span::styled(
+            marker,
+            Style::default()
+                .fg(rail_color)
+                .bg(theme::surface_raised())
+                .bold(),
+        ),
+        Span::styled(
+            fit(&headline, headline_width.max(1)),
+            Style::default().fg(theme::text()).bold(),
+        ),
+    ];
     if !tail.is_empty() {
         let remaining = (area.width as usize).saturating_sub(Line::from(spans.clone()).width());
-        spans.push(Span::styled(
-            format!("  · {}", fit(&tail, remaining.saturating_sub(4))),
-            Style::default().fg(theme::muted()),
-        ));
+        if remaining > 3 {
+            spans.push(Span::styled(
+                format!("  · {}", fit(&tail, remaining.saturating_sub(4))),
+                Style::default().fg(theme::muted()),
+            ));
+        }
     }
 
     let mut lines = vec![Line::from(spans)];
     if detail_row_available {
-        lines.push(Line::styled(
-            format!("  {}", fit(&detail, area.width.saturating_sub(2) as usize)),
-            Style::default().fg(theme::muted()),
-        ));
+        lines.push(Line::from(vec![
+            Span::styled("  ╰ ", Style::default().fg(theme::border_dim())),
+            Span::styled(
+                fit(&detail, area.width.saturating_sub(4) as usize),
+                Style::default().fg(theme::muted()),
+            ),
+        ]));
     }
     frame.render_widget(Paragraph::new(lines), area);
 }

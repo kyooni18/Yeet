@@ -4,6 +4,7 @@ use super::goal::{
     GOAL_JUDGE_SYSTEM_INSTRUCTION, GoalVerdict, parse_goal_verdict, render_goal_evidence,
 };
 use super::*;
+use crate::core::Usage;
 use uuid::Uuid;
 
 impl AgentCoordinator {
@@ -55,7 +56,6 @@ impl AgentCoordinator {
         } else {
             goal_input
         };
-        self.context_key = self.context_memory.id().to_owned();
         self.context_memory.capacity = self
             .bridge
             .context_length(model)
@@ -136,11 +136,9 @@ impl AgentCoordinator {
                             .restart()
                             .and_then(|_| self.registry.attach_enabled_mcp_servers());
                     }
-                    if running_goal {
-                        if let Some(goal) = self.context_memory.goal_mut() {
-                            goal.status = goal::GoalStatus::Recovering;
-                            goal.reason = Some(message.clone());
-                        }
+                    if running_goal && let Some(goal) = self.context_memory.goal_mut() {
+                        goal.status = goal::GoalStatus::Recovering;
+                        goal.reason = Some(message.clone());
                     }
                     emit(AgentEvent::GoalRetry {
                         attempt: retry_attempt,
@@ -171,27 +169,24 @@ impl AgentCoordinator {
                 }
             }
         };
-        if running_goal {
-            if let Some(goal) = self.context_memory.goal_mut() {
-                match &result {
-                    Ok(AgentRunOutcome::Completed)
-                        if goal.status == goal::GoalStatus::Succeeded => {}
-                    Ok(AgentRunOutcome::GoalPaused { reason })
-                    | Ok(AgentRunOutcome::CompletedUnverified { reason }) => {
-                        goal.status = goal::GoalStatus::Paused;
-                        goal.reason = Some(reason.clone());
-                    }
-                    Err(error) => {
-                        goal.status = if cancel.load(Ordering::Acquire) {
-                            goal::GoalStatus::Cancelled
-                        } else {
-                            goal::GoalStatus::Paused
-                        };
-                        goal.reason = Some(error.to_string());
-                    }
-                    _ => {
-                        goal.status = goal::GoalStatus::Paused;
-                    }
+        if running_goal && let Some(goal) = self.context_memory.goal_mut() {
+            match &result {
+                Ok(AgentRunOutcome::Completed) if goal.status == goal::GoalStatus::Succeeded => {}
+                Ok(AgentRunOutcome::GoalPaused { reason })
+                | Ok(AgentRunOutcome::CompletedUnverified { reason }) => {
+                    goal.status = goal::GoalStatus::Paused;
+                    goal.reason = Some(reason.clone());
+                }
+                Err(error) => {
+                    goal.status = if cancel.load(Ordering::Acquire) {
+                        goal::GoalStatus::Cancelled
+                    } else {
+                        goal::GoalStatus::Paused
+                    };
+                    goal.reason = Some(error.to_string());
+                }
+                _ => {
+                    goal.status = goal::GoalStatus::Paused;
                 }
             }
         }
@@ -208,53 +203,104 @@ impl AgentCoordinator {
         input: &str,
         model: &str,
         reasoning_level: &str,
+        execution_evidence: &turn_state::TurnExecutionEvidence,
         cancel: &AtomicBool,
         emit: &mut F,
-    ) -> Result<GoalVerdict>
+    ) -> Result<(GoalVerdict, Usage, usize)>
     where
         F: FnMut(AgentEvent),
     {
         check_cancel(cancel)?;
-        let recent_evidence = render_goal_evidence(&self.history);
+        const FORMAT_REPAIR_LIMIT: usize = 2;
+        let current_tool_observations = render_goal_evidence(&self.history);
         let retained = self
             .context_memory
             .goal()
             .map(|goal| serde_json::to_string(&goal.observations).unwrap_or_default())
             .unwrap_or_default();
+        let execution = serde_json::to_string_pretty(&execution_evidence.goal_evidence())
+            .unwrap_or_else(|_| "{}".into());
         let evidence = format!(
-            "Retained tool observations (excerpts; exact window/item locators included):\n{retained}\n\nCurrent observations:\n{recent_evidence}"
+            "AUTHORITATIVE EXECUTION STATE (coordinator-observed facts):\n{execution}\n\nRETAINED TOOL OBSERVATIONS (bounded excerpts with exact window/item locators):\n{retained}\n\nCURRENT TOOL OBSERVATIONS (tool messages only; no assistant claims):\n{current_tool_observations}"
         );
-        let mut request = CallRequest::simple(
-            model,
-            vec![
-                Message::system(GOAL_JUDGE_SYSTEM_INSTRUCTION),
-                Message::user(format!("GOAL:\n{input}\n\nWORKER EVIDENCE:\n{evidence}")),
-            ],
-        );
-        request.temperature = Some(0.0);
-        request.max_tokens = Some(2_048);
-        request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
-        let mut request_metadata = HashMap::from([
-            ("lane".into(), "goal-judge".into()),
-            ("strict".into(), "true".into()),
-            ("agentId".into(), "goal-judge".into()),
-            ("yeetVersion".into(), env!("CARGO_PKG_VERSION").to_owned()),
-        ]);
-        if reasoning_level != "auto" {
-            request_metadata.insert("reasoningLevel".into(), reasoning_level.to_owned());
+        let base_messages = vec![
+            Message::system(GOAL_JUDGE_SYSTEM_INSTRUCTION),
+            Message::user(format!("GOAL:\n{input}\n\nWORKER EVIDENCE:\n{evidence}")),
+        ];
+        let mut previous_invalid_response: Option<String> = None;
+        let mut judge_usage = Usage::default();
+        let mut judge_request_chars = 0usize;
+
+        for format_repair_attempt in 0..=FORMAT_REPAIR_LIMIT {
+            check_cancel(cancel)?;
+            let mut messages = base_messages.clone();
+            if format_repair_attempt > 0 {
+                if let Some(previous) = previous_invalid_response.as_deref()
+                    && !previous.trim().is_empty()
+                {
+                    messages.push(Message::assistant(previous.to_owned(), None));
+                }
+                messages.push(Message::user(
+                    "Judge protocol repair: the previous response was not valid JSON. Return exactly one JSON object matching the required verdict/evidence/remaining schema. No markdown, prose, or code fences.",
+                ));
+            }
+
+            let mut request = CallRequest::simple(model, messages);
+            request.temperature = Some(0.0);
+            request.max_tokens = Some(2_048);
+            request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
+            let mut request_metadata = HashMap::from([
+                ("lane".into(), "goal-judge".into()),
+                ("strict".into(), "true".into()),
+                ("agentId".into(), "goal-judge".into()),
+                ("yeetVersion".into(), env!("CARGO_PKG_VERSION").to_owned()),
+                (
+                    "formatRepairAttempt".into(),
+                    format_repair_attempt.to_string(),
+                ),
+            ]);
+            if reasoning_level != "auto" {
+                request_metadata.insert("reasoningLevel".into(), reasoning_level.to_owned());
+            }
+            request.metadata = Some(request_metadata);
+            emit(AgentEvent::ModelAttemptStarted {
+                diagnostics: json!({
+                    "lane":"goal-judge",
+                    "strict":true,
+                    "formatRepairAttempt":format_repair_attempt
+                }),
+            });
+            judge_request_chars = judge_request_chars.saturating_add(
+                serde_json::to_vec(&request)
+                    .map(|serialized| serialized.len())
+                    .unwrap_or_default(),
+            );
+            let result = self.bridge.complete_cancellable(&request, cancel)?;
+            emit(AgentEvent::ModelAttemptFinished(
+                json!({
+                    "lane":"goal-judge",
+                    "strict":true,
+                    "formatRepairAttempt":format_repair_attempt
+                }),
+                result.usage.clone(),
+            ));
+            if let Some(usage) = result.usage.as_ref() {
+                judge_usage.accumulate(usage);
+                emit(AgentEvent::AuxiliaryUsage {
+                    usage: usage.clone(),
+                    already_counted_calls: 1,
+                });
+            }
+            let verdict = parse_goal_verdict(&result.text);
+            let protocol_error = verdict
+                .reason
+                .starts_with("strict goal judge returned invalid JSON:");
+            if !protocol_error || format_repair_attempt == FORMAT_REPAIR_LIMIT {
+                return Ok((verdict, judge_usage, judge_request_chars));
+            }
+            previous_invalid_response = Some(result.text.chars().take(4_096).collect::<String>());
         }
-        request.metadata = Some(request_metadata);
-        emit(AgentEvent::ModelAttemptStarted {
-            diagnostics: json!({"lane":"goal-judge", "strict":true}),
-        });
-        let result = self.bridge.complete_cancellable(&request, cancel)?;
-        emit(AgentEvent::ModelAttemptFinished(
-            json!({"lane":"goal-judge", "strict":true}),
-            result.usage.clone(),
-        ));
-        if let Some(usage) = result.usage {
-            emit(AgentEvent::AuxiliaryUsage(usage));
-        }
-        Ok(parse_goal_verdict(&result.text))
+
+        unreachable!("Goal judge format-repair loop always returns a verdict")
     }
 }

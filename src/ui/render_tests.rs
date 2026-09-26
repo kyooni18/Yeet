@@ -1,6 +1,6 @@
 //! Cross-surface regressions for the terminal redesign.
 use super::*;
-use crate::model::{ConversationToolCall, SessionSummary, ShellPermission};
+use crate::model::{ConversationToolCall, ModelActivity, SessionSummary, ShellPermission};
 use ratatui::{Terminal, backend::TestBackend};
 
 fn render(app: &mut App, width: u16, height: u16) -> (String, ratatui::buffer::Buffer) {
@@ -34,6 +34,89 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
 }
 
 #[test]
+fn unfocused_composer_uses_quieter_surface_than_focused_input() {
+    let mut app = App::default();
+    let bounds = ratatui::layout::Rect::new(0, 0, 60, 5);
+
+    let mut focused = Terminal::new(TestBackend::new(60, 5)).unwrap();
+    focused
+        .draw(|frame| composer::draw(frame, &mut app, bounds))
+        .unwrap();
+    let (x, y, _, _) = app.composer_area;
+    assert_eq!(focused.backend().buffer()[(x, y)].bg, theme::surface_raised());
+
+    app.mode = Mode::Settings;
+    let mut unfocused = Terminal::new(TestBackend::new(60, 5)).unwrap();
+    unfocused
+        .draw(|frame| composer::draw(frame, &mut app, bounds))
+        .unwrap();
+    let (x, y, _, _) = app.composer_area;
+    assert_eq!(unfocused.backend().buffer()[(x, y)].bg, theme::surface_color());
+}
+
+#[test]
+fn welcome_shortcut_cards_use_raised_surface() {
+    let mut app = App::default();
+    let (text, buffer) = render(&mut app, 140, 38);
+    let card_y = text
+        .lines()
+        .position(|line| line.contains("Choose your model"))
+        .expect("welcome shortcut card is visible");
+    let card_row = &buffer.content[card_y * 140..(card_y + 1) * 140];
+    assert!(card_row.iter().any(|cell| cell.bg == theme::surface_raised()));
+}
+
+#[test]
+fn narrow_composer_placeholder_ends_cleanly() {
+    let mut app = App::default();
+    let (text, _) = render(&mut app, 36, 12);
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Write a message") && line.contains('…'))
+    );
+}
+
+#[test]
+fn generic_legacy_done_activity_is_hidden_but_informative_completion_survives() {
+    let mut app = App::default();
+    app.conversation = vec![
+        ConversationEntry {
+            id: "user".into(),
+            kind: ConversationKind::User {
+                content: "Polish the TUI".into(),
+            },
+        },
+        ConversationEntry {
+            id: "legacy-done".into(),
+            kind: ConversationKind::Activity {
+                activity: ModelActivity {
+                    phase: serde_json::json!("done"),
+                    title: "Done".into(),
+                    detail: None,
+                    run_id: None,
+                },
+            },
+        },
+        ConversationEntry {
+            id: "useful-done".into(),
+            kind: ConversationKind::Activity {
+                activity: ModelActivity {
+                    phase: serde_json::json!("done"),
+                    title: "Validation complete".into(),
+                    detail: Some("122 tests".into()),
+                    run_id: None,
+                },
+            },
+        },
+    ];
+
+    let (text, _) = render(&mut app, 100, 24);
+    assert!(!text.contains("· Done"), "{text}");
+    assert!(text.contains("Validation complete"), "{text}");
+    assert!(text.contains("122 tests"), "{text}");
+}
+
+#[test]
 fn user_and_assistant_have_distinct_readable_surfaces() {
     let mut app = App::default();
     app.conversation = vec![
@@ -53,7 +136,7 @@ fn user_and_assistant_have_distinct_readable_surfaces() {
     ];
     let (text, buffer) = render(&mut app, 80, 24);
     assert!(text.contains("▌ You"));
-    assert!(text.contains("● Yeet"));
+    assert!(text.contains("◆ Yeet"));
     let rail = buffer
         .content
         .iter()
@@ -62,6 +145,23 @@ fn user_and_assistant_have_distinct_readable_surfaces() {
     assert_eq!(rail.fg, theme::user());
     assert_eq!(rail.bg, theme::user_surface());
     assert!(text.contains("Here is the review."));
+    assert!(text.contains("│ Here is the review."));
+    let assistant_y = text
+        .lines()
+        .position(|line| line.contains("Here is the review."))
+        .unwrap();
+    let assistant_row = &buffer.content[assistant_y * 80..(assistant_y + 1) * 80];
+    let assistant_rail = assistant_row
+        .iter()
+        .find(|cell| cell.symbol() == "│")
+        .unwrap();
+    assert_eq!(assistant_rail.fg, theme::border_dim());
+    assert_eq!(
+        buffer[(app.transcript_area.0, 0)].bg,
+        theme::surface_color()
+    );
+    let (composer_x, composer_y, _, _) = app.composer_area;
+    assert_eq!(buffer[(composer_x, composer_y)].bg, theme::surface_raised());
 }
 
 #[test]
@@ -70,16 +170,34 @@ fn stopped_tool_groups_keep_errors_visible_and_hide_suppressed_calls() {
         "id": "call", "name": "run_shell", "arguments": "{\"command\":\"cargo test\"}", "status": "failed"
     })).unwrap();
     let app = App::default();
-    let failed = tool_group_lines(&app, &[&call], 80, false);
+    let failed = tool_group_lines(&app, &[WorkEvent::Tool(&call)], 80, false);
     assert!(
         failed
             .iter()
             .any(|line| line.to_string().contains("Failed"))
     );
     call.status = ToolCallStatus::Completed;
-    assert_eq!(tool_group_lines(&app, &[&call], 80, false).len(), 1);
+    let completed = tool_group_lines(&app, &[WorkEvent::Tool(&call)], 80, false);
+    assert_eq!(completed.len(), 1);
+    assert!(!completed[0].to_string().contains("Activity"));
+    assert!(completed[0].to_string().starts_with("  │ "));
+    assert_eq!(completed[0].spans[0].style.fg, Some(theme::muted()));
+    assert_eq!(completed[0].spans[2].style.fg, Some(theme::text_dim()));
     call.status = ToolCallStatus::Suppressed;
-    assert!(tool_group_lines(&app, &[&call], 80, false).is_empty());
+    assert!(tool_group_lines(&app, &[WorkEvent::Tool(&call)], 80, false).is_empty());
+}
+
+#[test]
+fn shell_location_badge_uses_selected_palette_surface() {
+    let mut app = App::default();
+    let (_, buffer) = render(&mut app, 100, 24);
+    let location = buffer
+        .content
+        .iter()
+        .find(|cell| cell.symbol() == "L")
+        .expect("latest location badge should be visible");
+    assert_eq!(location.fg, theme::accent_hot());
+    assert_eq!(location.bg, theme::selected_color());
 }
 
 #[test]

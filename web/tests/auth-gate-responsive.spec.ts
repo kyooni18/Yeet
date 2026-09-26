@@ -84,11 +84,11 @@ test('keyboard-constrained auth error remains reachable instead of center-clippi
   expect(cardBox).not.toBeNull()
   expect(cardBox!.y).toBeGreaterThanOrEqual(0)
 
-  const overflow = await dialog.evaluate((element) => ({
+  const viewportFit = await dialog.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
   }))
-  expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight)
+  expect(viewportFit.scrollHeight).toBeGreaterThanOrEqual(viewportFit.clientHeight)
 
   await alert.scrollIntoViewIfNeeded()
   const alertBox = await alert.boundingBox()

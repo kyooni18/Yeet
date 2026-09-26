@@ -112,8 +112,11 @@ pub struct BridgeState {
     pub providers_working: bool,
     pub openai_flex: bool,
     pub foundation_memory_enabled: bool,
+    pub foundation_memory_backend: String,
     pub foundation_memory_server: String,
     pub foundation_memory_connected: bool,
+    pub web_backend: String,
+    pub web_server: String,
     pub settings_notice: Option<String>,
     pub settings_working: bool,
     pub runtime_settings: RuntimeSettingsState,
@@ -164,8 +167,11 @@ impl BridgeState {
             providers_working: self.providers_working,
             openai_flex: self.openai_flex,
             foundation_memory_enabled: self.foundation_memory_enabled,
+            foundation_memory_backend: self.foundation_memory_backend.clone(),
             foundation_memory_server: self.foundation_memory_server.clone(),
             foundation_memory_connected: self.foundation_memory_connected,
+            web_backend: self.web_backend.clone(),
+            web_server: self.web_server.clone(),
             settings_notice: self.settings_notice.clone(),
             settings_working: self.settings_working,
             runtime_settings: self.runtime_settings.clone(),
@@ -209,6 +215,13 @@ pub struct RuntimeSettingsState {
     pub appearance: String,
     pub theme_dark: String,
     pub theme_light: String,
+    pub theme_dark_resolved: String,
+    pub theme_light_resolved: String,
+    pub theme_dark_palette: crate::theme::PaletteState,
+    pub theme_light_palette: crate::theme::PaletteState,
+    pub theme_catalog: Vec<crate::theme::ThemeCatalogItem>,
+    pub theme_dark_warning: Option<String>,
+    pub theme_light_warning: Option<String>,
     pub context_length_override: Option<u64>,
     pub jev_loop_mode: String,
 }
@@ -219,6 +232,13 @@ impl Default for RuntimeSettingsState {
             appearance: "auto".into(),
             theme_dark: "kanagawa".into(),
             theme_light: "adwaita".into(),
+            theme_dark_resolved: "kanagawa".into(),
+            theme_light_resolved: "adwaita".into(),
+            theme_dark_palette: crate::theme::Palette::kanagawa().into(),
+            theme_light_palette: crate::theme::Palette::adwaita().into(),
+            theme_catalog: crate::theme::catalog(),
+            theme_dark_warning: None,
+            theme_light_warning: None,
             context_length_override: None,
             jev_loop_mode: "off".into(),
         }
@@ -502,8 +522,16 @@ pub enum FrontendCommand {
     },
     Submit {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<crate::core::ImageAttachment>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachment_ids: Vec<String>,
     },
     Interrupt,
+    RegenerateLast,
+    EditLast {
+        text: String,
+    },
     AllowShell,
     DenyShell,
     AllowNativeApp,
@@ -566,6 +594,12 @@ pub enum FrontendCommand {
     },
     SetFoundationMemory {
         enabled: bool,
+    },
+    SetServiceBackend {
+        service: String,
+        backend: String,
+        #[serde(default)]
+        server: Option<String>,
     },
     RequestSandbox,
     UpdateSandbox {

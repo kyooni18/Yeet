@@ -9,6 +9,7 @@ import { accountIdFromJwt, jwtExpiresAt } from "./auth-jwt.js";
 import type { FetchLike } from "./types.js";
 import { defaultConfigDirectory } from "./platform.js";
 import { claudeUsageLabel, durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
+import { loginGeminiOAuth, refreshGeminiOAuth, setupGeminiCodeAssist } from "./gemini-oauth.js";
 
 export type AuthMethod = "none" | "api-key" | "browser" | "environment";
 
@@ -118,33 +119,21 @@ export interface AuthManagerOptions {
 const ENV_KEYS: Record<string, string> = {
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
+  "claude-api": "ANTHROPIC_API_KEY",
   gemini: "GEMINI_API_KEY",
   opencode: "OPENCODE_API_KEY",
   "opencode-go": "OPENCODE_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
 };
-
 const CREDENTIAL_ALIASES: Record<string, readonly string[]> = {
   opencode: ["opencode-go"],
   "opencode-go": ["opencode"],
 };
+const RESERVED_PROVIDER_IDS = new Set(["openai", "codex-cli", "anthropic", "gemini", "gemini-web", "claude", "claude-api", "openrouter", "opencode", "opencode-go"]);
+const BROWSER_PROVIDER_IDS = new Set(["codex-cli", "gemini-web", "claude"]);
+const API_KEY_PROVIDER_IDS = new Set(["openai", "anthropic", "claude-api", "gemini"]);
 
-const RESERVED_PROVIDER_IDS = new Set([
-  "openai",
-  "codex-cli",
-  "anthropic",
-  "gemini",
-  "gemini-web",
-  "claude",
-  "openrouter",
-  "opencode",
-  "opencode-go",
-]);
 
-const GEMINI_DEFAULT_SCOPES = [
-  "https://www.googleapis.com/auth/cloud-platform",
-  "https://www.googleapis.com/auth/generative-language.retriever",
-];
 
 const OPENAI_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_OAUTH_ISSUER = "https://auth.openai.com";
@@ -415,6 +404,7 @@ export class AuthManager {
     }
   }
 
+
   async setApiKey(provider: string, apiKey: string): Promise<AuthStatus> {
     if (!provider.trim()) throw new Error("Provider id is required");
     if (!apiKey.trim()) throw new Error("API key must not be empty");
@@ -501,14 +491,20 @@ export class AuthManager {
     if (provider === "claude") await this.#claudeLogout();
     const data = await this.#readCredentials();
     delete data.providers[provider];
+    if (provider === "gemini-web") delete data.oauthClients["gemini-web"];
     await this.#writeCredentials(data);
     return this.status(provider);
   }
 
   async status(provider: string): Promise<AuthStatus> {
     await this.ensure();
-    const data = await this.#readCredentials();
-    const stored = this.#storedCredential(data, provider);
+    let data = await this.#readCredentials();
+    let stored = this.#storedCredential(data, provider);
+
+
+    if (!stored && API_KEY_PROVIDER_IDS.has(provider) && process.env.ANTHROPIC_API_KEY && ["anthropic", "claude-api"].includes(provider)) {
+      return { provider, authenticated: true, method: "environment", configDir: this.configDir };
+    }
     if (stored) {
       return {
         provider,
@@ -848,6 +844,9 @@ export class AuthManager {
         return this.status("gemini-web");
       case "claude":
         await this.#claudeLogin();
+
+        return this.status(provider);
+      case "claude-api":
         return this.status(provider);
       default:
         throw new Error(`Browser authentication is not configured for provider ${provider}`);
@@ -1040,116 +1039,70 @@ export class AuthManager {
   }
 
   async #loginGemini(provider: string, options: BrowserLoginOptions): Promise<void> {
-    const data = await this.#readCredentials();
-    const existing = data.oauthClients[provider];
+    const current = await this.#readCredentials();
+    const existing = current.oauthClients[provider];
+    const previous = current.providers[provider];
+    const clientId = options.clientId
+      ?? (existing?.clientId === "gemini-cli-core" ? undefined : existing?.clientId);
     const clientSecret = options.clientSecret ?? existing?.clientSecret;
-    const projectId = options.projectId ?? existing?.projectId;
-    const client: OAuthClientConfiguration = {
-      clientId: options.clientId ?? existing?.clientId ?? "",
-      ...(clientSecret !== undefined ? { clientSecret } : {}),
-      ...(projectId !== undefined ? { projectId } : {}),
-      scopes: options.scopes ?? existing?.scopes ?? GEMINI_DEFAULT_SCOPES,
+    const scopes = options.scopes ?? existing?.scopes;
+    const oauth = await loginGeminiOAuth({
+      fetch: this.#fetch,
+      openBrowser: this.#openBrowser,
+      ...(clientId ? { clientId } : {}),
+      ...(clientSecret ? { clientSecret } : {}),
+      ...(scopes ? { scopes } : {}),
+      ...(previous?.type === "oauth" && previous.refreshToken
+        ? { previousRefreshToken: previous.refreshToken }
+        : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    });
+    const requestedProjectId = options.projectId
+      ?? existing?.projectId
+      ?? process.env.GEMINI_PROJECT_ID
+      ?? process.env.GOOGLE_CLOUD_PROJECT
+      ?? process.env.GOOGLE_CLOUD_PROJECT_ID;
+    const projectId = await setupGeminiCodeAssist(this.#fetch, oauth.accessToken, requestedProjectId);
+
+    const latest = await this.#readCredentials();
+    latest.oauthClients[provider] = {
+      clientId: oauth.clientId,
+      ...(oauth.clientSecret ? { clientSecret: oauth.clientSecret } : {}),
+      projectId,
+      scopes: oauth.scopes,
     };
-    if (!client.clientId) {
-      throw new Error("Gemini browser auth requires a Google OAuth Desktop clientId on first login");
-    }
-    data.oauthClients[provider] = client;
-    await this.#writeCredentials(data);
-
-    const timeoutMs = options.timeoutMs ?? 180_000;
-    const state = randomBytes(18).toString("base64url");
-    const statePath = `/oauth/gemini/${state}`;
-    const verifier = pkceVerifier();
-    const challenge = pkceChallenge(verifier);
-    const loopback = await loopbackCallback(statePath, timeoutMs);
-
-    try {
-      const authorize = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-      authorize.searchParams.set("client_id", client.clientId);
-      authorize.searchParams.set("redirect_uri", loopback.callbackUrl);
-      authorize.searchParams.set("response_type", "code");
-      authorize.searchParams.set("scope", (client.scopes ?? GEMINI_DEFAULT_SCOPES).join(" "));
-      authorize.searchParams.set("access_type", "offline");
-      authorize.searchParams.set("prompt", "consent");
-      authorize.searchParams.set("state", state);
-      authorize.searchParams.set("code_challenge", challenge);
-      authorize.searchParams.set("code_challenge_method", "S256");
-      await this.#openBrowser(authorize.toString());
-
-      const callback = await loopback.waitForCallback;
-      const returnedState = callback.searchParams.get("state");
-      if (returnedState !== state) throw new Error("Gemini OAuth callback state mismatch");
-      const error = callback.searchParams.get("error");
-      if (error) throw new Error(`Gemini authorization failed: ${error}`);
-      const code = callback.searchParams.get("code");
-      if (!code) throw new Error("Gemini callback did not include an authorization code");
-
-      const form = new URLSearchParams({
-        client_id: client.clientId,
-        code,
-        code_verifier: verifier,
-        grant_type: "authorization_code",
-        redirect_uri: loopback.callbackUrl,
-      });
-      if (client.clientSecret) form.set("client_secret", client.clientSecret);
-
-      const response = await this.#fetch("https://oauth2.googleapis.com/token", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: form.toString(),
-      });
-      if (!response.ok) throw new Error(`Gemini OAuth exchange failed (${response.status}): ${await response.text()}`);
-      const payload = asObject(await response.json());
-      const accessToken = typeof payload.access_token === "string" ? payload.access_token : undefined;
-      if (!accessToken) throw new Error("Gemini OAuth exchange did not return an access token");
-      const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
-
-      const latest = await this.#readCredentials();
-      latest.providers[provider] = {
-        type: "oauth",
-        accessToken,
-        ...(typeof payload.refresh_token === "string" ? { refreshToken: payload.refresh_token } : {}),
-        ...(typeof payload.token_type === "string" ? { tokenType: payload.token_type } : {}),
-        ...(typeof payload.scope === "string" ? { scope: payload.scope } : {}),
-        expiresAt: isoAfter(Number.isFinite(expiresIn) ? expiresIn : 3600),
-        source: "browser",
-        createdAt: new Date().toISOString(),
-      };
-      await this.#writeCredentials(latest);
-    } finally {
-      await loopback.close();
-    }
+    latest.providers[provider] = {
+      type: "oauth",
+      accessToken: oauth.accessToken,
+      refreshToken: oauth.refreshToken,
+      ...(oauth.idToken ? { idToken: oauth.idToken } : {}),
+      ...(oauth.tokenType ? { tokenType: oauth.tokenType } : {}),
+      ...(oauth.scope ? { scope: oauth.scope } : {}),
+      expiresAt: isoAfter(oauth.expiresIn),
+      source: "browser",
+      createdAt: new Date().toISOString(),
+    };
+    await this.#writeCredentials(latest);
   }
 
   async #refreshGemini(
     credential: OAuthCredentialRecord,
     client: OAuthClientConfiguration | undefined,
   ): Promise<OAuthCredentialRecord> {
-    if (!credential.refreshToken || !client?.clientId) return credential;
-    const form = new URLSearchParams({
-      client_id: client.clientId,
-      refresh_token: credential.refreshToken,
-      grant_type: "refresh_token",
+    if (!credential.refreshToken) return credential;
+    const refreshed = await refreshGeminiOAuth({
+      fetch: this.#fetch,
+      refreshToken: credential.refreshToken,
+      ...(client?.clientId ? { clientId: client.clientId } : {}),
+      ...(client?.clientSecret ? { clientSecret: client.clientSecret } : {}),
     });
-    if (client.clientSecret) form.set("client_secret", client.clientSecret);
-
-    const response = await this.#fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: form.toString(),
-    });
-    if (!response.ok) throw new Error(`Gemini OAuth refresh failed (${response.status}): ${await response.text()}`);
-    const payload = asObject(await response.json());
-    const accessToken = typeof payload.access_token === "string" ? payload.access_token : undefined;
-    if (!accessToken) throw new Error("Gemini OAuth refresh did not return an access token");
-    const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
     return {
       ...credential,
-      accessToken,
-      ...(typeof payload.refresh_token === "string" ? { refreshToken: payload.refresh_token } : {}),
-      ...(typeof payload.token_type === "string" ? { tokenType: payload.token_type } : {}),
-      ...(typeof payload.scope === "string" ? { scope: payload.scope } : {}),
-      expiresAt: isoAfter(Number.isFinite(expiresIn) ? expiresIn : 3600),
+      accessToken: refreshed.accessToken,
+      ...(refreshed.refreshToken ? { refreshToken: refreshed.refreshToken } : {}),
+      ...(refreshed.tokenType ? { tokenType: refreshed.tokenType } : {}),
+      ...(refreshed.scope ? { scope: refreshed.scope } : {}),
+      expiresAt: isoAfter(refreshed.expiresIn),
     };
   }
 

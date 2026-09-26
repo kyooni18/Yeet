@@ -543,14 +543,16 @@ class HTTPMcpConnection implements McpConnection {
   readonly configuration: McpHTTPServerConfiguration;
   readonly #fetch: FetchLike;
   #nextId = 1;
+  #era: "modern" | "legacy" = "modern";
+  #protocol = MCP_PROTOCOL_VERSION;
 
   constructor(configuration: McpHTTPServerConfiguration, fetchImpl: FetchLike) {
     this.configuration = configuration;
     this.#fetch = fetchImpl;
   }
 
-  get era(): "modern" { return "modern"; }
-  get protocol(): string { return MCP_PROTOCOL_VERSION; }
+  get era(): "modern" | "legacy" { return this.#era; }
+  get protocol(): string { return this.#protocol; }
   async connect(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw abortReason(signal);
   }
@@ -558,47 +560,61 @@ class HTTPMcpConnection implements McpConnection {
 
   async request(method: string, params: Record<string, unknown> = {}, toolSchema?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     if (signal?.aborted) throw abortReason(signal);
-    const id = this.#nextId++;
-    const finalParams = modernParams(params);
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-      "Mcp-Method": method,
-      ...(this.configuration.headers ?? {}),
-    };
-    const name = method === "resources/read" ? asString(params.uri) : asString(params.name);
-    if (name && (method === "tools/call" || method === "resources/read" || method === "prompts/get")) {
-      headers["Mcp-Name"] = encodeHeaderValue(name);
-    }
-    if (method === "tools/call" && toolSchema) {
-      Object.assign(headers, toolParameterHeaders(toolSchema, asObject(params.arguments)));
-    }
-
-    const response = await this.#fetch(this.configuration.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: finalParams }),
-      ...(signal ? { signal } : {}),
-    });
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!response.ok && !contentType.includes("application/json")) {
-      throw new McpError(`MCP HTTP ${response.status}: ${await response.text()}`, { server: this.configuration.name });
-    }
-
-    let message: JsonRpcResponse | undefined;
-    if (contentType.includes("text/event-stream")) {
-      for await (const event of parseSSE(response)) {
-        if (!event.data) continue;
-        const candidate = JSON.parse(event.data) as JsonRpcResponse;
-        if (candidate.id === id) message = candidate;
+    let id = this.#nextId++;
+    const request = async (protocol: string, modern: boolean): Promise<unknown> => {
+      const finalParams = modern ? modernParams(params) : params;
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": protocol,
+        "Mcp-Method": method,
+        ...(this.configuration.headers ?? {}),
+      };
+      const name = method === "resources/read" ? asString(params.uri) : asString(params.name);
+      if (name && (method === "tools/call" || method === "resources/read" || method === "prompts/get")) {
+        headers["Mcp-Name"] = encodeHeaderValue(name);
       }
-    } else {
-      message = await response.json() as JsonRpcResponse;
+      if (method === "tools/call" && toolSchema) {
+        Object.assign(headers, toolParameterHeaders(toolSchema, asObject(params.arguments)));
+      }
+
+      const response = await this.#fetch(this.configuration.url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params: finalParams }),
+        ...(signal ? { signal } : {}),
+      });
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!response.ok && !contentType.includes("application/json")) {
+        throw new McpError(`MCP HTTP ${response.status}: ${await response.text()}`, { server: this.configuration.name });
+      }
+
+      let message: JsonRpcResponse | undefined;
+      if (contentType.includes("text/event-stream")) {
+        for await (const event of parseSSE(response)) {
+          if (!event.data) continue;
+          const candidate = JSON.parse(event.data) as JsonRpcResponse;
+          if (candidate.id === id) message = candidate;
+        }
+      } else {
+        message = await response.json() as JsonRpcResponse;
+      }
+      if (!message) throw new McpError("MCP HTTP response did not include the final JSON-RPC response", { server: this.configuration.name });
+      if (message.error) throw jsonRpcError(message.error, this.configuration.name);
+      return message.result;
+    };
+
+    if (this.#era === "legacy") return request(this.#protocol, false);
+    try {
+      return await request(this.#protocol, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/unsupported protocol version/i.test(message)) throw error;
+      this.#era = "legacy";
+      this.#protocol = LEGACY_MCP_PROTOCOL_VERSION;
+      id = this.#nextId++;
+      return request(this.#protocol, false);
     }
-    if (!message) throw new McpError("MCP HTTP response did not include the final JSON-RPC response", { server: this.configuration.name });
-    if (message.error) throw jsonRpcError(message.error, this.configuration.name);
-    return message.result;
   }
 }
 

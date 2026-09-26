@@ -65,12 +65,12 @@ fn a_new_turn_does_not_inherit_old_progress_or_operations() {
         ..App::default()
     };
     assert_eq!(TaskStatus::for_app(&app), TaskStatus::Ready);
-    assert_eq!(tool_step_counts(&app), (0, 0));
+    assert_eq!(tool_step_counts(&app), (0, 0, 0));
     assert!(live_operation(&app).is_none());
     app.conversation.push(tool(ToolCallStatus::Completed));
-    assert_eq!(tool_step_counts(&app), (1, 0));
+    assert_eq!(tool_step_counts(&app), (1, 0, 0));
     app.conversation.push(tool(ToolCallStatus::Suppressed));
-    assert_eq!(tool_step_counts(&app), (1, 0));
+    assert_eq!(tool_step_counts(&app), (1, 0, 0));
 }
 
 #[test]
@@ -210,6 +210,7 @@ fn live_progress_remains_visible_while_reading_history() {
             .find(|row| row.contains("Read file"))
             .expect("live operation should stay visible in the task rail");
         assert!(progress_row.contains("Working"));
+        assert!(progress_row.contains("1 RUN"));
         assert!(progress_row.contains("src/ui.rs"));
         assert!(footer.contains("Next message"));
         assert!(footer.contains("Send after reply"));

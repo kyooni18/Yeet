@@ -250,7 +250,6 @@ pub(super) fn string_arg<'a>(object: &'a Map<String, Value>, key: &str) -> Resul
         .ok_or_else(|| anyhow!("missing string argument {key}"))
 }
 
-#[cfg(test)]
 pub(super) fn foundation_wrapper_schema(schema: &Map<String, Value>) -> Map<String, Value> {
     let mut schema = schema.clone();
     if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
@@ -418,6 +417,64 @@ pub(super) fn cache_read_result(
     entry
 }
 
+/// When `externalize_if_large` truncates a read_file result, the cache entry
+/// recorded the full requested range but the model only saw a bounded preview.
+/// This function trims the most recent cache entry so that duplicate-read
+/// suppression does not claim coverage of lines the model never received.
+pub(super) fn trim_cache_to_preview(
+    cache: &mut HashMap<String, Vec<ReadCacheEntry>>,
+    path: &str,
+    externalized_result: &str,
+) {
+    // Parse the externalized JSON to find the preview boundary.
+    let Ok(value) = serde_json::from_str::<Value>(externalized_result) else {
+        return;
+    };
+    let object = match value.as_object() {
+        Some(obj) => obj,
+        None => return,
+    };
+    let preview = match object.get("preview").and_then(Value::as_str) {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            // No usable preview — remove the most recent cache entry entirely
+            // so the model can re-request the range.
+            if let Some(entries) = cache.get_mut(path) {
+                entries.pop();
+            }
+            return;
+        }
+    };
+    // Count the number of anchored source lines visible in the preview.
+    // Anchored lines look like "123:abcd|..." — count complete lines.
+    let preview_line_count = preview.lines().filter(|line| !line.is_empty()).count();
+    if preview_line_count == 0 {
+        if let Some(entries) = cache.get_mut(path) {
+            entries.pop();
+        }
+        return;
+    }
+    // Trim the most recent cache entry to cover only the preview lines.
+    if let Some(entries) = cache.get_mut(path)
+        && let Some(last) = entries.last_mut()
+    {
+        let visible_end = last
+            .start
+            .saturating_add(preview_line_count.saturating_sub(1));
+        if visible_end < last.end {
+            // Trim anchored content to match.
+            let trimmed: String = last
+                .anchored
+                .lines()
+                .take(preview_line_count)
+                .collect::<Vec<_>>()
+                .join("\n");
+            last.end = visible_end;
+            last.anchored = trimmed;
+        }
+    }
+}
+
 pub(super) fn coverage_complete(total: usize, entries: &[ReadCacheEntry]) -> bool {
     let ranges = merged_ranges(
         entries
@@ -503,4 +560,59 @@ fn sanitize_tool_name_part(value: &str) -> String {
         result = result.replace("__", "_");
     }
     result.trim_matches('_').to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_visibility_cache_tracks_only_model_visible_ranges() {
+        let mut visible = HashMap::new();
+        let entry = cache_read_result(
+            &mut visible,
+            ReadResult {
+                path: "src/example.rs".into(),
+                snapshot: "snapshot-1".into(),
+                start_line: 10,
+                end_line: 20,
+                total_lines: 100,
+                content: String::new(),
+                numbered: String::new(),
+                anchored: "10:abcd|line".into(),
+            },
+        );
+
+        assert_eq!(entry.snapshot, "snapshot-1");
+        assert_eq!(visible["src/example.rs"][0].start, 10);
+        visible.clear();
+        assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn foundation_wrapper_schema_hides_project_identity() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "project": { "type": "string" },
+                "query": { "type": "string" }
+            },
+            "required": ["project", "query"]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let wrapped = foundation_wrapper_schema(&schema);
+        assert!(
+            wrapped
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| !properties.contains_key("project"))
+        );
+        assert_eq!(
+            wrapped.get("required").and_then(Value::as_array),
+            Some(&vec![json!("query")])
+        );
+    }
 }

@@ -39,7 +39,7 @@ pub(super) fn tool_execution_succeeded(
     true
 }
 
-/// Detects shell calls whose purpose is post-change validation.
+/// Detects shell calls whose command actually performs post-change validation.
 pub(super) fn is_validation_tool_call(call: &ToolCall) -> bool {
     if call.name != "run_shell"
         || call.arguments.get("background").and_then(Value::as_bool) == Some(true)
@@ -58,13 +58,51 @@ pub(super) fn is_validation_tool_call(call: &ToolCall) -> bool {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let combined = format!("{purpose}\n{command}");
-    [
+
+    if shell_fragment_is_validation(&command) {
+        return true;
+    }
+
+    let purpose_claims_validation = [
+        "verify",
+        "verification",
+        "validate",
+        "validation",
+        "compile",
+        "build",
+        "test",
+        "lint",
+        "check",
+    ]
+    .iter()
+    .any(|needle| purpose.contains(needle));
+    purpose_claims_validation
+        && [
+            " check",
+            " test",
+            " lint",
+            " build",
+            " compile",
+            " verify",
+            " validate",
+            "check.sh",
+            "test.sh",
+            "verify.sh",
+        ]
+        .iter()
+        .any(|needle| command.contains(needle))
+}
+
+fn shell_fragment_is_validation(fragment: &str) -> bool {
+    let fragment = fragment.trim();
+    let validation_commands = [
         "git diff --check",
         "cargo check",
         "cargo test",
         "cargo clippy",
+        "cargo build",
         "swift test",
+        "swift build",
         "go test",
         "pytest",
         "npm test",
@@ -87,22 +125,31 @@ pub(super) fn is_validation_tool_call(call: &ToolCall) -> bool {
         "python3 -m compileall",
         "cmake --build",
         "make test",
-    ]
-    .iter()
-    .any(|needle| combined.contains(needle))
-        || [
-            "verify",
-            "verification",
-            "validate",
-            "validation",
-            "compile",
-            "build",
-            "test",
-            "lint",
-            "check",
-        ]
-        .iter()
-        .any(|needle| purpose.contains(needle))
+        "xcodebuild",
+        "gradle test",
+        "gradle build",
+        "mvn test",
+        "mvn package",
+    ];
+    validation_commands.iter().any(|command| {
+        fragment == *command
+            || fragment
+                .strip_prefix(command)
+                .is_some_and(|suffix| suffix.starts_with(char::is_whitespace))
+    }) || ((fragment == "cargo fmt"
+        || fragment.starts_with("cargo fmt ")
+        || fragment == "rustfmt"
+        || fragment.starts_with("rustfmt "))
+        && fragment.contains("--check"))
+}
+
+/// Replay/duplicate results can be operationally successful, but they are not
+/// fresh validation evidence for the current model-visible window.
+pub(super) fn tool_result_is_replay(content: &str) -> bool {
+    serde_json::from_str::<Value>(content).is_ok_and(|value| {
+        value.get("duplicate").and_then(Value::as_bool) == Some(true)
+            || value.get("blockedReplay").and_then(Value::as_bool) == Some(true)
+    })
 }
 
 /// Returns whether a tool primarily inspects rather than mutates state.
@@ -149,31 +196,20 @@ pub(super) fn tool_made_progress(call: &ToolCall, content: &str, succeeded: bool
                     .and_then(Value::as_array)
                     .is_some_and(|items| !items.is_empty())
         }
-        "task_notes" => match call.arguments.get("operation").and_then(Value::as_str) {
-            Some("list") => value
-                .get("notes")
-                .and_then(Value::as_array)
-                .is_some_and(|items| !items.is_empty()),
-            Some("search") => value
-                .get("matches")
-                .and_then(Value::as_array)
-                .is_some_and(|items| !items.is_empty()),
-            Some("append" | "replace") => value.get("saved").is_some(),
-            Some("read") => payload_made_progress(&value),
-            _ => false,
-        },
-        "context_history" => match call.arguments.get("operation").and_then(Value::as_str) {
-            Some("windows") => value
-                .get("windows")
-                .and_then(Value::as_array)
-                .is_some_and(|items| !items.is_empty()),
-            Some("list" | "search") => value
-                .get("items")
-                .and_then(Value::as_array)
-                .is_some_and(|items| !items.is_empty()),
-            Some("read") => payload_made_progress(&value),
-            _ => false,
-        },
+        "artifact_info"
+        | "read_artifact"
+        | "search_artifact"
+        | "context_status"
+        | "context_history"
+        | "project_memory_recall"
+        | "project_memory_get"
+        | "project_memory_connections" => false,
+        "task_notes" => {
+            matches!(
+                call.arguments.get("operation").and_then(Value::as_str),
+                Some("append" | "replace")
+            ) && value.get("saved").is_some()
+        }
         "find_capabilities" => value.as_array().is_some_and(|values| !values.is_empty()),
         "activate_capability" => {
             value.get("alreadyActive").and_then(Value::as_bool) != Some(true)
@@ -384,4 +420,78 @@ fn normalize_loop_text(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn call(name: &str, arguments: Value) -> ToolCall {
+        ToolCall {
+            id: format!("{name}-1"),
+            name: name.to_owned(),
+            arguments,
+        }
+    }
+
+    #[test]
+    fn side_recovery_reads_do_not_count_as_forward_progress() {
+        for tool in [
+            "artifact_info",
+            "read_artifact",
+            "search_artifact",
+            "context_status",
+            "context_history",
+            "project_memory_recall",
+            "project_memory_get",
+            "project_memory_connections",
+        ] {
+            assert!(!tool_made_progress(
+                &call(tool, json!({"operation":"read"})),
+                r#"{"text":"recovered evidence"}"#,
+                true,
+            ));
+        }
+        assert!(!tool_made_progress(
+            &call("task_notes", json!({"operation":"read","name":"state"})),
+            r#"{"text":"note"}"#,
+            true,
+        ));
+    }
+
+    #[test]
+    fn task_note_write_still_counts_as_progress() {
+        assert!(tool_made_progress(
+            &call(
+                "task_notes",
+                json!({"operation":"replace","name":"state","content":"next"}),
+            ),
+            r#"{"saved":"state"}"#,
+            true,
+        ));
+    }
+
+    #[test]
+    fn source_inspection_purpose_does_not_fake_validation() {
+        assert!(!is_validation_tool_call(&call(
+            "run_shell",
+            json!({
+                "command":"sed -n '1,220p' src/remote.rs",
+                "purpose":"Verify the current remote lifecycle source"
+            }),
+        )));
+        assert!(is_validation_tool_call(&call(
+            "run_shell",
+            json!({"command":"cargo check","purpose":"Verify compilation"}),
+        )));
+    }
+
+    #[test]
+    fn duplicate_replay_is_not_fresh_validation_evidence() {
+        assert!(tool_result_is_replay(
+            r#"{"succeeded":true,"duplicate":true,"blockedReplay":true}"#
+        ));
+        assert!(!tool_result_is_replay(r#"{"succeeded":true,"exitCode":0}"#));
+    }
 }

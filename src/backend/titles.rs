@@ -79,7 +79,7 @@ pub(super) fn prepare_title_request(state: &mut SharedSession) -> Option<TitleRe
 
 /// Calls the provider for a concise session title and normalizes its output.
 pub(super) fn generate_session_title(
-    bridge: &BridgeClient,
+    bridge: &BridgeHandle,
     title: &TitleRequest,
 ) -> Result<String> {
     let system = format!(
@@ -102,7 +102,7 @@ pub(super) fn generate_session_title(
     request.timeout_ms = Some(15_000);
     request.metadata = Some(HashMap::from([("purpose".into(), "session-title".into())]));
     request.attached_capabilities = Some(Vec::new());
-    let result = bridge.complete(&request)?;
+    let result = bridge.client()?.complete(&request)?;
     normalize_generated_title(&result.text)
         .ok_or_else(|| anyhow!("title generator returned an unusable title"))
 }

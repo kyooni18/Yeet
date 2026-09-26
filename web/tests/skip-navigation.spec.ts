@@ -31,9 +31,9 @@ test('skip navigation is unavailable while the mobile sessions dialog owns focus
   test.skip(testInfo.project.name !== 'mobile-portrait')
 
   const skipLink = page.getByRole('link', { name: 'Skip to conversation' })
-  await page.getByTestId('open-sessions').click()
+  await page.getByRole('button', { name: 'Open sidebar' }).click()
 
-  await expect(page.getByRole('dialog', { name: 'Sessions' })).toBeVisible()
+  await expect(page.locator('.remote-sidebar')).toBeVisible()
   await expect(skipLink).toHaveCount(0)
 })
 

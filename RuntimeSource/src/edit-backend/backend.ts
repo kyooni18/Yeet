@@ -170,6 +170,10 @@ export class EditBackend {
     await this.transaction.initialize();
   }
 
+  snapshotText(handle: string): string {
+    return this.snapshots.get(handle).text;
+  }
+
   registerDialect(dialect: EditDialect): void {
     this.#dialects.set(dialect.id, dialect);
   }

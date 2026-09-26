@@ -205,6 +205,52 @@ export interface SandboxSettingsState {
   limits: SandboxLimitsState
 }
 
+export interface ThemePaletteState {
+  background: string
+  surface: string
+  surfaceRaised: string
+  codeBackground: string
+  selected: string
+  muted: string
+  border: string
+  borderDim: string
+  accent: string
+  accentHot: string
+  accentWarm: string
+  warning: string
+  success: string
+  text: string
+  textDim: string
+  user: string
+  userSurface: string
+  error: string
+}
+
+export interface ThemeCatalogItem {
+  id: string
+  label: string
+  appearance: 'dark' | 'light'
+  background: string
+  surface: string
+  accent: string
+  text: string
+}
+
+export interface RuntimeSettingsState {
+  appearance: 'auto' | 'dark' | 'light' | string
+  themeDark: string
+  themeLight: string
+  themeDarkResolved: string
+  themeLightResolved: string
+  themeDarkPalette: ThemePaletteState
+  themeLightPalette: ThemePaletteState
+  themeCatalog: ThemeCatalogItem[]
+  themeDarkWarning?: string | null
+  themeLightWarning?: string | null
+  contextLengthOverride?: number | null
+  jevLoopMode: string
+}
+
 export interface BridgeState {
   workspace_root?: string | null
   conversation_revision: number
@@ -244,10 +290,14 @@ export interface BridgeState {
   providers_working: boolean
   openai_flex: boolean
   foundation_memory_enabled: boolean
+  foundation_memory_backend: string
   foundation_memory_server: string
   foundation_memory_connected: boolean
+  web_backend: string
+  web_server: string
   settings_notice?: string | null
   settings_working: boolean
+  runtime_settings?: RuntimeSettingsState | null
   sandbox_settings?: SandboxSettingsState | null
   sandbox_notice?: string | null
   sandbox_working: boolean
@@ -280,8 +330,11 @@ export const emptyBridgeState = (): BridgeState => ({
   providers_working: false,
   openai_flex: false,
   foundation_memory_enabled: false,
+  foundation_memory_backend: 'builtin',
   foundation_memory_server: 'foundation',
   foundation_memory_connected: false,
+  web_backend: 'builtin',
+  web_server: 'web',
   settings_working: false,
   sandbox_working: false,
 })
@@ -304,8 +357,10 @@ export type SandboxAction =
   | { type: 'reset' }
 
 export type FrontendCommand =
-  | { type: 'submit'; text: string }
+  | { type: 'submit'; text: string; attachment_ids?: string[] }
   | { type: 'interrupt' }
+  | { type: 'regenerate_last' }
+  | { type: 'edit_last'; text: string }
   | { type: 'allow_shell' }
   | { type: 'deny_shell' }
   | { type: 'allow_native_app' }
@@ -329,6 +384,9 @@ export type FrontendCommand =
   | { type: 'request_settings' }
   | { type: 'set_open_ai_flex'; enabled: boolean }
   | { type: 'set_foundation_memory'; enabled: boolean }
+  | { type: 'set_service_backend'; service: string; backend: string; server?: string | null }
+  | { type: 'set_appearance'; appearance: string }
+  | { type: 'set_theme'; mode: 'dark' | 'light' | 'both'; value: string }
   | { type: 'request_sandbox' }
   | { type: 'update_sandbox'; action: SandboxAction }
   | { type: 'start_debate'; topic: string; models?: string[] | null }

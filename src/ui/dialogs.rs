@@ -5,6 +5,7 @@ use crate::{
     app::{App, SettingsEditKind, SettingsSection},
     model::{CapabilityToggleItem, reasoning_levels_for_model},
 };
+#[path = "dialogs/navigation.rs"]
 mod navigation;
 
 pub(super) use navigation::{draw_goal, draw_models, draw_reasoning, draw_sessions};
@@ -16,6 +17,7 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Paragraph, Wrap},
 };
 
+#[path = "dialogs/capabilities.rs"]
 mod capabilities;
 pub(super) use capabilities::{draw_capabilities, draw_capability_detail};
 
@@ -729,9 +731,27 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
             "off".into()
         },
         if app.state.foundation_memory_connected {
-            "native memory ready"
+            "selected backend ready"
         } else {
-            "native memory unavailable"
+            "selected backend unavailable"
+        },
+    );
+    row(
+        "Memory Backend",
+        app.state.foundation_memory_backend.clone(),
+        if app.state.foundation_memory_backend == "mcp" {
+            app.state.foundation_memory_server.as_str()
+        } else {
+            "Yeet internal provider"
+        },
+    );
+    row(
+        "Web Backend",
+        app.state.web_backend.clone(),
+        if app.state.web_backend == "mcp" {
+            app.state.web_server.as_str()
+        } else {
+            "Yeet internal provider"
         },
     );
     row(
@@ -769,13 +789,27 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
     );
     row(
         "Dark theme",
-        runtime.theme_dark.clone(),
-        "built-in name or theme path",
+        if runtime.theme_dark_warning.is_some() {
+            format!(
+                "{} · invalid → {}",
+                runtime.theme_dark, runtime.theme_dark_resolved
+            )
+        } else {
+            runtime.theme_dark.clone()
+        },
+        "built-in name or JSON/Lua theme path",
     );
     row(
         "Light theme",
-        runtime.theme_light.clone(),
-        "built-in name or theme path",
+        if runtime.theme_light_warning.is_some() {
+            format!(
+                "{} · invalid → {}",
+                runtime.theme_light, runtime.theme_light_resolved
+            )
+        } else {
+            runtime.theme_light.clone()
+        },
+        "built-in name or JSON/Lua theme path",
     );
     row(
         "Jev loop policy",
@@ -1152,8 +1186,10 @@ pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
     theme::modal_backdrop(frame, area);
     let (title, labels): (&str, Vec<&str>) = match app.settings_edit_kind.as_ref() {
         Some(SettingsEditKind::ContextLength) => ("Context window", vec!["Tokens or auto"]),
-        Some(SettingsEditKind::ThemeDark) => ("Dark theme", vec!["Name or path"]),
-        Some(SettingsEditKind::ThemeLight) => ("Light theme", vec!["Name or path"]),
+        Some(SettingsEditKind::ThemeDark) => ("Dark theme", vec!["Built-in name or JSON/Lua path"]),
+        Some(SettingsEditKind::ThemeLight) => {
+            ("Light theme", vec!["Built-in name or JSON/Lua path"])
+        }
         Some(SettingsEditKind::WorkspacePath) => ("Add workspace path", vec!["Relative path"]),
         Some(SettingsEditKind::Network) => ("Add network grant", vec!["Host", "Port (* = any)"]),
         Some(SettingsEditKind::Environment { .. }) => {

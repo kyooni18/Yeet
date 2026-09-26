@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { fetchEmbeddings } from "../embeddings.js";
 import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
 import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
@@ -22,6 +23,7 @@ export interface GeminiProviderOptions {
   accessToken?: string;
   projectId?: string;
   baseUrl?: string;
+  codeAssist?: boolean;
   fetch?: FetchLike;
   apiCallLogger?: ProviderFetchLogger;
 }
@@ -37,14 +39,25 @@ function functionNameForToolResult(message: Message): string {
 
 type GeminiFunctionMetadata = { providerId?: string; thoughtSignature?: string };
 
-function stateFunctionMetadata(message: Message, provider: string, model: string): Record<string, GeminiFunctionMetadata> | undefined {
+function providerStateData(message: Message, provider: string, model: string): Record<string, any> | undefined {
   const state = message.providerState;
   if (!state || state.provider !== provider || state.protocol !== "gemini-generate-content") return undefined;
   if (state.model && state.model !== model) return undefined;
-  const data = state.data as any;
+  return state.data && typeof state.data === "object" && !Array.isArray(state.data)
+    ? state.data as Record<string, any>
+    : undefined;
+}
+
+function stateFunctionMetadata(message: Message, provider: string, model: string): Record<string, GeminiFunctionMetadata> | undefined {
+  const data = providerStateData(message, provider, model);
   return data?.functionMetadata && typeof data.functionMetadata === "object" && !Array.isArray(data.functionMetadata)
     ? data.functionMetadata as Record<string, GeminiFunctionMetadata>
     : undefined;
+}
+
+function stateTextThoughtSignature(message: Message, provider: string, model: string): string | undefined {
+  const signature = providerStateData(message, provider, model)?.textThoughtSignature;
+  return typeof signature === "string" && signature ? signature : undefined;
 }
 
 function mergedFunctionMetadata(
@@ -66,12 +79,26 @@ function geminiProviderState(
   functionMetadata: Record<string, GeminiFunctionMetadata>,
   provider: string,
   model: string,
+  textThoughtSignature?: string,
 ): ProviderState | undefined {
-  if (Object.keys(functionMetadata).length === 0) return undefined;
-  return { provider, protocol: "gemini-generate-content", model, data: { functionMetadata } };
+  if (Object.keys(functionMetadata).length === 0 && !textThoughtSignature) return undefined;
+  return {
+    provider,
+    protocol: "gemini-generate-content",
+    model,
+    data: {
+      ...(Object.keys(functionMetadata).length ? { functionMetadata } : {}),
+      ...(textThoughtSignature ? { textThoughtSignature } : {}),
+    },
+  };
 }
 
-function mapContents(messages: Message[], metadata: Map<string, GeminiFunctionMetadata>): unknown[] {
+function mapContents(
+  messages: Message[],
+  metadata: Map<string, GeminiFunctionMetadata>,
+  provider: string,
+  model: string,
+): unknown[] {
   return messages.map((message) => {
     if (message.role === "tool") {
       const parsed = safeJsonParse(toolResultContent(message));
@@ -92,7 +119,13 @@ function mapContents(messages: Message[], metadata: Map<string, GeminiFunctionMe
 
     if (message.role === "assistant") {
       const parts: unknown[] = [];
-      if (message.content) parts.push({ text: message.content });
+      const textThoughtSignature = stateTextThoughtSignature(message, provider, model);
+      if (message.content) {
+        parts.push({
+          text: message.content,
+          ...(textThoughtSignature ? { thoughtSignature: textThoughtSignature } : {}),
+        });
+      }
       for (const tool of message.toolCalls ?? []) {
         const callMetadata = metadata.get(tool.id);
         parts.push({
@@ -261,7 +294,7 @@ function assertGeminiSchema(schema: Record<string, any>, path = "parameters"): v
   if (schema.items) assertGeminiSchema(schema.items as Record<string, any>, `${path}.items`);
 }
 
-function geminiToolSchema(input: Record<string, unknown>): Record<string, unknown> {
+export function geminiToolSchema(input: Record<string, unknown>): Record<string, unknown> {
   const schema = lowerGeminiSchema(input);
   if (schemaType(schema) !== "object") {
     if (Object.keys(schema).length === 0) return { type: "object", properties: {} };
@@ -269,6 +302,49 @@ function geminiToolSchema(input: Record<string, unknown>): Record<string, unknow
   }
   assertGeminiSchema(schema);
   return schema;
+}
+
+function normalizedGeminiModel(model: string): string {
+  return model.startsWith("models/") ? model.slice("models/".length) : model;
+}
+
+function legacyThinkingLevel(value: unknown): "low" | "medium" | "high" | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value <= 1_024) return "low";
+  if (value <= 8_192) return "medium";
+  return "high";
+}
+
+function generationConfigForModel(model: string, input: Record<string, unknown>): Record<string, unknown> {
+  const normalized = normalizedGeminiModel(model);
+  const output = { ...input };
+  if (/^gemini-3(?:\.|-|$)/.test(normalized)) {
+    // Gemini 3+ does not support multi-candidate generation.
+    delete output.candidateCount;
+    delete output.candidate_count;
+  }
+  if (/^gemini-3\.8-flash(?:-|$)/.test(normalized)) {
+    // Gemini 3.8 Flash's current API contract removes legacy sampling knobs.
+    delete output.temperature;
+    delete output.topP;
+    delete output.top_p;
+    delete output.topK;
+    delete output.top_k;
+
+    const rawThinking = output.thinkingConfig;
+    if (rawThinking && typeof rawThinking === "object" && !Array.isArray(rawThinking)) {
+      const thinking = { ...(rawThinking as Record<string, unknown>) };
+      if (thinking.thinkingLevel === "minimal") thinking.thinkingLevel = "low";
+      if (thinking.thinkingLevel === undefined) {
+        const migrated = legacyThinkingLevel(thinking.thinkingBudget ?? thinking.thinking_budget);
+        if (migrated) thinking.thinkingLevel = migrated;
+      }
+      delete thinking.thinkingBudget;
+      delete thinking.thinking_budget;
+      output.thinkingConfig = thinking;
+    }
+  }
+  return output;
 }
 
 function bodyFor(
@@ -282,10 +358,12 @@ function bodyFor(
   const split = splitLeadingSystem(request.messages, request.system);
   const effectiveMetadata = mergedFunctionMetadata(split.messages, metadata, providerId, request.model);
   const providerOptions = request.providerOptions ?? {};
-  const providerGenerationConfig =
+  const providerGenerationConfig = generationConfigForModel(
+    request.model,
     providerOptions.generationConfig && typeof providerOptions.generationConfig === "object"
       ? providerOptions.generationConfig as Record<string, unknown>
-      : {};
+      : {},
+  );
   const namedToolChoice = request.toolChoice && typeof request.toolChoice === "object"
     ? request.toolChoice.name
     : undefined;
@@ -297,7 +375,7 @@ function bodyFor(
   return {
     ...(providerOptions.safetySettings !== undefined ? { safetySettings: providerOptions.safetySettings } : {}),
     ...(typeof providerOptions.cachedContent === "string" ? { cachedContent: providerOptions.cachedContent } : {}),
-    contents: mapContents(split.messages, effectiveMetadata),
+    contents: mapContents(split.messages, effectiveMetadata, providerId, request.model),
     ...(split.system ? { systemInstruction: { parts: [{ text: split.system }] } } : {}),
     ...(request.tools?.length
       ? {
@@ -313,11 +391,14 @@ function bodyFor(
           ...(request.toolChoice !== undefined ? { toolConfig: toolConfig(request.toolChoice) } : {}),
         }
       : {}),
-    ...(Object.keys(providerGenerationConfig).length || request.temperature !== undefined || request.maxTokens !== undefined
+    ...(Object.keys(providerGenerationConfig).length || request.maxTokens !== undefined
+      || (request.temperature !== undefined && !/^gemini-3\.8-flash(?:-|$)/.test(normalizedGeminiModel(request.model)))
       ? {
           generationConfig: {
             ...providerGenerationConfig,
-            ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+            ...(request.temperature !== undefined && !/^gemini-3\.8-flash(?:-|$)/.test(normalizedGeminiModel(request.model))
+              ? { temperature: request.temperature }
+              : {}),
             ...(request.maxTokens !== undefined ? { maxOutputTokens: request.maxTokens } : {}),
           },
         }
@@ -359,6 +440,7 @@ export class GeminiProvider implements ProviderAdapter {
   readonly #accessToken: string | undefined;
   readonly #projectId: string | undefined;
   readonly #baseUrl: string;
+  readonly #codeAssist: boolean;
   readonly #fetch: FetchLike | undefined;
   readonly #apiCallLogger: ProviderFetchLogger | undefined;
   readonly #functionMetadata = new Map<string, GeminiFunctionMetadata>();
@@ -368,7 +450,13 @@ export class GeminiProvider implements ProviderAdapter {
     this.#apiKey = options.apiKey;
     this.#accessToken = options.accessToken;
     this.#projectId = options.projectId;
-    this.#baseUrl = (options.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
+    this.#codeAssist = options.codeAssist ?? false;
+    this.#baseUrl = (
+      options.baseUrl
+      ?? (this.#codeAssist
+        ? "https://cloudcode-pa.googleapis.com/v1internal"
+        : "https://generativelanguage.googleapis.com/v1beta")
+    ).replace(/\/$/, "");
     this.#fetch = options.fetch;
     this.#apiCallLogger = options.apiCallLogger;
   }
@@ -378,7 +466,7 @@ export class GeminiProvider implements ProviderAdapter {
       return {
         authorization: `Bearer ${this.#accessToken}`,
         "content-type": "application/json",
-        ...(this.#projectId ? { "x-goog-user-project": this.#projectId } : {}),
+        ...(this.#projectId && !this.#codeAssist ? { "x-goog-user-project": this.#projectId } : {}),
       };
     }
     if (!this.#apiKey) throw new Error("Missing API key or OAuth token for gemini");
@@ -387,6 +475,29 @@ export class GeminiProvider implements ProviderAdapter {
 
   #modelPath(model: string): string {
     return model.startsWith("models/") ? model.slice("models/".length) : model;
+  }
+
+  #codeAssistRequest(request: ProviderCallRequest): Record<string, unknown> {
+    const requestBody = bodyFor(request, this.#functionMetadata, this.id);
+    if (!this.#codeAssist) return requestBody;
+    if (!this.#projectId) throw new Error("Gemini Code Assist OAuth requires a project id");
+    return {
+      model: this.#modelPath(request.model),
+      project: this.#projectId,
+      user_prompt_id: randomUUID(),
+      request: requestBody,
+    };
+  }
+
+  #generateUrl(model: string, stream: boolean): string {
+    if (this.#codeAssist) {
+      return `${this.#baseUrl}:${stream ? "streamGenerateContent" : "generateContent"}${stream ? "?alt=sse" : ""}`;
+    }
+    return `${this.#baseUrl}/models/${encodeURIComponent(this.#modelPath(model))}:${stream ? "streamGenerateContent?alt=sse" : "generateContent"}`;
+  }
+
+  #unwrapResponse(value: any): any {
+    return this.#codeAssist ? value?.response ?? {} : value;
   }
 
   #rememberFunctionMetadata(part: any, normalizedId: string): GeminiFunctionMetadata | undefined {
@@ -411,6 +522,9 @@ export class GeminiProvider implements ProviderAdapter {
   }
 
   async embed(request: EmbeddingRequest): Promise<EmbeddingResult> {
+    if (this.#codeAssist) {
+      throw new Error("Gemini Code Assist OAuth does not expose the public embedding endpoint");
+    }
     return fetchEmbeddings({ provider: this.id, baseUrl: this.#baseUrl,
       headers: this.#headers(), request, format: "gemini",
       fetch: this.#fetch, apiCallLogger: this.#apiCallLogger });
@@ -421,6 +535,39 @@ export class GeminiProvider implements ProviderAdapter {
   }
 
   async listModelInfo(): Promise<ModelInfo[]> {
+    if (this.#codeAssist) {
+      if (!this.#projectId) throw new Error("Gemini Code Assist OAuth requires a project id");
+      const response = await providerFetch(
+        `${this.#baseUrl}:retrieveUserQuota`,
+        {
+          method: "POST",
+          headers: this.#headers(),
+          body: JSON.stringify({ project: this.#projectId }),
+        },
+        {
+          provider: this.id,
+          ...(this.#fetch ? { fetch: this.#fetch } : {}),
+          ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
+        },
+      );
+      const raw = await readJson<any>(response);
+      const seen = new Set<string>();
+      const models: ModelInfo[] = [];
+      for (const value of Array.isArray(raw?.buckets) ? raw.buckets : []) {
+        const candidate = value && typeof value === "object" && !Array.isArray(value) ? value as any : {};
+        const rawId = typeof candidate.modelId === "string"
+          ? candidate.modelId
+          : typeof candidate.model_id === "string"
+            ? candidate.model_id
+            : undefined;
+        if (!rawId) continue;
+        const id = this.#modelPath(rawId);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        models.push({ id });
+      }
+      return models;
+    }
     const models: ModelInfo[] = [];
     const seen = new Set<string>();
     let pageToken: string | undefined;
@@ -455,8 +602,8 @@ export class GeminiProvider implements ProviderAdapter {
 
   async complete(request: ProviderCallRequest): Promise<CallResult> {
     const response = await providerFetch(
-      `${this.#baseUrl}/models/${encodeURIComponent(this.#modelPath(request.model))}:generateContent`,
-      { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, this.#functionMetadata, this.id)) },
+      this.#generateUrl(request.model, false),
+      { method: "POST", headers: this.#headers(), body: JSON.stringify(this.#codeAssistRequest(request)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -467,7 +614,8 @@ export class GeminiProvider implements ProviderAdapter {
       },
     );
     const transportAttempts = providerFetchAttempts(response);
-    const raw = await readJson<any>(response);
+    const envelope = await readJson<any>(response);
+    const raw = this.#unwrapResponse(envelope);
     const candidate = raw.candidates?.[0] ?? {};
     const parts = candidate.content?.parts ?? [];
     const reasoning = parts
@@ -483,7 +631,13 @@ export class GeminiProvider implements ProviderAdapter {
         if (metadata) turnFunctionMetadata[toolCall.id] = metadata;
         return toolCall;
       });
-    const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model);
+    const textThoughtSignature = [...parts].reverse().find((part: any) =>
+      part?.thought !== true
+      && typeof part?.text === "string"
+      && typeof part?.thoughtSignature === "string"
+      && part.thoughtSignature
+    )?.thoughtSignature;
+    const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model, textThoughtSignature);
     const normalizedUsage = usage(
       raw.usageMetadata?.promptTokenCount,
       raw.usageMetadata?.candidatesTokenCount,
@@ -503,14 +657,14 @@ export class GeminiProvider implements ProviderAdapter {
       ...(providerState ? { providerState } : {}),
       finishReason: geminiFinish(candidate.finishReason, toolCalls.length > 0),
       ...(normalizedUsage ? { usage: normalizedUsage } : {}),
-      raw,
+      raw: this.#codeAssist ? envelope : raw,
     };
   }
 
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
     const response = await providerFetch(
-      `${this.#baseUrl}/models/${encodeURIComponent(this.#modelPath(request.model))}:streamGenerateContent?alt=sse`,
-      { method: "POST", headers: this.#headers(), body: JSON.stringify(bodyFor(request, this.#functionMetadata, this.id)) },
+      this.#generateUrl(request.model, true),
+      { method: "POST", headers: this.#headers(), body: JSON.stringify(this.#codeAssistRequest(request)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -526,12 +680,13 @@ export class GeminiProvider implements ProviderAdapter {
     let finish = "unknown" as ReturnType<typeof normalizeFinishReason>;
     let finalUsage: ReturnType<typeof usage>;
     let toolIndex = 0;
+    let textThoughtSignature: string | undefined;
     const turnFunctionMetadata: Record<string, GeminiFunctionMetadata> = {};
 
     for await (const event of parseSSE(response)) {
       let raw: any;
       try {
-        raw = JSON.parse(event.data);
+        raw = this.#unwrapResponse(JSON.parse(event.data));
       } catch {
         continue;
       }
@@ -554,7 +709,12 @@ export class GeminiProvider implements ProviderAdapter {
       for (const part of parts) {
         if (typeof part.text === "string" && part.text) {
           if (part.thought === true) yield { type: "reasoning-delta", delta: part.text };
-          else yield { type: "text-delta", delta: part.text };
+          else {
+            if (typeof part.thoughtSignature === "string" && part.thoughtSignature) {
+              textThoughtSignature = part.thoughtSignature;
+            }
+            yield { type: "text-delta", delta: part.text };
+          }
         }
         if (part.functionCall) {
           hasTools = true;
@@ -570,7 +730,7 @@ export class GeminiProvider implements ProviderAdapter {
       else if (hasTools) finish = "tool_call";
     }
 
-    const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model);
+    const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model, textThoughtSignature);
     yield {
       type: "finish",
       finishReason: finish,

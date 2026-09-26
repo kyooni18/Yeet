@@ -1,15 +1,14 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    io::{BufRead, BufReader, BufWriter, Read, Write},
+    io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
-        mpsc::{self, Receiver},
+        mpsc::{self, SyncSender},
     },
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -21,19 +20,20 @@ use uuid::Uuid;
 
 use super::{
     MODERN_PROTOCOL_VERSION,
-    auth::{AuthMode, AuthStore, AuthorizationRequest, OAuthRuntime, bearer_token},
+    auth::{AuthStore, OAuthRuntime},
     mcp_json_nesting_within_limit,
     trace::runtime_request_summary,
 };
 
+mod auth_support;
 mod runtime_support;
 mod wire;
 
-use crate::platform::force_terminate_process_tree;
-use runtime_support::{
-    JsonRpcErrorShape, mcp_jsonrpc_error_response, payload_contains_blocking_tool_call,
-    runtime_timeout_for_payload,
+use auth_support::{
+    attach_protocol_version, authorization_page, ensure_oauth_mode, mcp_authorized,
+    payload_contains_method, unauthorized_response,
 };
+use runtime_support::{JsonRpcErrorShape, mcp_jsonrpc_error_response};
 use wire::{
     HttpRequest, HttpResponse, inferred_public_url, issuer_for_resource, normalize_public_url,
     parse_form, read_request, split_target, write_response,
@@ -44,28 +44,36 @@ const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_WORKER_STACK_BYTES: usize = 4 * 1024 * 1024;
 const MAX_HTTP_WORKERS: usize = 64;
-const MAX_MCP_SESSIONS: usize = 32;
-// Keep enough lazily-created runtimes for concurrent workers while reserving a
-// quarter of the pool for short control/file calls. Foreground shell and native
-// desktop calls are deliberately capped below the full pool so they cannot
-// starve the MCP control plane.
-const MAX_LEGACY_RUNTIMES: usize = 16;
-const MAX_BLOCKING_TOOL_RUNTIMES: usize = 12;
+// MCP runtimes are demand-driven rather than count-capped. Idle runtime threads
+// are retired by TTL, so bursts can scale without rejecting valid workflows.
+static ACTIVE_MCP_RUNTIME_THREADS: AtomicUsize = AtomicUsize::new(0);
 const MAX_LEGACY_AFFINITY_HANDLES: usize = 8192;
-const MCP_LEGACY_RUNTIME_RETAIN_COUNT: usize = 4;
 const MCP_LEGACY_RUNTIME_IDLE_TTL: Duration = Duration::from_secs(5 * 60);
 const MCP_LEGACY_RUNTIME_REAP_INTERVAL: Duration = Duration::from_secs(30);
 const MCP_LEGACY_HANDLE_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
+const MCP_LEGACY_STICKY_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 const MCP_SESSION_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
-const MCP_RUNTIME_LANE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const MCP_RUNTIME_FIXED_LANE_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const MCP_RUNTIME_LANE_RETRY_DELAY: Duration = Duration::from_millis(10);
 const MCP_RUNTIME_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
-const MCP_RUNTIME_DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
-const MCP_RUNTIME_MAX_TIMEOUT: Duration = Duration::from_secs(15 * 60 + 30);
+const MCP_RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 const MCP_RUNTIME_UNAVAILABLE_ERROR_CODE: i64 = -32001;
-const MCP_SESSION_CAPACITY_ERROR_CODE: i64 = -32002;
 const MCP_SESSION_HEADER: &str = "mcp-session-id";
+
+struct RuntimeThreadPermit;
+
+impl RuntimeThreadPermit {
+    fn acquire() -> Self {
+        ACTIVE_MCP_RUNTIME_THREADS.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for RuntimeThreadPermit {
+    fn drop(&mut self) {
+        ACTIVE_MCP_RUNTIME_THREADS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct HttpOptions {
@@ -160,7 +168,13 @@ impl HttpServer {
                         });
                     if let Err(error) = spawn {
                         active_workers.fetch_sub(1, Ordering::AcqRel);
-                        return Err(error.into());
+                        // A transient OS thread limit must not take down the
+                        // listener and trigger a full daemon restart. The
+                        // accepted socket was dropped with the failed worker;
+                        // keep accepting once resources become available.
+                        eprintln!(
+                            "yeet mcpserver: could not start HTTP worker; connection dropped: {error}"
+                        );
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -182,26 +196,26 @@ impl Drop for HttpWorkerSlot {
 }
 
 struct SessionRuntime {
-    process: McpProcess,
+    runtime: McpRuntime,
     last_used: Instant,
 }
 
 impl SessionRuntime {
     fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
         Ok(Self {
-            process: McpProcess::new(default_workspace, restrict_workspace)?,
+            runtime: McpRuntime::new(default_workspace, restrict_workspace)?,
             last_used: Instant::now(),
         })
     }
 
     fn handle(&mut self, payload: Value) -> Result<Option<Value>> {
-        if !self.process.is_alive() {
+        if !self.runtime.is_alive() {
             eprintln!(
-                "yeet mcpserver: MCP session runtime was not alive; restarting before request"
+                "yeet mcpserver: MCP runtime thread was not alive; restarting before request"
             );
-            self.process.restart()?;
+            self.runtime.restart()?;
         }
-        let result = self.process.handle(payload);
+        let result = self.runtime.handle(payload);
         self.last_used = Instant::now();
         result
     }
@@ -242,7 +256,7 @@ impl SessionRuntimePool {
 struct RuntimeLanePool {
     default_workspace: PathBuf,
     restrict_workspace: bool,
-    lanes: Vec<Arc<Mutex<Option<SessionRuntime>>>>,
+    lanes: Mutex<Vec<Arc<Mutex<Option<SessionRuntime>>>>>,
     affinity: Mutex<LegacyAffinityState>,
 }
 
@@ -252,11 +266,17 @@ struct LegacyHandleAffinity {
     last_used: Instant,
 }
 
+#[derive(Clone, Copy)]
+struct LegacyStickyAffinity {
+    lane: usize,
+    last_used: Instant,
+}
+
 #[derive(Default)]
 struct LegacyAffinityState {
     handles: HashMap<String, LegacyHandleAffinity>,
     handle_order: VecDeque<String>,
-    sticky: HashMap<String, usize>,
+    sticky: HashMap<String, LegacyStickyAffinity>,
     preferred: HashMap<String, usize>,
     next_lane: usize,
 }
@@ -275,41 +295,51 @@ enum LegacyRoute {
 
 impl RuntimeLanePool {
     fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
-        let mut lanes = Vec::with_capacity(MAX_LEGACY_RUNTIMES);
-        lanes.push(Arc::new(Mutex::new(Some(SessionRuntime::new(
-            default_workspace.clone(),
-            restrict_workspace,
-        )?))));
-        for _ in 1..MAX_LEGACY_RUNTIMES {
-            lanes.push(Arc::new(Mutex::new(None)));
-        }
         Ok(Self {
             default_workspace,
             restrict_workspace,
-            lanes,
+            // A cold lane is just an in-process slot. No runtime thread and no
+            // provider child are created until a request actually claims it.
+            lanes: Mutex::new(vec![Arc::new(Mutex::new(None))]),
             affinity: Mutex::new(LegacyAffinityState::default()),
         })
     }
+
+    fn lanes_snapshot(
+        &self,
+    ) -> std::result::Result<Vec<Arc<Mutex<Option<SessionRuntime>>>>, RuntimeCallError> {
+        self.lanes.lock().map(|lanes| lanes.clone()).map_err(|_| {
+            RuntimeCallError::Unavailable(anyhow!("MCP runtime lane table lock poisoned"))
+        })
+    }
+
+    fn append_lane(
+        &self,
+    ) -> std::result::Result<(usize, Arc<Mutex<Option<SessionRuntime>>>), RuntimeCallError> {
+        let mut lanes = self.lanes.lock().map_err(|_| {
+            RuntimeCallError::Unavailable(anyhow!("MCP runtime lane table lock poisoned"))
+        })?;
+        let lane = Arc::new(Mutex::new(None));
+        let index = lanes.len();
+        lanes.push(Arc::clone(&lane));
+        Ok((index, lane))
+    }
+
     fn call(&self, payload: Value) -> std::result::Result<Option<Value>, RuntimeCallError> {
-        let blocking = payload_contains_blocking_tool_call(&payload);
         let info = legacy_request_info(&payload, &self.default_workspace);
-        let blocking_end = MAX_BLOCKING_TOOL_RUNTIMES.min(self.lanes.len());
-        // Stateful sticky domains (shell/native computer control) stay on the blocking
-        // side of the pool. Everything else that can safely choose a fresh runtime
-        // starts in the reserved short-call lanes, so snapshots/artifacts are not
-        // created on a lane that a long shell or desktop call can monopolize.
-        let use_reserved_short_lanes =
-            !blocking && info.sticky_key.is_none() && blocking_end < self.lanes.len();
-        let (lane_start, lane_end) = if use_reserved_short_lanes {
-            (blocking_end, self.lanes.len())
-        } else {
-            (0, blocking_end)
-        };
+        let lanes = self.lanes_snapshot()?;
+        let lane_start = 0;
+        let lane_end = lanes.len();
         let route = self.route(&info, lane_start, lane_end)?;
         let (lane, response) = match route {
             LegacyRoute::Fixed(lane) => {
+                let target = lanes.get(lane).ok_or_else(|| {
+                    RuntimeCallError::Unavailable(anyhow!(
+                        "MCP runtime affinity references missing lane {lane}"
+                    ))
+                })?;
                 let response = call_runtime_lane_bounded(
-                    &self.lanes[lane],
+                    target,
                     &self.default_workspace,
                     self.restrict_workspace,
                     payload,
@@ -319,15 +349,32 @@ impl RuntimeLanePool {
             }
             LegacyRoute::Flexible(start) => {
                 let protected_lanes = self.sticky_lanes_in_range(lane_start, lane_end)?;
-                call_flexible_runtime_bounded(
-                    &self.lanes,
+                let mut payload = Some(payload);
+                if let Some(result) = try_flexible_runtime(
+                    &lanes,
                     &self.default_workspace,
                     self.restrict_workspace,
-                    payload,
+                    &mut payload,
                     lane_start..lane_end,
                     start,
                     &protected_lanes,
-                )?
+                )? {
+                    result
+                } else {
+                    // Existing lanes are genuinely occupied. Grow only at the
+                    // point where concurrent demand requires another runtime.
+                    let (lane_index, target) = self.append_lane()?;
+                    let response = call_runtime_lane_bounded(
+                        &target,
+                        &self.default_workspace,
+                        self.restrict_workspace,
+                        payload
+                            .take()
+                            .expect("payload remains available until a lane is selected"),
+                        lane_index,
+                    )?;
+                    (lane_index, response)
+                }
             }
         };
         if let Some(key) = info.preferred_key.as_ref() {
@@ -353,13 +400,14 @@ impl RuntimeLanePool {
         lane_start: usize,
         lane_end: usize,
     ) -> std::result::Result<LegacyRoute, RuntimeCallError> {
-        debug_assert!(lane_start < lane_end && lane_end <= self.lanes.len());
+        debug_assert!(lane_start < lane_end);
         let lane_count = lane_end - lane_start;
         let mut affinity = self.affinity.lock().map_err(|_| {
             RuntimeCallError::Unavailable(anyhow!("legacy MCP affinity lock poisoned"))
         })?;
         let now = Instant::now();
         affinity.prune_expired_handles(now);
+        affinity.prune_expired_sticky(now);
         let mut fixed_lane = None;
         for handle in &info.handles {
             let Some(binding) = affinity.handles.get_mut(handle) else {
@@ -381,23 +429,31 @@ impl RuntimeLanePool {
             return Ok(LegacyRoute::Fixed(lane));
         }
         if let Some(key) = info.sticky_key.as_ref() {
-            if let Some(&lane) = affinity.sticky.get(key) {
-                return Ok(LegacyRoute::Fixed(lane));
+            if let Some(binding) = affinity.sticky.get_mut(key) {
+                binding.last_used = now;
+                return Ok(LegacyRoute::Fixed(binding.lane));
             }
             let lane = lane_start + affinity.next_lane % lane_count;
             affinity.next_lane = affinity.next_lane.wrapping_add(1);
-            affinity.sticky.insert(key.clone(), lane);
+            affinity.sticky.insert(
+                key.clone(),
+                LegacyStickyAffinity {
+                    lane,
+                    last_used: now,
+                },
+            );
             return Ok(LegacyRoute::Fixed(lane));
         }
+
         if let Some(key) = info.preferred_key.as_ref() {
             if let Some(&lane) = affinity.preferred.get(key)
                 && (lane_start..lane_end).contains(&lane)
             {
                 return Ok(LegacyRoute::Fixed(lane));
             }
-            // Short file calls create daemon-local snapshot/artifact state. Bind the
-            // workspace before execution so concurrent first-use requests cannot spill
-            // across reserved lanes and later produce incompatible handles.
+            // Short file calls create daemon-local snapshot state. Bind the workspace
+            // before execution so concurrent first-use requests cannot spill across
+            // reserved lanes and later produce incompatible snapshot handles.
             affinity.preferred.remove(key);
             let lane = lane_start + affinity.next_lane % lane_count;
             affinity.next_lane = affinity.next_lane.wrapping_add(1);
@@ -420,7 +476,7 @@ impl RuntimeLanePool {
         Ok(affinity
             .sticky
             .values()
-            .copied()
+            .map(|binding| binding.lane)
             .filter(|lane| (lane_start..lane_end).contains(lane))
             .collect())
     }
@@ -460,37 +516,30 @@ impl RuntimeLanePool {
 
     fn reap_idle_legacy_runtimes(&self) -> usize {
         let now = Instant::now();
-        let mut active_count = 0usize;
+        let lanes = match self.lanes.lock() {
+            Ok(lanes) => lanes.clone(),
+            Err(_) => return 0,
+        };
         let mut candidates = Vec::new();
 
-        for (lane_index, lane) in self.lanes.iter().enumerate() {
-            match lane.try_lock() {
-                Ok(slot) => {
-                    if let Some(runtime) = slot.as_ref() {
-                        active_count += 1;
-                        if now.saturating_duration_since(runtime.last_used)
-                            >= MCP_LEGACY_RUNTIME_IDLE_TTL
-                        {
-                            candidates.push((runtime.last_used, lane_index));
-                        }
-                    }
-                }
-                Err(std::sync::TryLockError::WouldBlock)
-                | Err(std::sync::TryLockError::Poisoned(_)) => active_count += 1,
+        for (lane_index, lane) in lanes.iter().enumerate() {
+            let Ok(slot) = lane.try_lock() else {
+                continue;
+            };
+            if let Some(runtime) = slot.as_ref()
+                && now.saturating_duration_since(runtime.last_used) >= MCP_LEGACY_RUNTIME_IDLE_TTL
+            {
+                candidates.push((runtime.last_used, lane_index));
             }
         }
 
-        if active_count <= MCP_LEGACY_RUNTIME_RETAIN_COUNT {
-            return 0;
-        }
         candidates.sort_unstable_by_key(|(last_used, _)| *last_used);
-
         let mut retired = 0usize;
         for (_, lane_index) in candidates {
-            if active_count <= MCP_LEGACY_RUNTIME_RETAIN_COUNT {
-                break;
-            }
-            let Ok(mut slot) = self.lanes[lane_index].try_lock() else {
+            let Some(lane) = lanes.get(lane_index) else {
+                continue;
+            };
+            let Ok(mut slot) = lane.try_lock() else {
                 continue;
             };
             let Some(runtime) = slot.as_ref() else {
@@ -503,6 +552,7 @@ impl RuntimeLanePool {
                 continue;
             };
             affinity.prune_expired_handles(now);
+            affinity.prune_expired_sticky(now);
             if affinity.lane_is_pinned(lane_index) {
                 continue;
             }
@@ -511,19 +561,25 @@ impl RuntimeLanePool {
             drop(affinity);
             drop(slot);
             drop(runtime);
-            active_count -= 1;
             retired += 1;
         }
         retired
     }
 
     fn add_health(&self, health: &mut RuntimeHealth) {
-        for lane in &self.lanes {
+        let lanes = match self.lanes.lock() {
+            Ok(lanes) => lanes.clone(),
+            Err(_) => {
+                health.dead += 1;
+                return;
+            }
+        };
+        for lane in &lanes {
             health.total += 1;
             match lane.try_lock() {
                 Ok(mut lane) => {
                     if let Some(runtime) = lane.as_mut() {
-                        if runtime.process.is_alive() {
+                        if runtime.runtime.is_alive() {
                             health.available += 1;
                         } else {
                             health.dead += 1;
@@ -546,9 +602,9 @@ fn call_runtime_lane_bounded(
     payload: Value,
     lane_index: usize,
 ) -> std::result::Result<Option<Value>, RuntimeCallError> {
-    // Fixed routes carry state (snapshot/artifact/job/native-session affinity),
-    // so spilling to another lane would be incorrect. Queue briefly on that
-    // lane instead of applying the aggressive flexible-pool admission timeout.
+    // Fixed routes carry state (snapshot/job/native-session affinity), so spilling
+    // to another lane would be incorrect. Queue briefly on that lane instead of
+    // applying the aggressive flexible-pool admission timeout.
     let request = runtime_request_summary(&payload, default_workspace);
     let deadline = Instant::now() + MCP_RUNTIME_FIXED_LANE_WAIT_TIMEOUT;
     loop {
@@ -581,21 +637,19 @@ fn call_runtime_lane_bounded(
     }
 }
 
-fn call_flexible_runtime_bounded(
+fn try_flexible_runtime(
     lanes: &[Arc<Mutex<Option<SessionRuntime>>>],
     default_workspace: &Path,
     restrict_workspace: bool,
-    payload: Value,
+    payload: &mut Option<Value>,
     lane_range: std::ops::Range<usize>,
     start: usize,
     protected_lanes: &HashSet<usize>,
-) -> std::result::Result<(usize, Option<Value>), RuntimeCallError> {
+) -> std::result::Result<Option<(usize, Option<Value>)>, RuntimeCallError> {
     let lane_start = lane_range.start;
     let lane_end = lane_range.end;
     if lanes.is_empty() || lane_start >= lane_end || lane_end > lanes.len() {
-        return Err(RuntimeCallError::Unavailable(anyhow!(
-            "MCP runtime pool has no eligible lanes"
-        )));
+        return Ok(None);
     }
 
     let lane_count = lane_end - lane_start;
@@ -607,70 +661,60 @@ fn call_flexible_runtime_bounded(
     let lane_order = (0..lane_count)
         .map(|offset| lane_start + (start_offset + offset) % lane_count)
         .collect::<Vec<_>>();
-    let request = runtime_request_summary(&payload, default_workspace);
-    let deadline = Instant::now() + MCP_RUNTIME_LANE_WAIT_TIMEOUT;
-    let mut payload = Some(payload);
-    loop {
-        // Prefer lanes without sticky shell/computer state. Stateful lanes remain
-        // fallback capacity when every unpinned lane is busy or unavailable.
-        for protected_phase in [false, true] {
-            // Prefer an already initialized idle runtime within this priority group.
-            for &lane_index in &lane_order {
-                if protected_lanes.contains(&lane_index) != protected_phase {
-                    continue;
-                }
-                match lanes[lane_index].try_lock() {
-                    Ok(mut runtime) if runtime.is_some() => {
-                        let response = call_locked_runtime(
-                            &mut runtime,
-                            default_workspace,
-                            restrict_workspace,
-                            payload
-                                .take()
-                                .expect("payload consumed only after lane selection"),
-                            lane_index,
-                        )?;
-                        return Ok((lane_index, response));
-                    }
-                    Ok(_) | Err(std::sync::TryLockError::WouldBlock) => {}
-                    Err(std::sync::TryLockError::Poisoned(_)) => continue,
-                }
-            }
 
-            // A cold unpinned slot is preferable to borrowing a lane that carries
-            // stateful affinity; initialization cost is bounded and paid once.
-            for &lane_index in &lane_order {
-                if protected_lanes.contains(&lane_index) != protected_phase {
-                    continue;
+    // Prefer existing runtime state first. A protected sticky lane is fallback
+    // capacity only; if every existing lane is occupied the caller grows the
+    // pool instead of waiting for a fixed admission slot.
+    for protected_phase in [false, true] {
+        for &lane_index in &lane_order {
+            if protected_lanes.contains(&lane_index) != protected_phase {
+                continue;
+            }
+            match lanes[lane_index].try_lock() {
+                Ok(mut runtime) if runtime.is_some() => {
+                    let response = call_locked_runtime(
+                        &mut runtime,
+                        default_workspace,
+                        restrict_workspace,
+                        payload
+                            .take()
+                            .expect("payload consumed only after lane selection"),
+                        lane_index,
+                    )?;
+                    return Ok(Some((lane_index, response)));
                 }
-                match lanes[lane_index].try_lock() {
-                    Ok(mut runtime) => {
-                        let response = call_locked_runtime(
-                            &mut runtime,
-                            default_workspace,
-                            restrict_workspace,
-                            payload
-                                .take()
-                                .expect("payload consumed only after lane selection"),
-                            lane_index,
-                        )?;
-                        return Ok((lane_index, response));
-                    }
-                    Err(
-                        std::sync::TryLockError::WouldBlock | std::sync::TryLockError::Poisoned(_),
-                    ) => continue,
-                }
+                Ok(_) | Err(std::sync::TryLockError::WouldBlock) => {}
+                Err(std::sync::TryLockError::Poisoned(_)) => continue,
             }
         }
 
-        if Instant::now() >= deadline {
-            return Err(RuntimeCallError::Unavailable(anyhow!(
-                "MCP runtime pool stayed busy for {} ms; retry shortly ({request})",
-                MCP_RUNTIME_LANE_WAIT_TIMEOUT.as_millis()
-            )));
+        // Reuse a cold slot before growing. Lockable None slots do not own a
+        // runtime thread yet, so this remains demand-driven.
+        for &lane_index in &lane_order {
+            if protected_lanes.contains(&lane_index) != protected_phase {
+                continue;
+            }
+            match lanes[lane_index].try_lock() {
+                Ok(mut runtime) => {
+                    let response = call_locked_runtime(
+                        &mut runtime,
+                        default_workspace,
+                        restrict_workspace,
+                        payload
+                            .take()
+                            .expect("payload consumed only after lane selection"),
+                        lane_index,
+                    )?;
+                    return Ok(Some((lane_index, response)));
+                }
+                Err(std::sync::TryLockError::WouldBlock | std::sync::TryLockError::Poisoned(_)) => {
+                    continue;
+                }
+            }
         }
-        thread::sleep(MCP_RUNTIME_LANE_RETRY_DELAY);
     }
+
+    Ok(None)
 }
 
 fn runtime_pool_busy_error(lane_index: usize, wait: Duration, request: &str) -> RuntimeCallError {
@@ -772,16 +816,9 @@ fn collect_legacy_request_info(
             .cloned()
             .unwrap_or_default();
         collect_named_handles(&Value::Object(arguments.clone()), handles);
-        if matches!(name, "artifact_info" | "read_artifact" | "search_artifact")
-            && let Some(id) = arguments.get("id").and_then(Value::as_str)
-        {
-            handles.push(id.to_owned());
-        }
 
         let sticky_domain = match name {
-            "computer_use" | "computer_use_reset" | "desktop_control" | "desktop_control_reset" => {
-                Some("computer")
-            }
+            "computer_use" => Some("computer"),
             "run_shell" if arguments.get("background").and_then(Value::as_bool) == Some(true) => {
                 Some("shell")
             }
@@ -837,7 +874,7 @@ fn collect_named_handles(value: &Value, handles: &mut Vec<String>) {
             Value::Array(items) => pending.extend(items.iter().rev()),
             Value::Object(object) => {
                 for (key, value) in object.iter().rev() {
-                    if matches!(key.as_str(), "snapshot" | "artifactId" | "jobId")
+                    if matches!(key.as_str(), "snapshot" | "jobId")
                         && let Some(handle) = value.as_str()
                         && !handle.is_empty()
                     {
@@ -889,6 +926,10 @@ impl RuntimeHealth {
             "available": self.available,
             "busy": self.busy,
             "dead": self.dead,
+            "runtimeThreads": {
+                "active": ACTIVE_MCP_RUNTIME_THREADS.load(Ordering::Acquire),
+                "policy": "elastic",
+            },
         })
     }
 }
@@ -938,21 +979,7 @@ impl McpRuntimeManager {
         }
         Ok(session)
     }
-
     fn create_session(&self) -> Result<(String, Arc<SessionRuntimePool>)> {
-        {
-            let mut sessions = self
-                .sessions
-                .lock()
-                .map_err(|_| anyhow!("MCP session table lock poisoned"))?;
-            prune_idle_sessions(&mut sessions);
-            if sessions.len() >= MAX_MCP_SESSIONS {
-                bail!(
-                    "Yeet MCP session capacity reached ({MAX_MCP_SESSIONS}); retry after an idle session expires"
-                );
-            }
-        }
-
         let runtime = Arc::new(SessionRuntimePool::new(
             self.default_workspace.clone(),
             self.restrict_workspace,
@@ -963,11 +990,6 @@ impl McpRuntimeManager {
             .lock()
             .map_err(|_| anyhow!("MCP session table lock poisoned"))?;
         prune_idle_sessions(&mut sessions);
-        if sessions.len() >= MAX_MCP_SESSIONS {
-            bail!(
-                "Yeet MCP session capacity reached ({MAX_MCP_SESSIONS}); retry after an idle session expires"
-            );
-        }
         sessions.insert(id.clone(), Arc::clone(&runtime));
         Ok((id, runtime))
     }
@@ -1271,10 +1293,8 @@ fn route_request(
                             eprintln!("yeet mcpserver: cannot create MCP session: {description}");
                             return Ok(mcp_jsonrpc_error_response(
                                 &payload,
-                                MCP_SESSION_CAPACITY_ERROR_CODE,
-                                format!(
-                                    "Yeet MCP session capacity is temporarily exhausted; retry shortly: {description}"
-                                ),
+                                MCP_RUNTIME_UNAVAILABLE_ERROR_CODE,
+                                format!("Yeet could not create an MCP session: {description}"),
                             ));
                         }
                     }
@@ -1302,15 +1322,17 @@ fn route_request(
             };
             match response {
                 Some(value) => {
+                    let response_protocol = value
+                        .get("result")
+                        .and_then(|result| result.get("protocolVersion"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .or_else(|| request.headers.get("mcp-protocol-version").cloned())
+                        .unwrap_or_else(|| MODERN_PROTOCOL_VERSION.into());
                     let mut response = HttpResponse::json(200, value);
-                    response.headers.push((
-                        "MCP-Protocol-Version".into(),
-                        request
-                            .headers
-                            .get("mcp-protocol-version")
-                            .cloned()
-                            .unwrap_or_else(|| MODERN_PROTOCOL_VERSION.into()),
-                    ));
+                    response
+                        .headers
+                        .push(("MCP-Protocol-Version".into(), response_protocol));
                     if let Some(session_id) = created_session {
                         response.headers.push(("Mcp-Session-Id".into(), session_id));
                     }
@@ -1363,332 +1385,154 @@ fn route_request(
     }
 }
 
-fn mcp_authorized(
-    headers: &HashMap<String, String>,
-    oauth: &OAuthRuntime,
-    auth_mode: AuthMode,
-    oauth_enabled: bool,
-) -> Result<bool> {
-    let header = headers.get("authorization").map(String::as_str);
-    match auth_mode {
-        AuthMode::None => Ok(true),
-        AuthMode::Key => {
-            let Some(token) = bearer_token(header) else {
-                return Ok(false);
-            };
-            if oauth.auth_store().verify_key(token)? {
-                return Ok(true);
-            }
-            if oauth_enabled {
-                oauth.verify_oauth_token(token)
-            } else {
-                Ok(false)
-            }
-        }
-        AuthMode::Oauth => bearer_token(header)
-            .map(|token| oauth.verify_oauth_token(token))
-            .transpose()
-            .map(|value| value.unwrap_or(false)),
-    }
+enum RuntimeCommand {
+    Call {
+        payload: Value,
+        response: SyncSender<Option<Value>>,
+    },
 }
 
-fn payload_contains_method(payload: &Value, method: &str) -> bool {
-    let mut pending = vec![payload];
-    while let Some(value) = pending.pop() {
-        match value {
-            Value::Array(items) => pending.extend(items.iter()),
-            Value::Object(object)
-                if object.get("method").and_then(Value::as_str) == Some(method) =>
-            {
-                return true;
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-struct McpProcess {
+struct McpRuntime {
     default_workspace: PathBuf,
     restrict_workspace: bool,
-    child: Child,
-    stdin: BufWriter<ChildStdin>,
-    responses: Receiver<std::result::Result<String, String>>,
+    _thread_permit: RuntimeThreadPermit,
+    requests: SyncSender<RuntimeCommand>,
+    worker: JoinHandle<()>,
 }
 
-impl McpProcess {
+impl McpRuntime {
     fn new(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
-        let mut process = Self::spawn(default_workspace, restrict_workspace)?;
-        // Prove the child is ready before advertising the HTTP server. This also
-        // makes daemon startup fail fast if the stdio runtime cannot initialize.
-        let response = process.call_with_timeout(
-            json!({"jsonrpc":"2.0","id":"http-runtime-health","method":"initialize","params":{}}),
-            MCP_RUNTIME_INITIALIZE_TIMEOUT,
-        )?;
-        if response.get("error").is_some() {
-            bail!("Yeet MCP stdio runtime failed initialization: {response}");
-        }
-        Ok(process)
-    }
-
-    fn spawn(default_workspace: PathBuf, restrict_workspace: bool) -> Result<Self> {
-        let executable = std::env::current_exe().context("locate Yeet executable")?;
-        let mut command = Command::new(executable);
-        command
-            .arg("mcpserver")
-            .arg("stdio")
-            .arg("--workspace")
-            .arg(&default_workspace);
-        if restrict_workspace {
-            command.arg("--restrict-workspace");
-        }
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .context("start isolated Yeet MCP stdio runtime")?;
-        let stdin = child
-            .stdin
-            .take()
-            .context("MCP runtime stdin unavailable")?;
-        let stdout = child
-            .stdout
-            .take()
-            .context("MCP runtime stdout unavailable")?;
-        let (response_tx, responses) = mpsc::channel();
-        thread::Builder::new()
-            .name("yeet-mcp-runtime-reader".into())
-            .spawn(move || runtime_stdout_reader(stdout, response_tx))
-            .context("start MCP runtime stdout reader")?;
+        let thread_permit = RuntimeThreadPermit::acquire();
+        let (requests, worker) = Self::spawn_worker(&default_workspace, restrict_workspace)?;
         Ok(Self {
             default_workspace,
             restrict_workspace,
-            child,
-            stdin: BufWriter::new(stdin),
-            responses,
+            _thread_permit: thread_permit,
+            requests,
+            worker,
         })
     }
 
-    fn handle(&mut self, payload: Value) -> Result<Option<Value>> {
-        let expects_response = payload
-            .as_object()
-            .is_none_or(|object| object.contains_key("id"));
-        if !expects_response {
-            return match self.send(payload) {
-                Ok(()) => Ok(None),
-                Err(error) => {
-                    let restart = self.restart();
-                    match restart {
-                        Ok(()) => Err(anyhow!(
-                            "isolated MCP runtime failed while sending a notification and was restarted: {error}"
-                        )),
-                        Err(restart_error) => Err(anyhow!(
-                            "isolated MCP runtime failed while sending a notification: {error}; restart also failed: {restart_error}"
-                        )),
+    fn spawn_worker(
+        default_workspace: &Path,
+        restrict_workspace: bool,
+    ) -> Result<(SyncSender<RuntimeCommand>, JoinHandle<()>)> {
+        let workspace = default_workspace.to_path_buf();
+        let (requests, receiver) = mpsc::sync_channel::<RuntimeCommand>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<std::result::Result<(), String>>(1);
+        let worker = thread::Builder::new()
+            .name("yeet-mcp-runtime".into())
+            .stack_size(MCP_RUNTIME_THREAD_STACK_BYTES)
+            .spawn(move || {
+                let mut server =
+                    super::McpServer::new_with_workspace_restriction(workspace, restrict_workspace);
+                let initialized = server.handle_payload(json!({
+                    "jsonrpc":"2.0",
+                    "id":"http-runtime-health",
+                    "method":"initialize",
+                    "params":{}
+                }));
+                let ready = match initialized {
+                    Some(response) if response.get("error").is_none() => Ok(()),
+                    Some(response) => Err(format!(
+                        "Yeet MCP in-process runtime failed initialization: {response}"
+                    )),
+                    None => Err(
+                        "Yeet MCP in-process runtime returned no initialization response".into(),
+                    ),
+                };
+                if ready_tx.send(ready).is_err() {
+                    return;
+                }
+
+                while let Ok(command) = receiver.recv() {
+                    match command {
+                        RuntimeCommand::Call { payload, response } => {
+                            let result = server.handle_payload(payload);
+                            let _ = response.send(result);
+                        }
                     }
                 }
-            };
-        }
-        let timeout = runtime_timeout_for_payload(&payload);
-        match self.call_with_timeout(payload, timeout) {
-            Ok(response) => Ok(Some(response)),
-            Err(error) => {
-                // A Rust stack overflow aborts the runtime process and cannot be
-                // caught in-process. Recreate it for the next request, but never
-                // replay the failed request because tool calls may be mutating.
-                let restart = self.restart();
-                match restart {
-                    Ok(()) => Err(anyhow!(
-                        "isolated MCP tool runtime failed and was restarted; the failed request was not replayed: {error}"
-                    )),
-                    Err(restart_error) => Err(anyhow!(
-                        "isolated MCP tool runtime failed: {error}; restart also failed: {restart_error}"
-                    )),
-                }
-            }
-        }
-    }
+            })
+            .context("start in-process Yeet MCP runtime thread")?;
 
-    fn call_with_timeout(&mut self, payload: Value, timeout: Duration) -> Result<Value> {
-        let request = runtime_request_summary(&payload, &self.default_workspace);
-        let pid = self.child.id();
-        self.send(payload)?;
-        match self.responses.recv_timeout(timeout) {
-            Ok(Ok(line)) => serde_json::from_str(&line).with_context(|| {
-                format!("decode MCP stdio runtime response ({request}; pid={pid})")
-            }),
-            Ok(Err(error)) => {
-                let status = self
-                    .child
-                    .try_wait()?
-                    .map(|status| status.to_string())
-                    .unwrap_or_else(|| "unknown".into());
-                bail!(
-                    "MCP stdio runtime stdout failed ({error}; status {status}; {request}; pid={pid})"
-                );
-            }
+        match ready_rx.recv_timeout(MCP_RUNTIME_INITIALIZE_TIMEOUT) {
+            Ok(Ok(())) => Ok((requests, worker)),
+            Ok(Err(error)) => bail!(error),
             Err(mpsc::RecvTimeoutError::Timeout) => bail!(
-                "MCP stdio runtime response timed out after {} seconds ({request}; pid={pid})",
-                timeout.as_secs(),
+                "Yeet MCP in-process runtime did not initialize within {} seconds",
+                MCP_RUNTIME_INITIALIZE_TIMEOUT.as_secs()
             ),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let status = self
-                    .child
-                    .try_wait()?
-                    .map(|status| status.to_string())
-                    .unwrap_or_else(|| "unknown".into());
-                bail!(
-                    "MCP stdio runtime reader disconnected (status {status}; {request}; pid={pid})"
-                );
+                bail!("Yeet MCP in-process runtime exited during initialization")
             }
         }
     }
 
-    fn send(&mut self, payload: Value) -> Result<()> {
-        serde_json::to_writer(&mut self.stdin, &payload)?;
-        self.stdin.write_all(b"\n")?;
-        self.stdin.flush()?;
-        Ok(())
+    fn handle(&mut self, payload: Value) -> Result<Option<Value>> {
+        let (response_tx, response_rx) = mpsc::sync_channel(1);
+        self.requests
+            .send(RuntimeCommand::Call {
+                payload,
+                response: response_tx,
+            })
+            .map_err(|_| anyhow!("MCP runtime thread is unavailable"))?;
+        response_rx
+            .recv()
+            .map_err(|_| anyhow!("MCP runtime thread exited before returning a response"))
     }
 
     fn restart(&mut self) -> Result<()> {
-        self.terminate();
-        let replacement = Self::new(self.default_workspace.clone(), self.restrict_workspace)?;
-        *self = replacement;
+        let (requests, worker) =
+            Self::spawn_worker(&self.default_workspace, self.restrict_workspace)?;
+        let old_worker = std::mem::replace(&mut self.worker, worker);
+        self.requests = requests;
+        if old_worker.is_finished() {
+            let _ = old_worker.join();
+        }
         Ok(())
     }
 
-    fn terminate(&mut self) {
-        match self.child.try_wait() {
-            Ok(None) => {
-                let pid = self.child.id();
-                if force_terminate_process_tree(pid).is_err() {
-                    let _ = self.child.kill();
-                }
-            }
-            Ok(Some(_)) => {}
-            Err(_) => {
-                let _ = self.child.kill();
-            }
+    fn is_alive(&self) -> bool {
+        !self.worker.is_finished()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_pool_is_lazy_and_elastic() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = McpRuntimeManager::new(directory.path().to_path_buf(), false).unwrap();
+
+        for _ in 0..64 {
+            manager.create_session().unwrap();
         }
-        let _ = self.child.wait();
+        let sessions = manager.sessions.lock().unwrap();
+        assert_eq!(sessions.len(), 64);
+        assert!(sessions.values().all(|runtime| {
+            let lanes = runtime.runtimes.lanes.lock().unwrap();
+            lanes.len() == 1 && lanes[0].lock().unwrap().is_none()
+        }));
+        drop(sessions);
+
+        let pool = RuntimeLanePool::new(directory.path().to_path_buf(), false).unwrap();
+        let lanes = pool.lanes_snapshot().unwrap();
+        let held_lane = lanes[0].lock().unwrap();
+        let response = pool
+            .call(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"tools/list",
+                "params":{}
+            }))
+            .unwrap()
+            .expect("tools/list response");
+
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(pool.lanes.lock().unwrap().len(), 2);
+        drop(held_lane);
     }
-
-    fn is_alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
-    }
-}
-
-fn runtime_stdout_reader(
-    stdout: ChildStdout,
-    sender: mpsc::Sender<std::result::Result<String, String>>,
-) {
-    let mut reader = BufReader::new(stdout);
-    loop {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                let _ = sender.send(Err("stdout closed".into()));
-                return;
-            }
-            Ok(_) if line.trim().is_empty() => continue,
-            Ok(_) => {
-                if sender.send(Ok(line)).is_err() {
-                    return;
-                }
-            }
-            Err(error) => {
-                let _ = sender.send(Err(error.to_string()));
-                return;
-            }
-        }
-    }
-}
-
-impl Drop for McpProcess {
-    fn drop(&mut self) {
-        self.terminate();
-    }
-}
-
-fn ensure_oauth_mode(oauth: &OAuthRuntime) -> Result<()> {
-    if !oauth.auth_store().status()?.oauth_enabled {
-        bail!("OAuth authentication is not enabled for this MCP daemon");
-    }
-    Ok(())
-}
-
-fn unauthorized_response(mode: AuthMode, oauth_enabled: bool, issuer: &Url) -> HttpResponse {
-    let mut response = HttpResponse::json(401, json!({"error":"unauthorized"}));
-    let challenge = if oauth_enabled || mode == AuthMode::Oauth {
-        let metadata = issuer
-            .join(".well-known/oauth-protected-resource")
-            .expect("metadata URL");
-        format!("Bearer resource_metadata=\"{}\", scope=\"mcp\"", metadata)
-    } else {
-        "Bearer".into()
-    };
-    response
-        .headers
-        .push(("WWW-Authenticate".into(), challenge));
-    response
-}
-
-fn attach_protocol_version(payload: &mut Value, version: &str) {
-    if let Some(items) = payload.as_array_mut() {
-        for item in items {
-            attach_protocol_version(item, version);
-        }
-        return;
-    }
-    let Some(object) = payload.as_object_mut() else {
-        return;
-    };
-    let params = object.entry("params").or_insert_with(|| json!({}));
-    let Some(params) = params.as_object_mut() else {
-        return;
-    };
-    let meta = params.entry("_meta").or_insert_with(|| json!({}));
-    let Some(meta) = meta.as_object_mut() else {
-        return;
-    };
-    meta.entry("io.modelcontextprotocol/protocolVersion")
-        .or_insert_with(|| json!(version));
-}
-
-fn authorization_page(request: &AuthorizationRequest) -> String {
-    let state = request.state.as_deref().unwrap_or("");
-    format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>Authorize Yeet MCP</title>\
-<style>body{{font:16px system-ui;max-width:620px;margin:10vh auto;padding:24px}}input,button{{font:inherit;padding:10px;width:100%;box-sizing:border-box}}code{{overflow-wrap:anywhere}}</style>\
-<h1>Authorize Yeet MCP</h1><p>Client: <code>{}</code></p><p>Resource: <code>{}</code></p>\
-<form method=\"post\" action=\"/authorize\">\
-<input type=\"hidden\" name=\"response_type\" value=\"code\">\
-<input type=\"hidden\" name=\"client_id\" value=\"{}\">\
-<input type=\"hidden\" name=\"redirect_uri\" value=\"{}\">\
-<input type=\"hidden\" name=\"state\" value=\"{}\">\
-<input type=\"hidden\" name=\"code_challenge\" value=\"{}\">\
-<input type=\"hidden\" name=\"code_challenge_method\" value=\"S256\">\
-<input type=\"hidden\" name=\"resource\" value=\"{}\">\
-<input type=\"hidden\" name=\"scope\" value=\"{}\">\
-<label>Authorization key<br><input autofocus type=\"password\" name=\"access_key\" autocomplete=\"current-password\" required></label><p><button type=\"submit\">Authorize</button></p></form>",
-        html_escape(&request.client_id),
-        html_escape(&request.resource),
-        html_escape(&request.client_id),
-        html_escape(&request.redirect_uri),
-        html_escape(state),
-        html_escape(&request.code_challenge),
-        html_escape(&request.resource),
-        html_escape(&request.scope),
-    )
-}
-
-fn html_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }

@@ -49,7 +49,10 @@ pub enum AgentEvent {
         call: ToolCall,
         reason: String,
     },
-    AuxiliaryUsage(Usage),
+    AuxiliaryUsage {
+        usage: Usage,
+        already_counted_calls: u64,
+    },
     GoalCheckpoint {
         epoch: u64,
         reason: String,

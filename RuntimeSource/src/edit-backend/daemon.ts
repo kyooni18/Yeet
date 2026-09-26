@@ -34,6 +34,10 @@ async function dispatch(request: RpcRequest): Promise<unknown> {
       return { ok: true, version: "0.1.0" };
     case "read":
       return backend.read(request.params as ReadRequest);
+    case "snapshotText": {
+      const params = request.params as { snapshot: string };
+      return { text: backend.snapshotText(params.snapshot) };
+    }
     case "search":
       return backend.search(request.params as SearchRequest);
     case "listFiles":

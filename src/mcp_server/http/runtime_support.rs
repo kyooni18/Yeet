@@ -1,12 +1,11 @@
 //! Small, side-effect-free helpers for MCP runtime admission and error shaping.
 
 use super::{
-    HttpResponse, LegacyAffinityState, MCP_LEGACY_HANDLE_IDLE_TTL, MCP_RUNTIME_DEFAULT_TIMEOUT,
-    MCP_RUNTIME_INITIALIZE_TIMEOUT, MCP_RUNTIME_MAX_TIMEOUT,
+    HttpResponse, LegacyAffinityState, MCP_LEGACY_HANDLE_IDLE_TTL, MCP_LEGACY_STICKY_IDLE_TTL,
 };
 use crate::mcp_server::jsonrpc_error;
 use serde_json::Value;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 impl LegacyAffinityState {
     pub(super) fn prune_expired_handles(&mut self, now: Instant) {
@@ -18,9 +17,15 @@ impl LegacyAffinityState {
             .retain(|handle| handles.contains_key(handle));
     }
 
+    pub(super) fn prune_expired_sticky(&mut self, now: Instant) {
+        self.sticky.retain(|_, binding| {
+            now.saturating_duration_since(binding.last_used) < MCP_LEGACY_STICKY_IDLE_TTL
+        });
+    }
+
     pub(super) fn lane_is_pinned(&self, lane: usize) -> bool {
         self.handles.values().any(|binding| binding.lane == lane)
-            || self.sticky.values().any(|&owner| owner == lane)
+            || self.sticky.values().any(|binding| binding.lane == lane)
     }
 
     pub(super) fn forget_preferred_lane(&mut self, lane: usize) {
@@ -28,37 +33,24 @@ impl LegacyAffinityState {
     }
 }
 
-pub(super) fn payload_contains_blocking_tool_call(payload: &Value) -> bool {
-    let mut pending = vec![payload];
-    while let Some(value) = pending.pop() {
-        match value {
-            Value::Array(items) => pending.extend(items.iter().rev()),
-            Value::Object(object) => {
-                if object.get("method").and_then(Value::as_str) != Some("tools/call") {
-                    continue;
-                }
-                let Some(params) = object.get("params").and_then(Value::as_object) else {
-                    continue;
-                };
-                let name = params
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let arguments = params.get("arguments").and_then(Value::as_object);
-                let background = arguments
-                    .and_then(|arguments| arguments.get("background"))
-                    .and_then(Value::as_bool)
-                    == Some(true);
-                if (name == "run_shell" && !background)
-                    || matches!(name, "computer_use" | "desktop_control")
-                {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-    }
-    false
+#[cfg(test)]
+#[test]
+fn expired_sticky_affinity_no_longer_pins_lane() {
+    let now = Instant::now();
+    let mut affinity = LegacyAffinityState::default();
+    affinity.sticky.insert(
+        "shell:/tmp/expired".into(),
+        super::LegacyStickyAffinity {
+            lane: 3,
+            last_used: now
+                .checked_sub(MCP_LEGACY_STICKY_IDLE_TTL + std::time::Duration::from_secs(1))
+                .expect("test instant supports sticky TTL"),
+        },
+    );
+
+    assert!(affinity.lane_is_pinned(3));
+    affinity.prune_expired_sticky(now);
+    assert!(!affinity.lane_is_pinned(3));
 }
 
 #[derive(Debug)]
@@ -115,51 +107,4 @@ pub(super) fn mcp_jsonrpc_error_response(
     message: String,
 ) -> HttpResponse {
     JsonRpcErrorShape::from_payload(payload).into_response(code, message)
-}
-
-pub(super) fn runtime_timeout_for_payload(payload: &Value) -> Duration {
-    fn one(payload: &Value) -> Duration {
-        let Some(object) = payload.as_object() else {
-            return MCP_RUNTIME_DEFAULT_TIMEOUT;
-        };
-        if object.get("method").and_then(Value::as_str) == Some("initialize") {
-            return MCP_RUNTIME_INITIALIZE_TIMEOUT;
-        }
-        if object.get("method").and_then(Value::as_str) != Some("tools/call") {
-            return MCP_RUNTIME_DEFAULT_TIMEOUT;
-        }
-        let Some(params) = object.get("params").and_then(Value::as_object) else {
-            return MCP_RUNTIME_DEFAULT_TIMEOUT;
-        };
-        let name = params
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let arguments = params.get("arguments").and_then(Value::as_object);
-        let requested = match name {
-            "run_shell" => arguments
-                .and_then(|value| value.get("timeoutSeconds"))
-                .and_then(Value::as_u64)
-                .map(|seconds| Duration::from_secs(seconds.saturating_add(30))),
-            "computer_use" | "desktop_control" => Some(Duration::from_millis(
-                arguments
-                    .and_then(|value| value.get("timeout_ms"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(30_000)
-                    .saturating_add(30_000),
-            )),
-            _ => None,
-        };
-        requested
-            .unwrap_or(MCP_RUNTIME_DEFAULT_TIMEOUT)
-            .min(MCP_RUNTIME_MAX_TIMEOUT)
-    }
-    match payload {
-        Value::Array(items) => items
-            .iter()
-            .map(one)
-            .max()
-            .unwrap_or(MCP_RUNTIME_DEFAULT_TIMEOUT),
-        _ => one(payload),
-    }
 }

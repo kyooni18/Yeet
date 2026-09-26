@@ -17,6 +17,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     {
         return;
     }
+    if !app.conversation.is_empty() {
+        return;
+    }
 
     let area = frame.area();
     if area.width < 8 || area.height < 8 {
@@ -30,13 +33,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         return;
     }
 
-    draw_content_guides(frame.buffer_mut(), area, adaptive);
+    draw_content_guides(frame.buffer_mut(), area, adaptive, app.transcript_area);
 }
 
 fn draw_content_guides(
     buffer: &mut ratatui::buffer::Buffer,
     area: ratatui::layout::Rect,
     adaptive: responsive::Metrics,
+    transcript_area: (u16, u16, u16, u16),
 ) {
     let sidebar = adaptive.sidebar_width.unwrap_or(0);
     let body_x = area.x.saturating_add(sidebar);
@@ -61,17 +65,73 @@ fn draw_content_guides(
         return;
     }
 
-    let top = area
-        .y
-        .saturating_add(adaptive.header_height)
-        .saturating_add(1);
-    let bottom = area.bottom().saturating_sub(adaptive.status_height + 1);
+    let (_, transcript_y, _, transcript_height) = transcript_area;
+    if transcript_height == 0 {
+        return;
+    }
+    let top = transcript_y;
+    let bottom = transcript_y
+        .saturating_add(transcript_height)
+        .saturating_sub(1)
+        .min(area.bottom().saturating_sub(1));
     if bottom <= top {
         return;
     }
-    for y in top..bottom {
-        paint(buffer, left, y, "│", theme::border_dim());
-        paint(buffer, right, y, "│", theme::border_dim());
+    // Treat the empty conversation as a gallery stage rather than a box.
+    // Warm leading marks and cool trailing marks give the frame a direction,
+    // while sparse registration ticks establish depth without enclosing content.
+    paint(buffer, left, top, "╭", theme::accent());
+    paint(
+        buffer,
+        left.saturating_add(1),
+        top,
+        "─",
+        theme::border_dim(),
+    );
+    paint(
+        buffer,
+        right.saturating_sub(1),
+        top,
+        "─",
+        theme::border_dim(),
+    );
+    paint(buffer, right, top, "╮", theme::accent_hot());
+
+    let center = content_x.saturating_add(content_width / 2);
+    if center > left.saturating_add(2) && center < right.saturating_sub(2) {
+        paint(buffer, center, top, "·", theme::muted());
+    }
+
+    let span = bottom.saturating_sub(top);
+    if span >= 10 {
+        let middle = top.saturating_add(span / 2);
+        paint(buffer, left, middle, "╴", theme::border_dim());
+        paint(buffer, right, middle, "╶", theme::border_dim());
+
+        let upper = top.saturating_add(span / 3);
+        let lower = top.saturating_add(span.saturating_mul(2) / 3);
+        paint(buffer, left, upper, "·", theme::accent());
+        paint(buffer, right, lower, "·", theme::accent_hot());
+    }
+
+    paint(buffer, left, bottom, "╰", theme::accent());
+    paint(
+        buffer,
+        left.saturating_add(1),
+        bottom,
+        "─",
+        theme::border_dim(),
+    );
+    paint(
+        buffer,
+        right.saturating_sub(1),
+        bottom,
+        "─",
+        theme::border_dim(),
+    );
+    paint(buffer, right, bottom, "╯", theme::accent());
+    if center > left.saturating_add(2) && center < right.saturating_sub(2) {
+        paint(buffer, center, bottom, "◇", theme::border());
     }
 }
 

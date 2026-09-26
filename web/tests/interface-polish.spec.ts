@@ -1,66 +1,133 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { installMockRemote } from './mockRemote'
+
+type TestHooks = {
+  __yeetEmit: (message: Record<string, unknown>) => void
+}
+
+async function emit(page: Page, message: Record<string, unknown>) {
+  await page.evaluate((payload) => {
+    ;(window as unknown as TestHooks).__yeetEmit(payload)
+  }, message)
+}
+
+function assistantCopy(page: Page) {
+  return page.locator('.message-block--assistant .message-actions button').first()
+}
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
-      writeText: async (text: string) => { Object.assign(window, { copiedResponse: text }) },
-    } })
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          Object.assign(window, { copiedResponse: text })
+        },
+      },
+    })
   })
   await installMockRemote(page)
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('whole response copy preserves markdown and keyboard focus', async ({ page }) => {
-  const copy = page.getByRole('button', { name: 'Copy response', exact: true })
+test('message copy preserves raw markdown and keyboard focus', async ({ page }) => {
+  const copy = assistantCopy(page)
+  await expect(copy).toHaveAttribute('aria-label', 'Copy message')
   await copy.focus()
   await page.keyboard.press('Enter')
-  await expect(copy).toHaveText('Copied')
+
+  await expect(copy).toHaveAttribute('aria-label', 'Copied')
   await expect(copy).toBeFocused()
-  await expect.poll(() => page.evaluate(() => (window as unknown as { copiedResponse: string }).copiedResponse)).toContain('## Interface ready')
-  await expect(page.getByRole('status').filter({ hasText: 'Response copied' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { copiedResponse?: string }).copiedResponse ?? ''
+  )).toContain('## Interface ready')
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { copiedResponse?: string }).copiedResponse ?? ''
+  )).toContain('const transport = "websocket"')
 })
 
-test('activity summaries distinguish approval, timeout, and interruption', async ({ page }) => {
+test('clipboard fallback copies successfully without losing focus', async ({ page }) => {
   await page.evaluate(() => {
-    const emit = (window as unknown as { __yeetEmit: (message: unknown) => void }).__yeetEmit
-    emit({ type: 'conversation_reset', version: 1, sequence: 2, revision: 2,
-      conversation: ['awaiting_permission', 'timed_out', 'interrupted'].map((status, index) => ({
-        id: `state-${index}`, kind: { type: 'toolCall', toolCall: {
-          id: `call-${index}`, name: 'run_shell', arguments: '{}', status,
-        } },
-      })),
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async () => { throw new Error('Clipboard unavailable') } },
+    })
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: (command: string) => {
+        Object.assign(window, { fallbackCopyCommand: command })
+        return command === 'copy'
+      },
     })
   })
-  const summary = page.getByTestId('activity-group').locator('summary').first()
-  await expect(summary).toContainText('1 awaiting approval')
-  await expect(summary).toContainText('1 failed')
-  await expect(summary).toContainText('1 stopped')
+
+  const copy = assistantCopy(page)
+  await copy.focus()
+  await page.keyboard.press('Enter')
+
+  await expect(copy).toHaveAttribute('aria-label', 'Copied')
+  await expect(copy).toBeFocused()
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { fallbackCopyCommand?: string }).fallbackCopyCommand ?? ''
+  )).toBe('copy')
 })
 
-test('semantic labels fit beside statuses and mobile replies use available width', async ({ page }, info) => {
-  const collisions = await page.locator('.semantic-card > summary').evaluateAll((summaries) => summaries.some((summary) => {
-    const heading = summary.querySelector('.semantic-heading')!.getBoundingClientRect()
-    const status = summary.querySelector('.semantic-status')!.getBoundingClientRect()
-    return heading.right > status.left
+test('copy failure is visible and keeps keyboard focus', async ({ page }) => {
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async () => { throw new Error('Clipboard unavailable') } },
+    })
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: () => false,
+    })
+  })
+
+  const copy = assistantCopy(page)
+  await copy.focus()
+  await page.keyboard.press('Enter')
+
+  await expect(copy).toHaveAttribute('aria-label', 'Copy failed')
+  await expect(copy).toHaveAttribute('title', 'Copy failed')
+  await expect(copy).toBeFocused()
+})
+
+test('activity rows distinguish approval, timeout, and interruption states', async ({ page }) => {
+  await emit(page, {
+    type: 'conversation_reset',
+    version: 1,
+    sequence: 2,
+    revision: 2,
+    conversation: ['awaiting_permission', 'timed_out', 'interrupted'].map((status, index) => ({
+      id: `state-${index}`,
+      kind: {
+        type: 'toolCall',
+        toolCall: {
+          id: `call-${index}`,
+          name: 'run_shell',
+          arguments: JSON.stringify({ command: `probe-${status}` }),
+          status,
+        },
+      },
+    })),
+  })
+
+  const group = page.locator('.activity-group').last()
+  const header = group.locator('.activity-group__header')
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
+
+  const rows = group.locator('.trace-disclosure__row')
+  await expect(rows).toHaveCount(3)
+  await expect(rows.filter({ hasText: 'probe-awaiting_permission' })).toContainText('Awaiting approval')
+  await expect(rows.filter({ hasText: 'probe-timed_out' })).toContainText('Timed out')
+  await expect(rows.filter({ hasText: 'probe-interrupted' })).toContainText('Interrupted')
+
+  const collisions = await rows.evaluateAll((elements) => elements.some((row) => {
+    const title = row.querySelector('.trace-disclosure__title')?.getBoundingClientRect()
+    const status = row.querySelector('.trace-disclosure__status')?.getBoundingClientRect()
+    return Boolean(title && status && title.right > status.left)
   }))
   expect(collisions).toBe(false)
-  if ((page.viewportSize()?.width ?? 0) <= 600) {
-    const reply = await page.locator('.assistant-content').boundingBox()
-    expect(reply!.width).toBeGreaterThan(page.viewportSize()!.width - 60)
-  }
-  await page.screenshot({ path: `/tmp/yeet-overall-${info.project.name}.png`, fullPage: true })
-})
-
-test('response copy reports clipboard failure', async ({ page }) => {
-  await page.evaluate(() => {
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
-      writeText: async () => { throw new Error('Clipboard unavailable') },
-    } })
-    Object.defineProperty(document, 'execCommand', { configurable: true, value: () => false })
-  })
-  await page.getByRole('button', { name: 'Copy response', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Copy response', exact: true })).toHaveText('Copy failed')
-  await expect(page.getByRole('status').filter({ hasText: 'Response could not be copied' })).toBeVisible()
 })

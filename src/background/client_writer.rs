@@ -13,10 +13,15 @@ use super::{BridgeEnvelope, CLIENT_WRITE_TIMEOUT, LocalStream, write_client_fram
 use anyhow::{Result, bail};
 
 const MAX_PENDING_FRAMES: usize = 64;
+// This writer runs on its own thread, so a long stall allowance never delays
+// the daemon loop. Clients that pause briefly (rendering a long transcript,
+// a GC pause in the gateway) stay attached; truly stuck ones are still
+// dropped by this deadline or by the bounded queue.
+const CLIENT_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const MAX_PENDING_BYTES: usize = 32 * 1024 * 1024;
 
 struct PendingFrame {
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     pending_bytes: Arc<AtomicUsize>,
 }
 
@@ -36,13 +41,24 @@ pub(super) struct ClientWriter {
 impl ClientWriter {
     pub(super) fn new(stream: LocalStream) -> Result<Self> {
         let mut output = stream.try_clone()?;
-        output.set_write_timeout(Some(CLIENT_WRITE_TIMEOUT))?;
+        // Darwin can reject SO_SNDTIMEO on AF_UNIX with EINVAL. The daemon's
+        // accept path already treats that as an unsupported socket option; the
+        // writer clone must do the same or a perfectly healthy client can fail
+        // attachment after the transport handshake. Backpressure is still
+        // bounded by the dedicated writer thread, queue/byte budgets and
+        // disconnect-on-overflow semantics below.
+        if let Err(error) = output.set_write_timeout(Some(CLIENT_WRITE_TIMEOUT))
+            && error.kind() != std::io::ErrorKind::InvalidInput
+        {
+            return Err(error.into());
+        }
         let (tx, rx) = mpsc::sync_channel::<PendingFrame>(MAX_PENDING_FRAMES);
         thread::Builder::new()
             .name("yeet-client-writer".into())
             .spawn(move || {
                 for frame in rx {
-                    if write_client_frame(&mut output, &frame.bytes, CLIENT_WRITE_TIMEOUT).is_err()
+                    if write_client_frame(&mut output, frame.bytes.as_ref(), CLIENT_STALL_TIMEOUT)
+                        .is_err()
                     {
                         break;
                     }
@@ -57,9 +73,17 @@ impl ClientWriter {
         })
     }
 
-    pub(super) fn send(&self, envelope: &BridgeEnvelope) -> Result<()> {
+    pub(super) fn encode(envelope: &BridgeEnvelope) -> Result<Arc<[u8]>> {
         let mut bytes = serde_json::to_vec(envelope)?;
         bytes.push(b'\n');
+        Ok(bytes.into())
+    }
+
+    pub(super) fn send(&self, envelope: &BridgeEnvelope) -> Result<()> {
+        self.send_frame(Self::encode(envelope)?)
+    }
+
+    pub(super) fn send_frame(&self, bytes: Arc<[u8]>) -> Result<()> {
         if self
             .pending_bytes
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |pending| {

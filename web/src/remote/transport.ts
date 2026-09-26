@@ -193,6 +193,7 @@ export class RemoteTransport {
             this.resume = {}
             this.lastReceivedSequence = null
             writeResumeState(this.resume)
+            this.intentionalClosures.add(socket)
             socket.close(1000, 'workspace changed')
             this.socket = null
             this.welcomed = false

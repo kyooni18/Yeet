@@ -4,32 +4,40 @@ Yeet is a native agent CLI/TUI with a TypeScript runtime, Remote WebUI, MCP supp
 
 ## Install
 
-Prebuilt releases support macOS, Linux, and Windows on ARM64 and x64. Node.js 20 or newer is required.
+Build dependencies are Rust, Node.js/npm, and the platform C/C++ toolchain. Git is only needed to clone the source. Yeet uses npm everywhere; pnpm and Corepack are not required.
 
-Download the archive for your platform from GitHub Releases, extract it, then run:
+One-command source install on macOS/Linux:
 
 ```sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/kyooni18/Yeet/main/install.sh | sh
 ```
 
-On Windows PowerShell:
+PowerShell:
 
 ```powershell
-.\install.ps1
+iwr https://raw.githubusercontent.com/kyooni18/Yeet/main/install.ps1 -UseBasicParsing | iex
 ```
 
-Linux releases also include Debian packages.
+The installer clones Yeet into `~/.local/src/yeet` (unless already run from a checkout), builds RuntimeSource and the Remote WebUI with npm, builds the Rust release binary, then installs the binary and runtime under `~/.local`. Override these locations with `YEET_SOURCE_DIR` and `YEET_PREFIX`.
 
-To build from source, install Rust stable, Node.js 20+, npm, and pnpm (or Corepack), then run:
+Foundation is optional and is not cloned or built with Yeet. Enable it when needed:
 
 ```sh
-git clone https://github.com/kyooni18/Yeet.git
-cd Yeet
-npm --prefix RuntimeSource ci
-./Scripts/install-local.sh
+yeet install foundation
 ```
 
-On Windows, use `Scripts\install-local.ps1`.
+That clones Foundation into Yeet-managed state, runs its normal npm build, registers its stdio MCP server, and enables memory for the current workspace. Remove it with `yeet uninstall foundation`. Apple Foundation Models remain an optional Foundation-specific build and are not part of this path.
+
+Other managed components use the same CLI surface:
+
+```sh
+yeet install web
+yeet install mcp
+yeet install remote
+yeet install status
+```
+
+`mcp` and `remote` are modes of the main Yeet binary; their install/uninstall commands start and stop those managed services rather than building separate executables.
 
 ## Use
 
@@ -85,8 +93,9 @@ docker run --rm -it -v "$PWD:/workspace" yeet
 
 ```sh
 npm --prefix RuntimeSource ci
-./Scripts/rebuild-runtime.sh
-./Scripts/build-remote-web.sh
+npm --prefix web ci
+npm --prefix RuntimeSource run build
+npm --prefix web run build
 cargo test --all-targets
 ```
 

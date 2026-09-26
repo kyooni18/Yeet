@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Component, Path, PathBuf},
-    sync::atomic::AtomicBool,
+    sync::{Arc, Mutex, atomic::AtomicBool},
     thread,
 };
 
@@ -9,10 +9,15 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    core::{BridgeClient, ToolCall, ToolDefinition, Usage},
+    core::{
+        AuthStatus, BridgeClient, BridgeEvent, CallRequest, CallResult,
+        HarnessCapabilityDescriptor, McpServerStatus, ModelInfo, OpenAiCompatibleProvider,
+        ProviderUsageStatus, SkillSummary, ToolCall, ToolDefinition, Usage,
+    },
     edit::{ApplyResult, EditClient},
     general,
     permission::PermissionBroker,
+    project_settings::ServiceBackend,
     sandbox::{SandboxMode, SandboxStore},
     session_store::SessionStore,
     shell::{
@@ -33,10 +38,12 @@ mod environment;
 mod io;
 mod mutation_lease;
 mod paths;
+mod service_backends;
 mod session_capabilities;
 mod shell_jobs;
 mod shell_runtime;
 mod support;
+mod syntax_edit;
 mod token_efficiency;
 
 pub(crate) use agent_deploy::deploy_agent_for_workspace;
@@ -52,9 +59,9 @@ use support::{
     ArtifactStore, McpServerIdentity, ReadCacheEntry, allocate_stable_tool_name,
     append_bounded_state_set, builtin_capability_for_tool, cache_read_result,
     collect_web_source_urls, coverage_complete, covered_ranges_within,
-    foundation_context_from_tool_result, foundation_tool_result_text, merged_ranges,
-    next_uncovered, shell_quote, string_arg, truncate_state_value, uncovered_ranges, usize_arg,
-    web_search_queries,
+    foundation_context_from_tool_result, foundation_tool_result_text, foundation_wrapper_schema,
+    merged_ranges, next_uncovered, shell_quote, string_arg, trim_cache_to_preview,
+    truncate_state_value, uncovered_ranges, usize_arg, web_search_queries,
 };
 
 const DEFAULT_READ_LINES: usize = 160;
@@ -113,8 +120,213 @@ impl MutationValidation {
     }
 }
 
+#[derive(Debug, Clone)]
+struct FoundationToolTarget {
+    server: String,
+    tool: String,
+}
+#[derive(Clone)]
+pub(crate) struct BridgeHandle {
+    inner: Arc<Mutex<BridgeHandleState>>,
+}
+
+struct BridgeHandleState {
+    client: Option<BridgeClient>,
+    workspace_root: Option<PathBuf>,
+    openai_flex: bool,
+}
+
+impl BridgeHandle {
+    fn eager(bridge: BridgeClient) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(BridgeHandleState {
+                client: Some(bridge),
+                workspace_root: None,
+                openai_flex: false,
+            })),
+        }
+    }
+
+    pub(crate) fn lazy() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(BridgeHandleState {
+                client: None,
+                workspace_root: None,
+                openai_flex: false,
+            })),
+        }
+    }
+
+    pub(crate) fn lazy_for_workspace(workspace_root: PathBuf) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(BridgeHandleState {
+                client: None,
+                workspace_root: Some(workspace_root),
+                openai_flex: false,
+            })),
+        }
+    }
+
+    pub(crate) fn client(&self) -> Result<BridgeClient> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("provider bridge slot poisoned"))?;
+        if state.client.is_none() {
+            let bridge = if let Some(workspace_root) = state.workspace_root.as_deref() {
+                BridgeClient::start_for_workspace(workspace_root)?
+            } else {
+                BridgeClient::start()?
+            };
+            bridge.set_openai_flex(state.openai_flex);
+            state.client = Some(bridge);
+        }
+        Ok(state
+            .client
+            .as_ref()
+            .expect("provider bridge initialized")
+            .clone())
+    }
+
+    pub(crate) fn existing_client(&self) -> Option<BridgeClient> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|state| state.client.as_ref().cloned())
+    }
+
+    pub(crate) fn set_openai_flex(&self, enabled: bool) {
+        let client = self.inner.lock().ok().and_then(|mut state| {
+            state.openai_flex = enabled;
+            state.client.as_ref().cloned()
+        });
+        if let Some(client) = client {
+            client.set_openai_flex(enabled);
+        }
+    }
+
+    pub(crate) fn interrupt_active_requests(&self) {
+        if let Some(client) = self.existing_client() {
+            client.interrupt_active_requests();
+        }
+    }
+
+    pub(crate) fn context_length(&self, model: &str) -> Result<Option<u64>> {
+        self.client()?.context_length(model)
+    }
+
+    pub(crate) fn auth_status(&self, provider: &str) -> Result<AuthStatus> {
+        self.client()?.auth_status(provider)
+    }
+
+    pub(crate) fn complete_cancellable(
+        &self,
+        request: &CallRequest,
+        cancel: &AtomicBool,
+    ) -> Result<CallResult> {
+        self.client()?.complete_cancellable(request, cancel)
+    }
+
+    pub(crate) fn restart(&self) -> Result<()> {
+        self.client()?.restart()
+    }
+
+    pub(crate) fn list_harness_capabilities(&self) -> Result<Vec<HarnessCapabilityDescriptor>> {
+        self.client()?.list_harness_capabilities()
+    }
+
+    pub(crate) fn list_skills(&self) -> Result<Vec<SkillSummary>> {
+        self.client()?.list_skills()
+    }
+
+    pub(crate) fn list_mcp_servers(&self) -> Result<Vec<McpServerStatus>> {
+        self.client()?.list_mcp_servers()
+    }
+
+    pub(crate) fn provider_usage(&self, provider: &str) -> Result<ProviderUsageStatus> {
+        self.client()?.provider_usage(provider)
+    }
+
+    pub(crate) fn list_providers(&self) -> Result<Vec<String>> {
+        self.client()?.list_providers()
+    }
+
+    pub(crate) fn list_model_info(&self, provider: &str) -> Result<Vec<ModelInfo>> {
+        self.client()?.list_model_info(provider)
+    }
+
+    pub(crate) fn login_browser(
+        &self,
+        provider: &str,
+        options: Option<Value>,
+    ) -> Result<AuthStatus> {
+        self.client()?.login_browser(provider, options)
+    }
+
+    pub(crate) fn logout(&self, provider: &str) -> Result<AuthStatus> {
+        self.client()?.logout(provider)
+    }
+
+    pub(crate) fn set_api_key(&self, provider: &str, key: &str) -> Result<AuthStatus> {
+        self.client()?.set_api_key(provider, key)
+    }
+
+    pub(crate) fn list_provider_configurations(&self) -> Result<Vec<OpenAiCompatibleProvider>> {
+        self.client()?.list_provider_configurations()
+    }
+
+    pub(crate) fn save_provider_configuration(
+        &self,
+        provider: &OpenAiCompatibleProvider,
+    ) -> Result<OpenAiCompatibleProvider> {
+        self.client()?.save_provider_configuration(provider)
+    }
+
+    pub(crate) fn remove_provider_configuration(&self, provider: &str) -> Result<bool> {
+        self.client()?.remove_provider_configuration(provider)
+    }
+
+    pub(crate) fn try_recv_event(&self) -> Option<BridgeEvent> {
+        self.existing_client()?.try_recv_event()
+    }
+
+    pub(crate) fn send_native_app_approval_decision(
+        &self,
+        request_id: &str,
+        approved: bool,
+    ) -> Result<()> {
+        self.client()?
+            .send_native_app_approval_decision(request_id, approved)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        let bridge = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut state| state.client.take());
+        if let Some(bridge) = bridge {
+            bridge.shutdown();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_started(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|state| state.client.is_some())
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EditReadCoverage {
+    snapshot: String,
+    ranges: Vec<(usize, usize)>,
+}
+
 pub struct ToolRegistry {
-    bridge: BridgeClient,
+    bridge: BridgeHandle,
     edit: Option<EditClient>,
     edit_generation: u64,
     workspace_root: PathBuf,
@@ -124,24 +336,27 @@ pub struct ToolRegistry {
     workers: WorkerRegistry,
     permission: PermissionBroker,
     artifacts: ArtifactStore,
+    artifacts_enabled: bool,
     descriptors: Vec<CapabilityDescriptor>,
     active_tools: BTreeMap<String, ToolDefinition>,
     skill_tool_map: HashMap<String, String>,
     skill_script_tool_map: HashMap<String, String>,
     mcp_tool_map: HashMap<String, (String, String)>,
-    foundation_tool_map: HashMap<String, String>,
+    foundation_tool_map: HashMap<String, FoundationToolTarget>,
     worker_tool_map: HashMap<String, (String, String)>,
     active_skills: HashSet<String>,
     active_mcp: HashSet<String>,
     active_mcp_identity: HashMap<String, McpServerIdentity>,
     foundation_enabled: bool,
+    foundation_backend: ServiceBackend,
     foundation_server: Option<String>,
     foundation_project: Option<String>,
-    foundation_memory_store: crate::memory::MemoryStore,
     active_workers: HashSet<String>,
     skyline_handle: Option<String>,
     disabled_capabilities: HashSet<String>,
     read_cache: HashMap<String, Vec<ReadCacheEntry>>,
+    edit_snapshots: HashMap<String, String>,
+    edit_read_coverage: HashMap<String, EditReadCoverage>,
     searches: HashSet<String>,
     listings: HashSet<String>,
     shell_jobs: shell_jobs::ShellJobs,
@@ -150,6 +365,8 @@ pub struct ToolRegistry {
     auxiliary_usage: Option<Usage>,
     latest_mutation: Option<MutationValidation>,
     web_search: WebSearchClient,
+    web_backend: ServiceBackend,
+    web_server: Option<String>,
     web_searches: HashSet<String>,
     web_sources: HashSet<String>,
     web_reads: HashSet<String>,
@@ -170,9 +387,23 @@ impl ToolRegistry {
         workers: WorkerRegistry,
         permission: PermissionBroker,
     ) -> Result<Self> {
-        // The structured edit daemon is started lazily. Most MCP calls do not
-        // need file I/O, and eagerly spawning one per workspace runtime caused
-        // every HTTP lane to accumulate idle Node edit daemons.
+        Self::new_with_bridge_handle(
+            BridgeHandle::eager(bridge),
+            workspace_root,
+            workers,
+            permission,
+        )
+    }
+
+    pub(crate) fn new_with_bridge_handle(
+        bridge: BridgeHandle,
+        workspace_root: PathBuf,
+        workers: WorkerRegistry,
+        permission: PermissionBroker,
+    ) -> Result<Self> {
+        // External sidecars are intentionally lazy. Creating a workspace/tool
+        // registry must stay in-process until a provider, MCP server, Skill, or
+        // Computer Use operation actually needs the Node bridge.
         let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
         let working_directory = workspace_root.clone();
         let context_roots = vec![workspace_root.clone()];
@@ -191,6 +422,7 @@ impl ToolRegistry {
             workers,
             permission,
             artifacts: ArtifactStore::new()?,
+            artifacts_enabled: true,
             descriptors: Vec::new(),
             active_tools,
             skill_tool_map: HashMap::new(),
@@ -202,13 +434,15 @@ impl ToolRegistry {
             active_mcp: HashSet::new(),
             active_mcp_identity: HashMap::new(),
             foundation_enabled: false,
+            foundation_backend: ServiceBackend::Builtin,
             foundation_server: Some("foundation".into()),
             foundation_project: None,
-            foundation_memory_store: crate::memory::MemoryStore::default(),
             active_workers: HashSet::new(),
             skyline_handle: None,
             disabled_capabilities: HashSet::new(),
             read_cache: HashMap::new(),
+            edit_snapshots: HashMap::new(),
+            edit_read_coverage: HashMap::new(),
             searches: HashSet::new(),
             listings: HashSet::new(),
             shell_jobs: shell_jobs::ShellJobs::default(),
@@ -217,6 +451,8 @@ impl ToolRegistry {
             auxiliary_usage: None,
             latest_mutation: None,
             web_search: WebSearchClient::default(),
+            web_backend: ServiceBackend::Builtin,
+            web_server: Some("web".into()),
             web_searches: HashSet::new(),
             web_sources: HashSet::new(),
             web_reads: HashSet::new(),
@@ -240,6 +476,15 @@ impl ToolRegistry {
         Ok(self.edit.as_mut().expect("edit client initialized"))
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_edit_started(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    pub(crate) fn bridge_client(&self) -> Result<BridgeClient> {
+        self.bridge.client()
+    }
+
     pub fn set_session_runtime(&mut self, store: SessionStore, active_session_id: Option<String>) {
         self.artifacts.root = active_session_id
             .as_ref()
@@ -249,64 +494,8 @@ impl ToolRegistry {
         self.active_session_id = active_session_id;
     }
 
-    pub fn configure_foundation_memory(
-        &mut self,
-        enabled: bool,
-        server: impl Into<String>,
-        project: impl Into<String>,
-    ) {
-        let server = server.into();
-        let project = project.into();
-        let changed = self.foundation_server.as_deref() != Some(server.as_str())
-            || self.foundation_project.as_deref() != Some(project.as_str())
-            || self.foundation_enabled != enabled;
-        if changed {
-            self.deactivate_foundation();
-        }
-        self.foundation_enabled = enabled;
-        self.foundation_server = Some(server);
-        self.foundation_project = Some(project);
-        if enabled {
-            self.activate_foundation();
-        }
-    }
-
-    pub fn foundation_memory_active(&self) -> bool {
-        self.foundation_enabled
-            && self.foundation_server.is_some()
-            && self.foundation_project.is_some()
-            && self
-                .foundation_tool_map
-                .contains_key(FOUNDATION_RECALL_TOOL)
-    }
-
-    pub fn foundation_memory_guidance(&self) -> Option<&'static str> {
-        self.foundation_memory_active().then_some(
-            "Yeet project memory is backed by Foundation v2 alongside session-local task_notes and context_history. Keep task progress and exact evidence in those local stores; promote only durable knowledge to Foundation memory. Recall is compact and token-budgeted by default; use project_memory_get to hydrate exact content only when needed. Use structured kind/subject/summary/confidence/importance/provenance/validity metadata when it improves later retrieval, and project_memory_relate for meaningful durable relationships. Project scope is the default; global scope is only for genuinely cross-project user knowledge. Give mutable current-state facts a stable key so newer values supersede older ones while preserving history. Do not store secrets, credentials, raw transcripts, transient progress chatter, build output, or facts that are cheap to rediscover from the repository. Fresh source evidence overrides stale memory.",
-        )
-    }
-
-    pub fn recall_foundation_memory(
-        &self,
-        query: &str,
-        cancel: &AtomicBool,
-    ) -> Result<Option<String>> {
-        if !self.foundation_memory_active() || query.trim().is_empty() {
-            return Ok(None);
-        }
-        let project = self
-            .foundation_project
-            .as_deref()
-            .ok_or_else(|| anyhow!("Project identity unavailable"))?;
-        let query = query.chars().take(20_000).collect::<String>();
-        let value = self.foundation_memory_store.call(
-            "memory_recall",
-            project,
-            &json!({"query":query,"limit":8}),
-            &self.bridge,
-            cancel,
-        )?;
-        Ok(foundation_context_from_tool_result(&value))
+    pub fn set_artifacts_enabled(&mut self, enabled: bool) {
+        self.artifacts_enabled = enabled;
     }
 
     pub fn runtime_capability_snapshot(&self, visible_tools: &[ToolDefinition]) -> Value {
@@ -367,8 +556,7 @@ impl ToolRegistry {
             }
         }
         if web_search_enabled {
-            tools.push(web_search_tool_definition());
-            tools.push(web_read_tool_definition());
+            tools.extend(self.configured_web_tool_definitions());
         }
         tools
     }
@@ -444,7 +632,7 @@ impl ToolRegistry {
                 Some((server, tool, arguments))
             })
             .collect::<Option<Vec<_>>>()?;
-        let bridge = self.bridge.clone();
+        let bridge = self.bridge_client().ok()?;
         Some(thread::scope(|scope| {
             let handles = targets
                 .into_iter()
@@ -491,7 +679,7 @@ impl ToolRegistry {
     }
 
     pub fn attach_enabled_mcp_servers(&mut self) -> Result<()> {
-        let servers = self.bridge.list_mcp_servers()?;
+        let servers = self.bridge_client()?.list_mcp_servers()?;
         let configured = servers
             .iter()
             .map(|server| server.name.clone())
@@ -506,9 +694,17 @@ impl ToolRegistry {
             self.deactivate_mcp(&server);
         }
         for server in servers {
-            // Memory is native now. Retain old MCP configuration on disk, but
-            // do not connect it or expose duplicate memory tools.
+            // Foundation memory owns this server through the canonical
+            // project_memory_* surface. In MCP mode retry activation here so a
+            // server that was unavailable at session startup can recover later;
+            // in builtin mode keep it hidden to avoid duplicate memory surfaces.
             if self.foundation_server.as_deref() == Some(server.name.as_str()) {
+                if self.foundation_backend == ServiceBackend::Mcp
+                    && self.foundation_enabled
+                    && !self.capability_disabled("mcp", &server.name)
+                {
+                    let _ = self.activate(&format!("mcp:{}", server.name));
+                }
                 continue;
             }
             if self.capability_disabled("mcp", &server.name) {
@@ -532,7 +728,7 @@ impl ToolRegistry {
 
     pub fn refresh_capabilities(&mut self) {
         let mut descriptors = Vec::new();
-        if let Ok(skills) = self.bridge.list_skills() {
+        if let Ok(skills) = self.bridge_client().and_then(|bridge| bridge.list_skills()) {
             descriptors.extend(
                 skills
                     .into_iter()
@@ -547,7 +743,10 @@ impl ToolRegistry {
                     }),
             );
         }
-        if let Ok(servers) = self.bridge.list_mcp_servers() {
+        if let Ok(servers) = self
+            .bridge_client()
+            .and_then(|bridge| bridge.list_mcp_servers())
+        {
             descriptors.extend(
                 servers
                     .into_iter()
@@ -752,21 +951,11 @@ impl ToolRegistry {
             "computer_use_reset" => self.computer_use_reset_tool(&object, cancel),
             "apply_file_edits" => self.apply_file_edits(&call.arguments),
             other => {
-                if let Some(tool) = self.foundation_tool_map.get(other).cloned() {
+                if let Some(target) = self.foundation_tool_map.get(other).cloned() {
                     if !self.foundation_enabled {
                         bail!("Project memory is disabled");
                     }
-                    let project = self
-                        .foundation_project
-                        .as_deref()
-                        .ok_or_else(|| anyhow!("Project identity is unavailable"))?;
-                    let result = self.foundation_memory_store.call(
-                        &tool,
-                        project,
-                        &Value::Object(object.clone()),
-                        &self.bridge,
-                        cancel,
-                    )?;
+                    let result = self.call_foundation_target(&target, &object, cancel)?;
                     return Ok(foundation_tool_result_text(&result));
                 }
                 if let Some(skill) = self.skill_script_tool_map.get(other).cloned() {
@@ -783,7 +972,7 @@ impl ToolRegistry {
                     if self.capability_disabled("skill", skill) {
                         bail!("Skill {skill} is disabled for this session");
                     }
-                    return self.bridge.read_skill_file(
+                    return self.bridge_client()?.read_skill_file(
                         skill,
                         object.get("path").and_then(Value::as_str).unwrap_or(""),
                     );
@@ -799,7 +988,7 @@ impl ToolRegistry {
                         self.workspace_mutation_guard()?
                     };
                     let result = self
-                        .bridge
+                        .bridge_client()?
                         .call_mcp_tool_cancellable(&server, &tool, &object, cancel)?
                         .to_string();
                     if !read_only {
@@ -876,17 +1065,39 @@ impl ToolRegistry {
             self.mutation_lease = None;
             self.active_task_id = None;
         }
-        self.read_cache.clear();
-        self.searches.clear();
-        self.web_searches.clear();
+        self.reset_model_evidence_window();
+        self.edit_snapshots.clear();
+        self.edit_read_coverage.clear();
         self.web_sources.clear();
-        self.web_reads.clear();
-        self.listings.clear();
-        self.shell_inspections.clear();
         self.permitted_shell_commands.clear();
         self.auxiliary_usage = None;
         self.latest_mutation = None;
         self.workers.finish_task(task_id);
+    }
+
+    /// Starts a fresh model-visible evidence window without discarding
+    /// task-wide edit snapshots, permissions, artifacts, mutations, or workers.
+    /// Context rollover removes prior tool results from the request, so duplicate
+    /// suppression must forget which inspection bytes were previously shown.
+    pub(super) fn reset_model_evidence_window(&mut self) {
+        self.read_cache.clear();
+        self.searches.clear();
+        self.listings.clear();
+        self.shell_inspections.clear();
+        self.web_searches.clear();
+        self.web_reads.clear();
+    }
+
+    /// Direct MCP calls do not reveal client-context lifetime. Clear only
+    /// duplicate-suppression state between calls while preserving state required
+    /// by a subsequent dependent call (fresh edit snapshots and web source grants).
+    pub(super) fn reset_direct_mcp_visibility(&mut self) {
+        self.read_cache.clear();
+        self.searches.clear();
+        self.listings.clear();
+        self.shell_inspections.clear();
+        self.web_searches.clear();
+        self.web_reads.clear();
     }
 
     pub fn consume_auxiliary_usage(&mut self) -> Option<Usage> {
@@ -1022,7 +1233,7 @@ impl ToolRegistry {
             return !self.capability_disabled("mcp", server);
         }
         if self.foundation_tool_map.contains_key(tool_name) {
-            return self.foundation_enabled;
+            return self.foundation_memory_active();
         }
         true
     }

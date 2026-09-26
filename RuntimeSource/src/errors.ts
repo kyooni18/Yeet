@@ -15,9 +15,20 @@ export class ProviderError extends Error {
 export function isQuotaExhausted(responseBody: string | undefined): boolean {
   try {
     const error = JSON.parse(responseBody ?? "").error;
-    return [error?.code, error?.type].some((value) =>
-      value === "insufficient_quota" || value === "credit_balance_exhausted",
-    );
+    if ([error?.code, error?.type].some((value) =>
+      value === "insufficient_quota" || value === "credit_balance_exhausted"
+    )) return true;
+
+    const details = Array.isArray(error?.details) ? error.details : [];
+    return details.some((detail: any) => {
+      if (!detail || typeof detail !== "object") return false;
+      const type = typeof detail["@type"] === "string" ? detail["@type"] : "";
+      if (!type.endsWith("google.rpc.QuotaFailure") || !Array.isArray(detail.violations)) return false;
+      return detail.violations.some((violation: any) => {
+        const quotaId = typeof violation?.quotaId === "string" ? violation.quotaId : "";
+        return /(?:per.?day|daily)/i.test(quotaId);
+      });
+    });
   } catch {
     return false;
   }

@@ -124,12 +124,19 @@ impl ConfigStore {
         if value.is_empty() {
             bail!("Theme name or path cannot be empty");
         }
+        if let Err(error) = crate::theme::validate_reference(value) {
+            bail!("{error}");
+        }
         let mut document = self.read()?;
         document.version = 1;
         match mode {
             "dark" => document.theme_dark = Some(value.to_owned()),
             "light" => document.theme_light = Some(value.to_owned()),
-            "both" => document.theme = Some(value.to_owned()),
+            "both" => {
+                document.theme = Some(value.to_owned());
+                document.theme_dark = None;
+                document.theme_light = None;
+            }
             _ => bail!("Theme mode must be dark, light, or both"),
         }
         self.write(&document)

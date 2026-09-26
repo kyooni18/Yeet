@@ -140,6 +140,53 @@ test('McpManager uses modern Streamable HTTP metadata and MCP parameter headers'
   await mcp.close();
 });
 
+test('McpManager retries HTTP MCP with the legacy protocol when the server rejects the current version', async (t) => {
+  const seen = [];
+  const server = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const rpc = JSON.parse(body);
+    seen.push({ method: rpc.method, params: rpc.params, protocol: req.headers['mcp-protocol-version'] });
+    if (req.headers['mcp-protocol-version'] !== '2025-11-25') {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        id: rpc.id,
+        error: { code: -32600, message: 'Unsupported protocol version: 2026-07-28' },
+      }));
+      return;
+    }
+
+    const result = rpc.method === 'tools/list'
+      ? { tools: [{ name: 'foundation_search', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }] }
+      : { content: [{ type: 'text', text: 'foundation-ok' }] };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }));
+  });
+  const address = await listen(server);
+  t.after(() => server.close());
+
+  const configDir = await tempConfig();
+  const mcp = new McpManager({ configDir });
+  await mcp.setServer({ name: 'foundation', transport: 'http', url: `http://127.0.0.1:${address.port}/mcp` });
+
+  assert.deepEqual((await mcp.listTools('foundation')).map((tool) => tool.name), ['foundation_search']);
+  const call = await mcp.callTool('foundation', 'foundation_search', { query: 'Yeet' });
+  assert.equal(call.content[0].text, 'foundation-ok');
+
+  const status = (await mcp.listServers())[0];
+  assert.equal(status.era, 'legacy');
+  assert.equal(status.protocol, '2025-11-25');
+  assert.deepEqual(seen.map(({ protocol }) => protocol), [
+    '2026-07-28',
+    '2025-11-25',
+    '2025-11-25',
+    '2025-11-25',
+  ]);
+  assert.ok(seen.slice(1).every(({ params }) => params._meta === undefined));
+  await mcp.close();
+});
+
 test('McpManager falls back to legacy initialize for stdio MCP servers', async () => {
   const configDir = await tempConfig();
   const fixture = new URL('./fixtures/legacy-mcp.mjs', import.meta.url).pathname;

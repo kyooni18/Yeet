@@ -18,17 +18,18 @@ impl BackendService {
             "The debate topic must contain 1–4000 characters."
         );
         anyhow::ensure!(
-            !self.shared.lock().unwrap().state.is_streaming,
+            !self.shared.lock_or_recover().state.is_streaming,
             "Stop the current task before starting a debate."
         );
-        let history = self.coordinator.lock().unwrap().model_history();
+        let history = self.coordinator.lock_or_recover().model_history();
         let turn = Uuid::new_v4().to_string();
         let subject = discover_debate_subject(&topic, &self.workspace_root);
         let framing_project_brief = subject
             .workspace_bound
             .then(|| debate_project_brief(&self.workspace_root));
+        let history_start = self.coordinator.lock_or_recover().model_history().len();
         {
-            let mut s = self.shared.lock().unwrap();
+            let mut s = self.shared.lock_or_recover();
             anyhow::ensure!(
                 !s.state.is_streaming,
                 "Stop the current task before starting a debate."
@@ -37,7 +38,14 @@ impl BackendService {
                 models.unwrap_or_else(|| crate::debate::DebateModels::same(&s.state.active_model));
             models.validate()?;
             let run_model = format!("pro={} con={} jury={}", models.pro, models.con, models.jury);
-            s.start_run(turn.clone(), "debate", run_model);
+            let conversation_start = s.state.conversation.as_ref().map_or(0, Vec::len);
+            s.start_run(
+                turn.clone(),
+                "debate",
+                run_model,
+                history_start,
+                conversation_start,
+            );
             let mut debate = crate::debate::DebateState::default();
             debate.topic = topic.clone();
             debate.models = models;
@@ -53,7 +61,7 @@ impl BackendService {
             s.state.error_message = None;
         }
         let session_runtime = {
-            let shared = self.shared.lock().unwrap();
+            let shared = self.shared.lock_or_recover();
             shared
                 .state
                 .current_session_id
@@ -68,19 +76,17 @@ impl BackendService {
             coordinator.set_retained_debate_knowledge(retained_knowledge);
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        *self.active_cancel.lock().unwrap() = Some(cancel.clone());
+        *self.active_cancel.lock_or_recover() = Some(cancel.clone());
         self.publish_state();
         let shared = self.shared.clone();
         let coordinator = self.coordinator.clone();
         let bridge = self.bridge.clone();
-        let foundation_capability = format!(
-            "mcp:{}",
-            self.project_settings
-                .load()
-                .ok()
-                .map(|project| project.foundation_memory.server)
-                .unwrap_or_else(|| "foundation".into())
-        );
+        let foundation_capability = self
+            .project_settings
+            .load()
+            .ok()
+            .filter(|project| project.foundation_memory.backend == ServiceBackend::Mcp)
+            .map(|project| format!("mcp:{}", project.foundation_memory.server));
         let store = self.store.clone();
         let workspace = self.workspace_root.clone();
         let tx = self.tx.clone();
@@ -88,7 +94,7 @@ impl BackendService {
         thread::spawn(move || {
             let result = (|| -> Result<()> {
                 let framing_grounding = {
-                    let s = shared.lock().unwrap();
+                    let s = shared.lock_or_recover();
                     let debate = s.state.debate.as_ref().unwrap();
                     let project_brief = debate.framing_project_brief.as_deref().unwrap_or(
                         "Project briefing omitted because this proposition is not workspace-bound.",
@@ -100,7 +106,7 @@ impl BackendService {
                     )
                 };
                 let contract_request = {
-                    let mut s = shared.lock().unwrap();
+                    let mut s = shared.lock_or_recover();
                     anyhow::ensure!(
                         s.meta.current_turn.as_ref() == Some(&turn),
                         "Session changed"
@@ -117,7 +123,7 @@ impl BackendService {
                 };
                 let contract_response = bridge.complete_cancellable(&contract_request, &cancel);
                 {
-                    let mut s = shared.lock().unwrap();
+                    let mut s = shared.lock_or_recover();
                     anyhow::ensure!(
                         s.meta.current_turn.as_ref() == Some(&turn)
                             && !cancel.load(Ordering::Acquire),
@@ -168,7 +174,7 @@ impl BackendService {
                 loop {
                     anyhow::ensure!(!cancel.load(Ordering::Acquire), "Debate interrupted");
                     let (closing_stage, jury_done) = {
-                        let s = shared.lock().unwrap();
+                        let s = shared.lock_or_recover();
                         let debate = s.state.debate.as_ref().unwrap();
                         (debate.closing_stage, debate.jury_done())
                     };
@@ -179,8 +185,7 @@ impl BackendService {
                     let judging = jury_start.is_some_and(|start| step >= start);
                     let reversed = if judging {
                         shared
-                            .lock()
-                            .unwrap()
+                            .lock_or_recover()
                             .state
                             .debate
                             .as_ref()
@@ -203,7 +208,7 @@ impl BackendService {
                                 if pro { "Pro" } else { "Con" }
                             );
                             let snapshot = {
-                                let mut s = shared.lock().unwrap();
+                                let mut s = shared.lock_or_recover();
                                 anyhow::ensure!(
                                     s.meta.current_turn.as_ref() == Some(&turn),
                                     "Session changed"
@@ -215,20 +220,22 @@ impl BackendService {
                                 s.state.debate.clone().unwrap()
                             };
                             let research = (|| -> Result<crate::debate::ResearchRecord> {
+                                let bridge_client = bridge.client()?;
                                 let mut registry = ToolRegistry::new(
-                                    bridge.clone(),
+                                    bridge_client.clone(),
                                     workspace.clone(),
                                     WorkerRegistry::new(Vec::new())?,
                                     PermissionBroker::default(),
                                 )?;
-                                registry.set_disabled_capabilities([
-                                    "builtin:file-write".into(),
-                                    "builtin:shell".into(),
-                                    foundation_capability.clone(),
-                                ]);
+                                let mut disabled =
+                                    vec!["builtin:file-write".into(), "builtin:shell".into()];
+                                if let Some(capability) = foundation_capability.as_ref() {
+                                    disabled.push(capability.clone());
+                                }
+                                registry.set_disabled_capabilities(disabled);
                                 let result = registry.attach_enabled_mcp_servers().and_then(|_| {
-                                    crate::debate::research::run(&snapshot, stage, pro, &bridge, &mut registry, &cancel, |kind, detail| {
-                                        let mut s = shared.lock().unwrap();
+                                    crate::debate::research::run(&snapshot, stage, pro, &bridge_client, &mut registry, &cancel, |kind, detail| {
+                                        let mut s = shared.lock_or_recover();
                                         anyhow::ensure!(s.meta.current_turn.as_ref() == Some(&turn) && !cancel.load(Ordering::Acquire), "Research interrupted");
                                         if let Some(id) = &s.state.current_session_id {
                                             let logged_detail = if kind == "checkpoint" {
@@ -297,7 +304,7 @@ impl BackendService {
                             let dossier = match research {
                                 Ok(dossier) => dossier,
                                 Err(error) => {
-                                    let mut s = shared.lock().unwrap();
+                                    let mut s = shared.lock_or_recover();
                                     anyhow::ensure!(
                                         s.meta.current_turn.as_ref() == Some(&turn)
                                             && !cancel.load(Ordering::Acquire),
@@ -333,7 +340,7 @@ impl BackendService {
                                     partial
                                 }
                             };
-                            let mut s = shared.lock().unwrap();
+                            let mut s = shared.lock_or_recover();
                             anyhow::ensure!(
                                 s.meta.current_turn.as_ref() == Some(&turn)
                                     && !cancel.load(Ordering::Acquire),
@@ -354,7 +361,7 @@ impl BackendService {
 
                         if step == 0 {
                             let grounding_gap =
-                                shared.lock().unwrap().state.debate.as_ref().and_then(
+                                shared.lock_or_recover().state.debate.as_ref().and_then(
                                     crate::debate::DebateState::initial_workspace_grounding_gap,
                                 );
                             if let Some(gap) = grounding_gap {
@@ -365,7 +372,7 @@ impl BackendService {
                         }
                     }
                     let request = {
-                        let mut s = shared.lock().unwrap();
+                        let mut s = shared.lock_or_recover();
                         anyhow::ensure!(
                             s.meta.current_turn.as_ref() == Some(&turn),
                             "Session changed"
@@ -405,7 +412,7 @@ impl BackendService {
                     let response = match bridge.complete_cancellable(&request, &cancel) {
                         Ok(response) => response,
                         Err(error) if judging => {
-                            let mut s = shared.lock().unwrap();
+                            let mut s = shared.lock_or_recover();
                             anyhow::ensure!(
                                 s.meta.current_turn.as_ref() == Some(&turn)
                                     && !cancel.load(Ordering::Acquire),
@@ -428,7 +435,7 @@ impl BackendService {
                         }
                         Err(error) => return Err(error),
                     };
-                    let mut s = shared.lock().unwrap();
+                    let mut s = shared.lock_or_recover();
                     anyhow::ensure!(
                         s.meta.current_turn.as_ref() == Some(&turn)
                             && !cancel.load(Ordering::Acquire),
@@ -498,7 +505,7 @@ impl BackendService {
 
                     if let Some(stage) = completed_strengthening_stage {
                         let checkpoint_request = {
-                            let mut s = shared.lock().unwrap();
+                            let mut s = shared.lock_or_recover();
                             anyhow::ensure!(
                                 s.meta.current_turn.as_ref() == Some(&turn)
                                     && !cancel.load(Ordering::Acquire),
@@ -518,7 +525,7 @@ impl BackendService {
 
                         match bridge.complete_cancellable(&checkpoint_request, &cancel) {
                             Ok(response) => {
-                                let mut s = shared.lock().unwrap();
+                                let mut s = shared.lock_or_recover();
                                 anyhow::ensure!(
                                     s.meta.current_turn.as_ref() == Some(&turn)
                                         && !cancel.load(Ordering::Acquire),
@@ -571,7 +578,7 @@ impl BackendService {
                             }
                             Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
                             Err(error) => {
-                                let mut s = shared.lock().unwrap();
+                                let mut s = shared.lock_or_recover();
                                 anyhow::ensure!(
                                     s.meta.current_turn.as_ref() == Some(&turn),
                                     "Session changed"
@@ -590,7 +597,7 @@ impl BackendService {
                 Ok(())
             })();
             let outcome = result.and_then(|_| {
-                let mut s = shared.lock().unwrap();
+                let mut s = shared.lock_or_recover();
                 anyhow::ensure!(
                     s.meta.current_turn.as_ref() == Some(&turn),
                     "Session changed"
@@ -618,7 +625,7 @@ impl BackendService {
                     .unwrap_or(false);
             let knowledge = if knowledge_allowed {
                 let request = {
-                    let mut s = shared.lock().unwrap();
+                    let mut s = shared.lock_or_recover();
                     if s.meta.current_turn.as_ref() != Some(&turn) {
                         return;
                     }
@@ -657,7 +664,7 @@ impl BackendService {
             };
 
             let mut retained_for_coordinator = None;
-            let mut s = shared.lock().unwrap();
+            let mut s = shared.lock_or_recover();
             if s.meta.current_turn.as_ref() != Some(&turn) {
                 return;
             }

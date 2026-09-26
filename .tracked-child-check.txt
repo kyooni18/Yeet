@@ -1,0 +1,13 @@
+error: unexpected closing delimiter: `}`
+   --> src/core.rs:835:5
+    |
+713 | impl BridgeClient {
+    |                   - the nearest open delimiter
+...
+767 |         });
+    |          - missing open `(` for this delimiter
+...
+835 |     }
+    |     ^ unexpected closing delimiter
+
+error: could not compile `yeet` (lib) due to 1 previous error

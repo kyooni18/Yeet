@@ -86,6 +86,27 @@ function retryAfterMs(response: Response): number | undefined {
   return undefined;
 }
 
+function googleRetryInfoMs(responseBody: string | undefined): number | undefined {
+  try {
+    const details = JSON.parse(responseBody ?? "")?.error?.details;
+    if (!Array.isArray(details)) return undefined;
+    for (const detail of details) {
+      if (!detail || typeof detail !== "object") continue;
+      const type = typeof detail["@type"] === "string" ? detail["@type"] : "";
+      if (!type.endsWith("google.rpc.RetryInfo")) continue;
+      const value = detail.retryDelay;
+      if (typeof value !== "string") continue;
+      const match = /^([0-9]+(?:\.[0-9]+)?)s$/.exec(value.trim());
+      if (!match) continue;
+      const seconds = Number(match[1]);
+      if (Number.isFinite(seconds)) return Math.max(0, Math.ceil(seconds * 1_000));
+    }
+  } catch {
+    // Non-Google errors simply fall back to the normal retry policy.
+  }
+  return undefined;
+}
+
 function delayForAttempt(attempt: number, policy: Required<RetryPolicy>, response?: Response): number {
   const fromHeader = response ? retryAfterMs(response) : undefined;
   if (fromHeader !== undefined) return Math.min(fromHeader, policy.maxDelayMs);
@@ -166,7 +187,10 @@ export async function providerFetch(
       const retryable = isRetryableStatus(response.status)
         && !(response.status === 429 && isQuotaExhausted(responseBody));
       if (retryable && attempt < policy.maxAttempts) {
-        const retryDelayMs = delayForAttempt(attempt, policy, response);
+        const retryInfoDelay = googleRetryInfoMs(responseBody);
+        const retryDelayMs = retryInfoDelay !== undefined
+          ? Math.min(retryInfoDelay, options.retry?.maxDelayMs ?? 60_000)
+          : delayForAttempt(attempt, policy, response);
         emitLog(options.apiCallLogger, {
           provider: options.provider,
           method,

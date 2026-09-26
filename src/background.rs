@@ -15,20 +15,27 @@ use anyhow::{Context, Result, anyhow, bail};
 use fs2::FileExt;
 
 use crate::{
-    backend::BackendEvent,
+    backend::SessionCatalog,
     config::ConfigStore,
     extensions::{ExtensionHost, ExtensionRequest},
     model::{BridgeEnvelope, BridgeState, FrontendCommand},
     platform::{
-        LocalStream, bind_local, configure_detached, connect_local, force_terminate_process_tree,
-        set_private_directory, set_private_file,
+        LocalStream, bind_local, configure_detached, connect_local, set_private_directory,
+        set_private_file,
     },
 };
 
 mod client_writer;
+mod routing;
 mod runtime_process;
+mod wake;
 use client_writer::ClientWriter;
+use routing::{
+    PendingIsolation, live_session_runtime_id, publish_runtime_state, route_client_to_runtime,
+    send_client_error_to, start_isolated_runtime,
+};
 use runtime_process::RuntimeProcess;
+pub(crate) use wake::Wake;
 
 enum ClientEvent {
     Command {
@@ -41,7 +48,17 @@ enum ClientEvent {
 struct ClientConnection {
     id: u64,
     runtime_id: u64,
+    /// Bumped on every session-routing command so a slow isolated startup
+    /// never overrides a newer LoadSession/NewSession from the same client.
+    route_seq: u64,
     writer: ClientWriter,
+}
+
+impl ClientConnection {
+    fn next_route(&mut self) -> u64 {
+        self.route_seq = self.route_seq.wrapping_add(1);
+        self.route_seq
+    }
 }
 
 struct SessionRuntime {
@@ -49,6 +66,8 @@ struct SessionRuntime {
     service: RuntimeProcess,
     idle_since: Option<Instant>,
     interrupt_requested_at: Option<Instant>,
+    /// Session catalog this runtime last published.
+    catalog: Option<SessionCatalog>,
 }
 
 struct RuntimeStartupEvent {
@@ -59,22 +78,30 @@ struct RuntimeStartupEvent {
 }
 
 struct RuntimeIsolationEvent {
-    client_id: u64,
     runtime_id: u64,
-    command: Option<FrontendCommand>,
     result: Result<SessionRuntime>,
 }
 
-const CONNECT_RETRIES: usize = 60;
 const CONNECT_DELAY: Duration = Duration::from_millis(50);
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(750);
+const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(10);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
-const CLIENT_STALE_AFTER: Duration = Duration::from_secs(6);
+// A dead socket is detected immediately by the reader thread. This timeout is
+// only a wedged-daemon fallback, so keep enough headroom for cold starts and
+// large-state serialization instead of reconnecting healthy sessions.
+const CLIENT_STALE_AFTER: Duration = Duration::from_secs(30);
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
+const RECONNECT_BACKOFF_BASE: Duration = Duration::from_millis(250);
+const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(5);
 const INTERRUPT_RECOVERY_AFTER: Duration = Duration::from_secs(4);
-const IDLE_EXIT_AFTER: Duration = Duration::from_secs(60);
+// Losing every frontend transport is not an interrupt request. Background
+// runs continue until they finish naturally or a user explicitly interrupts.
+const RUNTIME_IDLE_RETIRE_AFTER: Duration = Duration::from_secs(60);
+// Keep the lightweight socket owner around longer than its heavy session
+// runtimes. This avoids daemon start/stop churn while still reclaiming inactive
+// BackendService/bridge state promptly.
+const DAEMON_IDLE_EXIT_AFTER: Duration = Duration::from_secs(10 * 60);
 const STALE_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
-const FORCED_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_BACKGROUND_LOG_BYTES: u64 = 8 * 1024 * 1024;
 // State snapshots can contain a retained transcript, so the protocol limit is
 // deliberately larger than an ordinary command. It still prevents a peer
@@ -82,18 +109,24 @@ const MAX_BACKGROUND_LOG_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_BACKGROUND_FRAME_BYTES: usize = 32 * 1024 * 1024;
 const MAX_CLIENT_COMMAND_BYTES: usize = 8 * 1024 * 1024;
 const CLIENT_EVENT_QUEUE_CAPACITY: usize = 256;
-
-pub fn run_runtime_worker(workspace: PathBuf) -> Result<()> {
-    runtime_process::run_worker(&workspace)
-}
+// Upper bound on the daemon's wait. Producers wake it immediately; this only
+// bounds polling of sources that cannot signal (listener, bridge events).
+const DAEMON_TICK: Duration = Duration::from_millis(25);
+const MAX_RUNTIME_EVENTS_PER_TICK: usize = 1024;
+const MAX_PENDING_ISOLATIONS: usize = 8;
+const MAX_PENDING_STARTUP_CLIENTS: usize = 64;
 
 pub struct BackgroundConnection {
     workspace: PathBuf,
     scope: Option<String>,
     resume_session_id: Option<String>,
+    resume_barrier: Option<String>,
     stream: LocalStream,
     events: mpsc::Receiver<BridgeEnvelope>,
     last_daemon_activity: Instant,
+    wake: Option<Wake>,
+    reconnect_failures: u32,
+    next_reconnect_at: Option<Instant>,
 }
 
 impl BackgroundConnection {
@@ -102,31 +135,47 @@ impl BackgroundConnection {
     }
 
     pub fn connect_scoped(workspace: &Path, scope: Option<&str>) -> Result<Self> {
+        Self::connect_with_wake(workspace, scope, None)
+    }
+
+    /// Connects and notifies `wake` whenever a daemon frame arrives, so an
+    /// event loop can block instead of polling `try_recv` on a timer.
+    pub(crate) fn connect_with_wake(
+        workspace: &Path,
+        scope: Option<&str>,
+        wake: Option<Wake>,
+    ) -> Result<Self> {
         let workspace = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
         let scope = scope.map(str::to_owned);
-        let (stream, events) = Self::establish(&workspace, scope.as_deref())?;
+        let (stream, events) = Self::establish(&workspace, scope.as_deref(), wake.clone())?;
         Ok(Self {
             workspace,
             scope,
             resume_session_id: None,
+            resume_barrier: None,
             stream,
             events,
             last_daemon_activity: Instant::now(),
+            wake,
+            reconnect_failures: 0,
+            next_reconnect_at: None,
         })
     }
 
     fn establish(
         workspace: &Path,
         scope: Option<&str>,
+        wake: Option<Wake>,
     ) -> Result<(LocalStream, mpsc::Receiver<BridgeEnvelope>)> {
         let paths = BackgroundPaths::new(workspace, scope)?;
-        let executable_identity = current_executable_identity()?;
 
-        if daemon_identity_matches(&paths, &executable_identity)
-            && let Ok(connection) = Self::connect_existing(&paths.socket)
-        {
+        // Protocol reachability is the compatibility test. A daemon started by
+        // the previous Yeet binary can keep active sessions alive across an
+        // atomic local install, so never retire it merely because the executable
+        // identity (mtime/size) changed.
+        if let Ok(connection) = Self::connect_existing(&paths.socket, wake.clone()) {
             return Ok(connection);
         }
 
@@ -135,45 +184,76 @@ impl BackgroundConnection {
         // unlink each other's listener, and leave two independent daemons.
         let _lifecycle_lock = LifecycleLock::acquire(&paths.lifecycle_lock)?;
 
-        // Another terminal may have finished starting the daemon while this
-        // process was waiting for the lifecycle lock.
-        if daemon_identity_matches(&paths, &executable_identity) {
-            match Self::connect_existing(&paths.socket) {
-                Ok(connection) => return Ok(connection),
-                Err(handshake_error) => match connect_local(&paths.socket) {
-                    Ok(stream) => {
-                        let _ = stream.shutdown(Shutdown::Both);
-                        // A slow worker startup or a busy daemon can miss the
-                        // handshake deadline while existing sessions are healthy.
-                        // Never turn a failed attach into a workspace-wide kill.
-                        return Err(handshake_error).context(
-                            "background service is reachable but not ready; retry attaching (existing sessions were left running)",
-                        );
-                    }
-                    Err(error) if stale_socket_error(&error) => {}
-                    Err(error) => return Err(error.into()),
-                },
-            }
+        // Another client or an older build may have made the endpoint ready
+        // while this process waited for the lifecycle lock. Try the protocol
+        // again regardless of executable identity.
+        match Self::connect_existing(&paths.socket, wake.clone()) {
+            Ok(connection) => return Ok(connection),
+            Err(handshake_error) => match connect_local(&paths.socket) {
+                Ok(stream) => {
+                    let _ = stream.shutdown(Shutdown::Both);
+                    // Reachable but slow/incompatible is still live. Preserving
+                    // its sessions is safer than converting an attach failure or
+                    // rolling upgrade into a workspace-wide shutdown.
+                    return Err(handshake_error).context(format!(
+                        "background service is reachable but did not complete a compatible handshake; existing sessions were left running; workspace={}, socket={}, pid={}, identity={}, lifecycle_lock={}, log={}",
+                        workspace.display(),
+                        paths.socket.display(),
+                        paths.pid.display(),
+                        paths.identity.display(),
+                        paths.lifecycle_lock.display(),
+                        paths.log.display(),
+                    ));
+                }
+                Err(error) if stale_socket_error(&error) => {}
+                Err(error) => return Err(error.into()),
+            },
         }
 
-        if paths.socket.exists() || paths.identity.exists() {
+        if paths.socket.exists() || paths.identity.exists() || paths.pid.exists() {
             retire_stale_daemon(&paths)?;
         }
 
+        if InstanceLease::is_held(&paths.owner_lock)? {
+            bail!(
+                "background owner lease is still held while its endpoint metadata is unavailable; refusing duplicate spawn; workspace={}, owner_lock={}, socket={}, pid={}, identity={}",
+                workspace.display(),
+                paths.owner_lock.display(),
+                paths.socket.display(),
+                paths.pid.display(),
+                paths.identity.display(),
+            );
+        }
+
         spawn_daemon(workspace, scope, &paths)?;
-        for _ in 0..CONNECT_RETRIES {
-            match Self::connect_existing(&paths.socket) {
+        let deadline = Instant::now() + DAEMON_START_TIMEOUT;
+        let mut last_attach_error = String::from("background socket has not accepted a connection");
+        while Instant::now() < deadline {
+            match Self::connect_existing(&paths.socket, wake.clone()) {
                 Ok(connection) => return Ok(connection),
-                Err(_) => thread::sleep(CONNECT_DELAY),
+                Err(error) => {
+                    last_attach_error = error.to_string();
+                    thread::sleep(
+                        CONNECT_DELAY.min(deadline.saturating_duration_since(Instant::now())),
+                    );
+                }
             }
         }
         bail!(
-            "background service did not become ready; see {}",
-            paths.log.display()
+            "background service did not become ready within {DAEMON_START_TIMEOUT:?}; workspace={}, socket={}, pid={}, identity={}, lifecycle_lock={}, log={}; last attach error: {last_attach_error}",
+            workspace.display(),
+            paths.socket.display(),
+            paths.pid.display(),
+            paths.identity.display(),
+            paths.lifecycle_lock.display(),
+            paths.log.display(),
         )
     }
 
-    fn connect_existing(socket: &Path) -> Result<(LocalStream, mpsc::Receiver<BridgeEnvelope>)> {
+    fn connect_existing(
+        socket: &Path,
+        wake: Option<Wake>,
+    ) -> Result<(LocalStream, mpsc::Receiver<BridgeEnvelope>)> {
         let stream = connect_local(socket)?;
         let mut reader_stream = stream.try_clone()?;
         let first_line = Self::read_handshake_line(&mut reader_stream)?;
@@ -181,14 +261,13 @@ impl BackgroundConnection {
             .context("invalid background service handshake")?;
         let mut reader = BufReader::new(reader_stream);
         let (tx, events) = mpsc::sync_channel(CLIENT_EVENT_QUEUE_CAPACITY);
-        tx.send(first_envelope)
-            .map_err(|_| anyhow!("background event channel closed"))?;
+        if first_envelope.kind != "heartbeat" {
+            tx.send(first_envelope)
+                .map_err(|_| anyhow!("background event channel closed"))?;
+        }
         thread::spawn(move || {
-            loop {
-                let frame = match read_bounded_frame(&mut reader, MAX_BACKGROUND_FRAME_BYTES) {
-                    Ok(Some(frame)) => frame,
-                    Ok(None) | Err(_) => break,
-                };
+            while let Ok(Some(frame)) = read_bounded_frame(&mut reader, MAX_BACKGROUND_FRAME_BYTES)
+            {
                 let envelope = match serde_json::from_slice::<BridgeEnvelope>(&frame) {
                     Ok(envelope) => envelope,
                     Err(_) => break,
@@ -196,6 +275,13 @@ impl BackgroundConnection {
                 if tx.send(envelope).is_err() {
                     break;
                 }
+                if let Some(wake) = &wake {
+                    wake.notify();
+                }
+            }
+            // Wake the owner so it observes the disconnect promptly.
+            if let Some(wake) = &wake {
+                wake.notify();
             }
         });
         Ok((stream, events))
@@ -238,13 +324,20 @@ impl BackgroundConnection {
     }
 
     pub fn send(&mut self, command: &FrontendCommand) -> Result<()> {
+        if matches!(command, FrontendCommand::Shutdown) {
+            // A BackgroundConnection is only a frontend attachment to a shared
+            // workspace service. Frontends may disconnect, but they must never
+            // terminate the daemon and every other attached/detached session.
+            // Daemon replacement uses the private lifecycle socket path below.
+            bail!("frontend sessions cannot shut down the shared background service");
+        }
         self.observe_command(command);
         let mut frame = serde_json::to_vec(command)?;
         frame.push(b'\n');
         match self.stream.write_all(&frame) {
             Ok(()) => Ok(()),
             Err(error) if reconnectable_socket_error(&error) => {
-                self.reconnect()?;
+                self.reconnect_with_backoff()?;
                 self.stream.write_all(&frame).map_err(Into::into)
             }
             Err(error) => Err(error.into()),
@@ -259,6 +352,27 @@ impl BackgroundConnection {
                     if envelope.kind == "heartbeat" {
                         continue;
                     }
+                    if let Some(expected_session) = self.resume_barrier.clone() {
+                        if envelope.kind == "state" {
+                            let matches_resume = envelope
+                                .state
+                                .as_ref()
+                                .and_then(|state| state.current_session_id.as_deref())
+                                == Some(expected_session.as_str());
+                            if !matches_resume {
+                                // A newly attached socket receives the provisional
+                                // runtime snapshot before the daemon handles our
+                                // LoadSession resume command. Never let that stale
+                                // snapshot rewrite client affinity.
+                                continue;
+                            }
+                            self.resume_barrier = None;
+                        } else if envelope.kind == "error" {
+                            // Surface routing/load failures instead of filtering
+                            // every future frame behind a barrier that cannot clear.
+                            self.resume_barrier = None;
+                        }
+                    }
                     self.observe_envelope(&envelope);
                     return Some(envelope);
                 }
@@ -267,15 +381,16 @@ impl BackgroundConnection {
                         // A successful write is not proof that the daemon is
                         // alive: a wedged process can leave a connected socket
                         // with buffered input. Heartbeats make main-loop
-                        // liveness explicit and let establish() recycle it.
-                        self.last_daemon_activity = Instant::now();
-                        self.reconnect().ok()?;
+                        // liveness explicit. Do not reset the activity clock on
+                        // a failed reconnect: the retry backoff should govern the
+                        // next attempt, not another full stale interval.
+                        self.reconnect_with_backoff().ok()?;
                         continue;
                     }
                     return None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.reconnect().ok()?;
+                    self.reconnect_with_backoff().ok()?;
                     continue;
                 }
             }
@@ -286,8 +401,12 @@ impl BackgroundConnection {
         match command {
             FrontendCommand::LoadSession { session_id } => {
                 self.resume_session_id = Some(session_id.clone());
+                self.resume_barrier = None;
             }
-            FrontendCommand::NewSession => self.resume_session_id = None,
+            FrontendCommand::NewSession => {
+                self.resume_session_id = None;
+                self.resume_barrier = None;
+            }
             _ => {}
         }
     }
@@ -301,26 +420,48 @@ impl BackgroundConnection {
         }
     }
 
+    /// Reconnects unless a recent attempt failed. Without the backoff a dead
+    /// daemon turns every poll into a blocking spawn-and-retry cycle, which
+    /// freezes the TUI render loop and pins a CPU in the Remote gateway.
+    fn reconnect_with_backoff(&mut self) -> Result<()> {
+        if let Some(at) = self.next_reconnect_at
+            && Instant::now() < at
+        {
+            bail!("background service reconnect is backing off");
+        }
+        match self.reconnect() {
+            Ok(()) => {
+                self.reconnect_failures = 0;
+                self.next_reconnect_at = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.reconnect_failures = self.reconnect_failures.saturating_add(1);
+                self.next_reconnect_at =
+                    Some(Instant::now() + reconnect_backoff(self.reconnect_failures));
+                Err(error)
+            }
+        }
+    }
+
     fn reconnect(&mut self) -> Result<()> {
         // Cloning the local stream duplicates the same endpoint. Merely
         // dropping the writer does not wake the reader thread because its
         // duplicate descriptor remains open. Explicit shutdown tears down the
         // endpoint for every duplicate so the old client is actually detached.
         let _ = self.stream.shutdown(Shutdown::Both);
-        let (mut stream, events) = Self::establish(&self.workspace, self.scope.as_deref())?;
-        if let Some(session_id) = self.resume_session_id.as_deref() {
-            // `establish` always queues the daemon's initial snapshot. When a
-            // connection is resuming a known session that snapshot may belong
-            // to another detached runtime selected before LoadSession arrives.
-            // Drop it so neither the UI nor our affinity can briefly switch to
-            // the wrong session while the explicit resume command is handled.
-            let _ = events.try_recv();
+        let (mut stream, events) =
+            Self::establish(&self.workspace, self.scope.as_deref(), self.wake.clone())?;
+        if let Some(session_id) = self.resume_session_id.clone() {
             let mut frame = serde_json::to_vec(&FrontendCommand::LoadSession {
-                session_id: session_id.to_owned(),
+                session_id: session_id.clone(),
             })?;
             frame.push(b'\n');
             stream.write_all(&frame)?;
             stream.flush()?;
+            self.resume_barrier = Some(session_id);
+        } else {
+            self.resume_barrier = None;
         }
         self.stream = stream;
         self.events = events;
@@ -335,6 +476,11 @@ impl Drop for BackgroundConnection {
         // cloned descriptor and let the daemon observe a real disconnect.
         let _ = self.stream.shutdown(Shutdown::Both);
     }
+}
+
+fn reconnect_backoff(failures: u32) -> Duration {
+    let exponent = failures.saturating_sub(1).min(5);
+    (RECONNECT_BACKOFF_BASE * 2u32.pow(exponent)).min(RECONNECT_BACKOFF_MAX)
 }
 
 fn reconnectable_socket_error(error: &std::io::Error) -> bool {
@@ -353,6 +499,7 @@ struct BackgroundPaths {
     identity: PathBuf,
     pid: PathBuf,
     lifecycle_lock: PathBuf,
+    owner_lock: PathBuf,
 }
 
 impl BackgroundPaths {
@@ -369,6 +516,7 @@ impl BackgroundPaths {
             identity: directory.join(format!("{key}.identity")),
             pid: directory.join(format!("{key}.pid")),
             lifecycle_lock: directory.join(format!("{key}.lock")),
+            owner_lock: directory.join(format!("{key}.owner.lock")),
         })
     }
 }
@@ -388,9 +536,69 @@ impl LifecycleLock {
             .with_context(|| format!("lock background lifecycle {}", path.display()))?;
         Ok(Self(file))
     }
+    fn try_acquire(path: &Path) -> Result<Option<Self>> {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("open background lifecycle lock {}", path.display()))?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self(file))),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => {
+                Err(error).with_context(|| format!("probe background lifecycle {}", path.display()))
+            }
+        }
+    }
 }
 
 impl Drop for LifecycleLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+struct InstanceLease(File);
+
+impl InstanceLease {
+    fn open(path: &Path) -> Result<File> {
+        OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("open background owner lock {}", path.display()))
+    }
+
+    fn acquire(path: &Path) -> Result<Self> {
+        let file = Self::open(path)?;
+        file.try_lock_exclusive().with_context(|| {
+            format!(
+                "another Yeet background service already owns {}",
+                path.display()
+            )
+        })?;
+        Ok(Self(file))
+    }
+
+    fn is_held(path: &Path) -> Result<bool> {
+        let file = Self::open(path)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                let _ = FileExt::unlock(&file);
+                Ok(false)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+            Err(error) => Err(error)
+                .with_context(|| format!("probe background owner lock {}", path.display())),
+        }
+    }
+}
+
+impl Drop for InstanceLease {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.0);
     }
@@ -423,71 +631,25 @@ fn current_executable_identity() -> Result<String> {
     ))
 }
 
-fn daemon_identity_matches(paths: &BackgroundPaths, expected: &str) -> bool {
-    fs::read_to_string(&paths.identity)
-        .ok()
-        .is_some_and(|value| value.trim() == expected)
-}
-
 fn retire_stale_daemon(paths: &BackgroundPaths) -> Result<()> {
-    let daemon_pid = read_daemon_pid(paths);
     match connect_local(&paths.socket) {
-        Ok(mut stream) => {
-            let mut frame = serde_json::to_vec(&FrontendCommand::Shutdown)?;
-            frame.push(b'\n');
-            let _ = stream.write_all(&frame);
-            let _ = stream.flush();
+        Ok(stream) => {
             let _ = stream.shutdown(Shutdown::Both);
+            bail!(
+                "background service became reachable during stale cleanup; preserving live daemon at {}",
+                paths.socket.display()
+            );
         }
-        Err(error) if stale_socket_error(&error) => {
-            cleanup_stale_daemon_files(paths);
-            return Ok(());
-        }
+        Err(error) if stale_socket_error(&error) => {}
         Err(error) => return Err(error.into()),
     }
 
-    let started = Instant::now();
-    while paths.socket.exists() && started.elapsed() < STALE_DAEMON_EXIT_TIMEOUT {
-        thread::sleep(Duration::from_millis(25));
-    }
-    if paths.socket.exists() {
-        // A daemon that died without running its cleanup leaves a pathname
-        // behind, but connect(2) reports it as refused. Treat that as an orphan
-        // rather than making every post-update restart fail until manual rm.
-        match connect_local(&paths.socket) {
-            Err(error) if stale_socket_error(&error) => {
-                cleanup_stale_daemon_files(paths);
-                return Ok(());
-            }
-            Err(error) => return Err(error.into()),
-            Ok(stream) => {
-                let _ = stream.shutdown(Shutdown::Both);
-            }
-        }
-        if let Some(pid) = daemon_pid {
-            force_terminate_process_tree(pid).with_context(|| {
-                format!("force-terminate stale Yeet background daemon pid {pid}")
-            })?;
-            let started = Instant::now();
-            while started.elapsed() < FORCED_DAEMON_EXIT_TIMEOUT {
-                match connect_local(&paths.socket) {
-                    Err(error) if stale_socket_error(&error) => {
-                        cleanup_stale_daemon_files(paths);
-                        return Ok(());
-                    }
-                    Err(_) | Ok(_) => thread::sleep(Duration::from_millis(25)),
-                }
-            }
-        }
-        bail!(
-            "stale background service did not stop after graceful and forced recovery; endpoint: {}{}",
-            paths.socket.display(),
-            daemon_pid
-                .map(|pid| format!(", pid: {pid}"))
-                .unwrap_or_else(|| ", legacy daemon has no pid lease".into())
-        );
-    }
-    cleanup_stale_daemon_files(paths);
+    // The lifetime owner lock is authoritative. A missing/refused socket while
+    // that lock is held can mean startup, temporary endpoint damage, or a live
+    // daemon from another build; none justify killing it from an attaching
+    // frontend. Only remove lease files after ownership has actually ended.
+    wait_for_instance_release(paths, STALE_DAEMON_EXIT_TIMEOUT)?;
+    cleanup_stale_daemon_files(paths)?;
     Ok(())
 }
 
@@ -501,19 +663,93 @@ fn stale_socket_error(error: &std::io::Error) -> bool {
     )
 }
 
-fn cleanup_stale_daemon_files(paths: &BackgroundPaths) {
+fn wait_for_instance_release(paths: &BackgroundPaths, timeout: Duration) -> Result<()> {
+    let started = Instant::now();
+    while InstanceLease::is_held(&paths.owner_lock)? {
+        if started.elapsed() >= timeout {
+            bail!(
+                "background owner lease is still held; refusing to unlink live daemon files: {}",
+                paths.owner_lock.display()
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Ok(())
+}
+
+fn cleanup_stale_daemon_files(paths: &BackgroundPaths) -> Result<()> {
+    if InstanceLease::is_held(&paths.owner_lock)? {
+        bail!(
+            "background owner lease is still held; refusing to unlink live daemon files: {}",
+            paths.owner_lock.display()
+        );
+    }
     let _ = fs::remove_file(&paths.socket);
     let _ = fs::remove_file(&paths.identity);
     let _ = fs::remove_file(&paths.pid);
+    Ok(())
 }
 
-fn read_daemon_pid(paths: &BackgroundPaths) -> Option<u32> {
-    fs::read_to_string(&paths.pid)
-        .ok()?
-        .trim()
-        .parse::<u32>()
-        .ok()
-        .filter(|pid| *pid != 0 && *pid != std::process::id())
+pub fn cleanup_stale_artifacts() -> Result<usize> {
+    let config = ConfigStore::default();
+    config.ensure()?;
+    cleanup_stale_artifacts_in(&config.directory.join("background"))
+}
+
+fn cleanup_stale_artifacts_in(directory: &Path) -> Result<usize> {
+    if !directory.is_dir() {
+        return Ok(0);
+    }
+
+    let mut cleaned = 0usize;
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(key) = name.strip_suffix(".owner.lock") else {
+            continue;
+        };
+        let lifecycle = directory.join(format!("{key}.lock"));
+        let Some(_lifecycle_guard) = LifecycleLock::try_acquire(&lifecycle)? else {
+            continue;
+        };
+        if InstanceLease::is_held(&path)? {
+            continue;
+        }
+
+        let socket = directory.join(format!("{key}.sock"));
+        match connect_local(&socket) {
+            Ok(stream) => {
+                let _ = stream.shutdown(Shutdown::Both);
+                continue;
+            }
+            Err(error) if stale_socket_error(&error) => {}
+            Err(_) => continue,
+        }
+
+        let mut removed = false;
+        for stale in [
+            socket,
+            directory.join(format!("{key}.identity")),
+            directory.join(format!("{key}.pid")),
+        ] {
+            match fs::remove_file(&stale) {
+                Ok(()) => removed = true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("remove stale background artifact {}", stale.display())
+                    });
+                }
+            }
+        }
+        if removed {
+            cleaned += 1;
+        }
+    }
+    Ok(cleaned)
 }
 
 fn spawn_daemon(workspace: &Path, scope: Option<&str>, paths: &BackgroundPaths) -> Result<()> {
@@ -536,16 +772,10 @@ fn spawn_daemon(workspace: &Path, scope: Option<&str>, paths: &BackgroundPaths) 
     }
     configure_detached(&mut command);
     let mut child = command.spawn().context("start Yeet background service")?;
-    let child_id = child.id();
-    if let Err(error) =
-        fs::write(&paths.pid, format!("{child_id}\n")).and_then(|()| set_private_file(&paths.pid))
-    {
-        if force_terminate_process_tree(child_id).is_err() {
-            let _ = child.kill();
-        }
-        let _ = child.wait();
-        return Err(error.into());
-    }
+    // Only the daemon writes the PID lease, after it has acquired the lifetime
+    // owner lock and bound its endpoint. Writing it here lets a rejected child
+    // overwrite the live daemon's PID and makes later recovery target the wrong
+    // process.
     // Detached daemons are still direct children of the foreground Yeet
     // process. Keep a tiny waiter so a daemon replaced by stale recovery is
     // reaped immediately instead of sitting as a zombie until the TUI exits.
@@ -572,9 +802,15 @@ fn rotate_log(path: &Path, max_bytes: u64) -> Result<()> {
 pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let paths = BackgroundPaths::new(&workspace, scope.as_deref())?;
+    // Hold a lifetime lease in addition to the startup/recovery lock. Socket
+    // path removal or concurrent direct daemon launches must never create two
+    // backend owners for the same workspace.
+    let _instance_lease = InstanceLease::acquire(&paths.owner_lock)?;
     let executable_identity = current_executable_identity()?;
-    let _ = fs::remove_file(&paths.socket);
-    let _ = fs::remove_file(&paths.identity);
+    // The parent recovery path is responsible for retiring and unlinking a
+    // stale endpoint before this child is spawned. Never steal a pathname from
+    // a still-running daemon here: doing so leaves the old listener alive on an
+    // unlinked Unix socket and splits clients across two background services.
     let listener = bind_local(&paths.socket)
         .with_context(|| format!("bind background socket {}", paths.socket.display()))?;
     let _cleanup = DaemonFilesCleanup::new(&paths);
@@ -588,80 +824,137 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
     let config = ConfigStore::default();
     config.ensure()?;
     let extensions = ExtensionHost::discover_and_start(&config.directory, &workspace);
+    let wake = Wake::new();
     let (client_tx, client_rx) = mpsc::sync_channel::<ClientEvent>(CLIENT_EVENT_QUEUE_CAPACITY);
 
     let (runtime_start_tx, runtime_start_rx) = mpsc::channel::<RuntimeStartupEvent>();
     let (runtime_isolation_tx, runtime_isolation_rx) = mpsc::channel::<RuntimeIsolationEvent>();
     let mut clients: Vec<ClientConnection> = Vec::new();
     let mut runtimes: Vec<SessionRuntime> = Vec::new();
+    let mut pending_isolations: Vec<PendingIsolation> = Vec::new();
+    let mut session_catalog: Option<SessionCatalog> = None;
     let mut next_client_id = 1u64;
     let mut next_runtime_id = 1u64;
     let mut idle_since: Option<Instant> = None;
-    let mut shutdown_requested = false;
     let mut last_heartbeat = Instant::now();
 
-    let mut runtime_startup_pending = false;
+    let mut accept_startup_pending = false;
+    let mut startup_waiters: Vec<(u64, LocalStream)> = Vec::new();
 
     loop {
         while let Ok(event) = runtime_start_rx.try_recv() {
-            runtime_startup_pending = false;
+            accept_startup_pending = false;
             match event.result {
                 Ok(runtime) => {
                     runtimes.push(runtime);
-                    if attach_client_to_runtime(
+                    let mut attached_any = attach_client_to_runtime(
                         &mut clients,
                         &mut runtimes,
                         &extensions,
                         &client_tx,
+                        &wake,
                         event.client_id,
                         event.runtime_id,
                         event.stream,
-                    ) {
+                    );
+                    for (client_id, stream) in startup_waiters.drain(..) {
+                        attached_any |= attach_client_to_runtime(
+                            &mut clients,
+                            &mut runtimes,
+                            &extensions,
+                            &client_tx,
+                            &wake,
+                            client_id,
+                            event.runtime_id,
+                            stream,
+                        );
+                    }
+                    if attached_any {
                         idle_since = None;
                     }
                 }
-                Err(error) => send_unattached_client_error(event.stream, error),
+                Err(error) => {
+                    let message = error.to_string();
+                    send_unattached_client_error(event.stream, anyhow!(message.clone()));
+                    for (_, stream) in startup_waiters.drain(..) {
+                        send_unattached_client_error(stream, anyhow!(message.clone()));
+                    }
+                }
             }
         }
 
         while let Ok(event) = runtime_isolation_rx.try_recv() {
-            runtime_startup_pending = false;
-            let Some(client_index) = clients
+            let Some(index) = pending_isolations
                 .iter()
-                .position(|client| client.id == event.client_id)
+                .position(|pending| pending.runtime_id == event.runtime_id)
             else {
                 if let Ok(runtime) = event.result {
                     retire_runtime_async(runtime);
                 }
                 continue;
             };
-            match event.result {
-                Ok(mut runtime) => {
-                    if let Some(command) = event.command
-                        && let Err(error) = runtime.service.send(command)
-                    {
-                        send_client_error(&mut clients, client_index, error);
-                        retire_runtime_async(runtime);
-                        continue;
+            let pending = pending_isolations.swap_remove(index);
+            // A waiter that issued a newer LoadSession/NewSession (or left)
+            // no longer wants this runtime; honouring it would undo that
+            // newer choice when a slow startup finally completes.
+            let waiters = pending
+                .waiters
+                .iter()
+                .filter(|(client_id, route_seq)| {
+                    clients
+                        .iter()
+                        .any(|client| client.id == *client_id && client.route_seq == *route_seq)
+                })
+                .map(|(client_id, _)| *client_id)
+                .collect::<Vec<_>>();
+            let mut runtime = match event.result {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    for client_id in waiters {
+                        send_client_error_to(&mut clients, client_id, anyhow!(message.clone()));
                     }
-                    let envelope = BridgeEnvelope {
-                        kind: "state".into(),
-                        state: Some(state_with_extension_commands(
-                            runtime.service.state_snapshot(),
-                            &extensions,
-                        )),
-                        message: None,
-                    };
-                    runtimes.push(runtime);
-                    clients[client_index].runtime_id = event.runtime_id;
-                    if clients[client_index].writer.send(&envelope).is_err() {
-                        clients.remove(client_index);
-                    } else {
-                        idle_since = None;
-                    }
+                    continue;
                 }
-                Err(error) => send_client_error(&mut clients, client_index, error),
+            };
+            if waiters.is_empty() {
+                retire_runtime_async(runtime);
+                continue;
             }
+            let mut target_runtime_id = event.runtime_id;
+            if let Some(session_id) = pending.session_id {
+                if let Some(live_runtime_id) = live_session_runtime_id(&runtimes, &session_id) {
+                    // The session became live elsewhere while this runtime
+                    // started. Never keep two runtimes on one session: their
+                    // transcripts would diverge and overwrite each other.
+                    retire_runtime_async(runtime);
+                    target_runtime_id = live_runtime_id;
+                } else if let Err(error) = runtime
+                    .service
+                    .send(FrontendCommand::LoadSession { session_id })
+                {
+                    let message = format!("{error:#}");
+                    for client_id in waiters {
+                        send_client_error_to(&mut clients, client_id, anyhow!(message.clone()));
+                    }
+                    retire_runtime_async(runtime);
+                    continue;
+                } else {
+                    runtimes.push(runtime);
+                }
+            } else {
+                runtimes.push(runtime);
+            }
+            for client_id in waiters {
+                route_client_to_runtime(
+                    &mut clients,
+                    &mut runtimes,
+                    &extensions,
+                    client_id,
+                    target_runtime_id,
+                );
+            }
+            idle_since = None;
         }
 
         while let Ok(event) = client_rx.try_recv() {
@@ -681,72 +974,51 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
 
                     match command {
                         FrontendCommand::Shutdown => {
-                            shutdown_requested = true;
+                            // Frontend lifetime is not daemon lifetime. Older
+                            // clients may still emit Shutdown during a rolling
+                            // upgrade; ignore it so one UI cannot terminate every
+                            // session in the shared workspace service.
+                            if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
+                                eprintln!(
+                                    "background ignored frontend shutdown: client={client_id} runtime={runtime_id}"
+                                );
+                            }
+                            continue;
                         }
                         FrontendCommand::LoadSession { session_id } => {
-                            let live_runtime_id = runtimes
-                                .iter()
-                                .find(|runtime| {
-                                    !runtime.service.is_closed()
-                                        && runtime.service.current_session_id().as_deref()
-                                            == Some(session_id.as_str())
-                                })
-                                .map(|runtime| runtime.id);
-
-                            if let Some(target_runtime_id) = live_runtime_id {
-                                clients[client_index].runtime_id = target_runtime_id;
-                                if let Some(runtime) = runtimes
-                                    .iter_mut()
-                                    .find(|runtime| runtime.id == target_runtime_id)
-                                {
-                                    runtime.idle_since = None;
-                                    let envelope = BridgeEnvelope {
-                                        kind: "state".into(),
-                                        state: Some(state_with_extension_commands(
-                                            runtime.service.state_snapshot(),
-                                            &extensions,
-                                        )),
-                                        message: None,
-                                    };
-                                    if clients[client_index].writer.send(&envelope).is_err() {
-                                        clients.remove(client_index);
-                                    }
-                                }
+                            let route_seq = clients[client_index].next_route();
+                            if let Some(target_runtime_id) =
+                                live_session_runtime_id(&runtimes, &session_id)
+                            {
+                                route_client_to_runtime(
+                                    &mut clients,
+                                    &mut runtimes,
+                                    &extensions,
+                                    client_id,
+                                    target_runtime_id,
+                                );
+                                continue;
+                            }
+                            if let Some(pending) = pending_isolations.iter_mut().find(|pending| {
+                                pending.session_id.as_deref() == Some(session_id.as_str())
+                            }) {
+                                pending.waiters.push((client_id, route_seq));
                                 continue;
                             }
 
-                            let isolate_runtime =
-                                runtime_requires_isolation(&runtimes, &clients, runtime_id);
-                            if isolate_runtime {
-                                if runtime_startup_pending {
-                                    send_client_error(
-                                        &mut clients,
-                                        client_index,
-                                        anyhow!(
-                                            "background session runtime startup already in progress"
-                                        ),
-                                    );
-                                    continue;
+                            if runtime_requires_isolation(&runtimes, &clients, runtime_id) {
+                                if let Err(error) = start_isolated_runtime(
+                                    &mut pending_isolations,
+                                    &mut next_runtime_id,
+                                    &runtime_isolation_tx,
+                                    &workspace,
+                                    scope.as_deref(),
+                                    &wake,
+                                    Some(session_id),
+                                    (client_id, route_seq),
+                                ) {
+                                    send_client_error_to(&mut clients, client_id, error);
                                 }
-                                let new_runtime_id = allocate_runtime_id(&mut next_runtime_id);
-                                let startup_tx = runtime_isolation_tx.clone();
-                                let startup_workspace = workspace.clone();
-                                let startup_client_id = client_id;
-                                let startup_scope = scope.clone();
-                                runtime_startup_pending = true;
-                                thread::spawn(move || {
-                                    let result = spawn_runtime(
-                                        &startup_workspace,
-                                        new_runtime_id,
-                                        startup_scope.as_deref(),
-                                    );
-                                    let _ = startup_tx.send(RuntimeIsolationEvent {
-                                        client_id: startup_client_id,
-                                        runtime_id: new_runtime_id,
-                                        command: Some(FrontendCommand::LoadSession { session_id }),
-                                        result,
-                                    });
-                                });
                                 continue;
                             }
 
@@ -758,38 +1030,30 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                                 broadcast_runtime_error(&mut clients, runtime_id, error);
                             }
                         }
-                        FrontendCommand::NewSession
-                            if runtime_requires_isolation(&runtimes, &clients, runtime_id) =>
-                        {
-                            if runtime_startup_pending {
-                                send_client_error(
-                                    &mut clients,
-                                    client_index,
-                                    anyhow!(
-                                        "background session runtime startup already in progress"
-                                    ),
-                                );
+                        FrontendCommand::NewSession => {
+                            let route_seq = clients[client_index].next_route();
+                            if runtime_requires_isolation(&runtimes, &clients, runtime_id) {
+                                if let Err(error) = start_isolated_runtime(
+                                    &mut pending_isolations,
+                                    &mut next_runtime_id,
+                                    &runtime_isolation_tx,
+                                    &workspace,
+                                    scope.as_deref(),
+                                    &wake,
+                                    None,
+                                    (client_id, route_seq),
+                                ) {
+                                    send_client_error_to(&mut clients, client_id, error);
+                                }
                                 continue;
                             }
-                            let new_runtime_id = allocate_runtime_id(&mut next_runtime_id);
-                            let startup_tx = runtime_isolation_tx.clone();
-                            let startup_workspace = workspace.clone();
-                            let startup_client_id = client_id;
-                            let startup_scope = scope.clone();
-                            runtime_startup_pending = true;
-                            thread::spawn(move || {
-                                let result = spawn_runtime(
-                                    &startup_workspace,
-                                    new_runtime_id,
-                                    startup_scope.as_deref(),
-                                );
-                                let _ = startup_tx.send(RuntimeIsolationEvent {
-                                    client_id: startup_client_id,
-                                    runtime_id: new_runtime_id,
-                                    command: None,
-                                    result,
-                                });
-                            });
+                            if let Err(error) = dispatch_runtime_command(
+                                &mut runtimes,
+                                runtime_id,
+                                FrontendCommand::NewSession,
+                            ) {
+                                broadcast_runtime_error(&mut clients, runtime_id, error);
+                            }
                         }
                         FrontendCommand::ExtensionCommand { command, args } => {
                             match extensions.invoke_command(&command, &args) {
@@ -836,40 +1100,45 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
                         eprintln!("background client disconnected: client={client_id}");
                     }
-                    let runtime_id = clients
-                        .iter()
-                        .find(|client| client.id == client_id)
-                        .map(|client| client.runtime_id);
                     clients.retain(|client| client.id != client_id);
-                    if let Some(runtime_id) = runtime_id {
-                        interrupt_orphaned_runtime(&mut runtimes, &clients, runtime_id);
-                    }
                 }
             }
         }
 
         while let Some(request) = extensions.try_recv_request() {
-            let runtime_id =
-                if let Some(runtime_id) = clients.last().map(|client| client.runtime_id) {
-                    runtime_id
-                } else if let Some(runtime) = runtimes
-                    .iter()
-                    .rev()
-                    .find(|runtime| !runtime.service.is_closed())
-                {
-                    runtime.id
-                } else {
-                    let runtime_id = allocate_runtime_id(&mut next_runtime_id);
-                    runtimes.push(spawn_runtime(&workspace, runtime_id, scope.as_deref())?);
-                    runtime_id
-                };
+            let runtime_id = if let Some(runtime_id) =
+                clients.last().map(|client| client.runtime_id)
+            {
+                runtime_id
+            } else if let Some(runtime) = runtimes
+                .iter()
+                .rev()
+                .find(|runtime| !runtime.service.is_closed())
+            {
+                runtime.id
+            } else {
+                let runtime_id = allocate_runtime_id(&mut next_runtime_id);
+                match spawn_runtime(&workspace, runtime_id, scope.as_deref(), wake.clone()) {
+                    Ok(runtime) => runtimes.push(runtime),
+                    Err(error) => {
+                        eprintln!("yeet: could not start runtime for extension request: {error:#}");
+                        continue;
+                    }
+                }
+                runtime_id
+            };
             if let Some(runtime) = runtimes.iter_mut().find(|runtime| runtime.id == runtime_id) {
                 runtime.idle_since = None;
             }
             let (extension_id, command) = match request {
-                ExtensionRequest::Submit { extension_id, text } => {
-                    (extension_id, FrontendCommand::Submit { text })
-                }
+                ExtensionRequest::Submit { extension_id, text } => (
+                    extension_id,
+                    FrontendCommand::Submit {
+                        text,
+                        images: Vec::new(),
+                        attachment_ids: Vec::new(),
+                    },
+                ),
                 ExtensionRequest::SelectModel {
                     extension_id,
                     model,
@@ -893,16 +1162,10 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 broadcast_runtime_error(&mut clients, runtime_id, error);
             }
         }
-        if shutdown_requested {
-            break;
-        }
 
         loop {
-            if runtime_startup_pending && reusable_runtime_id(&runtimes, &clients).is_none() {
-                break;
-            }
             match listener.accept() {
-                Ok((stream, _)) => {
+                Ok((mut stream, _)) => {
                     // Accepted Unix-domain sockets can share listener flags on some
                     // platforms. Client readers are blocking, while a best-effort
                     // write timeout prevents an unresponsive local client from
@@ -919,6 +1182,20 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                         let _ = stream.shutdown(Shutdown::Both);
                         continue;
                     }
+                    // Transport readiness must not depend on provider/runtime startup.
+                    // A cold runtime can legitimately spend seconds loading the session
+                    // catalog or starting the provider bridge; acknowledge the accepted
+                    // socket immediately so clients do not misclassify that work as a
+                    // dead background daemon.
+                    let ready = BridgeEnvelope {
+                        kind: "heartbeat".into(),
+                        state: None,
+                        message: None,
+                    };
+                    if send_envelope(&mut stream, &ready).is_err() {
+                        let _ = stream.shutdown(Shutdown::Both);
+                        continue;
+                    }
                     let client_id = next_client_id;
                     next_client_id = next_client_id.wrapping_add(1).max(1);
 
@@ -928,6 +1205,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                             &mut runtimes,
                             &extensions,
                             &client_tx,
+                            &wake,
                             client_id,
                             runtime_id,
                             stream,
@@ -937,41 +1215,113 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                         continue;
                     }
 
+                    if accept_startup_pending {
+                        if startup_waiters.len() >= MAX_PENDING_STARTUP_CLIENTS {
+                            send_unattached_client_error(
+                                stream,
+                                anyhow!(
+                                    "background runtime startup already has {MAX_PENDING_STARTUP_CLIENTS} waiting clients"
+                                ),
+                            );
+                        } else {
+                            startup_waiters.push((client_id, stream));
+                        }
+                        continue;
+                    }
+
                     let runtime_id = allocate_runtime_id(&mut next_runtime_id);
                     let startup_tx = runtime_start_tx.clone();
                     let startup_workspace = workspace.clone();
                     let startup_scope = scope.clone();
-                    runtime_startup_pending = true;
+                    let startup_wake = wake.clone();
+                    accept_startup_pending = true;
                     thread::spawn(move || {
-                        let result =
-                            spawn_runtime(&startup_workspace, runtime_id, startup_scope.as_deref());
+                        let result = spawn_runtime(
+                            &startup_workspace,
+                            runtime_id,
+                            startup_scope.as_deref(),
+                            startup_wake.clone(),
+                        );
                         let _ = startup_tx.send(RuntimeStartupEvent {
                             client_id,
                             runtime_id,
                             stream,
                             result,
                         });
+                        startup_wake.notify();
                     });
-                    // Keep at most one unattached runtime startup in flight. This
-                    // bounds resource use when a caller retries a slow handshake.
-                    break;
+                    // Only one runtime startup runs at a time. Further accepted
+                    // clients are acknowledged immediately and queued above to share it.
+                    continue;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(error) => return Err(error.into()),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    // Transient accept failures (EMFILE, ECONNABORTED, ...) must
+                    // not take down every running session in the workspace.
+                    eprintln!("yeet: background accept failed: {error}");
+                    break;
+                }
             }
         }
 
+        let mut catalog_changed = false;
         for runtime in &mut runtimes {
-            while let Some(event) = runtime.service.try_recv() {
-                let BackendEvent::Envelope(mut envelope) = event;
-                if let Some(state) = envelope.state.as_mut() {
-                    state.extension_commands = extensions.command_items();
-                    extensions.publish_state(state);
+            let mut pending_state: Option<BridgeEnvelope> = None;
+            for _ in 0..MAX_RUNTIME_EVENTS_PER_TICK {
+                let Some(mut envelope) = runtime.service.try_recv() else {
+                    break;
+                };
+                if envelope.kind != "state" || envelope.state.is_none() {
+                    if let Some(state) = pending_state.take() {
+                        publish_runtime_state(
+                            &mut clients,
+                            &extensions,
+                            runtime,
+                            state,
+                            &mut session_catalog,
+                            &mut catalog_changed,
+                        );
+                    }
+                    broadcast_runtime_envelope(&mut clients, runtime.id, &envelope);
+                    continue;
                 }
-                broadcast_runtime_envelope(&mut clients, runtime.id, &envelope);
+                // Streaming produces one full state per token. Only the newest
+                // is worth sending, but a compact (conversation-less) state
+                // must inherit any transcript an earlier state in this batch
+                // carried, or clients would miss committed entries.
+                if let Some(previous) = pending_state.take()
+                    && let (Some(next), Some(previous)) = (envelope.state.as_mut(), previous.state)
+                    && next.conversation.is_none()
+                {
+                    next.conversation = previous.conversation;
+                }
+                pending_state = Some(envelope);
+            }
+            if let Some(state) = pending_state {
+                publish_runtime_state(
+                    &mut clients,
+                    &extensions,
+                    runtime,
+                    state,
+                    &mut session_catalog,
+                    &mut catalog_changed,
+                );
             }
             if !runtime.service.is_streaming() {
                 runtime.interrupt_requested_at = None;
+            }
+        }
+        if let Some(catalog) = session_catalog.as_ref()
+            && (catalog_changed
+                || runtimes
+                    .iter()
+                    .any(|runtime| runtime.catalog.as_ref() != Some(catalog)))
+        {
+            for runtime in &runtimes {
+                if runtime.catalog.as_ref() != Some(catalog) {
+                    runtime.service.adopt_session_catalog(catalog);
+                }
             }
         }
 
@@ -986,7 +1336,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
             .map(|runtime| runtime.id)
             .collect::<Vec<_>>();
         for runtime_id in stuck_runtime_ids {
-            if let Some(mut runtime) = take_runtime(&mut runtimes, runtime_id) {
+            if let Some(runtime) = take_runtime(&mut runtimes, runtime_id) {
                 let _ = runtime.service.abandon_stuck_run(
                     "Run did not stop after interrupt; Yeet recycled the stuck background runtime.",
                 );
@@ -1009,11 +1359,14 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
             }
         }
 
+        let now = Instant::now();
         for runtime in &mut runtimes {
             if runtime_client_count(&clients, runtime.id) > 0 || runtime.service.is_streaming() {
+                // A streaming runtime deliberately survives with zero clients:
+                // transport loss must not become semantic cancellation.
                 runtime.idle_since = None;
             } else {
-                runtime.idle_since.get_or_insert_with(Instant::now);
+                runtime.idle_since.get_or_insert(now);
             }
         }
         let expired_runtime_ids = runtimes
@@ -1021,7 +1374,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
             .filter(|runtime| {
                 runtime
                     .idle_since
-                    .is_some_and(|since| since.elapsed() >= IDLE_EXIT_AFTER)
+                    .is_some_and(|since| since.elapsed() >= RUNTIME_IDLE_RETIRE_AFTER)
             })
             .map(|runtime| runtime.id)
             .collect::<Vec<_>>();
@@ -1037,7 +1390,6 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 state: None,
                 message: None,
             };
-            let mut heartbeat_disconnected_runtime_ids = Vec::new();
             clients.retain_mut(|client| match client.writer.send(&heartbeat) {
                 Ok(()) => true,
                 Err(error) => {
@@ -1047,28 +1399,24 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                             client.id, client.runtime_id
                         );
                     }
-                    heartbeat_disconnected_runtime_ids.push(client.runtime_id);
                     false
                 }
             });
-            for runtime_id in heartbeat_disconnected_runtime_ids {
-                interrupt_orphaned_runtime(&mut runtimes, &clients, runtime_id);
-            }
             last_heartbeat = Instant::now();
         }
 
         let any_streaming = runtimes
             .iter()
             .any(|runtime| runtime.service.is_streaming());
-        if clients.is_empty() && !any_streaming {
+        if clients.is_empty() && !any_streaming && pending_isolations.is_empty() {
             let since = idle_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= IDLE_EXIT_AFTER {
+            if since.elapsed() >= DAEMON_IDLE_EXIT_AFTER {
                 break;
             }
         } else {
             idle_since = None;
         }
-        thread::sleep(Duration::from_millis(16));
+        wake.wait_timeout(DAEMON_TICK);
     }
 
     Ok(())
@@ -1092,12 +1440,18 @@ fn allocate_runtime_id(next_runtime_id: &mut u64) -> u64 {
     runtime_id
 }
 
-fn spawn_runtime(workspace: &Path, id: u64, scope: Option<&str>) -> Result<SessionRuntime> {
+fn spawn_runtime(
+    workspace: &Path,
+    id: u64,
+    scope: Option<&str>,
+    wake: Wake,
+) -> Result<SessionRuntime> {
     Ok(SessionRuntime {
         id,
-        service: RuntimeProcess::spawn(workspace, scope)?,
+        service: RuntimeProcess::spawn(workspace, scope, wake)?,
         idle_since: None,
         interrupt_requested_at: None,
+        catalog: None,
     })
 }
 
@@ -1147,46 +1501,6 @@ fn runtime_client_count(clients: &[ClientConnection], runtime_id: u64) -> usize 
         .count()
 }
 
-fn interrupt_orphaned_runtime(
-    runtimes: &mut [SessionRuntime],
-    clients: &[ClientConnection],
-    runtime_id: u64,
-) {
-    let client_count = runtime_client_count(clients, runtime_id);
-    let Some(runtime) = runtimes.iter_mut().find(|runtime| runtime.id == runtime_id) else {
-        return;
-    };
-    if !should_interrupt_orphaned_runtime(
-        client_count,
-        runtime.service.is_streaming(),
-        runtime.interrupt_requested_at.is_some(),
-    ) {
-        return;
-    }
-
-    if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
-        eprintln!(
-            "background runtime orphaned while streaming: runtime={runtime_id}; interrupting"
-        );
-    }
-    if let Err(error) = runtime.service.send(FrontendCommand::Interrupt)
-        && std::env::var_os("YEET_BACKGROUND_TRACE").is_some()
-    {
-        eprintln!(
-            "background runtime orphan interrupt failed: runtime={runtime_id} error={error:#}"
-        );
-    }
-    runtime.interrupt_requested_at = Some(Instant::now());
-}
-
-fn should_interrupt_orphaned_runtime(
-    client_count: usize,
-    is_streaming: bool,
-    interrupt_requested: bool,
-) -> bool {
-    client_count == 0 && is_streaming && !interrupt_requested
-}
-
 fn runtime_requires_isolation(
     runtimes: &[SessionRuntime],
     clients: &[ClientConnection],
@@ -1205,23 +1519,129 @@ fn should_isolate_runtime(client_count: usize, is_streaming: bool) -> bool {
 }
 
 #[cfg(test)]
-mod runtime_lifecycle_decision_tests {
+mod runtime_lifecycle_tests {
     use super::*;
 
     #[test]
-    fn orphaned_streaming_runtime_is_interrupted_once() {
-        assert!(should_interrupt_orphaned_runtime(0, true, false));
-        assert!(!should_interrupt_orphaned_runtime(1, true, false));
-        assert!(!should_interrupt_orphaned_runtime(0, false, false));
-        assert!(!should_interrupt_orphaned_runtime(0, true, true));
+    fn lifecycle_policy_is_consistent() {
+        assert!(DAEMON_IDLE_EXIT_AFTER > RUNTIME_IDLE_RETIRE_AFTER);
+
+        for (attempt, expected) in [
+            (1, Duration::from_millis(250)),
+            (2, Duration::from_millis(500)),
+            (3, Duration::from_secs(1)),
+            (30, RECONNECT_BACKOFF_MAX),
+        ] {
+            assert_eq!(reconnect_backoff(attempt), expected);
+        }
+
+        for (clients, streaming, isolate) in [
+            (0, false, false),
+            (1, false, false),
+            (2, false, true),
+            (1, true, true),
+        ] {
+            assert_eq!(should_isolate_runtime(clients, streaming), isolate);
+        }
     }
 
     #[test]
-    fn shared_or_streaming_runtime_requires_isolation() {
-        assert!(!should_isolate_runtime(0, false));
-        assert!(!should_isolate_runtime(1, false));
-        assert!(should_isolate_runtime(2, false));
-        assert!(should_isolate_runtime(1, true));
+    fn daemon_file_cleanup_only_removes_files_owned_by_that_daemon() {
+        let directory = tempfile::tempdir().unwrap();
+        let make_files = |pid_value: &str| {
+            let socket = directory.path().join("daemon.sock");
+            let identity = directory.path().join("daemon.identity");
+            let pid = directory.path().join("daemon.pid");
+            fs::write(&socket, b"socket").unwrap();
+            fs::write(&identity, b"identity").unwrap();
+            fs::write(&pid, pid_value).unwrap();
+            (socket, identity, pid)
+        };
+
+        let (socket, identity, pid) = make_files(
+            "222
+",
+        );
+        drop(DaemonFilesCleanup {
+            socket: socket.clone(),
+            identity: identity.clone(),
+            pid: pid.clone(),
+            owner_pid: 111,
+        });
+        assert!(socket.exists() && identity.exists() && pid.exists());
+
+        let (socket, identity, pid) = make_files(
+            "111
+",
+        );
+        drop(DaemonFilesCleanup {
+            socket: socket.clone(),
+            identity: identity.clone(),
+            pid: pid.clone(),
+            owner_pid: 111,
+        });
+        assert!(!socket.exists() && !identity.exists() && !pid.exists());
+    }
+
+    #[test]
+    fn owner_lease_is_exclusive_and_observable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("owner.lock");
+
+        let owner = InstanceLease::acquire(&path).unwrap();
+        assert!(InstanceLease::is_held(&path).unwrap());
+        assert!(InstanceLease::acquire(&path).is_err());
+
+        drop(owner);
+        assert!(!InstanceLease::is_held(&path).unwrap());
+        assert!(InstanceLease::acquire(&path).is_ok());
+    }
+
+    #[test]
+    fn stale_cleanup_preserves_live_owner_and_removes_dead_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let live = BackgroundPaths {
+            socket: directory.path().join("live.sock"),
+            log: directory.path().join("live.log"),
+            identity: directory.path().join("live.identity"),
+            pid: directory.path().join("live.pid"),
+            lifecycle_lock: directory.path().join("live.lock"),
+            owner_lock: directory.path().join("live.owner.lock"),
+        };
+        fs::write(&live.socket, b"socket").unwrap();
+        fs::write(&live.identity, b"identity").unwrap();
+        fs::write(
+            &live.pid, b"123
+",
+        )
+        .unwrap();
+        let live_owner = InstanceLease::acquire(&live.owner_lock).unwrap();
+
+        assert!(cleanup_stale_daemon_files(&live).is_err());
+        assert!(live.socket.exists() && live.identity.exists() && live.pid.exists());
+
+        let dead_socket = directory.path().join("dead.sock");
+        let dead_owner = directory.path().join("dead.owner.lock");
+        let dead_identity = directory.path().join("dead.identity");
+        let dead_pid = directory.path().join("dead.pid");
+        fs::write(&dead_owner, b"").unwrap();
+        let listener = bind_local(&dead_socket).unwrap();
+        drop(listener);
+        fs::write(&dead_identity, b"stale").unwrap();
+        fs::write(
+            &dead_pid, b"456
+",
+        )
+        .unwrap();
+
+        assert_eq!(cleanup_stale_artifacts_in(directory.path()).unwrap(), 1);
+        assert!(!dead_socket.exists() && !dead_identity.exists() && !dead_pid.exists());
+        assert!(live.socket.exists() && live.identity.exists() && live.pid.exists());
+
+        drop(live_owner);
+        cleanup_stale_daemon_files(&live).unwrap();
+        assert!(!live.socket.exists() && !live.identity.exists() && !live.pid.exists());
     }
 }
 
@@ -1237,7 +1657,19 @@ fn reusable_runtime_id(runtimes: &[SessionRuntime], clients: &[ClientConnection]
             )
         })
         .collect::<Vec<_>>();
-    choose_reusable_runtime_id(&states)
+    choose_reusable_runtime_id(&states).or_else(|| {
+        // A reconnect can arrive before the daemon reader observes the old
+        // socket closing. In that window there is no detached runtime, and the
+        // old implementation eagerly booted a second BackendService/provider
+        // bridge just to discard it after LoadSession. Prefer the most recently
+        // attached live runtime; session routing will isolate later only when a
+        // client actually selects a different session.
+        clients
+            .iter()
+            .rev()
+            .map(|client| client.runtime_id)
+            .find(|runtime_id| states.iter().any(|(id, _, _)| id == runtime_id))
+    })
 }
 
 fn choose_reusable_runtime_id(states: &[(u64, bool, bool)]) -> Option<u64> {
@@ -1260,11 +1692,13 @@ fn choose_reusable_runtime_id(states: &[(u64, bool, bool)]) -> Option<u64> {
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn attach_client_to_runtime(
     clients: &mut Vec<ClientConnection>,
     runtimes: &mut [SessionRuntime],
     extensions: &ExtensionHost,
     client_tx: &mpsc::SyncSender<ClientEvent>,
+    wake: &Wake,
     client_id: u64,
     runtime_id: u64,
     stream: LocalStream,
@@ -1287,6 +1721,10 @@ fn attach_client_to_runtime(
         }
     };
     runtime.idle_since = None;
+    let writer = match ClientWriter::new(stream) {
+        Ok(writer) => writer,
+        Err(_) => return false,
+    };
     let initial = BridgeEnvelope {
         kind: "state".into(),
         state: Some(state_with_extension_commands(
@@ -1298,18 +1736,16 @@ fn attach_client_to_runtime(
     if let Some(state) = initial.state.as_ref() {
         extensions.publish_state(state);
     }
-    let writer = match ClientWriter::new(stream) {
-        Ok(writer) => writer,
-        Err(_) => return false,
-    };
     if writer.send(&initial).is_err() {
         return false;
     }
     let tx = client_tx.clone();
-    thread::spawn(move || client_reader(client_id, reader, tx));
+    let wake = wake.clone();
+    thread::spawn(move || client_reader(client_id, reader, tx, wake));
     clients.push(ClientConnection {
         id: client_id,
         runtime_id,
+        route_seq: 0,
         writer,
     });
     if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
@@ -1354,11 +1790,21 @@ fn broadcast_runtime_envelope(
     runtime_id: u64,
     envelope: &BridgeEnvelope,
 ) {
+    let frame = match ClientWriter::encode(envelope) {
+        Ok(frame) => frame,
+        Err(error) => {
+            eprintln!(
+                "yeet: could not encode background envelope {} for runtime {runtime_id}: {error:#}",
+                envelope.kind
+            );
+            return;
+        }
+    };
     clients.retain_mut(|client| {
         if client.runtime_id != runtime_id {
             return true;
         }
-        match client.writer.send(envelope) {
+        match client.writer.send_frame(frame.clone()) {
             Ok(()) => true,
             Err(error) => {
                 if std::env::var_os("YEET_BACKGROUND_TRACE").is_some() {
@@ -1377,6 +1823,7 @@ struct DaemonFilesCleanup {
     socket: PathBuf,
     identity: PathBuf,
     pid: PathBuf,
+    owner_pid: u32,
 }
 
 impl DaemonFilesCleanup {
@@ -1385,37 +1832,54 @@ impl DaemonFilesCleanup {
             socket: paths.socket.clone(),
             identity: paths.identity.clone(),
             pid: paths.pid.clone(),
+            owner_pid: std::process::id(),
         }
+    }
+
+    fn still_owns_lease(&self) -> bool {
+        fs::read_to_string(&self.pid)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .is_some_and(|pid| pid == self.owner_pid)
     }
 }
 
 impl Drop for DaemonFilesCleanup {
     fn drop(&mut self) {
+        // A newer daemon may already own these shared pathnames. An older
+        // process can remain alive temporarily because its Unix listener stays
+        // valid after unlink. It must never remove the newer daemon's lease
+        // when it eventually exits.
+        if !self.still_owns_lease() {
+            return;
+        }
         let _ = fs::remove_file(&self.socket);
         let _ = fs::remove_file(&self.identity);
         let _ = fs::remove_file(&self.pid);
     }
 }
 
-fn client_reader(client_id: u64, stream: LocalStream, tx: mpsc::SyncSender<ClientEvent>) {
+fn client_reader(
+    client_id: u64,
+    stream: LocalStream,
+    tx: mpsc::SyncSender<ClientEvent>,
+    wake: Wake,
+) {
     let mut reader = BufReader::new(stream);
-    loop {
-        match read_bounded_frame(&mut reader, MAX_CLIENT_COMMAND_BYTES) {
-            Ok(Some(frame)) => match serde_json::from_slice::<FrontendCommand>(&frame) {
-                Ok(command) => {
-                    if tx
-                        .send(ClientEvent::Command { client_id, command })
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                Err(_) => continue,
-            },
-            Ok(None) | Err(_) => break,
+    while let Ok(Some(frame)) = read_bounded_frame(&mut reader, MAX_CLIENT_COMMAND_BYTES) {
+        let Ok(command) = serde_json::from_slice::<FrontendCommand>(&frame) else {
+            continue;
+        };
+        if tx
+            .send(ClientEvent::Command { client_id, command })
+            .is_err()
+        {
+            return;
         }
+        wake.notify();
     }
     let _ = tx.send(ClientEvent::Disconnected(client_id));
+    wake.notify();
 }
 
 /// Reads one newline-delimited protocol frame without allowing a partial
@@ -1540,54 +2004,45 @@ mod client_frame_tests {
     }
 
     #[test]
-    fn client_frame_deadline_applies_to_partial_progress_and_retries() {
+    fn outbound_frame_contract() {
+        let payload = b"{\"kind\":\"heartbeat\"}\n";
+        let mut output = Vec::new();
+        write_client_frame(&mut output, payload, CLIENT_WRITE_TIMEOUT).unwrap();
+        assert_eq!(output, payload);
+
+        let mut empty = &mut [][..];
+        assert_eq!(
+            write_client_frame(&mut empty, b"frame\n", CLIENT_WRITE_TIMEOUT)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WriteZero
+        );
+
         for error in [
             None,
             Some(std::io::ErrorKind::Interrupted),
             Some(std::io::ErrorKind::WouldBlock),
         ] {
             let mut writer = SlowWriter { error, calls: 0 };
-            let error =
-                write_client_frame(&mut writer, b"frame\n", Duration::from_millis(5)).unwrap_err();
-            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-            assert!(
-                writer.calls <= 1,
-                "continued writing beyond the frame deadline"
+            assert_eq!(
+                write_client_frame(&mut writer, b"frame\n", Duration::from_millis(5))
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::TimedOut
             );
+            assert!(writer.calls <= 1);
         }
     }
 
     #[test]
-    fn client_frame_preserves_complete_payload() {
-        let mut output = Vec::new();
-        write_client_frame(
-            &mut output,
-            b"{\"kind\":\"heartbeat\"}\n",
-            CLIENT_WRITE_TIMEOUT,
-        )
-        .unwrap();
-        assert_eq!(output, b"{\"kind\":\"heartbeat\"}\n");
-    }
+    fn inbound_frame_contract() {
+        let mut oversized = BufReader::new(Cursor::new(b"12345".to_vec()));
+        assert_eq!(
+            read_bounded_frame(&mut oversized, 4).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
 
-    #[test]
-    fn client_frame_rejects_zero_byte_write() {
-        let mut output = &mut [][..];
-        let error = write_client_frame(&mut output, b"frame\n", CLIENT_WRITE_TIMEOUT).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::WriteZero);
-    }
-
-    #[test]
-    fn inbound_frame_reader_rejects_partial_frames_over_the_limit() {
-        let input = Cursor::new(b"12345".to_vec());
-        let mut reader = BufReader::new(input);
-        let error = read_bounded_frame(&mut reader, 4).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-    }
-
-    #[test]
-    fn inbound_frame_reader_preserves_frame_boundaries() {
-        let input = Cursor::new(b"first\nsecond\n".to_vec());
-        let mut reader = BufReader::new(input);
+        let mut reader = BufReader::new(Cursor::new(b"first\nsecond\n".to_vec()));
         assert_eq!(
             read_bounded_frame(&mut reader, 16).unwrap(),
             Some(b"first".to_vec())

@@ -71,6 +71,8 @@ pub(crate) fn deploy_agent_for_workspace(
     connection
         .send(&FrontendCommand::Submit {
             text: task.to_owned(),
+            images: Vec::new(),
+            attachment_ids: Vec::new(),
         })
         .context("submit task to child Yeet agent")?;
 

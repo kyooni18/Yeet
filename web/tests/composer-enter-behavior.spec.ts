@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('plain Enter preserves multiline drafting on touch-first devices and sends on desktop', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
 
   await composer.fill('first line')
@@ -31,7 +31,7 @@ test('plain Enter preserves multiline drafting on touch-first devices and sends 
     await expect(composer).toHaveValue('first line\nsecond line')
     await expect.poll(() => submittedTexts(page)).toEqual([])
 
-    await page.getByTestId('submit').click()
+    await page.getByRole('button', { name: 'Send' }).click()
     await expect.poll(() => submittedTexts(page)).toEqual(['first line\nsecond line'])
   } else {
     await expect(composer).toHaveValue('')
@@ -43,7 +43,7 @@ test('touch-first hardware keyboard shortcut can still submit with Control+Enter
   const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
   test.skip(!touchFirst, 'Touch-first behavior only')
 
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.fill('send from hardware keyboard')
   await composer.press('Control+Enter')
 
@@ -52,17 +52,15 @@ test('touch-first hardware keyboard shortcut can still submit with Control+Enter
 })
 
 test('explicit send shortcuts submit multiline drafts', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.fill('first line\nsecond line')
-  const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
-  if (!touchFirst) await expect(page.locator('#composer-hint')).toBeVisible()
   await composer.press('Control+Enter')
   await expect(composer).toHaveValue('')
   await expect.poll(() => submittedTexts(page)).toEqual(['first line\nsecond line'])
 })
 
 test('multiline Enter and Shift+Enter preserve the draft', async ({ page }) => {
-  const composer = page.getByRole('textbox', { name: 'Message Yeet' })
+  const composer = page.getByRole('textbox', { name: 'Message' })
   await composer.fill('first line\nsecond line')
   await composer.press('End')
   await composer.press('Enter')

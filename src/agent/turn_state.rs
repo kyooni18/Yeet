@@ -10,10 +10,217 @@ use serde_json::{Value, json};
 
 use crate::core::{Message, ToolCall, Usage};
 
-use super::{context::ContextMemory, loop_budget::LoopBudget, policy::TaskProfile};
+use super::{
+    context::ContextMemory,
+    loop_budget::LoopBudget,
+    phase::{self, AgentPhase, PhaseState},
+    policy::TaskProfile,
+};
 
 const MAX_PROVENANCE_ENTRIES: usize = 24;
 const MAX_PROVENANCE_CHANGE_DETAILS: usize = 16;
+const MAX_RECENT_EXECUTION_EVIDENCE: usize = 8;
+const MAX_RECENT_INSPECTION_EVIDENCE: usize = 12;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InspectionEvidenceLocator {
+    summary: String,
+    paths: Vec<String>,
+}
+
+/// Authoritative execution facts for one agent turn.
+///
+/// The coordinator may decide strategy, but mutation authorship, validation
+/// freshness, and evidence retention belong here so Goal judging, completion
+/// gating, rollover, and final-answer provenance all consume the same state.
+#[derive(Debug, Default)]
+pub(super) struct TurnExecutionEvidence {
+    observed_tool_calls: usize,
+    successful_mutations: usize,
+    unresolved_failed_mutation: bool,
+    verification_attempted: bool,
+    verification_succeeded: bool,
+    last_validation_evidence: Option<String>,
+    recent_execution_evidence: Vec<String>,
+    recent_inspection_evidence: Vec<InspectionEvidenceLocator>,
+    provenance: SessionExecutionProvenance,
+}
+
+impl TurnExecutionEvidence {
+    pub(super) fn successful_mutations(&self) -> usize {
+        self.successful_mutations
+    }
+
+    pub(super) fn unresolved_failed_mutation(&self) -> bool {
+        self.unresolved_failed_mutation
+    }
+
+    pub(super) fn verification_attempted(&self) -> bool {
+        self.verification_attempted
+    }
+
+    pub(super) fn verification_succeeded(&self) -> bool {
+        self.verification_succeeded
+    }
+
+    pub(super) fn last_validation_evidence(&self) -> Option<&str> {
+        self.last_validation_evidence.as_deref()
+    }
+
+    pub(super) fn recent_evidence(&self) -> &[String] {
+        &self.recent_execution_evidence
+    }
+
+    pub(super) fn recommended_phase(
+        &self,
+        implementation_requested: bool,
+        planning_or_documentation: bool,
+    ) -> AgentPhase {
+        phase::recommend(
+            PhaseState {
+                observed_tool_calls: self.observed_tool_calls,
+                successful_mutations: self.successful_mutations,
+                unresolved_failed_mutation: self.unresolved_failed_mutation,
+                verification_succeeded: self.verification_succeeded,
+                has_inspection_evidence: !self.recent_inspection_evidence.is_empty(),
+            },
+            implementation_requested,
+            planning_or_documentation,
+        )
+    }
+
+    pub(super) fn request_overlay(&mut self) -> Option<Message> {
+        self.provenance.request_overlay()
+    }
+
+    pub(super) fn observe_tool(
+        &mut self,
+        call: &ToolCall,
+        content: &str,
+        succeeded: bool,
+        workspace_write_observed: bool,
+        validation_call: bool,
+        mutation_tool: bool,
+    ) {
+        self.observed_tool_calls = self.observed_tool_calls.saturating_add(1);
+        if workspace_write_observed {
+            // Validation applies only to the workspace generation it observed.
+            self.verification_attempted = false;
+            self.verification_succeeded = false;
+            self.last_validation_evidence = None;
+            if succeeded {
+                self.successful_mutations = self.successful_mutations.saturating_add(1);
+                self.unresolved_failed_mutation = false;
+            } else {
+                // A failed or timed-out write-capable command may have partially changed state.
+                self.unresolved_failed_mutation = true;
+            }
+        } else if !succeeded && mutation_tool {
+            self.unresolved_failed_mutation = true;
+        }
+
+        if workspace_write_observed {
+            invalidate_inspection_evidence(&mut self.recent_inspection_evidence, call);
+        } else if succeeded
+            && !validation_call
+            && let Some(locator) = summarize_inspection_locator(call, content)
+        {
+            if let Some(index) = self
+                .recent_inspection_evidence
+                .iter()
+                .position(|existing| existing.summary == locator.summary)
+            {
+                self.recent_inspection_evidence.remove(index);
+            }
+            self.recent_inspection_evidence.push(locator);
+            if self.recent_inspection_evidence.len() > MAX_RECENT_INSPECTION_EVIDENCE {
+                self.recent_inspection_evidence.remove(0);
+            }
+        }
+
+        self.provenance.observe_tool(
+            call,
+            content,
+            succeeded,
+            workspace_write_observed,
+            validation_call,
+        );
+
+        if validation_call {
+            self.verification_attempted = true;
+            self.last_validation_evidence = Some(summarize_tool_outcome(call, content, succeeded));
+            if succeeded {
+                self.verification_succeeded = true;
+            }
+        }
+
+        if workspace_write_observed || !succeeded || validation_call {
+            self.recent_execution_evidence
+                .push(summarize_tool_outcome(call, content, succeeded));
+            if self.recent_execution_evidence.len() > MAX_RECENT_EXECUTION_EVIDENCE {
+                self.recent_execution_evidence.remove(0);
+            }
+        }
+    }
+
+    pub(super) fn completion_blocker(
+        &self,
+        implementation_requested: bool,
+        planning_or_documentation: bool,
+    ) -> Option<String> {
+        implementation_completion_blocker(
+            implementation_requested,
+            self.successful_mutations,
+            self.unresolved_failed_mutation,
+            planning_or_documentation,
+            self.verification_attempted,
+            self.verification_succeeded,
+        )
+    }
+
+    pub(super) fn completion_warning(&self, blocker: &str) -> String {
+        completion_warning(
+            blocker,
+            self.successful_mutations,
+            self.last_validation_evidence(),
+        )
+    }
+
+    pub(super) fn rollover_handoff(&self, working_state: Option<&str>) -> Message {
+        rollover_handoff_message(
+            self.successful_mutations,
+            self.unresolved_failed_mutation,
+            self.verification_attempted,
+            self.verification_succeeded,
+            self.last_validation_evidence(),
+            working_state,
+            &self.recent_execution_evidence,
+            &self.recent_inspection_evidence,
+        )
+    }
+
+    /// Structured evidence handed to the semantic Goal judge.
+    ///
+    /// This intentionally excludes assistant/user prose. Tool observations and
+    /// exact provenance remain separately available, but completion facts come
+    /// from coordinator-observed execution state rather than model claims.
+    pub(super) fn goal_evidence(&self) -> Value {
+        json!({
+            "agentPhase": self.recommended_phase(true, false).as_str(),
+            "observedToolCalls": self.observed_tool_calls,
+            "successfulWorkspaceMutations": self.successful_mutations,
+            "unresolvedFailedMutation": self.unresolved_failed_mutation,
+            "verification": {
+                "attempted": self.verification_attempted,
+                "succeeded": self.verification_succeeded,
+                "lastEvidence": self.last_validation_evidence,
+            },
+            "recentExecutionEvidence": self.recent_execution_evidence,
+            "recentInspectionEvidence": self.recent_inspection_evidence.iter().map(|item| item.summary.as_str()).collect::<Vec<_>>(),
+            "provenance": self.provenance.goal_evidence(),
+        })
+    }
+}
 
 pub(super) struct RequestMetadataInput<'a> {
     pub profile: TaskProfile,
@@ -26,6 +233,11 @@ pub(super) struct RequestMetadataInput<'a> {
     pub deferred_tool_count: usize,
     pub native_deferred_tools_supported: bool,
     pub search_loaded_tool_count: usize,
+    pub execution_phase: &'a str,
+    pub successful_mutations: usize,
+    pub unresolved_failed_mutation: bool,
+    pub verification_attempted: bool,
+    pub verification_succeeded: bool,
 }
 
 pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<String, String> {
@@ -62,10 +274,35 @@ pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<Strin
         ),
         ("modelAttempt".into(), input.model_attempts.to_string()),
         ("toolRound".into(), input.tool_rounds.to_string()),
+        ("agentCoreVersion".into(), "2".into()),
+        ("agentPhase".into(), input.execution_phase.to_owned()),
+        (
+            "successfulWorkspaceMutations".into(),
+            input.successful_mutations.to_string(),
+        ),
+        (
+            "unresolvedFailedMutation".into(),
+            input.unresolved_failed_mutation.to_string(),
+        ),
+        (
+            "verificationAttempted".into(),
+            input.verification_attempted.to_string(),
+        ),
+        (
+            "verificationSucceeded".into(),
+            input.verification_succeeded.to_string(),
+        ),
         ("expectedCacheReuses".into(), "1".into()),
         (
             "turnCumulativeInputTokens".into(),
             input.loop_budget.cumulative_input_tokens().to_string(),
+        ),
+        (
+            "turnCumulativeRequestChars".into(),
+            input
+                .loop_budget
+                .cumulative_sent_request_chars()
+                .to_string(),
         ),
         (
             "turnCostEquivalentInputTokens".into(),
@@ -73,6 +310,22 @@ pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<Strin
                 .loop_budget
                 .cumulative_cost_equivalent_input_tokens()
                 .to_string(),
+        ),
+        (
+            "turnInputTokensSinceRollover".into(),
+            input.loop_budget.input_tokens_since_rollover().to_string(),
+        ),
+        (
+            "turnRolloverCount".into(),
+            input.loop_budget.rollover_count().to_string(),
+        ),
+        (
+            "turnBudgetStage".into(),
+            input.loop_budget.stage_label().to_owned(),
+        ),
+        (
+            "windowModelCalls".into(),
+            input.loop_budget.window_model_calls().to_string(),
         ),
         (
             "turnEstimatedCostUsd".into(),
@@ -120,6 +373,10 @@ pub(super) struct SessionExecutionProvenance {
     omitted_exact_mutations: usize,
     omitted_write_actions: usize,
     omitted_validations: usize,
+    pending_exact_mutations: Vec<String>,
+    pending_write_actions: Vec<String>,
+    pending_validations: Vec<String>,
+    pending_validation_reset: bool,
 }
 
 impl SessionExecutionProvenance {
@@ -128,65 +385,93 @@ impl SessionExecutionProvenance {
         call: &ToolCall,
         content: &str,
         succeeded: bool,
-        workspace_mutated: bool,
+        workspace_write_observed: bool,
         validation_call: bool,
     ) {
-        if workspace_mutated {
+        if workspace_write_observed {
             // Validation evidence only applies to the workspace generation it
-            // observed. Any later write-capable action invalidates it.
+            // observed. A failed write-capable action may still have partial effects.
             self.validations.clear();
             self.omitted_validations = 0;
-            if call.name == "apply_file_edits" {
+            self.pending_validation_reset = true;
+            if succeeded && call.name == "apply_file_edits" {
+                let summary = summarize_structured_mutation(call);
                 push_bounded_provenance(
                     &mut self.exact_mutations,
                     &mut self.omitted_exact_mutations,
-                    summarize_structured_mutation(call),
+                    summary.clone(),
                 );
+                push_pending_provenance(&mut self.pending_exact_mutations, summary);
             } else {
+                let summary = summarize_tool_outcome(call, content, succeeded);
                 push_bounded_provenance(
                     &mut self.write_capable_actions,
                     &mut self.omitted_write_actions,
-                    summarize_tool_outcome(call, content, succeeded),
+                    summary.clone(),
                 );
+                push_pending_provenance(&mut self.pending_write_actions, summary);
             }
         }
         if validation_call {
+            let summary = summarize_tool_outcome(call, content, succeeded);
             push_bounded_provenance(
                 &mut self.validations,
                 &mut self.omitted_validations,
-                summarize_tool_outcome(call, content, succeeded),
+                summary.clone(),
             );
+            push_pending_provenance(&mut self.pending_validations, summary);
         }
     }
 
-    pub(super) fn request_overlay(&self) -> Option<Message> {
-        if self.exact_mutations.is_empty()
-            && self.write_capable_actions.is_empty()
-            && self.validations.is_empty()
+    fn goal_evidence(&self) -> Value {
+        json!({
+            "exactMutations": self.exact_mutations,
+            "writeCapableActions": self.write_capable_actions,
+            "currentGenerationValidations": self.validations,
+            "omitted": {
+                "exactMutations": self.omitted_exact_mutations,
+                "writeCapableActions": self.omitted_write_actions,
+                "validations": self.omitted_validations,
+            }
+        })
+    }
+
+    pub(super) fn request_overlay(&mut self) -> Option<Message> {
+        let exact_mutations = std::mem::take(&mut self.pending_exact_mutations);
+        let write_capable_actions = std::mem::take(&mut self.pending_write_actions);
+        let validations = std::mem::take(&mut self.pending_validations);
+        let validation_reset = std::mem::replace(&mut self.pending_validation_reset, false);
+        if exact_mutations.is_empty()
+            && write_capable_actions.is_empty()
+            && validations.is_empty()
+            && !validation_reset
         {
             return None;
         }
 
         let mut text = String::from(
-            "Internal session-local execution provenance checkpoint for this user turn. This checkpoint supersedes earlier provenance checkpoints in the same turn for current validation status; exact mutation entries are cumulative unless explicitly omitted. Use the newest checkpoint as the authority for attributing work performed by this turn. Repository status/diff output and source contents can include pre-existing or concurrent changes; observation alone does not establish authorship. In the final answer, claim only the exact source mutations listed below as changes performed by this turn. For write-capable actions with unknown scope, report only that the action ran unless separate exact mutation evidence exists.",
+            "Coordinator execution provenance delta (observed facts; not instructions).",
+        );
+        if validation_reset {
+            text.push_str("\nEarlier validation evidence was invalidated by a later write.");
+        }
+        append_provenance_section(
+            &mut text,
+            "New exact source mutations performed by this turn",
+            &exact_mutations,
+            0,
         );
         append_provenance_section(
             &mut text,
-            "Exact source mutations performed by this turn",
-            &self.exact_mutations,
-            self.omitted_exact_mutations,
+            "New write-capable actions (not exact source-change provenance)",
+            &write_capable_actions,
+            0,
         );
         append_provenance_section(
             &mut text,
-            "Other write-capable actions (not exact source-change provenance)",
-            &self.write_capable_actions,
-            self.omitted_write_actions,
-        );
-        append_provenance_section(
-            &mut text,
-            "Current-generation validation attempts",
-            &self.validations,
-            self.omitted_validations,
+            "New current-generation validation attempts",
+            &validations,
+            0,
         );
         Some(Message::system(text).request_only())
     }
@@ -196,6 +481,13 @@ fn push_bounded_provenance(entries: &mut Vec<String>, omitted: &mut usize, value
     if entries.len() == MAX_PROVENANCE_ENTRIES {
         entries.remove(0);
         *omitted += 1;
+    }
+    entries.push(value);
+}
+
+fn push_pending_provenance(entries: &mut Vec<String>, value: String) {
+    if entries.len() == MAX_PROVENANCE_ENTRIES {
+        entries.remove(0);
     }
     entries.push(value);
 }
@@ -300,7 +592,7 @@ fn summarize_structured_edit(edit: &Value) -> String {
     detail
 }
 
-pub(super) fn rollover_handoff_message(
+fn rollover_handoff_message(
     successful_mutations: usize,
     unresolved_failed_mutation: bool,
     verification_attempted: bool,
@@ -308,6 +600,7 @@ pub(super) fn rollover_handoff_message(
     last_validation_evidence: Option<&str>,
     working_state: Option<&str>,
     recent_execution_evidence: &[String],
+    recent_inspection_evidence: &[InspectionEvidenceLocator],
 ) -> Message {
     let verification = if verification_succeeded {
         "passed"
@@ -317,7 +610,7 @@ pub(super) fn rollover_handoff_message(
         "not-yet-attempted"
     };
     let mut text = format!(
-        "Internal context rollover handoff. Continue the same task from this state; do not restart broad repository discovery. successfulWorkspaceMutations={successful_mutations}; unresolvedFailedMutation={unresolved_failed_mutation}; verification={verification}."
+        "Coordinator context rollover state. The same task and execution state carry into this fresh window. Prior source and tool payloads are not model-visible here, and historical locators do not imply current source freshness. successfulWorkspaceMutations={successful_mutations}; unresolvedFailedMutation={unresolved_failed_mutation}; verification={verification}."
     );
     if let Some(validation) = last_validation_evidence {
         text.push_str("\nLast validation: ");
@@ -335,16 +628,213 @@ pub(super) fn rollover_handoff_message(
             text.push('\n');
         }
     }
+
+    if !recent_inspection_evidence.is_empty() {
+        text.push_str(
+            "\nCurrent workspace evidence index (locators only; source text is intentionally not replayed across windows):\n",
+        );
+        for evidence in recent_inspection_evidence {
+            text.push_str("- ");
+            text.push_str(&evidence.summary);
+            text.push('\n');
+        }
+        text.push_str(
+            "Locator entries are pointers to workspace evidence captured before rollover; source freshness may need to be re-established when it is material.\n",
+        );
+    }
     Message::system(text)
 }
 
+fn summarize_inspection_locator(
+    call: &ToolCall,
+    content: &str,
+) -> Option<InspectionEvidenceLocator> {
+    match call.name.as_str() {
+        "read_file" | "read_files" => {
+            let mut ranges = Vec::new();
+            let mut paths = Vec::new();
+            if let Some(path) = call.arguments.get("path").and_then(Value::as_str) {
+                let start = call
+                    .arguments
+                    .get("startLine")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1);
+                let end = call
+                    .arguments
+                    .get("endLine")
+                    .and_then(Value::as_u64)
+                    .map(|line| line.to_string())
+                    .unwrap_or_else(|| "default-window".into());
+                paths.push(path.to_owned());
+                ranges.push(format!("{path}:{start}-{end}"));
+            }
+            if let Some(requests) = call.arguments.get("requests").and_then(Value::as_array) {
+                for request in requests.iter().take(8) {
+                    let Some(path) = request.get("path").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let start = request
+                        .get("startLine")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(1);
+                    let end = request
+                        .get("endLine")
+                        .and_then(Value::as_u64)
+                        .map(|line| line.to_string())
+                        .unwrap_or_else(|| "default-window".into());
+                    paths.push(path.to_owned());
+                    ranges.push(format!("{path}:{start}-{end}"));
+                }
+            }
+            (!ranges.is_empty()).then(|| InspectionEvidenceLocator {
+                summary: format!("read_file {}", ranges.join(", ")),
+                paths,
+            })
+        }
+        "search_workspace" => {
+            let query = call
+                .arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let search_root = call
+                .arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or(".");
+            let mut hits = Vec::new();
+            let mut paths = Vec::new();
+            if let Ok(value) = serde_json::from_str::<Value>(content)
+                && let Some(matches) = value.get("matches").and_then(Value::as_array)
+            {
+                for hit in matches.iter().take(6) {
+                    if let Some(hit_path) = hit.get("path").and_then(Value::as_str) {
+                        paths.push(hit_path.to_owned());
+                        let line = hit.get("line").and_then(Value::as_u64);
+                        hits.push(match line {
+                            Some(line) => format!("{hit_path}:{line}"),
+                            None => hit_path.to_owned(),
+                        });
+                    }
+                }
+            }
+            let suffix = if hits.is_empty() {
+                String::new()
+            } else {
+                format!(" -> {}", hits.join(", "))
+            };
+            Some(InspectionEvidenceLocator {
+                summary: format!(
+                    "search_workspace path={search_root} query={:?}{suffix}",
+                    bounded_text(query, 160)
+                ),
+                // With no concrete hit, the locator is query state rather than
+                // source state and should be invalidated on the next write.
+                paths,
+            })
+        }
+        "list_files" => {
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or(".");
+            Some(InspectionEvidenceLocator {
+                summary: format!("list_files path={path}"),
+                paths: vec![path.to_owned()],
+            })
+        }
+        "read_document" => {
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            Some(InspectionEvidenceLocator {
+                summary: format!("read_document path={path}"),
+                paths: vec![path.to_owned()],
+            })
+        }
+        "run_shell" => call
+            .arguments
+            .get("command")
+            .and_then(Value::as_str)
+            .map(|command| InspectionEvidenceLocator {
+                summary: format!("run_shell {}", bounded_text(command, 240)),
+                paths: Vec::new(),
+            }),
+        _ => None,
+    }
+}
+
+fn invalidate_inspection_evidence(
+    evidence: &mut Vec<InspectionEvidenceLocator>,
+    mutation: &ToolCall,
+) {
+    let changed_paths = mutation_paths(mutation);
+    if changed_paths.is_empty() {
+        evidence.clear();
+        return;
+    }
+
+    evidence.retain(|locator| {
+        !locator.paths.is_empty()
+            && locator.paths.iter().all(|observed| {
+                changed_paths
+                    .iter()
+                    .all(|changed| !paths_overlap(observed, changed))
+            })
+    });
+}
+
+fn mutation_paths(call: &ToolCall) -> Vec<String> {
+    if call.name != "apply_file_edits" {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+    if let Some(changes) = call.arguments.get("changes").and_then(Value::as_array) {
+        for change in changes.iter().take(16) {
+            if let Some(path) = change.get("path").and_then(Value::as_str) {
+                paths.push(path.to_owned());
+            }
+            if let Some(destination) = change
+                .get("fileOp")
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("destination"))
+                .and_then(Value::as_str)
+            {
+                paths.push(destination.to_owned());
+            }
+        }
+    }
+    paths
+}
+
+fn paths_overlap(left: &str, right: &str) -> bool {
+    fn normalized(path: &str) -> &str {
+        path.trim_end_matches('/')
+    }
+
+    let left = normalized(left);
+    let right = normalized(right);
+    left == right
+        || (!left.is_empty()
+            && right
+                .strip_prefix(left)
+                .is_some_and(|suffix| suffix.starts_with('/')))
+        || (!right.is_empty()
+            && left
+                .strip_prefix(right)
+                .is_some_and(|suffix| suffix.starts_with('/')))
+}
 pub(super) fn summarize_tool_outcome(call: &ToolCall, content: &str, succeeded: bool) -> String {
     let subject = match call.name.as_str() {
         "run_shell" => call
             .arguments
             .get("command")
             .and_then(Value::as_str)
-            .map(|command| format!("run_shell `{}`", bounded_text(command, 240)))
+            .map(|command| format!("run_shell `{}`", bounded_text(command, 120)))
             .unwrap_or_else(|| "run_shell".into()),
         "apply_file_edits" => {
             let paths = call
@@ -377,14 +867,14 @@ pub(super) fn summarize_tool_outcome(call: &ToolCall, content: &str, succeeded: 
         }
         for key in ["reason", "error", "summary", "stderr"] {
             if let Some(value) = value.get(key).and_then(Value::as_str) {
-                let value = bounded_text(value, if key == "stderr" { 320 } else { 220 });
+                let value = bounded_text(value, if key == "stderr" { 180 } else { 140 });
                 if !value.trim().is_empty() {
                     details.push(format!("{key}={value}"));
                 }
             }
         }
     }
-    bounded_text(&format!("{subject}: {}", details.join("; ")), 900)
+    bounded_text(&format!("{subject}: {}", details.join("; ")), 480)
 }
 
 pub(super) fn analysis_inspection_threshold(bounded_explanation: bool) -> usize {
@@ -532,4 +1022,152 @@ pub(super) fn usage_diagnostics(request_diagnostics: &Value, usage: Option<&Usag
         object.insert("cacheMissAttribution".into(), json!(attribution));
     }
     value
+}
+
+#[cfg(test)]
+#[path = "turn_state/write_observation_tests.rs"]
+mod write_observation_tests;
+
+#[cfg(test)]
+mod execution_evidence_tests {
+    use super::*;
+
+    fn shell_call(command: &str) -> ToolCall {
+        ToolCall {
+            id: command.to_owned(),
+            name: "run_shell".into(),
+            arguments: json!({"command": command}),
+        }
+    }
+
+    #[test]
+    fn goal_evidence_is_structured_coordinator_state() {
+        let mut evidence = TurnExecutionEvidence::default();
+        evidence.observe_tool(
+            &shell_call("cargo test"),
+            r#"{"exitCode":0,"succeeded":true}"#,
+            true,
+            false,
+            true,
+            false,
+        );
+        let value = evidence.goal_evidence();
+        assert_eq!(value["verification"]["succeeded"], json!(true));
+        assert!(value["provenance"]["currentGenerationValidations"].is_array());
+    }
+
+    #[test]
+    fn provenance_request_overlays_emit_deltas_not_a_repeated_ledger() {
+        let mut evidence = TurnExecutionEvidence::default();
+        for path in ["src/first.rs", "src/second.rs"] {
+            let edit = ToolCall {
+                id: path.into(),
+                name: "apply_file_edits".into(),
+                arguments: json!({
+                    "changes": [{"path": path, "edits": [{"kind": "replace", "text": "updated"}]}]
+                }),
+            };
+            evidence.observe_tool(&edit, r#"{"changed":true}"#, true, true, false, true);
+            let overlay = evidence.request_overlay().expect("new provenance delta");
+            let content = overlay.content.as_deref().unwrap_or_default();
+            assert!(content.contains(path));
+            assert!(content.len() < 1_500);
+        }
+        assert!(evidence.request_overlay().is_none());
+    }
+
+    #[test]
+    fn rollover_handoff_carries_current_source_locators_without_source_payload() {
+        let mut evidence = TurnExecutionEvidence::default();
+        let read = ToolCall {
+            id: "read-1".into(),
+            name: "read_file".into(),
+            arguments: json!({
+                "path": "src/remote.rs",
+                "startLine": 120,
+                "endLine": 180
+            }),
+        };
+        evidence.observe_tool(
+            &read,
+            "120: fn remote() { /* deliberately large source body */ }",
+            true,
+            false,
+            false,
+            false,
+        );
+
+        let handoff = evidence.rollover_handoff(Some("change strategy"));
+        let handoff = handoff.content.as_deref().unwrap_or_default();
+        assert!(handoff.contains("read_file src/remote.rs:120-180"));
+        assert!(handoff.contains("change strategy"));
+        assert!(!handoff.contains("deliberately large source body"));
+    }
+
+    #[test]
+    fn workspace_mutation_invalidates_pre_mutation_source_locators() {
+        let mut evidence = TurnExecutionEvidence::default();
+        let search = ToolCall {
+            id: "search-1".into(),
+            name: "search_workspace".into(),
+            arguments: json!({"path":"src","query":"remote"}),
+        };
+        evidence.observe_tool(
+            &search,
+            r#"{"matches":[{"path":"src/remote.rs","line":42}]}"#,
+            true,
+            false,
+            false,
+            false,
+        );
+
+        let unrelated = ToolCall {
+            id: "read-unrelated".into(),
+            name: "read_file".into(),
+            arguments: json!({
+                "path":"src/cache.rs",
+                "startLine":10,
+                "endLine":20
+            }),
+        };
+        evidence.observe_tool(
+            &unrelated,
+            "10: unrelated cache source",
+            true,
+            false,
+            false,
+            false,
+        );
+        let handoff = evidence.rollover_handoff(None);
+        assert!(
+            handoff
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("src/remote.rs:42")
+        );
+
+        let edit = ToolCall {
+            id: "edit".into(),
+            name: "apply_file_edits".into(),
+            arguments: json!({"changes":[{"path":"src/remote.rs","edits":[]}]}),
+        };
+        evidence.observe_tool(&edit, r#"{"changed":true}"#, true, true, false, true);
+        let handoff = evidence.rollover_handoff(None);
+        assert!(
+            !handoff
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("src/remote.rs:42")
+        );
+
+        assert!(
+            handoff
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("src/cache.rs:10-20")
+        );
+    }
 }

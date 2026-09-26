@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::HashMap,
     io::{BufRead, Write},
     path::{Path, PathBuf},
     sync::{
@@ -19,15 +19,11 @@ use uuid::Uuid;
 
 use crate::{
     config::ConfigStore,
-    core::{BridgeClient, BridgeEvent, ToolCall, ToolDefinition},
+    core::{BridgeEvent, ToolCall, ToolDefinition},
     permission::PermissionBroker,
     project_settings::ProjectSettingsStore,
-    sandbox::{
-        NetworkEndpoint, SandboxMode, SandboxPolicy, SandboxStore, WorkspaceRead,
-        validate_environment, validate_relative_path, validate_secret_id,
-    },
     session_store::SessionStore,
-    tools::{ToolRegistry, direct_mcp_tool_definitions},
+    tools::{BridgeHandle, ToolRegistry, direct_mcp_tool_definitions},
     workers::WorkerRegistry,
 };
 
@@ -42,6 +38,16 @@ pub fn run_cli(args: &[String]) -> Result<String> {
 
 const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 const LEGACY_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+fn protocol_version_supported(version: &str) -> bool {
+    version == MODERN_PROTOCOL_VERSION || LEGACY_PROTOCOL_VERSIONS.contains(&version)
+}
+
+fn supported_protocol_versions() -> Vec<&'static str> {
+    std::iter::once(MODERN_PROTOCOL_VERSION)
+        .chain(LEGACY_PROTOCOL_VERSIONS.iter().copied())
+        .collect()
+}
 const TOOL_LIST_TTL_MS: u64 = 300_000;
 const MAX_MCP_JSON_NESTING: usize = 64;
 #[cfg(unix)]
@@ -273,17 +279,7 @@ fn handle_io_line(server: &mut McpServer, writer: &mut impl Write, line: &str) -
         )?;
         return Ok(());
     }
-    if let Some(items) = request.as_array() {
-        let responses = items
-            .iter()
-            .filter_map(|item| server.handle(item.clone()))
-            .collect::<Vec<_>>();
-        if !responses.is_empty() {
-            write_json(writer, &Value::Array(responses))?;
-        }
-        return Ok(());
-    }
-    if let Some(response) = server.handle(request) {
+    if let Some(response) = server.handle_payload(request) {
         write_json(writer, &response)?;
     }
     Ok(())
@@ -341,7 +337,7 @@ fn write_json(writer: &mut impl Write, value: &Value) -> Result<()> {
 
 struct WorkspaceRuntime {
     registry: ToolRegistry,
-    bridge: BridgeClient,
+    bridge: BridgeHandle,
     config: ConfigStore,
     project_settings: ProjectSettingsStore,
     project_identity: String,
@@ -351,7 +347,7 @@ struct WorkspaceRuntime {
 impl WorkspaceRuntime {
     fn new(
         workspace: PathBuf,
-        bridge: BridgeClient,
+        bridge: BridgeHandle,
         hard_access_root: Option<PathBuf>,
     ) -> Result<Self> {
         let config = ConfigStore::default();
@@ -377,14 +373,18 @@ impl WorkspaceRuntime {
         }));
 
         let workers = WorkerRegistry::new(Vec::new())?;
-        let mut registry = ToolRegistry::new(bridge.clone(), workspace, workers, permission)?;
+        let mut registry =
+            ToolRegistry::new_with_bridge_handle(bridge.clone(), workspace, workers, permission)?;
         registry.set_hard_access_root(hard_access_root)?;
+        registry.set_artifacts_enabled(false);
         registry.set_disabled_capabilities(project.capabilities.disabled.clone());
         registry.configure_foundation_memory(
             project.foundation_memory.enabled,
+            project.foundation_memory.backend,
             project.foundation_memory.server.clone(),
             project_identity.clone(),
         );
+        registry.configure_web_backend(project.web.backend, project.web.server.clone());
         let sessions = SessionStore::new(&config.directory);
         sessions.prepare()?;
         registry.set_session_runtime(sessions, None);
@@ -405,9 +405,12 @@ impl WorkspaceRuntime {
             .set_disabled_capabilities(project.capabilities.disabled);
         self.registry.configure_foundation_memory(
             project.foundation_memory.enabled,
+            project.foundation_memory.backend,
             project.foundation_memory.server,
             self.project_identity.clone(),
         );
+        self.registry
+            .configure_web_backend(project.web.backend, project.web.server);
         Ok(())
     }
 
@@ -423,7 +426,7 @@ impl WorkspaceRuntime {
         };
         let stop_bridge_events = Arc::new(AtomicBool::new(false));
         let bridge_event_worker = if matches!(name, "computer_use" | "computer_use_reset") {
-            let bridge = self.bridge.clone();
+            let bridge = self.bridge.client()?;
             let stop = stop_bridge_events.clone();
             Some(thread::spawn(move || {
                 while !stop.load(Ordering::Acquire) {
@@ -447,6 +450,10 @@ impl WorkspaceRuntime {
         } else {
             None
         };
+        // Direct MCP has no reliable knowledge of the client's current
+        // model-visible context. Never carry duplicate-suppression coverage across
+        // independent MCP calls; dependent safety/source state is retained separately.
+        self.registry.reset_direct_mcp_visibility();
         let result = self.registry.execute(&call, &model, &cancel);
         stop_bridge_events.store(true, Ordering::Release);
         if let Some(worker) = bridge_event_worker {
@@ -465,7 +472,7 @@ impl WorkspaceRuntime {
 pub(super) struct McpServer {
     default_workspace: PathBuf,
     restrict_workspace: bool,
-    bridge: Option<BridgeClient>,
+    bridge: BridgeHandle,
     workspaces: HashMap<PathBuf, WorkspaceRuntime>,
 }
 
@@ -482,16 +489,20 @@ impl McpServer {
         Self {
             default_workspace,
             restrict_workspace,
-            bridge: None,
+            bridge: BridgeHandle::lazy(),
             workspaces: HashMap::new(),
         }
     }
 
-    fn bridge(&mut self) -> Result<BridgeClient> {
-        if self.bridge.is_none() {
-            self.bridge = Some(BridgeClient::start()?);
+    pub(super) fn handle_payload(&mut self, request: Value) -> Option<Value> {
+        if let Value::Array(items) = request {
+            let responses = items
+                .into_iter()
+                .filter_map(|item| self.handle(item))
+                .collect::<Vec<_>>();
+            return (!responses.is_empty()).then_some(Value::Array(responses));
         }
-        Ok(self.bridge.as_ref().expect("bridge initialized").clone())
+        self.handle(request)
     }
 
     fn runtime(&mut self, workspace: PathBuf) -> Result<&mut WorkspaceRuntime> {
@@ -499,8 +510,8 @@ impl McpServer {
             let hard_access_root = self
                 .restrict_workspace
                 .then(|| self.default_workspace.clone());
-            let bridge = self.bridge()?;
-            let runtime = WorkspaceRuntime::new(workspace.clone(), bridge, hard_access_root)?;
+            let runtime =
+                WorkspaceRuntime::new(workspace.clone(), self.bridge.clone(), hard_access_root)?;
             self.workspaces.insert(workspace.clone(), runtime);
         }
         Ok(self
@@ -524,7 +535,7 @@ impl McpServer {
         let requested_protocol = request_protocol(object.get("params"));
         if method != "initialize"
             && method != "server/discover"
-            && requested_protocol.is_some_and(|version| version != MODERN_PROTOCOL_VERSION)
+            && requested_protocol.is_some_and(|version| !protocol_version_supported(version))
         {
             return Some(unsupported_protocol_error(
                 id,
@@ -561,15 +572,9 @@ impl McpServer {
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("tools/call requires a tool name"))?;
-        let lazy_tool = crate::skyline::direct_mcp_tool_definitions()
+        if !direct_mcp_tool_definitions()
             .iter()
-            .any(|tool| tool.name == name);
-        if name != "sandbox_get"
-            && name != "sandbox_configure"
-            && !lazy_tool
-            && !direct_mcp_tool_definitions()
-                .iter()
-                .any(|tool| tool.name == name)
+            .any(|tool| tool.name == name)
         {
             return Ok(tool_error(
                 format!("unknown Yeet tool: {name}"),
@@ -587,20 +592,85 @@ impl McpServer {
             Err(error) => return Ok(tool_error(error.to_string(), None, modern)),
         };
         let workspace_text = workspace.display().to_string();
-        let execution_name = match name {
-            "desktop_control" => "computer_use",
-            "desktop_control_reset" => "computer_use_reset",
-            _ => name,
-        };
-        let result = match name {
-            "sandbox_get" => sandbox_get(&workspace, arguments),
-            "sandbox_configure" => sandbox_configure(&workspace, arguments),
-            "activate_capability" => crate::skyline::activate(&workspace, arguments),
-            "invoke_capability" => crate::skyline::invoke(&workspace, arguments),
-            _ => self
-                .runtime(workspace)
-                .and_then(|runtime| runtime.execute(execution_name, arguments)),
-        };
+        if name == "read_file" && arguments.contains_key("requests") {
+            return Ok(tool_error(
+                "read_file accepts exactly one file per MCP call; use path with an optional line range",
+                Some(&workspace_text),
+                modern,
+            ));
+        }
+        let mut execution_name = name.to_owned();
+        if name == "run_shell" {
+            let job = arguments.remove("job");
+            let has_command = arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| !command.trim().is_empty());
+            match (has_command, job) {
+                (true, None) => {}
+                (false, Some(Value::Object(job))) => {
+                    arguments = job;
+                    execution_name = "shell_job".into();
+                }
+                (false, Some(_)) => {
+                    return Ok(tool_error(
+                        "run_shell job must be an object",
+                        Some(&workspace_text),
+                        modern,
+                    ));
+                }
+                _ => {
+                    return Ok(tool_error(
+                        "run_shell requires exactly one of command or job",
+                        Some(&workspace_text),
+                        modern,
+                    ));
+                }
+            }
+        } else if name == "web" {
+            let action = arguments
+                .remove("action")
+                .and_then(|value| value.as_str().map(str::to_owned));
+            execution_name = match action.as_deref() {
+                Some("search") => "web_search".into(),
+                Some("read") => "web_read".into(),
+                _ => {
+                    return Ok(tool_error(
+                        "web action must be search or read",
+                        Some(&workspace_text),
+                        modern,
+                    ));
+                }
+            };
+        }
+
+        if name == "computer_use" {
+            let reset = match arguments.remove("reset") {
+                None => false,
+                Some(Value::Bool(value)) => value,
+                Some(_) => {
+                    return Ok(tool_error(
+                        "computer_use reset must be a boolean",
+                        Some(&workspace_text),
+                        modern,
+                    ));
+                }
+            };
+            let has_code = arguments.get("code").and_then(Value::as_str).is_some();
+            if reset == has_code {
+                return Ok(tool_error(
+                    "computer_use requires exactly one of code or reset=true",
+                    Some(&workspace_text),
+                    modern,
+                ));
+            }
+            if reset {
+                execution_name = "computer_use_reset".into();
+            }
+        }
+        let result = self
+            .runtime(workspace)
+            .and_then(|runtime| runtime.execute(&execution_name, arguments));
         Ok(match result {
             Ok(output) => tool_success(output, &workspace_text, modern),
             Err(error) => tool_error(error.to_string(), Some(&workspace_text), modern),
@@ -630,259 +700,9 @@ impl McpServer {
     }
 }
 
-fn sandbox_get(workspace: &Path, arguments: Map<String, Value>) -> Result<String> {
-    if let Some(key) = arguments.keys().next() {
-        bail!("unknown sandbox_get argument: {key}");
-    }
-    let store = SandboxStore::new(workspace)?;
-    store.render(&store.load()?)
-}
-
-fn sandbox_configure(workspace: &Path, arguments: Map<String, Value>) -> Result<String> {
-    const ALLOWED: &[&str] = &[
-        "reset",
-        "mode",
-        "autoApprove",
-        "scratchWritable",
-        "workspaceRead",
-        "networkAllow",
-        "environment",
-        "secretIDs",
-        "limits",
-    ];
-    if let Some(key) = arguments
-        .keys()
-        .find(|key| !ALLOWED.contains(&key.as_str()))
-    {
-        bail!("unknown sandbox_configure argument: {key}");
-    }
-    if arguments.is_empty() {
-        bail!("sandbox_configure requires at least one setting");
-    }
-
-    let store = SandboxStore::new(workspace)?;
-    let reset = optional_bool_value(&arguments, "reset")?.unwrap_or(false);
-    let mut policy = if reset {
-        SandboxPolicy::default()
-    } else {
-        store.load()?
-    };
-
-    if let Some(mode) = arguments.get("mode") {
-        policy.mode = match mode.as_str() {
-            Some("sandboxed") => SandboxMode::Sandboxed,
-            Some("unlimited") => SandboxMode::Unlimited,
-            _ => bail!("mode must be sandboxed or unlimited"),
-        };
-    }
-    if let Some(value) = optional_bool_value(&arguments, "autoApprove")? {
-        policy.auto_approve = value;
-    }
-    if let Some(value) = optional_bool_value(&arguments, "scratchWritable")? {
-        policy.scratch_writable = value;
-    }
-    if let Some(value) = arguments.get("workspaceRead") {
-        policy.workspace_read = parse_workspace_read(value)?;
-    }
-    if let Some(value) = arguments.get("networkAllow") {
-        policy.network_allow = parse_network_allow(value)?;
-        policy.normalize_network();
-    }
-    if let Some(value) = arguments.get("environment") {
-        policy.environment = parse_environment(value)?;
-    }
-    if let Some(value) = arguments.get("secretIDs") {
-        policy.secret_ids = parse_secret_ids(value)?;
-    }
-    if let Some(value) = arguments.get("limits") {
-        apply_limits_patch(&mut policy, value)?;
-    }
-
-    if reset && arguments.len() == 1 {
-        store.reset()?;
-        return store.render(&SandboxPolicy::default());
-    }
-    store.save(&policy)?;
-    store.render(&policy)
-}
-
-fn optional_bool_value(arguments: &Map<String, Value>, key: &str) -> Result<Option<bool>> {
-    let Some(value) = arguments.get(key) else {
-        return Ok(None);
-    };
-    value
-        .as_bool()
-        .map(Some)
-        .ok_or_else(|| anyhow!("{key} must be a boolean"))
-}
-
-fn parse_workspace_read(value: &Value) -> Result<WorkspaceRead> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow!("workspaceRead must be an object"))?;
-    if let Some(key) = object
-        .keys()
-        .find(|key| !matches!(key.as_str(), "mode" | "paths"))
-    {
-        bail!("unknown workspaceRead field: {key}");
-    }
-    let mode = object
-        .get("mode")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("workspaceRead.mode is required"))?;
-    match mode {
-        "none" => {
-            if object.contains_key("paths") {
-                bail!("workspaceRead.paths is only valid when mode=paths");
-            }
-            Ok(WorkspaceRead::None)
-        }
-        "all" => {
-            if object.contains_key("paths") {
-                bail!("workspaceRead.paths is only valid when mode=paths");
-            }
-            Ok(WorkspaceRead::All)
-        }
-        "paths" => {
-            let paths = object
-                .get("paths")
-                .and_then(Value::as_array)
-                .ok_or_else(|| anyhow!("workspaceRead.paths is required when mode=paths"))?;
-            if paths.is_empty() {
-                bail!("workspaceRead.paths must not be empty");
-            }
-            let mut values = BTreeSet::new();
-            for path in paths {
-                let path = path
-                    .as_str()
-                    .ok_or_else(|| anyhow!("workspaceRead.paths entries must be strings"))?;
-                values.insert(validate_relative_path(path)?);
-            }
-            Ok(WorkspaceRead::Paths(values))
-        }
-        _ => bail!("workspaceRead.mode must be none, all, or paths"),
-    }
-}
-
-fn parse_network_allow(value: &Value) -> Result<BTreeSet<NetworkEndpoint>> {
-    let items = value
-        .as_array()
-        .ok_or_else(|| anyhow!("networkAllow must be an array"))?;
-    let mut endpoints = BTreeSet::new();
-    for item in items {
-        let object = item
-            .as_object()
-            .ok_or_else(|| anyhow!("networkAllow entries must be objects"))?;
-        if let Some(key) = object
-            .keys()
-            .find(|key| !matches!(key.as_str(), "host" | "port"))
-        {
-            bail!("unknown networkAllow field: {key}");
-        }
-        let host = object
-            .get("host")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("networkAllow.host is required"))?;
-        let port = match object.get("port") {
-            None | Some(Value::Null) => None,
-            Some(value) => {
-                let raw = value
-                    .as_u64()
-                    .ok_or_else(|| anyhow!("networkAllow.port must be an integer or null"))?;
-                let port =
-                    u16::try_from(raw).map_err(|_| anyhow!("invalid network port: {raw}"))?;
-                if port == 0 {
-                    bail!("invalid network port: 0");
-                }
-                Some(port)
-            }
-        };
-        endpoints.insert(NetworkEndpoint::new(host, port)?);
-    }
-    Ok(endpoints)
-}
-
-fn parse_environment(value: &Value) -> Result<BTreeMap<String, String>> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow!("environment must be an object of string values"))?;
-    let mut environment = BTreeMap::new();
-    for (key, value) in object {
-        let value = value
-            .as_str()
-            .ok_or_else(|| anyhow!("environment values must be strings"))?;
-        environment.insert(key.clone(), value.to_owned());
-    }
-    validate_environment(&environment)?;
-    Ok(environment)
-}
-
-fn parse_secret_ids(value: &Value) -> Result<BTreeSet<String>> {
-    let values = value
-        .as_array()
-        .ok_or_else(|| anyhow!("secretIDs must be an array"))?;
-    let mut ids = BTreeSet::new();
-    for value in values {
-        let id = value
-            .as_str()
-            .ok_or_else(|| anyhow!("secretIDs entries must be strings"))?;
-        validate_secret_id(id)?;
-        ids.insert(id.to_owned());
-    }
-    Ok(ids)
-}
-
-fn apply_limits_patch(policy: &mut SandboxPolicy, value: &Value) -> Result<()> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow!("limits must be an object"))?;
-    if object.is_empty() {
-        bail!("limits must contain at least one field");
-    }
-    const ALLOWED: &[&str] = &[
-        "wallTimeSeconds",
-        "maxStdoutBytes",
-        "maxStderrBytes",
-        "maxMemoryBytes",
-        "maxProcesses",
-    ];
-    if let Some(key) = object.keys().find(|key| !ALLOWED.contains(&key.as_str())) {
-        bail!("unknown limits field: {key}");
-    }
-    if let Some(value) = object.get("wallTimeSeconds") {
-        policy.limits.wall_time_seconds = required_u64(value, "limits.wallTimeSeconds")?;
-    }
-    if let Some(value) = object.get("maxStdoutBytes") {
-        policy.limits.max_stdout_bytes = required_usize(value, "limits.maxStdoutBytes")?;
-    }
-    if let Some(value) = object.get("maxStderrBytes") {
-        policy.limits.max_stderr_bytes = required_usize(value, "limits.maxStderrBytes")?;
-    }
-    if let Some(value) = object.get("maxMemoryBytes") {
-        policy.limits.max_memory_bytes = required_u64(value, "limits.maxMemoryBytes")?;
-    }
-    if let Some(value) = object.get("maxProcesses") {
-        policy.limits.max_processes = required_usize(value, "limits.maxProcesses")?;
-    }
-    policy.limits.validate()
-}
-
-fn required_u64(value: &Value, field: &str) -> Result<u64> {
-    value
-        .as_u64()
-        .ok_or_else(|| anyhow!("{field} must be a non-negative integer"))
-}
-
-fn required_usize(value: &Value, field: &str) -> Result<usize> {
-    let value = required_u64(value, field)?;
-    usize::try_from(value).map_err(|_| anyhow!("{field} is too large"))
-}
-
 impl Drop for McpServer {
     fn drop(&mut self) {
-        if let Some(bridge) = self.bridge.take() {
-            bridge.shutdown();
-        }
+        self.bridge.shutdown();
     }
 }
 
@@ -924,7 +744,7 @@ fn discover_result() -> Value {
         "supportedVersions": [MODERN_PROTOCOL_VERSION],
         "capabilities": {"tools": {}},
         "_meta": server_meta(),
-        "instructions": "Yeet exposes its native tools directly over MCP. No Yeet agent turn is started. Every tool accepts workspace to select the project directory for that call; omitting it uses the server default workspace. Tool state such as file snapshots, artifacts, and background shell jobs is isolated per workspace. sandbox_get and sandbox_configure read or update the same per-workspace .yeet/sandbox.json policy used by Yeet CLI and TUI.",
+        "instructions": "Yeet exposes a small native work surface directly over MCP. No Yeet agent turn is started and the server does not rewrite the client's conversation context. Every tool accepts workspace to select the project directory for that call; omitting it uses the server default workspace. Artifact, memory, session-management, sandbox-management, capability-management, and compatibility-alias tools are intentionally not exported. MCP runtimes do not create Yeet artifacts.",
         "ttlMs": TOOL_LIST_TTL_MS,
         "cacheScope": "public"
     })
@@ -935,15 +755,13 @@ fn initialize_result(params: Option<&Value>) -> Value {
         .and_then(|value| value.get("protocolVersion"))
         .and_then(Value::as_str);
     let protocol = requested
-        .filter(|value| {
-            *value == MODERN_PROTOCOL_VERSION || LEGACY_PROTOCOL_VERSIONS.contains(value)
-        })
+        .filter(|value| protocol_version_supported(value))
         .unwrap_or(LEGACY_PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": protocol,
         "capabilities": {"tools": {}},
         "serverInfo": {"name":"yeet","version":env!("CARGO_PKG_VERSION")},
-        "instructions": "Yeet exposes its native file, shell, document, data, web, session, artifact, and project-memory tools directly. Pass workspace on a tool call to select its project directory."
+        "instructions": "Yeet exposes exactly five core MCP tools: read_file, apply_file_edits, run_shell, computer_use, and web. Pass workspace on a tool call to select its project directory. run_shell also manages detached jobs; web handles both search and source reads. Artifact storage and Yeet administrative/state-management tools are not part of the MCP surface."
     })
 }
 
@@ -985,82 +803,10 @@ fn modernize_result(result: &mut Value) {
 }
 
 fn tool_definitions() -> Vec<Value> {
-    let mut tools = direct_mcp_tool_definitions()
+    direct_mcp_tool_definitions()
         .into_iter()
-        .chain(crate::skyline::direct_mcp_tool_definitions())
         .map(export_tool_definition)
-        .collect::<Vec<_>>();
-    tools.push(sandbox_get_definition());
-    tools.push(sandbox_configure_definition());
-    tools
-}
-
-fn sandbox_get_definition() -> Value {
-    json!({
-        "name":"sandbox_get",
-        "description":"Read the selected workspace's current Yeet sandbox policy from .yeet/sandbox.json. Omit workspace to use the MCP server default workspace.",
-        "inputSchema":{
-            "type":"object",
-            "properties":{"workspace":workspace_property()},
-            "additionalProperties":false
-        },
-        "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
-    })
-}
-
-fn sandbox_configure_definition() -> Value {
-    json!({
-        "name":"sandbox_configure",
-        "description":"Partially update or reset the selected workspace's Yeet sandbox policy. Changes persist to the same .yeet/sandbox.json used by Yeet CLI and TUI and apply to later MCP tool calls in that workspace.",
-        "inputSchema":{
-            "type":"object",
-            "properties":{
-                "workspace":workspace_property(),
-                "reset":{"type":"boolean","description":"Start from Yeet's default sandbox policy before applying other supplied fields. If used alone, remove the persisted sandbox file."},
-                "mode":{"type":"string","enum":["sandboxed","unlimited"]},
-                "autoApprove":{"type":"boolean"},
-                "scratchWritable":{"type":"boolean"},
-                "workspaceRead":{
-                    "type":"object",
-                    "properties":{
-                        "mode":{"type":"string","enum":["none","all","paths"]},
-                        "paths":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
-                    },
-                    "required":["mode"],
-                    "additionalProperties":false
-                },
-                "networkAllow":{
-                    "type":"array",
-                    "items":{
-                        "type":"object",
-                        "properties":{
-                            "host":{"type":"string","minLength":1},
-                            "port":{"oneOf":[{"type":"integer","minimum":1,"maximum":65535},{"type":"null"}]}
-                        },
-                        "required":["host"],
-                        "additionalProperties":false
-                    }
-                },
-                "environment":{"type":"object","additionalProperties":{"type":"string"}},
-                "secretIDs":{"type":"array","items":{"type":"string","minLength":1}},
-                "limits":{
-                    "type":"object",
-                    "minProperties":1,
-                    "properties":{
-                        "wallTimeSeconds":{"type":"integer","minimum":1,"maximum":86400},
-                        "maxStdoutBytes":{"type":"integer","minimum":1,"maximum":67108864},
-                        "maxStderrBytes":{"type":"integer","minimum":1,"maximum":67108864},
-                        "maxMemoryBytes":{"type":"integer","minimum":67108864,"maximum":34_359_738_368u64},
-                        "maxProcesses":{"type":"integer","minimum":1,"maximum":1024}
-                    },
-                    "additionalProperties":false
-                }
-            },
-            "additionalProperties":false,
-            "minProperties":1
-        },
-        "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
-    })
+        .collect()
 }
 
 fn workspace_property() -> Value {
@@ -1072,6 +818,7 @@ fn workspace_property() -> Value {
 }
 
 fn export_tool_definition(tool: ToolDefinition) -> Value {
+    let name = tool.name.clone();
     let mut schema = Value::Object(tool.input_schema);
     if let Some(schema_object) = schema.as_object_mut() {
         let properties = schema_object
@@ -1079,14 +826,39 @@ fn export_tool_definition(tool: ToolDefinition) -> Value {
             .or_insert_with(|| json!({}));
         if let Some(properties) = properties.as_object_mut() {
             properties.insert("workspace".into(), workspace_property());
+            if name == "computer_use" {
+                properties.insert(
+                    "reset".into(),
+                    json!({
+                        "type":"boolean",
+                        "description":"Reset the persistent Computer Use JavaScript session. Use reset=true without code."
+                    }),
+                );
+            }
+        }
+        if name == "computer_use" {
+            schema_object.remove("required");
+            schema_object.insert(
+                "anyOf".into(),
+                json!([
+                    {"required":["code"]},
+                    {"properties":{"reset":{"const":true}},"required":["reset"]}
+                ]),
+            );
         }
     }
-    let description = format!(
-        "{} Workspace can be selected per call with the workspace argument.",
-        tool.description.unwrap_or_default()
-    );
+    let base_description = tool.description.unwrap_or_default();
+    let description = if name == "computer_use" {
+        format!(
+            "{base_description} Pass reset=true without code to reset persistent JavaScript bindings. Workspace can be selected per call with the workspace argument."
+        )
+    } else {
+        format!(
+            "{base_description} Workspace can be selected per call with the workspace argument."
+        )
+    };
     json!({
-        "name": tool.name,
+        "name": name,
         "description": description,
         "inputSchema": schema,
         "annotations": tool_annotations(&tool.name),
@@ -1094,44 +866,9 @@ fn export_tool_definition(tool: ToolDefinition) -> Value {
 }
 
 fn tool_annotations(name: &str) -> Value {
-    let read_only = matches!(
-        name,
-        "read_file"
-            | "list_files"
-            | "search_workspace"
-            | "read_document"
-            | "analyze_data"
-            | "artifact_info"
-            | "read_artifact"
-            | "search_artifact"
-            | "list_sessions"
-            | "web_search"
-            | "web_read"
-            | "project_memory_recall"
-            | "project_memory_get"
-            | "project_memory_connections"
-    );
-    let destructive = matches!(
-        name,
-        "apply_file_edits"
-            | "run_shell"
-            | "shell_job"
-            | "export_session"
-            | "project_memory_remember"
-            | "project_memory_update"
-            | "project_memory_replace"
-            | "project_memory_forget"
-            | "project_memory_restore"
-            | "project_memory_relate"
-            | "computer_use"
-            | "desktop_control"
-            | "activate_capability"
-            | "invoke_capability"
-    );
-    let open_world = matches!(
-        name,
-        "run_shell" | "web_search" | "web_read" | "computer_use" | "desktop_control"
-    );
+    let read_only = matches!(name, "read_file" | "web");
+    let destructive = matches!(name, "apply_file_edits" | "run_shell" | "computer_use");
+    let open_world = matches!(name, "run_shell" | "web" | "computer_use");
     json!({
         "readOnlyHint": read_only,
         "destructiveHint": destructive,
@@ -1152,9 +889,258 @@ fn unsupported_protocol_error(id: Value, requested: &str) -> Value {
             "code":-32022,
             "message":format!("Unsupported protocol version: {requested}"),
             "data":{
-                "supported":[MODERN_PROTOCOL_VERSION],
+                "supported":supported_protocol_versions(),
                 "requested":requested
             }
         }
     })
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn direct_mcp_surface_is_minimal() {
+        let tools = tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "read_file",
+                "apply_file_edits",
+                "run_shell",
+                "computer_use",
+                "web",
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_mcp_read_file_is_single_file_only() {
+        let tools = tool_definitions();
+        let read_file = tools
+            .iter()
+            .find(|tool| tool["name"] == "read_file")
+            .expect("read_file tool");
+        let schema = &read_file["inputSchema"];
+        assert!(schema["properties"].get("requests").is_none());
+        assert_eq!(schema["required"], json!(["path"]));
+    }
+
+    #[test]
+    fn direct_mcp_rejects_read_file_batches_even_if_sent_raw() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut server = McpServer::new(directory.path().to_path_buf());
+        let response = server
+            .handle(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"tools/call",
+                "params":{
+                    "name":"read_file",
+                    "arguments":{
+                        "requests":[{"path":"a"},{"path":"b"}]
+                    }
+                }
+            }))
+            .expect("tools/call response");
+        assert_eq!(response["result"]["isError"], json!(true));
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("exactly one file per MCP call"))
+        );
+    }
+
+    #[test]
+    fn ordinary_file_call_does_not_start_provider_or_edit_sidecars() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("example.txt"), "hello\n").unwrap();
+        let workspace = directory.path().canonicalize().unwrap();
+        let mut server = McpServer::new(workspace.clone());
+        assert!(!server.bridge.is_started());
+
+        let response = server
+            .handle(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"tools/call",
+                "params":{
+                    "name":"read_file",
+                    "arguments":{"path":"example.txt"}
+                }
+            }))
+            .expect("tools/call response");
+        assert_eq!(response["result"]["isError"], json!(false), "{response}");
+        assert!(!server.bridge.is_started());
+        let runtime = server
+            .workspaces
+            .get(&workspace)
+            .expect("workspace runtime");
+        assert!(!runtime.registry.is_edit_started());
+    }
+
+    #[test]
+    fn edit_after_in_process_read_starts_edit_sidecar_only_when_needed() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("example.txt"), "hello\nworld\n").unwrap();
+        let workspace = directory.path().canonicalize().unwrap();
+        let mut server = McpServer::new(workspace.clone());
+        let read = server
+            .handle(json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"read_file","arguments":{"path":"example.txt","startLine":1,"endLine":1}}
+            }))
+            .expect("read response");
+        assert_eq!(read["result"]["isError"], json!(false), "{read}");
+        assert!(!server.workspaces[&workspace].registry.is_edit_started());
+
+        let edit = server
+            .handle(json!({
+                "jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"apply_file_edits","arguments":{"changes":[{
+                    "path":"example.txt",
+                    "edits":[{"kind":"replace","range":{"start":1,"end":1},"text":"hi"}]
+                }]}}
+            }))
+            .expect("edit response");
+        assert_eq!(edit["result"]["isError"], json!(false), "{edit}");
+        assert!(server.workspaces[&workspace].registry.is_edit_started());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("example.txt")).unwrap(),
+            "hi\nworld\n"
+        );
+    }
+
+    #[test]
+    fn lazy_edit_rehydration_rejects_file_changed_after_read() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("example.txt"), "hello\nworld\n").unwrap();
+        let workspace = directory.path().canonicalize().unwrap();
+        let mut server = McpServer::new(workspace.clone());
+        let read = server
+            .handle(json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"read_file","arguments":{"path":"example.txt","startLine":1,"endLine":1}}
+            }))
+            .expect("read response");
+        assert_eq!(read["result"]["isError"], json!(false), "{read}");
+        assert!(!server.workspaces[&workspace].registry.is_edit_started());
+
+        std::fs::write(workspace.join("example.txt"), "changed\nworld\n").unwrap();
+        let edit = server
+            .handle(json!({
+                "jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"apply_file_edits","arguments":{"changes":[{
+                    "path":"example.txt",
+                    "edits":[{"kind":"replace","range":{"start":1,"end":1},"text":"hi"}]
+                }]}}
+            }))
+            .expect("edit response");
+        assert_eq!(edit["result"]["isError"], json!(true), "{edit}");
+        assert!(
+            edit["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("changed after it was read")),
+            "{edit}"
+        );
+        assert!(!server.workspaces[&workspace].registry.is_edit_started());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("example.txt")).unwrap(),
+            "changed\nworld\n"
+        );
+    }
+
+    #[test]
+    fn lazy_edit_rehydration_preserves_seen_line_enforcement() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("example.txt"), "hello\nworld\n").unwrap();
+        let workspace = directory.path().canonicalize().unwrap();
+        let mut server = McpServer::new(workspace.clone());
+        let read = server
+            .handle(json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"read_file","arguments":{"path":"example.txt","startLine":1,"endLine":1}}
+            }))
+            .expect("read response");
+        assert_eq!(read["result"]["isError"], json!(false), "{read}");
+
+        let edit = server
+            .handle(json!({
+                "jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"apply_file_edits","arguments":{"changes":[{
+                    "path":"example.txt",
+                    "edits":[{"kind":"replace","range":{"start":2,"end":2},"text":"changed"}]
+                }]}}
+            }))
+            .expect("edit response");
+        assert_eq!(edit["result"]["isError"], json!(true), "{edit}");
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("example.txt")).unwrap(),
+            "hello\nworld\n"
+        );
+    }
+
+    #[test]
+    fn legacy_protocol_header_is_accepted_after_initialize() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut server = McpServer::new(directory.path().to_path_buf());
+
+        for version in LEGACY_PROTOCOL_VERSIONS {
+            let response = server
+                .handle(json!({
+                    "jsonrpc":"2.0",
+                    "id":1,
+                    "method":"tools/list",
+                    "params":{
+                        "_meta":{
+                            "io.modelcontextprotocol/protocolVersion":version
+                        }
+                    }
+                }))
+                .expect("tools/list response");
+            assert!(
+                response.get("error").is_none(),
+                "legacy protocol {version} was rejected: {response}"
+            );
+            assert!(response["result"]["tools"].is_array());
+        }
+    }
+
+    #[test]
+    fn unsupported_protocol_error_advertises_all_supported_versions() {
+        let response = unsupported_protocol_error(json!(1), "2099-01-01");
+        let supported = response["error"]["data"]["supported"]
+            .as_array()
+            .expect("supported versions");
+        for version in supported_protocol_versions() {
+            assert!(
+                supported
+                    .iter()
+                    .any(|value| value.as_str() == Some(version))
+            );
+        }
+    }
+
+    #[test]
+    fn computer_use_exports_inline_reset_instead_of_a_reset_tool() {
+        let tools = tool_definitions();
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool["name"] != "computer_use_reset")
+        );
+        let computer = tools
+            .iter()
+            .find(|tool| tool["name"] == "computer_use")
+            .expect("computer_use tool");
+        assert_eq!(
+            computer["inputSchema"]["properties"]["reset"]["type"],
+            json!("boolean")
+        );
+    }
 }

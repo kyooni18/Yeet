@@ -72,6 +72,7 @@ export function rebaseEdits(previousText: string, currentText: string, edits: re
   const current = addressableLines(currentText);
   const mapped: ConcreteEdit[] = [];
   const offsets: number[] = [];
+  const relocations: Array<{ before: LineRange; after: LineRange }> = [];
 
   for (const edit of edits) {
     const anchor = anchorRange(edit);
@@ -82,7 +83,21 @@ export function rebaseEdits(previousText: string, currentText: string, edits: re
     const located = locateRange(previous, current, anchor);
     if (!located) return null;
     offsets.push(located.start - anchor.start);
+    relocations.push({ before: anchor, after: located });
     mapped.push(remapEdit(edit, located));
+  }
+
+  // Different edits may move by different amounts when unrelated text is
+  // inserted between them. Accept that only when every target was uniquely
+  // re-identified and their original ordering remains intact.
+  const ordered = [...relocations].sort((lhs, rhs) => lhs.before.start - rhs.before.start || lhs.before.end - rhs.before.end);
+  for (let index = 1; index < ordered.length; index++) {
+    const previousRange = ordered[index - 1]!;
+    const currentRange = ordered[index]!;
+    if (previousRange.before.end < currentRange.before.start
+      && previousRange.after.end >= currentRange.after.start) {
+      return null;
+    }
   }
 
   if (offsets.length === 0) {
@@ -92,14 +107,17 @@ export function rebaseEdits(previousText: string, currentText: string, edits: re
       warning: "The file changed after the snapshot, but the requested edits only target file boundaries.",
     };
   }
+
   const first = offsets[0]!;
-  if (!offsets.every(offset => offset === first)) return null;
+  const commonOffset = offsets.every(offset => offset === first) ? first : null;
   return {
     edits: mapped,
-    offset: first,
-    warning: first === 0
-      ? "The file changed after the snapshot; unchanged edit anchors were revalidated against the live file."
-      : `The file changed after the snapshot; edit anchors were conservatively rebased by ${first > 0 ? "+" : ""}${first} lines.`,
+    offset: commonOffset,
+    warning: commonOffset === null
+      ? "The file changed after the snapshot; each unchanged edit target was independently revalidated against the live file."
+      : commonOffset === 0
+        ? "The file changed after the snapshot; unchanged edit anchors were revalidated against the live file."
+        : `The file changed after the snapshot; edit anchors were conservatively rebased by ${commonOffset > 0 ? "+" : ""}${commonOffset} lines.`,
   };
 }
 

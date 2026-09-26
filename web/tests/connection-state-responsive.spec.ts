@@ -7,16 +7,17 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('phone keeps offline state visible without opening secondary UI', async ({ page }) => {
+test('phone exposes offline state without opening secondary UI', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.evaluate(() => window.dispatchEvent(new Event('offline')))
 
-  await expect(page.getByRole('status')).toContainText('Offline')
-  await expect(page.getByRole('button', { name: /Connection: offline/ })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled()
+  const status = page.getByRole('status')
+  await expect(status).toBeVisible()
+  await expect(status).toContainText('Offline')
+  await expect(page.getByRole('button', { name: 'Send' })).toBeDisabled()
 })
 
-test('fatal transport failure exposes the actual reason instead of only a generic failure', async ({ page }) => {
+test('fatal transport failure exposes the protocol reason as an alert', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.evaluate(() => {
     const emit = (window as unknown as { __yeetEmit: (message: Record<string, unknown>) => void }).__yeetEmit
@@ -28,14 +29,12 @@ test('fatal transport failure exposes the actual reason instead of only a generi
     })
   })
 
-  const failure = page.getByRole('alert')
-  await expect(failure).toContainText('Connection failed')
+  const failure = page.getByRole('alert', { name: 'Connection failed' })
+  await expect(failure).toBeVisible()
   await expect(failure).toContainText('protocol_mismatch: Server requires Remote protocol v2.')
-  await expect(page.getByRole('button', { name: /Connection: failed/ })).toBeVisible()
 })
 
 test('connected phone stays visually quiet', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await expect(page.locator('.connection-banner')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /Connection: connected/ })).toBeHidden()
+  await expect(page.locator('.connection-toast')).toHaveCount(0)
 })

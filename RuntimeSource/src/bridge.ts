@@ -150,34 +150,7 @@ async function usageWithEstimatedCost(
       };
 }
 
-async function compactionContextLength(model: string): Promise<number | undefined> {
-  const parsed = parseModelId(model);
-  // An OpenAI-compatible custom endpoint may not implement /models at all,
-  // and model discovery must never sit on the critical path of a completion.
-  // Unknown windows simply disable LLM compaction; deterministic tool-history
-  // thinning still runs for every request.
-  if (customProviders.has(parsed.provider)) {
-    // Do not put a custom provider's optional /models endpoint on the critical
-    // completion path. The shared catalog can still resolve many compatible
-    // model ids without touching that endpoint.
-    try { return await modelMetadata.contextLength(model); }
-    catch { return undefined; }
-  }
-  return contextLength(model);
-}
-
-const harnessCapabilities = createRequestCapabilityRegistry({
-  contextLength: compactionContextLength,
-  complete: async (request) => {
-    await refreshProvider(parseModelId(request.model).provider);
-    const costAware = await costAwareRequest(request);
-    const prepared = withReasoningPolicy(costAware);
-    await refreshProvider(parseModelId(prepared.model).provider);
-    const result = await core.complete(prepared);
-    const usage = await usageWithEstimatedCost(prepared, result.usage);
-    return { ...result, ...(usage ? { usage } : {}) };
-  },
-});
+const harnessCapabilities = createRequestCapabilityRegistry();
 
 function write(message: BridgeMessage): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -281,6 +254,13 @@ async function refreshProvider(providerId: string): Promise<void> {
         apiCallLogger: writeApiCallLog,
       }));
       return;
+    case "claude-api":
+      core.register(new AnthropicProvider({
+        id: "claude-api",
+        ...apiKeyOption(credential),
+        apiCallLogger: writeApiCallLog,
+      }));
+      return;
     case "gemini":
       core.register(new GeminiProvider(
         credential?.kind === "oauth"
@@ -291,6 +271,7 @@ async function refreshProvider(providerId: string): Promise<void> {
     case "gemini-web":
       core.register(new GeminiProvider({
         id: "gemini-web",
+        codeAssist: true,
         ...(credential?.kind === "oauth" ? { accessToken: credential.accessToken } : {}),
         ...(credential?.kind === "oauth" && credential.projectId ? { projectId: credential.projectId } : {}),
         apiCallLogger: writeApiCallLog,
@@ -320,6 +301,7 @@ async function refreshProvider(providerId: string): Promise<void> {
 }
 
 for (const provider of ["openai", "codex-cli", "anthropic", "claude", "gemini", "gemini-web", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
+for (const provider of ["claude-api"]) await refreshProvider(provider);
 for (const provider of await auth.listCustomProviders()) {
   customProviders.set(provider.id, { kind: "openai-compatible", ...provider });
   await refreshProvider(provider.id);
@@ -670,6 +652,9 @@ async function handle(command: BridgeCommand): Promise<void> {
     case "mcp-set-server":
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-server", server: await mcp.setServer(command.server) });
       return;
+    case "mcp-set-runtime-server":
+      write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-server", server: await mcp.setRuntimeServer(command.server) });
+      return;
     case "mcp-remove-server":
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-removed", removed: await mcp.removeServer(command.server) });
       return;
@@ -752,11 +737,24 @@ input.on("close", () => {
   void mcp.close().finally(() => process.exit(0));
 });
 
+let fatalErrorHandled = false;
+function terminateAfterFatalError(label: string, reason: unknown): void {
+  // An uncaught exception leaves the event loop running when a handler only
+  // sets exitCode. If the failing callback is scheduled repeatedly, that
+  // turns into a tight loop and can consume an entire CPU core indefinitely.
+  if (fatalErrorHandled) return;
+  fatalErrorHandled = true;
+  const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  try {
+    process.stderr.write(`harness-call-core bridge ${label}: ${detail}\n`);
+  } finally {
+    process.exit(1);
+  }
+}
+
 process.on("uncaughtException", (error) => {
-  process.stderr.write(`harness-call-core bridge uncaughtException: ${error.stack ?? error.message}\n`);
-  process.exitCode = 1;
+  terminateAfterFatalError("uncaughtException", error);
 });
 process.on("unhandledRejection", (reason) => {
-  process.stderr.write(`harness-call-core bridge unhandledRejection: ${String(reason)}\n`);
-  process.exitCode = 1;
+  terminateAfterFatalError("unhandledRejection", reason);
 });

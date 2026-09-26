@@ -62,6 +62,9 @@ impl ToolRegistry {
         tool_name: &str,
         content: String,
     ) -> Result<(String, bool)> {
+        if !self.artifacts_enabled {
+            return Ok((content, false));
+        }
         artifact_output::externalize_model_visible_tool_output(&self.artifacts, tool_name, content)
     }
 
@@ -73,6 +76,10 @@ impl ToolRegistry {
         content: String,
         budget: &mut ModelVisibleToolOutputRoundBudget,
     ) -> Result<(String, bool)> {
+        if !self.artifacts_enabled {
+            budget.observe(content.len());
+            return Ok((content, false));
+        }
         let limit = budget.next_limit();
         let result = artifact_output::externalize_model_visible_tool_output_with_limit(
             &self.artifacts,
