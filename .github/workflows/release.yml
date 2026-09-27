@@ -134,17 +134,23 @@ jobs:
       - name: Update Homebrew tap
         shell: bash
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
-            echo "::notice::HOMEBREW_TAP_TOKEN is not configured; skipping Homebrew tap update."
-            exit 0
+          if [ -z "${HOMEBREW_TAP_DEPLOY_KEY:-}" ]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not configured; cannot update the Homebrew tap."
+            exit 1
           fi
 
-          export GH_TOKEN="$HOMEBREW_TAP_TOKEN"
-          gh auth setup-git
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$HOME/.ssh/yeet-homebrew-tap"
+          chmod 600 "$HOME/.ssh/yeet-homebrew-tap"
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/yeet-homebrew-tap -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+
           rm -rf target/homebrew/tap
-          gh repo clone kyooni18/homebrew-tap target/homebrew/tap -- --depth 1
+          git clone --depth 1 git@github.com:kyooni18/homebrew-tap.git target/homebrew/tap
           mkdir -p target/homebrew/tap/Formula
           cp target/homebrew/Formula/yeet.rb target/homebrew/tap/Formula/yeet.rb
 
@@ -157,4 +163,4 @@ jobs:
           fi
           git add Formula/yeet.rb
           git commit -m "yeet $GITHUB_REF_NAME"
-          git push
+          git push origin HEAD:main
