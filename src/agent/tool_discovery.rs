@@ -147,6 +147,10 @@ impl ToolDiscovery {
     pub fn promote_for_input(&mut self, input: &str) {
         let value = input.trim().to_ascii_lowercase();
 
+        if super::policy::looks_like_implementation_request(input) {
+            self.load(["apply_file_edits"]);
+        }
+
         if [
             "session",
             "sessions",
@@ -397,6 +401,26 @@ mod tests {
         assert!(names.contains(&"list_sessions".to_owned()));
         assert!(names.contains(&"export_session".to_owned()));
         assert!(!names.contains(&SEARCH_TOOL.to_owned()));
+    }
+
+    #[test]
+    fn mutation_requests_attach_structured_file_edits() {
+        let catalog = vec![
+            tool("read_file"),
+            tool("search_workspace"),
+            tool("run_shell"),
+            tool("apply_file_edits"),
+        ];
+        for input in ["write notes.txt", "edit README.md"] {
+            let mut discovery = ToolDiscovery::agent();
+            discovery.promote_for_input(input);
+            let names = discovery
+                .attached(&catalog)
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>();
+            assert!(names.contains(&"apply_file_edits".to_owned()), "{input}");
+        }
     }
 
     #[test]

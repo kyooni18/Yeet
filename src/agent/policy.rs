@@ -940,6 +940,9 @@ pub(super) fn looks_like_implementation_request(input: &str) -> bool {
                 .any(|prefix| value == *prefix || value.starts_with(&format!("{prefix} "))));
     let mutation = [
         "fix",
+        "edit",
+        "modify",
+        "rename",
         "implement",
         "add",
         "remove",
