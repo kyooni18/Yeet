@@ -49,6 +49,7 @@ mod commands;
 mod debate_context;
 mod debate_runtime;
 mod events;
+mod input_context;
 mod lifecycle;
 mod settings;
 mod settings_support;
@@ -61,6 +62,10 @@ use debate_context::{debate_project_brief, discover_debate_subject};
 use events::{
     agent_event_log_value, apply_agent_event, commit_session_write, persist_locked,
     prepare_session_write_locked, record_usage,
+};
+use input_context::{
+    REMOTE_FILE_CONTEXT_CLOSE, REMOTE_FILE_CONTEXT_OPEN, split_remote_file_context,
+    visible_user_content,
 };
 use settings_support::{
     apply_sandbox_action, auth_login_options, finish_auth_action, finish_provider_action,
@@ -108,88 +113,6 @@ fn default_attached_harness(capabilities: &[HarnessCapabilityDescriptor]) -> Vec
 
 fn model_selection_changes(current: &str, next: &str) -> bool {
     current != next
-}
-
-const REMOTE_FILE_CONTEXT_OPEN: &str = "\n\n<yeet_remote_files>";
-const REMOTE_FILE_CONTEXT_CLOSE: &str = "</yeet_remote_files>";
-
-fn split_remote_file_context(input: &str) -> (&str, Option<&str>) {
-    if !input.ends_with(REMOTE_FILE_CONTEXT_CLOSE) {
-        return (input, None);
-    }
-    let Some(start) = input.rfind(REMOTE_FILE_CONTEXT_OPEN) else {
-        return (input, None);
-    };
-    let payload_start = start + REMOTE_FILE_CONTEXT_OPEN.len();
-    let payload_end = input.len() - REMOTE_FILE_CONTEXT_CLOSE.len();
-    if payload_start > payload_end {
-        return (input, None);
-    }
-    (&input[..start], Some(&input[payload_start..payload_end]))
-}
-
-fn remote_file_annotation(payload: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(payload).ok()?;
-    let files = value.get("files")?.as_array()?;
-    if files.is_empty() {
-        return None;
-    }
-
-    let names = files
-        .iter()
-        .filter_map(|file| file.get("name").and_then(Value::as_str))
-        .filter(|name| !name.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Some(format!(
-        "[{} file{}{}]",
-        files.len(),
-        if files.len() == 1 { "" } else { "s" },
-        if names.is_empty() {
-            String::new()
-        } else {
-            format!(": {names}")
-        }
-    ))
-}
-
-fn visible_user_content(input: &str, images: &[ImageAttachment]) -> String {
-    let (visible_input, file_payload) = split_remote_file_context(input);
-    let mut annotations = Vec::new();
-
-    if !images.is_empty() {
-        let names = images
-            .iter()
-            .filter_map(|image| image.name.as_deref())
-            .collect::<Vec<_>>()
-            .join(", ");
-        annotations.push(format!(
-            "[{} image{}{}]",
-            images.len(),
-            if images.len() == 1 { "" } else { "s" },
-            if names.is_empty() {
-                String::new()
-            } else {
-                format!(": {names}")
-            }
-        ));
-    }
-
-    if let Some(annotation) = file_payload.and_then(remote_file_annotation) {
-        annotations.push(annotation);
-    }
-
-    if annotations.is_empty() {
-        return visible_input.to_owned();
-    }
-
-    let annotations = annotations.join("\n");
-    if visible_input.is_empty() {
-        annotations
-    } else {
-        format!("{visible_input}\n{annotations}")
-    }
 }
 
 fn session_environment_mutation_allowed(is_streaming: bool) -> bool {
