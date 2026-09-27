@@ -23,9 +23,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: node Scripts/verify-release-version.mjs "$GITHUB_REF_NAME"
-      - run: cargo test --lib --bins
       - run: npm --prefix RuntimeSource ci
       - run: npm --prefix RuntimeSource run check
+      - run: cargo test --lib --bins
       - run: npm --prefix web ci
       - run: npm --prefix web run build
 
