@@ -908,30 +908,47 @@ pub fn start_remote_background(options: &RemoteOptions) -> Result<RemoteStatus> 
     )
 }
 
+fn remote_control_disconnected(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound
+            | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::UnexpectedEof
+    )
+}
+
 fn remote_control_request(command: &str) -> Result<Option<String>> {
     let paths = RemoteControlPaths::new()?;
     let mut stream = match connect_local(&paths.socket) {
         Ok(stream) => stream,
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound
-                    | io::ErrorKind::ConnectionRefused
-                    | io::ErrorKind::ConnectionReset
-            ) =>
-        {
-            return Ok(None);
-        }
+        Err(error) if remote_control_disconnected(&error) => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     stream.set_read_timeout(Some(REMOTE_CONTROL_TIMEOUT))?;
     stream.set_write_timeout(Some(REMOTE_CONTROL_TIMEOUT))?;
-    stream.write_all(command.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
-    stream.shutdown(Shutdown::Write)?;
+
+    if let Err(error) = (|| -> io::Result<()> {
+        stream.write_all(command.as_bytes())?;
+        stream.write_all(b"\n")?;
+        stream.flush()?;
+        stream.shutdown(Shutdown::Write)?;
+        Ok(())
+    })() {
+        if remote_control_disconnected(&error) {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+
     let mut response = String::new();
-    stream.read_to_string(&mut response)?;
+    if let Err(error) = stream.read_to_string(&mut response) {
+        if remote_control_disconnected(&error) {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
     Ok(Some(response.trim().to_owned()))
 }
 
