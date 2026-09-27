@@ -336,8 +336,7 @@ pub(crate) fn systemd_managed_process() -> bool {
     #[cfg(target_os = "linux")]
     {
         // systemd keeps descendants in the unit cgroup even after setsid().
-        return std::env::var_os("INVOCATION_ID").is_some()
-            || std::env::var_os("NOTIFY_SOCKET").is_some();
+        std::env::var_os("INVOCATION_ID").is_some() || std::env::var_os("NOTIFY_SOCKET").is_some()
     }
 
     #[cfg(not(target_os = "linux"))]

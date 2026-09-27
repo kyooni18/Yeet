@@ -33,21 +33,26 @@ fn main() -> io::Result<()> {
         generated,
         "pub(crate) fn webui_asset(path: &str) -> Option<EmbeddedWebAsset> {{"
     )?;
-    writeln!(generated, "    match path {{")?;
-    for (relative, absolute) in files {
-        let content_type = content_type(&relative);
-        let immutable = relative.starts_with("assets/");
-        writeln!(
-            generated,
-            "        {:?} => Some(EmbeddedWebAsset {{ bytes: include_bytes!({:?}), content_type: {:?}, immutable: {} }}),",
-            relative,
-            absolute.to_string_lossy(),
-            content_type,
-            immutable,
-        )?;
+    if files.is_empty() {
+        writeln!(generated, "    let _ = path;")?;
+        writeln!(generated, "    None")?;
+    } else {
+        writeln!(generated, "    match path {{")?;
+        for (relative, absolute) in files {
+            let content_type = content_type(&relative);
+            let immutable = relative.starts_with("assets/");
+            writeln!(
+                generated,
+                "        {:?} => Some(EmbeddedWebAsset {{ bytes: include_bytes!({:?}), content_type: {:?}, immutable: {} }}),",
+                relative,
+                absolute.to_string_lossy(),
+                content_type,
+                immutable,
+            )?;
+        }
+        writeln!(generated, "        _ => None,")?;
+        writeln!(generated, "    }}")?;
     }
-    writeln!(generated, "        _ => None,")?;
-    writeln!(generated, "    }}")?;
     writeln!(generated, "}}")?;
     Ok(())
 }
