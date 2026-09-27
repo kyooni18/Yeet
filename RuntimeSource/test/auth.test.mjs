@@ -31,9 +31,11 @@ test("AuthManager stores API keys under the yeet config directory with restricti
   assert.equal(status.method, "api-key");
   assert.deepEqual(await auth.resolve("openai"), { kind: "api-key", value: "sk-test", source: "stored" });
 
-  assert.equal((await stat(configDir)).mode & 0o777, 0o700);
-  assert.equal((await stat(path.join(configDir, "credentials.json"))).mode & 0o777, 0o600);
-  assert.equal((await stat(path.join(configDir, "config.json"))).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(configDir)).mode & 0o777, 0o700);
+    assert.equal((await stat(path.join(configDir, "credentials.json"))).mode & 0o777, 0o600);
+    assert.equal((await stat(path.join(configDir, "config.json"))).mode & 0o777, 0o600);
+  }
 });
 
 test("OpenAI API-key and Codex CLI OAuth credentials remain separate", async () => {

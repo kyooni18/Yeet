@@ -79,7 +79,7 @@ function processIsAlive(pid: number | undefined): boolean {
 async function atomicWriteJson(file: string, value: unknown): Promise<void> {
   const temporary = `${file}.tmp-${randomBytes(4).toString("hex")}`;
   await writeFile(temporary, JSON.stringify(value, null, 2), { mode: 0o600 });
-  const handle = await open(temporary, "r");
+  const handle = await open(temporary, process.platform === "win32" ? "r+" : "r");
   try { await handle.sync(); } finally { await handle.close(); }
   await rename(temporary, file);
 }
@@ -94,8 +94,13 @@ async function fsyncDir(directory: string): Promise<void> {
 }
 
 async function fsyncFile(file: string): Promise<void> {
-  const handle = await open(file, "r");
-  try { await handle.sync(); } finally { await handle.close(); }
+  try {
+    const handle = await open(file, process.platform === "win32" ? "r+" : "r");
+    try { await handle.sync(); } finally { await handle.close(); }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform !== "win32" || !["EPERM", "EACCES"].includes(code ?? "")) throw error;
+  }
 }
 
 async function createRollbackBackup(target: string, backup: string): Promise<void> {

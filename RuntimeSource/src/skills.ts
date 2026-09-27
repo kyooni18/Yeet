@@ -151,7 +151,7 @@ async function walkFiles(root: string, current = root): Promise<string[]> {
     if (entry.isSymbolicLink()) continue;
     const absolute = join(current, entry.name);
     if (entry.isDirectory()) files.push(...await walkFiles(root, absolute));
-    else if (entry.isFile()) files.push(relative(root, absolute));
+    else if (entry.isFile()) files.push(relative(root, absolute).split(sep).join("/"));
   }
   return files.sort();
 }
