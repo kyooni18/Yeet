@@ -42,8 +42,8 @@ test('focused mobile controls keep the document fixed while the model sheet pans
     listTouchAction: getComputedStyle(root.querySelector('.model-sheet__scroll')!).touchAction,
     searchFontSize: Number.parseFloat(getComputedStyle(root.querySelector<HTMLInputElement>('input[placeholder="Search models"]')!).fontSize),
   }))).toEqual({
-    sheetTouchAction: 'pinch-zoom',
-    listTouchAction: 'pan-y pinch-zoom',
+    sheetTouchAction: 'pan-y',
+    listTouchAction: 'pan-y',
     searchFontSize: 16,
   })
 

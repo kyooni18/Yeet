@@ -54,13 +54,15 @@ test('software keyboard keeps the iOS shell on the VisualViewport without steali
 
   const transcript = page.locator('.conversation-scroll')
   const textarea = page.getByRole('textbox', { name: 'Message' })
+  const fullHeight = page.viewportSize()!.height
+  const keyboardHeight = Math.min(430, Math.max(1, fullHeight - 120))
   await transcript.evaluate((element) => element.scrollTo({ top: element.scrollHeight }))
   await expect.poll(() => transcript.evaluate((element) =>
     Math.round(element.scrollHeight - element.scrollTop - element.clientHeight)
   )).toBeLessThanOrEqual(2)
   await textarea.focus()
 
-  await page.evaluate(() => (window as unknown as Hooks).__setTestVisualViewport({ height: 430, offsetTop: 18 }))
+  await page.evaluate((height) => (window as unknown as Hooks).__setTestVisualViewport({ height, offsetTop: 18 }), keyboardHeight)
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.keyboardOpen)).toBe('true')
 
   const stageBox = await page.locator('.remote-stage').boundingBox()
@@ -68,8 +70,8 @@ test('software keyboard keeps the iOS shell on the VisualViewport without steali
   expect(stageBox).not.toBeNull()
   expect(composerBox).not.toBeNull()
   expect(Math.abs(stageBox!.y - 18)).toBeLessThanOrEqual(1)
-  expect(Math.abs(stageBox!.height - 430)).toBeLessThanOrEqual(1)
-  expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(448)
+  expect(Math.abs(stageBox!.height - keyboardHeight)).toBeLessThanOrEqual(1)
+  expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(18 + keyboardHeight)
   await expect.poll(() => transcript.evaluate((element) =>
     Math.round(element.scrollHeight - element.scrollTop - element.clientHeight)
   )).toBeLessThanOrEqual(2)
@@ -82,7 +84,8 @@ test('software keyboard keeps the iOS shell on the VisualViewport without steali
   )).toBeGreaterThan(200)
   const before = await transcript.evaluate((element) => element.scrollTop)
 
-  await page.evaluate(() => (window as unknown as Hooks).__setTestVisualViewport({ height: 390, offsetTop: 24 }))
+  const resizedKeyboardHeight = Math.min(390, Math.max(1, fullHeight - 160))
+  await page.evaluate((height) => (window as unknown as Hooks).__setTestVisualViewport({ height, offsetTop: 24 }), resizedKeyboardHeight)
   await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeCloseTo(before, 0)
   const after = await transcript.evaluate((element) => element.scrollTop)
   expect(Math.abs(after - before)).toBeLessThanOrEqual(3)
@@ -90,7 +93,6 @@ test('software keyboard keeps the iOS shell on the VisualViewport without steali
   await textarea.blur()
   expect(await page.evaluate(() => document.documentElement.dataset.keyboardOpen)).toBe('true')
 
-  const fullHeight = page.viewportSize()!.height
   await page.evaluate((height) => (window as unknown as Hooks).__setTestVisualViewport({ height, offsetTop: 0 }), fullHeight)
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.keyboardOpen ?? 'false')).toBe('false')
 })

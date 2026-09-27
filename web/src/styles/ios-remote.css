@@ -2691,6 +2691,7 @@ progress::-moz-progress-bar {
 
 .settings-section {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 6px;
 }

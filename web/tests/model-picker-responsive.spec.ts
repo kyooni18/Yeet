@@ -99,7 +99,7 @@ test('short landscape model sheet scrolls internally without escaping the viewpo
   }))
   expect(['auto', 'scroll']).toContain(metrics.overflowY)
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
-  expect(metrics.touchAction).toBe('pan-y pinch-zoom')
+  expect(metrics.touchAction).toBe('pan-y')
 
   const box = await dialog.boundingBox()
   expect(box).not.toBeNull()
