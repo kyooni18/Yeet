@@ -37,6 +37,7 @@ jobs:
       - run: npm --prefix RuntimeSource run build
       - run: cargo fmt --all -- --check
       - run: cargo check --all-targets
+      - run: cargo build --bin yeet
       - run: cargo test --all-targets -- --test-threads=1
       - run: cargo clippy --all-targets -- -D warnings
 
@@ -127,6 +128,7 @@ jobs:
       - run: npm --prefix RuntimeSource ci
       - run: npm --prefix RuntimeSource run check
       - run: cargo check --all-targets
+      - run: cargo build --bin yeet
       - run: cargo test --all-targets -- --test-threads=1
       - run: cargo clippy --all-targets -- -D warnings
       - name: Native ARM64 CLI/runtime smoke

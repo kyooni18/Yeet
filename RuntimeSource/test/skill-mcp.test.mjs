@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { McpManager, SkillRegistry } from '../dist/index.js';
 
@@ -189,7 +190,7 @@ test('McpManager retries HTTP MCP with the legacy protocol when the server rejec
 
 test('McpManager falls back to legacy initialize for stdio MCP servers', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/legacy-mcp.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/legacy-mcp.mjs', import.meta.url));
   const mcp = new McpManager({ configDir });
   await mcp.setServer({ name: 'legacy', transport: 'stdio', command: process.execPath, args: [fixture] });
   const tools = await mcp.listTools('legacy');
@@ -205,7 +206,7 @@ test('McpManager falls back to legacy initialize for stdio MCP servers', async (
 
 test('McpManager can host an in-memory runtime without persisting or listing it as user MCP', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/legacy-mcp.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/legacy-mcp.mjs', import.meta.url));
   const mcp = new McpManager({ configDir });
   await mcp.setRuntimeServer({ name: 'runtime-only', transport: 'stdio', command: process.execPath, args: [fixture] });
   assert.deepEqual(await mcp.listServers(), []);
@@ -220,7 +221,7 @@ test('McpManager can host an in-memory runtime without persisting or listing it 
 
 test('McpManager restarts stdio before legacy fallback when modern discovery exits the server', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/legacy-exit-on-discover.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/legacy-exit-on-discover.mjs', import.meta.url));
   const mcp = new McpManager({ configDir });
   await mcp.setServer({ name: 'legacy-exit', transport: 'stdio', command: process.execPath, args: [fixture] });
   const tools = await mcp.listTools('legacy-exit');
@@ -235,7 +236,7 @@ test('McpManager restarts stdio before legacy fallback when modern discovery exi
 
 test('McpManager forwards native-app elicitation and accepts only an explicit session approval', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/native-approval.mjs', import.meta.url));
   let request;
   let resolveApproval;
   const approvalSeen = new Promise((resolve) => { resolveApproval = resolve; });
@@ -265,7 +266,7 @@ test('McpManager forwards native-app elicitation and accepts only an explicit se
 
 test('McpManager accepts the current Codex _meta native-app elicitation shape', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/native-approval.mjs', import.meta.url));
   let request;
   const mcp = new McpManager({
     configDir,
@@ -293,7 +294,7 @@ test('McpManager accepts the current Codex _meta native-app elicitation shape', 
 
 test('McpManager declines native-app elicitation when the host denies it', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/native-approval.mjs', import.meta.url));
   const mcp = new McpManager({ configDir, nativeAppApproval: async () => false });
   await mcp.setServer({ name: 'native-deny', transport: 'stdio', command: process.execPath, args: [fixture] });
   const response = await mcp.callTool('native-deny', 'open');
@@ -303,7 +304,7 @@ test('McpManager declines native-app elicitation when the host denies it', async
 
 test('McpManager declines a native-app elicitation when the call is cancelled or the connection closes', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/native-approval.mjs', import.meta.url));
   let approvalSeen;
   const seen = new Promise((resolve) => { approvalSeen = resolve; });
   const mcp = new McpManager({
@@ -324,7 +325,7 @@ test('McpManager declines a native-app elicitation when the call is cancelled or
 
 test('McpManager declines unsupported elicitation without invoking the approval host', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/native-approval.mjs', import.meta.url));
   const mcp = new McpManager({
     configDir,
     nativeAppApproval: async () => { throw new Error('approval must not be requested'); },
@@ -337,7 +338,7 @@ test('McpManager declines unsupported elicitation without invoking the approval 
 
 test('McpManager resolves an in-flight approval as denied when its stdio connection closes', async () => {
   const configDir = await tempConfig();
-  const fixture = new URL('./fixtures/native-approval.mjs', import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL('./fixtures/native-approval.mjs', import.meta.url));
   let seenResolve;
   const seen = new Promise((resolve) => { seenResolve = resolve; });
   const mcp = new McpManager({

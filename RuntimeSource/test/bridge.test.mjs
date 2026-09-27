@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import http from "node:http";
 import readline from "node:readline";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -12,13 +13,23 @@ function listen(server) {
 }
 
 function createBridge(environment = {}) {
-  const child = spawn(process.execPath, [new URL("../dist/bridge.js", import.meta.url).pathname], {
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/bridge.js", import.meta.url))], {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, ...environment },
   });
   const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
   const waiters = [];
   const backlog = [];
+  let childFailure;
+
+  const rejectWaiters = (error) => {
+    childFailure ??= error;
+    for (const waiter of waiters.splice(0)) waiter.reject(childFailure);
+  };
+  child.on("error", (error) => rejectWaiters(error));
+  child.on("exit", (code, signal) => {
+    rejectWaiters(new Error(`bridge exited before completing the request (code=${code ?? "null"}, signal=${signal ?? "none"})`));
+  });
 
   lines.on("line", (line) => {
     const message = JSON.parse(line);
@@ -34,7 +45,8 @@ function createBridge(environment = {}) {
   const waitFor = (predicate) => {
     const index = backlog.findIndex(predicate);
     if (index >= 0) return Promise.resolve(backlog.splice(index, 1)[0]);
-    return new Promise((resolve) => waiters.push({ predicate, resolve }));
+    if (childFailure) return Promise.reject(childFailure);
+    return new Promise((resolve, reject) => waiters.push({ predicate, resolve, reject }));
   };
 
   const send = (value) => child.stdin.write(`${JSON.stringify(value)}\n`);
@@ -43,7 +55,7 @@ function createBridge(environment = {}) {
       const id = "shutdown";
       send({ v: 1, id, op: "shutdown" });
       await waitFor((message) => message.id === id && message.type === "done");
-      await new Promise((resolve) => child.once("exit", resolve));
+      if (child.exitCode === null) await new Promise((resolve) => child.once("exit", resolve));
     }
   };
 
@@ -245,7 +257,7 @@ test("bridge routes native-app approvals as unsolicited events and correlates th
   const configDir = await mkdtemp(path.join(os.tmpdir(), "yeet-native-approval-"));
   const bridge = createBridge({ YEET_CONFIG_DIR: configDir });
   t.after(() => bridge.child.kill());
-  const fixture = new URL("./fixtures/native-approval.mjs", import.meta.url).pathname;
+  const fixture = fileURLToPath(new URL("./fixtures/native-approval.mjs", import.meta.url));
 
   bridge.send({ v: 1, id: "native-set", op: "mcp-set-server", server: { name: "native", transport: "stdio", command: process.execPath, args: [fixture] } });
   await bridge.waitFor((message) => message.id === "native-set" && message.type === "mcp-server");
