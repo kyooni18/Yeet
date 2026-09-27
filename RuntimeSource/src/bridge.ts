@@ -10,6 +10,7 @@ import type { ProviderFetchLog } from "./http.js";
 import { McpManager } from "./mcp.js";
 import { ModelMetadataCatalog } from "./model-metadata.js";
 import { applyCacheCostPolicy, applyOpenAIFlexAuthPolicy, cheapestModel, estimateUsageCostUsd, estimatedRequestTokens, inputCostEquivalentTokens } from "./pricing.js";
+import { AntigravityProvider } from "./providers/antigravity.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { GeminiProvider } from "./providers/gemini.js";
 import { OpenAIChatProvider } from "./providers/openai-chat.js";
@@ -244,6 +245,9 @@ async function refreshProvider(providerId: string): Promise<void> {
       }));
       return;
     }
+    case "antigravity":
+      core.register(new AntigravityProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
+      return;
     case "anthropic":
       core.register(new AnthropicProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
       return;
@@ -300,7 +304,7 @@ async function refreshProvider(providerId: string): Promise<void> {
   }));
 }
 
-for (const provider of ["openai", "codex-cli", "anthropic", "claude", "gemini", "gemini-web", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
+for (const provider of ["openai", "codex-cli", "antigravity", "anthropic", "claude", "gemini", "gemini-web", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
 for (const provider of ["claude-api"]) await refreshProvider(provider);
 for (const provider of await auth.listCustomProviders()) {
   customProviders.set(provider.id, { kind: "openai-compatible", ...provider });

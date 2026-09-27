@@ -36,6 +36,7 @@ pub(super) fn model_picker_rows(app: &App) -> Vec<ModelPickerRow> {
                 previous_provider = provider.clone();
                 match provider.as_str() {
                     "codex-cli" => "Codex CLI".to_owned(),
+                    "antigravity" => "Antigravity".to_owned(),
                     "gemini" => "Gemini".to_owned(),
                     "gemini-web" => "Gemini Web".to_owned(),
                     "anthropic" => "Claude (Anthropic)".to_owned(),
