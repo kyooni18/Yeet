@@ -1,11 +1,4 @@
-use std::{
-    net::TcpListener,
-    path::PathBuf,
-    process::Command,
-    sync::Mutex,
-    thread,
-    time::Duration,
-};
+use std::{net::TcpListener, path::PathBuf, process::Command, sync::Mutex, thread, time::Duration};
 
 use crate::remote::{
     RemoteOptions, remote_pid, remote_status, start_remote_background, stop_remote,
@@ -28,9 +21,10 @@ fn locate_yeet_binary() -> PathBuf {
         }
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidate = manifest_dir
-        .join("target/debug")
-        .join(if cfg!(windows) { "yeet.exe" } else { "yeet" });
+    let candidate =
+        manifest_dir
+            .join("target/debug")
+            .join(if cfg!(windows) { "yeet.exe" } else { "yeet" });
     if candidate.is_file() {
         return candidate;
     }
@@ -197,7 +191,9 @@ fn stop_and_direct_termination_do_not_respawn() {
         .args(["remote", "status"])
         .output()
         .expect("status check A");
-    assert!(String::from_utf8_lossy(&status_output.stdout).contains("Yeet remote UI is not running"));
+    assert!(
+        String::from_utf8_lossy(&status_output.stdout).contains("Yeet remote UI is not running")
+    );
 
     // Part B: Direct process termination (SIGKILL) does not respawn
     let port_b = pick_unused_port();
@@ -254,7 +250,9 @@ fn stop_and_direct_termination_do_not_respawn() {
         .args(["remote", "status"])
         .output()
         .expect("status check B");
-    assert!(String::from_utf8_lossy(&status_output.stdout).contains("Yeet remote UI is not running"));
+    assert!(
+        String::from_utf8_lossy(&status_output.stdout).contains("Yeet remote UI is not running")
+    );
 
     // Sleep to verify no supervisor (launchd/systemd/monitor) respawns it
     thread::sleep(Duration::from_millis(500));

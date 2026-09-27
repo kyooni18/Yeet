@@ -9,18 +9,15 @@ WORKDIR /src
 COPY RuntimeSource/package.json RuntimeSource/package-lock.json ./RuntimeSource/
 RUN npm --prefix RuntimeSource ci
 
-COPY web/package.json web/pnpm-lock.yaml ./web/
-RUN rm -f /usr/local/bin/pnpm /usr/local/bin/pnpx \
-    && PNPM_VERSION=$(node -p "require('./web/package.json').packageManager.split('@').pop()") \
-    && npm install --global "pnpm@$PNPM_VERSION" \
-    && pnpm --dir web install --frozen-lockfile
+COPY web/package.json web/package-lock.json ./web/
+RUN npm --prefix web ci
 
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \
     npm --prefix RuntimeSource run build \
-    && pnpm --dir web build \
+    && npm --prefix web run build \
     && cargo build --locked --release \
     && cp /src/target/release/yeet /tmp/yeet
 

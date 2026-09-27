@@ -838,10 +838,11 @@ fn resolve_executable() -> Result<PathBuf> {
     let current = std::env::current_exe().context("locate Yeet executable")?;
     if let Some(parent) = current.parent() {
         if parent.file_name().and_then(|n| n.to_str()) == Some("deps") {
-            let candidate = parent
-                .parent()
-                .unwrap_or(parent)
-                .join(if cfg!(windows) { "yeet.exe" } else { "yeet" });
+            let candidate = parent.parent().unwrap_or(parent).join(if cfg!(windows) {
+                "yeet.exe"
+            } else {
+                "yeet"
+            });
             if candidate.is_file() {
                 return Ok(candidate);
             }
