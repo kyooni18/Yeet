@@ -211,18 +211,27 @@ fn set_windows_private_acl(path: &Path, directory: bool) -> io::Result<()> {
         format!("*S-1-5-18:{rights}"),
         format!("*S-1-5-32-544:{rights}"),
     ];
-    let status = Command::new("icacls")
+    let output = Command::new("icacls")
         .arg(path)
         .arg("/inheritancelevel:r")
         .arg("/grant:r")
         .args(&grants)
         .arg("/Q")
-        .status()?;
-    if !status.success() {
-        return Err(io::Error::other(format!(
-            "icacls failed while hardening {}",
-            path.display()
-        )));
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = stderr.trim();
+        let detail = if detail.is_empty() {
+            stdout.trim()
+        } else {
+            detail
+        };
+        return Err(io::Error::other(if detail.is_empty() {
+            format!("icacls failed while hardening {}", path.display())
+        } else {
+            format!("icacls failed while hardening {}: {detail}", path.display())
+        }));
     }
     hardened
         .lock()
