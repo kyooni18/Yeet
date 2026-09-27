@@ -328,7 +328,12 @@ export class AnthropicProvider implements ProviderAdapter {
   }
 
   #headers(request?: ProviderCallRequest): Record<string, string> {
-    if (!this.#apiKey && !this.#accessToken) throw new Error(`Missing API key or OAuth token for ${this.id}`);
+    if (!this.#apiKey && !this.#accessToken) {
+      if (this.id === "claude") {
+        throw new Error("Claude subscription OAuth token is missing or expired. Run `claude auth login` to sign in again.");
+      }
+      throw new Error(`Missing API key or OAuth token for ${this.id}`);
+    }
     const betas = [
       ...(this.#accessToken ? ["oauth-2025-04-20"] : []),
       ...(request && contextManagementForRequest(request) !== undefined ? [CONTEXT_MANAGEMENT_BETA] : []),

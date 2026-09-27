@@ -28,16 +28,15 @@ yeet install foundation
 
 That clones Foundation into Yeet-managed state, runs its normal npm build, registers its stdio MCP server, and enables memory for the current workspace. Remove it with `yeet uninstall foundation`. Apple Foundation Models remain an optional Foundation-specific build and are not part of this path.
 
-Other managed components use the same CLI surface:
+Other components use the same CLI surface:
 
 ```sh
 yeet install web
 yeet install mcp
-yeet install remote
 yeet install status
 ```
 
-`mcp` and `remote` are modes of the main Yeet binary; their install/uninstall commands start and stop those managed services rather than building separate executables.
+`mcp` is a mode of the main Yeet binary; its install/uninstall commands start and stop the local MCP server daemon rather than building a separate executable. `remote` is also built directly into the Yeet binary and has no separate installation or managed service lifecycle (`yeet install remote` notes that it is already built-in).
 
 ## Use
 
@@ -45,6 +44,31 @@ Start the TUI:
 
 ```sh
 yeet
+```
+
+### Remote WebUI
+
+Yeet Remote is built into the Yeet binary and is workspace-neutral: the Remote server itself owns no project directory and never derives one from the shell current directory. Each browser client restores or selects its own workspace, falling back to the user's home directory.
+
+Start the semantic WebUI in the foreground:
+
+```sh
+yeet remote
+```
+
+Or detach a single Remote process in the background:
+
+```sh
+yeet remote --background
+```
+
+`--background` only detaches the current process. It does not install a launchd/systemd service or register a supervisor or restart policy, so a stopped or killed Remote stays dead and will not automatically respawn.
+
+Check status or stop the background Remote:
+
+```sh
+yeet remote status
+yeet remote stop
 ```
 
 ## Skyline

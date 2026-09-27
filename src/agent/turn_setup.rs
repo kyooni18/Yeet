@@ -240,6 +240,9 @@ impl AgentCoordinator {
                 .load()?
                 .context;
         let mut turn_stable_overlays = Vec::new();
+        if let Some(project_instructions) = load_project_instructions(&workspace_root) {
+            turn_stable_overlays.push(Message::system(project_instructions).request_only());
+        }
         let (session_cwd, context_roots) = self.registry.session_environment();
         if session_cwd != workspace_root || context_roots.len() > 1 {
             turn_stable_overlays.push(
@@ -366,4 +369,33 @@ impl AgentCoordinator {
             last_context_updates,
         })
     }
+}
+
+/// Read conventional root-level agent instruction files for this project's turns.
+/// Missing, unreadable, non-regular, and oversized files are ignored.
+fn load_project_instructions(workspace_root: &str) -> Option<String> {
+    const MAX_FILE_BYTES: u64 = 64 * 1024;
+    let root = std::path::Path::new(workspace_root);
+    let mut sections = Vec::new();
+    for name in ["AGENTS.md", "YEET.md"] {
+        let path = root.join(name);
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
+            continue;
+        }
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if !contents.trim().is_empty() {
+            sections.push(format!("--- {name} ---\n{}", contents.trim()));
+        }
+    }
+    (!sections.is_empty()).then(|| {
+        format!(
+            "Project instructions from root-level AGENTS.md and YEET.md files (apply where relevant):\n{}",
+            sections.join("\n\n")
+        )
+    })
 }

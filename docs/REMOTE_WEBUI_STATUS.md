@@ -19,7 +19,7 @@ Current shared-tree observation:
 - `src/main.rs` launches the semantic WebUI path by default and uses the Ratatui/TestBackend renderer only for `--legacy-tui`.
 - `src/remote/server.rs` serves embedded WebUI assets with SPA fallback/cache policy while keeping `/api/*` outside SPA fallback.
 - Remote authentication is service-wide rather than workspace-scoped. The legacy per-workspace auth document is migrated into `~/.yeet/remote/auth.json`, and auth changes are reloaded across running Remote daemons.
-- Authenticated semantic clients may select a workspace in the WebUI. The daemon startup workspace is only the default; each `(workspace, client_id)` gets an isolated semantic runtime.
+- Authenticated semantic clients may select a workspace in the WebUI. A new client falls back to the home directory by default; each `(workspace, client_id)` gets an isolated semantic runtime.
 - `docs/REMOTE_PROTOCOL.md` is the authoritative browser/backend wire contract.
 
 `@WEBUI` integration note: protocol-v1 assistant/reasoning streams are delta-first. The final store appends `delta` for `reset=false`, replaces from authoritative `content` for `reset=true`, batches semantic events on `requestAnimationFrame`, and preserves the server conversation revision rather than manufacturing browser-side revisions.
@@ -48,7 +48,7 @@ The production asset integration is now present:
 
 | Behavior | Baseline | Final target | Status |
 | --- | --- | --- | --- |
-| `yeet remote [WORKSPACE]` | detached legacy browser-TUI | detached semantic WebUI | implemented |
+| `yeet remote [--background]` | detached legacy browser-TUI | detached semantic WebUI | implemented |
 | `--workspace PATH` | supported | preserve | implemented |
 | positional workspace | supported | preserve | implemented |
 | `--bind ADDRESS` | supported | preserve | implemented |

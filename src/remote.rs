@@ -816,6 +816,40 @@ pub fn remote_browser_url(status: &RemoteStatus) -> Result<String> {
     Ok(remote_origin()?.unwrap_or_else(|| status.address.clone()))
 }
 
+pub fn remote_pid() -> Result<Option<u32>> {
+    let Some(response) = remote_control_request("pid")? else {
+        return Ok(None);
+    };
+    let value = response.trim();
+    if value.is_empty() || value == "unknown" {
+        return Ok(None);
+    }
+    let pid = value.parse::<u32>().context("parse remote PID")?;
+    Ok(Some(pid))
+}
+
+fn resolve_executable() -> Result<PathBuf> {
+    if let Some(explicit) = std::env::var_os("YEET_EXE").filter(|v| !v.is_empty()) {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    let current = std::env::current_exe().context("locate Yeet executable")?;
+    if let Some(parent) = current.parent() {
+        if parent.file_name().and_then(|n| n.to_str()) == Some("deps") {
+            let candidate = parent
+                .parent()
+                .unwrap_or(parent)
+                .join(if cfg!(windows) { "yeet.exe" } else { "yeet" });
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Ok(current)
+}
+
 pub fn start_remote_background(options: &RemoteOptions) -> Result<RemoteStatus> {
     if options.legacy_tui {
         bail!("--background is only supported by the semantic Remote WebUI");
@@ -824,7 +858,7 @@ pub fn start_remote_background(options: &RemoteOptions) -> Result<RemoteStatus> 
         bail!("Yeet Remote is already running");
     }
 
-    let executable = std::env::current_exe().context("locate Yeet executable")?;
+    let executable = resolve_executable()?;
     let home = dirs::home_dir().context("home directory is unavailable")?;
     let paths = RemoteControlPaths::new()?;
     let directory = paths
@@ -1035,6 +1069,10 @@ impl RemoteControl {
                             match request.trim() {
                                 "status" => {
                                     let _ = writeln!(stream, "http://{address}");
+                                    let _ = stream.flush();
+                                }
+                                "pid" => {
+                                    let _ = writeln!(stream, "{}", std::process::id());
                                     let _ = stream.flush();
                                 }
                                 "origin" => {
@@ -1425,3 +1463,6 @@ fn browser_key_code(key: &str, shift: bool) -> Option<KeyCode> {
     };
     Some(code)
 }
+
+#[cfg(test)]
+mod lifecycle_tests;

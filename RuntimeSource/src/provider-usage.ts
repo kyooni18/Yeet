@@ -97,6 +97,13 @@ function claudeTokenFromPayload(value: unknown): string | undefined {
     : typeof payload.accessToken === "string"
       ? payload.accessToken.trim()
       : "";
+  const expiresAt = oauth.expiresAt ?? payload.expiresAt;
+  const expiry = typeof expiresAt === "number"
+    ? expiresAt
+    : typeof expiresAt === "string" && expiresAt.trim()
+      ? (Number.isFinite(Number(expiresAt)) ? Number(expiresAt) : Date.parse(expiresAt))
+      : undefined;
+  if (expiry !== undefined && Number.isFinite(expiry) && expiry <= Date.now()) return undefined;
   return token || undefined;
 }
 

@@ -165,7 +165,7 @@ impl RemoteHub {
         Ok(resolved)
     }
 
-    fn resolve_workspace(&self, requested: Option<&str>) -> Result<PathBuf> {
+    pub(crate) fn resolve_workspace(&self, requested: Option<&str>) -> Result<PathBuf> {
         let requested = requested.map(str::trim).filter(|value| !value.is_empty());
         let home = dirs::home_dir().ok_or_else(|| {
             anyhow!("home directory is unavailable; use an absolute workspace path")
