@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
+use fs2::{FileExt, lock_contended_error};
 
 use crate::{
     config::ConfigStore,
@@ -20,6 +20,10 @@ use crate::{
 };
 
 use super::{MAX_BACKGROUND_LOG_BYTES, STALE_DAEMON_EXIT_TIMEOUT};
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == lock_contended_error().raw_os_error()
+}
 
 pub(super) struct BackgroundPaths {
     pub(super) socket: PathBuf,
@@ -74,7 +78,7 @@ impl LifecycleLock {
             .with_context(|| format!("open background lifecycle lock {}", path.display()))?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self(file))),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) if lock_is_contended(&error) => Ok(None),
             Err(error) => {
                 Err(error).with_context(|| format!("probe background lifecycle {}", path.display()))
             }
@@ -119,7 +123,7 @@ impl InstanceLease {
                 let _ = FileExt::unlock(&file);
                 Ok(false)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+            Err(error) if lock_is_contended(&error) => Ok(true),
             Err(error) => Err(error)
                 .with_context(|| format!("probe background owner lock {}", path.display())),
         }
