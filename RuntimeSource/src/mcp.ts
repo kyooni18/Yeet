@@ -328,6 +328,14 @@ class StdioMcpConnection implements McpConnection {
     this.#buffer = "";
     child.stdout.on("data", (chunk: any) => this.#consume(String(chunk)));
     child.stderr.on("data", (_chunk: any) => undefined);
+    child.stdin.on("error", (cause: NodeJS.ErrnoException) => {
+      if (this.#child !== child) return;
+      this.#child = undefined;
+      this.#abortApprovals();
+      const error = new McpError(`MCP server ${this.configuration.name} stdin failed: ${cause.message}`, { server: this.configuration.name });
+      for (const pending of this.#pending.values()) pending.reject(error);
+      this.#pending.clear();
+    });
     child.on("error", (cause: Error) => {
       if (this.#child !== child) return;
       this.#child = undefined;
