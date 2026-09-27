@@ -35,6 +35,8 @@ cp -R RuntimeSource/dist "$STAGE/share/yeet/runtime/dist"
 cp -R RuntimeSource/skills "$STAGE/share/yeet/runtime/skills"
 cp RuntimeSource/package.json "$STAGE/share/yeet/runtime/package.json"
 cp README.md CHANGELOG.md LICENSE.txt "$STAGE/"
+cp install.sh "$STAGE/install.sh"
+chmod 755 "$STAGE/install.sh"
 [ -f "$STAGE/share/yeet/runtime/skills/pdf/SKILL.md" ] || {
   echo "Staged release is missing bundled PDF skill" >&2
   exit 1
@@ -53,6 +55,18 @@ ACTUAL_VERSION=$("$STAGE/bin/yeet" --version)
 }
 YEET_CONFIG_DIR="$SMOKE_CONFIG" "$STAGE/bin/yeet" doctor >/dev/null
 rm -rf "$SMOKE_CONFIG"
+
+INSTALL_SMOKE="$ROOT/target/release-install-smoke-$TARGET"
+INSTALL_SMOKE_CONFIG="$ROOT/target/release-install-smoke-config-$TARGET"
+rm -rf "$INSTALL_SMOKE" "$INSTALL_SMOKE_CONFIG"
+PREFIX="$INSTALL_SMOKE" sh "$STAGE/install.sh" >/dev/null
+INSTALLED_VERSION=$("$INSTALL_SMOKE/bin/yeet" --version)
+[ "$INSTALLED_VERSION" = "$VERSION" ] || {
+  echo "Installed Yeet version $INSTALLED_VERSION does not match release version $VERSION" >&2
+  exit 1
+}
+YEET_CONFIG_DIR="$INSTALL_SMOKE_CONFIG" "$INSTALL_SMOKE/bin/yeet" doctor >/dev/null
+rm -rf "$INSTALL_SMOKE" "$INSTALL_SMOKE_CONFIG"
 
 ARCHIVE="$OUT/$NAME.tar.gz"
 rm -f "$ARCHIVE" "$ARCHIVE.sha256"

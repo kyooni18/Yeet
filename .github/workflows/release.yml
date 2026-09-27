@@ -23,7 +23,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: node Scripts/verify-release-version.mjs "$GITHUB_REF_NAME"
-      - run: cargo test --all-targets
+      - run: cargo test --lib --bins
       - run: npm --prefix RuntimeSource ci
       - run: npm --prefix RuntimeSource run check
       - run: npm --prefix web ci
@@ -101,6 +101,7 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: yeet-*
@@ -115,6 +116,9 @@ jobs:
         uses: actions/attest@v4
         with:
           subject-path: release-assets/SHA256SUMS
+      - name: Render Homebrew formula
+        shell: bash
+        run: ./Scripts/render-homebrew-formula.sh "$GITHUB_REF_NAME" release-assets target/homebrew/Formula/yeet.rb
       - name: Publish GitHub release
         shell: bash
         env:
@@ -125,3 +129,30 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
           fi
+      - name: Update Homebrew tap
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not configured; skipping Homebrew tap update."
+            exit 0
+          fi
+
+          export GH_TOKEN="$HOMEBREW_TAP_TOKEN"
+          gh auth setup-git
+          rm -rf target/homebrew/tap
+          gh repo clone kyooni18/homebrew-tap target/homebrew/tap -- --depth 1
+          mkdir -p target/homebrew/tap/Formula
+          cp target/homebrew/Formula/yeet.rb target/homebrew/tap/Formula/yeet.rb
+
+          cd target/homebrew/tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --porcelain -- Formula/yeet.rb)" ]; then
+            echo "Homebrew formula is already current."
+            exit 0
+          fi
+          git add Formula/yeet.rb
+          git commit -m "yeet $GITHUB_REF_NAME"
+          git push

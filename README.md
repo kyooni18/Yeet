@@ -4,21 +4,35 @@ Yeet is a native agent CLI/TUI with a TypeScript runtime, Remote WebUI, MCP supp
 
 ## Install
 
-Build dependencies are Rust, Node.js/npm, and the platform C/C++ toolchain. Git is only needed to clone the source. Yeet uses npm everywhere; pnpm and Corepack are not required.
+Prebuilt macOS and Linux releases require Node.js 20 or newer at runtime, but they do not require Rust, npm, or a local Yeet source checkout.
 
-One-command source install on macOS/Linux:
+Install the latest signed-by-checksum GitHub release:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kyooni18/Yeet/main/install.sh | sh
 ```
 
-PowerShell:
+The installer detects macOS/Linux and arm64/x86_64, downloads the matching GitHub Release archive, verifies its SHA-256 sidecar, and installs Yeet under `~/.local`. Set `YEET_PREFIX` to change the install prefix or `YEET_VERSION` to install a specific release.
+
+Homebrew on macOS or Linux:
+
+```sh
+brew install kyooni18/tap/yeet
+```
+
+Homebrew supplies the Node.js runtime dependency automatically. Linux releases also publish native `.deb` packages for amd64 and arm64.
+
+To build Yeet from source instead:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kyooni18/Yeet/main/Scripts/install-source.sh | sh
+```
+
+Windows source installation remains available through PowerShell:
 
 ```powershell
 iwr https://raw.githubusercontent.com/kyooni18/Yeet/main/install.ps1 -UseBasicParsing | iex
 ```
-
-The installer clones Yeet into `~/.local/src/yeet` (unless already run from a checkout), builds RuntimeSource and the Remote WebUI with npm, builds the Rust release binary, then installs the binary and runtime under `~/.local`. Override these locations with `YEET_SOURCE_DIR` and `YEET_PREFIX`.
 
 Foundation is optional and is not cloned or built with Yeet. Enable it when needed:
 
