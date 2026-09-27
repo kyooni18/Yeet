@@ -369,6 +369,9 @@ pub(crate) fn configure_process_group(command: &mut Command) {
         use std::os::unix::process::CommandExt;
         #[cfg(target_os = "linux")]
         let owner_pid = std::process::id() as libc::pid_t;
+        #[cfg(target_os = "linux")]
+        let arm_parent_death_signal =
+            unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t } == owner_pid;
         unsafe {
             command.pre_exec(move || {
                 if libc::setpgid(0, 0) == -1 {
@@ -376,16 +379,21 @@ pub(crate) fn configure_process_group(command: &mut Command) {
                 }
                 #[cfg(target_os = "linux")]
                 {
-                    // Owned sidecars must not outlive Yeet if the parent dies
-                    // without running Rust destructors. This is intentionally
-                    // absent from configure_detached(): daemons own themselves.
-                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    // Close the fork -> prctl race. If the original parent died
-                    // before PDEATHSIG was armed, refuse to start the orphan.
-                    if libc::getppid() != owner_pid {
-                        return Err(io::Error::from_raw_os_error(libc::ECHILD));
+                    // PR_SET_PDEATHSIG tracks the specific thread that forked the
+                    // child, not the Rust process as a whole. Yeet starts some
+                    // owned children from short-lived worker threads, so arming
+                    // it there kills a healthy child as soon as that worker
+                    // returns. Only use PDEATHSIG when the process-leader thread
+                    // performs the spawn; TrackedChild still owns normal cleanup.
+                    if arm_parent_death_signal {
+                        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        // Close the fork -> prctl race. If the original process
+                        // died before PDEATHSIG was armed, refuse to start orphaned.
+                        if libc::getppid() != owner_pid {
+                            return Err(io::Error::from_raw_os_error(libc::ECHILD));
+                        }
                     }
                 }
                 Ok(())
@@ -586,6 +594,33 @@ mod tests {
         ] {
             assert_eq!(process_tree_from_pairs(10, &pairs), expected);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_group_child_spawned_from_worker_survives_worker_exit() {
+        let mut child = std::thread::spawn(|| {
+            let mut command = Command::new("/bin/sh");
+            command
+                .arg("-c")
+                .arg("sleep 30")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            configure_process_group(&mut command);
+            command.spawn().unwrap()
+        })
+        .join()
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "child was killed when its spawning worker thread exited"
+        );
+
+        let pid = child.id();
+        let _ = force_terminate_process_tree(pid);
+        let _ = child.wait();
     }
 
     fn process_group_exists(pgid: u32) -> bool {
