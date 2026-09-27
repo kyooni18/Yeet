@@ -25,6 +25,7 @@ jobs:
       - run: node Scripts/verify-release-version.mjs "$GITHUB_REF_NAME"
       - run: npm --prefix RuntimeSource ci
       - run: npm --prefix RuntimeSource run check
+      - run: cargo build --bin yeet
       - run: cargo test --lib --bins -- --test-threads=1
       - run: npm --prefix web ci
       - run: npm --prefix web run build
