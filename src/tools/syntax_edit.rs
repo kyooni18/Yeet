@@ -243,20 +243,20 @@ fn collect_candidates<'tree>(
     containers: &[String],
     output: &mut Vec<Candidate<'tree>>,
 ) {
-    if let Some(kind) = declaration_kind(node) {
-        if let Some(name) = node_name(node, source) {
-            let semantic_kind = if kind == "function" && is_method_context(node) {
-                "method"
-            } else {
-                kind
-            };
-            output.push(Candidate {
-                node,
-                kind: semantic_kind,
-                name,
-                containers: containers.to_vec(),
-            });
-        }
+    if let Some(kind) = declaration_kind(node)
+        && let Some(name) = node_name(node, source)
+    {
+        let semantic_kind = if kind == "function" && is_method_context(node) {
+            "method"
+        } else {
+            kind
+        };
+        output.push(Candidate {
+            node,
+            kind: semantic_kind,
+            name,
+            containers: containers.to_vec(),
+        });
     }
 
     let mut child_containers = containers.to_vec();
@@ -347,10 +347,10 @@ fn container_name(node: Node<'_>, source: &str) -> Option<String> {
 }
 
 fn node_name(node: Node<'_>, source: &str) -> Option<String> {
-    if let Some(name) = node.child_by_field_name("name") {
-        if let Some(value) = node_text(name, source) {
-            return Some(value);
-        }
+    if let Some(name) = node.child_by_field_name("name")
+        && let Some(value) = node_text(name, source)
+    {
+        return Some(value);
     }
     if matches!(node.kind(), "init_declaration") {
         return Some("init".into());

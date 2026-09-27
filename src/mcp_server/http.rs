@@ -253,10 +253,12 @@ impl SessionRuntimePool {
     }
 }
 
+type RuntimeLane = Arc<Mutex<Option<SessionRuntime>>>;
+
 struct RuntimeLanePool {
     default_workspace: PathBuf,
     restrict_workspace: bool,
-    lanes: Mutex<Vec<Arc<Mutex<Option<SessionRuntime>>>>>,
+    lanes: Mutex<Vec<RuntimeLane>>,
     affinity: Mutex<LegacyAffinityState>,
 }
 
@@ -305,17 +307,13 @@ impl RuntimeLanePool {
         })
     }
 
-    fn lanes_snapshot(
-        &self,
-    ) -> std::result::Result<Vec<Arc<Mutex<Option<SessionRuntime>>>>, RuntimeCallError> {
+    fn lanes_snapshot(&self) -> std::result::Result<Vec<RuntimeLane>, RuntimeCallError> {
         self.lanes.lock().map(|lanes| lanes.clone()).map_err(|_| {
             RuntimeCallError::Unavailable(anyhow!("MCP runtime lane table lock poisoned"))
         })
     }
 
-    fn append_lane(
-        &self,
-    ) -> std::result::Result<(usize, Arc<Mutex<Option<SessionRuntime>>>), RuntimeCallError> {
+    fn append_lane(&self) -> std::result::Result<(usize, RuntimeLane), RuntimeCallError> {
         let mut lanes = self.lanes.lock().map_err(|_| {
             RuntimeCallError::Unavailable(anyhow!("MCP runtime lane table lock poisoned"))
         })?;

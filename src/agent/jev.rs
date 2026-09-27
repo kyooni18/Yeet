@@ -57,6 +57,7 @@ impl LoopMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // The suffix makes the tool-policy domain explicit at call sites.
 enum LoopAction {
     AutoTools,
     ReadOnlyTools,
@@ -175,6 +176,7 @@ pub(super) struct LoopPolicy {
     pub jev_request_chars: usize,
 }
 
+#[allow(clippy::too_many_arguments)] // Policy assembly combines bridge, catalog, filters, and turn input.
 pub(super) fn apply_loop_policy<Defer, ReadOnly>(
     bridge: &BridgeClient,
     cancel: &AtomicBool,

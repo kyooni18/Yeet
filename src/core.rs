@@ -819,7 +819,7 @@ impl BridgeClient {
                 Ok(pong) => pong,
                 Err(error) => {
                     if let Ok(mut child) = client.inner.child.lock() {
-                        kill_bridge_process_group(&mut *child);
+                        kill_bridge_process_group(&mut child);
                         let _ = child.wait();
                     }
                     return Err(error);
@@ -827,7 +827,7 @@ impl BridgeClient {
             };
         if pong.get("type").and_then(Value::as_str) != Some("pong") {
             if let Ok(mut child) = client.inner.child.lock() {
-                kill_bridge_process_group(&mut *child);
+                kill_bridge_process_group(&mut child);
                 let _ = child.wait();
             }
             bail!("provider bridge did not answer ping");
@@ -853,7 +853,7 @@ impl BridgeClient {
                 .lock()
                 .map_err(|_| anyhow!("bridge child lock poisoned"))?;
             if child.try_wait()?.is_none() {
-                kill_bridge_process_group(&mut *child);
+                kill_bridge_process_group(&mut child);
                 let _ = child.wait();
             }
         }

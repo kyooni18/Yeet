@@ -43,7 +43,10 @@ fn unfocused_composer_uses_quieter_surface_than_focused_input() {
         .draw(|frame| composer::draw(frame, &mut app, bounds))
         .unwrap();
     let (x, y, _, _) = app.composer_area;
-    assert_eq!(focused.backend().buffer()[(x, y)].bg, theme::surface_raised());
+    assert_eq!(
+        focused.backend().buffer()[(x, y)].bg,
+        theme::surface_raised()
+    );
 
     app.mode = Mode::Settings;
     let mut unfocused = Terminal::new(TestBackend::new(60, 5)).unwrap();
@@ -51,7 +54,10 @@ fn unfocused_composer_uses_quieter_surface_than_focused_input() {
         .draw(|frame| composer::draw(frame, &mut app, bounds))
         .unwrap();
     let (x, y, _, _) = app.composer_area;
-    assert_eq!(unfocused.backend().buffer()[(x, y)].bg, theme::surface_color());
+    assert_eq!(
+        unfocused.backend().buffer()[(x, y)].bg,
+        theme::surface_color()
+    );
 }
 
 #[test]
@@ -63,7 +69,11 @@ fn welcome_shortcut_cards_use_raised_surface() {
         .position(|line| line.contains("Choose your model"))
         .expect("welcome shortcut card is visible");
     let card_row = &buffer.content[card_y * 140..(card_y + 1) * 140];
-    assert!(card_row.iter().any(|cell| cell.bg == theme::surface_raised()));
+    assert!(
+        card_row
+            .iter()
+            .any(|cell| cell.bg == theme::surface_raised())
+    );
 }
 
 #[test]
@@ -78,37 +88,39 @@ fn narrow_composer_placeholder_ends_cleanly() {
 
 #[test]
 fn generic_legacy_done_activity_is_hidden_but_informative_completion_survives() {
-    let mut app = App::default();
-    app.conversation = vec![
-        ConversationEntry {
-            id: "user".into(),
-            kind: ConversationKind::User {
-                content: "Polish the TUI".into(),
-            },
-        },
-        ConversationEntry {
-            id: "legacy-done".into(),
-            kind: ConversationKind::Activity {
-                activity: ModelActivity {
-                    phase: serde_json::json!("done"),
-                    title: "Done".into(),
-                    detail: None,
-                    run_id: None,
+    let mut app = App {
+        conversation: vec![
+            ConversationEntry {
+                id: "user".into(),
+                kind: ConversationKind::User {
+                    content: "Polish the TUI".into(),
                 },
             },
-        },
-        ConversationEntry {
-            id: "useful-done".into(),
-            kind: ConversationKind::Activity {
-                activity: ModelActivity {
-                    phase: serde_json::json!("done"),
-                    title: "Validation complete".into(),
-                    detail: Some("122 tests".into()),
-                    run_id: None,
+            ConversationEntry {
+                id: "legacy-done".into(),
+                kind: ConversationKind::Activity {
+                    activity: ModelActivity {
+                        phase: serde_json::json!("done"),
+                        title: "Done".into(),
+                        detail: None,
+                        run_id: None,
+                    },
                 },
             },
-        },
-    ];
+            ConversationEntry {
+                id: "useful-done".into(),
+                kind: ConversationKind::Activity {
+                    activity: ModelActivity {
+                        phase: serde_json::json!("done"),
+                        title: "Validation complete".into(),
+                        detail: Some("122 tests".into()),
+                        run_id: None,
+                    },
+                },
+            },
+        ],
+        ..App::default()
+    };
 
     let (text, _) = render(&mut app, 100, 24);
     assert!(!text.contains("· Done"), "{text}");
@@ -118,22 +130,24 @@ fn generic_legacy_done_activity_is_hidden_but_informative_completion_survives() 
 
 #[test]
 fn user_and_assistant_have_distinct_readable_surfaces() {
-    let mut app = App::default();
-    app.conversation = vec![
-        ConversationEntry {
-            id: "user".into(),
-            kind: ConversationKind::User {
-                content: "Review the layout".into(),
+    let mut app = App {
+        conversation: vec![
+            ConversationEntry {
+                id: "user".into(),
+                kind: ConversationKind::User {
+                    content: "Review the layout".into(),
+                },
             },
-        },
-        ConversationEntry {
-            id: "answer".into(),
-            kind: ConversationKind::Assistant {
-                content: "Here is the review.".into(),
-                tool_calls: vec![],
+            ConversationEntry {
+                id: "answer".into(),
+                kind: ConversationKind::Assistant {
+                    content: "Here is the review.".into(),
+                    tool_calls: vec![],
+                },
             },
-        },
-    ];
+        ],
+        ..App::default()
+    };
     let (text, buffer) = render(&mut app, 80, 24);
     assert!(text.contains("▌ You"));
     assert!(text.contains("◆ Yeet"));
@@ -237,7 +251,8 @@ fn unicode_draft_cursor_stays_inside_composer_after_resize() {
     for (width, height) in [(20, 8), (60, 14), (80, 24), (140, 38)] {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
-        let (x, y) = terminal.get_cursor().unwrap();
+        let position = terminal.get_cursor_position().unwrap();
+        let (x, y) = (position.x, position.y);
         assert!(x < width && y < height);
         assert!(y > app.transcript_area.1 + app.transcript_area.3);
         assert!(y < height - 1);

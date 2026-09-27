@@ -59,8 +59,10 @@ impl ToolDiscovery {
     /// lazy: ordinary local analysis should not be invited to search task notes or
     /// history before it has used direct workspace evidence.
     pub fn agent() -> Self {
-        let mut discovery = Self::default();
-        discovery.search_enabled = false;
+        let mut discovery = Self {
+            search_enabled: false,
+            ..Self::default()
+        };
         discovery.load(STABLE_INSPECTION_TOOLS);
         discovery.load(STABLE_EXECUTION_TOOLS);
         discovery
@@ -70,8 +72,10 @@ impl ToolDiscovery {
     /// session tools remain lazy so source inspection does not drift into notes or
     /// historical context unless the model has a concrete reason to request them.
     pub fn coding(implementation_requested: bool) -> Self {
-        let mut discovery = Self::default();
-        discovery.search_enabled = false;
+        let mut discovery = Self {
+            search_enabled: false,
+            ..Self::default()
+        };
         // Keep this deliberately ordered. Implementation turns pay once for the
         // complete inspect/edit/verify surface instead of promoting shell_job or
         // context_status halfway through a long coding loop.
@@ -87,8 +91,10 @@ impl ToolDiscovery {
     /// stable without paying for context-recovery schemas. Detached-job and
     /// artifact readers are promoted only when those states actually occur.
     pub fn bounded_analysis() -> Self {
-        let mut discovery = Self::default();
-        discovery.search_enabled = false;
+        let mut discovery = Self {
+            search_enabled: false,
+            ..Self::default()
+        };
         discovery.load(STABLE_INSPECTION_TOOLS);
         discovery.load(STABLE_BOUNDED_EXECUTION_TOOLS);
         discovery
@@ -99,8 +105,10 @@ impl ToolDiscovery {
     /// The model uses one native shell metadata command and then reads the
     /// selected file directly.
     pub fn direct_file_lookup() -> Self {
-        let mut discovery = Self::default();
-        discovery.search_enabled = false;
+        let mut discovery = Self {
+            search_enabled: false,
+            ..Self::default()
+        };
         discovery.load(["run_shell", "read_file"]);
         discovery
     }
@@ -109,8 +117,10 @@ impl ToolDiscovery {
     /// readers are promoted only after a result is actually externalized;
     /// session history, task notes, and project memory stay lazy.
     pub fn research() -> Self {
-        let mut discovery = Self::default();
-        discovery.search_enabled = false;
+        let mut discovery = Self {
+            search_enabled: false,
+            ..Self::default()
+        };
         discovery.load(["web_search", "web_read"]);
         discovery
     }

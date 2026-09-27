@@ -149,8 +149,7 @@ fn ignored_workspace_directory(name: &str) -> bool {
 }
 
 fn requested_path_hits_ignored_directory(path: &str) -> bool {
-    path.split(|character| character == '/' || character == '\\')
-        .any(ignored_workspace_directory)
+    path.split(['/', '\\']).any(ignored_workspace_directory)
 }
 
 fn workspace_entry_priority(name: &str) -> u8 {
@@ -189,6 +188,7 @@ fn list_files_in_process(
     max_results: usize,
     max_depth: usize,
 ) -> Result<ListFilesResult> {
+    #[allow(clippy::too_many_arguments)] // Recursive traversal carries bounded accumulator state.
     fn walk(
         root: &Path,
         path: &Path,
@@ -326,6 +326,7 @@ fn search_workspace_in_process(
     let mut files_scanned = 0usize;
     let mut truncated = false;
 
+    #[allow(clippy::too_many_arguments)] // Recursive traversal carries bounded accumulator state.
     fn walk(
         root: &Path,
         path: &Path,

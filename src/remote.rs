@@ -836,16 +836,16 @@ fn resolve_executable() -> Result<PathBuf> {
         }
     }
     let current = std::env::current_exe().context("locate Yeet executable")?;
-    if let Some(parent) = current.parent() {
-        if parent.file_name().and_then(|n| n.to_str()) == Some("deps") {
-            let candidate = parent.parent().unwrap_or(parent).join(if cfg!(windows) {
-                "yeet.exe"
-            } else {
-                "yeet"
-            });
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
+    if let Some(parent) = current.parent()
+        && parent.file_name().and_then(|n| n.to_str()) == Some("deps")
+    {
+        let candidate =
+            parent
+                .parent()
+                .unwrap_or(parent)
+                .join(if cfg!(windows) { "yeet.exe" } else { "yeet" });
+        if candidate.is_file() {
+            return Ok(candidate);
         }
     }
     Ok(current)
@@ -1264,14 +1264,6 @@ pub struct RemoteServer {
 impl RemoteServer {
     pub fn start(options: &RemoteOptions) -> Result<Self> {
         Self::start_inner(options, None)
-    }
-
-    #[cfg(test)]
-    fn start_with_auth_document(
-        options: &RemoteOptions,
-        document: RemoteAuthDocument,
-    ) -> Result<Self> {
-        Self::start_inner(options, Some(document))
     }
 
     fn start_inner(

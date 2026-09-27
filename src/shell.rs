@@ -1215,13 +1215,6 @@ impl BoundedOutput {
     }
 }
 
-#[cfg(test)]
-impl BoundedOutput {
-    fn retained_bytes(&self) -> usize {
-        self.head.len() + self.tail.bytes.len()
-    }
-}
-
 #[derive(Debug)]
 struct CapturedOutput {
     total_bytes: usize,
@@ -1286,11 +1279,6 @@ impl TailBuffer {
         }
         self.bytes
     }
-}
-
-#[cfg(test)]
-fn read_bounded(reader: impl Read, limit: usize) -> BoundedOutput {
-    read_bounded_with_progress(reader, limit, None, ShellStream::Stdout)
 }
 
 fn read_bounded_with_progress(

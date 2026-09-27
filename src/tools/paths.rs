@@ -14,22 +14,6 @@ use std::{
 use anyhow::{Result, bail};
 use sha2::{Digest, Sha256};
 
-/// Returns whether a requested path resolves outside the active workspace.
-#[cfg(test)]
-pub(super) fn path_outside_workspace(root: &Path, input: &str) -> Result<bool> {
-    if input.trim().is_empty() || input.contains('\0') {
-        bail!("invalid file path");
-    }
-    let input = Path::new(input);
-    let joined = if input.is_absolute() {
-        input.to_path_buf()
-    } else {
-        root.join(input)
-    };
-    let resolved = canonicalize_existing_ancestor(&joined)?;
-    Ok(!(resolved == root || resolved.starts_with(root)))
-}
-
 /// Returns a stable display/cache key for a workspace path.
 ///
 /// Paths inside the workspace are canonicalized to the same forward-slash relative

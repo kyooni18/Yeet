@@ -592,6 +592,7 @@ fn summarize_structured_edit(edit: &Value) -> String {
     detail
 }
 
+#[allow(clippy::too_many_arguments)] // Turn accounting updates one cohesive state transition.
 fn rollover_handoff_message(
     successful_mutations: usize,
     unresolved_failed_mutation: bool,

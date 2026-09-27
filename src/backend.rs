@@ -606,12 +606,12 @@ impl BackendService {
         let (_, remote_file_payload) = split_remote_file_context(&original_content);
         let remote_file_payload = remote_file_payload.map(str::to_owned);
         let mut text = replacement_text.unwrap_or(original_content);
-        if let Some(payload) = remote_file_payload {
-            if split_remote_file_context(&text).1.is_none() {
-                text.push_str(REMOTE_FILE_CONTEXT_OPEN);
-                text.push_str(&payload);
-                text.push_str(REMOTE_FILE_CONTEXT_CLOSE);
-            }
+        if let Some(payload) = remote_file_payload
+            && split_remote_file_context(&text).1.is_none()
+        {
+            text.push_str(REMOTE_FILE_CONTEXT_OPEN);
+            text.push_str(&payload);
+            text.push_str(REMOTE_FILE_CONTEXT_CLOSE);
         }
         if text.is_empty() && images.is_empty() {
             return Err(anyhow!("edited message cannot be empty"));
@@ -993,14 +993,14 @@ impl BackendService {
                 }
             }
 
-            if let Some(prepared) = final_write {
-                if let Err(error) = commit_session_write(&store, prepared) {
-                    let mut state = shared.lock_or_recover();
-                    state.state.error_message = Some(format!("Save failed: {error}"));
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope_without_conversation(
-                        &state.state,
-                    )));
-                }
+            if let Some(prepared) = final_write
+                && let Err(error) = commit_session_write(&store, prepared)
+            {
+                let mut state = shared.lock_or_recover();
+                state.state.error_message = Some(format!("Save failed: {error}"));
+                let _ = tx.send(BackendEvent::Envelope(state_envelope_without_conversation(
+                    &state.state,
+                )));
             }
 
             if let Ok(catalog) = SessionCatalog::read_from_store(&store, &workspace) {
@@ -1038,14 +1038,14 @@ impl BackendService {
                     None
                 };
 
-                if let Some(Some(prepared)) = title_write {
-                    if let Err(error) = commit_session_write(&store, prepared) {
-                        let mut state = shared.lock_or_recover();
-                        state.state.error_message = Some(format!("Save failed: {error}"));
-                        let _ = tx.send(BackendEvent::Envelope(
-                            state_envelope_without_conversation(&state.state),
-                        ));
-                    }
+                if let Some(Some(prepared)) = title_write
+                    && let Err(error) = commit_session_write(&store, prepared)
+                {
+                    let mut state = shared.lock_or_recover();
+                    state.state.error_message = Some(format!("Save failed: {error}"));
+                    let _ = tx.send(BackendEvent::Envelope(state_envelope_without_conversation(
+                        &state.state,
+                    )));
                 }
 
                 if let Ok(catalog) = SessionCatalog::read_from_store(&store, &workspace) {

@@ -37,6 +37,7 @@ impl WorkspaceMutationLease {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(&path)
             .with_context(|| format!("open workspace mutation lease {}", path.display()))?;
 

@@ -70,19 +70,6 @@ pub(super) fn select_tools_for_profile(
     }
 }
 
-/// Builds the model history appropriate for the selected execution lane.
-#[cfg(test)]
-pub(super) fn request_history_for_profile(
-    history: &[Message],
-    profile: TaskProfile,
-) -> Vec<Message> {
-    let start = history
-        .iter()
-        .rposition(|m| m.role == MessageRole::User)
-        .unwrap_or(history.len());
-    request_history_for_profile_at(history, profile, start)
-}
-
 /// Execution lanes restrict available tools, not previously submitted evidence.
 /// Lane-specific guidance is appended by the coordinator at the new turn.
 pub(super) fn request_history_for_profile_at(

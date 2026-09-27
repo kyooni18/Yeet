@@ -46,8 +46,12 @@ unsafe fn string_from_ptr<'a>(value: *const c_char, name: &str) -> Result<&'a st
         .map_err(|error| format!("{name} is not valid UTF-8: {error}"))
 }
 
+/// Creates an embedded harness for a workspace.
+///
+/// # Safety
+/// The workspace pointer must reference a valid NUL-terminated C string for this call.
 #[unsafe(no_mangle)]
-pub extern "C" fn yeet_harness_create_embedded(workspace: *const c_char) -> *mut Harness {
+pub unsafe extern "C" fn yeet_harness_create_embedded(workspace: *const c_char) -> *mut Harness {
     clear_error();
 
     let workspace = match unsafe { string_from_ptr(workspace, "workspace") } {
@@ -67,8 +71,12 @@ pub extern "C" fn yeet_harness_create_embedded(workspace: *const c_char) -> *mut
     }
 }
 
+/// Destroys a harness created by Yeet.
+///
+/// # Safety
+/// The handle must be null or a live Yeet harness pointer and must not be freed twice.
 #[unsafe(no_mangle)]
-pub extern "C" fn yeet_harness_destroy(handle: *mut Harness) {
+pub unsafe extern "C" fn yeet_harness_destroy(handle: *mut Harness) {
     if handle.is_null() {
         return;
     }
@@ -80,8 +88,16 @@ pub extern "C" fn yeet_harness_destroy(handle: *mut Harness) {
     }
 }
 
+/// Sends one serialized harness command.
+///
+/// # Safety
+/// The handle must be live and exclusively accessed by the host. The command pointer must be a
+/// valid NUL-terminated C string for this call.
 #[unsafe(no_mangle)]
-pub extern "C" fn yeet_harness_send_json(handle: *mut Harness, command_json: *const c_char) -> i32 {
+pub unsafe extern "C" fn yeet_harness_send_json(
+    handle: *mut Harness,
+    command_json: *const c_char,
+) -> i32 {
     clear_error();
 
     if handle.is_null() {
@@ -117,8 +133,13 @@ pub extern "C" fn yeet_harness_send_json(handle: *mut Harness, command_json: *co
     }
 }
 
+/// Attempts to receive one serialized harness event.
+///
+/// # Safety
+/// The handle must be live and exclusively accessed by the host. The output pointer must be valid
+/// writable storage for one C string pointer.
 #[unsafe(no_mangle)]
-pub extern "C" fn yeet_harness_try_recv_json(
+pub unsafe extern "C" fn yeet_harness_try_recv_json(
     handle: *mut Harness,
     output: *mut *mut c_char,
 ) -> i32 {
@@ -160,8 +181,12 @@ pub extern "C" fn yeet_harness_try_recv_json(
     }
 }
 
+/// Serializes the latest harness state.
+///
+/// # Safety
+/// The handle must be a live Yeet harness with exclusive host access.
 #[unsafe(no_mangle)]
-pub extern "C" fn yeet_harness_state_json(handle: *mut Harness) -> *mut c_char {
+pub unsafe extern "C" fn yeet_harness_state_json(handle: *mut Harness) -> *mut c_char {
     clear_error();
 
     if handle.is_null() {
@@ -195,8 +220,12 @@ pub extern "C" fn yeet_harness_take_last_error() -> *mut c_char {
     })
 }
 
+/// Frees a string returned by a Yeet C-ABI function.
+///
+/// # Safety
+/// The value must be null or a pointer returned by Yeet that has not already been freed.
 #[unsafe(no_mangle)]
-pub extern "C" fn yeet_string_free(value: *mut c_char) {
+pub unsafe extern "C" fn yeet_string_free(value: *mut c_char) {
     if value.is_null() {
         return;
     }

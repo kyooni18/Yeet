@@ -476,46 +476,102 @@ fn tool_activity_title(call: &crate::model::ConversationToolCall) -> String {
     let fallback_verb = humanize_tool_name(&call.name);
     let verb = match call.name.as_str() {
         "apply_file_edits" => {
-            if active { "Editing" } else { "Edited" }
+            if active {
+                "Editing"
+            } else {
+                "Edited"
+            }
         }
         "search_workspace" | "search_artifact" | "web_search" => {
-            if active { "Searching" } else { "Searched" }
+            if active {
+                "Searching"
+            } else {
+                "Searched"
+            }
         }
         "search_tools" => {
-            if active { "Finding tools" } else { "Found tools" }
+            if active {
+                "Finding tools"
+            } else {
+                "Found tools"
+            }
         }
         "task_notes" => {
-            if active { "Updating notes" } else { "Updated notes" }
+            if active {
+                "Updating notes"
+            } else {
+                "Updated notes"
+            }
         }
         "context_history" => {
-            if active { "Reading context" } else { "Read context" }
+            if active {
+                "Reading context"
+            } else {
+                "Read context"
+            }
         }
         "read_file" | "read_files" => {
-            if active { "Reading" } else { "Read" }
+            if active {
+                "Reading"
+            } else {
+                "Read"
+            }
         }
         "read_artifact" => {
-            if active { "Reading output" } else { "Read output" }
+            if active {
+                "Reading output"
+            } else {
+                "Read output"
+            }
         }
         "read_document" => {
-            if active { "Reading document" } else { "Read document" }
+            if active {
+                "Reading document"
+            } else {
+                "Read document"
+            }
         }
         "web_read" => {
-            if active { "Reading web source" } else { "Read web source" }
+            if active {
+                "Reading web source"
+            } else {
+                "Read web source"
+            }
         }
         "run_shell" => {
-            if active { "Running command" } else { "Ran command" }
+            if active {
+                "Running command"
+            } else {
+                "Ran command"
+            }
         }
         "shell_job" => {
-            if active { "Checking command" } else { "Checked command" }
+            if active {
+                "Checking command"
+            } else {
+                "Checked command"
+            }
         }
         "list_files" => {
-            if active { "Listing files" } else { "Listed files" }
+            if active {
+                "Listing files"
+            } else {
+                "Listed files"
+            }
         }
         "analyze_data" => {
-            if active { "Analyzing data" } else { "Analyzed data" }
+            if active {
+                "Analyzing data"
+            } else {
+                "Analyzed data"
+            }
         }
         "computer_use" | "desktop_control" => {
-            if active { "Using computer" } else { "Used computer" }
+            if active {
+                "Using computer"
+            } else {
+                "Used computer"
+            }
         }
         _ => fallback_verb.as_str(),
     };
@@ -535,9 +591,7 @@ fn tool_activity_title(call: &crate::model::ConversationToolCall) -> String {
 fn tool_activity_summary(call: &crate::model::ConversationToolCall) -> Option<String> {
     let mut summary = match call.name.as_str() {
         "apply_file_edits" => Some(edit_activity_detail(call)),
-        "search_workspace" | "search_artifact" | "web_search" => {
-            Some(search_activity_detail(call))
-        }
+        "search_workspace" | "search_artifact" | "web_search" => Some(search_activity_detail(call)),
         "read_file" | "read_files" => Some(read_activity_detail(call)),
         "run_shell" => tool_json_string(call, &["command"])
             .map(|value| compact_tool_text(&value, 88))
@@ -562,7 +616,10 @@ fn tool_activity_summary(call: &crate::model::ConversationToolCall) -> Option<St
             | ToolCallStatus::Cancelled
             | ToolCallStatus::Interrupted
             | ToolCallStatus::TimedOut
-    ) && let Some(error) = call.error.as_deref().filter(|value| !value.trim().is_empty())
+    ) && let Some(error) = call
+        .error
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
     {
         let error = compact_tool_text(error, 72);
         summary = Some(match summary {
@@ -1363,41 +1420,43 @@ mod compact_tool_group_tests {
             result: None,
             error: None,
         };
-        let mut app = App::default();
-        app.conversation = vec![
-            ConversationEntry {
-                id: "user".into(),
-                kind: ConversationKind::User {
-                    content: "GPT-6 Sol rumors".into(),
+        let app = App {
+            conversation: vec![
+                ConversationEntry {
+                    id: "user".into(),
+                    kind: ConversationKind::User {
+                        content: "GPT-6 Sol rumors".into(),
+                    },
                 },
-            },
-            ConversationEntry {
-                id: "reasoning-1".into(),
-                kind: ConversationKind::Reasoning {
-                    content: String::new(),
-                    summary: Some("**Checking sources**".into()),
+                ConversationEntry {
+                    id: "reasoning-1".into(),
+                    kind: ConversationKind::Reasoning {
+                        content: String::new(),
+                        summary: Some("**Checking sources**".into()),
+                    },
                 },
-            },
-            ConversationEntry {
-                id: "tool-1".into(),
-                kind: ConversationKind::ToolCall {
-                    tool_call: call("search", "web_search"),
+                ConversationEntry {
+                    id: "tool-1".into(),
+                    kind: ConversationKind::ToolCall {
+                        tool_call: call("search", "web_search"),
+                    },
                 },
-            },
-            ConversationEntry {
-                id: "reasoning-2".into(),
-                kind: ConversationKind::Reasoning {
-                    content: String::new(),
-                    summary: Some("**Cross-checking claims**".into()),
+                ConversationEntry {
+                    id: "reasoning-2".into(),
+                    kind: ConversationKind::Reasoning {
+                        content: String::new(),
+                        summary: Some("**Cross-checking claims**".into()),
+                    },
                 },
-            },
-            ConversationEntry {
-                id: "tool-2".into(),
-                kind: ConversationKind::ToolCall {
-                    tool_call: call("read", "web_read"),
+                ConversationEntry {
+                    id: "tool-2".into(),
+                    kind: ConversationKind::ToolCall {
+                        tool_call: call("read", "web_read"),
+                    },
                 },
-            },
-        ];
+            ],
+            ..App::default()
+        };
 
         let transcript = transcript_text(&app, 100);
         let text = transcript
@@ -1537,10 +1596,12 @@ mod overall_layout_tests {
 
     #[test]
     fn history_status_explains_return_shortcut_at_narrow_widths() {
-        let mut app = App::default();
-        app.follow_tail = false;
-        app.max_scroll = 200;
-        app.scroll_y = 40;
+        let app = App {
+            follow_tail: false,
+            max_scroll: 200,
+            scroll_y: 40,
+            ..App::default()
+        };
         for width in [20, 40, 80] {
             let line = status_line(&app, width);
             assert!(line.to_string().contains("Ctrl+End"));

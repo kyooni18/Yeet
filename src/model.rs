@@ -393,6 +393,7 @@ pub struct ConversationEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)] // Preserve the public serde/UI model shape without boxing variants.
 pub enum ConversationKind {
     #[serde(rename = "user")]
     User { content: String },

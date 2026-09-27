@@ -75,6 +75,7 @@ impl ContextMemory {
         self.state.goal.as_mut()
     }
 
+    #[allow(clippy::too_many_arguments)] // Cohesive durable checkpoint state is passed atomically.
     pub(super) fn set_agent_checkpoint(
         &mut self,
         objective: &str,

@@ -236,22 +236,13 @@ fn canonical_base_prefix(request: &CallRequest) -> Vec<Message> {
         .collect()
 }
 
-/// Marks the current user message as the stable prompt-cache boundary.
-#[cfg(test)]
-pub(super) fn mark_turn_cache_breakpoint(messages: &mut [Message], input: &str) {
-    if let Some(message) = messages.iter_mut().rev().find(|message| {
-        message.role == MessageRole::User && message.content.as_deref() == Some(input)
-    }) {
-        message.cache_breakpoint = Some(true);
-    }
-}
-
 /// Inserts turn-stable overlays while keeping the oldest explicit cache boundary
 /// on the canonical user message. The overlay tail gets a second boundary so
 /// repeated tool rounds can still cache large turn-local guidance, but the next
 /// user turn can reuse the earlier canonical prefix after request-only overlays
 /// disappear.
 #[cfg(test)]
+#[allow(dead_code)] // Called from child test modules under all-target Clippy builds.
 pub(super) fn insert_turn_stable_overlays(
     messages: &mut Vec<Message>,
     input: &str,
@@ -688,6 +679,7 @@ pub(super) fn diagnostics(request: &CallRequest) -> Value {
 }
 
 #[cfg(test)]
+#[allow(dead_code)] // Called from child test modules under all-target Clippy builds.
 pub(super) fn usage_diagnostics(request_diagnostics: &Value, usage: Option<&Usage>) -> Value {
     super::turn_state::usage_diagnostics(request_diagnostics, usage)
 }

@@ -233,6 +233,7 @@ pub(super) fn resolve_workspace_path(base: &Path, value: &str) -> Result<PathBuf
 }
 
 #[cfg(any(test, not(unix)))]
+#[allow(dead_code)] // Used by non-Unix stdio serving; Unix test builds compile it without calling it.
 fn serve_io<R: BufRead, W: Write>(
     server: &mut McpServer,
     mut reader: R,
