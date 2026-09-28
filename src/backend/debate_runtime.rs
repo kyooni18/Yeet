@@ -76,7 +76,7 @@ impl BackendService {
             coordinator.set_retained_debate_knowledge(retained_knowledge);
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        *self.active_cancel.lock_or_recover() = Some(cancel.clone());
+        self.run_manager.register(turn.clone(), cancel.clone());
         self.publish_state();
         let shared = self.shared.clone();
         let coordinator = self.coordinator.clone();
@@ -90,7 +90,7 @@ impl BackendService {
         let store = self.store.clone();
         let workspace = self.workspace_root.clone();
         let tx = self.tx.clone();
-        let active_cancel = self.active_cancel.clone();
+        let run_manager = self.run_manager.clone();
         thread::spawn(move || {
             let result = (|| -> Result<()> {
                 let framing_grounding = {
@@ -762,7 +762,7 @@ impl BackendService {
             {
                 coordinator.set_retained_debate_knowledge(knowledge);
             }
-            clear_matching_cancel(&active_cancel, &cancel);
+            run_manager.remove_matching(&turn, &cancel);
         });
         Ok(())
     }

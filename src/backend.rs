@@ -33,6 +33,7 @@ use crate::{
         SessionSummary, ToolCallStatus, WorkspaceSessionGroup, WorkspaceSummary,
         normalize_reasoning_level, reasoning_levels_for_model,
     },
+    orchestration::RunManager,
     permission::PermissionBroker,
     project_settings::{ProjectSettingsStore, ServiceBackend},
     sandbox::{
@@ -152,7 +153,7 @@ pub(crate) struct BackendService {
     store: SessionStore,
     workspace_root: PathBuf,
     permission: PermissionBroker,
-    active_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    run_manager: RunManager,
     goal_mode: Arc<AtomicBool>,
     events: Receiver<BackendEvent>,
     tx: EventSender,
@@ -278,7 +279,7 @@ impl BackendService {
             store,
             workspace_root,
             permission,
-            active_cancel: Arc::new(Mutex::new(None)),
+            run_manager: RunManager::default(),
             goal_mode: Arc::new(AtomicBool::new(false)),
             events,
             tx,
@@ -763,7 +764,7 @@ impl BackendService {
             return Ok(());
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        *self.active_cancel.lock_or_recover() = Some(cancel.clone());
+        self.run_manager.register(turn_id.clone(), cancel.clone());
         {
             let history = self.coordinator.lock_or_recover().model_history();
             let prepared = crate::session_store::ensure_workspace_id(&self.workspace_root)
@@ -791,7 +792,7 @@ impl BackendService {
                 state.meta.current_turn = None;
                 state.state.error_message = Some(format!("Save failed: {error}"));
                 drop(state);
-                *self.active_cancel.lock_or_recover() = None;
+                self.run_manager.remove_matching(&turn_id, &cancel);
                 self.publish_state();
                 return Ok(());
             }
@@ -813,7 +814,7 @@ impl BackendService {
         let tx = self.tx.clone();
         let store = self.store.clone();
         let workspace = self.workspace_root.clone();
-        let active_cancel = self.active_cancel.clone();
+        let run_manager = self.run_manager.clone();
         let goal_mode = self.goal_mode.clone();
         let permission = self.permission.clone();
         let bridge = self.bridge.clone();
@@ -1056,7 +1057,7 @@ impl BackendService {
                     )));
                 }
             }
-            clear_matching_cancel(&active_cancel, &cancel);
+            run_manager.remove_matching(&turn_id, &cancel);
         });
         Ok(())
     }
@@ -1172,16 +1173,6 @@ impl BackendService {
 impl Drop for BackendService {
     fn drop(&mut self) {
         self.shutdown();
-    }
-}
-
-fn clear_matching_cancel(slot: &Arc<Mutex<Option<Arc<AtomicBool>>>>, completed: &Arc<AtomicBool>) {
-    if let Ok(mut active) = slot.lock()
-        && active
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, completed))
-    {
-        *active = None;
     }
 }
 

@@ -221,7 +221,7 @@ impl BackendService {
                 shared.state.current_session_id.clone()
             }
         };
-        *self.active_cancel.lock_or_recover() = None;
+        self.run_manager.detach_all();
         let Some(session_id) = replaced_session_id else {
             return Ok(());
         };
@@ -241,9 +241,7 @@ impl BackendService {
 
     /// Requests cancellation for the active run and pending permission prompt.
     pub(super) fn interrupt(&self) {
-        if let Some(cancel) = self.active_cancel.lock_or_recover().as_ref() {
-            cancel.store(true, Ordering::Release);
-        }
+        self.run_manager.cancel_all();
         self.bridge.interrupt_active_requests();
         if self.permission.pending_shell().is_some()
             || self.permission.pending_native_app().is_some()
@@ -286,7 +284,7 @@ impl BackendService {
                 shared.state.current_session_id.clone()
             }
         };
-        *self.active_cancel.lock_or_recover() = None;
+        self.run_manager.detach_all();
 
         if let Some(session_id) = session_id {
             let history = if let Ok(coordinator) = self.coordinator.try_lock() {
