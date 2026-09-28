@@ -61,6 +61,7 @@ impl BackendService {
         shared.state.active_model = stored.model;
         shared.state.token_usage = stored.token_usage;
         shared.state.goal_mode = persisted_goal;
+        shared.state.agent_mode = stored.agent_mode;
         shared.state.current_context_tokens = None;
         shared.state.sandbox_settings = sandbox_settings;
         shared.state.credit_usage = stored.credit_usage;

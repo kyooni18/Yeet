@@ -9,7 +9,7 @@ impl BackendService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /attach ID  /detach ID  /clear"),
+            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /agents [on|off|adaptive|single|status]  /attach ID  /detach ID  /clear"),
             "/new" => self.new_session(),
             "/model" => {
                 if arguments.is_empty() {
@@ -250,6 +250,29 @@ impl BackendService {
                         self.append_system(&format!("Goal: {}", if current { "ON" } else { "OFF" }));
                     }
                     Some(_) => self.append_system("Usage: /goal [on|off|toggle|status]"),
+                }
+            }
+            "/agents" => {
+                let current = self.shared.lock_or_recover().state.agent_mode;
+                match arguments.first().copied() {
+                    None | Some("status") => self.append_system(&format!(
+                        "Agents: {}",
+                        match current {
+                            AgentMode::Single => "single",
+                            AgentMode::Adaptive => "adaptive",
+                        }
+                    )),
+                    Some("on") | Some("enable") | Some("adaptive") => {
+                        self.set_agent_mode(AgentMode::Adaptive)?;
+                        self.append_system("Agents: adaptive");
+                    }
+                    Some("off") | Some("disable") | Some("single") => {
+                        self.set_agent_mode(AgentMode::Single)?;
+                        self.append_system("Agents: single");
+                    }
+                    Some(_) => self.append_system(
+                        "Usage: /agents [on|off|adaptive|single|status]",
+                    ),
                 }
             }
             "/image" => {

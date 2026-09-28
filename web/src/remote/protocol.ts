@@ -251,6 +251,8 @@ export interface RuntimeSettingsState {
   jevLoopMode: string
 }
 
+export type AgentMode = 'single' | 'adaptive'
+
 export interface BridgeState {
   workspace_root?: string | null
   conversation_revision: number
@@ -263,6 +265,7 @@ export interface BridgeState {
   active_reasoning_summary: string
   is_streaming: boolean
   goal_mode: boolean
+  agent_mode: AgentMode
   error_message?: string | null
   active_model: string
   active_reasoning_level: string
@@ -312,6 +315,7 @@ export const emptyBridgeState = (): BridgeState => ({
   active_reasoning_summary: '',
   is_streaming: false,
   goal_mode: false,
+  agent_mode: 'single',
   active_model: '',
   active_reasoning_level: 'auto',
   token_usage: {},
@@ -369,6 +373,7 @@ export type FrontendCommand =
   | { type: 'select_model'; model: string }
   | { type: 'select_reasoning'; level: string }
   | { type: 'set_goal'; enabled: boolean }
+  | { type: 'set_agent_mode'; mode: AgentMode }
   | { type: 'request_sessions' }
   | { type: 'load_session'; session_id: string }
   | { type: 'new_session' }

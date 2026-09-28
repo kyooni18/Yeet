@@ -394,6 +394,7 @@ pub(super) fn prepare_session_write_locked(
                 .map(|path| crate::session_store::workspace_relative_path(workspace, path))
                 .collect(),
             model: state.state.active_model.clone(),
+            agent_mode: state.state.agent_mode,
             token_usage: state.state.token_usage.clone(),
             credit_usage: state.state.credit_usage,
             conversation,

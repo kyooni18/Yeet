@@ -18,7 +18,9 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::{
     core::{Message, Usage},
-    model::{ConversationEntry, SessionSummary, WorkspaceSessionGroup, WorkspaceSummary},
+    model::{
+        AgentMode, ConversationEntry, SessionSummary, WorkspaceSessionGroup, WorkspaceSummary,
+    },
     platform::{replace_file, set_private_directory, set_private_file, sync_directory},
 };
 
@@ -56,6 +58,8 @@ pub struct StoredSession {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_roots: Vec<String>,
     pub model: String,
+    #[serde(default)]
+    pub agent_mode: AgentMode,
     pub token_usage: Usage,
     pub credit_usage: u64,
     pub conversation: Vec<ConversationEntry>,
@@ -1617,6 +1621,7 @@ mod tests {
             working_directory: Some("src".into()),
             context_roots: vec![".".into()],
             model: "test".into(),
+            agent_mode: AgentMode::Single,
             token_usage: Usage::default(),
             credit_usage: 0,
             conversation: Vec::new(),
@@ -1626,6 +1631,16 @@ mod tests {
             attached_harness_capabilities: None,
             disabled_capabilities: Vec::new(),
         }
+    }
+
+    #[test]
+    fn missing_agent_mode_defaults_to_single() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut value = serde_json::to_value(session("legacy", temp.path(), None)).unwrap();
+        value.as_object_mut().unwrap().remove("agentMode");
+
+        let restored: StoredSession = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.agent_mode, AgentMode::Single);
     }
 
     #[test]

@@ -26,12 +26,12 @@ use crate::{
         BridgeEvent, CallRequest, HarnessCapabilityDescriptor, ImageAttachment, Message, Usage,
     },
     model::{
-        AuthProviderItem, BridgeEnvelope, BridgeState, CapabilityToggleItem, ConversationEntry,
-        ConversationKind, ConversationToolCall, FrontendCommand, ModelActivity, ModelCatalogItem,
-        NativeAppPermission, ProviderConfigurationItem, RuntimeSettingsState, SandboxAction,
-        SandboxEnvironmentItem, SandboxLimitsState, SandboxNetworkItem, SandboxSettingsState,
-        SessionSummary, ToolCallStatus, WorkspaceSessionGroup, WorkspaceSummary,
-        normalize_reasoning_level, reasoning_levels_for_model,
+        AgentMode, AuthProviderItem, BridgeEnvelope, BridgeState, CapabilityToggleItem,
+        ConversationEntry, ConversationKind, ConversationToolCall, FrontendCommand, ModelActivity,
+        ModelCatalogItem, NativeAppPermission, ProviderConfigurationItem, RuntimeSettingsState,
+        SandboxAction, SandboxEnvironmentItem, SandboxLimitsState, SandboxNetworkItem,
+        SandboxSettingsState, SessionSummary, ToolCallStatus, WorkspaceSessionGroup,
+        WorkspaceSummary, normalize_reasoning_level, reasoning_levels_for_model,
     },
     orchestration::{AgentRuntimeFactory, RunManager},
     permission::PermissionBroker,
@@ -332,6 +332,7 @@ impl BackendService {
             FrontendCommand::SelectModel { model } => self.select_model(model),
             FrontendCommand::SelectReasoning { level } => self.select_reasoning(level),
             FrontendCommand::SetGoal { enabled } => self.set_goal_enabled(enabled),
+            FrontendCommand::SetAgentMode { mode } => self.set_agent_mode(mode),
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
                 Ok(())
@@ -510,6 +511,28 @@ impl BackendService {
         if resume {
             self.submit_agent(GOAL_RESUME_PROMPT.to_owned(), false, "goal-resume", true)?;
         }
+        Ok(())
+    }
+
+    fn set_agent_mode(&mut self, mode: AgentMode) -> Result<()> {
+        if self.shared.lock_or_recover().state.is_streaming {
+            return Err(anyhow!(
+                "Agent mode cannot be changed while a response is running."
+            ));
+        }
+        let history = self
+            .coordinator
+            .lock()
+            .map_err(|_| anyhow!("coordinator lock poisoned"))?
+            .model_history();
+        {
+            let mut shared = self.shared.lock_or_recover();
+            shared.state.agent_mode = mode;
+            if shared.state.current_session_id.is_some() {
+                persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
+            }
+        }
+        self.publish_state();
         Ok(())
     }
 
