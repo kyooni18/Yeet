@@ -3,12 +3,12 @@ use super::theme;
 use super::{cell_width, centered_rect, compact_number, truncate_end, truncate_middle};
 use crate::{
     app::{App, SettingsEditKind, SettingsSection},
-    model::{AgentMode, AutonomyMode, CapabilityToggleItem, reasoning_levels_for_model},
+    model::{CapabilityToggleItem, reasoning_levels_for_model},
 };
 #[path = "dialogs/navigation.rs"]
 mod navigation;
 
-pub(super) use navigation::{draw_agent, draw_goal, draw_models, draw_reasoning, draw_sessions};
+pub(super) use navigation::{draw_goal, draw_models, draw_reasoning, draw_sessions};
 
 use ratatui::{
     Frame,

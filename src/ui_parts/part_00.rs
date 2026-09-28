@@ -24,8 +24,8 @@ mod theme;
 #[path = "../ui/yeet_brand.rs"]
 mod yeet_brand;
 use dialogs::{
-    draw_agent, draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_goal,
-    draw_help, draw_models, draw_permission, draw_provider_edit, draw_providers, draw_reasoning,
+    draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_goal, draw_help,
+    draw_models, draw_permission, draw_provider_edit, draw_providers, draw_reasoning,
     draw_sandbox_policy, draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
     draw_status_dialog,
 };
@@ -140,7 +140,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Mode::Models => draw_models(frame, app),
         Mode::Reasoning => draw_reasoning(frame, app),
         Mode::Goal => draw_goal(frame, app),
-        Mode::Agent => draw_agent(frame, app),
         Mode::Sessions => draw_sessions(frame, app),
         Mode::Capabilities => draw_capabilities(frame, app),
         Mode::CapabilityDetail => draw_capability_detail(frame, app),

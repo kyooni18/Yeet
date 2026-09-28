@@ -9,7 +9,7 @@ impl BackendService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /agent  /attach ID  /detach ID  /clear"),
+            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /attach ID  /detach ID  /clear"),
             "/new" => self.new_session(),
             "/model" => {
                 if arguments.is_empty() {
@@ -251,22 +251,6 @@ impl BackendService {
                     }
                     Some(_) => self.append_system("Usage: /goal [on|off|toggle|status]"),
                 }
-            }
-            "/agent" => {
-                let state = self.shared.lock_or_recover().state.without_conversation();
-                let agents = match state.agent_mode {
-                    AgentMode::Single => "single",
-                    AgentMode::Adaptive => "adaptive",
-                };
-                let autonomy = match state.autonomy_mode {
-                    AutonomyMode::Manual => "manual",
-                    AutonomyMode::Goal => "goal",
-                    AutonomyMode::Autonomous => "autonomous",
-                };
-                self.append_system(&format!(
-                    "Agent settings: Goal {} · Agents {agents} · Autonomy {autonomy}",
-                    if state.goal_mode { "ON" } else { "OFF" }
-                ));
             }
             "/image" => {
                 let Some(argument) = arguments.first().copied() else {
