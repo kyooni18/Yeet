@@ -143,7 +143,7 @@ fn install_release(release: &GitHubRelease, version: &Version) -> Result<()> {
             "Yeet {version} is verified and staged. It will install after this process exits."
         );
         println!("Staging directory: {}", staging.display());
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(windows))]
