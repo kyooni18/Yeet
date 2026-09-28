@@ -523,6 +523,20 @@ impl BackendService {
         } else {
             state.active_reasoning_level.as_str()
         };
+        let agent_mode = match state.agent_mode {
+            AgentMode::Single => "single",
+            AgentMode::Adaptive => "adaptive",
+        };
+        let autonomy_mode = match state.autonomy_mode {
+            AutonomyMode::Manual => "manual",
+            AutonomyMode::Goal => "goal",
+            AutonomyMode::Autonomous => "autonomous",
+        };
+        let active_workers = state
+            .agent_tasks
+            .iter()
+            .filter(|task| matches!(task.status.as_str(), "pending" | "running"))
+            .count();
         let (permission, sandbox_detail) = state
             .sandbox_settings
             .as_ref()
@@ -550,6 +564,11 @@ impl BackendService {
             format!("Tokens: input {input} · output {output} · reasoning {reasoning_tokens}"),
             cache_line,
             format!("Reasoning mode: {reasoning_mode}"),
+            format!(
+                "Agents: {agent_mode} · {active_workers} active / {} tracked",
+                state.agent_tasks.len()
+            ),
+            format!("Autonomy: {autonomy_mode}"),
             format!("Goal: {}", if state.goal_mode { "ON" } else { "OFF" }),
             format!("Permission: {permission} · {sandbox_detail}"),
             self.session_environment_report()
