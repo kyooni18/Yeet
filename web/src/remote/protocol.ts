@@ -252,6 +252,7 @@ export interface RuntimeSettingsState {
 }
 
 export type AgentMode = 'single' | 'adaptive'
+export type AutonomyMode = 'manual' | 'goal' | 'autonomous'
 
 export interface BridgeState {
   workspace_root?: string | null
@@ -266,6 +267,7 @@ export interface BridgeState {
   is_streaming: boolean
   goal_mode: boolean
   agent_mode: AgentMode
+  autonomy_mode: AutonomyMode
   error_message?: string | null
   active_model: string
   active_reasoning_level: string
@@ -316,6 +318,7 @@ export const emptyBridgeState = (): BridgeState => ({
   is_streaming: false,
   goal_mode: false,
   agent_mode: 'single',
+  autonomy_mode: 'manual',
   active_model: '',
   active_reasoning_level: 'auto',
   token_usage: {},
@@ -374,6 +377,7 @@ export type FrontendCommand =
   | { type: 'select_reasoning'; level: string }
   | { type: 'set_goal'; enabled: boolean }
   | { type: 'set_agent_mode'; mode: AgentMode }
+  | { type: 'set_autonomy_mode'; mode: AutonomyMode }
   | { type: 'request_sessions' }
   | { type: 'load_session'; session_id: string }
   | { type: 'new_session' }

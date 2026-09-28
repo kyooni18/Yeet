@@ -77,6 +77,15 @@ pub enum AgentMode {
     Adaptive,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomyMode {
+    #[default]
+    Manual,
+    Goal,
+    Autonomous,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BridgeState {
@@ -93,6 +102,7 @@ pub struct BridgeState {
     pub is_streaming: bool,
     pub goal_mode: bool,
     pub agent_mode: AgentMode,
+    pub autonomy_mode: AutonomyMode,
     pub error_message: Option<String>,
     pub active_model: String,
     pub active_reasoning_level: String,
@@ -149,6 +159,7 @@ impl BridgeState {
             is_streaming: self.is_streaming,
             goal_mode: self.goal_mode,
             agent_mode: self.agent_mode,
+            autonomy_mode: self.autonomy_mode,
             error_message: self.error_message.clone(),
             active_model: self.active_model.clone(),
             active_reasoning_level: self.active_reasoning_level.clone(),
@@ -559,6 +570,9 @@ pub enum FrontendCommand {
     },
     SetAgentMode {
         mode: AgentMode,
+    },
+    SetAutonomyMode {
+        mode: AutonomyMode,
     },
     RequestSessions,
     LoadSession {

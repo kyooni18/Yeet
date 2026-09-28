@@ -26,12 +26,13 @@ use crate::{
         BridgeEvent, CallRequest, HarnessCapabilityDescriptor, ImageAttachment, Message, Usage,
     },
     model::{
-        AgentMode, AuthProviderItem, BridgeEnvelope, BridgeState, CapabilityToggleItem,
-        ConversationEntry, ConversationKind, ConversationToolCall, FrontendCommand, ModelActivity,
-        ModelCatalogItem, NativeAppPermission, ProviderConfigurationItem, RuntimeSettingsState,
-        SandboxAction, SandboxEnvironmentItem, SandboxLimitsState, SandboxNetworkItem,
-        SandboxSettingsState, SessionSummary, ToolCallStatus, WorkspaceSessionGroup,
-        WorkspaceSummary, normalize_reasoning_level, reasoning_levels_for_model,
+        AgentMode, AuthProviderItem, AutonomyMode, BridgeEnvelope, BridgeState,
+        CapabilityToggleItem, ConversationEntry, ConversationKind, ConversationToolCall,
+        FrontendCommand, ModelActivity, ModelCatalogItem, NativeAppPermission,
+        ProviderConfigurationItem, RuntimeSettingsState, SandboxAction, SandboxEnvironmentItem,
+        SandboxLimitsState, SandboxNetworkItem, SandboxSettingsState, SessionSummary,
+        ToolCallStatus, WorkspaceSessionGroup, WorkspaceSummary, normalize_reasoning_level,
+        reasoning_levels_for_model,
     },
     orchestration::{AgentRuntimeFactory, RunManager},
     permission::PermissionBroker,
@@ -86,6 +87,8 @@ use transport::{
 use crate::background::Wake;
 const GOAL_RESUME_PROMPT: &str = "Continue the current goal from the existing working state. Do not restart completed work. Make useful forward progress toward satisfying every requirement and do not stop until the strict goal judge can accept concrete evidence.";
 
+const AUTONOMOUS_NEXT_OBJECTIVE_PROMPT: &str = "Autonomous cycle: inspect the current conversation, workspace, working state, and completed work. Choose and complete exactly one concrete, useful, safe next objective that advances the user's established intent. Prefer unfinished work, verification, integration, or cleanup that materially improves the result. Do not invent busywork or repeat completed work. If there is no meaningful safe work left, respond with exactly AUTONOMOUS_IDLE and do not call tools.";
+const AUTONOMOUS_IDLE_MARKER: &str = "AUTONOMOUS_IDLE";
 const SKYLINE_CAPABILITY_ID: &str = crate::skyline::CAPABILITY_ID;
 const CAPABILITY_STREAMING_LOCK_ERROR: &str =
     "Capabilities cannot be changed while a response is running.";
@@ -333,6 +336,7 @@ impl BackendService {
             FrontendCommand::SelectReasoning { level } => self.select_reasoning(level),
             FrontendCommand::SetGoal { enabled } => self.set_goal_enabled(enabled),
             FrontendCommand::SetAgentMode { mode } => self.set_agent_mode(mode),
+            FrontendCommand::SetAutonomyMode { mode } => self.set_autonomy_mode(mode),
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
                 Ok(())
@@ -487,29 +491,61 @@ impl BackendService {
     }
 
     pub(super) fn set_goal_enabled(&mut self, enabled: bool) -> Result<()> {
-        self.goal_mode.store(enabled, Ordering::Release);
-        let session_id = {
-            let mut shared = self.shared.lock_or_recover();
-            shared.state.goal_mode = enabled;
-            shared.state.current_session_id.clone()
-        };
-        if let Some(session_id) = session_id {
-            self.store.set_goal_mode(&session_id, enabled)?;
+        self.set_autonomy_mode(if enabled {
+            AutonomyMode::Goal
+        } else {
+            AutonomyMode::Manual
+        })
+    }
+
+    fn set_autonomy_mode(&mut self, mode: AutonomyMode) -> Result<()> {
+        let is_streaming = self.shared.lock_or_recover().state.is_streaming;
+        if is_streaming && mode != AutonomyMode::Manual {
+            return Err(anyhow!(
+                "Autonomy mode cannot be enabled while a response is running."
+            ));
         }
-        self.publish_state();
-        let resume = {
-            let shared = self.shared.lock_or_recover();
-            enabled
+
+        let goal_enabled = mode != AutonomyMode::Manual;
+        self.goal_mode.store(goal_enabled, Ordering::Release);
+        let (session_id, resume) = {
+            let mut shared = self.shared.lock_or_recover();
+            shared.state.goal_mode = goal_enabled;
+            shared.state.autonomy_mode = mode;
+            let resume = goal_enabled
                 && !shared.state.is_streaming
                 && shared
                     .state
                     .conversation
                     .iter()
                     .flatten()
-                    .any(|entry| matches!(entry.kind, ConversationKind::User { .. }))
+                    .any(|entry| matches!(entry.kind, ConversationKind::User { .. }));
+            (shared.state.current_session_id.clone(), resume)
         };
+
+        if let Some(session_id) = session_id.as_deref() {
+            self.store.set_goal_mode(session_id, goal_enabled)?;
+            if !is_streaming {
+                let history = self.coordinator.lock_or_recover().model_history();
+                let mut shared = self.shared.lock_or_recover();
+                persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
+            }
+        }
+
+        self.publish_state();
         if resume {
-            self.submit_agent(GOAL_RESUME_PROMPT.to_owned(), false, "goal-resume", true)?;
+            match mode {
+                AutonomyMode::Manual => {}
+                AutonomyMode::Goal => {
+                    self.submit_agent(GOAL_RESUME_PROMPT.to_owned(), false, "goal-resume", true)?
+                }
+                AutonomyMode::Autonomous => self.submit_agent(
+                    AUTONOMOUS_NEXT_OBJECTIVE_PROMPT.to_owned(),
+                    false,
+                    "autonomous-resume",
+                    false,
+                )?,
+            }
         }
         Ok(())
     }
@@ -713,12 +749,16 @@ impl BackendService {
         if input.is_empty() && images.is_empty() {
             return Ok(());
         }
+        let autonomy_mode = self.shared.lock_or_recover().state.autonomy_mode;
+        let goal_enabled = autonomy_mode != AutonomyMode::Manual;
+        self.goal_mode.store(goal_enabled, Ordering::Release);
         let history_start = self
             .coordinator
             .lock_or_recover()
             .prepare_turn_history_checkpoint();
         {
             let mut shared = self.shared.lock_or_recover();
+            shared.state.goal_mode = goal_enabled;
             shared.state.error_message = None;
             shared.state.is_streaming = true;
             shared.state.active_assistant_entry_id = None;
@@ -849,79 +889,122 @@ impl BackendService {
             // completion path below always clears the activity and publishes state.
             let result = catch_unwind(AssertUnwindSafe(|| {
                 let mut coordinator = coordinator.lock_or_recover();
-                coordinator.run(
-                    AgentRunRequest {
-                        input: &input,
-                        images,
-                        model: &model,
-                        reasoning_level: &reasoning_level,
-                        attached_capabilities: attached,
-                        disabled_capabilities,
-                        cancel: cancel.clone(),
-                        goal_mode: goal_mode.clone(),
-                        continuation,
-                    },
-                    |event| {
-                        // Session-store writes take cross-process file locks and may
-                        // block on filesystem I/O. Never perform them while holding
-                        // the central live-state mutex: Remote reconnects and the
-                        // background daemon need that mutex to observe semantic state.
-                        let log_event = agent_event_log_value(&event);
-                        let projected = {
-                            let mut state = shared.lock_or_recover();
-                            if state.meta.current_turn.as_deref() != Some(&turn_id) {
-                                return;
-                            }
-                            let omit_conversation = match &event {
-                                AgentEvent::ModelAttemptStarted { .. }
-                                | AgentEvent::ModelAttemptFinished(..)
-                                | AgentEvent::AuxiliaryUsage { .. }
-                                | AgentEvent::GoalCheckpoint { .. }
-                                | AgentEvent::GoalJudge { .. }
-                                | AgentEvent::GoalRetry { .. } => true,
-                                AgentEvent::TextDelta(_) => {
-                                    state.state.active_assistant_entry_id.is_some()
-                                }
-                                AgentEvent::ReasoningDelta(_)
-                                | AgentEvent::ReasoningSummaryDelta(_) => {
-                                    state.state.active_reasoning_entry_id.is_some()
-                                }
-                                _ => false,
-                            };
-                            let session_id = state.state.current_session_id.clone();
-                            apply_agent_event(&mut state, event);
-                            state.state.pending_shell_permission = permission.pending_shell();
-                            state.state.pending_native_app_permission =
-                                permission.pending_native_app();
-                            let envelope = if omit_conversation {
-                                state_envelope_without_conversation(&state.state)
-                            } else {
-                                state_envelope(&state.state)
-                            };
-                            Some((session_id, envelope))
-                        };
-
-                        let Some((session_id, envelope)) = projected else {
-                            return;
-                        };
-                        let _ = tx.send(BackendEvent::Envelope(envelope));
-
-                        if let (Some(id), Some(log_event)) = (session_id, log_event)
-                            && let Err(error) = store.append_event(&id, Some(&turn_id), &log_event)
-                        {
-                            {
+                let mut cycle_input = input;
+                let mut cycle_images = images;
+                let mut cycle_continuation = continuation;
+                loop {
+                    let self_directed_cycle = cycle_input == AUTONOMOUS_NEXT_OBJECTIVE_PROMPT;
+                    let outcome = coordinator.run(
+                        AgentRunRequest {
+                            input: &cycle_input,
+                            images: std::mem::take(&mut cycle_images),
+                            model: &model,
+                            reasoning_level: &reasoning_level,
+                            attached_capabilities: attached.clone(),
+                            disabled_capabilities: disabled_capabilities.clone(),
+                            cancel: cancel.clone(),
+                            goal_mode: goal_mode.clone(),
+                            continuation: cycle_continuation,
+                        },
+                        |event| {
+                            // Session-store writes take cross-process file locks and may
+                            // block on filesystem I/O. Never perform them while holding
+                            // the central live-state mutex: Remote reconnects and the
+                            // background daemon need that mutex to observe semantic state.
+                            let log_event = agent_event_log_value(&event);
+                            let projected = {
                                 let mut state = shared.lock_or_recover();
-                                if state.meta.current_turn.as_deref() == Some(&turn_id) {
-                                    state.state.error_message =
-                                        Some(format!("Event log write failed: {error}"));
-                                    let _ = tx.send(BackendEvent::Envelope(
-                                        state_envelope_without_conversation(&state.state),
-                                    ));
+                                if state.meta.current_turn.as_deref() != Some(&turn_id) {
+                                    return;
+                                }
+                                let omit_conversation = match &event {
+                                    AgentEvent::ModelAttemptStarted { .. }
+                                    | AgentEvent::ModelAttemptFinished(..)
+                                    | AgentEvent::AuxiliaryUsage { .. }
+                                    | AgentEvent::GoalCheckpoint { .. }
+                                    | AgentEvent::GoalJudge { .. }
+                                    | AgentEvent::GoalRetry { .. } => true,
+                                    AgentEvent::TextDelta(_) => {
+                                        state.state.active_assistant_entry_id.is_some()
+                                    }
+                                    AgentEvent::ReasoningDelta(_)
+                                    | AgentEvent::ReasoningSummaryDelta(_) => {
+                                        state.state.active_reasoning_entry_id.is_some()
+                                    }
+                                    _ => false,
+                                };
+                                let session_id = state.state.current_session_id.clone();
+                                apply_agent_event(&mut state, event);
+                                state.state.pending_shell_permission = permission.pending_shell();
+                                state.state.pending_native_app_permission =
+                                    permission.pending_native_app();
+                                let envelope = if omit_conversation {
+                                    state_envelope_without_conversation(&state.state)
+                                } else {
+                                    state_envelope(&state.state)
+                                };
+                                Some((session_id, envelope))
+                            };
+
+                            let Some((session_id, envelope)) = projected else {
+                                return;
+                            };
+                            let _ = tx.send(BackendEvent::Envelope(envelope));
+
+                            if let (Some(id), Some(log_event)) = (session_id, log_event)
+                                && let Err(error) =
+                                    store.append_event(&id, Some(&turn_id), &log_event)
+                            {
+                                {
+                                    let mut state = shared.lock_or_recover();
+                                    if state.meta.current_turn.as_deref() == Some(&turn_id) {
+                                        state.state.error_message =
+                                            Some(format!("Event log write failed: {error}"));
+                                        let _ = tx.send(BackendEvent::Envelope(
+                                            state_envelope_without_conversation(&state.state),
+                                        ));
+                                    }
                                 }
                             }
+                        },
+                    )?;
+
+                    let current_mode = shared.lock_or_recover().state.autonomy_mode;
+                    if current_mode != AutonomyMode::Autonomous
+                        || !matches!(&outcome, AgentRunOutcome::Completed)
+                        || cancel.load(Ordering::Acquire)
+                    {
+                        return Ok(outcome);
+                    }
+
+                    if self_directed_cycle {
+                        let idle = shared.lock_or_recover().state.active_assistant_text.trim()
+                            == AUTONOMOUS_IDLE_MARKER;
+                        if idle {
+                            shared
+                                .lock_or_recover()
+                                .discard_assistant_text(AUTONOMOUS_IDLE_MARKER);
+                            return Ok(AgentRunOutcome::AutonomousIdle {
+                                reason: "No meaningful safe next objective is available.".into(),
+                            });
                         }
-                    },
-                )
+                    }
+                    goal_mode.store(true, Ordering::Release);
+                    {
+                        let mut state = shared.lock_or_recover();
+                        state.state.goal_mode = true;
+                        state.set_activity(
+                            "thinking",
+                            "Autonomous - next objective",
+                            Some("Selecting the next useful objective".into()),
+                        );
+                        let _ = tx.send(BackendEvent::Envelope(
+                            state_envelope_without_conversation(&state.state),
+                        ));
+                    }
+                    cycle_input = AUTONOMOUS_NEXT_OBJECTIVE_PROMPT.to_owned();
+                    cycle_continuation = false;
+                }
             }))
             .unwrap_or_else(|_| Err(anyhow!("agent run panicked")));
             let workspace_id = crate::session_store::ensure_workspace_id(&workspace).ok();
@@ -954,11 +1037,21 @@ impl BackendService {
                             state.set_activity("paused", "Goal · Paused", Some(reason.clone()));
                             (RunStatus::Paused, Some(reason))
                         }
+                        Ok(AgentRunOutcome::AutonomousIdle { reason }) => {
+                            state.set_activity("paused", "Autonomous · Idle", Some(reason.clone()));
+                            (RunStatus::Paused, Some(reason))
+                        }
                         Ok(AgentRunOutcome::CompletedUnverified { reason }) => {
                             state.set_activity("done", "Done · Unverified", Some(reason.clone()));
                             (RunStatus::CompletedUnverified, Some(reason))
                         }
                     };
+                    if run_status == RunStatus::Completed
+                        && state.state.autonomy_mode == AutonomyMode::Goal
+                    {
+                        state.state.autonomy_mode = AutonomyMode::Manual;
+                        state.state.goal_mode = false;
+                    }
                     state.seal_assistant();
                     state.state.active_assistant_entry_id = None;
                     state.state.active_assistant_text.clear();

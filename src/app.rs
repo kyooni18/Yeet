@@ -1671,6 +1671,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "Continue until a strict success judge accepts concrete evidence",
     ),
     ("/agents", "Opt in to adaptive multi-agent execution"),
+    (
+        "/autonomy",
+        "Choose manual, fixed-goal, or self-directed continuation",
+    ),
     ("/attach", "Attach an optional capability"),
     ("/detach", "Detach an optional capability"),
     ("/allow", "Allow pending shell command once"),

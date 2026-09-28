@@ -16,6 +16,9 @@ pub enum AgentRunOutcome {
     GoalPaused {
         reason: String,
     },
+    AutonomousIdle {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]

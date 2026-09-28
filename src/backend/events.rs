@@ -395,6 +395,7 @@ pub(super) fn prepare_session_write_locked(
                 .collect(),
             model: state.state.active_model.clone(),
             agent_mode: state.state.agent_mode,
+            autonomy_mode: state.state.autonomy_mode,
             token_usage: state.state.token_usage.clone(),
             credit_usage: state.state.credit_usage,
             conversation,

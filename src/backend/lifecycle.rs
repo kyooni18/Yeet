@@ -20,6 +20,13 @@ impl BackendService {
         let stored_working_directory = stored.working_directory.as_ref().map(rebase);
         let stored_context_roots = stored.context_roots.iter().map(rebase).collect::<Vec<_>>();
         let persisted_goal = self.store.goal_mode(id).unwrap_or(false);
+        let restored_autonomy = if stored.autonomy_mode == AutonomyMode::Manual && persisted_goal {
+            // Sessions written before autonomy policy existed only persisted the
+            // Goal sidecar. Preserve their old resume semantics.
+            AutonomyMode::Goal
+        } else {
+            stored.autonomy_mode
+        };
         let resume_goal = persisted_goal
             && stored
                 .runs
@@ -62,6 +69,7 @@ impl BackendService {
         shared.state.token_usage = stored.token_usage;
         shared.state.goal_mode = persisted_goal;
         shared.state.agent_mode = stored.agent_mode;
+        shared.state.autonomy_mode = restored_autonomy;
         shared.state.current_context_tokens = None;
         shared.state.sandbox_settings = sandbox_settings;
         shared.state.credit_usage = stored.credit_usage;

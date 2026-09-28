@@ -19,7 +19,8 @@ use std::os::unix::fs::PermissionsExt;
 use crate::{
     core::{Message, Usage},
     model::{
-        AgentMode, ConversationEntry, SessionSummary, WorkspaceSessionGroup, WorkspaceSummary,
+        AgentMode, AutonomyMode, ConversationEntry, SessionSummary, WorkspaceSessionGroup,
+        WorkspaceSummary,
     },
     platform::{replace_file, set_private_directory, set_private_file, sync_directory},
 };
@@ -60,6 +61,8 @@ pub struct StoredSession {
     pub model: String,
     #[serde(default)]
     pub agent_mode: AgentMode,
+    #[serde(default)]
+    pub autonomy_mode: AutonomyMode,
     pub token_usage: Usage,
     pub credit_usage: u64,
     pub conversation: Vec<ConversationEntry>,
@@ -1622,6 +1625,7 @@ mod tests {
             context_roots: vec![".".into()],
             model: "test".into(),
             agent_mode: AgentMode::Single,
+            autonomy_mode: AutonomyMode::Manual,
             token_usage: Usage::default(),
             credit_usage: 0,
             conversation: Vec::new(),
@@ -1641,6 +1645,17 @@ mod tests {
 
         let restored: StoredSession = serde_json::from_value(value).unwrap();
         assert_eq!(restored.agent_mode, AgentMode::Single);
+    }
+
+    #[test]
+    fn missing_autonomy_mode_defaults_to_manual() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut value =
+            serde_json::to_value(session("legacy-autonomy", temp.path(), None)).unwrap();
+        value.as_object_mut().unwrap().remove("autonomyMode");
+
+        let restored: StoredSession = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.autonomy_mode, AutonomyMode::Manual);
     }
 
     #[test]
