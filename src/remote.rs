@@ -35,8 +35,8 @@ use webauthn_rs::prelude::{
 use crate::{
     config::ConfigStore,
     platform::{
-        bind_local, configure_detached, connect_local, replace_file, set_private_directory,
-        set_private_file, tracked_children_snapshot,
+        bind_local, connect_local, replace_file, set_private_directory, set_private_file,
+        spawn_detached, tracked_children_snapshot,
     },
 };
 
@@ -887,9 +887,7 @@ pub fn start_remote_background(options: &RemoteOptions) -> Result<RemoteStatus> 
     if let Some(origin) = &options.origin {
         command.arg("--origin").arg(origin);
     }
-    configure_detached(&mut command);
-
-    let mut child = command.spawn().context("start Yeet Remote in background")?;
+    let mut child = spawn_detached(&mut command).context("start Yeet Remote in background")?;
     for _ in 0..REMOTE_BACKGROUND_START_RETRIES {
         if let Some(status) = remote_status()? {
             return Ok(status);

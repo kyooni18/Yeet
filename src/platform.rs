@@ -371,6 +371,90 @@ pub(crate) fn configure_detached(command: &mut Command) {
     }
 }
 
+#[cfg(windows)]
+struct StandardHandleInheritanceGuard {
+    handles: Vec<*mut std::ffi::c_void>,
+}
+
+#[cfg(windows)]
+impl StandardHandleInheritanceGuard {
+    fn new() -> io::Result<Self> {
+        const STD_INPUT_HANDLE: u32 = (-10_i32) as u32;
+        const STD_OUTPUT_HANDLE: u32 = (-11_i32) as u32;
+        const STD_ERROR_HANDLE: u32 = (-12_i32) as u32;
+        const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+        const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = (-1_isize) as *mut std::ffi::c_void;
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetStdHandle(n_std_handle: u32) -> *mut std::ffi::c_void;
+            fn GetHandleInformation(handle: *mut std::ffi::c_void, flags: *mut u32) -> i32;
+            fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+        }
+
+        let mut guard = Self {
+            handles: Vec::with_capacity(3),
+        };
+        for stream in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let handle = unsafe { GetStdHandle(stream) };
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE || guard.handles.contains(&handle)
+            {
+                continue;
+            }
+
+            let mut flags = 0_u32;
+            if unsafe { GetHandleInformation(handle, &mut flags) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if flags & HANDLE_FLAG_INHERIT == 0 {
+                continue;
+            }
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            guard.handles.push(handle);
+        }
+        Ok(guard)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for StandardHandleInheritanceGuard {
+    fn drop(&mut self) {
+        const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+        }
+
+        for handle in self.handles.drain(..) {
+            let _ =
+                unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        }
+    }
+}
+
+pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<Child> {
+    configure_detached(command);
+
+    #[cfg(windows)]
+    {
+        static DETACHED_SPAWN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let lock = DETACHED_SPAWN_LOCK.get_or_init(|| Mutex::new(()));
+        let _spawn_guard = lock
+            .lock()
+            .map_err(|_| io::Error::other("detached process spawn lock poisoned"))?;
+        let _inheritance_guard = StandardHandleInheritanceGuard::new()?;
+        command.spawn()
+    }
+
+    #[cfg(not(windows))]
+    {
+        command.spawn()
+    }
+}
+
 pub(crate) fn configure_process_group(command: &mut Command) {
     #[cfg(unix)]
     {

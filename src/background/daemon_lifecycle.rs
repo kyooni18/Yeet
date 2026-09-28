@@ -16,7 +16,7 @@ use fs2::{FileExt, lock_contended_error};
 
 use crate::{
     config::ConfigStore,
-    platform::{configure_detached, connect_local, set_private_directory},
+    platform::{connect_local, set_private_directory, spawn_detached},
 };
 
 use super::{MAX_BACKGROUND_LOG_BYTES, STALE_DAEMON_EXIT_TIMEOUT};
@@ -306,8 +306,7 @@ pub(super) fn spawn_daemon(
     if let Some(scope) = scope {
         command.arg(scope);
     }
-    configure_detached(&mut command);
-    let mut child = command.spawn().context("start Yeet background service")?;
+    let mut child = spawn_detached(&mut command).context("start Yeet background service")?;
     // Only the daemon writes the PID lease, after it has acquired the lifetime
     // owner lock and bound its endpoint. Writing it here lets a rejected child
     // overwrite the live daemon's PID and makes later recovery target the wrong

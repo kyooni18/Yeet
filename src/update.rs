@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cli::VERSION;
 #[cfg(windows)]
-use crate::platform::configure_detached;
+use crate::platform::spawn_detached;
 
 const USER_AGENT: &str = "Yeet self-updater";
 const GITHUB_API: &str = "https://api.github.com";
@@ -137,8 +137,7 @@ fn install_release(release: &GitHubRelease, version: &Version) -> Result<()> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        configure_detached(&mut command);
-        command.spawn().context("launch staged Windows updater")?;
+        spawn_detached(&mut command).context("launch staged Windows updater")?;
         std::mem::forget(temp);
         println!(
             "Yeet {version} is verified and staged. It will install after this process exits."

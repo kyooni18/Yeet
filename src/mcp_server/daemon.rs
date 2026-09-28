@@ -28,7 +28,7 @@ use super::{
 use crate::{
     config::ConfigStore,
     platform::{
-        bind_local, configure_detached, connect_local, set_private_directory, set_private_file,
+        bind_local, connect_local, set_private_directory, set_private_file, spawn_detached,
         systemd_managed_process, tracked_children_snapshot,
     },
 };
@@ -271,8 +271,7 @@ fn start_command(args: &[String]) -> Result<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
-    configure_detached(&mut command);
-    let mut child = command.spawn().context("start Yeet MCP daemon")?;
+    let mut child = spawn_detached(&mut command).context("start Yeet MCP daemon")?;
     for _ in 0..START_RETRIES {
         if let Some(status) = daemon_status(port)? {
             return Ok(format_launch(&status, generated_key.as_deref(), false));
