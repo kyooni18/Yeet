@@ -1,0 +1,730 @@
+# Yeet TUI Workbench Whiteboard
+
+Status: living design whiteboard, not a frozen specification.
+Audience: any agent working on Yeet native TUI / workbench UX.
+Scope: native TUI first. Remote/Web UI may borrow concepts later, but does not drive this design.
+
+## North star
+
+Move Yeet away from a session-centric chat application and toward an IDE-like AI workbench.
+
+A session remains a useful object, but it is no longer the root of the UX.
+
+The workbench should answer three different questions with three different surfaces:
+
+1. Top tabs: What view state do I have open?
+2. Context rail: What nearby/recent things are relevant to this view?
+3. Main surface: What am I looking at or working on right now?
+
+The bottom composer remains the direct way to ask or command Yeet.
+
+## Non-negotiable mental model
+
+### Tabs are stateful view instances
+
+Tabs are NOT view-type buttons.
+
+A tab represents one concrete open view state, similar to an IDE editor tab.
+
+Examples:
+
+- Overview for workspace A
+- guidance_taem.c at line 418 with a local selection
+- Agent: Landing with its own internal section selected
+- Run MM305 with output position and filters
+- Settings with Providers selected
+- a session/conversation view
+
+Conceptually:
+
+    Tab
+      id
+      view_kind
+      resource_identity
+      title
+      local_navigation_state
+      selection
+      cursor
+      scroll
+      filters
+      sidebar_state
+      view_specific_state
+
+Switching tabs restores the complete state of that view, including the contextual rail/sidebar.
+
+Do not model Files, Agent, Database, etc. as permanent tabs that merely select a mode. A File view and another File view can coexist as different tabs.
+
+### The left area is contextual, not global navigation
+
+The left column changes meaning with the active tab.
+
+Examples:
+
+- Overview -> unified recent/relevant objects
+- File -> outline, symbols, related files, local history
+- Agent -> agent sections, context, activity, related runs
+- Settings -> table of contents
+- Database -> collections, queries, recent objects
+
+Do not turn it back into a fixed global menu.
+
+### Command Palette and View Switcher are different
+
+Cmd+P is the Command Palette.
+
+The View Switcher is a separate overlay for switching among open view instances and, optionally, opening a new view.
+
+The Command Palette executes actions.
+The View Switcher changes what is visible.
+
+Do not merge them just because both are searchable overlays.
+
+## App shell
+
+High-level structure:
+
+    +--------------------------------------------------------------+
+    | Yeet | [tab] [tab] [tab] [+]                                 |
+    +------------------+-------------------------------------------+
+    | contextual rail  |                                           |
+    |                  |              active view                  |
+    |                  |                                           |
+    |                  |                                           |
+    +------------------+-------------------------------------------+
+    | > Ask / command Yeet...                                      |
+    +--------------------------------------------------------------+
+
+Use secondary background colors mainly for:
+
+- tab strip
+- contextual rail
+- selected/focused rows
+- overlays
+- compact controls
+
+The main view should mostly stay on the base background.
+
+Avoid filling the main area with card surfaces.
+
+## Overview view
+
+Overview is a workspace-level status document.
+
+It should NOT look like a web dashboard.
+
+The main Overview surface is one vertically scrollable document with a natural reading order.
+
+Suggested section order:
+
+    Overview
+    workspace / branch / compact status
+
+    Now
+    Active Goal
+    Recent Activity
+    Changed Files
+    Runs
+    Issues
+    Suggested Next Action
+
+Optional sections may appear only when they have meaningful content:
+
+- Recent Findings / Notes
+- Artifacts
+- Approvals / Decisions Needed
+- Usage / budget warning
+- Tests / build health
+
+### Main Overview rules
+
+- Single vertical scroll.
+- No grid of cards.
+- Prefer whitespace, alignment, indentation, and horizontal rules.
+- Section titles are anchors, not cards.
+- Keep each section compact by default; allow expansion/detail views.
+- The current state should be understandable from the first screenful.
+- Do not duplicate information already obvious in the left rail unless the main page needs it for the workspace narrative.
+
+## Overview contextual rail: Unified Recent Objects
+
+The Overview rail is NOT a navigation sidebar and NOT a table of contents.
+
+It is a unified, mixed list of recently relevant objects.
+
+Possible object kinds:
+
+- Agent
+- Commit
+- Push
+- Issue
+- Session
+- Run
+- Goal
+- Artifact
+- File
+- Pull request, if available
+- Approval / decision
+- other openable Yeet resources
+
+Example:
+
+    RECENT
+
+    * Agent
+      Landing
+      working - 2m
+
+    * Commit
+      8f3a2c1
+      Improve TAEM pitch control - 5m
+
+    ! Issue #42
+      Crosswind instability
+      open - 12m
+
+    o Session
+      MM305 tuning
+      28m
+
+    ^ Push
+      main -> origin/main
+      41m
+
+Do not group rows under headings such as Agents / Sessions / Git. Mixing types is intentional.
+
+The rail answers: What have I been dealing with recently?
+
+### Recent object row
+
+Each row should be compact:
+
+    [type/status glyph] primary title                 age/status
+                        optional secondary detail
+
+Requirements:
+
+- one stable resource identity
+- one primary label
+- optional secondary/status line
+- compact age/status metadata
+- semantic icon/glyph
+- selected/focused state
+- open action
+
+### Deduplication
+
+Recent is object-oriented, not raw-event-oriented.
+
+Examples:
+
+- An agent performing 15 actions should normally still occupy one Agent row whose state and timestamp update.
+- A session should occupy one row.
+- A run should occupy one row.
+- Separate commits remain separate because each commit is a separate object.
+- Repeated file reads do not spam the rail; a file may be represented once if it is itself considered a recent object.
+
+The main Activity section remains the event-oriented history.
+
+### Ranking
+
+Default ordering is recency, with a small priority bias for:
+
+1. currently active / running
+2. requires user attention
+3. recently changed
+4. ordinary recent objects
+
+Do not make the ranking clever enough to become unpredictable.
+
+## Opening objects from the rail
+
+Selecting an item should open its corresponding view state.
+
+Examples:
+
+- Agent -> Agent view
+- Commit -> commit/diff view
+- Issue -> Issue view
+- Session -> Session view
+- Run -> Run detail view
+- File -> File view
+
+Open question: when an identical resource identity is already open, should Enter focus the existing tab or create another stateful instance?
+
+Preferred default for now: focus an existing exact-identity tab; provide an explicit open-another-instance action later if real workflows require it.
+
+## Tabs
+
+Tabs behave like IDE tabs.
+
+Required operations:
+
+- create/open a view instance
+- close current tab
+- switch previous/next
+- switch by searchable View Switcher
+- restore local state when revisiting a tab
+
+Likely bindings, subject to final keymap:
+
+- Ctrl+W: close current tab
+- Ctrl+Tab: next / MRU tab
+- Ctrl+Shift+Tab: previous / MRU tab
+- View Switcher shortcut: TBD
+- Cmd/Ctrl+P: Command Palette, not View Switcher
+
+### Tab overflow
+
+Do not let a long tab strip destroy the layout.
+
+Candidate policy:
+
+- active tab is always visible
+- adjacent tabs get priority
+- inactive titles truncate
+- View Switcher is the authoritative way to reach off-screen tabs
+- no horizontal tab-strip scrolling as the primary mechanism
+
+### Tab persistence
+
+Open question: whether tabs persist across Yeet restarts.
+
+If implemented, persist serializable view state only. Runtime-only handles must rehydrate safely or degrade to a useful static view.
+
+## Marquee text for constrained widths
+
+Use marquee behavior for text that cannot fit horizontally.
+
+Target behavior is similar to iPhone Now Playing Live Activity: the fixed-width viewport stays put while the text reveals itself by moving inside it.
+
+Preferred animation: ping-pong marquee.
+
+    start -> pause -> scroll left -> pause -> scroll right -> pause -> repeat
+
+### Where marquee is useful
+
+Primary candidates:
+
+- selected Overview recent-object row
+- active tab title
+- selected row in other contextual rails
+- selected result in View Switcher, if needed
+
+Do NOT animate every truncated row at once.
+
+Non-focused rows remain static and truncated.
+
+### Marquee trigger
+
+Only animate when all are true:
+
+- text display width exceeds available width
+- row/tab is active or focused
+- UI has been stable/focused for a short delay
+
+Suggested defaults for prototyping:
+
+- start delay: 700 ms
+- edge pause: 800 ms
+- speed: roughly 8 terminal columns / second
+- frame/tick cadence: 50-100 ms, chosen to avoid wasteful redraws
+
+These are tuning values, not contracts.
+
+### Marquee implementation rules
+
+Terminal widths are display cells, not bytes or Rust char counts.
+
+Implementation must be safe for:
+
+- Unicode grapheme clusters
+- wide CJK characters
+- combining characters
+- emoji / variation sequences where terminal support allows
+
+Never slice a UTF-8 string by display-column index.
+
+Use grapheme-aware iteration plus terminal display-width accounting.
+
+The row's right-side metadata should stay anchored. Only the title viewport should marquee.
+
+Example:
+
+    [Agent] Investigating MM305 crosswind ene...     2m
+            <------ title viewport --------->
+
+When selected, only the title viewport moves.
+
+### Reduced motion / accessibility
+
+Provide a way to disable or globally reduce marquee animation.
+
+When disabled, use deterministic truncation.
+
+Animation must never be necessary to understand the object's type or state.
+
+## Overview main surface: detailed proposal
+
+### 1. Header
+
+Compact only.
+
+    Overview
+    KSPShuttleLander / main
+
+Optional right-aligned compact status is fine, but avoid a second dashboard row of badges.
+
+### 2. Now
+
+The most important current work.
+
+    NOW
+    Working on MM305 crosswind tuning for TAEM landing.
+    Running simulation -> analyzing result -> adjusting lateral guidance.
+    In progress | MM305 | 24m
+
+### 3. Active Goal
+
+Goal text plus concise checklist/progress.
+
+Avoid large progress cards.
+
+### 4. Recent Activity
+
+Event-oriented timeline/log.
+
+This is distinct from the Overview rail:
+
+- rail = recent OBJECTS
+- activity = recent EVENTS
+
+Examples:
+
+- edited file
+- ran command
+- agent delegated work
+- test passed
+- commit created
+- decision requested
+
+### 5. Changed Files
+
+Git-style list.
+
+Keep descriptions optional and compact.
+
+### 6. Runs
+
+Latest relevant runs, not an exhaustive run browser.
+
+Show status/result/duration and open on Enter.
+
+### 7. Issues
+
+Only blockers/warnings that matter to current workspace state.
+
+Do not turn Overview into an issue tracker.
+
+### 8. Suggested Next Action
+
+One strong next action is better than a menu of suggestions.
+
+Can expose a command or action that is directly executable/editable.
+
+## Scrolling behavior
+
+Overview main surface scrolls vertically.
+
+The contextual rail has its own independent selection/scroll position.
+
+Tabs retain both when switching away and back.
+
+Suggested focus model:
+
+- Tab strip
+- Context rail
+- Main surface
+- Composer
+- Overlay when open
+
+Focus movement should be predictable and visible.
+
+Main-surface scroll should not accidentally move the context rail.
+
+## Responsive behavior
+
+### Wide
+
+- contextual rail visible
+- main surface gets majority of width
+- metadata may align into columns within a section
+
+### Medium
+
+- narrower rail
+- secondary row details reduced
+- main remains single-column
+
+### Narrow
+
+- main surface wins
+- contextual rail collapses into an overlay/drawer
+- tab strip shows active plus as many neighbors as fit
+- active tab title may marquee
+- Overview remains usable without the rail
+
+Never convert the Overview main surface into a cramped multi-column card grid to use extra width.
+
+## Color / surface rules
+
+Main background: base surface.
+
+Secondary background: use primarily for:
+
+- tabs
+- contextual rail
+- selected rows
+- overlays
+- input/composer chrome
+
+Main document:
+
+- mostly base background
+- horizontal rules
+- text hierarchy
+- semantic foreground colors
+- very occasional inline highlight
+
+Semantic colors:
+
+- green: success / running-positive
+- yellow/amber: warning / needs attention
+- red: failure / error
+- cyan/blue: selection / navigation / links
+- muted: metadata
+
+Avoid assigning every section its own decorative color.
+
+## Data model sketch
+
+Names are illustrative.
+
+    struct WorkbenchTab {
+        id: TabId,
+        title: String,
+        view: ViewInstance,
+    }
+
+    enum ViewKind {
+        Overview,
+        File,
+        Agent,
+        Run,
+        Session,
+        Commit,
+        Issue,
+        Settings,
+        // ...
+    }
+
+    struct ViewInstance {
+        kind: ViewKind,
+        identity: ResourceIdentity,
+        scroll: ViewScrollState,
+        selection: ViewSelectionState,
+        local_nav: LocalNavigationState,
+        sidebar: SidebarState,
+        filters: ViewFilters,
+        payload: ViewPayload,
+    }
+
+Overview recent rail:
+
+    struct RecentObject {
+        identity: ResourceIdentity,
+        kind: RecentObjectKind,
+        title: String,
+        detail: Option<String>,
+        status: Option<RecentStatus>,
+        updated_at: Timestamp,
+        attention: AttentionLevel,
+    }
+
+Keep resource identity separate from display title so tab dedupe/open behavior is stable.
+
+## Recent-object data sources
+
+The aggregator should accept adapters rather than hard-code one giant query.
+
+Likely sources:
+
+- sessions/workspaces
+- agent runtime
+- runs
+- local git commits and pushes
+- issues if a source is available
+- artifacts/files
+- goals/approvals
+
+Rendering must consume already-collected state.
+
+Do not run blocking git/network/shell commands from a frame render function.
+
+Use cached/event-driven/background refreshed state.
+
+## Current code reality
+
+As of this whiteboard, the existing native TUI shell is still conversation/session-centric.
+
+Key current implementation:
+
+- src/ui/shell.rs
+  - draws a responsive shell around the conversation
+  - sidebar is currently workspace + session oriented
+  - current SidebarRowKind is Workspace / Session
+  - current rows truncate into fixed single-line geometry
+- src/ui/responsive.rs
+  - owns responsive layout metrics
+- src/ui/theme.rs
+  - owns surface/selection/theme primitives
+- src/ui/composer.rs
+  - existing bottom interaction surface
+- src/ui/dialogs/navigation.rs
+  - likely relevant to navigation/switching overlays
+- src/app.rs and src/app/*
+  - application state / selection / session state
+
+The implementation should evolve these concepts rather than bolt a second unrelated shell beside them.
+
+The current session sidebar code in src/ui/shell.rs is a migration target, not the intended final model.
+
+## Migration strategy
+
+Avoid a one-shot rewrite.
+
+### Phase 0 - State model
+
+Introduce workbench tab + view-instance state without radically changing rendering.
+
+Goal: prove multiple stateful view instances can coexist.
+
+### Phase 1 - Tab strip
+
+Add IDE-like tab rendering, switching, closing, and restoration.
+
+Keep the existing conversation as one possible view during migration.
+
+### Phase 2 - Overview main surface
+
+Add the vertical Overview document with real data where already available and explicit placeholders/adapters where not.
+
+No card grid.
+
+### Phase 3 - Unified recent rail
+
+Replace the Overview sidebar content with RecentObject aggregation.
+
+Start with sources already available locally:
+
+- sessions
+- current workspace
+- git commits
+- active agent/run state
+
+Then extend.
+
+### Phase 4 - View Switcher
+
+Add the searchable open-view switcher.
+
+Keep it separate from Cmd+P Command Palette.
+
+### Phase 5 - Marquee
+
+Add a reusable focused-overflow text viewport.
+
+Use it first in the recent rail and active tab.
+
+Add tests for Unicode width, edge pauses/state machine, narrow widths, and non-overflow text.
+
+### Phase 6 - Migrate other views
+
+Move File, Agent, Settings, Run, Session, etc. into the same stateful-view contract one by one.
+
+Do not block the Overview work on every future view being complete.
+
+## Guardrails
+
+Do NOT:
+
+- make Session the root identity of the whole UI
+- turn the Overview rail into a fixed global navigation menu
+- group the Overview rail into Agents / Sessions / Git sections
+- make tabs synonymous with view kinds
+- make the Overview main view a grid of cards
+- use secondary filled backgrounds all over the main document
+- add an embedded terminal view just because Yeet runs commands
+- merge Command Palette and View Switcher
+- animate all truncated text simultaneously
+- execute expensive data collection during frame rendering
+
+## Initial acceptance criteria
+
+The first convincing Overview prototype should satisfy all of these:
+
+1. Top strip visibly behaves like stateful IDE tabs.
+2. Overview left rail shows mixed recent objects from at least three object kinds.
+3. No fixed Overview navigation menu occupies the rail.
+4. Main Overview is one vertically scrollable document.
+5. Main Overview contains no card grid.
+6. Secondary background is concentrated in tabs, rail, selection, overlays, and composer.
+7. Activity is event-oriented; recent rail is object-oriented.
+8. Switching away from Overview and back restores main scroll + rail selection/scroll.
+9. Long selected recent-object text can marquee without moving right-side metadata.
+10. Non-selected overflowing rows stay static/truncated.
+11. Narrow layout can hide/collapse the rail without breaking Overview.
+12. Existing session workflows remain reachable during migration.
+
+## Open questions
+
+Keep these visible until answered by implementation experience.
+
+- Exact shortcut for View Switcher?
+- MRU vs linear semantics for Ctrl+Tab?
+- Should opening an already-open exact resource focus it or duplicate it?
+- Should open tabs persist across restart?
+- How much recent-object ranking bias should active/attention states receive?
+- Which issue sources belong in native Overview initially?
+- Should commits and pushes be separate recent-object kinds when a push contains several commits?
+- How should the rail represent one agent with several concurrent runs?
+- Marquee timing/speed after real terminal testing?
+- Should the rail retain its own history per Overview tab/workspace?
+- What is the minimum terminal width at which the rail stays visible?
+
+## Suggested first implementation slice
+
+Do the smallest architecture-first slice:
+
+1. Define ViewKind, ResourceIdentity, ViewInstance, and WorkbenchTab.
+2. Wrap the current conversation UI as a view instance so existing behavior keeps working.
+3. Add a minimal Overview view instance.
+4. Add a top tab strip with two real stateful tabs.
+5. Add Overview main vertical sections using existing state only.
+6. Replace Overview's rail with a small unified RecentObject list using sessions + git commits + one active run/agent source.
+7. Only after the interaction feels correct, add additional sources and marquee.
+
+This keeps the architecture honest before polishing.
+
+## Whiteboard maintenance
+
+This file is intentionally a whiteboard.
+
+Agents working on this area should update it when:
+
+- a design decision becomes settled
+- an open question is answered
+- an implementation constraint invalidates an assumption
+- a phase is completed
+- a better interaction model is discovered
+
+Do not silently let implementation diverge from this file. Either follow it or update the whiteboard with the new decision and reason.
