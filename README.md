@@ -22,10 +22,12 @@ brew install kyooni18/tap/yeet
 
 Homebrew supplies the Node.js runtime dependency automatically. Linux releases also publish native `.deb` packages for amd64 and arm64.
 
-To build Yeet from source instead:
+To explicitly build and install the current source checkout instead of downloading a release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kyooni18/Yeet/main/Scripts/install-source.sh | sh
+git clone https://github.com/kyooni18/Yeet.git
+cd Yeet
+./install.sh --build
 ```
 
 Windows source installation remains available through PowerShell:

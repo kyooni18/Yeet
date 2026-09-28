@@ -9,8 +9,8 @@ cd "$ROOT"
 "$DOCKER" build --tag "$IMAGE" .
 
 
-# The repository installer must build from source, install RuntimeSource, and
-# persist the user-local binary directory into PATH on Linux.
+# The repository installer's explicit --build path must build from source,
+# install RuntimeSource, and persist the user-local binary directory into PATH.
 SOURCE_INSTALL_IMAGE="${IMAGE}-source-install"
 cleanup_source_install_image() {
   "$DOCKER" image rm "$SOURCE_INSTALL_IMAGE" >/dev/null 2>&1 || true
@@ -23,7 +23,7 @@ trap cleanup_source_install_image EXIT INT TERM
   "$SOURCE_INSTALL_IMAGE" -c '
     set -eu
     mkdir -p "$HOME"
-    PREFIX=/tmp/yeet-prefix ./install.sh >/tmp/yeet-install.log
+    PREFIX=/tmp/yeet-prefix ./install.sh --build >/tmp/yeet-install.log
     test -x /tmp/yeet-prefix/bin/yeet
     test -f /tmp/yeet-prefix/share/yeet/runtime/dist/bridge.js
     test -f /tmp/yeet-prefix/share/yeet/runtime/package.json

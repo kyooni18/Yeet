@@ -188,7 +188,32 @@ bundle_dir() {
   printf '%s\n' "$dir"
 }
 
-if source=$(source_dir); then
+BUILD_FROM_SOURCE=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --build)
+      BUILD_FROM_SOURCE=1
+      ;;
+    -h|--help)
+      cat <<'EOF'
+Usage: ./install.sh [--build]
+
+Without options, download and install the latest Yeet release.
+
+  --build    Build and install the source checkout containing this script.
+  -h, --help Show this help.
+EOF
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
+if [ "$BUILD_FROM_SOURCE" -eq 1 ]; then
+  source=$(source_dir) || die "--build requires a Yeet source checkout"
   install_source "$source"
   exit 0
 fi
