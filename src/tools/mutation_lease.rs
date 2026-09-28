@@ -12,9 +12,14 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use fs2::FileExt;
+use fs2::{FileExt, lock_contended_error};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == lock_contended_error().raw_os_error()
+}
 
 #[derive(Debug)]
 pub(super) struct WorkspaceMutationLease {
@@ -43,7 +48,7 @@ impl WorkspaceMutationLease {
 
         match file.try_lock_exclusive() {
             Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(error) if lock_is_contended(&error) => {
                 let owner = read_owner(&path);
                 let owner = owner.trim();
                 let detail = if owner.is_empty() {

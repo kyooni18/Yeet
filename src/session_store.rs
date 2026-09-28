@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
-use fs2::FileExt;
+use fs2::{FileExt, lock_contended_error};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -19,7 +19,7 @@ use std::os::unix::fs::PermissionsExt;
 use crate::{
     core::{Message, Usage},
     model::{ConversationEntry, SessionSummary, WorkspaceSessionGroup, WorkspaceSummary},
-    platform::{set_private_directory, set_private_file},
+    platform::{replace_file, set_private_directory, set_private_file, sync_directory},
 };
 
 const SESSION_LAYOUT_VERSION: u64 = 4;
@@ -1068,6 +1068,11 @@ fn session_archive_listing(path: &Path) -> Result<Vec<String>> {
     Ok(listing)
 }
 
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == lock_contended_error().raw_os_error()
+}
+
 struct StoreFileLock {
     file: fs::File,
 }
@@ -1101,7 +1106,7 @@ impl StoreFileLock {
         let file = options.open(path)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(Self { file })),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) if lock_is_contended(&error) => Ok(None),
             Err(error) => Err(error).context("lock session store"),
         }
     }
@@ -1263,14 +1268,9 @@ fn materialize_component(object: &Path, target: &Path) -> Result<()> {
         .unwrap_or("component");
     let tmp = target.with_file_name(format!(".{file_name}.{}.link", Uuid::new_v4()));
     fs::hard_link(object, &tmp)?;
-    if let Err(error) = fs::rename(&tmp, target) {
-        if target.exists() {
-            fs::remove_file(target)?;
-            fs::rename(&tmp, target)?;
-        } else {
-            let _ = fs::remove_file(&tmp);
-            return Err(error.into());
-        }
+    if let Err(error) = replace_file(&tmp, target) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error.into());
     }
     Ok(())
 }
@@ -1343,19 +1343,14 @@ fn write_private_replace(path: &Path, data: &[u8]) -> Result<()> {
     file.write_all(data)?;
     file.sync_all()?;
     drop(file);
-    if let Err(error) = fs::rename(&tmp, path) {
-        if path.exists() {
-            fs::remove_file(path)?;
-            fs::rename(&tmp, path)?;
-        } else {
-            let _ = fs::remove_file(&tmp);
-            return Err(error.into());
-        }
+    if let Err(error) = replace_file(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error.into());
     }
 
     set_private_file(path)?;
     if let Some(parent) = path.parent() {
-        fs::File::open(parent)?.sync_all()?;
+        sync_directory(parent)?;
     }
     Ok(())
 }
@@ -1583,7 +1578,7 @@ pub fn ensure_workspace_id(root: &Path) -> Result<String> {
 pub fn workspace_relative_path(root: &Path, path: &str) -> String {
     match Path::new(path).strip_prefix(root) {
         Ok(relative) if relative.as_os_str().is_empty() => ".".into(),
-        Ok(relative) => relative.to_string_lossy().into_owned(),
+        Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
         Err(_) => path.to_owned(),
     }
 }
@@ -1691,21 +1686,38 @@ mod tests {
 
     #[test]
     fn stored_paths_rebase_onto_current_root() {
-        let root = Path::new("/new/place");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("new").join("place");
+        let old = temp.path().join("old");
+        let elsewhere = temp.path().join("elsewhere");
+        let root_text = root.to_string_lossy().into_owned();
+        let old_text = old.to_string_lossy().into_owned();
+        let elsewhere_text = elsewhere.to_string_lossy().into_owned();
+
         assert_eq!(
-            resolve_workspace_path(root, "/old", "src"),
-            "/new/place/src"
-        );
-        assert_eq!(resolve_workspace_path(root, "/old", "."), "/new/place");
-        assert_eq!(
-            resolve_workspace_path(root, "/old", "/old/lib"),
-            "/new/place/lib"
+            PathBuf::from(resolve_workspace_path(&root, &old_text, "src")),
+            root.join("src")
         );
         assert_eq!(
-            resolve_workspace_path(root, "/old", "/elsewhere"),
-            "/elsewhere"
+            PathBuf::from(resolve_workspace_path(&root, &old_text, ".")),
+            root
         );
-        assert_eq!(workspace_relative_path(root, "/new/place"), ".");
-        assert_eq!(workspace_relative_path(root, "/new/place/a/b"), "a/b");
+        assert_eq!(
+            PathBuf::from(resolve_workspace_path(
+                &root,
+                &old_text,
+                &old.join("lib").to_string_lossy()
+            )),
+            root.join("lib")
+        );
+        assert_eq!(
+            PathBuf::from(resolve_workspace_path(&root, &old_text, &elsewhere_text)),
+            elsewhere
+        );
+        assert_eq!(workspace_relative_path(&root, &root_text), ".");
+        assert_eq!(
+            workspace_relative_path(&root, &root.join("a").join("b").to_string_lossy()),
+            "a/b"
+        );
     }
 }

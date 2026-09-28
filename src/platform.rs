@@ -248,6 +248,18 @@ pub(crate) fn replace_file(source: &Path, destination: &Path) -> io::Result<()> 
     fs::rename(source, destination)
 }
 
+pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(path)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OwnedChildInfo {
     pub pid: u32,

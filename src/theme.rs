@@ -1104,13 +1104,8 @@ M.dark = {
 
     #[test]
     fn theme_directory_loads_lua_palette_files() {
-        let root = std::env::temp_dir().join(format!(
-            "yeet-theme-dir-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("theme")
-        ));
-        let palette_dir = root.join("lua/quiet-night");
-        let _ = std::fs::remove_dir_all(&root);
+        let root = tempfile::tempdir().unwrap();
+        let palette_dir = root.path().join("lua/quiet-night");
         std::fs::create_dir_all(&palette_dir).unwrap();
         std::fs::write(
             palette_dir.join("palette.lua"),
@@ -1136,13 +1131,12 @@ return M
         )
         .unwrap();
 
-        let theme = ThemeFile::load(&root).unwrap();
+        let theme = ThemeFile::load(root.path()).unwrap();
         let palette = theme.apply(Palette::kanagawa());
         assert_eq!(palette.background, Rgb::new(17, 17, 19));
         assert_eq!(palette.accent_warm, Rgb::new(220, 154, 108));
         assert_eq!(palette.accent, Rgb::new(124, 167, 223));
         assert_eq!(palette.error, Rgb::new(216, 131, 129));
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

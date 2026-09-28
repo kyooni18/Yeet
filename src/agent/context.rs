@@ -2,7 +2,7 @@
 //! and the active window are committed atomically in one manifest.
 use crate::{
     core::{Message, MessageRole, ToolCall, ToolDefinition},
-    platform::{set_private_directory, set_private_file},
+    platform::{replace_file, set_private_directory, set_private_file, sync_directory},
 };
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -563,10 +563,11 @@ fn write_json(path: PathBuf, value: &(impl Serialize + ?Sized)) -> Result<()> {
     serde_json::to_writer(&mut temp, value)?;
     temp.flush()?;
     temp.as_file().sync_all()?;
-    temp.persist(&path)?;
+    let temp_path = temp.into_temp_path();
+    replace_file(temp_path.as_ref(), &path)?;
 
     set_private_file(&path)?;
-    fs::File::open(parent)?.sync_all()?;
+    sync_directory(parent)?;
     Ok(())
 }
 
@@ -581,7 +582,7 @@ fn write_json_new(path: PathBuf, value: &(impl Serialize + ?Sized)) -> Result<()
     temp.persist_noclobber(&path)?;
 
     set_private_file(&path)?;
-    fs::File::open(parent)?.sync_all()?;
+    sync_directory(parent)?;
     Ok(())
 }
 /// Image bytes are transport payload, not text tokens. Use a conservative
