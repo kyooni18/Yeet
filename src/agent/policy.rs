@@ -33,8 +33,14 @@ pub(super) fn task_profile_with_history(
     input: &str,
     web_search_enabled: bool,
     history: &[Message],
+    goal_mode: bool,
 ) -> TaskProfile {
-    if web_search_enabled
+    if goal_mode {
+        // Continuous goals are execution jobs. Keep the full Agent surface even
+        // when the objective also mentions web research, because a recovery turn
+        // may need local inspection, shell execution, or workspace mutation.
+        TaskProfile::Agent
+    } else if web_search_enabled
         && !looks_like_implementation_request(input)
         && (looks_like_web_research_request(input) || follows_recent_web_research(input, history))
     {
@@ -932,6 +938,12 @@ pub(super) fn is_mutation_tool(name: &str) -> bool {
 /// Detects explicit implementation/mutation intent rather than analysis-only intent.
 pub(super) fn looks_like_implementation_request(input: &str) -> bool {
     let value = input.trim().to_ascii_lowercase();
+    if let Some((_, goal_clause)) = value.split_once("goal:")
+        && !goal_clause.trim().is_empty()
+        && looks_like_implementation_request(goal_clause)
+    {
+        return true;
+    }
     let non_mutating_make = ["make sense", "make a plan", "make a list"];
     let make_command = value == "make"
         || (value.starts_with("make ")

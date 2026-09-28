@@ -125,7 +125,7 @@ fn natural_discovery_requests_route_to_web_without_hijacking_local_search() {
     let a1b3 = "how different is Starship's entry profile compared to Space Shuttle";
     assert!(looks_like_web_research_request(a1b3));
     assert_eq!(
-        task_profile_with_history(a1b3, true, &[]),
+        task_profile_with_history(a1b3, true, &[], false),
         TaskProfile::Research
     );
     assert!(looks_like_web_research_request(
@@ -139,7 +139,7 @@ fn natural_discovery_requests_route_to_web_without_hijacking_local_search() {
     ));
     assert!(looks_like_web_research_request("GPT-6 Sol release rumors?"));
     assert_eq!(
-        task_profile_with_history("GPT-6 Sol release rumors?", true, &[]),
+        task_profile_with_history("GPT-6 Sol release rumors?", true, &[], false),
         TaskProfile::Research
     );
     assert!(!looks_like_web_research_request(
@@ -201,7 +201,7 @@ fn implicit_followup_preserves_web_surface_only_after_actual_web_use() {
         Message::user(followup),
     ];
     assert_eq!(
-        task_profile_with_history(followup, true, &history),
+        task_profile_with_history(followup, true, &history, false),
         TaskProfile::Agent
     );
     assert!(should_preserve_web_tool_surface(followup, &history));

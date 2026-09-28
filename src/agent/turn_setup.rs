@@ -134,7 +134,12 @@ impl AgentCoordinator {
         explicitly_activated_tools.dedup();
         let (vision_enabled, web_search_enabled, _web_search_explicitly_attached) =
             attached_harness_flags(attached_capabilities.as_deref());
-        let profile = task_profile_with_history(input, web_search_enabled, &self.history);
+        let profile = task_profile_with_history(
+            input,
+            web_search_enabled,
+            &self.history,
+            goal_mode.load(Ordering::Acquire),
+        );
         if profile == TaskProfile::Research {
             self.history
                 .push(Message::system(policy::RESEARCH_SYSTEM_INSTRUCTION).request_only());
