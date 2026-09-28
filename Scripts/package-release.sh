@@ -59,10 +59,14 @@ rm -rf "$SMOKE_CONFIG"
 INSTALL_SMOKE="$ROOT/target/release-install-smoke-$TARGET"
 INSTALL_SMOKE_CONFIG="$ROOT/target/release-install-smoke-config-$TARGET"
 rm -rf "$INSTALL_SMOKE" "$INSTALL_SMOKE_CONFIG"
-PREFIX="$INSTALL_SMOKE" sh "$STAGE/install.sh" >/dev/null
+YEET_NO_PATH_UPDATE=1 PREFIX="$INSTALL_SMOKE" sh "$STAGE/install.sh" >/dev/null
 INSTALLED_VERSION=$("$INSTALL_SMOKE/bin/yeet" --version)
 [ "$INSTALLED_VERSION" = "$VERSION" ] || {
   echo "Installed Yeet version $INSTALLED_VERSION does not match release version $VERSION" >&2
+  exit 1
+}
+[ -f "$INSTALL_SMOKE/share/yeet/runtime/dist/bridge.js" ] || {
+  echo "Installed release is missing the Yeet runtime" >&2
   exit 1
 }
 YEET_CONFIG_DIR="$INSTALL_SMOKE_CONFIG" "$INSTALL_SMOKE/bin/yeet" doctor >/dev/null

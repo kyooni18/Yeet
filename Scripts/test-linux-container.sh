@@ -8,6 +8,33 @@ DOCKER=${DOCKER:-docker}
 cd "$ROOT"
 "$DOCKER" build --tag "$IMAGE" .
 
+
+# The repository installer must build from source, install RuntimeSource, and
+# persist the user-local binary directory into PATH on Linux.
+SOURCE_INSTALL_IMAGE="${IMAGE}-source-install"
+cleanup_source_install_image() {
+  "$DOCKER" image rm "$SOURCE_INSTALL_IMAGE" >/dev/null 2>&1 || true
+}
+trap cleanup_source_install_image EXIT INT TERM
+"$DOCKER" build --target build --tag "$SOURCE_INSTALL_IMAGE" .
+"$DOCKER" run --rm --entrypoint /bin/sh \
+  -e HOME=/tmp/yeet-installer-home \
+  -e SHELL=/bin/bash \
+  "$SOURCE_INSTALL_IMAGE" -c '
+    set -eu
+    mkdir -p "$HOME"
+    PREFIX=/tmp/yeet-prefix ./install.sh >/tmp/yeet-install.log
+    test -x /tmp/yeet-prefix/bin/yeet
+    test -f /tmp/yeet-prefix/share/yeet/runtime/dist/bridge.js
+    test -f /tmp/yeet-prefix/share/yeet/runtime/package.json
+    test -d /tmp/yeet-prefix/share/yeet/runtime/skills
+    grep -F "/tmp/yeet-prefix/bin" "$HOME/.profile" >/dev/null
+    grep -F "/tmp/yeet-prefix/bin" "$HOME/.bashrc" >/dev/null
+    PATH="/tmp/yeet-prefix/bin:$PATH" yeet doctor >/dev/null
+  '
+cleanup_source_install_image
+trap - EXIT INT TERM
+
 # Host IDs can collide with pre-existing Debian users/groups. Build once with
 # nobody:nogroup to ensure bind-mount ID matching remains collision-safe.
 IDMAP_IMAGE="${IMAGE}-idmap"
