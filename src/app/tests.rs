@@ -353,6 +353,18 @@ fn goal_command_is_suggested() {
 }
 
 #[test]
+fn agent_command_replaces_split_agent_policy_commands() {
+    let app = App {
+        input: "/a".into(),
+        ..App::default()
+    };
+    let suggestions = app.command_suggestions();
+    assert!(suggestions.iter().any(|(name, _)| name == "/agent"));
+    assert!(!suggestions.iter().any(|(name, _)| name == "/agents"));
+    assert!(!suggestions.iter().any(|(name, _)| name == "/autonomy"));
+}
+
+#[test]
 fn clear_command_describes_the_notice_it_actually_dismisses() {
     let app = App {
         input: "/clear".into(),
@@ -486,6 +498,7 @@ fn ctrl_c_interrupts_streaming_non_chat_modes_without_stealing_chat_copy() {
         Mode::CapabilityDetail,
         Mode::Reasoning,
         Mode::Goal,
+        Mode::Agent,
         Mode::Auth,
         Mode::AuthKey,
         Mode::Providers,

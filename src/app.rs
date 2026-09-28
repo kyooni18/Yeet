@@ -15,8 +15,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::{
     backend::Backend,
     model::{
-        BridgeState, CapabilityToggleItem, ConversationEntry, FrontendCommand, ModelCatalogItem,
-        ProviderConfigurationItem, SandboxAction, SessionSummary, reasoning_levels_for_model,
+        AgentMode, AutonomyMode, BridgeState, CapabilityToggleItem, ConversationEntry,
+        FrontendCommand, ModelCatalogItem, ProviderConfigurationItem, SandboxAction,
+        SessionSummary, reasoning_levels_for_model,
     },
 };
 
@@ -27,6 +28,7 @@ pub enum Mode {
     Models,
     Reasoning,
     Goal,
+    Agent,
     Sessions,
     Capabilities,
     CapabilityDetail,
@@ -432,6 +434,7 @@ impl App {
             Mode::Models => self.handle_model_key(event, backend),
             Mode::Reasoning => self.handle_reasoning_key(event, backend),
             Mode::Goal => self.handle_goal_key(event, backend),
+            Mode::Agent => self.handle_agent_key(event, backend),
             Mode::Sessions => self.handle_session_key(event, backend),
             Mode::Capabilities => self.handle_capability_key(event, backend),
             Mode::CapabilityDetail => self.handle_capability_detail_key(event, backend),
@@ -651,6 +654,7 @@ impl App {
             self.mode,
             Mode::Reasoning
                 | Mode::Goal
+                | Mode::Agent
                 | Mode::Providers
                 | Mode::Settings
                 | Mode::SandboxPresets
@@ -798,6 +802,7 @@ impl App {
                     "/model" => self.open_models(backend)?,
                     "/reasoning" => self.open_reasoning(),
                     "/goal" => self.open_goal(),
+                    "/agent" => self.open_agent(),
                     "/sessions" => self.open_sessions(backend)?,
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
@@ -1057,6 +1062,57 @@ impl App {
                 backend.send(FrontendCommand::SetGoal {
                     enabled: self.popup_index == 0,
                 })?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_agent_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        match event.code {
+            KeyCode::Esc => self.close_popup(),
+            KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                backend.send(FrontendCommand::Interrupt)?;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.popup_index = self.popup_index.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.popup_index = cmp::min(self.popup_index + 1, 2);
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.adjust_agent_setting(backend, false)?;
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter | KeyCode::Char(' ') => {
+                self.adjust_agent_setting(backend, true)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn adjust_agent_setting(&mut self, backend: &mut Backend, forward: bool) -> anyhow::Result<()> {
+        match self.popup_index {
+            0 => backend.send(FrontendCommand::SetGoal {
+                enabled: !self.state.goal_mode,
+            })?,
+            1 => {
+                let mode = match self.state.agent_mode {
+                    AgentMode::Single => AgentMode::Adaptive,
+                    AgentMode::Adaptive => AgentMode::Single,
+                };
+                backend.send(FrontendCommand::SetAgentMode { mode })?;
+            }
+            2 => {
+                let mode = match (self.state.autonomy_mode, forward) {
+                    (AutonomyMode::Manual, true) => AutonomyMode::Goal,
+                    (AutonomyMode::Goal, true) => AutonomyMode::Autonomous,
+                    (AutonomyMode::Autonomous, true) => AutonomyMode::Manual,
+                    (AutonomyMode::Manual, false) => AutonomyMode::Autonomous,
+                    (AutonomyMode::Goal, false) => AutonomyMode::Manual,
+                    (AutonomyMode::Autonomous, false) => AutonomyMode::Goal,
+                };
+                backend.send(FrontendCommand::SetAutonomyMode { mode })?;
             }
             _ => {}
         }
@@ -1375,6 +1431,7 @@ impl App {
             Mode::Models => self.filtered_models().len(),
             Mode::Reasoning => reasoning_levels_for_model(&self.state.active_model).len(),
             Mode::Goal => 2,
+            Mode::Agent => 3,
             Mode::Sessions => self.filtered_session_picker_items().len(),
             Mode::Capabilities => self.filtered_capabilities().len(),
             Mode::Auth => self.state.auth_providers.len(),
@@ -1670,11 +1727,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "/goal",
         "Continue until a strict success judge accepts concrete evidence",
     ),
-    ("/agents", "Opt in to adaptive multi-agent execution"),
-    (
-        "/autonomy",
-        "Choose manual, fixed-goal, or self-directed continuation",
-    ),
+    ("/agent", "Configure Goal, adaptive agents, and autonomy"),
     ("/attach", "Attach an optional capability"),
     ("/detach", "Detach an optional capability"),
     ("/allow", "Allow pending shell command once"),

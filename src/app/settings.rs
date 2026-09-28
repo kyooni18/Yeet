@@ -417,6 +417,12 @@ impl App {
         self.popup_index = if self.state.goal_mode { 0 } else { 1 };
     }
 
+    pub(super) fn open_agent(&mut self) {
+        self.mode = Mode::Agent;
+        self.popup_filter.clear();
+        self.popup_index = 0;
+    }
+
     pub(super) fn open_sessions(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         self.mode = Mode::Sessions;
         self.popup_filter.clear();

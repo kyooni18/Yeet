@@ -9,7 +9,7 @@ impl BackendService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /agents [on|off|adaptive|single|status]  /autonomy [manual|goal|autonomous|status]  /attach ID  /detach ID  /clear"),
+            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /agent  /attach ID  /detach ID  /clear"),
             "/new" => self.new_session(),
             "/model" => {
                 if arguments.is_empty() {
@@ -231,7 +231,7 @@ impl BackendService {
             }
             "/status" => self.append_system(&self.status_report()),
             "/goal" => {
-                let current = self.shared.lock_or_recover().state.autonomy_mode == AutonomyMode::Goal;
+                let current = self.shared.lock_or_recover().state.goal_mode;
                 match arguments.first().copied() {
                     None | Some("toggle") => {
                         let enabled = !current;
@@ -252,56 +252,21 @@ impl BackendService {
                     Some(_) => self.append_system("Usage: /goal [on|off|toggle|status]"),
                 }
             }
-            "/agents" => {
-                let current = self.shared.lock_or_recover().state.agent_mode;
-                match arguments.first().copied() {
-                    None | Some("status") => self.append_system(&format!(
-                        "Agents: {}",
-                        match current {
-                            AgentMode::Single => "single",
-                            AgentMode::Adaptive => "adaptive",
-                        }
-                    )),
-                    Some("on") | Some("enable") | Some("adaptive") => {
-                        self.set_agent_mode(AgentMode::Adaptive)?;
-                        self.append_system("Agents: adaptive");
-                    }
-                    Some("off") | Some("disable") | Some("single") => {
-                        self.set_agent_mode(AgentMode::Single)?;
-                        self.append_system("Agents: single");
-                    }
-                    Some(_) => self.append_system(
-                        "Usage: /agents [on|off|adaptive|single|status]",
-                    ),
-                }
-            }
-            "/autonomy" => {
-                let current = self.shared.lock_or_recover().state.autonomy_mode;
-                match arguments.first().copied() {
-                    None | Some("status") => self.append_system(&format!(
-                        "Autonomy: {}",
-                        match current {
-                            AutonomyMode::Manual => "manual",
-                            AutonomyMode::Goal => "goal",
-                            AutonomyMode::Autonomous => "autonomous",
-                        }
-                    )),
-                    Some("manual") | Some("off") | Some("disable") => {
-                        self.set_autonomy_mode(AutonomyMode::Manual)?;
-                        self.append_system("Autonomy: manual");
-                    }
-                    Some("goal") => {
-                        self.set_autonomy_mode(AutonomyMode::Goal)?;
-                        self.append_system("Autonomy: goal");
-                    }
-                    Some("autonomous") | Some("auto") | Some("self") => {
-                        self.set_autonomy_mode(AutonomyMode::Autonomous)?;
-                        self.append_system("Autonomy: autonomous");
-                    }
-                    Some(_) => self.append_system(
-                        "Usage: /autonomy [manual|goal|autonomous|status]",
-                    ),
-                }
+            "/agent" => {
+                let state = self.shared.lock_or_recover().state.without_conversation();
+                let agents = match state.agent_mode {
+                    AgentMode::Single => "single",
+                    AgentMode::Adaptive => "adaptive",
+                };
+                let autonomy = match state.autonomy_mode {
+                    AutonomyMode::Manual => "manual",
+                    AutonomyMode::Goal => "goal",
+                    AutonomyMode::Autonomous => "autonomous",
+                };
+                self.append_system(&format!(
+                    "Agent settings: Goal {} · Agents {agents} · Autonomy {autonomy}",
+                    if state.goal_mode { "ON" } else { "OFF" }
+                ));
             }
             "/image" => {
                 let Some(argument) = arguments.first().copied() else {
