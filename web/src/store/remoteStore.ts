@@ -222,7 +222,10 @@ class RemoteStore {
         return
       case 'state_update':
         this.applyState(message.patch)
-        if (message.patch.is_streaming === false) this.clearStreamingEntries()
+        if (message.patch.is_streaming === false) {
+          this.clearStreamingEntries()
+          this.clearActiveStreams()
+        }
         this.state.conversation_revision = message.revision
         return
       case 'assistant_delta':
@@ -319,6 +322,15 @@ class RemoteStore {
 
   private clearStreamingEntries(): void {
     for (const entry of this.entries) entry.uiStreaming = false
+  }
+
+
+  private clearActiveStreams(): void {
+    this.state.active_assistant_entry_id = null
+    this.state.active_assistant_text = ''
+    this.state.active_reasoning_entry_id = null
+    this.state.active_reasoning_text = ''
+    this.state.active_reasoning_summary = ''
   }
 
   private markStreamingEntry(id: string | null, kind: 'assistant' | 'reasoning'): void {

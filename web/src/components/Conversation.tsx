@@ -1258,7 +1258,7 @@ export function Conversation({ onEditLast }: { onEditLast: (content: string) => 
 
         {remote.state.is_streaming && (
           <div className="streaming-block">
-            {remote.state.active_assistant_text
+            {remote.state.active_assistant_entry_id && remote.state.active_assistant_text
               ? <StreamingAssistant text={remote.state.active_assistant_text} />
               : !hasStreamingActivity && (
                   <div className="preparing-response">

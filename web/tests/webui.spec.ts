@@ -176,3 +176,57 @@ test('permission prompts send semantic allow and deny commands', async ({ page }
     expect.objectContaining({ type: 'deny_native_app' }),
   ]))
 })
+
+
+test('completed assistant text stays in turn order when the next run starts', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop')
+
+  await emit(page, {
+    type: 'assistant_delta',
+    version: 1,
+    sequence: 2,
+    revision: 2,
+    entry_id: 'assistant-1',
+    delta: '',
+    content: 'Previous final answer',
+    reset: true,
+  })
+  await emit(page, {
+    type: 'conversation_entry',
+    version: 1,
+    sequence: 3,
+    revision: 3,
+    entry: { id: 'assistant-1', kind: { type: 'assistant', content: 'Previous final answer' } },
+  })
+  await emit(page, {
+    type: 'state_update',
+    version: 1,
+    sequence: 4,
+    revision: 4,
+    patch: { is_streaming: false, active_assistant_entry_id: null, active_run_id: null },
+  })
+
+  await expect(page.getByText('Previous final answer', { exact: true })).toHaveCount(1)
+
+  await emit(page, {
+    type: 'conversation_entry',
+    version: 1,
+    sequence: 5,
+    revision: 5,
+    entry: { id: 'user-2', kind: { type: 'user', content: 'New user message' } },
+  })
+  await emit(page, {
+    type: 'state_update',
+    version: 1,
+    sequence: 6,
+    revision: 6,
+    patch: { is_streaming: true, active_run_id: 'run-2' },
+  })
+
+  await expect(page.getByText('Previous final answer', { exact: true })).toHaveCount(1)
+  await expect(page.getByText('New user message', { exact: true })).toBeVisible()
+  await expect(page.getByText('Preparing response', { exact: true })).toBeVisible()
+
+  const transcriptText = await page.getByTestId('transcript').textContent()
+  expect(transcriptText?.indexOf('Previous final answer')).toBeLessThan(transcriptText?.indexOf('New user message') ?? -1)
+})
