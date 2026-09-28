@@ -223,24 +223,28 @@ fn stop_and_direct_termination_do_not_respawn() {
         assert!(status.success());
     }
 
-    // Wait for the process to exit
-    let mut dead = false;
-    for _ in 0..50 {
+    // Wait for the process to exit.
+    let dead = {
         #[cfg(unix)]
-        unsafe {
-            if libc::kill(pid as libc::pid_t, 0) != 0 {
-                dead = true;
-                break;
+        {
+            let mut dead = false;
+            for _ in 0..50 {
+                unsafe {
+                    if libc::kill(pid as libc::pid_t, 0) != 0 {
+                        dead = true;
+                        break;
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
             }
+            dead
         }
         #[cfg(windows)]
         {
-            dead = true;
-            break;
+            true
         }
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert!(dead, "process did not terminate after SIGKILL");
+    };
+    assert!(dead, "process did not terminate after forced termination");
 
     // remote_status must immediately reflect not running
     assert!(remote_status().unwrap().is_none());
