@@ -61,7 +61,11 @@ test('uses an overlay sidebar on touch and a docked sidebar on desktop', async (
     await expect(sidebar).toHaveClass(/is-open/)
     await expect(sidebar).toHaveAttribute('role', 'complementary')
     const main = page.locator('.main-viewport')
-    await expect.poll(async () => (await main.boundingBox())?.x ?? 0).toBeGreaterThan(300)
+    await expect.poll(async () => {
+      const [sidebarBounds, mainBounds] = await Promise.all([sidebar.boundingBox(), main.boundingBox()])
+      if (!sidebarBounds || !mainBounds) return Number.POSITIVE_INFINITY
+      return Math.abs(mainBounds.x - (sidebarBounds.x + sidebarBounds.width))
+    }).toBeLessThanOrEqual(1)
   } else {
     await expect(sidebar).not.toHaveClass(/is-open/)
   }
@@ -76,8 +80,23 @@ test('uses an overlay sidebar on touch and a docked sidebar on desktop', async (
 
   const controlsBox = await controls.boundingBox()
   expect(controlsBox).not.toBeNull()
-  expect(controlsBox?.width ?? 0).toBeGreaterThan(250)
-  expect(controlsBox?.width ?? 999).toBeLessThanOrEqual(300)
+  const inspectorDocked = await page.evaluate(() =>
+    matchMedia('(min-width: 1180px) and (hover: hover) and (pointer: fine)').matches
+  )
+  if (inspectorDocked) {
+    const main = page.locator('.main-viewport')
+    await expect.poll(async () => (await controls.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(290)
+    await expect.poll(async () => {
+      const [controlsBounds, mainBounds] = await Promise.all([controls.boundingBox(), main.boundingBox()])
+      if (!controlsBounds || !mainBounds) return Number.POSITIVE_INFINITY
+      return Math.abs(controlsBounds.x - (mainBounds.x + mainBounds.width))
+    }).toBeLessThanOrEqual(1)
+    const settledControls = await controls.boundingBox()
+    expect(settledControls?.width ?? 999).toBeLessThanOrEqual(340)
+  } else {
+    expect(controlsBox?.width ?? 0).toBeGreaterThan(250)
+    expect(controlsBox?.width ?? 999).toBeLessThanOrEqual(300)
+  }
 })
 
 test('collapses the composer toolbar and keeps the affordance usable', async ({ page }) => {

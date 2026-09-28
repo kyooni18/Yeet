@@ -114,8 +114,7 @@ export function RemoteShell() {
         onClose={() => setSidebar(false)}
         onSettings={openSettings}
       />
-
-      <section className="main-viewport app-workspace" aria-label="Current session">
+      <section className={`main-viewport app-workspace${sidebarVisible ? ' sidebar-open' : ''}`} aria-label="Current session">
         <TopBar
           sidebarOpen={sidebarVisible}
           controlsOpen={controlsVisible}

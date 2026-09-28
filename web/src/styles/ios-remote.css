@@ -23,7 +23,7 @@
   --primary-c: #ffffff;
   --chat-user-bg: color(display-p3 0.138 0.138 0.138);
   --chat-user-shadow: rgba(8, 8, 8, 0.36);
-  --sidebar-width: clamp(268px, 78vw, 300px);
+  --sidebar-width: clamp(268px, 78vw, 299px);
   --visual-viewport-top: 0px;
   --visual-viewport-left: 0px;
   --visual-viewport-width: 100vw;
@@ -4313,6 +4313,10 @@ button.quick-row,
   position: relative;
   z-index: 26;
   min-width: 0;
+  min-height: 0;
+  max-height: calc(100dvh - 56px);
+  overflow: hidden;
+  overscroll-behavior: contain;
   border-top: 0.5px solid var(--line-soft);
   background: color-mix(in srgb, var(--bg) 92%, var(--surface) 8%);
 }
@@ -4382,10 +4386,10 @@ button.quick-row,
 
 .remote-topbar .topbar-icon {
   display: grid;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   place-items: center;
   border: 0;
@@ -4505,6 +4509,9 @@ button.quick-row,
     6px max(12px, env(safe-area-inset-right))
     calc(8px + max(env(safe-area-inset-bottom), 0px))
     max(12px, env(safe-area-inset-left));
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   transform: none;
   pointer-events: auto;
 }
