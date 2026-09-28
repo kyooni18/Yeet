@@ -162,6 +162,13 @@ impl AgentCoordinator {
         self.registry.set_protected_write_paths(paths);
     }
 
+    pub(crate) fn set_agent_orchestrator(
+        &mut self,
+        orchestrator: Option<crate::orchestration::AdaptiveAgentOrchestrator>,
+    ) {
+        self.registry.set_agent_orchestrator(orchestrator);
+    }
+
     pub fn session_environment(&self) -> (String, Vec<String>) {
         self.registry.session_environment()
     }

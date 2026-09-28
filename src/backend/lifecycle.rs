@@ -9,6 +9,7 @@ impl BackendService {
     /// Restores a persisted session and rebinds coordinator runtime state.
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
+        self.agent_orchestrator.begin_run();
         let stored = self.store.load(id)?;
         let rebase = |path: &String| {
             crate::session_store::resolve_workspace_path(
@@ -20,6 +21,7 @@ impl BackendService {
         let stored_working_directory = stored.working_directory.as_ref().map(rebase);
         let stored_context_roots = stored.context_roots.iter().map(rebase).collect::<Vec<_>>();
         let persisted_goal = self.store.goal_mode(id).unwrap_or(false);
+        let restored_agent_mode = stored.agent_mode;
         let restored_autonomy = if stored.autonomy_mode == AutonomyMode::Manual && persisted_goal {
             // Sessions written before autonomy policy existed only persisted the
             // Goal sidecar. Preserve their old resume semantics.
@@ -68,7 +70,7 @@ impl BackendService {
         shared.state.active_model = stored.model;
         shared.state.token_usage = stored.token_usage;
         shared.state.goal_mode = persisted_goal;
-        shared.state.agent_mode = stored.agent_mode;
+        shared.state.agent_mode = restored_agent_mode;
         shared.state.autonomy_mode = restored_autonomy;
         shared.state.current_context_tokens = None;
         shared.state.sandbox_settings = sandbox_settings;
@@ -107,6 +109,10 @@ impl BackendService {
             coordinator.set_protected_write_paths([protected]);
             coordinator.set_session_runtime(self.store.clone(), Some(stored.id.clone()));
             coordinator.set_retained_debate_knowledge(retained_knowledge);
+            coordinator.set_agent_orchestrator(match restored_agent_mode {
+                AgentMode::Single => None,
+                AgentMode::Adaptive => Some(self.agent_orchestrator.clone()),
+            });
             coordinator.restore_session_environment(
                 stored_working_directory.as_deref(),
                 &stored_context_roots,
@@ -132,6 +138,7 @@ impl BackendService {
     pub(super) fn new_session(&mut self) {
         let _ = self.set_goal_enabled(false);
         self.interrupt();
+        self.agent_orchestrator.begin_run();
         let _ = self.invalidate_active_turn_for_replacement();
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.replace_model_history(Vec::new());
@@ -180,6 +187,7 @@ impl BackendService {
             coordinator.set_protected_write_paths(Vec::<PathBuf>::new());
             coordinator.set_session_runtime(self.store.clone(), None);
             coordinator.set_retained_debate_knowledge(Vec::new());
+            coordinator.set_agent_orchestrator(None);
             let _ = coordinator.restore_session_environment(None, &[]);
         }
         self.publish_state();
@@ -330,6 +338,7 @@ impl BackendService {
     /// Emits the latest bridge state with current permission prompts attached.
     pub(super) fn publish_state(&self) {
         let mut state = self.shared.lock_or_recover();
+        state.state.agent_tasks = self.agent_orchestrator.snapshots();
         state.state.pending_shell_permission = self.permission.pending_shell();
         state.state.pending_native_app_permission = self.permission.pending_native_app();
         let _ = self

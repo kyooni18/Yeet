@@ -253,6 +253,14 @@ export interface RuntimeSettingsState {
 
 export type AgentMode = 'single' | 'adaptive'
 export type AutonomyMode = 'manual' | 'goal' | 'autonomous'
+export interface AgentTaskItem {
+  id: string
+  role: 'researcher' | 'implementer' | 'verifier' | string
+  objective: string
+  status: string
+  summary?: string | null
+}
+
 
 export interface BridgeState {
   workspace_root?: string | null
@@ -268,6 +276,7 @@ export interface BridgeState {
   goal_mode: boolean
   agent_mode: AgentMode
   autonomy_mode: AutonomyMode
+  agent_tasks: AgentTaskItem[]
   error_message?: string | null
   active_model: string
   active_reasoning_level: string
@@ -319,6 +328,7 @@ export const emptyBridgeState = (): BridgeState => ({
   goal_mode: false,
   agent_mode: 'single',
   autonomy_mode: 'manual',
+  agent_tasks: [],
   active_model: '',
   active_reasoning_level: 'auto',
   token_usage: {},

@@ -34,7 +34,7 @@ use crate::{
         ToolCallStatus, WorkspaceSessionGroup, WorkspaceSummary, normalize_reasoning_level,
         reasoning_levels_for_model,
     },
-    orchestration::{AgentRuntimeFactory, RunManager},
+    orchestration::{AdaptiveAgentOrchestrator, AgentLimits, AgentRuntimeFactory, RunManager},
     permission::PermissionBroker,
     project_settings::{ProjectSettingsStore, ServiceBackend},
     sandbox::{
@@ -157,6 +157,7 @@ pub(crate) struct BackendService {
     workspace_root: PathBuf,
     permission: PermissionBroker,
     run_manager: RunManager,
+    agent_orchestrator: AdaptiveAgentOrchestrator,
     goal_mode: Arc<AtomicBool>,
     events: Receiver<BackendEvent>,
     tx: EventSender,
@@ -198,6 +199,12 @@ impl BackendService {
             project_settings.clone(),
             project_identity.clone(),
             store.clone(),
+        );
+        let run_manager = RunManager::default();
+        let agent_orchestrator = AdaptiveAgentOrchestrator::new(
+            runtime_factory.clone(),
+            run_manager.clone(),
+            AgentLimits::default(),
         );
         let coordinator = Arc::new(Mutex::new(runtime_factory.build(None)?));
         let mut session = SharedSession::new(model, reasoning_level);
@@ -275,7 +282,8 @@ impl BackendService {
             store,
             workspace_root,
             permission,
-            run_manager: RunManager::default(),
+            run_manager,
+            agent_orchestrator,
             goal_mode: Arc::new(AtomicBool::new(false)),
             events,
             tx,
@@ -556,6 +564,14 @@ impl BackendService {
                 "Agent mode cannot be changed while a response is running."
             ));
         }
+        self.agent_orchestrator.begin_run();
+        {
+            let mut coordinator = self.coordinator.lock_or_recover();
+            coordinator.set_agent_orchestrator(match mode {
+                AgentMode::Single => None,
+                AgentMode::Adaptive => Some(self.agent_orchestrator.clone()),
+            });
+        }
         let history = self
             .coordinator
             .lock()
@@ -564,6 +580,7 @@ impl BackendService {
         {
             let mut shared = self.shared.lock_or_recover();
             shared.state.agent_mode = mode;
+            shared.state.agent_tasks = self.agent_orchestrator.snapshots();
             if shared.state.current_session_id.is_some() {
                 persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
             }
@@ -752,6 +769,7 @@ impl BackendService {
         let autonomy_mode = self.shared.lock_or_recover().state.autonomy_mode;
         let goal_enabled = autonomy_mode != AutonomyMode::Manual;
         self.goal_mode.store(goal_enabled, Ordering::Release);
+        self.agent_orchestrator.begin_run();
         let history_start = self
             .coordinator
             .lock_or_recover()
@@ -759,6 +777,7 @@ impl BackendService {
         {
             let mut shared = self.shared.lock_or_recover();
             shared.state.goal_mode = goal_enabled;
+            shared.state.agent_tasks = self.agent_orchestrator.snapshots();
             shared.state.error_message = None;
             shared.state.is_streaming = true;
             shared.state.active_assistant_entry_id = None;
@@ -874,6 +893,7 @@ impl BackendService {
         let goal_mode = self.goal_mode.clone();
         let permission = self.permission.clone();
         let bridge = self.bridge.clone();
+        let agent_orchestrator = self.agent_orchestrator.clone();
         thread::spawn(move || {
             let (attached, disabled_capabilities) = shared
                 .lock()
@@ -935,6 +955,7 @@ impl BackendService {
                                 };
                                 let session_id = state.state.current_session_id.clone();
                                 apply_agent_event(&mut state, event);
+                                state.state.agent_tasks = agent_orchestrator.snapshots();
                                 state.state.pending_shell_permission = permission.pending_shell();
                                 state.state.pending_native_app_permission =
                                     permission.pending_native_app();

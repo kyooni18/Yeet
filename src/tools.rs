@@ -12,6 +12,7 @@ use crate::{
     core::{BridgeClient, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
+    orchestration::AdaptiveAgentOrchestrator,
     permission::PermissionBroker,
     project_settings::ServiceBackend,
     sandbox::{SandboxMode, SandboxStore},
@@ -158,6 +159,7 @@ pub struct ToolRegistry {
     active_workers: HashSet<String>,
     skyline_handle: Option<String>,
     disabled_capabilities: HashSet<String>,
+    agent_orchestrator: Option<AdaptiveAgentOrchestrator>,
     read_cache: HashMap<String, Vec<ReadCacheEntry>>,
     edit_snapshots: HashMap<String, String>,
     edit_read_coverage: HashMap<String, EditReadCoverage>,
@@ -244,6 +246,7 @@ impl ToolRegistry {
             active_workers: HashSet::new(),
             skyline_handle: None,
             disabled_capabilities: HashSet::new(),
+            agent_orchestrator: None,
             read_cache: HashMap::new(),
             edit_snapshots: HashMap::new(),
             edit_read_coverage: HashMap::new(),
@@ -300,6 +303,20 @@ impl ToolRegistry {
 
     pub fn set_artifacts_enabled(&mut self, enabled: bool) {
         self.artifacts_enabled = enabled;
+    }
+
+    pub(crate) fn set_agent_orchestrator(
+        &mut self,
+        orchestrator: Option<AdaptiveAgentOrchestrator>,
+    ) {
+        const TOOL: &str = "propose_agent_tasks";
+        self.agent_orchestrator = orchestrator;
+        if self.agent_orchestrator.is_some() {
+            let definition = AdaptiveAgentOrchestrator::tool_definition();
+            self.active_tools.insert(TOOL.into(), definition);
+        } else {
+            self.active_tools.remove(TOOL);
+        }
     }
 
     pub fn runtime_capability_snapshot(&self, visible_tools: &[ToolDefinition]) -> Value {
@@ -613,6 +630,11 @@ impl ToolRegistry {
             }
             "skyline" => self.execute_skyline(&object),
             "deploy_agent" => self.deploy_agent(&object, cancel),
+            "propose_agent_tasks" => self
+                .agent_orchestrator
+                .as_ref()
+                .ok_or_else(|| anyhow!("adaptive agent orchestration is not enabled"))?
+                .execute(&object, model, self.active_session_id.clone(), cancel),
             "read_file" => self.read_file(&object),
             // Hidden compatibility alias for restored sessions created before
             // read_file absorbed batch reads. New requests never expose this schema.

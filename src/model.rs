@@ -77,6 +77,16 @@ pub enum AgentMode {
     Adaptive,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTaskItem {
+    pub id: String,
+    pub role: String,
+    pub objective: String,
+    pub status: String,
+    pub summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomyMode {
@@ -102,6 +112,7 @@ pub struct BridgeState {
     pub is_streaming: bool,
     pub goal_mode: bool,
     pub agent_mode: AgentMode,
+    pub agent_tasks: Vec<AgentTaskItem>,
     pub autonomy_mode: AutonomyMode,
     pub error_message: Option<String>,
     pub active_model: String,
@@ -159,6 +170,7 @@ impl BridgeState {
             is_streaming: self.is_streaming,
             goal_mode: self.goal_mode,
             agent_mode: self.agent_mode,
+            agent_tasks: self.agent_tasks.clone(),
             autonomy_mode: self.autonomy_mode,
             error_message: self.error_message.clone(),
             active_model: self.active_model.clone(),
