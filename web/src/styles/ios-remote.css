@@ -4270,3 +4270,511 @@ button.quick-row,
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* Application shell -------------------------------------------------------
+   The shell is spatially stable: navigation, workspace, composer, and the
+   desktop inspector are peers. Compact layouts adapt those peers to drawers
+   without translating or reconstructing the workspace.
+   ---------------------------------------------------------------------- */
+
+.app-shell {
+  --inspector-width: clamp(292px, 24vw, 340px);
+}
+
+.main-viewport,
+.main-viewport.sidebar-open {
+  position: relative;
+  inset: auto;
+  left: auto;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+  transform: none;
+  transition: none;
+  will-change: auto;
+}
+
+.workspace-transcript {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-composer {
+  position: relative;
+  z-index: 26;
+  min-width: 0;
+  border-top: 0.5px solid var(--line-soft);
+  background: color-mix(in srgb, var(--bg) 92%, var(--surface) 8%);
+}
+
+.remote-topbar {
+  position: relative;
+  z-index: 28;
+  top: auto;
+  display: grid;
+  width: 100%;
+  height: auto;
+  min-height: calc(56px + max(env(safe-area-inset-top), 0px));
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  padding:
+    max(env(safe-area-inset-top), 0px)
+    max(12px, env(safe-area-inset-right))
+    6px
+    max(12px, env(safe-area-inset-left));
+  border-bottom: 0.5px solid var(--line-soft);
+  background: color-mix(in srgb, var(--bg) 94%, var(--surface) 6%);
+  pointer-events: auto;
+}
+
+.topbar-leading {
+  display: flex;
+  min-width: 0;
+  height: 44px;
+  align-items: center;
+  gap: 9px;
+}
+
+.topbar-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+
+.topbar-workspace,
+.topbar-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-workspace {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 560;
+  line-height: 1.1;
+  letter-spacing: .015em;
+}
+
+.topbar-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.remote-topbar .topbar-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+  transform: none;
+}
+
+.remote-topbar .topbar-icon.is-active,
+.remote-topbar .topbar-icon[aria-pressed="true"] {
+  background: var(--surface-selected);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.remote-topbar .topbar-icon:disabled {
+  background: transparent;
+  box-shadow: none;
+  opacity: .4;
+}
+
+.topbar-status {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 7px;
+  align-self: center;
+  padding: 0 9px;
+  border: 0.5px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.topbar-status__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.topbar-status.is-ok .topbar-status__dot {
+  background: var(--success);
+}
+
+.topbar-status.is-busy .topbar-status__dot {
+  background: var(--accent);
+}
+
+.topbar-status.is-warning {
+  color: color-mix(in srgb, var(--warning) 82%, var(--text));
+}
+
+.topbar-status.is-warning .topbar-status__dot {
+  background: var(--warning);
+}
+
+.topbar-actions {
+  display: flex;
+  width: auto;
+  height: 44px;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.topbar-actions button + button::before {
+  display: none;
+}
+
+/* The transcript owns scrolling. Header and composer no longer overlap it. */
+.conversation-scroll {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  scroll-padding-block: 24px;
+}
+
+.conversation-content {
+  width: min(100%, 860px);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 26px 24px 34px;
+}
+
+.conversation-latest {
+  bottom: 12px;
+}
+
+/* Composer is a real application dock, not a viewport overlay. */
+.composer-shell {
+  position: relative;
+  z-index: 25;
+  inset: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  width: min(100%, 860px);
+  margin: 0 auto;
+  gap: 6px;
+  padding:
+    6px max(12px, env(safe-area-inset-right))
+    calc(8px + max(env(safe-area-inset-bottom), 0px))
+    max(12px, env(safe-area-inset-left));
+  transform: none;
+  pointer-events: auto;
+}
+
+.composer-shell > * {
+  pointer-events: auto;
+}
+
+.workspace-composer .toolbar-chip,
+.workspace-composer .toolbar-collapse {
+  border-color: var(--line-soft);
+  background: var(--surface-inset);
+  box-shadow: none;
+}
+
+.workspace-composer .composer-input {
+  border: 0.5px solid var(--line);
+  background: var(--surface-inset);
+  box-shadow: none;
+}
+
+.workspace-composer .composer-send,
+.workspace-composer .attachment-add {
+  box-shadow: none;
+}
+
+.workspace-composer .composer-toolbar.is-expanded::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--bg) 78%, transparent),
+    color-mix(in srgb, var(--bg) 98%, transparent)
+  );
+}
+
+/* Compact navigation/inspector are drawers over a workspace that never moves. */
+.remote-sidebar {
+  background: color-mix(in srgb, var(--surface) 88%, var(--bg) 12%);
+}
+
+.quick-panel {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(300px, 92vw);
+  gap: 10px;
+  padding:
+    calc(max(env(safe-area-inset-top), 0px) + 12px)
+    max(12px, env(safe-area-inset-right))
+    calc(max(env(safe-area-inset-bottom), 0px) + 12px)
+    12px;
+  border-width: 0 0 0 0.5px;
+  border-radius: 18px 0 0 18px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg) 8%);
+  box-shadow: -14px 0 34px color-mix(in srgb, var(--shadow) 48%, transparent);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .remote-topbar .topbar-icon:hover:not(:disabled) {
+    background: var(--surface-selected);
+    box-shadow: none;
+    transform: none;
+  }
+
+  .workspace-composer .toolbar-chip:hover:not(:disabled),
+  .workspace-composer .toolbar-collapse:hover:not(:disabled) {
+    box-shadow: none;
+    transform: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .remote-topbar {
+    gap: 6px;
+    padding-right: max(8px, env(safe-area-inset-right));
+    padding-left: max(8px, env(safe-area-inset-left));
+  }
+
+  .topbar-leading {
+    gap: 5px;
+  }
+
+  .topbar-status {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .topbar-status > span:last-child {
+    display: none;
+  }
+
+  .conversation-content {
+    padding: 18px 12px 24px;
+  }
+
+  .composer-shell {
+    padding-right: max(8px, env(safe-area-inset-right));
+    padding-left: max(8px, env(safe-area-inset-left));
+  }
+}
+
+@media (max-width: 430px) {
+  .topbar-workspace {
+    display: none;
+  }
+
+  .topbar-title {
+    font-size: 13px;
+  }
+}
+
+/* Desktop: navigation is a shell column. Opening it resizes the workspace;
+   it never translates, rounds, or rebuilds the current session. */
+@media (min-width: 1000px) and (hover: hover) and (pointer: fine) {
+  .remote-stage.app-shell {
+    display: grid;
+    grid-template-columns: 0 minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    transition: grid-template-columns 260ms var(--motion-panel);
+  }
+
+  .remote-stage.app-shell.navigation-open {
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  }
+
+  .sidebar-backdrop.is-desktop-docked {
+    display: none;
+  }
+
+  .remote-sidebar.is-desktop-docked {
+    position: relative;
+    z-index: 20;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    gap: 9px;
+    overflow: hidden;
+    padding: 12px 10px;
+    border: 0;
+    border-right: 0.5px solid var(--line-soft);
+    border-radius: 0;
+    background: color-mix(in srgb, var(--surface) 76%, var(--bg) 24%);
+    box-shadow: none;
+    opacity: 0;
+    transform: none;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+  }
+
+  .remote-sidebar.is-desktop-docked.is-open {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .remote-sidebar.is-desktop-docked .sidebar-header {
+    min-height: 42px;
+    padding: 0 3px 2px 7px;
+  }
+
+  .remote-sidebar.is-desktop-docked .sidebar-header strong {
+    font-size: 16px;
+  }
+
+  .main-viewport,
+  .main-viewport.sidebar-open {
+    grid-column: 2;
+    grid-row: 1;
+    left: auto;
+    min-width: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
+    transition: none;
+  }
+
+  .remote-stage.app-shell.navigation-open .main-viewport {
+    border-left: 0;
+  }
+
+  .conversation-content {
+    padding-top: 32px;
+    padding-right: 30px;
+    padding-left: 30px;
+  }
+
+  .composer-shell {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+}
+
+/* Wide desktop: controls become a persistent inspector column as well. */
+@media (min-width: 1180px) and (hover: hover) and (pointer: fine) {
+  .remote-stage.app-shell {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
+
+  .remote-stage.app-shell.navigation-open {
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0;
+  }
+
+  .remote-stage.app-shell.inspector-open {
+    grid-template-columns: 0 minmax(0, 1fr) var(--inspector-width);
+  }
+
+  .remote-stage.app-shell.navigation-open.inspector-open {
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
+  }
+
+  .controls-backdrop {
+    display: none;
+  }
+
+  .quick-panel {
+    position: relative;
+    z-index: 20;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    grid-column: 3;
+    grid-row: 1;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    gap: 10px;
+    overflow: hidden;
+    padding: 12px;
+    border: 0;
+    border-left: 0.5px solid var(--line-soft);
+    border-radius: 0;
+    background: color-mix(in srgb, var(--surface) 76%, var(--bg) 24%);
+    box-shadow: none;
+    opacity: 0;
+    transform: none;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+  }
+
+  .quick-panel.is-open {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .quick-panel__header {
+    min-height: 42px;
+  }
+
+  .quick-panel__header strong {
+    font-size: 14px;
+  }
+}
+
+
+@media (hover: none) and (pointer: coarse) {
+  .remote-topbar .topbar-icon {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

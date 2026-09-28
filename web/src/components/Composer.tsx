@@ -533,34 +533,6 @@ export function Composer({
     node.style.height = `${Math.min(Math.max(node.scrollHeight, 24), 150)}px`
   }, [text])
 
-  useEffect(() => {
-    const shell = composerShell.current
-    if (!shell || typeof ResizeObserver === 'undefined') return
-    const host = shell.closest<HTMLElement>('.main-viewport')
-    if (!host) return
-
-    const updateClearance = () => {
-      const rect = shell.getBoundingClientRect()
-      const viewport = window.visualViewport
-      const viewportBottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight)
-      host.style.setProperty('--composer-overlay-clearance', `${Math.max(0, viewportBottom - rect.top)}px`)
-    }
-
-    const observer = new ResizeObserver(updateClearance)
-    observer.observe(shell)
-    window.addEventListener('resize', updateClearance)
-    window.visualViewport?.addEventListener('resize', updateClearance)
-    window.visualViewport?.addEventListener('scroll', updateClearance)
-    updateClearance()
-
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', updateClearance)
-      window.visualViewport?.removeEventListener('resize', updateClearance)
-      window.visualViewport?.removeEventListener('scroll', updateClearance)
-      host.style.removeProperty('--composer-overlay-clearance')
-    }
-  }, [])
 
   useEffect(() => {
     if (!editRequest) return

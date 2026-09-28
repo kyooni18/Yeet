@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { TriangleAlert, WifiOff } from '@/components/Icons'
 import { Composer } from '@/components/Composer'
 import { Conversation } from '@/components/Conversation'
 import { ModelSheet } from '@/components/ModelSheet'
@@ -7,10 +6,8 @@ import { QuickPanel } from '@/components/QuickPanel'
 import { SettingsSheet } from '@/components/SettingsSheet'
 import { Sidebar } from '@/components/Sidebar'
 import { TopBar } from '@/components/TopBar'
-import { useRemote } from '@/store/remoteStore'
 
 export function RemoteShell() {
-  const remote = useRemote()
   const [sidebar, setSidebar] = useState(false)
   const [controls, setControls] = useState(false)
   const [modelSheet, setModelSheet] = useState(false)
@@ -20,8 +17,8 @@ export function RemoteShell() {
   const settingsReturnFocus = useRef<HTMLElement | null>(null)
 
   const [editRequest, setEditRequest] = useState<{ key: number; content: string } | null>(null)
-  const sidebarVisible = sidebar && !modelSheet && !settings
-  const controlsVisible = controls && !modelSheet && !settings
+  const sidebarVisible = sidebar && (desktopLayout || (!modelSheet && !settings))
+  const controlsVisible = controls && (desktopLayout || (!modelSheet && !settings))
 
   const rememberFocus = (target: React.MutableRefObject<HTMLElement | null>) => {
     const active = document.activeElement
@@ -66,6 +63,7 @@ export function RemoteShell() {
         if (initial) setSidebar(true)
       } else if (!initial) {
         setSidebar(false)
+        setControls(false)
       }
     }
 
@@ -88,8 +86,16 @@ export function RemoteShell() {
   }, [controls, modelSheet, settings, sidebar])
 
   return (
-    <div className="remote-stage">
-      {!((sidebarVisible && !desktopLayout) || controlsVisible || modelSheet || settings) && (
+    <div
+      className={[
+        'remote-stage',
+        'app-shell',
+        desktopLayout ? 'is-desktop' : 'is-compact',
+        sidebarVisible ? 'navigation-open' : '',
+        controlsVisible ? 'inspector-open' : '',
+      ].filter(Boolean).join(' ')}
+    >
+      {!((sidebarVisible && !desktopLayout) || (controlsVisible && !desktopLayout) || modelSheet || settings) && (
         <a
           className="skip-link"
           href="#conversation-transcript"
@@ -101,6 +107,7 @@ export function RemoteShell() {
           Skip to conversation
         </a>
       )}
+
       <Sidebar
         open={sidebarVisible}
         desktopDocked={desktopLayout}
@@ -108,11 +115,12 @@ export function RemoteShell() {
         onSettings={openSettings}
       />
 
-      <div className={`main-viewport${sidebarVisible ? ' sidebar-open' : ''}`}>
-        <Conversation onEditLast={(content) => setEditRequest({ key: Date.now(), content })} />
+      <section className="main-viewport app-workspace" aria-label="Current session">
         <TopBar
-          onOpenSidebar={() => {
-            setControls(false)
+          sidebarOpen={sidebarVisible}
+          controlsOpen={controlsVisible}
+          onToggleSidebar={() => {
+            if (!desktopLayout) setControls(false)
             setSidebar(true)
           }}
           onToggleControls={() => {
@@ -120,39 +128,24 @@ export function RemoteShell() {
             setControls((value) => !value)
           }}
         />
-        <Composer
-          onModel={openModel}
-          onSessions={() => setSidebar(true)}
-          onSettings={openSettings}
-          editRequest={editRequest}
-          onEditConsumed={() => setEditRequest(null)}
-        />
 
-{remote.connection !== 'connected' && remote.connection !== 'auth-required' && (() => {
-          const failed = remote.connection === 'failed'
-          const offline = remote.connection === 'offline'
-          const message = offline
-            ? 'Offline'
-            : failed
-              ? (remote.connectionError || 'Remote connection failed')
-              : (remote.connectionError || 'Reconnecting…')
-          return (
-            <div
-              className="connection-toast glass-panel"
-              role={failed ? 'alert' : 'status'}
-              aria-live={failed ? 'assertive' : 'polite'}
-              aria-label={failed ? 'Connection failed' : undefined}
-            >
-              {offline
-                ? <WifiOff size={13} />
-                : failed
-                  ? <TriangleAlert size={13} />
-                  : <span className="mini-spinner" />}
-              <span>{message}</span>
-            </div>
-          )
-        })()}
-      </div>
+        <div className="workspace-transcript">
+          <Conversation onEditLast={(content) => setEditRequest({ key: Date.now(), content })} />
+        </div>
+
+        <div className="workspace-composer">
+          <Composer
+            onModel={openModel}
+            onSessions={() => {
+              if (!desktopLayout) setControls(false)
+              setSidebar(true)
+            }}
+            onSettings={openSettings}
+            editRequest={editRequest}
+            onEditConsumed={() => setEditRequest(null)}
+          />
+        </div>
+      </section>
 
       <QuickPanel
         open={controlsVisible}

@@ -1037,11 +1037,27 @@ function buildDisplayItems(
   return items
 }
 
+interface ConversationScrollState {
+  top: number
+  following: boolean
+}
+
+const conversationScrollPositions = new Map<string, ConversationScrollState>()
+
 export function Conversation({ onEditLast }: { onEditLast: (content: string) => void }) {
   const remote = useRemote()
   const scroller = useRef<HTMLDivElement>(null)
   const nearBottom = useRef(true)
   const [following, setFollowing] = useState(true)
+  const viewKey = useMemo(() => JSON.stringify([
+    remote.state.workspace_root ?? '',
+    remote.state.current_session_id ?? null,
+    remote.state.current_session_id == null ? remote.sessionResetRevision : 0,
+  ]), [
+    remote.state.workspace_root,
+    remote.state.current_session_id,
+    remote.sessionResetRevision,
+  ])
   const [copiedEntryID, setCopiedEntryID] = useState<string | null>(null)
   const [copyFailedEntryID, setCopyFailedEntryID] = useState<string | null>(null)
   const copiedTimer = useRef<number | null>(null)
@@ -1092,6 +1108,7 @@ export function Conversation({ onEditLast }: { onEditLast: (content: string) => 
     if (!node) return
     nearBottom.current = true
     setFollowing(true)
+    conversationScrollPositions.set(viewKey, { top: node.scrollHeight, following: true })
     node.scrollTo({ top: remote.entries.length ? node.scrollHeight : 0, behavior: 'auto' })
     if (focus) node.focus({ preventScroll: true })
   }
@@ -1109,11 +1126,25 @@ export function Conversation({ onEditLast }: { onEditLast: (content: string) => 
   ])
 
   useEffect(() => {
-    nearBottom.current = true
-    setFollowing(true)
-    const frame = requestAnimationFrame(() => scrollLatest(false))
+    const node = scroller.current
+    if (!node) return
+
+    const saved = conversationScrollPositions.get(viewKey)
+    const shouldFollow = saved?.following ?? true
+    nearBottom.current = shouldFollow
+    setFollowing(shouldFollow)
+
+    const frame = requestAnimationFrame(() => {
+      if (shouldFollow) {
+        node.scrollTo({ top: node.scrollHeight, behavior: 'auto' })
+        return
+      }
+
+      const maxTop = Math.max(0, node.scrollHeight - node.clientHeight)
+      node.scrollTo({ top: Math.min(saved?.top ?? 0, maxTop), behavior: 'auto' })
+    })
     return () => cancelAnimationFrame(frame)
-  }, [remote.state.workspace_root, remote.state.current_session_id])
+  }, [viewKey])
 
   useEffect(() => {
     const node = scroller.current
@@ -1183,6 +1214,7 @@ export function Conversation({ onEditLast }: { onEditLast: (content: string) => 
         const nextFollowing = node.scrollHeight - node.scrollTop - node.clientHeight < 160
         nearBottom.current = nextFollowing
         setFollowing(nextFollowing)
+        conversationScrollPositions.set(viewKey, { top: node.scrollTop, following: nextFollowing })
       }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey) return
