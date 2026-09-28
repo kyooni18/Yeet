@@ -31,11 +31,9 @@ export function Sidebar({
       }
     } else if (!open && wasOpen.current) {
       setWorkspaceMenu(false)
-      const active = document.activeElement
-      const focusWasInside = !!panelRef.current && active instanceof Node && panelRef.current.contains(active)
       const target = returnFocus.current
       returnFocus.current = null
-      if ((focusWasInside || active === document.body) && target?.isConnected) {
+      if (!desktopDocked && target?.isConnected) {
         requestAnimationFrame(() => target.focus({ preventScroll: true }))
       }
     } else if (!open) {
