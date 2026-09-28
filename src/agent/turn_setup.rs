@@ -199,6 +199,9 @@ impl AgentCoordinator {
             TaskProfile::Agent if local_file_lookup => {
                 tool_discovery::ToolDiscovery::direct_file_lookup()
             }
+            TaskProfile::Agent if goal_mode.load(Ordering::Acquire) => {
+                tool_discovery::ToolDiscovery::goal()
+            }
             TaskProfile::Agent if implementation_requested => {
                 tool_discovery::ToolDiscovery::coding(true)
             }

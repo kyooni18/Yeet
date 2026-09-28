@@ -68,6 +68,13 @@ impl ToolDiscovery {
         discovery
     }
 
+    /// Continuous goal jobs retain the core edit/verify surface across recovery
+    /// turns. A later continuation may need to mutate the workspace even when the
+    /// current recovery text itself does not contain an implementation keyword.
+    pub fn goal() -> Self {
+        Self::coding(true)
+    }
+
     /// Keep one stable tool prefix for the common edit/verify loop. Recovery-only
     /// session tools remain lazy so source inspection does not drift into notes or
     /// historical context unless the model has a concrete reason to request them.
@@ -427,6 +434,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn goal_surface_retains_structured_file_edits_without_mutation_keywords() {
+        let catalog = vec![
+            tool("read_file"),
+            tool("search_workspace"),
+            tool("run_shell"),
+            tool("apply_file_edits"),
+        ];
+        let names = ToolDiscovery::goal()
+            .attached(&catalog)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "read_file".to_owned(),
+                "search_workspace".to_owned(),
+                "apply_file_edits".to_owned(),
+                "run_shell".to_owned(),
+            ]
+        );
+    }
     #[test]
     fn recent_workspace_sessions_do_not_use_direct_file_fast_path() {
         assert!(!super::super::policy::looks_like_local_file_lookup(
