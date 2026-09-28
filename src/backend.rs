@@ -33,7 +33,7 @@ use crate::{
         SessionSummary, ToolCallStatus, WorkspaceSessionGroup, WorkspaceSummary,
         normalize_reasoning_level, reasoning_levels_for_model,
     },
-    orchestration::RunManager,
+    orchestration::{AgentRuntimeFactory, RunManager},
     permission::PermissionBroker,
     project_settings::{ProjectSettingsStore, ServiceBackend},
     sandbox::{
@@ -185,25 +185,18 @@ impl BackendService {
         bridge.set_openai_flex(project.openai_flex);
         let permission = PermissionBroker::default();
         let workers = WorkerRegistry::new(Vec::new())?;
-        let mut registry = ToolRegistry::new_with_bridge_handle(
+        let store = SessionStore::new(&config.directory);
+        store.prepare()?;
+        let runtime_factory = AgentRuntimeFactory::new(
             bridge.clone(),
             workspace_root.clone(),
             workers,
             permission.clone(),
-        )?;
-        registry.configure_foundation_memory(
-            project.foundation_memory.enabled,
-            project.foundation_memory.backend,
-            project.foundation_memory.server.clone(),
+            project_settings.clone(),
             project_identity.clone(),
+            store.clone(),
         );
-        registry.configure_web_backend(project.web.backend, project.web.server.clone());
-        let coordinator = Arc::new(Mutex::new(AgentCoordinator::new(bridge.clone(), registry)));
-        let store = SessionStore::new(&config.directory);
-        store.prepare()?;
-        if let Ok(mut coordinator) = coordinator.lock() {
-            coordinator.set_session_runtime(store.clone(), None);
-        }
+        let coordinator = Arc::new(Mutex::new(runtime_factory.build(None)?));
         let mut session = SharedSession::new(model, reasoning_level);
         session.meta.working_directory = Some(workspace_root.display().to_string());
         session.meta.context_roots = vec![workspace_root.display().to_string()];
