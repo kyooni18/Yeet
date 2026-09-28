@@ -214,6 +214,10 @@ impl AgentCoordinator {
             TaskProfile::Agent => tool_discovery::ToolDiscovery::agent(),
             TaskProfile::Research => tool_discovery::ToolDiscovery::research(),
         };
+        promote_agent_orchestration_tool(
+            &mut tool_discovery,
+            profile == TaskProfile::Agent && self.registry.agent_orchestration_enabled(),
+        );
         if !local_file_lookup && profile == TaskProfile::Agent {
             tool_discovery.promote_for_input(input);
             if web_search_enabled && policy::looks_like_web_research_request(input) {
@@ -367,6 +371,7 @@ impl AgentCoordinator {
             workspace_write_generation,
             tool_discovery,
             loop_budget,
+
             research_stop_grace_used,
             analysis_stop_grace_used,
             runaway_detector,
@@ -376,6 +381,12 @@ impl AgentCoordinator {
             turn_context_orientation,
             last_context_updates,
         })
+    }
+}
+
+fn promote_agent_orchestration_tool(discovery: &mut tool_discovery::ToolDiscovery, enabled: bool) {
+    if enabled {
+        discovery.load(["propose_agent_tasks"]);
     }
 }
 
@@ -406,4 +417,35 @@ fn load_project_instructions(workspace_root: &str) -> Option<String> {
             sections.join("\n\n")
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adaptive_agent_tool_is_foreground_only_when_enabled() {
+        let catalog = vec![
+            ToolDefinition::new("read_file", "read", json!({"type":"object"})),
+            ToolDefinition::new("propose_agent_tasks", "delegate", json!({"type":"object"})),
+        ];
+
+        let mut disabled = tool_discovery::ToolDiscovery::goal();
+        promote_agent_orchestration_tool(&mut disabled, false);
+        assert!(
+            disabled
+                .attached(&catalog)
+                .iter()
+                .all(|tool| tool.name != "propose_agent_tasks")
+        );
+
+        let mut enabled = tool_discovery::ToolDiscovery::goal();
+        promote_agent_orchestration_tool(&mut enabled, true);
+        assert!(
+            enabled
+                .attached(&catalog)
+                .iter()
+                .any(|tool| tool.name == "propose_agent_tasks")
+        );
+    }
 }

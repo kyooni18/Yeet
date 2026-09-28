@@ -319,6 +319,10 @@ impl ToolRegistry {
         }
     }
 
+    pub(crate) fn agent_orchestration_enabled(&self) -> bool {
+        self.agent_orchestrator.is_some()
+    }
+
     pub fn runtime_capability_snapshot(&self, visible_tools: &[ToolDefinition]) -> Value {
         let policy = SandboxStore::new(&self.workspace_root)
             .and_then(|store| store.load())
