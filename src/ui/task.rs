@@ -123,12 +123,7 @@ pub(super) fn height(app: &App) -> u16 {
     }
     match TaskStatus::for_app(app) {
         TaskStatus::Approval | TaskStatus::Failed | TaskStatus::Interrupted => 2,
-        TaskStatus::Working => match live_operation(app) {
-            Some(operation) if operation.detail.is_some() => 2,
-            Some(_) => 1,
-            None => 0,
-        },
-        TaskStatus::Ready | TaskStatus::Complete => 0,
+        TaskStatus::Working | TaskStatus::Ready | TaskStatus::Complete => 0,
     }
 }
 

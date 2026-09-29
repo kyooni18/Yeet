@@ -493,14 +493,6 @@ impl App {
     }
 
     pub fn command_suggestions(&self) -> Vec<(String, String)> {
-        if self.input == "."
-            || self.input == "./"
-            || self.input.starts_with("./v")
-                && "./views".starts_with(&self.input)
-                && self.input != "./views"
-        {
-            return vec![("./views".into(), "Switch view".into())];
-        }
         if !self.input.starts_with('/') || self.input.chars().any(char::is_whitespace) {
             return Vec::new();
         }
@@ -833,7 +825,7 @@ impl App {
                 if self.state.is_streaming
                     && !text.starts_with('/')
                     && text != "?"
-                    && text != "./views"
+                    && text != "/views"
                 {
                     return Ok(());
                 }
@@ -848,7 +840,7 @@ impl App {
                     "/goal" => self.open_goal(),
                     "/sessions" => self.open_sessions(backend)?,
                     "/files" => self.open_files(),
-                    "./views" => self.open_views(),
+                    "/views" => self.open_views(),
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
                     "/permissions" => {
@@ -1750,6 +1742,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/permissions", "Sandbox and permission settings"),
     ("/sessions", "Browse saved chats"),
     ("/files", "Browse workspace files"),
+    ("/views", "Switch view"),
     ("/capabilities", "Toggle skills, capabilities, and MCP"),
     ("/skyline", "Attach or detach Skyline coordination"),
     ("/image", "Queue an image for the next turn"),

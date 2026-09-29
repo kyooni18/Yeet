@@ -103,7 +103,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     if suggestion_height > 0 {
         draw_suggestions(frame, app, chunks[2], &suggestions);
     }
-    task::draw(frame, app, chunks[1]);
+    task::draw(
+        frame,
+        app,
+        Rect::new(
+            chunks[1].x + 1,
+            chunks[1].y,
+            chunks[1].width.saturating_sub(2),
+            chunks[1].height,
+        ),
+    );
     if let Some(line) = usage {
         let width = (line.width() as u16).min(chunks[3].width.saturating_sub(2));
         frame.render_widget(
