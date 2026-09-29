@@ -473,7 +473,10 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     let value = Style::default().fg(theme::text());
     let mut lines = vec![
         Line::styled(
-            format!(" {}", fit(&entry.name, area.width.saturating_sub(2) as usize)),
+            format!(
+                " {}",
+                fit(&entry.name, area.width.saturating_sub(2) as usize)
+            ),
             value.add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
@@ -482,7 +485,10 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     let rows = [
         ("Kind", kind),
         ("Size", size),
-        ("Created", stamp(meta.as_ref().and_then(|m| m.created().ok()))),
+        (
+            "Created",
+            stamp(meta.as_ref().and_then(|m| m.created().ok())),
+        ),
         ("Modified", stamp(entry.modified)),
         ("Where", fit(&files.dir.display().to_string(), 20)),
         ("Perms", perms),

@@ -1,9 +1,9 @@
 //! Responsive application shell around the conversation.
 use super::{
-    responsive,
+    responsive, tabbar,
     task::{self, TaskStatus},
     text::truncate_end,
-    theme, tabbar, yeet_brand,
+    theme, yeet_brand,
 };
 use crate::{app::App, model::SessionSummary};
 use ratatui::{
@@ -40,8 +40,8 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> Rect
     let rest = below_tabbar(bounds, adaptive);
     let sidebar_width = shell_sidebar_width(frame.area(), adaptive);
     let body = if let Some(sidebar_width) = sidebar_width {
-        let columns = Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(1)])
-            .split(rest);
+        let columns =
+            Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(1)]).split(rest);
         sidebar(frame, app, columns[0]);
         columns[1]
     } else {
@@ -174,7 +174,11 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
 fn sidebar_header(width: u16) -> Vec<Line<'static>> {
     let width = width as usize;
     let left = width.saturating_sub(1) / 2;
-    let plus = format!("{}+{}", " ".repeat(left), " ".repeat(width.saturating_sub(left + 1)));
+    let plus = format!(
+        "{}+{}",
+        " ".repeat(left),
+        " ".repeat(width.saturating_sub(left + 1))
+    );
     vec![
         Line::styled(
             plus,

@@ -81,11 +81,17 @@ mod tests {
         app.state.current_session_id = Some("a".into());
 
         app.input = "/mo".into();
-        assert_eq!(app.handle_sidebar_key(&key(KeyCode::Left)), SidebarKey::Ignored);
+        assert_eq!(
+            app.handle_sidebar_key(&key(KeyCode::Left)),
+            SidebarKey::Ignored
+        );
         assert!(!app.sidebar_focus);
 
         app.input.clear();
-        assert_eq!(app.handle_sidebar_key(&key(KeyCode::Left)), SidebarKey::Handled);
+        assert_eq!(
+            app.handle_sidebar_key(&key(KeyCode::Left)),
+            SidebarKey::Handled
+        );
         assert!(app.sidebar_focus);
         app.handle_sidebar_key(&key(KeyCode::Char('j')));
         app.handle_sidebar_key(&key(KeyCode::Enter));

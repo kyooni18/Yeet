@@ -5,8 +5,9 @@ use std::sync::OnceLock;
 fn nerd() -> bool {
     static NERD: OnceLock<bool> = OnceLock::new();
     *NERD.get_or_init(|| {
-        std::env::var("YEET_NERD_FONT")
-            .map_or(true, |v| !matches!(v.as_str(), "0" | "false" | "no" | "off"))
+        std::env::var("YEET_NERD_FONT").map_or(true, |v| {
+            !matches!(v.as_str(), "0" | "false" | "no" | "off")
+        })
     })
 }
 

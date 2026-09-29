@@ -7,8 +7,8 @@ use std::{
 pub mod files;
 pub mod keymap;
 mod selection;
-mod sidebar;
 mod settings;
+mod sidebar;
 #[cfg(test)]
 mod tests;
 pub use selection::TranscriptContextMenu;

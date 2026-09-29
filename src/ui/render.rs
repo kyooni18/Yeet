@@ -61,22 +61,25 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         .clamp(adaptive.input_min_lines, adaptive.input_max_lines)
         + input_chrome;
     let task_height = task::height(app).min(adaptive.task_height);
-    let suggestion_budget = area.height.saturating_sub(
-        task_height
-            .saturating_add(input_height)
-            .saturating_add(1),
-    );
+    let suggestion_budget = area
+        .height
+        .saturating_sub(task_height.saturating_add(input_height).saturating_add(1));
     let suggestion_height = if requested_suggestion_height >= 3 && suggestion_budget >= 3 {
         requested_suggestion_height.min(suggestion_budget)
     } else {
         0
     };
+    let usage = (status_area.width as usize >= 100)
+        .then(|| status::usage_line(app, area.width.saturating_sub(2) as usize))
+        .flatten()
+        .filter(|_| area.height >= task_height + suggestion_height + input_height + 4);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
             Constraint::Length(task_height),
             Constraint::Length(suggestion_height),
+            Constraint::Length(u16::from(usage.is_some())),
             Constraint::Length(input_height),
         ])
         .split(area);
@@ -86,7 +89,14 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         draw_suggestions(frame, app, chunks[2], &suggestions);
     }
     task::draw(frame, app, chunks[1]);
-    draw_input(frame, app, chunks[3]);
+    if let Some(line) = usage {
+        let width = (line.width() as u16).min(chunks[3].width.saturating_sub(2));
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(line),
+            Rect::new(chunks[3].x + 1, chunks[3].y, width, 1),
+        );
+    }
+    draw_input(frame, app, chunks[4]);
     draw_status(frame, app, status_area);
     sessions::draw_context_menu(frame, app);
 

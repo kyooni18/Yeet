@@ -18,7 +18,81 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     }
     frame.render_widget(Block::default().style(theme::surface()), area);
-    frame.render_widget(Paragraph::new(status_line(app, width)), area);
+    let line = if width >= DESKTOP_WIDTH {
+        desktop_line(app, width)
+    } else {
+        status_line(app, width)
+    };
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+const DESKTOP_WIDTH: usize = 100;
+
+/// Desktop bottom bar: working directory left, clock right (usage lives in the pill above the composer).
+fn desktop_line(app: &App, width: usize) -> Line<'static> {
+    if !app.follow_tail && app.max_scroll > 0 {
+        return status_line(app, width);
+    }
+    let clock = chrono::Local::now().format("%a %d %b  %H:%M").to_string();
+    let left = task::fit(&working_directory(), width.saturating_sub(clock.len() + 3));
+    let gap = width.saturating_sub(1 + Span::raw(&left).width() + clock.len() + 1);
+    Line::from(vec![
+        Span::raw(" "),
+        Span::styled(left, Style::default().fg(theme::muted())),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(clock, Style::default().fg(theme::muted())),
+        Span::raw(" "),
+    ])
+}
+
+/// Floating usage pill shown above the composer on desktop shapes.
+pub(super) fn usage_line(app: &App, width: usize) -> Option<Line<'static>> {
+    let usage = &app.state.token_usage;
+    let mut parts: Vec<String> = Vec::new();
+    if usage.input_tokens.is_some() || usage.output_tokens.is_some() {
+        parts.push(format!(
+            "↓ {}",
+            compact_number(usage.input_tokens.unwrap_or(0))
+        ));
+        parts.push(format!(
+            "↑ {}",
+            compact_number(usage.output_tokens.unwrap_or(0))
+        ));
+        if let Some(rate) = usage.cache_measurement().hit_rate {
+            parts.push(format!("cache {:.0}%", rate * 100.0));
+        }
+    }
+    if let (Some(current), Some(total)) = (
+        app.state.current_context_tokens,
+        app.state
+            .active_model_context_length
+            .filter(|total| *total > 0),
+    ) {
+        parts.push(format!(
+            "ctx {} {}/{} ({:.0}%)",
+            context_meter(current, Some(total), 10),
+            compact_number(current),
+            compact_number(total),
+            current as f64 * 100.0 / total as f64
+        ));
+    }
+    if !app.state.active_model.is_empty() {
+        let mut model = app.state.active_model.clone();
+        if !app.state.active_reasoning_level.is_empty() {
+            model = format!("{model} ({})", app.state.active_reasoning_level);
+        }
+        parts.push(model);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let text = task::fit(&format!(" {} ", parts.join("   ")), width);
+    Some(Line::styled(
+        text,
+        Style::default()
+            .fg(theme::text_dim())
+            .bg(theme::surface_raised()),
+    ))
 }
 
 pub(super) fn working_directory() -> String {
@@ -79,8 +153,12 @@ pub(super) fn status_line(app: &App, width: usize) -> Line<'static> {
         } else {
             theme::user()
         };
-        let counts = if width >= 60 {
-            format!("{}/{}  ", compact_number(current), compact_number(total))
+        let counts = if width >= 36 {
+            format!(
+                "CTX {} / {}  ",
+                compact_number(current),
+                compact_number(total)
+            )
         } else {
             format!("{:.0}%  ", ratio * 100.0)
         };

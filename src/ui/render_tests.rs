@@ -1,6 +1,6 @@
 //! Cross-surface regressions for the terminal redesign.
 use super::sessions::tools::{WorkEvent, tool_group_lines};
-use super::status::status_line;
+use super::status::{status_line, usage_line};
 use super::{composer, draw, theme};
 use crate::model::{ConversationToolCall, ModelActivity, SessionSummary, ShellPermission};
 use crate::{
@@ -333,11 +333,16 @@ mod overall_layout_tests {
         app.state.current_context_tokens = Some(58_300);
         app.state.active_reasoning_level = "high".into();
 
-        let line = status_line(&app, 120);
+        let line = usage_line(&app, 118).unwrap();
         let text = line.to_string();
-        assert!(text.contains("gpt-5.6-sol"));
+        assert!(text.contains("gpt-5.6-sol (high)"));
         assert!(text.contains("58.3k/262"));
-        assert!(line.width() <= 120);
+        assert!(line.width() <= 118);
+        assert!(
+            status_line(&app, 60)
+                .to_string()
+                .contains("CTX 58.3k / 262")
+        );
     }
 
     #[test]
@@ -391,7 +396,9 @@ fn user_bubble_padding_rows_are_adjacent_to_message() {
     let mut app = App {
         conversation: vec![ConversationEntry {
             id: "u".into(),
-            kind: ConversationKind::User { content: "hi".into() },
+            kind: ConversationKind::User {
+                content: "hi".into(),
+            },
         }],
         ..App::default()
     };
@@ -402,5 +409,9 @@ fn user_bubble_padding_rows_are_adjacent_to_message() {
         .filter(|&row| buf[(column, row)].bg == theme::surface_color())
         .collect();
     assert_eq!(lit.len(), 3, "{lit:?}");
-    assert_eq!(lit[2] - lit[0], 2, "bubble rows must be contiguous: {lit:?}");
+    assert_eq!(
+        lit[2] - lit[0],
+        2,
+        "bubble rows must be contiguous: {lit:?}"
+    );
 }
