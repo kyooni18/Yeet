@@ -26,13 +26,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     } else {
         theme::accent()
     };
-    let portrait_padding = u16::from(area.height >= 3);
+    let portrait = super::responsive::shape(frame.area()) == super::responsive::Shape::Portrait;
+    let top = u16::from(area.height >= 2);
+    let bottom = u16::from(portrait && area.height >= 3);
     let inner = Rect::new(
-        area.x.saturating_add(3),
-        area.y.saturating_add(portrait_padding),
-        area.width.saturating_sub(6),
-        area.height
-            .saturating_sub(portrait_padding.saturating_mul(2)),
+        area.x.saturating_add(5),
+        area.y.saturating_add(top),
+        area.width.saturating_sub(9),
+        area.height.saturating_sub(top + bottom),
     );
     app.composer_area = (inner.x, inner.y, inner.width, inner.height);
     app.composer_width = inner.width;
@@ -47,11 +48,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 .fg(marker_color)
                 .add_modifier(Modifier::BOLD),
         )),
-        Rect::new(area.x + 1, inner.y, 1, 1),
+        Rect::new(area.x + 3, inner.y, 1, 1),
     );
     frame.render_widget(
         Paragraph::new(Line::styled("→", Style::default().fg(theme::muted()))),
-        Rect::new(area.right().saturating_sub(2), inner.y, 1, 1),
+        Rect::new(area.right().saturating_sub(4), inner.y, 1, 1),
     );
     let layout = layout(&app.input, app.cursor, inner.width);
     let scroll = layout.row.saturating_sub(inner.height as usize - 1);

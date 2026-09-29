@@ -62,7 +62,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             .min(area.height / 3)
     };
     let portrait = adaptive.shape == responsive::Shape::Portrait;
-    let (input_inset, input_chrome) = (6, if portrait { 2 } else { 0 });
+    let (input_inset, input_chrome) = (9, if portrait { 2 } else { 1 });
     let input_rows = composer::layout(
         &app.input,
         app.cursor,
@@ -120,12 +120,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             Rect::new(chunks[3].x + 1, chunks[3].y, width, 1),
         );
     }
-    let composer_area = Rect::new(
-        chunks[4].x + 1,
-        chunks[4].y,
-        chunks[4].width.saturating_sub(2),
-        chunks[4].height,
-    );
+    let composer_area = chunks[4];
     draw_input(frame, app, composer_area);
     draw_status(frame, app, status_area);
     sessions::draw_context_menu(frame, app);
