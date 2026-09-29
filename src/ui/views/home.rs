@@ -40,7 +40,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     } else {
         frame.render_widget(Block::default().style(theme::base()), main_and_inspector[1]);
     }
-    draw_composer(frame, app, rows[2]);
+    let composer = Rect::new(
+        bounds.x.saturating_add(rail_width),
+        rows[2].y,
+        rows[2].width.saturating_sub(rail_width),
+        rows[2].height,
+    );
+    draw_composer(frame, app, composer);
     status::draw(
         frame,
         app,
