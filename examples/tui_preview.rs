@@ -111,69 +111,77 @@ fn main() -> anyhow::Result<()> {
     }
     match scene {
         "session" => {
-            app.state.current_session_id = Some("session-0".into());
+            // Mirrors the Desktop / Session mockup frame.
+            let now = chrono::Utc::now();
+            for (session, (title, age)) in app.state.saved_sessions.iter_mut().zip([
+                ("MM305 crosswind tuning", 18),
+                ("TUI shell direction", 180),
+                ("Runtime MCP attach", 540),
+                ("Provider cleanup", 1260),
+                ("Foundation memory", 2580),
+            ]) {
+                session.title = title.into();
+                session.updated_at = (now - chrono::Duration::seconds(age)).to_rfc3339();
+            }
+            app.state.active_model = "anthropic/opus-5.5".into();
+            app.state.active_model_context_length = Some(200_000);
+            app.state.current_context_tokens = Some(58_000);
+            app.state.token_usage.input_tokens = Some(1_200_000);
+            app.state.token_usage.output_tokens = Some(48_000);
+            app.state.token_usage.cached_input_tokens = Some(1_044_000);
+            app.state.token_usage.cache_measured_input_tokens = Some(1_200_000);
             app.state.is_streaming = true;
-            app.state.active_assistant_entry_id = Some("live-answer".into());
-            app.state.active_assistant_text = "The session preview uses the real transcript renderer and streaming state. The tool steps below show how completed work, an error, and a live operation appear in sequence.".into();
-            app.state.active_activity_entry_id = Some("live-activity".into());
             app.state.active_run_id = Some("run-preview".into());
-            app.state.current_context_tokens = Some(8_420);
+            app.input =
+                "Compare roll-rate peaks with MM304; flag touchdown dispersion above 150 m.".into();
+            app.cursor = app.input.chars().count();
+            let summary = |id: &str, text: &str| ConversationEntry {
+                id: id.into(),
+                kind: ConversationKind::Reasoning {
+                    content: String::new(),
+                    summary: Some(text.into()),
+                },
+            };
+            let done = ToolCallStatus::Completed;
             app.conversation = vec![
                 ConversationEntry {
                     id: "session-user".into(),
                     kind: ConversationKind::User {
-                        content: "Inspect the current session layout and make the activity stream easier to scan.".into(),
+                        content: "The handoff still prefers the nominal 12 km HAC whenever it qualifies.\nMake the radius genuinely state-dependent, then verify Final delivery.".into(),
                     },
                 },
                 ConversationEntry {
-                    id: "session-reasoning".into(),
+                    id: "intro".into(),
+                    kind: ConversationKind::Assistant {
+                        content: "The early exit is the problem. A qualifying nominal candidate prevents tighter flyable radii from competing.\nI’m tracing the qualification gate against the MM304 handoff energy before changing the ranking.".into(),
+                        tool_calls: vec![],
+                    },
+                },
+                summary("s1", "**Analyzed recent MM304 logs**"),
+                tool_event("r1", "web_read", "Read", "ntrs.nasa.gov · TAEM energy management", done, Some("ok"), None),
+                tool_event("q1", "search_workspace", "Search", "\"MM304\"", done, Some("ok"), None),
+                tool_event("r2", "web_read", "Read", "nasa.gov/archive/entry-guidance", ToolCallStatus::Failed, None, Some("404")),
+                summary("s2", "**Editing MM304 guidance logic to reflect proper decision**"),
+                tool_event("e1", "apply_file_edits", "Edit", "guidance_taem.c", done, Some("ok"), None),
+                tool_event("q2", "search_workspace", "Search", "\"MM304 gate\"", done, Some("ok"), None),
+                ConversationEntry {
+                    id: "thinking".into(),
                     kind: ConversationKind::Reasoning {
-                        content: "I’ll check the view structure, inspect the render path, and keep the active session state attached to the existing shell.".into(),
-                        summary: Some("Reviewing the UI integration points".into()),
+                        content: "NASA document indicates the radius should absorb excess energy before the HAC turn.".into(),
+                        summary: None,
                     },
                 },
-                tool_event(
-                    "read-complete",
-                    "read_file",
-                    "Read",
-                    "src/ui/shell.rs",
-                    ToolCallStatus::Completed,
-                    Some("Inspected shell layout and session context."),
-                    None,
-                ),
-                tool_event(
-                    "read-failed",
-                    "read_file",
-                    "Read",
-                    "missing reference file",
-                    ToolCallStatus::Failed,
-                    None,
-                    Some("File does not exist"),
-                ),
-                tool_event(
-                    "edit-running",
-                    "apply_file_edits",
-                    "Edit",
-                    "src/ui/sessions.rs",
-                    ToolCallStatus::Running,
-                    None,
-                    None,
-                ),
-                ConversationEntry {
-                    id: "live-activity".into(),
-                    kind: ConversationKind::Activity {
-                        activity: ModelActivity {
-                            phase: json!("working"),
-                            title: "Rendering the active session".into(),
-                            detail: Some("Checking conversation and tool progress".into()),
-                            run_id: Some("run-preview".into()),
-                        },
-                    },
-                },
+                summary("s3", "**Clarifying MM304 behavior**"),
+                tool_event("r3", "read_file", "Read", "guidance_taem.c", done, Some("ok"), None),
+                tool_event("q3", "search_workspace", "Search", "\"handoff energy\"", done, Some("ok"), None),
+                tool_event("e2", "apply_file_edits", "Edit", "guidance_taem.c", done, Some("ok"), None),
+                summary("s4", "**Editing MM304 guidance logic to reflect proper decision**"),
+                tool_event("e3", "apply_file_edits", "Edit", "guidance_taem.c", done, Some("ok"), None),
+                tool_event("q4", "search_workspace", "Search", "\"MM305 qualification gate\"", ToolCallStatus::Running, None, None),
                 ConversationEntry {
                     id: "live-answer".into(),
                     kind: ConversationKind::Assistant {
-                        content: String::new(),
+                        content: "The ranking now lets every flyable radius compete while Final-speed shortfall remains dominant.\nNext I’m checking whether the tighter candidate remains inside the native authority gate.".into(),
                         tool_calls: vec![],
                     },
                 },

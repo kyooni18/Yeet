@@ -63,7 +63,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
             draw_wide_body(frame, files, rows[1]);
             draw_wide_breadcrumb(frame, files, rows[1]);
         }
-        composer::draw(frame, app, rows[2]);
+        composer::draw(frame, app, rows[2], 0);
         status::draw(frame, app, rows[3]);
         return;
     }

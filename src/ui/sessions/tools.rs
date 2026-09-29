@@ -213,13 +213,43 @@ fn tool_activity_summary_with_style(
     call: &crate::model::ConversationToolCall,
     legacy: bool,
 ) -> Option<String> {
+    let mut summary = tool_target_with_style(call, legacy);
+    if matches!(
+        call.status,
+        ToolCallStatus::Failed
+            | ToolCallStatus::Cancelled
+            | ToolCallStatus::Interrupted
+            | ToolCallStatus::TimedOut
+    ) && let Some(error) = call
+        .error
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let error = compact_tool_text(error, 72);
+        summary = Some(match summary {
+            Some(summary) => format!("{summary} · {error}"),
+            None => error,
+        });
+    }
+    summary
+}
+
+/// What a trace row points at. Failures are shown by the row's icon colour.
+fn tool_target(call: &crate::model::ConversationToolCall) -> Option<String> {
+    tool_target_with_style(call, false)
+}
+
+fn tool_target_with_style(
+    call: &crate::model::ConversationToolCall,
+    legacy: bool,
+) -> Option<String> {
     let explicit_detail = (!legacy)
         .then_some(call.detail.as_deref())
         .flatten()
         .map(str::trim)
         .filter(|detail| !detail.is_empty())
         .map(str::to_owned);
-    let mut summary = explicit_detail
+    explicit_detail
         .or_else(|| match call.name.as_str() {
             "apply_file_edits" => Some(edit_activity_detail(call)),
             "search_workspace" | "search_artifact" | "web_search" => {
@@ -241,26 +271,7 @@ fn tool_activity_summary_with_style(
             "search_tools" | "task_notes" | "context_history" => None,
             _ => tool_argument_summary(&call.arguments, 88),
         })
-        .filter(|value| !value.trim().is_empty());
-
-    if matches!(
-        call.status,
-        ToolCallStatus::Failed
-            | ToolCallStatus::Cancelled
-            | ToolCallStatus::Interrupted
-            | ToolCallStatus::TimedOut
-    ) && let Some(error) = call
-        .error
-        .as_deref()
         .filter(|value| !value.trim().is_empty())
-    {
-        let error = compact_tool_text(error, 72);
-        summary = Some(match summary {
-            Some(summary) => format!("{summary} · {error}"),
-            None => error,
-        });
-    }
-    summary
 }
 
 fn short_tool_path(path: &str) -> String {
@@ -408,7 +419,7 @@ fn search_activity_detail(call: &crate::model::ConversationToolCall) -> String {
     match (path, query.is_empty()) {
         (Some(path), false) => format!("{path} for {query}"),
         (Some(path), true) => path,
-        (None, false) => compact_tool_text(query, 88),
+        (None, false) => format!("\"{}\"", compact_tool_text(query, 86)),
         (None, true) => "workspace".into(),
     }
 }
@@ -751,6 +762,11 @@ pub(in crate::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGroup<'a
                     (true, Some(WorkGroup::Tools { title: slot, .. })) if slot.is_none() => {
                         *slot = title;
                     }
+                    // A fresh summary after a titled group opens the next step.
+                    (true, _) if title.is_some() => {
+                        open = false;
+                        pending_title = title;
+                    }
                     (false, _) if pending_title.is_none() => pending_title = title,
                     _ => {}
                 }
@@ -767,7 +783,7 @@ pub(in crate::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGroup<'a
     groups
 }
 
-fn spinner() -> &'static str {
+pub(in crate::ui) fn spinner() -> &'static str {
     let tick = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() / 180)
@@ -808,7 +824,9 @@ pub(in crate::ui) fn work_group_lines(
 ) -> Vec<Line<'static>> {
     let width = usize::from(width);
     let muted = Style::default().fg(theme::muted());
-    let mut lines = Vec::new();
+    let secondary = Style::default().fg(theme::secondary());
+    let rail = Style::default().fg(theme::hairline());
+    let mut lines: Vec<Line<'static>> = Vec::new();
     for group in groups {
         match group {
             WorkGroup::Tools { calls, title } => {
@@ -818,6 +836,10 @@ pub(in crate::ui) fn work_group_lines(
                 let active = calls.iter().any(|call| is_active(call));
                 let failed = calls.iter().any(|call| is_failed(call));
                 let expanded = expand_all || active || failed;
+                // Expanded groups breathe; collapsed ones stack tightly.
+                if expanded && lines.last().is_some_and(|line| line.width() > 0) {
+                    lines.push(Line::default());
+                }
                 let icons = group_icons(calls);
                 let title = title.clone().unwrap_or_else(|| fallback_group_title(calls));
                 let lead = if active {
@@ -837,7 +859,7 @@ pub(in crate::ui) fn work_group_lines(
                         .fg(theme::text())
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(theme::text_dim())
+                    secondary
                 };
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -846,7 +868,7 @@ pub(in crate::ui) fn work_group_lines(
                             .fg(theme::text())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(icons, muted),
+                    Span::styled(icons, secondary),
                     Span::raw(" "),
                     Span::styled(task::fit(&title, budget), title_style),
                     Span::styled(chevron, muted),
@@ -854,26 +876,38 @@ pub(in crate::ui) fn work_group_lines(
                 if expanded {
                     for (call, count) in collapse_repeats(calls) {
                         let failed = is_failed(call);
-                        let mut target = tool_activity_summary(call)
+                        let running = is_active(call);
+                        let mut target = tool_target(call)
                             .or_else(|| call.detail.clone())
                             .unwrap_or_default();
                         if count > 1 {
                             target = format!("{target} ×{count}");
                         }
-                        let verb = format!(" {:<7}", tool_verb(&call.name));
-                        let used = 2 + 3 + 1 + Span::raw(&verb).width();
+                        let verb = format!(" {:<8}", tool_verb(&call.name));
+                        let tail = if running {
+                            format!(" {}", spinner())
+                        } else {
+                            String::new()
+                        };
+                        let used = 2 + 3 + 1 + Span::raw(&verb).width() + tail.len();
                         let target = task::fit(&target, width.saturating_sub(used + 1));
                         let icon_style = if failed {
                             Style::default().fg(theme::error_subtle())
                         } else {
-                            muted
+                            secondary
                         };
                         lines.push(Line::from(vec![
-                            Span::styled(" │", Style::default().fg(theme::border_dim())),
+                            Span::styled(" │", rail),
                             Span::raw("   "),
                             Span::styled(tool_icon(&call.name), icon_style),
-                            Span::styled(verb, Style::default().fg(theme::text_dim())),
-                            Span::styled(target, Style::default().fg(theme::text())),
+                            Span::styled(verb, secondary),
+                            Span::styled(target, secondary),
+                            Span::styled(
+                                tail,
+                                Style::default()
+                                    .fg(theme::text())
+                                    .add_modifier(Modifier::BOLD),
+                            ),
                         ]));
                     }
                     lines.push(Line::default());
@@ -899,18 +933,15 @@ pub(in crate::ui) fn work_group_lines(
                     .saturating_sub(Span::raw(&lead).width() + 2 + Span::raw(&chevron).width());
                 lines.push(Line::from(vec![
                     Span::styled(lead, Style::default().fg(theme::text())),
-                    Span::styled(icon.to_owned(), muted),
+                    Span::styled(icon.to_owned(), secondary),
                     Span::raw(" "),
-                    Span::styled(
-                        task::fit(&head, budget),
-                        Style::default().fg(theme::text_dim()),
-                    ),
+                    Span::styled(task::fit(&head, budget), secondary),
                     Span::styled(chevron, muted),
                 ]));
                 if expanded {
                     for line in session_markdown_lines(text) {
                         lines.extend(prefixed_wrapped_line(
-                            Span::styled(" │   ", Style::default().fg(theme::border_dim())),
+                            Span::styled(" │   ", rail),
                             line.style(muted),
                             width as u16,
                         ));

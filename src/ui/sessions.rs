@@ -237,7 +237,9 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
             while end < app.conversation.len() {
                 let current = &app.conversation[end];
                 match &current.kind {
-                    ConversationKind::ToolCall { tool_call } => items.push(WorkItem::Tool(tool_call)),
+                    ConversationKind::ToolCall { tool_call } => {
+                        items.push(WorkItem::Tool(tool_call))
+                    }
                     ConversationKind::Reasoning { .. } => {
                         if let Some(summary) = summary_only_reasoning(app, current) {
                             items.push(WorkItem::Summary(summary));
@@ -258,6 +260,9 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
             index = end;
             let work = work_group_lines(&work_groups(&items), width, app.tools_expanded);
             if !work.is_empty() {
+                if rendered_any && !previous_compact {
+                    lines.push(Line::default());
+                }
                 lines.extend(work);
                 rendered_any = true;
                 previous_compact = true;
@@ -275,7 +280,7 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
             if previous_compact && matches!(entry.kind, ConversationKind::Assistant { .. }) {
                 lines.push(Line::styled(
                     "─".repeat(width as usize),
-                    Style::default().fg(theme::border_dim()),
+                    Style::default().fg(theme::hairline()),
                 ));
             } else {
                 lines.push(Line::default());
@@ -381,7 +386,11 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                 lines.extend(prefixed_wrapped_line(Span::raw(""), line, width));
             }
             let items = tool_calls.iter().map(WorkItem::Tool).collect::<Vec<_>>();
-            lines.extend(work_group_lines(&work_groups(&items), width, app.tools_expanded));
+            lines.extend(work_group_lines(
+                &work_groups(&items),
+                width,
+                app.tools_expanded,
+            ));
             lines
         }
         ConversationKind::Reasoning { .. } | ConversationKind::ToolCall { .. } => Vec::new(),
@@ -457,11 +466,18 @@ fn user_message_lines(content: &str, width: u16) -> Vec<Line<'static>> {
             theme::surface(),
         )];
     }
-    let bubble_width = if width >= 90 {
-        ((u32::from(width) * 50 / 100) as u16).min(72)
+    let cap = if width >= 90 {
+        (u32::from(width) * 55 / 100) as u16
     } else {
         ((u32::from(width) * 80 / 100) as u16).max(6)
     };
+    // Shrink-wrap short messages; long ones wrap inside the cap.
+    let longest = content
+        .split('\n')
+        .map(|line| Span::raw(line).width())
+        .max()
+        .unwrap_or(0);
+    let bubble_width = (longest as u16).saturating_add(4).clamp(6, cap.max(6));
     let indent = usize::from(width - bubble_width);
     let surface = theme::surface();
     let blank = || {

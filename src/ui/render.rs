@@ -52,7 +52,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         app.sidebar_nav_ids.clear();
         app.sidebar_focus = false;
     }
-    let area = shell::draw_shell(frame, app, main);
+    let (pane, area) = shell::draw_shell(frame, app, main);
     let suggestions = app.command_suggestions();
     let requested_suggestion_height = if suggestions.is_empty() {
         0
@@ -66,7 +66,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let input_rows = composer::layout(
         &app.input,
         app.cursor,
-        area.width.saturating_sub(input_inset),
+        pane.width.saturating_sub(input_inset),
     );
     let input_height = (input_rows.lines.len() as u16)
         .clamp(adaptive.input_min_lines, adaptive.input_max_lines)
@@ -85,7 +85,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         0
     };
     let usage = (status_area.width as usize >= 100)
-        .then(|| status::usage_line(app, area.width.saturating_sub(2) as usize))
+        .then(|| status::usage_line(app, pane.width.saturating_sub(4) as usize))
         .flatten()
         .filter(|_| area.height >= task_height + suggestion_height + input_height + 4);
     let chunks = Layout::default()
@@ -113,15 +113,17 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             chunks[1].height,
         ),
     );
+    // The usage pill and composer span the whole pane; the composer text
+    // lines up with the transcript column.
     if let Some(line) = usage {
-        let width = (line.width() as u16).min(chunks[3].width.saturating_sub(2));
+        let width = (line.width() as u16).min(pane.width.saturating_sub(4));
         frame.render_widget(
             ratatui::widgets::Paragraph::new(line),
-            Rect::new(chunks[3].x + 1, chunks[3].y, width, 1),
+            Rect::new(pane.x + 2, chunks[3].y, width, 1),
         );
     }
-    let composer_area = chunks[4];
-    draw_input(frame, app, composer_area);
+    let composer_area = Rect::new(pane.x, chunks[4].y, pane.width, chunks[4].height);
+    draw_input(frame, app, composer_area, area.x + 1);
     draw_status(frame, app, status_area);
     sessions::draw_context_menu(frame, app);
 

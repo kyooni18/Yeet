@@ -28,7 +28,9 @@ fn below_tabbar(bounds: Rect, adaptive: responsive::Metrics) -> Rect {
     )
 }
 
-pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> Rect {
+/// Draws tabs and rail; returns the full conversation pane and its centered
+/// reading column.
+pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> (Rect, Rect) {
     let adaptive = responsive::metrics(frame.area());
     let header_area = Rect::new(
         bounds.x,
@@ -56,12 +58,13 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> Rect
         vertical: 0,
     });
     let content_width = available.width.min(adaptive.content_max_width);
-    Rect::new(
+    let content = Rect::new(
         available.x + (available.width - content_width) / 2,
         available.y,
         content_width,
         available.height,
-    )
+    );
+    (body, content)
 }
 
 fn shell_sidebar_width(bounds: Rect, adaptive: responsive::Metrics) -> Option<u16> {
@@ -162,7 +165,7 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_stateful_widget(
         List::new(items).highlight_style(
             Style::default()
-                .bg(theme::surface_color())
+                .bg(theme::rail_selected())
                 .add_modifier(Modifier::BOLD),
         ),
         rows[1],
@@ -324,15 +327,18 @@ fn sidebar_item(app: &App, row: &SidebarRow, width: u16) -> ListItem<'static> {
             Style::default().fg(theme::muted()),
         ),
         SidebarRowKind::Session { current: true } => (
-            format!(" {} ", TaskStatus::for_app(app).marker(app)),
-            Style::default().fg(TaskStatus::for_app(app).color()),
+            format!(" {} ", session_marker(app)),
+            Style::default().fg(match TaskStatus::for_app(app) {
+                TaskStatus::Working => theme::text(),
+                status => status.color(),
+            }),
             Style::default().fg(theme::text()).bold(),
             Style::default().fg(theme::muted()),
         ),
         SidebarRowKind::Session { current: false } => (
             " · ".to_owned(),
             Style::default().fg(theme::muted()),
-            Style::default().fg(theme::text_dim()),
+            Style::default().fg(theme::secondary()),
             Style::default().fg(theme::muted()),
         ),
     };
@@ -349,6 +355,14 @@ fn sidebar_item(app: &App, row: &SidebarRow, width: u16) -> ListItem<'static> {
     );
     line.spans.insert(0, Span::styled(prefix, marker_style));
     ListItem::new(line)
+}
+
+/// The live session spins like the transcript's active tool group.
+fn session_marker(app: &App) -> &'static str {
+    match TaskStatus::for_app(app) {
+        TaskStatus::Working => super::sessions::tools::spinner(),
+        status => status.marker(app),
+    }
 }
 
 fn aligned_line(

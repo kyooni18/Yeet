@@ -5,11 +5,12 @@ pub(super) use crate::text_layout::layout;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
-    prelude::{Line, Modifier, Style},
+    prelude::{Line, Style},
     widgets::{Block, Paragraph},
 };
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+/// `text_x` is the column the draft starts at, so it can line up with the transcript.
+pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16) {
     let focused = app.mode == Mode::Chat
         && app.state.pending_shell_permission.is_none()
         && app.state.pending_native_app_permission.is_none();
@@ -21,18 +22,16 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         })),
         area,
     );
-    let marker_color = if app.state.is_streaming {
-        theme::accent_warm()
-    } else {
-        theme::accent()
-    };
     let portrait = super::responsive::shape(frame.area()) == super::responsive::Shape::Portrait;
     let top = u16::from(area.height >= 2);
     let bottom = u16::from(portrait && area.height >= 3);
+    let text_x = text_x
+        .min(area.x + area.width / 3)
+        .max(area.x.saturating_add(5));
     let inner = Rect::new(
-        area.x.saturating_add(5),
+        text_x,
         area.y.saturating_add(top),
-        area.width.saturating_sub(9),
+        area.right().saturating_sub(text_x + 7),
         area.height.saturating_sub(top + bottom),
     );
     app.composer_area = (inner.x, inner.y, inner.width, inner.height);
@@ -42,17 +41,12 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         return;
     }
     frame.render_widget(
-        Paragraph::new(Line::styled(
-            "+",
-            Style::default()
-                .fg(marker_color)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Rect::new(area.x + 3, inner.y, 1, 1),
+        Paragraph::new(Line::styled("+", Style::default().fg(theme::secondary()))),
+        Rect::new(text_x - 3, inner.y, 1, 1),
     );
     frame.render_widget(
-        Paragraph::new(Line::styled("→", Style::default().fg(theme::muted()))),
-        Rect::new(area.right().saturating_sub(4), inner.y, 1, 1),
+        Paragraph::new(Line::styled("→", Style::default().fg(theme::secondary()))),
+        Rect::new(area.right().saturating_sub(5), inner.y, 1, 1),
     );
     let layout = layout(&app.input, app.cursor, inner.width);
     let scroll = layout.row.saturating_sub(inner.height as usize - 1);
@@ -98,12 +92,12 @@ mod composer_viewport_tests {
         app.cursor = app.input.chars().count();
         let mut terminal = Terminal::new(TestBackend::new(60, 3)).unwrap();
         terminal
-            .draw(|frame| draw(frame, &mut app, frame.area()))
+            .draw(|frame| draw(frame, &mut app, frame.area(), 0))
             .unwrap();
         assert!(contents(&terminal).contains("draft 12"));
         app.cursor = 0;
         terminal
-            .draw(|frame| draw(frame, &mut app, frame.area()))
+            .draw(|frame| draw(frame, &mut app, frame.area(), 0))
             .unwrap();
         assert!(contents(&terminal).contains("draft 1"));
         assert!(!contents(&terminal).contains("draft 12"));

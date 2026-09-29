@@ -102,7 +102,7 @@ fn unfocused_composer_uses_quieter_surface_than_focused_input() {
 
     let mut focused = Terminal::new(TestBackend::new(60, 5)).unwrap();
     focused
-        .draw(|frame| composer::draw(frame, &mut app, bounds))
+        .draw(|frame| composer::draw(frame, &mut app, bounds, 0))
         .unwrap();
     let (x, y, _, _) = app.composer_area;
     assert_eq!(
@@ -113,7 +113,7 @@ fn unfocused_composer_uses_quieter_surface_than_focused_input() {
     app.mode = Mode::Settings;
     let mut unfocused = Terminal::new(TestBackend::new(60, 5)).unwrap();
     unfocused
-        .draw(|frame| composer::draw(frame, &mut app, bounds))
+        .draw(|frame| composer::draw(frame, &mut app, bounds, 0))
         .unwrap();
     let (x, y, _, _) = app.composer_area;
     assert_eq!(unfocused.backend().buffer()[(x, y)].bg, theme::background());
@@ -205,7 +205,7 @@ fn session_user_bubble_is_right_aligned_and_assistant_prose_is_unframed() {
     );
     assert_eq!(user_row[user_x].bg, theme::surface_color());
     assert_eq!(
-        buffer[(app.transcript_area.0, 0)].bg,
+        buffer[(app.transcript_area.0, app.transcript_area.1)].bg,
         theme::code_background()
     );
     let (composer_x, composer_y, _, _) = app.composer_area;
@@ -395,7 +395,7 @@ fn portrait_uses_borderless_single_row_composer_and_one_row_header() {
     let rows: Vec<&str> = text.lines().collect();
     assert!(
         rows.iter()
-            .any(|row| row.trim_start().starts_with("+ hello"))
+            .any(|row| row.trim_start().starts_with("+  hello"))
     );
     assert!(!text.contains("Message"));
     assert!(!text.contains("LATEST"));

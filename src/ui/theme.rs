@@ -105,6 +105,24 @@ pub(super) fn text() -> Color {
 pub(super) fn text_dim() -> Color {
     color(active().text_dim)
 }
+/// Neutral grey between body text and muted, used for secondary labels.
+pub(super) fn secondary() -> Color {
+    color(active().text.mix(active().muted, 0.5))
+}
+/// Barely-visible rule on the conversation canvas (tree rails, dividers).
+pub(super) fn hairline() -> Color {
+    color(active().code_background.mix(active().surface, 0.8))
+}
+/// Current-row highlight inside the session rail.
+pub(super) fn rail_selected() -> Color {
+    color(active().background.mix(active().surface, 0.5))
+}
+pub(super) fn status_background() -> Color {
+    color(active().code_background.mix(Rgb::new(0, 0, 0), 0.1))
+}
+pub(super) fn meter_track() -> Color {
+    color(active().surface_raised.mix(active().border, 0.5))
+}
 pub(super) fn user() -> Color {
     color(active().user)
 }

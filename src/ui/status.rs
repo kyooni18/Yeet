@@ -18,7 +18,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     }
     frame.render_widget(
-        Block::default().style(theme::base().bg(theme::code_background())),
+        Block::default().style(theme::base().bg(theme::status_background())),
         area,
     );
     let line = if width >= DESKTOP_WIDTH {
@@ -51,18 +51,23 @@ fn desktop_line(app: &App, width: usize) -> Line<'static> {
 /// Floating usage pill shown above the composer on desktop shapes.
 pub(super) fn usage_line(app: &App, width: usize) -> Option<Line<'static>> {
     let usage = &app.state.token_usage;
-    let mut parts: Vec<String> = Vec::new();
+    let value = Style::default().fg(theme::secondary());
+    let label = Style::default().fg(theme::muted());
+    let mut parts: Vec<Vec<Span<'static>>> = Vec::new();
     if usage.input_tokens.is_some() || usage.output_tokens.is_some() {
-        parts.push(format!(
-            "↓ {}",
-            compact_number(usage.input_tokens.unwrap_or(0))
-        ));
-        parts.push(format!(
-            "↑ {}",
-            compact_number(usage.output_tokens.unwrap_or(0))
-        ));
+        parts.push(vec![Span::styled(
+            format!("↓ {}", compact_number(usage.input_tokens.unwrap_or(0))),
+            value,
+        )]);
+        parts.push(vec![Span::styled(
+            format!("↑ {}", compact_number(usage.output_tokens.unwrap_or(0))),
+            value,
+        )]);
         if let Some(rate) = usage.cache_measurement().hit_rate {
-            parts.push(format!("cache {:.0}%", rate * 100.0));
+            parts.push(vec![Span::styled(
+                format!("cache {:.0}%", rate * 100.0),
+                value,
+            )]);
         }
     }
     if let (Some(current), Some(total)) = (
@@ -71,44 +76,61 @@ pub(super) fn usage_line(app: &App, width: usize) -> Option<Line<'static>> {
             .active_model_context_length
             .filter(|total| *total > 0),
     ) {
-        parts.push(format!(
-            "ctx {} {}/{} ({:.0}%)",
-            context_meter(current, Some(total), 10),
-            compact_number(current),
-            compact_number(total),
-            current as f64 * 100.0 / total as f64
-        ));
+        const BAR: u64 = 11;
+        let filled = ((current.saturating_mul(BAR) + total / 2) / total).min(BAR) as usize;
+        parts.push(vec![
+            Span::styled("ctx ", label),
+            Span::styled("━".repeat(filled), Style::default().fg(theme::accent())),
+            Span::styled(
+                "━".repeat(BAR as usize - filled),
+                Style::default().fg(theme::meter_track()),
+            ),
+            Span::styled(
+                format!(
+                    "  {}/{} ({:.0}%)",
+                    compact_number(current),
+                    compact_number(total),
+                    current as f64 * 100.0 / total as f64
+                ),
+                value,
+            ),
+        ]);
     }
     if !app.state.active_model.is_empty() {
         let mut model = app.state.active_model.clone();
         if !app.state.active_reasoning_level.is_empty() {
             model = format!("{model} ({})", app.state.active_reasoning_level);
         }
-        parts.push(model);
+        parts.push(vec![Span::styled(model, label)]);
     }
-    if parts.is_empty() {
+    if parts.is_empty() || width < 3 {
         return None;
     }
-    if width < 3 {
-        return None;
-    }
-    let text = task::fit(&format!(" {} ", parts.join("   ")), width - 2);
     let surface = theme::composer_info_surface();
-    Some(Line::from(vec![
-        Span::styled(
-            "│",
-            Style::default()
-                .fg(theme::composer_info_border())
-                .bg(surface),
-        ),
-        Span::styled(text, Style::default().fg(theme::text_dim()).bg(surface)),
-        Span::styled(
-            "│",
-            Style::default()
-                .fg(theme::composer_info_border())
-                .bg(surface),
-        ),
-    ]))
+    let mut spans = vec![Span::raw("  ")];
+    for (index, part) in parts.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("   "));
+        }
+        spans.extend(part);
+    }
+    spans.push(Span::raw("  "));
+    let mut body = Line::from(spans);
+    if body.width() > width - 2 {
+        let plain = task::fit(&body.to_string(), width - 2);
+        body = Line::styled(plain, value);
+    }
+    let border = Style::default()
+        .fg(theme::composer_info_border())
+        .bg(surface);
+    let mut spans = vec![Span::styled("│", border)];
+    spans.extend(
+        body.spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, span.style.bg(surface))),
+    );
+    spans.push(Span::styled("│", border));
+    Some(Line::from(spans))
 }
 
 pub(super) fn working_directory() -> String {

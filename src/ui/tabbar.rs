@@ -38,45 +38,47 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
         26
     };
 
-    let home_style = if active == Active::Home {
-        Style::default().fg(theme::muted()).bg(theme::background())
-    } else {
-        Style::default().fg(theme::muted())
-    };
-    let mut spans = vec![
-        Span::styled(format!(" {} ", icons::home()), home_style),
-        Span::styled(if area.width >= 100 { "Home " } else { "" }, home_style),
-        Span::styled("│", Style::default().fg(theme::border_dim())),
-    ];
-    let mut push_tab = |icon: &str, label: &str, is_active: bool| {
-        let style = if is_active {
-            Style::default()
-                .fg(theme::text())
-                .bg(theme::background())
-                .add_modifier(Modifier::BOLD)
+    let mut spans = Vec::new();
+    // Each tab is `  icon label` padded to a minimum width; the active tab is
+    // raised onto the rail surface.
+    let mut push_tab = |icon: &str, label: &str, is_active: bool, min_width: usize| {
+        let (style, icon_style) = if is_active {
+            let raised = Style::default().bg(theme::background());
+            (
+                raised.fg(theme::text()).add_modifier(Modifier::BOLD),
+                raised.fg(theme::secondary()),
+            )
         } else {
-            Style::default().fg(theme::muted())
+            let plain = Style::default().fg(theme::secondary());
+            (plain, plain)
         };
-        let icon_style = if is_active {
-            style.fg(theme::muted()).remove_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::muted())
-        };
-        spans.push(Span::styled(format!(" {icon} "), icon_style));
-        spans.push(Span::styled(fit(label, tab_width), style));
-        spans.push(Span::styled(" ", style));
+        let label = fit(label, tab_width);
+        let used = 4 + Span::raw(&label).width();
+        spans.push(Span::styled(format!("  {icon} "), icon_style));
+        spans.push(Span::styled(label, style));
+        spans.push(Span::styled(
+            " ".repeat(min_width.max(used + 4).saturating_sub(used)),
+            style,
+        ));
     };
-
+    let (home_width, session_width) = if narrow { (0, 0) } else { (23, 35) };
+    push_tab(
+        icons::home(),
+        if area.width >= 100 { "Home" } else { "" },
+        active == Active::Home,
+        home_width,
+    );
     let session_title = conversation_title(app).to_owned();
     if !narrow || active == Active::Session {
         push_tab(
             icons::session_tab(),
             &session_title,
             active == Active::Session,
+            session_width,
         );
     }
     if active == Active::Files {
-        push_tab(icons::folder(false), "Files", true);
+        push_tab(icons::folder(false), "Files", true, 0);
     }
     if let Some(files) = app.files.as_ref() {
         for (index, path) in files.tabs.iter().enumerate() {
@@ -88,10 +90,10 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            push_tab(icons::file(&name), &name, is_active);
+            push_tab(icons::file(&name), &name, is_active, 0);
         }
     }
-    spans.push(Span::styled(" + ", Style::default().fg(theme::muted())));
+    spans.push(Span::styled("+ ", Style::default().fg(theme::muted())));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
