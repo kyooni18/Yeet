@@ -75,11 +75,17 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         ("#214", "▣ #214", false),
         ("+", "+", false),
     ];
-    // Pixel proportions from the mockup; unused width stays available after the final tab.
-    let inset = (area.width as u32 * 16 / 1440) as u16;
-    let tab_widths =
-        [160u32, 248, 160, 96, 160, 72, 48].map(|px| (area.width as u32 * px / 1440) as u16);
+    // Allocate by visible terminal cells, not mockup pixels; keeping every title readable
+    // avoids clipping the fixed sample tabs at ordinary desktop terminal widths.
+    let inset = 1;
     let mut x = area.x + inset;
+    let tab_widths = [160u32, 248, 160, 96, 160, 72, 48]
+        .into_iter()
+        .zip(entries)
+        .map(|(px, (_, label, _))| {
+            ((area.width as u32 * px + 1439) / 1440).max(label.chars().count() as u32 + 2) as u16
+        })
+        .collect::<Vec<_>>();
     for (index, (_name, label, active)) in entries.into_iter().enumerate() {
         if x >= area.right() {
             break;
@@ -95,7 +101,7 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
                 .fg(theme::muted())
                 .bg(theme::code_background())
         };
-        let text = super::super::task::fit(label, width.saturating_sub(4) as usize);
+        let text = super::super::task::fit(label, width as usize);
         frame.render_widget(
             Paragraph::new(text).style(style),
             Rect::new(x, area.y, width, area.height),
