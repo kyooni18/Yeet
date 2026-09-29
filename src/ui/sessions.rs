@@ -502,7 +502,8 @@ fn user_message_lines(content: &str, width: u16) -> Vec<Line<'static>> {
     let blank = || {
         Line::from(vec![
             Span::raw(" ".repeat(indent)),
-            Span::styled(" ".repeat(bubble_width as usize), surface),
+            // NBSP: ratatui wraps a full-width all-space line into two rows.
+            Span::styled("\u{a0}".repeat(bubble_width as usize), surface),
         ])
     };
     let mut lines = Vec::new();

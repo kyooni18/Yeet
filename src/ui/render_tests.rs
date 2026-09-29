@@ -385,3 +385,22 @@ fn files_view_shows_hint_cue_and_toggled_hints_panel() {
     assert!(text.contains("changed only"));
     assert!(text.contains("parent folder"));
 }
+
+#[test]
+fn user_bubble_padding_rows_are_adjacent_to_message() {
+    let mut app = App {
+        conversation: vec![ConversationEntry {
+            id: "u".into(),
+            kind: ConversationKind::User { content: "hi".into() },
+        }],
+        ..App::default()
+    };
+    let (_, buf) = render(&mut app, 160, 20);
+    let (x, y, w, _) = app.transcript_area;
+    let column = x + w - 4;
+    let lit: Vec<u16> = (y..y + 6)
+        .filter(|&row| buf[(column, row)].bg == theme::surface_color())
+        .collect();
+    assert_eq!(lit.len(), 3, "{lit:?}");
+    assert_eq!(lit[2] - lit[0], 2, "bubble rows must be contiguous: {lit:?}");
+}

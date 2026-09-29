@@ -1,11 +1,12 @@
-//! Single source for TUI icons. Plain single-cell Unicode by default; set
-//! `YEET_NERD_FONT=1` to use Nerd Font glyphs for file types and folders.
+//! Single source for TUI icons. Nerd Font glyphs by default; set
+//! `YEET_NERD_FONT=0` to fall back to plain single-cell Unicode.
 use std::sync::OnceLock;
 
 fn nerd() -> bool {
     static NERD: OnceLock<bool> = OnceLock::new();
     *NERD.get_or_init(|| {
-        std::env::var("YEET_NERD_FONT").is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        std::env::var("YEET_NERD_FONT")
+            .map_or(true, |v| !matches!(v.as_str(), "0" | "false" | "no" | "off"))
     })
 }
 
