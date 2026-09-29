@@ -98,10 +98,16 @@ fn draw_location(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
+fn centered_offset(cursor: usize, len: usize, height: usize) -> usize {
+    cursor
+        .saturating_sub(height / 2)
+        .min(len.saturating_sub(height))
+}
+
 fn draw_list(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     let visible = files.visible();
     let height = area.height as usize;
-    let offset = files.cursor.saturating_sub(height.saturating_sub(1));
+    let offset = centered_offset(files.cursor, visible.len(), height);
     for (row, (index, entry)) in visible
         .iter()
         .enumerate()
@@ -379,7 +385,7 @@ fn draw_parent_column(
         .position(|(name, _)| Some(name) == child_name.as_ref())
         .unwrap_or(0);
     let height = area.height as usize;
-    let offset = selected.saturating_sub(height.saturating_sub(1));
+    let offset = centered_offset(selected, entries.len(), height);
     let width = area.width.saturating_sub(1) as usize;
     for (row, (index, (name, is_dir))) in entries
         .iter()

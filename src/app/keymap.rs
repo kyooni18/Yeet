@@ -16,11 +16,14 @@ pub enum Action {
     MoveDown,
     MoveTop,
     MoveBottom,
+    PageUp,
+    PageDown,
     ParentFolder,
     OpenEntry,
     OpenAsTab,
     OpenViews,
     NextTab,
+    PrevTab,
     ToggleInfo,
     ToggleChangedOnly,
     ToggleDiff,
@@ -37,11 +40,14 @@ impl Action {
             Action::MoveDown => "down",
             Action::MoveTop => "top",
             Action::MoveBottom => "bottom",
+            Action::PageUp => "page up",
+            Action::PageDown => "page down",
             Action::ParentFolder => "parent folder",
             Action::OpenEntry => "open",
             Action::OpenAsTab => "open as tab",
             Action::OpenViews => "views",
             Action::NextTab => "next tab",
+            Action::PrevTab => "previous tab",
             Action::ToggleInfo => "info",
             Action::ToggleChangedOnly => "changed only",
             Action::ToggleDiff => "diff",
@@ -84,6 +90,7 @@ impl KeySpec {
                 "ctrl" => KeyModifiers::CONTROL,
                 "alt" => KeyModifiers::ALT,
                 "shift" => KeyModifiers::SHIFT,
+                "cmd" | "super" => KeyModifiers::SUPER,
                 _ => return None,
             };
             rest = tail;
@@ -131,6 +138,9 @@ impl KeySpec {
         let mut out = String::new();
         if self.modifiers.contains(KeyModifiers::CONTROL) {
             out.push_str("ctrl+");
+        }
+        if self.modifiers.contains(KeyModifiers::SUPER) {
+            out.push_str("cmd+");
         }
         if self.modifiers.contains(KeyModifiers::ALT) {
             out.push_str("alt+");
@@ -184,6 +194,14 @@ impl Default for Keymap {
             ("c", ToggleChangedOnly),
             ("d", ToggleDiff),
             ("/", Find),
+            ("alt+up", PageUp),
+            ("alt+down", PageDown),
+            ("cmd+up", MoveTop),
+            ("cmd+down", MoveBottom),
+            ("alt+left", PrevTab),
+            ("alt+right", NextTab),
+            ("cmd+left", ParentFolder),
+            ("cmd+right", OpenAsTab),
         ];
         for (key, action) in files {
             if let Some(spec) = KeySpec::parse(key) {

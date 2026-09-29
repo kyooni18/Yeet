@@ -11,6 +11,8 @@ use std::{
     time::SystemTime,
 };
 
+const PAGE: isize = 10;
+
 #[derive(Debug, Clone)]
 pub struct FileEntry {
     pub name: String,
@@ -28,6 +30,7 @@ pub struct FilesState {
     pub changed_only: bool,
     pub diff: bool,
     pub hints: bool,
+    pub count: Option<usize>,
     pub find: Option<String>,
     pub tabs: Vec<PathBuf>,
     pub active_tab: Option<usize>,
@@ -228,7 +231,47 @@ impl FilesState {
                 self.active_tab = Some(next);
             }
             Action::NextTab => {}
+            Action::PrevTab if !self.tabs.is_empty() => {
+                let len = self.tabs.len();
+                let prev = self.active_tab.map_or(len - 1, |i| (i + len - 1) % len);
+                self.active_tab = Some(prev);
+            }
+            Action::PrevTab => {}
+            Action::PageDown => self.move_cursor(PAGE),
+            Action::PageUp => self.move_cursor(-PAGE),
         }
+        FilesOutcome::Stay
+    }
+
+    /// Vim-style count prefix: `10j`, `3l`. Non-movement actions run once.
+    pub fn apply_counted(&mut self, action: Action, count: usize) -> FilesOutcome {
+        let repeat = match action {
+            Action::MoveDown | Action::MoveUp | Action::PageDown | Action::PageUp => {
+                return self.apply_scaled(action, count);
+            }
+            Action::ParentFolder | Action::OpenEntry | Action::NextTab | Action::PrevTab => count,
+            _ => 1,
+        };
+        for step in 0..repeat.max(1) {
+            if step > 0 && action == Action::OpenEntry && !self.selected().is_some_and(|e| e.is_dir)
+            {
+                break;
+            }
+            if self.apply(action) == FilesOutcome::Close {
+                return FilesOutcome::Close;
+            }
+        }
+        FilesOutcome::Stay
+    }
+
+    fn apply_scaled(&mut self, action: Action, count: usize) -> FilesOutcome {
+        let step = match action {
+            Action::MoveDown => 1,
+            Action::MoveUp => -1,
+            Action::PageDown => PAGE,
+            _ => -PAGE,
+        };
+        self.move_cursor(step.saturating_mul(count.max(1) as isize));
         FilesOutcome::Stay
     }
 }
@@ -304,6 +347,22 @@ impl App {
             self.mode = Mode::Chat;
             return;
         };
+        if event.modifiers.is_empty()
+            && let KeyCode::Char(c @ '0'..='9') = event.code
+            && (c != '0' || files.count.is_some())
+        {
+            let digit = c as usize - '0' as usize;
+            files.count = Some(
+                files
+                    .count
+                    .unwrap_or(0)
+                    .saturating_mul(10)
+                    .saturating_add(digit)
+                    .min(9999),
+            );
+            return;
+        }
+        let count = files.count.take();
         let Some(action) = self.keymap.lookup(Context::Files, &event) else {
             return;
         };
@@ -311,7 +370,7 @@ impl App {
             self.open_views();
             return;
         }
-        if files.apply(action) == FilesOutcome::Close {
+        if files.apply_counted(action, count.unwrap_or(1)) == FilesOutcome::Close {
             self.mode = Mode::Chat;
         }
     }
@@ -370,6 +429,28 @@ mod tests {
         assert_eq!(files.dir, root);
         assert_eq!(files.selected().unwrap().name, "sub");
         assert_eq!(key(&mut files, KeyCode::Char('q')), FilesOutcome::Close);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn count_prefix_and_page_keys_move_by_the_expected_amount() {
+        let root = std::env::temp_dir().join(format!("yeet-files-count-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        for n in 0..30 {
+            std::fs::write(root.join(format!("f{n:02}")), "x").unwrap();
+        }
+        let mut files = FilesState::open(root.clone());
+        files.apply_counted(Action::MoveDown, 12);
+        assert_eq!(files.cursor, 12);
+        files.apply_counted(Action::PageDown, 1);
+        assert_eq!(files.cursor, 22);
+        files.apply_counted(Action::MoveUp, 100);
+        assert_eq!(files.cursor, 0);
+        files.apply_counted(Action::OpenEntry, 3);
+        assert_eq!(files.dir, root.join("a/b"));
+        files.apply_counted(Action::ParentFolder, 2);
+        assert_eq!(files.dir, root);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
