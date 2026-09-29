@@ -1,5 +1,8 @@
 //! Existing app shell, composer, status, and overlay orchestration.
-use super::{chrome, composer, dialogs, responsive, sessions, shell, status, task, theme, views};
+use super::{
+    chrome, composer, dialogs, responsive, session_picker, sessions, shell, status, task, theme,
+    views,
+};
 use crate::app::{App, Mode};
 use composer::draw as draw_input;
 use dialogs::{
@@ -17,6 +20,11 @@ use ratatui::{
 use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    if app.mode == Mode::Sessions && responsive::shape(frame.area()) == responsive::Shape::Portrait
+    {
+        session_picker::draw(frame, app);
+        return;
+    }
     if app.mode == Mode::Files || (app.mode == Mode::Views && app.views_origin == Mode::Files) {
         super::files::draw(frame, app);
         if app.mode == Mode::Views {
@@ -54,7 +62,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             .min(area.height / 3)
     };
     let portrait = adaptive.shape == responsive::Shape::Portrait;
-    let (input_inset, input_chrome) = if portrait { (4, 0) } else { (4, 2) };
+    let (input_inset, input_chrome) = (4, 2);
     let input_rows = composer::layout(
         &app.input,
         app.cursor,
@@ -63,7 +71,11 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let input_height = (input_rows.lines.len() as u16)
         .clamp(adaptive.input_min_lines, adaptive.input_max_lines)
         + input_chrome;
-    let task_height = task::height(app).min(adaptive.task_height);
+    let task_height = if portrait {
+        0
+    } else {
+        task::height(app).min(adaptive.task_height)
+    };
     let suggestion_budget = area
         .height
         .saturating_sub(task_height.saturating_add(input_height).saturating_add(1));
@@ -99,7 +111,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             Rect::new(chunks[3].x + 1, chunks[3].y, width, 1),
         );
     }
-    draw_input(frame, app, chunks[4]);
+    let composer_area = Rect::new(
+        chunks[4].x + 1,
+        chunks[4].y,
+        chunks[4].width.saturating_sub(2),
+        chunks[4].height,
+    );
+    draw_input(frame, app, composer_area);
     draw_status(frame, app, status_area);
     sessions::draw_context_menu(frame, app);
 

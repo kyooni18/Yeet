@@ -26,11 +26,13 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     } else {
         theme::accent()
     };
+    let portrait_padding = u16::from(area.height >= 3);
     let inner = Rect::new(
         area.x.saturating_add(3),
-        area.y,
+        area.y.saturating_add(portrait_padding),
         area.width.saturating_sub(4),
-        area.height,
+        area.height
+            .saturating_sub(portrait_padding.saturating_mul(2)),
     );
     app.composer_area = (inner.x, inner.y, inner.width, inner.height);
     app.composer_width = inner.width;
@@ -45,7 +47,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 .fg(marker_color)
                 .add_modifier(Modifier::BOLD),
         )),
-        Rect::new(area.x + 1, area.y, 1, 1),
+        Rect::new(area.x + 1, inner.y, 1, 1),
     );
     let layout = layout(&app.input, app.cursor, inner.width);
     let scroll = layout.row.saturating_sub(inner.height as usize - 1);

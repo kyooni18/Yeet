@@ -178,7 +178,7 @@ fn session_user_bubble_is_right_aligned_and_assistant_prose_is_unframed() {
         "user bubble should sit on the right: {user_x}, {:?}",
         app.transcript_area
     );
-    assert_eq!(user_row[user_x].bg, theme::surface_color());
+    assert_eq!(user_row[user_x].bg, theme::user_surface());
     assert_eq!(
         buffer[(app.transcript_area.0, 0)].bg,
         theme::surface_color()
@@ -419,7 +419,7 @@ fn user_bubble_padding_rows_are_adjacent_to_message() {
     let (x, y, w, _) = app.transcript_area;
     let column = x + w - 4;
     let lit: Vec<u16> = (y..y + 6)
-        .filter(|&row| buf[(column, row)].bg == theme::surface_color())
+        .filter(|&row| buf[(column, row)].bg == theme::user_surface())
         .collect();
     assert_eq!(lit.len(), 3, "{lit:?}");
     assert_eq!(
