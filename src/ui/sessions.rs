@@ -392,7 +392,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             let (content, summary) =
                 reasoning_parts(app, entry).unwrap_or((content.as_str(), summary.as_deref()));
             let mut lines = vec![Line::from(vec![
-                Span::styled("  \u{f02d} ", Style::default().fg(theme::accent_warm())),
+                Span::styled("  \u{f02d} ", Style::default().fg(theme::muted())),
                 Span::styled(
                     "Thinking",
                     Style::default()

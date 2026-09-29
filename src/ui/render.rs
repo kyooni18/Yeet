@@ -35,6 +35,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let status_area = Rect::new(full.x, main.bottom(), full.width, status_height);
     let (sidebar_area, sidebar_targets) = shell::sidebar_session_targets(app, main);
     app.set_sidebar_session_targets(sidebar_area, sidebar_targets);
+    if sidebar_area.2 > 0 {
+        app.sidebar_nav_ids = shell::sidebar_nav_ids(app);
+    } else {
+        app.sidebar_nav_ids.clear();
+        app.sidebar_focus = false;
+    }
     let area = shell::draw_shell(frame, app, main);
     let suggestions = app.command_suggestions();
     let requested_suggestion_height = if suggestions.is_empty() {

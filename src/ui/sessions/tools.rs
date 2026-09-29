@@ -37,7 +37,6 @@ fn tool_activity_line_count_with_style(
             | ToolCallStatus::Interrupted
             | ToolCallStatus::TimedOut
     );
-    let completed = matches!(call.status, ToolCallStatus::Completed);
     let icon_name = if legacy {
         tool_icon_legacy(&call.name)
     } else {
@@ -48,8 +47,6 @@ fn tool_activity_line_count_with_style(
         Style::default().fg(theme::error())
     } else if active {
         Style::default().fg(theme::accent())
-    } else if completed {
-        Style::default().fg(theme::success())
     } else {
         Style::default().fg(theme::muted())
     };

@@ -132,6 +132,13 @@ pub(super) fn sidebar_session_targets(
     )
 }
 
+pub(super) fn sidebar_nav_ids(app: &App) -> Vec<Option<String>> {
+    sidebar_rows(app)
+        .into_iter()
+        .map(|row| row.session_id)
+        .collect()
+}
+
 fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = sidebar_block();
     let inner = block.inner(area);
@@ -139,7 +146,11 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let rows = sidebar_sections(inner);
     frame.render_widget(Paragraph::new(sidebar_header(inner.width)), rows[0]);
     let nav_rows = sidebar_rows(app);
-    let selected = sidebar_selected_index(&nav_rows);
+    let selected = if app.sidebar_focus {
+        Some(app.sidebar_cursor.min(nav_rows.len().saturating_sub(1)))
+    } else {
+        sidebar_selected_index(&nav_rows)
+    };
     let offset = sidebar_list_offset(selected, nav_rows.len(), rows[1].height);
     let items = nav_rows
         .iter()
@@ -149,7 +160,11 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .with_offset(offset)
         .with_selected(selected);
     frame.render_stateful_widget(
-        List::new(items).highlight_style(theme::selected()),
+        List::new(items).highlight_style(
+            Style::default()
+                .bg(theme::surface_raised())
+                .add_modifier(Modifier::BOLD),
+        ),
         rows[1],
         &mut state,
     );
@@ -252,14 +267,14 @@ fn append_workspace_sessions(
         .iter()
         .position(|session| Some(session.id.as_str()) == app.state.current_session_id.as_deref());
     if let Some(index) = current_index {
-        rows.push(session_row(&sessions[index], true, app));
+        rows.push(session_row(&sessions[index], true));
         rows.extend(
             sessions
                 .iter()
                 .enumerate()
                 .filter(|(candidate, _)| *candidate != index)
                 .take(4)
-                .map(|(_, session)| session_row(session, false, app)),
+                .map(|(_, session)| session_row(session, false)),
         );
     } else {
         rows.push(SidebarRow {
@@ -272,22 +287,18 @@ fn append_workspace_sessions(
             sessions
                 .iter()
                 .take(4)
-                .map(|session| session_row(session, false, app)),
+                .map(|session| session_row(session, false)),
         );
     }
 }
 
-fn session_row(session: &SessionSummary, current: bool, app: &App) -> SidebarRow {
+fn session_row(session: &SessionSummary, current: bool) -> SidebarRow {
     SidebarRow {
         label: session.display_title(),
-        detail: if current {
-            String::new()
+        detail: if chrono::DateTime::parse_from_rfc3339(&session.updated_at).is_ok() {
+            session.updated_label().replace(" ago", "")
         } else {
-            if chrono::DateTime::parse_from_rfc3339(&session.updated_at).is_ok() {
-                session.updated_label()
-            } else {
-                format!("{} msg", session.message_count)
-            }
+            format!("{} msg", session.message_count)
         },
         kind: SidebarRowKind::Session { current },
         session_id: Some(session.id.clone()),
@@ -309,13 +320,13 @@ fn sidebar_item(app: &App, row: &SidebarRow, width: u16) -> ListItem<'static> {
             Style::default().fg(theme::muted()),
         ),
         SidebarRowKind::Session { current: true } => (
-            format!("▎ {} ", TaskStatus::for_app(app).marker(app)),
+            format!(" {} ", TaskStatus::for_app(app).marker(app)),
             Style::default().fg(TaskStatus::for_app(app).color()),
             Style::default().fg(theme::text()).bold(),
-            Style::default().fg(TaskStatus::for_app(app).color()),
+            Style::default().fg(theme::muted()),
         ),
         SidebarRowKind::Session { current: false } => (
-            "  · ".to_owned(),
+            " · ".to_owned(),
             Style::default().fg(theme::muted()),
             Style::default().fg(theme::text_dim()),
             Style::default().fg(theme::muted()),

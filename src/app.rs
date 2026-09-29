@@ -7,6 +7,7 @@ use std::{
 pub mod files;
 pub mod keymap;
 mod selection;
+mod sidebar;
 mod settings;
 #[cfg(test)]
 mod tests;
@@ -125,6 +126,9 @@ pub struct App {
     pub(crate) sidebar_area: (u16, u16, u16, u16),
     pub(crate) sidebar_session_targets: Vec<(u16, String)>,
     pub(crate) sidebar_load_request: Option<String>,
+    pub(crate) sidebar_focus: bool,
+    pub(crate) sidebar_cursor: usize,
+    pub(crate) sidebar_nav_ids: Vec<Option<String>>,
     pub quit: bool,
     pub backend_message: Option<String>,
     pub stream_started_at: Option<Instant>,
@@ -181,6 +185,9 @@ impl Default for App {
             sidebar_area: (0, 0, 0, 0),
             sidebar_session_targets: Vec::new(),
             sidebar_load_request: None,
+            sidebar_focus: false,
+            sidebar_cursor: 0,
+            sidebar_nav_ids: Vec::new(),
             quit: false,
             backend_message: None,
             stream_started_at: None,
@@ -677,6 +684,15 @@ impl App {
             }
             if self.selection_start.is_some() || self.selection_end.is_some() {
                 self.clear_transcript_selection();
+                return Ok(());
+            }
+        }
+        match self.handle_sidebar_key(&event) {
+            sidebar::SidebarKey::Ignored => {}
+            sidebar::SidebarKey::Handled => return Ok(()),
+            sidebar::SidebarKey::NewSession => {
+                backend.send(FrontendCommand::NewSession)?;
+                self.follow_tail = true;
                 return Ok(());
             }
         }
