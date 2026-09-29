@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
-const RAIL_WIDTH: u16 = 29;
+const RAIL_WIDTH: u16 = 23;
 const ACTIVE: Modifier = Modifier::BOLD;
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
@@ -100,15 +100,11 @@ fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    // The mockup reserves the first rail row for the quick-create action.
     let add_area = Rect::new(area.x, area.y, area.width, 2.min(area.height));
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "+",
-            Style::default().fg(theme::text()),
-        )))
-        .alignment(ratatui::layout::Alignment::Center)
-        .style(Style::default().bg(theme::code_background())),
+        Paragraph::new("+")
+            .alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(theme::text()).bg(theme::code_background())),
         add_area,
     );
     let rows = [
