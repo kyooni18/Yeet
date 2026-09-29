@@ -55,6 +55,9 @@ pub(super) fn surface_color() -> Color {
 pub(super) fn surface_raised() -> Color {
     color(active().surface_raised)
 }
+pub(super) fn user_surface() -> Color {
+    color(active().user_surface)
+}
 pub(super) fn code_background() -> Color {
     color(active().code_background)
 }

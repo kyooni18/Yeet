@@ -1,5 +1,5 @@
 //! Composer surface, character wrapping, and cursor placement.
-use super::{task, theme};
+use super::{responsive, task, theme};
 use crate::app::{App, Mode};
 pub(super) use crate::text_layout::layout;
 use ratatui::{
@@ -9,10 +9,69 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 
+/// Portrait terminals get a borderless prompt row: `›` marker, text, caret.
+fn draw_compact(frame: &mut Frame<'_>, app: &mut App, area: Rect, focused: bool) {
+    frame.render_widget(
+        Block::default().style(
+            Style::default()
+                .fg(theme::text())
+                .bg(theme::surface_raised()),
+        ),
+        area,
+    );
+    let marker_color = if app.state.is_streaming {
+        theme::accent_warm()
+    } else {
+        theme::accent()
+    };
+    let inner = Rect::new(
+        area.x.saturating_add(3),
+        area.y,
+        area.width.saturating_sub(4),
+        area.height,
+    );
+    app.composer_area = (inner.x, inner.y, inner.width, inner.height);
+    app.composer_width = inner.width;
+    app.composer_scroll = 0;
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            "›",
+            Style::default()
+                .fg(marker_color)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Rect::new(area.x + 1, area.y, 1, 1),
+    );
+    let layout = layout(&app.input, app.cursor, inner.width);
+    let scroll = layout.row.saturating_sub(inner.height as usize - 1);
+    app.composer_scroll = scroll;
+    let lines: Vec<Line> = layout
+        .lines
+        .iter()
+        .skip(scroll)
+        .take(inner.height as usize)
+        .map(|line| Line::raw(line.clone()))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+    if focused {
+        frame.set_cursor_position(Position::new(
+            inner.x + (layout.column as u16).min(inner.width - 1),
+            inner.y + (layout.row - scroll) as u16,
+        ));
+    }
+}
+
 pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let focused = app.mode == Mode::Chat
         && app.state.pending_shell_permission.is_none()
         && app.state.pending_native_app_permission.is_none();
+    if responsive::shape(frame.area()) == responsive::Shape::Portrait {
+        draw_compact(frame, app, area, focused);
+        return;
+    }
     let accent = if app.state.is_streaming {
         theme::accent_warm()
     } else {

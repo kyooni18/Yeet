@@ -60,8 +60,8 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         },
         Shape::Portrait => Metrics {
             shape,
-            header_height: if area.height >= 14 { 2 } else { 1 },
-            status_height: if area.height >= 24 { 2 } else { 1 },
+            header_height: 1,
+            status_height: 1,
             task_height: 1,
             suggestion_height: 6,
             input_min_lines: 1,

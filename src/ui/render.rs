@@ -36,10 +36,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             .min(adaptive.suggestion_height)
             .min(area.height / 3)
     };
-    let input_rows = composer::layout(&app.input, app.cursor, area.width.saturating_sub(4));
+    let portrait = adaptive.shape == responsive::Shape::Portrait;
+    let (input_inset, input_chrome) = if portrait { (4, 0) } else { (4, 2) };
+    let input_rows = composer::layout(
+        &app.input,
+        app.cursor,
+        area.width.saturating_sub(input_inset),
+    );
     let input_height = (input_rows.lines.len() as u16)
         .clamp(adaptive.input_min_lines, adaptive.input_max_lines)
-        + 2;
+        + input_chrome;
     let task_height = task::height(app).min(adaptive.task_height);
     let suggestion_budget = area.height.saturating_sub(
         task_height

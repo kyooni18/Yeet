@@ -436,3 +436,16 @@ mod overall_layout_tests {
         }
     }
 }
+
+#[test]
+fn portrait_uses_borderless_single_row_composer_and_one_row_header() {
+    let mut app = App::default();
+    app.input = "hello".into();
+    app.cursor = 5;
+    let (text, _) = render(&mut app, 40, 60);
+    let rows: Vec<&str> = text.lines().collect();
+    assert!(rows.iter().any(|row| row.trim_start().starts_with("› hello")));
+    assert!(!text.contains("Message"));
+    assert!(!text.contains("LATEST"));
+    assert_eq!(app.composer_area.3, 1);
+}
