@@ -1,5 +1,5 @@
 //! Full-screen keyboard file browser (`Mode::Files`).
-use super::{icons, task::fit, theme};
+use super::{icons, tabbar, task::fit, theme};
 use crate::app::{
     App,
     files::FilesState,
@@ -37,7 +37,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     } else {
         Vec::new()
     };
-    let info_height = if files.info { 4 } else { 0 };
+    let wide = area.width >= 100;
+    let info_height = if files.info && !wide { 4 } else { 0 };
     let hints_height = hints.len() as u16;
     let rows = Layout::vertical([
         Constraint::Length(1),
@@ -49,54 +50,41 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     ])
     .split(area);
 
-    draw_tabs(frame, files, rows[0]);
+    let active = match files.active_tab {
+        Some(index) => tabbar::Active::File(index),
+        None => tabbar::Active::Home,
+    };
+    tabbar::draw(frame, app, rows[0], active);
     draw_location(frame, files, rows[1]);
     if files.diff {
         draw_diff(frame, files, rows[2]);
+    } else if files.info && wide {
+        let list_width = (rows[2].width * 2 / 5).clamp(30, 60);
+        let [list, gap, inspector] = Layout::horizontal([
+            Constraint::Length(list_width),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .areas(rows[2]);
+        draw_list(frame, files, list);
+        for y in gap.y..gap.bottom() {
+            frame.render_widget(
+                Paragraph::new(Line::styled("│", Style::default().fg(theme::border_dim()))),
+                Rect::new(gap.x, y, 1, 1),
+            );
+        }
+        draw_info(frame, files, inspector);
     } else {
         draw_list(frame, files, rows[2]);
     }
-    if files.info {
+    if info_height > 0 {
+        frame.render_widget(Block::default().style(theme::surface()), rows[3]);
         draw_info(frame, files, rows[3]);
     }
     if !hints.is_empty() {
         draw_hints(frame, &hints, rows[4]);
     }
     draw_status(frame, app, files, rows[5]);
-}
-
-fn draw_tabs(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
-    frame.render_widget(Block::default().style(theme::surface()), area);
-    let mut spans = vec![Span::styled(
-        format!(" {} ", icons::home()),
-        Style::default()
-            .fg(theme::accent())
-            .add_modifier(Modifier::BOLD),
-    )];
-    for (index, path) in files.tabs.iter().enumerate() {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let active = files.active_tab == Some(index);
-        spans.push(Span::styled("│ ", Style::default().fg(theme::border_dim())));
-        spans.push(Span::styled(
-            format!("{} ", icons::file(&name)),
-            Style::default().fg(theme::accent()),
-        ));
-        spans.push(Span::styled(
-            name,
-            if active {
-                Style::default()
-                    .fg(theme::text())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::muted())
-            },
-        ));
-        spans.push(Span::raw(" "));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_location(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
@@ -203,7 +191,6 @@ fn draw_diff(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
 }
 
 fn draw_info(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
-    frame.render_widget(Block::default().style(theme::surface()), area);
     let Some(entry) = files.selected() else {
         return;
     };
@@ -212,9 +199,15 @@ fn draw_info(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         .get(&entry.name)
         .cloned()
         .unwrap_or_else(|| "clean".to_owned());
+    let size = if entry.is_dir {
+        let count = std::fs::read_dir(files.dir.join(&entry.name)).map_or(0, Iterator::count);
+        format!("{count} items")
+    } else {
+        human_size(entry.size)
+    };
     let values = [
         entry.name.clone(),
-        human_size(entry.size),
+        size,
         entry.modified.map(age).unwrap_or_default(),
         status,
     ];

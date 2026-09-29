@@ -385,39 +385,3 @@ fn files_view_shows_hint_cue_and_toggled_hints_panel() {
     assert!(text.contains("changed only"));
     assert!(text.contains("parent folder"));
 }
-
-#[test]
-#[ignore]
-fn dump_views() {
-    fn session() -> App {
-        let mut app = App {
-            conversation: vec![
-                ConversationEntry {
-                    id: "u".into(),
-                    kind: ConversationKind::User {
-                        content: "The handoff still prefers the nominal 12 km HAC whenever it qualifies. Make the radius genuinely state-dependent.".into(),
-                    },
-                },
-                ConversationEntry {
-                    id: "a".into(),
-                    kind: ConversationKind::Assistant {
-                        content: "The early exit is the problem. A qualifying nominal candidate prevents tighter flyable radii from competing.\n\nI'm tracing the qualification gate.".into(),
-                        tool_calls: vec![],
-                    },
-                },
-            ],
-            ..App::default()
-        };
-        app.input = "Compare roll-rate peaks with MM304".into();
-        app.cursor = app.input.chars().count();
-        app
-    }
-    for (w, h) in [(160u16, 43u16), (44, 60)] {
-        let mut app = session();
-        println!("=== SESSION {w}x{h}\n{}", render(&mut app, w, h).0);
-        let mut app = App::default();
-        app.open_files();
-        app.files.as_mut().unwrap().info = true;
-        println!("=== FILES {w}x{h}\n{}", render(&mut app, w, h).0);
-    }
-}
