@@ -89,13 +89,26 @@ pub(super) fn usage_line(app: &App, width: usize) -> Option<Line<'static>> {
     if parts.is_empty() {
         return None;
     }
-    let text = task::fit(&format!(" {} ", parts.join("   ")), width);
-    Some(Line::styled(
-        text,
-        Style::default()
-            .fg(theme::text_dim())
-            .bg(theme::surface_raised()),
-    ))
+    if width < 3 {
+        return None;
+    }
+    let text = task::fit(&format!(" {} ", parts.join("   ")), width - 2);
+    let surface = theme::composer_info_surface();
+    Some(Line::from(vec![
+        Span::styled(
+            "│",
+            Style::default()
+                .fg(theme::composer_info_border())
+                .bg(surface),
+        ),
+        Span::styled(text, Style::default().fg(theme::text_dim()).bg(surface)),
+        Span::styled(
+            "│",
+            Style::default()
+                .fg(theme::composer_info_border())
+                .bg(surface),
+        ),
+    ]))
 }
 
 pub(super) fn working_directory() -> String {

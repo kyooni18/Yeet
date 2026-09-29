@@ -354,6 +354,14 @@ mod overall_layout_tests {
         assert!(text.contains("gpt-5.6-sol (high)"));
         assert!(text.contains("58.3k/262"));
         assert!(line.width() <= 118);
+        assert_eq!(
+            line.spans.first().map(|span| span.content.as_ref()),
+            Some("│")
+        );
+        assert_eq!(
+            line.spans.last().map(|span| span.content.as_ref()),
+            Some("│")
+        );
         assert!(
             status_line(&app, 60)
                 .to_string()

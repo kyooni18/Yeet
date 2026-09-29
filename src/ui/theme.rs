@@ -55,6 +55,12 @@ pub(super) fn surface_color() -> Color {
 pub(super) fn surface_raised() -> Color {
     color(active().surface_raised)
 }
+pub(super) fn composer_info_surface() -> Color {
+    color(active().surface.mix(active().surface_raised, 0.25))
+}
+pub(super) fn composer_info_border() -> Color {
+    color(active().surface_raised.mix(active().border, 0.15))
+}
 pub(super) fn code_background() -> Color {
     color(active().code_background)
 }
