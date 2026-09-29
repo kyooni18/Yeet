@@ -58,22 +58,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_location(frame, files, rows[1]);
     if files.diff {
         draw_diff(frame, files, rows[2]);
-    } else if files.info && wide {
-        let list_width = (rows[2].width * 2 / 5).clamp(30, 60);
-        let [list, gap, inspector] = Layout::horizontal([
-            Constraint::Length(list_width),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .areas(rows[2]);
-        draw_list(frame, files, list);
-        for y in gap.y..gap.bottom() {
-            frame.render_widget(
-                Paragraph::new(Line::styled("│", Style::default().fg(theme::border_dim()))),
-                Rect::new(gap.x, y, 1, 1),
-            );
-        }
-        draw_info(frame, files, inspector);
+    } else if wide {
+        draw_wide_body(frame, files, rows[2]);
     } else {
         draw_list(frame, files, rows[2]);
     }
@@ -292,4 +278,223 @@ fn age(time: SystemTime) -> String {
         3600..=86399 => format!("{}h ago", secs / 3600),
         _ => format!("{}d ago", secs / 86400),
     }
+}
+
+fn draw_wide_body(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
+    let rail_width = if area.width >= 120 { 24 } else { 0 };
+    let inspector_width = 38.min(area.width / 3);
+    let [rail, columns, inspector] = Layout::horizontal([
+        Constraint::Length(rail_width),
+        Constraint::Min(10),
+        Constraint::Length(inspector_width),
+    ])
+    .areas(area);
+    if rail_width > 0 {
+        draw_rail(frame, files, rail);
+    }
+    let parents: Vec<&std::path::Path> = files.dir.ancestors().skip(1).take(2).collect();
+    let count = parents.len() + 1;
+    let column_width = columns.width / count as u16;
+    for (index, parent) in parents.iter().rev().enumerate() {
+        let x = columns.x + column_width * index as u16;
+        let col = Rect::new(x, columns.y, column_width, columns.height);
+        let child = if index + 1 == parents.len() {
+            files.dir.as_path()
+        } else {
+            parents[parents.len() - 2 - index]
+        };
+        draw_parent_column(frame, parent, child, col);
+        for y in col.y..col.bottom() {
+            frame.render_widget(
+                Paragraph::new(Line::styled("│", Style::default().fg(theme::border_dim()))),
+                Rect::new(col.right() - 1, y, 1, 1),
+            );
+        }
+    }
+    let last_x = columns.x + column_width * parents.len() as u16;
+    draw_list(
+        frame,
+        files,
+        Rect::new(last_x, columns.y, columns.right() - last_x, columns.height),
+    );
+    frame.render_widget(Block::default().style(theme::surface()), inspector);
+    draw_inspector(frame, files, inspector);
+}
+
+fn draw_rail(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
+    frame.render_widget(Block::default().style(theme::surface()), area);
+    let root = std::env::current_dir()
+        .ok()
+        .and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    let muted = Style::default().fg(theme::muted());
+    let dim = Style::default().fg(theme::text_dim());
+    let row = |label: String, value: String, style: Style| {
+        let gap = (area.width as usize).saturating_sub(3 + label.chars().count() + value.len());
+        Line::from(vec![
+            Span::styled(format!(" {label}"), style),
+            Span::raw(" ".repeat(gap)),
+            Span::styled(value, muted),
+        ])
+    };
+    let lines = vec![
+        Line::styled(" PLACES", muted),
+        row(
+            fit(&root, 16),
+            String::new(),
+            Style::default()
+                .fg(theme::text())
+                .add_modifier(Modifier::BOLD),
+        ),
+        row("changed".into(), files.changed.len().to_string(), dim),
+        row("open tabs".into(), files.tabs.len().to_string(), dim),
+    ];
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn draw_parent_column(
+    frame: &mut Frame<'_>,
+    dir: &std::path::Path,
+    child: &std::path::Path,
+    area: Rect,
+) {
+    let child_name = child.file_name().map(|n| n.to_string_lossy().into_owned());
+    let mut entries: Vec<(String, bool)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| {
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                e.metadata().is_ok_and(|m| m.is_dir()),
+            )
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+    });
+    let selected = entries
+        .iter()
+        .position(|(name, _)| Some(name) == child_name.as_ref())
+        .unwrap_or(0);
+    let height = area.height as usize;
+    let offset = selected.saturating_sub(height.saturating_sub(1));
+    let width = area.width.saturating_sub(1) as usize;
+    for (row, (index, (name, is_dir))) in entries
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(height)
+        .enumerate()
+    {
+        let row_area = Rect::new(area.x, area.y + row as u16, area.width.saturating_sub(1), 1);
+        let is_selected = index == selected;
+        let mut style = Style::default().fg(if is_selected {
+            theme::text()
+        } else {
+            theme::text_dim()
+        });
+        if is_selected {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(theme::surface_raised())),
+                row_area,
+            );
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        let icon = if *is_dir {
+            icons::folder(is_selected)
+        } else {
+            icons::file(name)
+        };
+        let chevron = if *is_dir { "›" } else { " " };
+        let label = fit(name, width.saturating_sub(5));
+        let gap = width.saturating_sub(3 + label.chars().count() + 2);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!(" {icon} "), Style::default().fg(theme::muted())),
+                Span::styled(label, style),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(chevron, Style::default().fg(theme::muted())),
+            ])),
+            row_area,
+        );
+    }
+}
+
+fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(entry) = files.selected() else {
+        return;
+    };
+    let path = files.dir.join(&entry.name);
+    let meta = std::fs::metadata(&path).ok();
+    let stamp = |time: Option<SystemTime>| {
+        time.map(|t| {
+            chrono::DateTime::<chrono::Local>::from(t)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
+    };
+    let kind = if entry.is_dir {
+        "Folder".to_owned()
+    } else {
+        std::path::Path::new(&entry.name)
+            .extension()
+            .map(|e| format!("{} file", e.to_string_lossy()))
+            .unwrap_or_else(|| "File".to_owned())
+    };
+    let size = if entry.is_dir {
+        format!(
+            "{} items",
+            std::fs::read_dir(&path).map_or(0, Iterator::count)
+        )
+    } else {
+        human_size(entry.size)
+    };
+    let perms = meta
+        .as_ref()
+        .map(|m| {
+            let mode = m.permissions().mode();
+            "rwxrwxrwx"
+                .chars()
+                .enumerate()
+                .map(|(i, c)| if mode & (1 << (8 - i)) != 0 { c } else { '-' })
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    let status = files
+        .changed
+        .get(&entry.name)
+        .cloned()
+        .unwrap_or_else(|| "clean".to_owned());
+    let label = Style::default().fg(theme::muted());
+    let value = Style::default().fg(theme::text());
+    let mut lines = vec![
+        Line::styled(
+            format!(" {}", fit(&entry.name, area.width.saturating_sub(2) as usize)),
+            value.add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::styled(" INFORMATION", label),
+    ];
+    let rows = [
+        ("Kind", kind),
+        ("Size", size),
+        ("Created", stamp(meta.as_ref().and_then(|m| m.created().ok()))),
+        ("Modified", stamp(entry.modified)),
+        ("Where", fit(&files.dir.display().to_string(), 20)),
+        ("Perms", perms),
+    ];
+    for (name, text) in rows {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {name:<9}"), label),
+            Span::styled(text, value),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(" GIT", label));
+    lines.push(Line::styled(format!(" {status}"), value));
+    frame.render_widget(Paragraph::new(lines), area);
 }
