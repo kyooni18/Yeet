@@ -274,7 +274,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     let show_details = rows[1].height >= 4;
     let items = sessions.iter().map(|item| {
         let current = app.state.current_session_id.as_deref() == Some(item.session.id.as_str());
-        let marker = if current { "●" } else { " " };
+        let marker = crate::ui::icons::session(current);
         let badge = if current && row_width >= 20 {
             " · current"
         } else {
@@ -324,7 +324,10 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
         ListItem::new(vec![
             title,
             Line::from(vec![
-                Span::raw("  "),
+                Span::styled(
+                    format!("{} ", crate::ui::icons::workspace()),
+                    workspace_style,
+                ),
                 Span::styled(workspace, workspace_style),
                 Span::styled(
                     truncate_end(&metadata, metadata_budget),

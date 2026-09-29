@@ -1,5 +1,5 @@
 //! Full-screen keyboard file browser (`Mode::Files`).
-use super::{task::fit, theme};
+use super::{icons, task::fit, theme};
 use crate::app::{
     App,
     files::FilesState,
@@ -68,7 +68,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
 fn draw_tabs(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     frame.render_widget(Block::default().style(theme::surface()), area);
     let mut spans = vec![Span::styled(
-        " ⌂ ",
+        format!(" {} ", icons::home()),
         Style::default()
             .fg(theme::accent())
             .add_modifier(Modifier::BOLD),
@@ -80,6 +80,10 @@ fn draw_tabs(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
             .unwrap_or_default();
         let active = files.active_tab == Some(index);
         spans.push(Span::styled("│ ", Style::default().fg(theme::border_dim())));
+        spans.push(Span::styled(
+            format!("{} ", icons::file(&name)),
+            Style::default().fg(theme::accent()),
+        ));
         spans.push(Span::styled(
             name,
             if active {
@@ -134,7 +138,14 @@ fn draw_list(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     {
         let selected = index == files.cursor;
         let changed = files.is_changed(entry);
-        let icon = if entry.is_dir { "▸ " } else { "· " };
+        let icon = format!(
+            "{} ",
+            if entry.is_dir {
+                icons::folder(selected)
+            } else {
+                icons::file(&entry.name)
+            }
+        );
         let name = if entry.is_dir {
             format!("{}/", entry.name)
         } else {
