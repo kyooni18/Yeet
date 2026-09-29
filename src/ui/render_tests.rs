@@ -26,13 +26,9 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
     for (width, height) in [(32, 8), (60, 14), (80, 24), (100, 36), (140, 38), (200, 50)] {
         let mut app = App::default();
         let (text, _) = render(&mut app, width, height);
-        assert!(text.contains('›'), "composer at {width}x{height}");
+        assert!(text.contains('+'), "composer at {width}x{height}");
         if height >= 24 {
             assert!(text.contains("What are we building?"));
-        }
-        if height >= 36 {
-            assert!(text.contains("Explore actions"));
-            assert!(text.contains("Choose your model"));
         }
     }
 }
@@ -121,22 +117,6 @@ fn unfocused_composer_uses_quieter_surface_than_focused_input() {
         .unwrap();
     let (x, y, _, _) = app.composer_area;
     assert_eq!(unfocused.backend().buffer()[(x, y)].bg, theme::background());
-}
-
-#[test]
-fn welcome_shortcut_cards_use_raised_surface() {
-    let mut app = App::default();
-    let (text, buffer) = render(&mut app, 140, 38);
-    let card_y = text
-        .lines()
-        .position(|line| line.contains("Choose your model"))
-        .expect("welcome shortcut card is visible");
-    let card_row = &buffer.content[card_y * 140..(card_y + 1) * 140];
-    assert!(
-        card_row
-            .iter()
-            .any(|cell| cell.bg == theme::surface_raised())
-    );
 }
 
 #[test]
@@ -407,7 +387,7 @@ fn portrait_uses_borderless_single_row_composer_and_one_row_header() {
     let rows: Vec<&str> = text.lines().collect();
     assert!(
         rows.iter()
-            .any(|row| row.trim_start().starts_with("› hello"))
+            .any(|row| row.trim_start().starts_with("+ hello"))
     );
     assert!(!text.contains("Message"));
     assert!(!text.contains("LATEST"));

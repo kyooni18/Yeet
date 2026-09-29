@@ -30,7 +30,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let inner = Rect::new(
         area.x.saturating_add(3),
         area.y.saturating_add(portrait_padding),
-        area.width.saturating_sub(4),
+        area.width.saturating_sub(6),
         area.height
             .saturating_sub(portrait_padding.saturating_mul(2)),
     );
@@ -42,12 +42,16 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
     frame.render_widget(
         Paragraph::new(Line::styled(
-            "›",
+            "+",
             Style::default()
                 .fg(marker_color)
                 .add_modifier(Modifier::BOLD),
         )),
         Rect::new(area.x + 1, inner.y, 1, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(Line::styled("→", Style::default().fg(theme::muted()))),
+        Rect::new(area.right().saturating_sub(2), inner.y, 1, 1),
     );
     let layout = layout(&app.input, app.cursor, inner.width);
     let scroll = layout.row.saturating_sub(inner.height as usize - 1);

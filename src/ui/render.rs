@@ -62,7 +62,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             .min(area.height / 3)
     };
     let portrait = adaptive.shape == responsive::Shape::Portrait;
-    let (input_inset, input_chrome) = (4, 2);
+    let (input_inset, input_chrome) = (6, if portrait { 2 } else { 0 });
     let input_rows = composer::layout(
         &app.input,
         app.cursor,

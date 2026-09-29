@@ -493,6 +493,14 @@ impl App {
     }
 
     pub fn command_suggestions(&self) -> Vec<(String, String)> {
+        if self.input == "."
+            || self.input == "./"
+            || self.input.starts_with("./v")
+                && "./views".starts_with(&self.input)
+                && self.input != "./views"
+        {
+            return vec![("./views".into(), "Switch view".into())];
+        }
         if !self.input.starts_with('/') || self.input.chars().any(char::is_whitespace) {
             return Vec::new();
         }
@@ -779,7 +787,9 @@ impl App {
             KeyCode::Char('j') if self.input.is_empty() => self.scroll_down(3),
             KeyCode::Up if self.input.is_empty() => self.scroll_up(3),
             KeyCode::Down if self.input.is_empty() => self.scroll_down(3),
-            KeyCode::Char('e') if self.input.is_empty() => self.tools_expanded = !self.tools_expanded,
+            KeyCode::Char('e') if self.input.is_empty() => {
+                self.tools_expanded = !self.tools_expanded
+            }
             KeyCode::Char('g') if self.input.is_empty() => self.jump_to_transcript_start(),
             KeyCode::Char('G') if self.input.is_empty() => self.jump_to_transcript_end(),
             KeyCode::End if event.modifiers.contains(KeyModifiers::CONTROL) => {
