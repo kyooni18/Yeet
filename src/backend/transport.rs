@@ -19,10 +19,19 @@ pub struct Backend {
 }
 
 impl Backend {
+    /// Attaches to the workspace's shared background runtime so switching
+    /// sessions leaves running sessions alive; falls back to an in-process
+    /// runtime when the daemon cannot be reached.
     pub fn spawn() -> anyhow::Result<Self> {
-        Ok(Self {
-            harness: Harness::embedded(std::env::current_dir()?)?,
-        })
+        let workspace = std::env::current_dir()?;
+        let harness = match Harness::attach(&workspace) {
+            Ok(harness) => harness,
+            Err(error) => {
+                eprintln!("yeet: background runtime unavailable, running in-process: {error:#}");
+                Harness::embedded(workspace)?
+            }
+        };
+        Ok(Self { harness })
     }
 
     pub fn spawn_remote() -> anyhow::Result<Self> {
