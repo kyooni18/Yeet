@@ -2,6 +2,7 @@
 mod chrome;
 mod composer;
 mod dialogs;
+mod files;
 mod markdown;
 mod render;
 mod responsive;

@@ -182,10 +182,7 @@ pub(in crate::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                " Overview  ",
-                Style::default().fg(theme::accent()).bold(),
-            ),
+            Span::styled(" Overview  ", Style::default().fg(theme::accent()).bold()),
             Span::styled(
                 capability_summary(app),
                 Style::default().fg(theme::text_dim()),
@@ -209,10 +206,7 @@ pub(in crate::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                " Search  ",
-                Style::default().fg(theme::accent()).bold(),
-            ),
+            Span::styled(" Search  ", Style::default().fg(theme::accent()).bold()),
             Span::styled(filter_text, Style::default().fg(theme::text())),
             Span::styled(
                 format!(

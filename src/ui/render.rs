@@ -17,6 +17,10 @@ use ratatui::{
 use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    if app.mode == Mode::Files {
+        super::files::draw(frame, app);
+        return;
+    }
     if app.state.is_streaming {
         let activity_label = task::live_operation(app)
             .map(|operation| operation.label)
@@ -99,7 +103,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         }
         Mode::Status => draw_status_dialog(frame, app),
         Mode::Help => draw_help(frame),
-        Mode::Chat => {}
+        Mode::Chat | Mode::Files => {}
     }
 
     if app.state.pending_shell_permission.is_some()

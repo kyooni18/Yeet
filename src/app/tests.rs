@@ -508,6 +508,7 @@ fn ctrl_c_interrupts_streaming_non_chat_modes_without_stealing_chat_copy() {
         Mode::SettingsEdit,
         Mode::Status,
         Mode::Help,
+        Mode::Files,
         Mode::Debate,
     ] {
         assert!(

@@ -99,10 +99,7 @@ pub(crate) fn draw_models(frame: &mut Frame<'_>, app: &App) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                " Search  ",
-                Style::default().fg(theme::accent()).bold(),
-            ),
+            Span::styled(" Search  ", Style::default().fg(theme::accent()).bold()),
             Span::styled(query, Style::default().fg(theme::text())),
             Span::styled(
                 format!(
@@ -213,7 +210,6 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
     frame.render_stateful_widget(list, chunks[1], &mut state);
 }
 
-
 pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(82, 76, frame.area());
     theme::modal_backdrop(frame, area);
@@ -231,10 +227,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                " Search  ",
-                Style::default().fg(theme::accent()).bold(),
-            ),
+            Span::styled(" Search  ", Style::default().fg(theme::accent()).bold()),
             Span::styled(filter_label, Style::default().fg(theme::text())),
             Span::styled(
                 format!(
@@ -289,10 +282,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
         };
         let title_budget = row_width.saturating_sub(2 + cell_width(badge));
         let title = Line::from(vec![
-            Span::styled(
-                format!("{marker} "),
-                Style::default().fg(theme::accent()),
-            ),
+            Span::styled(format!("{marker} "), Style::default().fg(theme::accent())),
             Span::styled(
                 truncate_end(&item.session.display_title(), title_budget),
                 Style::default().fg(theme::text()).bold(),

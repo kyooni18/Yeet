@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod files;
+pub mod keymap;
 mod selection;
 mod settings;
 #[cfg(test)]
@@ -40,6 +42,7 @@ pub enum Mode {
     SettingsEdit,
     Status,
     Help,
+    Files,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +82,8 @@ enum PermissionPromptAction {
 }
 
 pub struct App {
+    pub files: Option<files::FilesState>,
+    pub keymap: keymap::Keymap,
     pub debate_models: crate::debate::DebateModels,
     pub debate_field: usize,
     pub debate_model_picker: bool,
@@ -133,6 +138,8 @@ pub struct App {
 impl Default for App {
     fn default() -> Self {
         Self {
+            files: None,
+            keymap: keymap::Keymap::default(),
             debate_models: Default::default(),
             debate_field: 0,
             debate_model_picker: false,
@@ -428,6 +435,10 @@ impl App {
                 }
                 Ok(())
             }
+            Mode::Files => {
+                self.handle_files_key(event);
+                Ok(())
+            }
             Mode::Chat => self.handle_chat_key(event, backend),
             Mode::Models => self.handle_model_key(event, backend),
             Mode::Reasoning => self.handle_reasoning_key(event, backend),
@@ -711,11 +722,7 @@ impl App {
         }
 
         match event.code {
-            KeyCode::Esc => {
-                if self.state.is_streaming {
-                    backend.send(FrontendCommand::Interrupt)?;
-                }
-            }
+            KeyCode::Esc => {}
             KeyCode::Up if event.modifiers.contains(KeyModifiers::ALT) => self.history_up(),
             KeyCode::Down if event.modifiers.contains(KeyModifiers::ALT) => self.history_down(),
             KeyCode::F(2) | KeyCode::Char('m')
@@ -728,6 +735,7 @@ impl App {
             {
                 self.open_sessions(backend)?;
             }
+            KeyCode::Char('f') if event.modifiers.contains(KeyModifiers::ALT) => self.open_files(),
             KeyCode::F(4) | KeyCode::Char('r')
                 if event.code == KeyCode::F(4) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
@@ -737,9 +745,6 @@ impl App {
                 if event.code == KeyCode::F(5) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
                 self.open_capabilities(backend)?;
-            }
-            KeyCode::Char('?') if self.input.is_empty() => {
-                self.mode = Mode::Help;
             }
             KeyCode::PageUp => self.scroll_up(10),
             KeyCode::PageDown => self.scroll_down(10),
@@ -787,10 +792,11 @@ impl App {
                     self.follow_tail = true;
                     return Ok(());
                 }
-                if self.state.is_streaming && !text.starts_with('/') {
+                if self.state.is_streaming && !text.starts_with('/') && text != "?" {
                     return Ok(());
                 }
                 match text.as_str() {
+                    "?" => self.mode = Mode::Help,
                     "/debate" => {
                         self.open_debate();
                         backend.send(FrontendCommand::RequestModels)?;
@@ -799,6 +805,7 @@ impl App {
                     "/reasoning" => self.open_reasoning(),
                     "/goal" => self.open_goal(),
                     "/sessions" => self.open_sessions(backend)?,
+                    "/files" => self.open_files(),
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
                     "/permissions" => {
@@ -1660,6 +1667,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/settings", "Runtime and application settings"),
     ("/permissions", "Sandbox and permission settings"),
     ("/sessions", "Browse saved chats"),
+    ("/files", "Browse workspace files"),
     ("/capabilities", "Toggle skills, capabilities, and MCP"),
     ("/skyline", "Attach or detach Skyline coordination"),
     ("/image", "Queue an image for the next turn"),

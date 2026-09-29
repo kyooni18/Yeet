@@ -176,22 +176,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 fn composer_hint(streaming: bool, width: u16) -> Line<'static> {
     let items: &[(&str, &str)] = if streaming {
         if width < 34 {
-            &[("Esc", "stop")]
-        } else if width < 60 {
-            &[("Esc", "stop"), ("Enter", "queue")]
-        } else if width < 104 {
-            &[
-                ("Esc", "stop"),
-                ("Enter", "queue"),
-                ("Shift+Enter", "newline"),
-            ]
+            &[("Enter", "queue")]
         } else {
-            &[
-                ("Esc", "stop"),
-                ("Enter", "queue"),
-                ("Shift+Enter", "newline"),
-                ("Alt+↑/↓", "history"),
-            ]
+            &[("Enter", "queue"), ("Shift+Enter", "newline")]
         }
     } else if width < 34 {
         &[("Enter", "send")]

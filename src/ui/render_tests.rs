@@ -444,8 +444,24 @@ fn portrait_uses_borderless_single_row_composer_and_one_row_header() {
     app.cursor = 5;
     let (text, _) = render(&mut app, 40, 60);
     let rows: Vec<&str> = text.lines().collect();
-    assert!(rows.iter().any(|row| row.trim_start().starts_with("› hello")));
+    assert!(
+        rows.iter()
+            .any(|row| row.trim_start().starts_with("› hello"))
+    );
     assert!(!text.contains("Message"));
     assert!(!text.contains("LATEST"));
     assert_eq!(app.composer_area.3, 1);
+}
+
+#[test]
+fn files_view_shows_hint_cue_and_toggled_hints_panel() {
+    let mut app = App::default();
+    app.open_files();
+    let (text, _) = render(&mut app, 40, 30);
+    assert!(text.contains("? hints"));
+    assert!(!text.contains("changed only"));
+    app.files.as_mut().unwrap().hints = true;
+    let (text, _) = render(&mut app, 40, 30);
+    assert!(text.contains("changed only"));
+    assert!(text.contains("parent folder"));
 }
