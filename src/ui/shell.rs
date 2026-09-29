@@ -360,7 +360,7 @@ fn sidebar_item(app: &App, row: &SidebarRow, width: u16) -> ListItem<'static> {
 /// The live session spins like the transcript's active tool group.
 fn session_marker(app: &App) -> &'static str {
     match TaskStatus::for_app(app) {
-        TaskStatus::Working => super::sessions::tools::spinner(),
+        TaskStatus::Working => super::views::sessions::tools::spinner(),
         status => status.marker(app),
     }
 }

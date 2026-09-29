@@ -1,5 +1,5 @@
 //! Full-screen session picker for portrait terminals.
-use super::{status, task::fit, theme};
+use super::super::{status, task::fit, theme};
 use crate::app::App;
 use ratatui::{
     Frame,
@@ -29,7 +29,7 @@ enum Row {
     },
 }
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
+pub(in crate::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(theme::base()), area);
     if area.width == 0 || area.height < 3 {

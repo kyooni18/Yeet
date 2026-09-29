@@ -439,3 +439,18 @@ fn user_bubble_padding_rows_are_adjacent_to_message() {
         "bubble rows must be contiguous: {lit:?}"
     );
 }
+
+#[test]
+fn home_workbench_renders_activity_inspector_and_composer() {
+    let mut app = App::default();
+    let (text, _) = render(&mut app, 144, 44);
+    for expected in [
+        "Home",
+        "MM305 crosswind",
+        "Verification",
+        "3.2 km",
+        "Ask Yeet",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+}

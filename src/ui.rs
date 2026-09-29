@@ -2,13 +2,10 @@
 mod chrome;
 mod composer;
 mod dialogs;
-mod files;
 mod icons;
 mod markdown;
 mod render;
 mod responsive;
-mod session_picker;
-mod sessions;
 mod shell;
 mod status;
 mod tabbar;

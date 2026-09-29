@@ -1,5 +1,5 @@
 //! Consistent task state and persistent progress, independent of transcript scrolling.
-use super::sessions::tools::{reasoning_summary_items, tool_activity_summary, tool_activity_title};
+use super::views::sessions::tools::{reasoning_summary_items, tool_activity_summary, tool_activity_title};
 use super::{markdown::markdown_lines, text::format_elapsed, theme};
 use crate::{
     app::App,

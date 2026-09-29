@@ -1,7 +1,7 @@
 //! Active session/conversation view. `Mode::Sessions` remains the session picker.
-pub(super) mod tools;
-use super::text::{format_elapsed, prefixed_wrapped_line, truncate_end, truncate_middle};
-use super::{markdown::markdown_lines, responsive, shell, task, theme};
+pub(in crate::ui) mod tools;
+use super::super::text::{format_elapsed, prefixed_wrapped_line, truncate_end, truncate_middle};
+use super::super::{markdown::markdown_lines, responsive, shell, task, theme};
 use crate::{
     app::App,
     model::{ConversationEntry, ConversationKind, ToolCallStatus},
@@ -17,7 +17,7 @@ use ratatui::{
 };
 use tools::{WorkItem, work_group_lines, work_groups};
 
-pub(super) fn draw(
+pub(in crate::ui) fn draw(
     frame: &mut Frame<'_>,
     app: &mut App,
     area: Rect,
@@ -167,7 +167,7 @@ fn capture_transcript_cells(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .collect();
 }
 
-pub(super) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
+pub(in crate::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
     let Some(menu) = app.transcript_context_menu else {
         app.transcript_context_menu_area = (0, 0, 0, 0);
         return;

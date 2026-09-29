@@ -1,4 +1,9 @@
-//! Small switcher for the two top-level TUI views.
+//! View-specific renderers and the top-level view switcher.
+
+pub(super) mod files;
+pub(super) mod home;
+pub(super) mod session_picker;
+pub(super) mod sessions;
 use super::theme;
 use crate::app::App;
 use ratatui::{
@@ -7,6 +12,8 @@ use ratatui::{
     prelude::{Line, Modifier, Span, Style},
     widgets::Paragraph,
 };
+
+
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     let bounds = frame.area();

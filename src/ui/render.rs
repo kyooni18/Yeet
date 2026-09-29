@@ -1,8 +1,5 @@
 //! Existing app shell, composer, status, and overlay orchestration.
-use super::{
-    chrome, composer, dialogs, responsive, session_picker, sessions, shell, status, task, theme,
-    views,
-};
+use super::{chrome, composer, dialogs, responsive, shell, status, task, theme, views};
 use crate::app::{App, Mode};
 use composer::draw as draw_input;
 use dialogs::{
@@ -22,11 +19,11 @@ use status::draw as draw_status;
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     if app.mode == Mode::Sessions && responsive::shape(frame.area()) == responsive::Shape::Portrait
     {
-        session_picker::draw(frame, app);
+        views::session_picker::draw(frame, app);
         return;
     }
     if app.mode == Mode::Files || (app.mode == Mode::Views && app.views_origin == Mode::Files) {
-        super::files::draw(frame, app);
+        views::files::draw(frame, app);
         if app.mode == Mode::Views {
             views::draw(frame, app);
         }
@@ -37,6 +34,19 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             .map(|operation| operation.label)
             .unwrap_or_else(|| task::live_activity(app).0);
         app.sync_activity_label(&activity_label);
+    }
+    if app.mode == Mode::Chat
+        && app.conversation.is_empty()
+        && !app.state.is_streaming
+        && app.state.current_session_id.is_none()
+        && frame.area().width >= 110
+        && app.input.is_empty()
+        && app.state.pending_shell_permission.is_none()
+        && app.state.pending_native_app_permission.is_none()
+        && app.state.error_message.is_none()
+    {
+        views::home::draw(frame, app);
+        return;
     }
     frame.render_widget(Block::default().style(theme::base()), frame.area());
     let adaptive = responsive::metrics(frame.area());
@@ -99,7 +109,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         ])
         .split(area);
 
-    sessions::draw(frame, app, chunks[0], adaptive.shape);
+    views::sessions::draw(frame, app, chunks[0], adaptive.shape);
     if suggestion_height > 0 {
         draw_suggestions(frame, app, chunks[2], &suggestions);
     }
@@ -125,7 +135,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let composer_area = Rect::new(pane.x, chunks[4].y, pane.width, chunks[4].height);
     draw_input(frame, app, composer_area, area.x + 1);
     draw_status(frame, app, status_area);
-    sessions::draw_context_menu(frame, app);
+    views::sessions::draw_context_menu(frame, app);
 
     match app.mode {
         Mode::Debate => dialogs::draw_debate(frame, app),

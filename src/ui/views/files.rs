@@ -1,5 +1,5 @@
 //! Full-screen keyboard file browser (`Mode::Files`).
-use super::{composer, icons, responsive, status, tabbar, task::fit, theme};
+use super::super::{composer, icons, responsive, status, tabbar, task::fit, theme};
 use crate::app::{
     App,
     files::FilesState,
@@ -23,7 +23,7 @@ const HINT_ACTIONS: [Action; 7] = [
     Action::FocusInput,
 ];
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
+pub(in crate::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     frame.render_widget(
         Block::default().style(theme::base().bg(theme::code_background())),
