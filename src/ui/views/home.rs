@@ -21,9 +21,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         return;
     }
 
+    // Desktop / Overview mockup geometry translated at ten pixels per terminal cell.
     let scale = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
     let tab_height = scale(34).max(1);
-    let composer_height = scale(34).max(1);
+    let composer_height = scale(36).max(1);
     let status_height = scale(24).max(1);
     let rows = Layout::vertical([
         Constraint::Length(tab_height),
@@ -36,18 +37,23 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
 
     let body = rows[1];
     let rail_width = scale(232).min(body.width / 3);
-    let columns =
-        Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
+    let rail_gap = scale(30).min(body.width.saturating_sub(rail_width));
+    let columns = Layout::horizontal([
+        Constraint::Length(rail_width),
+        Constraint::Length(rail_gap),
+        Constraint::Min(1),
+    ])
+    .split(body);
     draw_sessions_rail(frame, columns[0]);
 
-    let activity_width = scale(540).min(columns[1].width);
-    let pane_gap = scale(54).min(columns[1].width.saturating_sub(activity_width));
+    let activity_width = scale(540).min(columns[2].width);
+    let pane_gap = scale(60).min(columns[2].width.saturating_sub(activity_width));
     let panes = Layout::horizontal([
         Constraint::Length(activity_width),
         Constraint::Length(pane_gap),
         Constraint::Min(1),
     ])
-    .split(columns[1]);
+    .split(columns[2]);
     draw_activity(frame, panes[0]);
     draw_inspector(frame, panes[2]);
     draw_usage(frame, panes[0]);
@@ -69,14 +75,11 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         ("#214", "▣ #214", false),
         ("+", "+", false),
     ];
-    let total_width = [160, 248, 160, 96, 160, 72, 48]
-        .into_iter()
-        .map(|px| (area.width as u32 * px / 1440) as u16)
-        .sum::<u16>();
-    let cell_scale = (total_width / area.width.max(1)).max(1);
-    let tab_widths = [160, 248, 160, 96, 160, 72, 48]
-        .map(|px| ((area.width as u32 * px / 1440) as u16 / cell_scale).max(1));
-    let mut x = area.x;
+    // Pixel proportions from the mockup; unused width stays available after the final tab.
+    let inset = (area.width as u32 * 16 / 1440) as u16;
+    let tab_widths =
+        [160u32, 248, 160, 96, 160, 72, 48].map(|px| (area.width as u32 * px / 1440) as u16);
+    let mut x = area.x + inset;
     for (index, (_name, label, active)) in entries.into_iter().enumerate() {
         if x >= area.right() {
             break;
