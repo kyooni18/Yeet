@@ -111,7 +111,6 @@ fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let add_height = 2.min(area.height);
     frame.render_widget(
         Paragraph::new("+")
             .alignment(ratatui::layout::Alignment::Center)
@@ -120,53 +119,40 @@ fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
                     .fg(theme::text())
                     .bg(theme::code_background()),
             ),
-        Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), add_height),
+        Rect::new(
+            area.x + 1,
+            area.y,
+            area.width.saturating_sub(2),
+            2.min(area.height),
+        ),
     );
     let rows = [
-        ("/", "MM305 crosswind", "18s"),
-        ("?", "TUI shell direction", "3m"),
-        ("●", "Runtime MCP attach", "9m"),
-        ("·", "Provider cleanup", "21m"),
-        ("·", "Foundation memory", "43m"),
+        ("▤", "MM305 crosswind", "18s"),
+        ("▣", "Landing", "2 running  26m"),
+        ("▤", "TUI shell direction", "3m"),
     ];
-    for (i, (icon, title, age)) in rows.iter().enumerate() {
-        let y = area.y.saturating_add(2 + i as u16 * 2);
+    for (index, (icon, title, trailing)) in rows.iter().enumerate() {
+        let y = area.y.saturating_add(2 + index as u16 * 2);
         if y >= area.bottom() {
             break;
         }
-        let selected = i == 0;
-        let row = Rect::new(area.x, y, area.width, 1);
-        let style = if selected {
-            Style::default()
-                .fg(theme::text())
-                .bg(theme::selected_color())
-                .add_modifier(ACTIVE)
-        } else {
-            Style::default().fg(theme::muted())
-        };
-        if selected {
-            frame.render_widget(
-                Block::default().style(Style::default().bg(theme::selected_color())),
-                row,
-            );
-        }
-        let inner_width = area.width.saturating_sub(2) as usize;
-        let title_width =
-            inner_width.saturating_sub(icon.chars().count() + age.chars().count() + 2);
-        let fitted = super::super::task::fit(title, title_width);
-        let gap = " ".repeat(inner_width.saturating_sub(
-            icon.chars().count() + fitted.chars().count() + age.chars().count() + 2,
-        ));
+        let width = area.width.saturating_sub(2);
+        let style = Style::default().fg(theme::muted());
+        let inner_width = width as usize;
+        let trailing_width = trailing.chars().count();
+        let title_width = inner_width.saturating_sub(icon.chars().count() + trailing_width + 2);
+        let title = super::super::task::fit(title, title_width);
+        let gap = " ".repeat(
+            inner_width
+                .saturating_sub(icon.chars().count() + title.chars().count() + trailing_width + 2),
+        );
         let line = Line::from(vec![
             Span::styled(format!("{icon} "), style),
-            Span::styled(fitted, style),
+            Span::styled(title, style),
             Span::raw(gap),
-            Span::styled(format!(" {age}"), Style::default().fg(theme::muted())),
+            Span::styled(format!(" {trailing}"), style),
         ]);
-        frame.render_widget(
-            Paragraph::new(line),
-            Rect::new(area.x + 1, y, area.width.saturating_sub(2), 1),
-        );
+        frame.render_widget(Paragraph::new(line), Rect::new(area.x + 1, y, width, 1));
     }
 }
 
