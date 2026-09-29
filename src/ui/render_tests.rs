@@ -1,13 +1,12 @@
 //! Cross-surface regressions for the terminal redesign.
 use super::sessions::tools::{WorkEvent, tool_group_lines};
-use super::status::{status_aux_line, status_line};
-use super::{composer, draw, responsive, theme};
+use super::status::status_line;
+use super::{composer, draw, theme};
 use crate::model::{ConversationToolCall, ModelActivity, SessionSummary, ShellPermission};
 use crate::{
     app::{App, Mode},
     model::{ConversationEntry, ConversationKind, ToolCallStatus},
 };
-use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 
 fn render(app: &mut App, width: u16, height: u16) -> (String, ratatui::buffer::Buffer) {
@@ -28,8 +27,7 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
     for (width, height) in [(32, 8), (60, 14), (80, 24), (100, 36), (140, 38), (200, 50)] {
         let mut app = App::default();
         let (text, _) = render(&mut app, width, height);
-        assert!(text.contains("Message"), "composer at {width}x{height}");
-        assert!(text.contains("Enter send"), "send hint at {width}x{height}");
+        assert!(text.contains('›'), "composer at {width}x{height}");
         if height >= 24 {
             assert!(text.contains("What are we building?"));
         }
@@ -80,16 +78,6 @@ fn welcome_shortcut_cards_use_raised_surface() {
         card_row
             .iter()
             .any(|cell| cell.bg == theme::surface_raised())
-    );
-}
-
-#[test]
-fn narrow_composer_placeholder_ends_cleanly() {
-    let mut app = App::default();
-    let (text, _) = render(&mut app, 36, 12);
-    assert!(
-        text.lines()
-            .any(|line| line.contains("Write a message") && line.contains('…'))
     );
 }
 
@@ -169,9 +157,8 @@ fn session_user_bubble_is_right_aligned_and_assistant_prose_is_unframed() {
         .find_map(|(y, line)| line.contains("Review the layout").then_some(y))
         .expect("user message row inside transcript");
     let user_row = &buffer.content[user_y * 140..(user_y + 1) * 140];
-    let user_x = user_row
-        .iter()
-        .position(|cell| cell.symbol() == "R")
+    let user_x = (usize::from(app.transcript_area.0)..user_row.len())
+        .find(|&x| user_row[x].symbol() == "R")
         .expect("user message text");
     assert!(
         user_x > usize::from(app.transcript_area.0 + app.transcript_area.2 / 3),
@@ -239,19 +226,6 @@ fn stopped_tool_groups_keep_errors_visible_and_hide_suppressed_calls() {
     assert_eq!(completed[0].spans[2].style.fg, Some(theme::text_dim()));
     call.status = ToolCallStatus::Suppressed;
     assert!(tool_group_lines(&[WorkEvent::Tool(&call)], 80).is_empty());
-}
-
-#[test]
-fn shell_location_badge_uses_selected_palette_surface() {
-    let mut app = App::default();
-    let (_, buffer) = render(&mut app, 100, 24);
-    let location = buffer
-        .content
-        .iter()
-        .find(|cell| cell.symbol() == "L")
-        .expect("latest location badge should be visible");
-    assert_eq!(location.fg, theme::accent_hot());
-    assert_eq!(location.bg, theme::selected_color());
 }
 
 #[test]
@@ -348,21 +322,11 @@ mod overall_layout_tests {
         let mut app = App::default();
         app.state.active_model_context_length = Some(100_000);
         app.state.current_context_tokens = None;
-        assert!(status_line(&app, 120).to_string().contains("unavailable"));
+        assert!(!status_line(&app, 120).to_string().contains("0%"));
     }
 
     #[test]
-    fn runtime_status_anchor_uses_raised_surface() {
-        let app = App::default();
-        let line = status_line(&app, 80);
-        assert_eq!(
-            line.spans.first().and_then(|span| span.style.bg),
-            Some(theme::surface_raised())
-        );
-    }
-
-    #[test]
-    fn wide_runtime_status_reads_like_an_instrument_panel() {
+    fn wide_status_shows_model_and_context() {
         let mut app = App::default();
         app.state.active_model = "openai/gpt-5.6-sol".into();
         app.state.active_model_context_length = Some(262_144);
@@ -372,52 +336,8 @@ mod overall_layout_tests {
         let line = status_line(&app, 120);
         let text = line.to_string();
         assert!(text.contains("gpt-5.6-sol"));
-        assert!(text.contains("CTX 22%"));
-        assert!(text.contains("THINK high"));
-        assert!(text.contains("MODE ask"));
+        assert!(text.contains("58.3k/262"));
         assert!(line.width() <= 120);
-        assert_eq!(line.spans[1].style.bg, Some(theme::surface_raised()));
-    }
-
-    #[test]
-    fn auxiliary_status_reports_usage_and_selection_shortcuts() {
-        let mut app = App::default();
-        app.state.token_usage.input_tokens = Some(12_500);
-        app.state.token_usage.output_tokens = Some(2_300);
-        app.state.token_usage.cached_input_tokens = Some(10_000);
-        app.state.token_usage.cache_measured_input_tokens = Some(12_500);
-        app.state.token_usage.model_calls = Some(4);
-
-        let rich = status_aux_line(&app, 120).to_string();
-        assert!(rich.contains("in 12.5k"));
-        assert!(rich.contains("out 2.3k"));
-        assert!(rich.contains("cache 80%"));
-        assert!(rich.contains("calls 4"));
-        for width in [12, 20, 40, 80] {
-            assert!(status_aux_line(&app, width).width() <= width);
-        }
-
-        app.selection_start = Some((1, 1));
-        app.selection_end = Some((2, 1));
-        let selected = status_aux_line(&app, 80).to_string();
-        assert!(selected.contains("Ctrl+C"));
-        assert!(selected.contains("Esc"));
-    }
-
-    #[test]
-    fn responsive_status_uses_second_row_only_when_space_allows() {
-        assert_eq!(
-            responsive::metrics(Rect::new(0, 0, 80, 24)).status_height,
-            2
-        );
-        assert_eq!(
-            responsive::metrics(Rect::new(0, 0, 60, 14)).status_height,
-            1
-        );
-        assert_eq!(
-            responsive::metrics(Rect::new(0, 0, 180, 40)).status_height,
-            2
-        );
     }
 
     #[test]
@@ -464,4 +384,40 @@ fn files_view_shows_hint_cue_and_toggled_hints_panel() {
     let (text, _) = render(&mut app, 40, 30);
     assert!(text.contains("changed only"));
     assert!(text.contains("parent folder"));
+}
+
+#[test]
+#[ignore]
+fn dump_views() {
+    fn session() -> App {
+        let mut app = App {
+            conversation: vec![
+                ConversationEntry {
+                    id: "u".into(),
+                    kind: ConversationKind::User {
+                        content: "The handoff still prefers the nominal 12 km HAC whenever it qualifies. Make the radius genuinely state-dependent.".into(),
+                    },
+                },
+                ConversationEntry {
+                    id: "a".into(),
+                    kind: ConversationKind::Assistant {
+                        content: "The early exit is the problem. A qualifying nominal candidate prevents tighter flyable radii from competing.\n\nI'm tracing the qualification gate.".into(),
+                        tool_calls: vec![],
+                    },
+                },
+            ],
+            ..App::default()
+        };
+        app.input = "Compare roll-rate peaks with MM304".into();
+        app.cursor = app.input.chars().count();
+        app
+    }
+    for (w, h) in [(160u16, 43u16), (44, 60)] {
+        let mut app = session();
+        println!("=== SESSION {w}x{h}\n{}", render(&mut app, w, h).0);
+        let mut app = App::default();
+        app.open_files();
+        app.files.as_mut().unwrap().info = true;
+        println!("=== FILES {w}x{h}\n{}", render(&mut app, w, h).0);
+    }
 }

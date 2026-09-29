@@ -332,7 +332,7 @@ mod tests {
         std::fs::write(root.join("beta.rs"), "b").unwrap();
         let keymap = Keymap::default();
         let mut files = FilesState::open(root.clone());
-        let mut key = |files: &mut FilesState, code| press(files, &keymap, code);
+        let key = |files: &mut FilesState, code| press(files, &keymap, code);
         assert_eq!(files.visible()[0].name, "sub");
 
         key(&mut files, KeyCode::Char('j'));

@@ -72,8 +72,8 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         },
         Shape::Compact => Metrics {
             shape,
-            header_height: if area.height >= 16 { 2 } else { 1 },
-            status_height: if area.height >= 22 { 2 } else { 1 },
+            header_height: 1,
+            status_height: 1,
             task_height: 2,
             suggestion_height: 6,
             input_min_lines: 1,
@@ -84,8 +84,8 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         },
         Shape::Standard => Metrics {
             shape,
-            header_height: if area.height >= 16 { 2 } else { 1 },
-            status_height: if area.height >= 22 { 2 } else { 1 },
+            header_height: 1,
+            status_height: 1,
             task_height: 2,
             suggestion_height: 8,
             input_min_lines: if area.height >= 28 { 2 } else { 1 },
@@ -96,8 +96,8 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         },
         Shape::Wide => Metrics {
             shape,
-            header_height: 2,
-            status_height: 2,
+            header_height: 1,
+            status_height: 1,
             task_height: 2,
             suggestion_height: 8,
             input_min_lines: if area.height >= 28 { 2 } else { 1 },
@@ -108,8 +108,8 @@ pub(super) fn metrics(area: Rect) -> Metrics {
         },
         Shape::UltraWide => Metrics {
             shape,
-            header_height: 2,
-            status_height: 2,
+            header_height: 1,
+            status_height: 1,
             task_height: 2,
             suggestion_height: 9,
             input_min_lines: if area.height >= 28 { 2 } else { 1 },

@@ -25,13 +25,13 @@ pub(super) fn draw(
     viewport_shape: responsive::Shape,
 ) {
     match viewport_shape {
-        responsive::Shape::Tiny
-        | responsive::Shape::ShortWide
-        | responsive::Shape::Portrait
-        | responsive::Shape::Compact => legacy::draw(frame, app, area, viewport_shape),
-        responsive::Shape::Standard | responsive::Shape::Wide | responsive::Shape::UltraWide => {
-            draw_desktop(frame, app, area, viewport_shape)
+        responsive::Shape::Tiny | responsive::Shape::ShortWide | responsive::Shape::Compact => {
+            legacy::draw(frame, app, area, viewport_shape)
         }
+        responsive::Shape::Portrait
+        | responsive::Shape::Standard
+        | responsive::Shape::Wide
+        | responsive::Shape::UltraWide => draw_desktop(frame, app, area, viewport_shape),
     }
 }
 

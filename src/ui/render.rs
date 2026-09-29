@@ -29,9 +29,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
     frame.render_widget(Block::default().style(theme::base()), frame.area());
     let adaptive = responsive::metrics(frame.area());
-    let (sidebar_area, sidebar_targets) = shell::sidebar_session_targets(app, frame.area());
+    let full = frame.area();
+    let status_height = adaptive.status_height.min(full.height);
+    let main = Rect::new(full.x, full.y, full.width, full.height - status_height);
+    let status_area = Rect::new(full.x, main.bottom(), full.width, status_height);
+    let (sidebar_area, sidebar_targets) = shell::sidebar_session_targets(app, main);
     app.set_sidebar_session_targets(sidebar_area, sidebar_targets);
-    let area = shell::draw_shell(frame, app);
+    let area = shell::draw_shell(frame, app, main);
     let suggestions = app.command_suggestions();
     let requested_suggestion_height = if suggestions.is_empty() {
         0
@@ -54,7 +58,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let suggestion_budget = area.height.saturating_sub(
         task_height
             .saturating_add(input_height)
-            .saturating_add(adaptive.status_height)
             .saturating_add(1),
     );
     let suggestion_height = if requested_suggestion_height >= 3 && suggestion_budget >= 3 {
@@ -69,7 +72,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             Constraint::Length(task_height),
             Constraint::Length(suggestion_height),
             Constraint::Length(input_height),
-            Constraint::Length(adaptive.status_height),
         ])
         .split(area);
 
@@ -79,7 +81,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
     task::draw(frame, app, chunks[1]);
     draw_input(frame, app, chunks[3]);
-    draw_status(frame, app, chunks[4]);
+    draw_status(frame, app, status_area);
     sessions::draw_context_menu(frame, app);
 
     match app.mode {

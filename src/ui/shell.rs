@@ -3,166 +3,65 @@ use super::{
     responsive,
     task::{self, TaskStatus},
     text::truncate_end,
-    theme, yeet_brand,
+    theme, tabbar, yeet_brand,
 };
 use crate::{app::App, model::SessionSummary};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, List, ListItem, ListState, Padding, Paragraph},
 };
 
 const MIN_MAIN_PANE_WIDTH_WITH_SIDEBAR: u16 = 96;
 type SidebarArea = (u16, u16, u16, u16);
 type SidebarSessionTarget = (u16, String);
 
-pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
-    let bounds = frame.area();
-    let adaptive = responsive::metrics(bounds);
-    let sidebar_width = shell_sidebar_width(bounds, adaptive);
+/// Area under the tab bar that holds the rail and the conversation.
+fn below_tabbar(bounds: Rect, adaptive: responsive::Metrics) -> Rect {
+    let header = adaptive.header_height.min(bounds.height);
+    Rect::new(
+        bounds.x,
+        bounds.y + header,
+        bounds.width,
+        bounds.height - header,
+    )
+}
+
+pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> Rect {
+    let adaptive = responsive::metrics(frame.area());
+    let header_area = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width,
+        adaptive.header_height.min(bounds.height),
+    );
+    tabbar::draw(frame, app, header_area, tabbar::Active::Session);
+    let rest = below_tabbar(bounds, adaptive);
+    let sidebar_width = shell_sidebar_width(frame.area(), adaptive);
     let body = if let Some(sidebar_width) = sidebar_width {
         let columns = Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(1)])
-            .split(bounds);
+            .split(rest);
         sidebar(frame, app, columns[0]);
         columns[1]
     } else {
-        bounds
+        rest
     };
     frame.render_widget(
         Block::default().style(Style::default().bg(theme::code_background())),
         body,
     );
-    let rows = Layout::vertical([
-        Constraint::Length(adaptive.header_height),
-        Constraint::Min(1),
-    ])
-    .split(body);
-
-    let available = rows[1].inner(Margin {
-        horizontal: adaptive.horizontal_margin.min(rows[1].width / 2),
+    let available = body.inner(Margin {
+        horizontal: adaptive.horizontal_margin.min(body.width / 2),
         vertical: 0,
     });
     let content_width = available.width.min(adaptive.content_max_width);
-    let content_area = Rect::new(
+    Rect::new(
         available.x + (available.width - content_width) / 2,
         available.y,
         content_width,
         available.height,
-    );
-    let header_area = Rect::new(
-        content_area.x,
-        rows[0].y,
-        content_area.width,
-        rows[0].height,
-    );
-
-    let title = conversation_title(app);
-    let task_status = TaskStatus::for_app(app);
-    let header = Block::default()
-        .style(theme::surface())
-        .padding(Padding::horizontal(2));
-    let inner = header.inner(header_area);
-    frame.render_widget(header, header_area);
-    let badge = format!(" {} {} ", task_status.marker(app), task_status.label());
-    let badge_width = Span::raw(&badge).width() as u16;
-    let show_badge = inner.width >= badge_width + 28;
-    let title_width = if show_badge {
-        inner.width.saturating_sub(badge_width + 2)
-    } else {
-        inner.width
-    };
-    frame.render_widget(
-        Paragraph::new(header_title_line(
-            title,
-            title_width as usize,
-            sidebar_width.is_none(),
-        )),
-        Rect::new(inner.x, inner.y, title_width, inner.height.min(1)),
-    );
-    if show_badge {
-        frame.render_widget(
-            Paragraph::new(badge).style(
-                Style::default()
-                    .fg(if task_status == TaskStatus::Approval {
-                        theme::pulse_color()
-                    } else {
-                        task_status.color()
-                    })
-                    .bg(theme::surface_raised())
-                    .bold(),
-            ),
-            Rect::new(
-                inner.right() - badge_width,
-                inner.y,
-                badge_width,
-                inner.height.min(1),
-            ),
-        );
-    }
-    if inner.height > 1 {
-        let location = if app.follow_tail || app.conversation.is_empty() {
-            "LATEST"
-        } else {
-            "HISTORY"
-        };
-        let context = current_workspace_name(app);
-        let location_text = format!(" {location} ");
-        let location_width = Span::raw(&location_text).width() as u16;
-        let show_location = inner.width >= location_width.saturating_add(20);
-        let context_width = if show_location {
-            inner.width.saturating_sub(location_width + 2)
-        } else {
-            inner.width
-        };
-        let available = context_width.saturating_sub(2) as usize;
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("⌁ ", Style::default().fg(theme::user()).bold()),
-                Span::styled(
-                    task::fit(&context, available),
-                    Style::default().fg(theme::muted()),
-                ),
-            ])),
-            Rect::new(inner.x, inner.y + 1, context_width, 1),
-        );
-        if show_location {
-            frame.render_widget(
-                Paragraph::new(location_text).style(theme::selected()),
-                Rect::new(
-                    inner.right().saturating_sub(location_width),
-                    inner.y + 1,
-                    location_width,
-                    1,
-                ),
-            );
-        }
-    }
-
-    content_area
-}
-
-/// Keep the brand distinct from the conversation, and normalize user-supplied
-/// titles so pasted newlines or tabs cannot disrupt the single-line header.
-fn header_title_line(title: &str, width: usize, show_brand: bool) -> Line<'static> {
-    if !show_brand {
-        return Line::from(Span::styled(
-            task::fit(title, width),
-            Style::default().fg(theme::text()).bold(),
-        ));
-    }
-
-    let brand = task::fit("Yeet", width);
-    let remaining = width.saturating_sub(Span::raw(&brand).width());
-    let mut spans = vec![Span::styled(brand, theme::brand())];
-    if remaining > 3 {
-        spans.push(Span::styled(" · ", Style::default().fg(theme::muted())));
-        spans.push(Span::styled(
-            task::fit(title, remaining - 3),
-            Style::default().fg(theme::text()).bold(),
-        ));
-    }
-    Line::from(spans)
+    )
 }
 
 fn shell_sidebar_width(bounds: Rect, adaptive: responsive::Metrics) -> Option<u16> {
@@ -173,20 +72,13 @@ fn shell_sidebar_width(bounds: Rect, adaptive: responsive::Metrics) -> Option<u1
 
 fn sidebar_block() -> Block<'static> {
     Block::default()
-        .style(theme::base())
-        .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(theme::border_dim()))
-        .padding(Padding::new(1, 1, 1, 1))
+        .style(theme::surface())
+        .padding(Padding::new(1, 1, 1, 0))
 }
 
-fn sidebar_sections(inner: Rect) -> [Rect; 3] {
-    let rows = Layout::vertical([
-        Constraint::Length(6),
-        Constraint::Min(1),
-        Constraint::Length(5),
-    ])
-    .split(inner);
-    [rows[0], rows[1], rows[2]]
+fn sidebar_sections(inner: Rect) -> [Rect; 2] {
+    let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
+    [rows[0], rows[1]]
 }
 
 fn sidebar_selected_index(rows: &[SidebarRow]) -> Option<usize> {
@@ -214,7 +106,8 @@ pub(super) fn sidebar_session_targets(
     let Some(sidebar_width) = shell_sidebar_width(bounds, adaptive) else {
         return ((0, 0, 0, 0), Vec::new());
     };
-    let area = Rect::new(bounds.x, bounds.y, sidebar_width, bounds.height);
+    let rest = below_tabbar(bounds, adaptive);
+    let area = Rect::new(rest.x, rest.y, sidebar_width, rest.height);
     let inner = sidebar_block().inner(area);
     let sections = sidebar_sections(inner);
     let list_area = sections[1];
@@ -260,85 +153,23 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
         rows[1],
         &mut state,
     );
-    let footer = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(theme::border_dim()));
-    frame.render_widget(
-        Paragraph::new(vec![
-            shortcut("Models", "Alt+M", inner.width),
-            shortcut("Settings", "/settings", inner.width),
-            shortcut("Help", "?", inner.width),
-        ])
-        .block(footer),
-        rows[2],
-    );
 }
 
+/// A single raised `+` row for starting a new session.
 fn sidebar_header(width: u16) -> Vec<Line<'static>> {
-    let brand_width = width as usize;
-    let prefix = if brand_width >= 2 { "◈ " } else { "" };
-    let prefix_width = Span::raw(prefix).width();
-    let yeet = task::fit("YEET", brand_width.saturating_sub(prefix_width));
-    let mut brand = Vec::new();
-    if !prefix.is_empty() {
-        brand.push(Span::styled(
-            prefix,
-            Style::default().fg(theme::accent_warm()).bold(),
-        ));
-    }
-    let used = prefix_width + Span::raw(&yeet).width();
-    brand.push(Span::styled(yeet, theme::brand()));
-    if brand_width.saturating_sub(used) > 12 {
-        brand.push(Span::styled(" / ", Style::default().fg(theme::border())));
-        brand.push(Span::styled(
-            task::fit("WORKBENCH", brand_width.saturating_sub(used + 3)),
-            Style::default().fg(theme::muted()),
-        ));
-    }
-
-    vec![
-        Line::from(brand),
-        Line::default(),
-        sidebar_action("+", "New session", "Ctrl+N", theme::user(), width),
-        sidebar_action("≡", "Sessions", "Alt+S", theme::accent(), width),
-        Line::default(),
-        sidebar_section("WORKSPACE", width),
-    ]
-}
-
-fn sidebar_action(icon: &str, label: &str, key: &str, color: Color, width: u16) -> Line<'static> {
-    let prefix = format!("{icon} ");
-    let prefix = truncate_end(&prefix, width as usize);
-    let remaining = width.saturating_sub(Span::raw(&prefix).width() as u16);
-    let mut line = aligned_line(
-        label,
-        key,
-        remaining,
-        Style::default().fg(theme::text_dim()).bold(),
-        Style::default().fg(color),
-    );
-    line.spans
-        .insert(0, Span::styled(prefix, Style::default().fg(color).bold()));
-    line
-}
-
-fn sidebar_section(label: &str, width: u16) -> Line<'static> {
     let width = width as usize;
-    let label = task::fit(label, width);
-    let label_width = Span::raw(&label).width();
-    let rule_width = width.saturating_sub(label_width + usize::from(label_width < width));
-    let mut spans = vec![Span::styled(
-        label,
-        Style::default().fg(theme::muted()).bold(),
-    )];
-    if rule_width > 0 {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            "─".repeat(rule_width.saturating_sub(1)),
-            Style::default().fg(theme::border_dim()),
-        ));
-    }
-    Line::from(spans)
+    let left = width.saturating_sub(1) / 2;
+    let plus = format!("{}+{}", " ".repeat(left), " ".repeat(width.saturating_sub(left + 1)));
+    vec![
+        Line::styled(
+            plus,
+            Style::default()
+                .fg(theme::text())
+                .bg(theme::surface_raised())
+                .bold(),
+        ),
+        Line::default(),
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,6 +234,7 @@ fn sidebar_rows(app: &App) -> Vec<SidebarRow> {
         rows.splice(1..1, sessions);
     }
 
+    rows.retain(|row| matches!(row.kind, SidebarRowKind::Session { .. }));
     rows
 }
 
@@ -432,7 +264,7 @@ fn append_workspace_sessions(
     } else {
         rows.push(SidebarRow {
             label: conversation_title(app).to_owned(),
-            detail: TaskStatus::for_app(app).label().to_owned(),
+            detail: String::new(),
             kind: SidebarRowKind::Session { current: true },
             session_id: None,
         });
@@ -449,7 +281,7 @@ fn session_row(session: &SessionSummary, current: bool, app: &App) -> SidebarRow
     SidebarRow {
         label: session.display_title(),
         detail: if current {
-            TaskStatus::for_app(app).label().to_owned()
+            String::new()
         } else {
             if chrono::DateTime::parse_from_rfc3339(&session.updated_at).is_ok() {
                 session.updated_label()
@@ -526,15 +358,6 @@ fn aligned_line(
     ])
 }
 
-fn current_workspace_name(app: &App) -> String {
-    app.state
-        .known_workspaces
-        .iter()
-        .find(|workspace| workspace.is_current)
-        .map(|workspace| workspace_display_name(&workspace.display_name, &workspace.path))
-        .unwrap_or_else(fallback_workspace_name)
-}
-
 fn workspace_display_name(display_name: &str, path: &str) -> String {
     if !display_name.trim().is_empty() {
         return display_name.trim().to_owned();
@@ -564,7 +387,7 @@ fn session_count_label(count: usize) -> String {
     }
 }
 
-fn conversation_title(app: &App) -> &str {
+pub(super) fn conversation_title(app: &App) -> &str {
     app.sessions()
         .iter()
         .find(|session| Some(session.id.as_str()) == app.state.current_session_id.as_deref())
@@ -578,16 +401,6 @@ fn conversation_title(app: &App) -> &str {
         .unwrap_or("New conversation")
 }
 
-fn shortcut(label: &str, key: &str, width: u16) -> Line<'static> {
-    aligned_line(
-        label,
-        key,
-        width,
-        Style::default(),
-        Style::default().fg(theme::muted()),
-    )
-}
-
 pub(super) fn draw_welcome(frame: &mut Frame<'_>, area: Rect, viewport_shape: responsive::Shape) {
     yeet_brand::draw(frame, area, viewport_shape);
 }
@@ -597,26 +410,20 @@ mod polish_tests {
     use super::*;
 
     #[test]
-    fn sidebar_header_has_clear_sections_and_fits_available_width() {
-        for width in 0..40 {
+    fn sidebar_header_is_a_single_centered_plus_row() {
+        for width in 1..40 {
             let lines = sidebar_header(width);
-            assert_eq!(lines.len(), 6);
-            assert!(lines.iter().all(|line| line.width() <= width as usize));
-            assert_eq!(lines[1].width(), 0);
-            assert_eq!(lines[4].width(), 0);
+            assert_eq!(lines.len(), 2);
+            assert_eq!(lines[0].width(), width as usize);
+            assert_eq!(lines[0].to_string().trim(), "+");
         }
-        let lines = sidebar_header(25);
-        assert_eq!(lines[0].to_string(), "◈ YEET / WORKBENCH");
-        assert_eq!(lines[0].spans[0].style.fg, Some(theme::accent_warm()));
-        assert!(lines[2].to_string().ends_with("Ctrl+N"));
-        assert!(lines[5].to_string().starts_with("WORKSPACE "));
     }
 
     #[test]
     fn sidebar_labels_cannot_break_the_single_line_hit_targets() {
         let line = aligned_line(
             "Fix\n the\t sidebar",
-            "Ready",
+            "3m",
             25,
             theme::base(),
             theme::brand(),
@@ -628,58 +435,12 @@ mod polish_tests {
     #[test]
     fn sidebar_rows_fit_and_keep_both_columns_readable() {
         for width in 0..80 {
-            for (label, detail) in [
-                ("  · Conversation", "Current · Working"),
-                ("修正界面", "昨日"),
-            ] {
+            for (label, detail) in [("  · Conversation", "21m"), ("修正界面", "昨日")] {
                 let line = aligned_line(label, detail, width, theme::base(), theme::brand());
                 assert!(line.width() <= width as usize, "width {width}: {line:?}");
             }
-            assert!(shortcut("Settings", "Ctrl+,", width).width() <= width as usize);
         }
-        let line = aligned_line("Session", "2m ago", 24, theme::base(), theme::brand());
-        assert_eq!(line.to_string(), "Session           2m ago");
-        let narrow = aligned_line(
-            "Session",
-            "Current · Working",
-            16,
-            theme::base(),
-            theme::brand(),
-        );
-        assert!(narrow.to_string().starts_with("Session"));
-        assert_eq!(narrow.width(), 16);
-    }
-
-    #[test]
-    fn header_preserves_brand_and_title_hierarchy() {
-        let line = header_title_line("New conversation", 80, true);
-        assert_eq!(line.to_string(), "Yeet · New conversation");
-        assert_eq!(line.spans[0].style, theme::brand());
-        assert_eq!(line.spans[1].style.fg, Some(theme::muted()));
-        assert_eq!(line.spans[2].style.fg, Some(theme::text()));
-        assert!(line.spans[2].style.add_modifier.contains(Modifier::BOLD));
-
-        let sidebar_owned_brand = header_title_line("New conversation", 80, false);
-        assert_eq!(sidebar_owned_brand.to_string(), "New conversation");
-    }
-
-    #[test]
-    fn header_keeps_multiline_titles_on_one_line() {
-        let line = header_title_line("  Fix\n  the\t layout\r\nplease  ", 80, true);
-        assert_eq!(line.to_string(), "Yeet · Fix the layout please");
-    }
-
-    #[test]
-    fn header_fits_even_narrow_and_unicode_viewports() {
-        for title in [
-            "A long conversation title",
-            "修正界面布局",
-            "Cafe\u{301} ☕",
-        ] {
-            for width in 0..80 {
-                let line = header_title_line(title, width, true);
-                assert!(line.width() <= width, "width {width}: {line:?}");
-            }
-        }
+        let line = aligned_line("Session", "2m", 24, theme::base(), theme::brand());
+        assert_eq!(line.to_string(), "Session               2m");
     }
 }

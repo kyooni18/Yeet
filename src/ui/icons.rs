@@ -13,6 +13,10 @@ pub(super) fn home() -> &'static str {
     if nerd() { "\u{f015}" } else { "⌂" }
 }
 
+pub(super) fn session_tab() -> &'static str {
+    if nerd() { "\u{f27a}" } else { "▤" }
+}
+
 pub(super) fn workspace() -> &'static str {
     if nerd() { "\u{f07b}" } else { "▣" }
 }

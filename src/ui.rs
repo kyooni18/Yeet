@@ -10,6 +10,7 @@ mod responsive;
 mod sessions;
 mod shell;
 mod status;
+mod tabbar;
 mod task;
 mod text;
 mod theme;
