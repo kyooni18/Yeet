@@ -72,7 +72,7 @@ fn shell_sidebar_width(bounds: Rect, adaptive: responsive::Metrics) -> Option<u1
 
 fn sidebar_block() -> Block<'static> {
     Block::default()
-        .style(theme::surface())
+        .style(theme::base())
         .padding(Padding::new(1, 1, 1, 0))
 }
 
@@ -162,7 +162,7 @@ fn sidebar(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_stateful_widget(
         List::new(items).highlight_style(
             Style::default()
-                .bg(theme::surface_raised())
+                .bg(theme::surface_color())
                 .add_modifier(Modifier::BOLD),
         ),
         rows[1],
@@ -184,7 +184,7 @@ fn sidebar_header(width: u16) -> Vec<Line<'static>> {
             plus,
             Style::default()
                 .fg(theme::text())
-                .bg(theme::surface_raised())
+                .bg(theme::surface_color())
                 .bold(),
         ),
         Line::default(),

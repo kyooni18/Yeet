@@ -7,6 +7,7 @@ mod icons;
 mod markdown;
 mod render;
 mod responsive;
+mod session_picker;
 mod sessions;
 mod shell;
 mod status;

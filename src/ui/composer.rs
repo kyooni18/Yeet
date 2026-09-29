@@ -15,9 +15,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         && app.state.pending_native_app_permission.is_none();
     frame.render_widget(
         Block::default().style(Style::default().fg(theme::text()).bg(if focused {
-            theme::surface_raised()
-        } else {
             theme::surface_color()
+        } else {
+            theme::background()
         })),
         area,
     );

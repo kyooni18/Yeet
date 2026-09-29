@@ -1,5 +1,5 @@
 //! Full-screen keyboard file browser (`Mode::Files`).
-use super::{icons, tabbar, task::fit, theme};
+use super::{composer, icons, responsive, status, tabbar, task::fit, theme};
 use crate::app::{
     App,
     files::FilesState,
@@ -23,13 +23,20 @@ const HINT_ACTIONS: [Action; 7] = [
     Action::FocusInput,
 ];
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
+pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
-    frame.render_widget(Block::default().style(theme::base()), area);
+    frame.render_widget(
+        Block::default().style(theme::base().bg(theme::code_background())),
+        area,
+    );
     let Some(files) = app.files.as_ref() else {
         return;
     };
     if area.height < 4 || area.width < 8 {
+        return;
+    }
+    if responsive::shape(area) == responsive::Shape::Portrait {
+        draw_portrait(frame, app, files, area);
         return;
     }
     let hints = if files.hints {
@@ -38,6 +45,28 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         Vec::new()
     };
     let wide = area.width >= 100;
+    if wide {
+        let rows = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+        let active = files
+            .active_tab
+            .map_or(tabbar::Active::Files, tabbar::Active::File);
+        tabbar::draw(frame, app, rows[0], active);
+        if files.diff {
+            draw_diff(frame, files, rows[1]);
+        } else {
+            draw_wide_body(frame, files, rows[1]);
+            draw_wide_breadcrumb(frame, files, rows[1]);
+        }
+        composer::draw(frame, app, rows[2]);
+        status::draw(frame, app, rows[3]);
+        return;
+    }
     let info_height = if files.info && !wide { 4 } else { 0 };
     let hints_height = hints.len() as u16;
     let rows = Layout::vertical([
@@ -52,7 +81,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
 
     let active = match files.active_tab {
         Some(index) => tabbar::Active::File(index),
-        None => tabbar::Active::Home,
+        None => tabbar::Active::Files,
     };
     tabbar::draw(frame, app, rows[0], active);
     draw_location(frame, files, rows[1]);
@@ -71,6 +100,230 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         draw_hints(frame, &hints, rows[4]);
     }
     draw_status(frame, app, files, rows[5]);
+}
+
+fn draw_wide_breadcrumb(frame: &mut Frame<'_>, files: &FilesState, body: Rect) {
+    if body.height == 0 || body.width < 36 {
+        return;
+    }
+    let x = body.x + 24.min(body.width / 4) + 1;
+    let width = body.right().saturating_sub(x).min(64);
+    let location = files.selected_path().unwrap_or_else(|| files.dir.clone());
+    let parts = location
+        .components()
+        .rev()
+        .take(4)
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .filter(|part| part != "/")
+        .collect::<Vec<_>>();
+    let label = parts.into_iter().rev().collect::<Vec<_>>().join("  ›  ");
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            format!(" {} ", fit(&label, width.saturating_sub(2) as usize)),
+            Style::default()
+                .fg(theme::muted())
+                .bg(theme::surface_color()),
+        )),
+        Rect::new(x, body.bottom() - 1, width, 1),
+    );
+}
+
+fn draw_portrait(frame: &mut Frame<'_>, app: &App, files: &FilesState, area: Rect) {
+    frame.render_widget(
+        Block::default().style(theme::base().bg(theme::code_background())),
+        area,
+    );
+    draw_location(frame, files, Rect::new(area.x, area.y, area.width, 1));
+    let body = Rect::new(
+        area.x,
+        area.y + 2,
+        area.width,
+        area.height.saturating_sub(3),
+    );
+    if files.diff {
+        draw_diff(frame, files, body);
+    } else {
+        let item_rows = (files.visible().len() + 1)
+            .saturating_mul(2)
+            .min(u16::MAX as usize) as u16;
+        let list_height = item_rows.min(14).min(body.height.saturating_sub(7));
+        let list = Rect::new(body.x, body.y, body.width, list_height);
+        draw_portrait_list(frame, files, list);
+        let details = Rect::new(body.x, list.bottom(), body.width, body.height - list_height);
+        draw_portrait_details(frame, files, details);
+    }
+    if files.hints {
+        let hints = app.keymap.hints(Context::Files, &HINT_ACTIONS);
+        let height = (hints.len() as u16).min(area.height.saturating_sub(2));
+        draw_hints(
+            frame,
+            &hints,
+            Rect::new(area.x, area.bottom() - 1 - height, area.width, height),
+        );
+    }
+    draw_status(
+        frame,
+        app,
+        files,
+        Rect::new(area.x, area.bottom() - 1, area.width, 1),
+    );
+}
+
+fn draw_portrait_list(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
+    if area.height < 2 {
+        return;
+    }
+    if files.dir.parent().is_some() {
+        frame.render_widget(
+            Paragraph::new(Line::styled("     ..", Style::default().fg(theme::muted()))),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+    }
+    let visible = files.visible();
+    let slots = area.height.saturating_sub(2) as usize / 2;
+    let offset = centered_offset(files.cursor, visible.len(), slots);
+    for (row, (index, entry)) in visible
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(slots)
+        .enumerate()
+    {
+        let selected = index == files.cursor;
+        let row_area = Rect::new(area.x, area.y + 2 + row as u16 * 2, area.width, 1);
+        if selected {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(theme::selected_color())),
+                row_area,
+            );
+        }
+        let icon = if entry.is_dir {
+            icons::folder(false)
+        } else {
+            icons::file(&entry.name)
+        };
+        let name = if entry.is_dir {
+            format!("{}/", entry.name)
+        } else {
+            entry.name.clone()
+        };
+        let style = Style::default()
+            .fg(if selected {
+                theme::text()
+            } else {
+                theme::text_dim()
+            })
+            .add_modifier(if selected {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            });
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    if selected { "▏ " } else { "   " },
+                    Style::default().fg(theme::accent()),
+                ),
+                Span::styled(format!("{icon}  "), Style::default().fg(theme::muted())),
+                Span::styled(fit(&name, area.width.saturating_sub(7) as usize), style),
+            ])),
+            row_area,
+        );
+    }
+}
+
+fn draw_portrait_details(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
+    let Some(entry) = files.selected() else {
+        return;
+    };
+    if area.height < 3 {
+        return;
+    }
+    let divider = "─".repeat(area.width.saturating_sub(4) as usize);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            format!("  {divider}"),
+            Style::default().fg(theme::border_dim()),
+        )),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    let size = human_size(entry.size);
+    let lines = files
+        .selected_lines
+        .map(|n| format!(" · {n} lines"))
+        .unwrap_or_default();
+    let modified = entry
+        .modified
+        .map(|time| {
+            chrono::DateTime::<chrono::Local>::from(time)
+                .format("%b %d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let status = change_label(files.changed.get(&entry.name).map(String::as_str));
+    let delta = files
+        .diff_stats
+        .map(|(add, remove)| format!(" · +{add} -{remove}"))
+        .unwrap_or_default();
+    let details = [
+        (2, entry.name.clone(), true),
+        (4, format!("{size}{lines}"), false),
+        (6, modified, false),
+        (8, format!("{status}{delta}"), false),
+    ];
+    for (offset, text, bold) in details {
+        if offset >= area.height {
+            break;
+        }
+        let style = Style::default()
+            .fg(if bold {
+                theme::text()
+            } else {
+                theme::text_dim()
+            })
+            .add_modifier(if bold {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            });
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!("  {}", fit(&text, area.width.saturating_sub(3) as usize)),
+                style,
+            )),
+            Rect::new(area.x, area.y + offset, area.width, 1),
+        );
+    }
+}
+
+fn change_label(status: Option<&str>) -> &'static str {
+    match status.unwrap_or_default().trim() {
+        "M" => "modified",
+        "A" => "added",
+        "D" => "deleted",
+        "??" => "untracked",
+        "R" => "renamed",
+        _ => "clean",
+    }
+}
+
+fn change_stage(status: Option<&str>) -> &'static str {
+    match status.unwrap_or_default().as_bytes() {
+        [b'?', b'?'] => "",
+        [index, worktree] if *index != b' ' && *worktree != b' ' => " · staged + unstaged",
+        [index, _] if *index != b' ' => " · staged",
+        [_, worktree] if *worktree != b' ' => " · unstaged",
+        _ => "",
+    }
+}
+
+fn friendly_path(path: &std::path::Path) -> String {
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from)
+        && let Ok(relative) = path.strip_prefix(home)
+    {
+        return format!("~/{}", relative.display());
+    }
+    path.display().to_string()
 }
 
 fn draw_location(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
@@ -110,7 +363,11 @@ fn centered_offset(cursor: usize, len: usize, height: usize) -> usize {
 fn draw_list(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     let visible = files.visible();
     let height = area.height as usize;
-    let offset = centered_offset(files.cursor, visible.len(), height);
+    let offset = if area.height >= 20 {
+        files.cursor.saturating_sub(3)
+    } else {
+        centered_offset(files.cursor, visible.len(), height)
+    };
     for (row, (index, entry)) in visible
         .iter()
         .enumerate()
@@ -148,7 +405,7 @@ fn draw_list(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         let row_area = Rect::new(area.x, area.y + row as u16, area.width, 1);
         if selected {
             frame.render_widget(
-                Block::default().style(Style::default().bg(theme::surface_raised())),
+                Block::default().style(Style::default().bg(theme::selected_color())),
                 row_area,
             );
         }
@@ -192,7 +449,7 @@ fn draw_info(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     let status = files
         .changed
         .get(&entry.name)
-        .cloned()
+        .map(|value| value.trim().to_owned())
         .unwrap_or_else(|| "clean".to_owned());
     let size = if entry.is_dir {
         let count = std::fs::read_dir(files.dir.join(&entry.name)).map_or(0, Iterator::count);
@@ -219,7 +476,10 @@ fn draw_info(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
 }
 
 fn draw_hints(frame: &mut Frame<'_>, hints: &[(String, &'static str)], area: Rect) {
-    frame.render_widget(Block::default().style(theme::surface()), area);
+    frame.render_widget(
+        Block::default().style(theme::base().bg(theme::code_background())),
+        area,
+    );
     let lines: Vec<Line> = hints
         .iter()
         .map(|(key, label)| {
@@ -238,7 +498,10 @@ fn draw_hints(frame: &mut Frame<'_>, hints: &[(String, &'static str)], area: Rec
 }
 
 fn draw_status(frame: &mut Frame<'_>, app: &App, files: &FilesState, area: Rect) {
-    frame.render_widget(Block::default().style(theme::surface()), area);
+    frame.render_widget(
+        Block::default().style(theme::base().bg(theme::code_background())),
+        area,
+    );
     let cue = app
         .keymap
         .keys_for(Context::Files, Action::ToggleHints)
@@ -247,7 +510,7 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, files: &FilesState, area: Rect)
         .map(|key| format!("{key} hints"))
         .unwrap_or_default();
     let cue_width = cue.chars().count() as u16 + 1;
-    let path = files.dir.display().to_string();
+    let path = friendly_path(&files.dir);
     frame.render_widget(
         Paragraph::new(Line::styled(
             format!(
@@ -301,6 +564,10 @@ fn draw_wide_body(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     if rail_width > 0 {
         draw_rail(frame, files, rail);
     }
+    frame.render_widget(
+        Block::default().style(theme::base().bg(theme::code_background())),
+        columns,
+    );
     let parents: Vec<&std::path::Path> = files.dir.ancestors().skip(1).take(2).collect();
     let count = parents.len() + 1;
     let column_width = columns.width / count as u16;
@@ -326,12 +593,12 @@ fn draw_wide_body(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         files,
         Rect::new(last_x, columns.y, columns.right() - last_x, columns.height),
     );
-    frame.render_widget(Block::default().style(theme::surface()), inspector);
+    frame.render_widget(Block::default().style(theme::base()), inspector);
     draw_inspector(frame, files, inspector);
 }
 
 fn draw_rail(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
-    frame.render_widget(Block::default().style(theme::surface()), area);
+    frame.render_widget(Block::default().style(theme::base()), area);
     let root = std::env::current_dir()
         .ok()
         .and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -346,18 +613,50 @@ fn draw_rail(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
             Span::styled(value, muted),
         ])
     };
-    let lines = vec![
+    let mut lines = vec![
+        Line::raw(""),
         Line::styled(" PLACES", muted),
-        row(
-            fit(&root, 16),
-            String::new(),
+        Line::raw(""),
+        Line::styled(
+            format!(
+                " {:<width$}",
+                fit(&root, area.width.saturating_sub(2) as usize),
+                width = area.width.saturating_sub(1) as usize
+            ),
             Style::default()
                 .fg(theme::text())
+                .bg(theme::surface_color())
                 .add_modifier(Modifier::BOLD),
         ),
         row("changed".into(), files.changed.len().to_string(), dim),
         row("open tabs".into(), files.tabs.len().to_string(), dim),
+        Line::raw(""),
+        Line::styled(
+            "─".repeat(area.width.saturating_sub(2) as usize),
+            Style::default().fg(theme::border_dim()),
+        ),
+        Line::raw(""),
+        Line::styled(" RECENT", muted),
     ];
+    let workspace = std::env::current_dir().unwrap_or_default();
+    for recent in files.recent_dirs.iter().take(5) {
+        let display = recent
+            .strip_prefix(&workspace)
+            .ok()
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| {
+                recent
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| recent.display().to_string())
+            });
+        lines.push(row(
+            fit(&display, area.width.saturating_sub(3) as usize),
+            String::new(),
+            dim,
+        ));
+    }
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -388,7 +687,7 @@ fn draw_parent_column(
         .position(|(name, _)| Some(name) == child_name.as_ref())
         .unwrap_or(0);
     let height = area.height as usize;
-    let offset = centered_offset(selected, entries.len(), height);
+    let offset = selected;
     let width = area.width.saturating_sub(1) as usize;
     for (row, (index, (name, is_dir))) in entries
         .iter()
@@ -406,7 +705,7 @@ fn draw_parent_column(
         });
         if is_selected {
             frame.render_widget(
-                Block::default().style(Style::default().bg(theme::surface_raised())),
+                Block::default().style(Style::default().bg(theme::surface_color())),
                 row_area,
             );
             style = style.add_modifier(Modifier::BOLD);
@@ -446,14 +745,7 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         })
         .unwrap_or_default()
     };
-    let kind = if entry.is_dir {
-        "Folder".to_owned()
-    } else {
-        std::path::Path::new(&entry.name)
-            .extension()
-            .map(|e| format!("{} file", e.to_string_lossy()))
-            .unwrap_or_else(|| "File".to_owned())
-    };
+    let kind = file_kind(entry);
     let size = if entry.is_dir {
         format!(
             "{} items",
@@ -473,23 +765,27 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
                 .collect::<String>()
         })
         .unwrap_or_default();
-    let status = files
-        .changed
-        .get(&entry.name)
-        .cloned()
-        .unwrap_or_else(|| "clean".to_owned());
+    let status = change_label(files.changed.get(&entry.name).map(String::as_str));
+    let stage = change_stage(files.changed.get(&entry.name).map(String::as_str));
     let label = Style::default().fg(theme::muted());
     let value = Style::default().fg(theme::text());
     let mut lines = vec![
         Line::styled(
             format!(
-                " {}",
-                fit(&entry.name, area.width.saturating_sub(2) as usize)
+                " {}  {}",
+                if entry.is_dir {
+                    icons::folder(false)
+                } else {
+                    icons::file(&entry.name)
+                },
+                fit(&entry.name, area.width.saturating_sub(5) as usize)
             ),
             value.add_modifier(Modifier::BOLD),
         ),
+        Line::styled(format!(" {} · {size}", kind), label),
         Line::raw(""),
         Line::styled(" INFORMATION", label),
+        Line::raw(""),
     ];
     let rows = [
         ("Kind", kind),
@@ -499,8 +795,25 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
             stamp(meta.as_ref().and_then(|m| m.created().ok())),
         ),
         ("Modified", stamp(entry.modified)),
-        ("Where", fit(&files.dir.display().to_string(), 20)),
+        (
+            "Opened",
+            stamp(meta.as_ref().and_then(|m| m.accessed().ok())),
+        ),
+        (
+            "Where",
+            fit(
+                &friendly_path(&files.dir),
+                area.width.saturating_sub(13) as usize,
+            ),
+        ),
         ("Perms", perms),
+        (
+            "Lines",
+            files
+                .selected_lines
+                .map(|lines| format!("{lines} · UTF-8 · LF"))
+                .unwrap_or_default(),
+        ),
     ];
     for (name, text) in rows {
         lines.push(Line::from(vec![
@@ -510,6 +823,32 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     }
     lines.push(Line::raw(""));
     lines.push(Line::styled(" GIT", label));
-    lines.push(Line::styled(format!(" {status}"), value));
+    lines.push(Line::raw(""));
+    for (name, text) in [
+        ("Status", format!("{status}{stage}")),
+        ("Branch", files.git_branch.clone()),
+        ("Commit", files.git_commit.clone()),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {name:<9}"), label),
+            Span::styled(fit(&text, area.width.saturating_sub(12) as usize), value),
+        ]));
+    }
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn file_kind(entry: &crate::app::files::FileEntry) -> String {
+    if entry.is_dir {
+        return "Folder".into();
+    }
+    match std::path::Path::new(&entry.name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+    {
+        Some("rs") => "Rust source".into(),
+        Some("c" | "h") => "C source".into(),
+        Some("md") => "Markdown".into(),
+        Some(ext) => format!("{ext} file"),
+        None => "File".into(),
+    }
 }

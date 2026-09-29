@@ -389,7 +389,7 @@ impl SessionSummary {
         if elapsed.num_seconds() < 0 {
             updated.format("%Y-%m-%d").to_string()
         } else if elapsed.num_minutes() < 1 {
-            "now".to_owned()
+            format!("{}s", elapsed.num_seconds())
         } else if elapsed.num_hours() < 1 {
             format!("{}m ago", elapsed.num_minutes())
         } else if elapsed.num_days() < 1 {

@@ -8,7 +8,7 @@ use ratatui::{
 };
 use serde_json::json;
 use yeet::{
-    app::{App, Mode},
+    app::{App, Mode, files::FilesState, keymap::Action},
     model::{
         ConversationEntry, ConversationKind, ConversationToolCall, ModelActivity, SessionSummary,
         ShellPermission, ToolCallStatus, WorkspaceSummary,
@@ -195,6 +195,27 @@ fn main() -> anyhow::Result<()> {
         }
         "session-picker" => {
             app.mode = Mode::Sessions;
+        }
+        "files" => {
+            let dir = std::env::current_dir()?.join("src/ui");
+            let mut files = FilesState::open(dir);
+            let selected = files
+                .visible()
+                .iter()
+                .position(|entry| entry.name == "theme.rs")
+                .unwrap_or(0);
+            for _ in 0..selected {
+                files.apply(Action::MoveDown);
+            }
+            files.apply(Action::OpenEntry);
+            app.files = Some(files);
+            app.mode = Mode::Files;
+        }
+        "views" => {
+            app.files = Some(FilesState::open(std::env::current_dir()?));
+            app.mode = Mode::Views;
+            app.views_origin = Mode::Files;
+            app.views_index = 1;
         }
         "working" | "history" => {
             app.state.is_streaming = true;

@@ -17,7 +17,10 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     if width == 0 {
         return;
     }
-    frame.render_widget(Block::default().style(theme::surface()), area);
+    frame.render_widget(
+        Block::default().style(theme::base().bg(theme::code_background())),
+        area,
+    );
     let line = if width >= DESKTOP_WIDTH {
         desktop_line(app, width)
     } else {

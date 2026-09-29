@@ -35,13 +35,19 @@ pub struct FilesState {
     pub find_locked: bool,
     pub tabs: Vec<PathBuf>,
     pub active_tab: Option<usize>,
+    pub recent_dirs: Vec<PathBuf>,
     pub changed: HashMap<String, String>,
     pub diff_lines: Vec<String>,
+    pub selected_lines: Option<usize>,
+    pub diff_stats: Option<(usize, usize)>,
+    pub git_branch: String,
+    pub git_commit: String,
 }
 
 impl FilesState {
     pub fn open(dir: PathBuf) -> Self {
         let mut state = Self {
+            recent_dirs: vec![dir.clone()],
             dir,
             ..Self::default()
         };
@@ -51,6 +57,14 @@ impl FilesState {
 
     pub fn reload(&mut self) {
         self.changed = git_changes(&self.dir);
+        self.git_branch = git(&self.dir, &["branch", "--show-current"])
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        self.git_commit = git(&self.dir, &["rev-parse", "--short", "HEAD"])
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
         let mut entries: Vec<FileEntry> = std::fs::read_dir(&self.dir)
             .into_iter()
             .flatten()
@@ -112,6 +126,16 @@ impl FilesState {
 
     fn refresh_detail(&mut self) {
         self.clamp();
+        self.selected_lines = self.selected().and_then(|entry| {
+            (!entry.is_dir)
+                .then(|| count_text_lines(&self.dir.join(&entry.name)))
+                .flatten()
+        });
+        self.diff_stats = self.selected().and_then(|entry| {
+            (!entry.is_dir)
+                .then(|| git_numstat(&self.dir, &entry.name))
+                .flatten()
+        });
         self.diff_lines = match (self.diff, self.selected()) {
             (true, Some(entry)) if !entry.is_dir => git_diff(&self.dir, &entry.name),
             _ => Vec::new(),
@@ -131,6 +155,9 @@ impl FilesState {
     }
 
     fn set_dir(&mut self, dir: PathBuf) {
+        self.recent_dirs.retain(|recent| recent != &dir);
+        self.recent_dirs.insert(0, dir.clone());
+        self.recent_dirs.truncate(5);
         self.dir = dir;
         self.find = None;
         self.find_locked = false;
@@ -325,7 +352,7 @@ fn git_changes(dir: &Path) -> HashMap<String, String> {
         .filter_map(|line| {
             let path = line[3..].rsplit(" -> ").next()?.trim_matches('"');
             let relative = path.strip_prefix(prefix)?;
-            Some((relative.to_owned(), line[..2].trim().to_owned()))
+            Some((relative.to_owned(), line[..2].to_owned()))
         })
         .collect()
 }
@@ -336,12 +363,40 @@ fn git_diff(dir: &Path, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn git_numstat(dir: &Path, name: &str) -> Option<(usize, usize)> {
+    let output = git(dir, &["diff", "HEAD", "--numstat", "--", name])?;
+    let mut parts = output.split_whitespace();
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+fn count_text_lines(path: &Path) -> Option<usize> {
+    if std::fs::metadata(path).ok()?.len() > 2 * 1024 * 1024 {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    std::str::from_utf8(&bytes).ok()?;
+    Some(
+        bytes.iter().filter(|byte| **byte == b'\n').count()
+            + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n")),
+    )
+}
+
 impl App {
     pub(crate) fn open_files(&mut self) {
         let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let files = match self.files.take() {
             Some(mut files) => {
+                let selected = files.selected_path();
                 files.reload();
+                if let Some(selected) = selected
+                    && let Some(index) = files
+                        .visible()
+                        .iter()
+                        .position(|entry| files.dir.join(&entry.name) == selected)
+                {
+                    files.cursor = index;
+                    files.refresh_detail();
+                }
                 files
             }
             None => FilesState::open(dir),
@@ -395,6 +450,21 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::keymap::Keymap;
+
+    #[test]
+    fn reopening_files_keeps_the_selected_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.rs"), "a\n").unwrap();
+        std::fs::write(dir.path().join("beta.rs"), "b\n").unwrap();
+        let mut app = App::default();
+        app.files = Some(FilesState::open(dir.path().to_path_buf()));
+        app.files.as_mut().unwrap().apply(Action::MoveDown);
+        app.open_files();
+        assert_eq!(
+            app.files.as_ref().unwrap().selected().unwrap().name,
+            "beta.rs"
+        );
+    }
 
     fn press(files: &mut FilesState, keymap: &Keymap, code: KeyCode) -> FilesOutcome {
         let event = KeyEvent::new(code, KeyModifiers::NONE);

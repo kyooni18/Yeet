@@ -246,7 +246,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
             Paragraph::new(vec![
                 Line::from("No saved sessions."),
                 Line::styled(
-                    "Press Ctrl+N to start a new session.",
+                    "Press Enter to start a new session.",
                     Style::default().fg(theme::muted()),
                 ),
             ]),
@@ -259,7 +259,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
             Paragraph::new(vec![
                 Line::from("No matching sessions."),
                 Line::styled(
-                    "Backspace to broaden the filter.",
+                    "Press Enter for a new session, or Backspace to broaden the filter.",
                     Style::default().fg(theme::muted()),
                 ),
             ]),
@@ -272,82 +272,87 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     // Keep titles on their own line instead of letting workspace/model columns
     // consume the label budget. Very short terminals retain compact rows.
     let show_details = rows[1].height >= 4;
-    let items = sessions.iter().map(|item| {
-        let current = app.state.current_session_id.as_deref() == Some(item.session.id.as_str());
-        let marker = crate::ui::icons::session(current);
-        let badge = if current && row_width >= 20 {
-            " · current"
-        } else {
-            ""
-        };
-        let title_budget = row_width.saturating_sub(2 + cell_width(badge));
-        let title = Line::from(vec![
-            Span::styled(
-                format!("{marker} "),
-                Style::default().fg(if current {
-                    theme::accent()
-                } else {
-                    theme::muted()
-                }),
-            ),
-            Span::styled(
-                truncate_end(&item.session.display_title(), title_budget),
-                Style::default().fg(theme::text()).bold(),
-            ),
-            Span::styled(badge, Style::default().fg(theme::accent())),
-        ]);
-        if !show_details {
-            return ListItem::new(title);
-        }
-        let workspace_style = if item.workspace_current {
-            Style::default().fg(theme::accent())
-        } else {
-            Style::default().fg(theme::muted())
-        };
-        let detail_budget = row_width.saturating_sub(2);
-        let workspace_budget = (detail_budget / 3).min(20);
-        let workspace = truncate_middle(&item.workspace_name, workspace_budget);
-        let messages = if item.session.message_count == 1 {
-            "message"
-        } else {
-            "messages"
-        };
-        let mut metadata = format!(
-            " · {} · {} {messages}",
-            item.session.updated_label(),
-            item.session.message_count,
-        );
-        if row_width >= 60 && !item.session.model.trim().is_empty() {
-            metadata.push_str(&format!(
-                " · {}",
-                item.session
-                    .model
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ));
-        }
-        let metadata_budget = detail_budget.saturating_sub(cell_width(&workspace));
-        ListItem::new(vec![
-            title,
-            Line::from(vec![
+    let items = sessions
+        .iter()
+        .map(|item| {
+            let current = app.state.current_session_id.as_deref() == Some(item.session.id.as_str());
+            let marker = crate::ui::icons::session(current);
+            let badge = if current && row_width >= 20 {
+                " · current"
+            } else {
+                ""
+            };
+            let title_budget = row_width.saturating_sub(2 + cell_width(badge));
+            let title = Line::from(vec![
                 Span::styled(
-                    format!("{} ", crate::ui::icons::workspace()),
-                    workspace_style,
+                    format!("{marker} "),
+                    Style::default().fg(if current {
+                        theme::accent()
+                    } else {
+                        theme::muted()
+                    }),
                 ),
-                Span::styled(workspace, workspace_style),
                 Span::styled(
-                    truncate_end(&metadata, metadata_budget),
-                    Style::default().fg(theme::muted()),
+                    truncate_end(&item.session.display_title(), title_budget),
+                    Style::default().fg(theme::text()).bold(),
                 ),
-            ]),
-        ])
-    });
+                Span::styled(badge, Style::default().fg(theme::accent())),
+            ]);
+            if !show_details {
+                return ListItem::new(title);
+            }
+            let workspace_style = if item.workspace_current {
+                Style::default().fg(theme::accent())
+            } else {
+                Style::default().fg(theme::muted())
+            };
+            let detail_budget = row_width.saturating_sub(2);
+            let workspace_budget = (detail_budget / 3).min(20);
+            let workspace = truncate_middle(&item.workspace_name, workspace_budget);
+            let messages = if item.session.message_count == 1 {
+                "message"
+            } else {
+                "messages"
+            };
+            let mut metadata = format!(
+                " · {} · {} {messages}",
+                item.session.updated_label(),
+                item.session.message_count,
+            );
+            if row_width >= 60 && !item.session.model.trim().is_empty() {
+                metadata.push_str(&format!(
+                    " · {}",
+                    item.session
+                        .model
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+            let metadata_budget = detail_budget.saturating_sub(cell_width(&workspace));
+            ListItem::new(vec![
+                title,
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} ", crate::ui::icons::workspace()),
+                        workspace_style,
+                    ),
+                    Span::styled(workspace, workspace_style),
+                    Span::styled(
+                        truncate_end(&metadata, metadata_budget),
+                        Style::default().fg(theme::muted()),
+                    ),
+                ]),
+            ])
+        })
+        .chain(std::iter::once(ListItem::new(Line::styled(
+            "  + New session",
+            Style::default().fg(theme::text()),
+        ))));
     let list = List::new(items)
         .highlight_style(theme::selected())
         .highlight_symbol("▸ ");
-    let mut state =
-        ListState::default().with_selected(Some(app.popup_index.min(sessions.len() - 1)));
+    let mut state = ListState::default().with_selected(Some(app.popup_index.min(sessions.len())));
     frame.render_stateful_widget(list, rows[1], &mut state);
 }
 

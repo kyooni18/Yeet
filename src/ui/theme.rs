@@ -55,9 +55,6 @@ pub(super) fn surface_color() -> Color {
 pub(super) fn surface_raised() -> Color {
     color(active().surface_raised)
 }
-pub(super) fn user_surface() -> Color {
-    color(active().user_surface)
-}
 pub(super) fn code_background() -> Color {
     color(active().code_background)
 }
@@ -108,6 +105,9 @@ pub(super) fn user() -> Color {
 pub(super) fn error() -> Color {
     color(active().error)
 }
+pub(super) fn error_subtle() -> Color {
+    color(active().error.mix(active().background, 0.45))
+}
 
 pub(super) fn base() -> Style {
     Style::default().fg(text()).bg(background())
@@ -132,10 +132,6 @@ pub(super) fn selected() -> Style {
         .fg(accent_hot())
         .bg(selected_color())
         .add_modifier(Modifier::BOLD)
-}
-
-pub(super) fn pulse_color() -> Color {
-    accent()
 }
 
 pub(super) fn modal_block(title: impl AsRef<str>) -> Block<'static> {

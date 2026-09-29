@@ -1,10 +1,10 @@
 //! Cross-surface regressions for the terminal redesign.
 use super::status::{status_line, usage_line};
 use super::{composer, draw, theme};
-use crate::model::{ConversationToolCall, ModelActivity, SessionSummary, ShellPermission};
+use crate::model::{ModelActivity, SessionSummary, ShellPermission};
 use crate::{
     app::{App, Mode},
-    model::{ConversationEntry, ConversationKind, ToolCallStatus},
+    model::{ConversationEntry, ConversationKind},
 };
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -82,6 +82,21 @@ fn portrait_files_shows_selected_file_details_without_a_tab_bar() {
     assert!(text.contains("sample.rs"), "{text}");
     assert!(text.contains("2 lines"), "{text}");
     assert!(!text.contains("Home"), "{text}");
+}
+
+#[test]
+fn desktop_files_keeps_inspector_breadcrumb_and_composer_visible() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sample.rs"), "one\ntwo\n").unwrap();
+    let mut app = App::default();
+    app.files = Some(crate::app::files::FilesState::open(
+        dir.path().to_path_buf(),
+    ));
+    app.mode = Mode::Files;
+    let (text, _) = render(&mut app, 144, 44);
+    for expected in ["sample.rs", "INFORMATION", "GIT", "2 · UTF-8 · LF", "›"] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
 }
 
 #[test]

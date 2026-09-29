@@ -13,6 +13,7 @@ use ratatui::{
 pub(super) enum Active {
     Home,
     Session,
+    Files,
     File(usize),
 }
 
@@ -22,7 +23,10 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
     if area.width == 0 || area.height == 0 {
         return;
     }
-    frame.render_widget(Block::default().style(theme::surface()), area);
+    frame.render_widget(
+        Block::default().style(theme::base().bg(theme::code_background())),
+        area,
+    );
     let narrow = area.width < NARROW;
     if narrow && active == Active::Session {
         draw_title(frame, app, area);
@@ -35,9 +39,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
     };
 
     let home_style = if active == Active::Home {
-        Style::default()
-            .fg(theme::muted())
-            .bg(theme::surface_raised())
+        Style::default().fg(theme::muted()).bg(theme::background())
     } else {
         Style::default().fg(theme::muted())
     };
@@ -50,7 +52,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
         let style = if is_active {
             Style::default()
                 .fg(theme::text())
-                .bg(theme::surface_raised())
+                .bg(theme::background())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::muted())
@@ -73,6 +75,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
             active == Active::Session,
         );
     }
+    if active == Active::Files {
+        push_tab(icons::folder(false), "Files", true);
+    }
     if let Some(files) = app.files.as_ref() {
         for (index, path) in files.tabs.iter().enumerate() {
             let is_active = active == Active::File(index);
@@ -92,7 +97,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
 
 /// Portrait session header: bold title left, clock right.
 fn draw_title(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let clock = chrono::Local::now().format("%H:%M").to_string();
+    let clock = app
+        .state
+        .saved_sessions
+        .iter()
+        .find(|session| Some(session.id.as_str()) == app.state.current_session_id.as_deref())
+        .filter(|session| chrono::DateTime::parse_from_rfc3339(&session.updated_at).is_ok())
+        .map(|session| session.updated_label().replace(" ago", ""))
+        .unwrap_or_else(|| chrono::Local::now().format("%H:%M").to_string());
     let title = fit(
         conversation_title(app),
         (area.width as usize).saturating_sub(clock.len() + 3),
