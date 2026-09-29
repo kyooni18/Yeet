@@ -13,8 +13,6 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-
-
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     let bounds = frame.area();
     if bounds.width < 16 || bounds.height < 5 {

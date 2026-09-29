@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::{Line, Span, Style},
     style::Modifier,
-    widgets::{Block, Paragraph, Wrap},
+    widgets::{Block, Paragraph},
 };
 
 const ACTIVE: Modifier = Modifier::BOLD;
@@ -20,46 +20,40 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         draw_compact(frame, app, bounds);
         return;
     }
-    let status_height = 1.min(bounds.height);
-    let content_height = bounds.height.saturating_sub(status_height);
-    let content = Rect::new(bounds.x, bounds.y, bounds.width, content_height);
+
+    let scale = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
+    let tab_height = scale(34).max(1);
+    let composer_height = scale(34).max(1);
+    let status_height = scale(24).max(1);
     let rows = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(tab_height),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(composer_height),
+        Constraint::Length(status_height),
     ])
-    .split(content);
+    .split(bounds);
     draw_tabs(frame, rows[0]);
+
     let body = rows[1];
-    // The Desktop / Overview mockup includes a separate Sessions rail.
-    let sessions_width = ((body.width as u32 * 232 / 1440) as u16)
-        .clamp(16, 24)
-        .min(body.width.saturating_sub(30));
+    let rail_width = scale(232).min(body.width / 3);
     let columns =
-        Layout::horizontal([Constraint::Length(sessions_width), Constraint::Min(1)]).split(body);
+        Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
     draw_sessions_rail(frame, columns[0]);
-    let work = columns[1];
-    let panes =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(work);
+
+    let activity_width = scale(540).min(columns[1].width);
+    let pane_gap = scale(54).min(columns[1].width.saturating_sub(activity_width));
+    let panes = Layout::horizontal([
+        Constraint::Length(activity_width),
+        Constraint::Length(pane_gap),
+        Constraint::Min(1),
+    ])
+    .split(columns[1]);
     draw_activity(frame, panes[0]);
-    draw_inspector(frame, panes[1]);
-    let composer = Rect::new(
-        bounds.x.saturating_add(sessions_width),
-        rows[2].y,
-        rows[2].width.saturating_sub(sessions_width),
-        rows[2].height,
-    );
-    draw_composer(frame, app, composer);
-    status::draw(
-        frame,
-        app,
-        Rect::new(
-            bounds.x,
-            bounds.y + content_height,
-            bounds.width,
-            status_height,
-        ),
-    );
+    draw_inspector(frame, panes[2]);
+    draw_usage(frame, panes[0]);
+
+    draw_composer(frame, app, rows[2]);
+    status::draw(frame, app, rows[3]);
 }
 
 fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
@@ -67,35 +61,44 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        ("⌂ Home", true),
-        ("▤ MM305 crosswind tuning", false),
-        ("▱ theme.rs", false),
-        ("▣ Landing", false),
-        ("⚙ guidance_taem.c", false),
-        ("▣ #214", false),
+        ("Home", "⌂ Home", true),
+        ("MM305 crosswind tuning", "▤ MM305 crosswind tuning", false),
+        ("theme.rs", "▱ theme.rs", false),
+        ("Landing", "▣ Landing", false),
+        ("guidance_taem.c", "⚙ guidance_taem.c", false),
+        ("#214", "▣ #214", false),
+        ("+", "+", false),
     ];
-    let mut spans = Vec::new();
-    let mut used = 0usize;
-    for (label, active) in entries {
-        let width = label.chars().count() + 4;
-        if used + width > area.width as usize {
+    let total_width = [160, 248, 160, 96, 160, 72, 48]
+        .into_iter()
+        .map(|px| (area.width as u32 * px / 1440) as u16)
+        .sum::<u16>();
+    let cell_scale = (total_width / area.width.max(1)).max(1);
+    let tab_widths = [160, 248, 160, 96, 160, 72, 48]
+        .map(|px| ((area.width as u32 * px / 1440) as u16 / cell_scale).max(1));
+    let mut x = area.x;
+    for (index, (_name, label, active)) in entries.into_iter().enumerate() {
+        if x >= area.right() {
             break;
         }
+        let width = tab_widths[index].min(area.right() - x);
         let style = if active {
-            Style::default().fg(theme::text()).add_modifier(ACTIVE)
+            Style::default()
+                .fg(theme::text())
+                .bg(theme::surface_color())
+                .add_modifier(ACTIVE)
         } else {
-            Style::default().fg(theme::muted())
+            Style::default()
+                .fg(theme::muted())
+                .bg(theme::code_background())
         };
-        spans.push(Span::styled(format!("{label:<width$}"), style));
-        used += width;
+        let text = super::super::task::fit(label, width.saturating_sub(4) as usize);
+        frame.render_widget(
+            Paragraph::new(text).style(style),
+            Rect::new(x, area.y, width, area.height),
+        );
+        x += width;
     }
-    if used < area.width as usize {
-        spans.push(Span::styled("+", Style::default().fg(theme::muted())));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::code_background())),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(theme::border())),
         Rect::new(area.x, area.y + 1, area.width, 1),
@@ -103,26 +106,42 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(
-        Block::default().style(Style::default().bg(theme::surface_color())),
-        area,
-    );
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let inner = area.width.saturating_sub(2) as usize;
     let entries = [
         ("/", "MM305 crosswind", "18s", true),
         ("?", "TUI shell direction", "3m", false),
-        ("●", "Runtime MCP attach", "", false),
+        ("●", "Runtime MCP attach", "9m", false),
         ("·", "Provider cleanup", "21m", false),
         ("·", "Foundation memory", "43m", false),
     ];
+    let button = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        2.min(area.height),
+    );
+    frame.render_widget(
+        Paragraph::new(" + ").style(
+            Style::default()
+                .fg(theme::text())
+                .bg(theme::selected_color()),
+        ),
+        button,
+    );
+    // Recent sessions are a compact list beneath the new-session control.
+    // Keep rows grouped at the same two-cell rhythm as the 28px mockup rows.
     for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
-        let y = area.y.saturating_add(2 + index as u16);
+        let y = area.y.saturating_add(4 + index as u16 * 2);
         if y >= area.bottom() {
             break;
         }
+
+        let age_width = age.chars().count();
+        let title_width = area.width.saturating_sub(age_width as u16 + 5) as usize;
+        let fitted = super::super::task::fit(title, title_width);
+        let padding = " ".repeat(title_width.saturating_sub(fitted.chars().count()));
         let style = if selected {
             Style::default()
                 .fg(theme::text())
@@ -131,14 +150,12 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         } else {
             Style::default().fg(theme::muted())
         };
-        let age_width = age.chars().count();
-        let title = super::super::task::fit(title, inner.saturating_sub(age_width + 4));
-        let gap = " ".repeat(inner.saturating_sub(title.chars().count() + age_width + 3));
         let line = Line::from(vec![
-            Span::styled(format!("{icon}  "), style),
-            Span::styled(title, style),
-            Span::raw(gap),
-            Span::styled(age, style),
+            Span::styled(format!("{icon} "), style),
+            Span::styled(fitted, style),
+            Span::raw(padding),
+            Span::raw("  "),
+            Span::styled(age, Style::default().fg(theme::muted())),
         ]);
         frame.render_widget(
             Paragraph::new(line).style(style),
@@ -148,9 +165,6 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
     frame.render_widget(Block::default().style(theme::base()), area);
     let usage_height = if area.height >= 6 { 3 } else { 0 };
     let content_height = area.height.saturating_sub(usage_height);
@@ -239,49 +253,37 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
                 .saturating_add(content_height)
                 .saturating_sub(changes_y),
         );
-        frame.render_widget(
-            Paragraph::new(changes).wrap(Wrap { trim: false }),
-            change_area,
-        );
-    }
-    if usage_height > 0 {
-        let y = area.bottom().saturating_sub(usage_height);
-        let provider_lines: Vec<Line<'static>> = vec![
-            Line::from(vec![
-                Span::styled("anthropic", muted),
-                Span::styled(
-                    "     5h  ▰▰▰▱▱▱▱▱  62%",
-                    Style::default().fg(theme::text_dim()),
-                ),
-                Span::styled(
-                    "     week  ▰▰▱▱▱▱▱▱  31%",
-                    Style::default().fg(theme::text_dim()),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("openai", muted),
-                Span::styled(
-                    "        5h  ▰▱▱▱▱▱▱▱  12%",
-                    Style::default().fg(theme::text_dim()),
-                ),
-                Span::styled(
-                    "     week  ▰▱▱▱▱▱▱▱   4%",
-                    Style::default().fg(theme::text_dim()),
-                ),
-            ]),
-        ];
-        frame.render_widget(
-            Paragraph::new(provider_lines),
-            Rect::new(
-                area.x + 5,
-                y,
-                area.width.saturating_sub(10),
-                2.min(usage_height),
-            ),
-        );
+        frame.render_widget(Paragraph::new(changes), change_area);
     }
 }
 
+fn draw_usage(frame: &mut Frame<'_>, area: Rect) {
+    if area.width == 0 || area.height < 3 {
+        return;
+    }
+    let muted = Style::default().fg(theme::muted());
+    let provider_lines: Vec<Line<'static>> = vec![
+        Line::from(vec![
+            Span::styled("anthropic", muted),
+            Span::styled(" 5h ▰▰▰▱▱ 62%", Style::default().fg(theme::text_dim())),
+            Span::styled(" wk ▰▰▱▱ 31%", Style::default().fg(theme::text_dim())),
+        ]),
+        Line::from(vec![
+            Span::styled("openai", muted),
+            Span::styled(" 5h ▰▱▱▱▱ 12%", Style::default().fg(theme::text_dim())),
+            Span::styled(" wk ▰▱▱▱ 4%", Style::default().fg(theme::text_dim())),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(provider_lines),
+        Rect::new(
+            area.x + 5.min(area.width),
+            area.bottom().saturating_sub(3),
+            area.width.saturating_sub(10),
+            2,
+        ),
+    );
+}
 fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -321,7 +323,7 @@ fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
         Line::raw(""),
         Line::from(Span::styled("c   Have Planner re-sweep first", body)),
     ];
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), content);
+    frame.render_widget(Paragraph::new(text), content);
 }
 
 fn draw_compact(frame: &mut Frame<'_>, app: &mut App, bounds: Rect) {
