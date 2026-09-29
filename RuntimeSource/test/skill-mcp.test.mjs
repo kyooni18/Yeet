@@ -188,6 +188,86 @@ test('McpManager retries HTTP MCP with the legacy protocol when the server rejec
   await mcp.close();
 });
 
+test('McpManager initializes session-based Streamable HTTP MCP servers on demand', async (t) => {
+  const seen = [];
+  const sessionId = 'session-openpencil-test';
+  let initialized = false;
+  const server = http.createServer(async (req, res) => {
+    if (req.method === 'DELETE') {
+      seen.push({ method: 'DELETE', session: req.headers['mcp-session-id'] });
+      res.writeHead(200).end();
+      return;
+    }
+
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const rpc = JSON.parse(body);
+    seen.push({
+      method: rpc.method,
+      protocol: req.headers['mcp-protocol-version'],
+      session: req.headers['mcp-session-id'],
+    });
+
+    if (rpc.method === 'initialize') {
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'mcp-session-id': sessionId,
+      });
+      res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        id: rpc.id,
+        result: {
+          protocolVersion: '2025-11-25',
+          capabilities: { tools: { listChanged: true } },
+          serverInfo: { name: 'session-test', version: '1.0.0' },
+        },
+      }));
+      return;
+    }
+
+    if (rpc.method === 'notifications/initialized') {
+      assert.equal(req.headers['mcp-session-id'], sessionId);
+      initialized = true;
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (!initialized || req.headers['mcp-session-id'] !== sessionId) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        id: rpc.id,
+        error: { code: -32002, message: 'Server not initialized' },
+      }));
+      return;
+    }
+
+    const result = rpc.method === 'tools/list'
+      ? { tools: [{ name: 'get_current_page', inputSchema: { type: 'object', properties: {} } }] }
+      : { content: [{ type: 'text', text: 'session-ok' }] };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }));
+  });
+  const address = await listen(server);
+  t.after(() => server.close());
+
+  const configDir = await tempConfig();
+  const mcp = new McpManager({ configDir });
+  await mcp.setServer({ name: 'session', transport: 'http', url: `http://127.0.0.1:${address.port}/mcp` });
+
+  assert.deepEqual((await mcp.listTools('session')).map((tool) => tool.name), ['get_current_page']);
+  const call = await mcp.callTool('session', 'get_current_page');
+  assert.equal(call.content[0].text, 'session-ok');
+
+  const status = (await mcp.listServers())[0];
+  assert.equal(status.era, 'legacy');
+  assert.equal(status.protocol, '2025-11-25');
+  assert.ok(seen.some((entry) => entry.method === 'initialize'));
+  assert.ok(seen.some((entry) => entry.method === 'notifications/initialized'));
+  assert.ok(seen.some((entry) => entry.method === 'tools/list' && entry.session === sessionId));
+  await mcp.close();
+});
+
 test('McpManager falls back to legacy initialize for stdio MCP servers', async () => {
   const configDir = await tempConfig();
   const fixture = fileURLToPath(new URL('./fixtures/legacy-mcp.mjs', import.meta.url));

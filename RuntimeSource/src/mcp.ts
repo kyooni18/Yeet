@@ -553,6 +553,8 @@ class HTTPMcpConnection implements McpConnection {
   #nextId = 1;
   #era: "modern" | "legacy" = "modern";
   #protocol = MCP_PROTOCOL_VERSION;
+  #sessionId: string | undefined;
+  #initializing: Promise<void> | undefined;
 
   constructor(configuration: McpHTTPServerConfiguration, fetchImpl: FetchLike) {
     this.configuration = configuration;
@@ -561,10 +563,28 @@ class HTTPMcpConnection implements McpConnection {
 
   get era(): "modern" | "legacy" { return this.#era; }
   get protocol(): string { return this.#protocol; }
+
   async connect(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw abortReason(signal);
   }
-  async close(): Promise<void> { /* no persistent session */ }
+
+  async close(): Promise<void> {
+    const sessionId = this.#sessionId;
+    this.#sessionId = undefined;
+    if (!sessionId) return;
+    try {
+      await this.#fetch(this.configuration.url, {
+        method: "DELETE",
+        headers: {
+          "MCP-Protocol-Version": this.#protocol,
+          "MCP-Session-Id": sessionId,
+          ...(this.configuration.headers ?? {}),
+        },
+      });
+    } catch {
+      // Best-effort session cleanup.
+    }
+  }
 
   async request(method: string, params: Record<string, unknown> = {}, toolSchema?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     if (signal?.aborted) throw abortReason(signal);
@@ -577,6 +597,7 @@ class HTTPMcpConnection implements McpConnection {
         "MCP-Protocol-Version": protocol,
         "Mcp-Method": method,
         ...(this.configuration.headers ?? {}),
+        ...(this.#sessionId ? { "MCP-Session-Id": this.#sessionId } : {}),
       };
       const name = method === "resources/read" ? asString(params.uri) : asString(params.name);
       if (name && (method === "tools/call" || method === "resources/read" || method === "prompts/get")) {
@@ -612,16 +633,119 @@ class HTTPMcpConnection implements McpConnection {
       return message.result;
     };
 
-    if (this.#era === "legacy") return request(this.#protocol, false);
+    const legacyRequest = async (): Promise<unknown> => {
+      try {
+        return await request(this.#protocol, false);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/server not initialized/i.test(message)) throw error;
+        await this.#initializeLegacySession(signal);
+        id = this.#nextId++;
+        return request(this.#protocol, false);
+      }
+    };
+
+    if (this.#era === "legacy") return legacyRequest();
     try {
       return await request(this.#protocol, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (/server not initialized/i.test(message)) {
+        this.#era = "legacy";
+        this.#protocol = LEGACY_MCP_PROTOCOL_VERSION;
+        await this.#initializeLegacySession(signal);
+        id = this.#nextId++;
+        return request(this.#protocol, false);
+      }
       if (!/unsupported protocol version/i.test(message)) throw error;
       this.#era = "legacy";
       this.#protocol = LEGACY_MCP_PROTOCOL_VERSION;
       id = this.#nextId++;
-      return request(this.#protocol, false);
+      return legacyRequest();
+    }
+  }
+
+  async #initializeLegacySession(signal?: AbortSignal): Promise<void> {
+    if (this.#sessionId) return;
+    if (this.#initializing) {
+      await this.#initializing;
+      return;
+    }
+
+    this.#initializing = (async () => {
+      const id = this.#nextId++;
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": LEGACY_MCP_PROTOCOL_VERSION,
+        "Mcp-Method": "initialize",
+        ...(this.configuration.headers ?? {}),
+      };
+      const response = await this.#fetch(this.configuration.url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "initialize",
+          params: {
+            protocolVersion: LEGACY_MCP_PROTOCOL_VERSION,
+            capabilities: CLIENT_CAPABILITIES,
+            clientInfo: CLIENT_INFO,
+          },
+        }),
+        ...(signal ? { signal } : {}),
+      });
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!response.ok && !contentType.includes("application/json")) {
+        throw new McpError(`MCP HTTP ${response.status}: ${await response.text()}`, { server: this.configuration.name });
+      }
+
+      let message: JsonRpcResponse | undefined;
+      if (contentType.includes("text/event-stream")) {
+        for await (const event of parseSSE(response)) {
+          if (!event.data) continue;
+          const candidate = JSON.parse(event.data) as JsonRpcResponse;
+          if (candidate.id === id) message = candidate;
+        }
+      } else {
+        message = await response.json() as JsonRpcResponse;
+      }
+      if (!message) throw new McpError("MCP HTTP initialize did not include a JSON-RPC response", { server: this.configuration.name });
+      if (message.error) throw jsonRpcError(message.error, this.configuration.name);
+
+      const result = asObject(message.result);
+      this.#protocol = asString(result.protocolVersion) ?? LEGACY_MCP_PROTOCOL_VERSION;
+      this.#era = "legacy";
+      this.#sessionId = response.headers.get("mcp-session-id") ?? undefined;
+
+      const initializedHeaders: Record<string, string> = {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": this.#protocol,
+        "Mcp-Method": "notifications/initialized",
+        ...(this.configuration.headers ?? {}),
+        ...(this.#sessionId ? { "MCP-Session-Id": this.#sessionId } : {}),
+      };
+      const initialized = await this.#fetch(this.configuration.url, {
+        method: "POST",
+        headers: initializedHeaders,
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+          params: {},
+        }),
+        ...(signal ? { signal } : {}),
+      });
+      if (!initialized.ok) {
+        throw new McpError(`MCP HTTP ${initialized.status}: ${await initialized.text()}`, { server: this.configuration.name });
+      }
+    })();
+
+    try {
+      await this.#initializing;
+    } finally {
+      this.#initializing = undefined;
     }
   }
 }

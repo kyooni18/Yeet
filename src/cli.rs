@@ -82,6 +82,12 @@ pub const HELP: &str = r#"Usage:
   yeet mcpserver status [--port PORT]
   yeet mcpserver stop [--port PORT]
   yeet mcpserver restart [--port PORT] [...]
+  yeet mcpserver attach [--port PORT] stdio NAME COMMAND [ARGS...]
+  yeet mcpserver attach [--port PORT] http NAME URL [--header Name=Value]...
+  yeet mcpserver detach [--port PORT] NAME
+  yeet mcpserver attachments [--port PORT]
+  yeet mcpserver import [--port PORT] FILE
+  yeet mcpserver external [--port PORT]
   yeet mcpserver auth [status|mode|key] ...
   yeet mcpserver stdio [WORKSPACE|--workspace PATH] [--restrict-workspace]
   yeet memory status

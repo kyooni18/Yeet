@@ -15,11 +15,12 @@ use std::sync::mpsc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
     config::ConfigStore,
-    core::{BridgeEvent, ToolCall, ToolDefinition},
+    core::{BridgeEvent, McpServerConfiguration, ToolCall, ToolDefinition},
     permission::PermissionBroker,
     project_settings::ProjectSettingsStore,
     session_store::SessionStore,
@@ -27,6 +28,7 @@ use crate::{
     workers::WorkerRegistry,
 };
 
+mod attachments;
 mod auth;
 mod daemon;
 mod http;
@@ -48,7 +50,7 @@ fn supported_protocol_versions() -> Vec<&'static str> {
         .chain(LEGACY_PROTOCOL_VERSIONS.iter().copied())
         .collect()
 }
-const TOOL_LIST_TTL_MS: u64 = 300_000;
+const TOOL_LIST_TTL_MS: u64 = 1_000;
 const MAX_MCP_JSON_NESTING: usize = 64;
 #[cfg(unix)]
 const STDIO_ORPHAN_STARTUP_GRACE: Duration = Duration::from_secs(3);
@@ -470,11 +472,22 @@ impl WorkspaceRuntime {
     }
 }
 
+#[derive(Debug, Clone)]
+struct AttachedToolTarget {
+    server: String,
+    tool: String,
+}
+
 pub(super) struct McpServer {
     default_workspace: PathBuf,
     restrict_workspace: bool,
     bridge: BridgeHandle,
     workspaces: HashMap<PathBuf, WorkspaceRuntime>,
+    attachments: Arc<attachments::AttachmentRegistry>,
+    attachment_generation: Option<u64>,
+    attached_servers: HashMap<String, McpServerConfiguration>,
+    attached_tools: HashMap<String, AttachedToolTarget>,
+    attached_definitions: Vec<Value>,
 }
 
 impl McpServer {
@@ -487,11 +500,24 @@ impl McpServer {
         default_workspace: PathBuf,
         restrict_workspace: bool,
     ) -> Self {
+        Self::new_with_attachments(default_workspace, restrict_workspace, attachments::global())
+    }
+
+    fn new_with_attachments(
+        default_workspace: PathBuf,
+        restrict_workspace: bool,
+        attachments: Arc<attachments::AttachmentRegistry>,
+    ) -> Self {
         Self {
             default_workspace,
             restrict_workspace,
             bridge: BridgeHandle::lazy(),
             workspaces: HashMap::new(),
+            attachments,
+            attachment_generation: None,
+            attached_servers: HashMap::new(),
+            attached_tools: HashMap::new(),
+            attached_definitions: Vec::new(),
         }
     }
 
@@ -549,7 +575,7 @@ impl McpServer {
             "server/discover" => Ok(discover_result()),
             "initialize" => Ok(initialize_result(object.get("params"))),
             "ping" if !modern => Ok(json!({})),
-            "tools/list" => Ok(tools_list_result(modern)),
+            "tools/list" => self.tools_list_result(modern),
             "tools/call" => self.call_tool(object.get("params"), modern),
             _ => {
                 return Some(jsonrpc_error(
@@ -573,21 +599,43 @@ impl McpServer {
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("tools/call requires a tool name"))?;
-        if !direct_mcp_tool_definitions()
+        let is_direct = direct_mcp_tool_definitions()
             .iter()
-            .any(|tool| tool.name == name)
-        {
-            return Ok(tool_error(
-                format!("unknown Yeet tool: {name}"),
-                None,
-                modern,
-            ));
-        }
+            .any(|tool| tool.name == name);
         let mut arguments = match params.get("arguments") {
             None | Some(Value::Null) => Map::new(),
             Some(Value::Object(value)) => value.clone(),
             Some(_) => return Ok(tool_error("tool arguments must be an object", None, modern)),
         };
+        if !is_direct {
+            self.sync_attached_tools()?;
+            let Some(target) = self.attached_tools.get(name).cloned() else {
+                return Ok(tool_error(
+                    format!("unknown Yeet or attached MCP tool: {name}"),
+                    None,
+                    modern,
+                ));
+            };
+            let result = self.bridge.client().and_then(|bridge| {
+                bridge.call_external_mcp_tool(&target.server, &target.tool, &arguments)
+            });
+            return Ok(match result {
+                Ok(mut result) => {
+                    if modern {
+                        modernize_result(&mut result);
+                    }
+                    result
+                }
+                Err(error) => tool_error(
+                    format!(
+                        "attached MCP tool {}/{} failed: {error}",
+                        target.server, target.tool
+                    ),
+                    None,
+                    modern,
+                ),
+            });
+        }
         let workspace = match self.workspace_from_arguments(&mut arguments) {
             Ok(workspace) => workspace,
             Err(error) => return Ok(tool_error(error.to_string(), None, modern)),
@@ -678,6 +726,96 @@ impl McpServer {
         })
     }
 
+    fn sync_attached_tools(&mut self) -> Result<()> {
+        let snapshot = self.attachments.snapshot()?;
+        if self.attachment_generation == Some(snapshot.generation) {
+            return Ok(());
+        }
+
+        let current = snapshot
+            .servers
+            .iter()
+            .map(|server| (server.name.clone(), server.clone()))
+            .collect::<HashMap<_, _>>();
+        let needs_bridge = !current.is_empty() || !self.attached_servers.is_empty();
+        let bridge = needs_bridge.then(|| self.bridge.client()).transpose()?;
+
+        if let Some(bridge) = bridge.as_ref() {
+            for (name, previous) in &self.attached_servers {
+                if current.get(name) != Some(previous) {
+                    let _ = bridge.remove_external_mcp_server(name);
+                }
+            }
+        }
+
+        let mut definitions = Vec::new();
+        let mut targets = HashMap::new();
+        let mut complete = true;
+
+        for server in &snapshot.servers {
+            let Some(bridge) = bridge.as_ref() else {
+                continue;
+            };
+            if self.attached_servers.get(&server.name) != Some(server) {
+                bridge.set_external_mcp_server(server)?;
+            }
+
+            let mut tools = match bridge.list_external_mcp_tools(&server.name) {
+                Ok(tools) => tools,
+                Err(error) => {
+                    complete = false;
+                    eprintln!(
+                        "yeet mcpserver: attached MCP {} is unavailable: {error}",
+                        server.name
+                    );
+                    continue;
+                }
+            };
+            tools.sort_by(|left, right| left.name.cmp(&right.name));
+            for tool in tools {
+                let proxy_name = attached_proxy_tool_name(&server.name, &tool.name);
+                targets.insert(
+                    proxy_name.clone(),
+                    AttachedToolTarget {
+                        server: server.name.clone(),
+                        tool: tool.name.clone(),
+                    },
+                );
+                definitions.push(export_attached_tool_definition(
+                    &proxy_name,
+                    &server.name,
+                    tool,
+                ));
+            }
+        }
+
+        definitions.sort_by(|left, right| {
+            left.get("name")
+                .and_then(Value::as_str)
+                .cmp(&right.get("name").and_then(Value::as_str))
+        });
+        self.attached_servers = current;
+        self.attached_tools = targets;
+        self.attached_definitions = definitions;
+        self.attachment_generation = complete.then_some(snapshot.generation);
+        Ok(())
+    }
+
+    fn tools_list_result(&mut self, modern: bool) -> Result<Value> {
+        self.sync_attached_tools()?;
+        let mut tools = tool_definitions();
+        tools.extend(self.attached_definitions.clone());
+        let mut result = json!({"tools": tools});
+        if modern {
+            modernize_result(&mut result);
+            if let Some(object) = result.as_object_mut() {
+                object.insert("ttlMs".into(), json!(TOOL_LIST_TTL_MS));
+                object.insert("cacheScope".into(), json!("session"));
+            }
+        }
+        Ok(result)
+    }
+
     fn workspace_from_arguments(&self, arguments: &mut Map<String, Value>) -> Result<PathBuf> {
         let value = arguments.remove("workspace");
         let workspace = match value {
@@ -743,11 +881,11 @@ fn discover_result() -> Value {
     json!({
         "resultType": "complete",
         "supportedVersions": [MODERN_PROTOCOL_VERSION],
-        "capabilities": {"tools": {}},
+        "capabilities": {"tools": {"listChanged": true}},
         "_meta": server_meta(),
-        "instructions": "Yeet exposes a small native work surface directly over MCP. No Yeet agent turn is started and the server does not rewrite the client's conversation context. Every tool accepts workspace to select the project directory for that call; omitting it uses the server default workspace. Artifact, memory, session-management, sandbox-management, capability-management, and compatibility-alias tools are intentionally not exported. MCP runtimes do not create Yeet artifacts.",
+        "instructions": "Yeet exposes its native work surface plus tools from MCP servers attached to the live daemon. Attached MCP tools are namespaced and proxied through the same Yeet MCP endpoint, so they do not need their own public tunnel. Every native Yeet tool accepts workspace to select the project directory for that call; attached tools retain their original schema.",
         "ttlMs": TOOL_LIST_TTL_MS,
-        "cacheScope": "public"
+        "cacheScope": "session"
     })
 }
 
@@ -760,22 +898,10 @@ fn initialize_result(params: Option<&Value>) -> Value {
         .unwrap_or(LEGACY_PROTOCOL_VERSIONS[0]);
     json!({
         "protocolVersion": protocol,
-        "capabilities": {"tools": {}},
+        "capabilities": {"tools": {"listChanged": true}},
         "serverInfo": {"name":"yeet","version":env!("CARGO_PKG_VERSION")},
-        "instructions": "Yeet exposes exactly five core MCP tools: read_file, apply_file_edits, run_shell, computer_use, and web. Pass workspace on a tool call to select its project directory. run_shell also manages detached jobs; web handles both search and source reads. Artifact storage and Yeet administrative/state-management tools are not part of the MCP surface."
+        "instructions": "Yeet exposes five native tools and may additionally expose tools from MCP servers attached to the running daemon. Attached servers are proxied through this same MCP endpoint and can be added or removed without restarting Yeet."
     })
-}
-
-fn tools_list_result(modern: bool) -> Value {
-    let mut result = json!({"tools": tool_definitions()});
-    if modern {
-        modernize_result(&mut result);
-        if let Some(object) = result.as_object_mut() {
-            object.insert("ttlMs".into(), json!(TOOL_LIST_TTL_MS));
-            object.insert("cacheScope".into(), json!("public"));
-        }
-    }
-    result
 }
 
 fn request_protocol(params: Option<&Value>) -> Option<&str> {
@@ -798,8 +924,17 @@ fn server_meta() -> Value {
 
 fn modernize_result(result: &mut Value) {
     if let Some(object) = result.as_object_mut() {
-        object.insert("resultType".into(), json!("complete"));
-        object.insert("_meta".into(), server_meta());
+        object
+            .entry("resultType")
+            .or_insert_with(|| json!("complete"));
+        let meta = object.entry("_meta").or_insert_with(|| json!({}));
+        if let Some(meta) = meta.as_object_mut()
+            && let Some(server) = server_meta().as_object()
+        {
+            for (key, value) in server {
+                meta.insert(key.clone(), value.clone());
+            }
+        }
     }
 }
 
@@ -808,6 +943,66 @@ fn tool_definitions() -> Vec<Value> {
         .into_iter()
         .map(export_tool_definition)
         .collect()
+}
+
+fn attached_proxy_tool_name(server: &str, tool: &str) -> String {
+    fn part(value: &str, limit: usize) -> String {
+        let mut output = value
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        while output.contains("__") {
+            output = output.replace("__", "_");
+        }
+        output = output.trim_matches('_').chars().take(limit).collect();
+        if output.is_empty() {
+            "tool".into()
+        } else {
+            output
+        }
+    }
+
+    let identity = format!("{server}/{tool}");
+    let digest = Sha256::digest(identity.as_bytes());
+    let suffix = digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("mcp_{}_{}_{}", part(server, 16), part(tool, 28), suffix)
+}
+
+fn export_attached_tool_definition(
+    proxy_name: &str,
+    server: &str,
+    tool: crate::core::McpTool,
+) -> Value {
+    let description = match tool.description.as_deref() {
+        Some(description) if !description.trim().is_empty() => {
+            format!("[Attached MCP: {server}] {description}")
+        }
+        _ => format!("Tool {} from attached MCP server {server}.", tool.name),
+    };
+    let mut exported = json!({
+        "name": proxy_name,
+        "description": description,
+        "inputSchema": Value::Object(tool.input_schema),
+        "annotations": Value::Object(tool.annotations.unwrap_or_default()),
+    });
+    if let Some(object) = exported.as_object_mut() {
+        if let Some(title) = tool.title {
+            object.insert("title".into(), json!(title));
+        }
+        if let Some(output_schema) = tool.output_schema {
+            object.insert("outputSchema".into(), Value::Object(output_schema));
+        }
+    }
+    exported
 }
 
 fn workspace_property() -> Value {

@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+mod mcp_runtime;
 mod runtime;
 use runtime::bridge_script;
 pub use runtime::{edit_daemon_script, node_executable, runtime_directory};
@@ -678,7 +679,7 @@ pub struct McpPrompt {
     pub arguments: Option<Vec<Value>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfiguration {
     pub name: String,

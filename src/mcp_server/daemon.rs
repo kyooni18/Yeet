@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::{self, OpenOptions},
     io::{self, IsTerminal, Read, Write},
     net::Shutdown,
@@ -20,6 +21,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use super::{
+    attachments,
     auth::{AuthMode, AuthStore},
     current_workspace,
     http::{HttpOptions, HttpServer, ensure_bind_available},
@@ -27,6 +29,7 @@ use super::{
 };
 use crate::{
     config::ConfigStore,
+    core::McpServerConfiguration,
     platform::{
         bind_local, connect_local, set_private_directory, set_private_file, spawn_detached,
         systemd_managed_process, tracked_children_snapshot,
@@ -49,6 +52,12 @@ Usage:
   yeet mcpserver stop [--port PORT]
   yeet mcpserver list
   yeet mcpserver config [--port PORT]
+  yeet mcpserver attach [--port PORT] stdio NAME COMMAND [ARGS...]
+  yeet mcpserver attach [--port PORT] http NAME URL [--header Name=Value]...
+  yeet mcpserver detach [--port PORT] NAME
+  yeet mcpserver attachments [--port PORT]
+  yeet mcpserver import [--port PORT] FILE
+  yeet mcpserver external [--port PORT]
   yeet mcpserver auth status [--port PORT]
   yeet mcpserver auth mode key|oauth|none [--port PORT]
   yeet mcpserver auth key generate|set|clear [--port PORT]
@@ -142,6 +151,7 @@ struct DaemonPaths {
     supervisor_lock: PathBuf,
     log: PathBuf,
     config: PathBuf,
+    external: PathBuf,
 }
 
 impl DaemonPaths {
@@ -156,6 +166,7 @@ impl DaemonPaths {
             supervisor_lock: directory.join(format!("supervisor-{port}.lock")),
             log: directory.join(format!("daemon-{port}.log")),
             config: directory.join(format!("daemon-{port}.json")),
+            external: directory.join(format!("external-{port}.json")),
         })
     }
 }
@@ -182,6 +193,11 @@ pub(super) fn run_cli(args: &[String]) -> Result<String> {
         "stop" => stop_command(&args[1..]),
         "list" => list_command(&args[1..]),
         "config" => config_command(&args[1..]),
+        "attach" => attach_command(&args[1..]),
+        "detach" => detach_command(&args[1..]),
+        "attachments" => attachments_command(&args[1..]),
+        "import" => import_command(&args[1..]),
+        "external" => attachments_command(&args[1..]),
         "auth" => auth_command(&args[1..]),
         // Compatibility for older launchers: both internal entry points now run
         // the daemon directly. There is no separate Yeet supervisor process.
@@ -338,6 +354,164 @@ fn stop_command(args: &[String]) -> Result<String> {
     } else {
         Ok(format!("Yeet MCP daemon is not running on port {port}"))
     }
+}
+
+fn attach_command(args: &[String]) -> Result<String> {
+    let (port, args) = split_leading_port(args)?;
+    let transport = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| anyhow!(
+            "Usage: yeet mcpserver attach [--port PORT] stdio NAME COMMAND [ARGS...]\n       yeet mcpserver attach [--port PORT] http NAME URL [--header Name=Value]..."
+        ))?;
+
+    let server = match transport {
+        "stdio" => {
+            if args.len() < 3 {
+                bail!("Usage: yeet mcpserver attach [--port PORT] stdio NAME COMMAND [ARGS...]");
+            }
+            McpServerConfiguration {
+                name: args[1].clone(),
+                transport: "stdio".into(),
+                command: Some(args[2].clone()),
+                args: Some(args[3..].to_vec()),
+                env: None,
+                cwd: None,
+                url: None,
+                headers: None,
+            }
+        }
+        "http" => {
+            if args.len() < 3 {
+                bail!(
+                    "Usage: yeet mcpserver attach [--port PORT] http NAME URL [--header Name=Value]..."
+                );
+            }
+            let mut headers = HashMap::new();
+            let mut index = 3;
+            while index < args.len() {
+                if args[index] != "--header" || index + 1 >= args.len() {
+                    bail!(
+                        "Usage: yeet mcpserver attach [--port PORT] http NAME URL [--header Name=Value]..."
+                    );
+                }
+                let (name, value) = args[index + 1]
+                    .split_once('=')
+                    .ok_or_else(|| anyhow!("MCP header must use Name=Value"))?;
+                let name = name.trim();
+                if name.is_empty() {
+                    bail!("MCP header name cannot be empty");
+                }
+                headers.insert(name.to_owned(), value.to_owned());
+                index += 2;
+            }
+            McpServerConfiguration {
+                name: args[1].clone(),
+                transport: "http".into(),
+                command: None,
+                args: None,
+                env: None,
+                cwd: None,
+                url: Some(args[2].clone()),
+                headers: (!headers.is_empty()).then_some(headers),
+            }
+        }
+        _ => bail!("MCP attachment transport must be stdio or http"),
+    };
+
+    let request = format!("attach {}", serde_json::to_string(&server)?);
+    control_response(port, &request)
+}
+
+fn detach_command(args: &[String]) -> Result<String> {
+    let (port, args) = split_leading_port(args)?;
+    if args.len() != 1 {
+        bail!("Usage: yeet mcpserver detach [--port PORT] NAME");
+    }
+    control_response(port, &format!("detach {}", args[0]))
+}
+
+fn attachments_command(args: &[String]) -> Result<String> {
+    let port = parse_port_only(args)?;
+    if let Some(response) = control_request(port, "attachments")? {
+        if let Some(error) = response.strip_prefix("error: ") {
+            bail!("{error}");
+        }
+        return Ok(response);
+    }
+    let registry = attachments::AttachmentRegistry::open(DaemonPaths::new(port)?.external)?;
+    format_external_snapshot(port, registry.snapshot()?)
+}
+
+fn import_command(args: &[String]) -> Result<String> {
+    let (port, args) = split_leading_port(args)?;
+    if args.len() != 1 {
+        bail!("Usage: yeet mcpserver import [--port PORT] FILE");
+    }
+    let source = PathBuf::from(&args[0]);
+    let servers = attachments::import_standard_config(&source)?;
+    if servers.is_empty() {
+        bail!("MCP config {} contains no mcpServers", source.display());
+    }
+
+    if daemon_status(port)?.is_some() {
+        let payload = serde_json::to_string(&servers)?;
+        return control_response(port, &format!("import {payload}"));
+    }
+
+    let registry = attachments::AttachmentRegistry::open(DaemonPaths::new(port)?.external)?;
+    let imported = servers.len();
+    let update = registry.attach_many(servers)?;
+    Ok(format!(
+        "Imported {imported} external MCP server(s) for Yeet daemon port {port}; {} changed, {} configured",
+        update.changed, update.total
+    ))
+}
+
+fn format_external_snapshot(
+    port: u16,
+    snapshot: attachments::AttachmentSnapshot,
+) -> Result<String> {
+    let servers = snapshot
+        .servers
+        .into_iter()
+        .map(|server| {
+            json!({
+                "name": server.name,
+                "transport": server.transport,
+                "command": server.command,
+                "args": server.args,
+                "cwd": server.cwd,
+                "url": server.url,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::to_string_pretty(&json!({
+        "port": port,
+        "generation": snapshot.generation,
+        "servers": servers,
+    }))?)
+}
+
+fn split_leading_port(args: &[String]) -> Result<(u16, &[String])> {
+    if args.first().is_some_and(|value| value == "--port") {
+        if args.len() < 2 {
+            bail!("--port requires a value");
+        }
+        Ok((parse_port_value(args.get(1))?, &args[2..]))
+    } else {
+        Ok((DEFAULT_PORT, args))
+    }
+}
+
+fn control_response(port: u16, command: &str) -> Result<String> {
+    let Some(response) = control_request(port, command)? else {
+        bail!("Yeet MCP daemon is not running on port {port}");
+    };
+    if let Some(error) = response.strip_prefix("error: ") {
+        bail!("{error}");
+    }
+    Ok(response)
 }
 
 fn list_command(args: &[String]) -> Result<String> {
@@ -570,6 +744,7 @@ fn run_daemon(port: u16) -> Result<()> {
     let config = load_daemon_config(port)?
         .ok_or_else(|| anyhow!("MCP daemon config for port {port} does not exist"))?;
     validate_security(&config)?;
+    attachments::initialize(paths.external.clone())?;
     let auth_store = AuthStore::new(port)?;
     let server = HttpServer::bind(
         HttpOptions {
@@ -918,30 +1093,113 @@ impl DaemonControl {
                             let _ = stream.set_read_timeout(Some(CONTROL_TIMEOUT));
                             let mut request = String::new();
                             let _ = stream.read_to_string(&mut request);
-                            match request.trim() {
-                                "status" => {
-                                    let mut current = status.clone();
-                                    if let Ok(auth) =
-                                        AuthStore::new(port).and_then(|store| store.status())
-                                    {
-                                        current.auth_mode = auth.mode.as_str().into();
-                                        current.key_enabled = auth.key_enabled;
-                                        current.oauth_enabled = auth.oauth_enabled;
+                            let request = request.trim();
+                            if let Some(payload) = request.strip_prefix("attach ") {
+                                let response = serde_json::from_str::<McpServerConfiguration>(payload)
+                                    .map_err(anyhow::Error::from)
+                                    .and_then(|server| {
+                                        let name = server.name.clone();
+                                        attachments::global()
+                                            .attach(server)
+                                            .map(|changed| {
+                                                if changed {
+                                                    format!("Attached MCP server {name} to Yeet daemon on port {port}")
+                                                } else {
+                                                    format!("MCP server {name} is already attached on port {port}")
+                                                }
+                                            })
+                                    });
+                                match response {
+                                    Ok(response) => {
+                                        let _ = writeln!(stream, "{response}");
                                     }
-                                    current.owned_children = tracked_children_snapshot()
-                                        .into_iter()
-                                        .map(|child| format!("{}:{}", child.role, child.pid))
-                                        .collect();
-                                    let status_json = serde_json::to_string(&current)
-                                        .unwrap_or_else(|_| "{}".into());
-                                    let _ = writeln!(stream, "{status_json}");
+                                    Err(error) => {
+                                        let _ = writeln!(stream, "error: {error}");
+                                    }
                                 }
-                                "stop" => {
-                                    thread_stop.store(true, Ordering::Release);
-                                    let _ = writeln!(stream, "stopping");
+                            } else if let Some(payload) = request.strip_prefix("import ") {
+                                let response = serde_json::from_str::<Vec<McpServerConfiguration>>(payload)
+                                    .map_err(anyhow::Error::from)
+                                    .and_then(|servers| {
+                                        let imported = servers.len();
+                                        attachments::global()
+                                            .attach_many(servers)
+                                            .map(|update| {
+                                                format!(
+                                                    "Imported {imported} external MCP server(s) for Yeet daemon port {port}; {} changed, {} configured",
+                                                    update.changed, update.total
+                                                )
+                                            })
+                                    });
+                                match response {
+                                    Ok(response) => {
+                                        let _ = writeln!(stream, "{response}");
+                                    }
+                                    Err(error) => {
+                                        let _ = writeln!(stream, "error: {error}");
+                                    }
                                 }
-                                _ => {
-                                    let _ = writeln!(stream, "error: unknown command");
+                            } else if let Some(name) = request.strip_prefix("detach ") {
+                                let name = name.trim();
+                                if name.is_empty() {
+                                    let _ = writeln!(stream, "error: detach requires a server name");
+                                } else {
+                                    match attachments::global().detach(name) {
+                                        Ok(true) => {
+                                            let _ = writeln!(
+                                                stream,
+                                                "Detached MCP server {name} from Yeet daemon on port {port}"
+                                            );
+                                        }
+                                        Ok(false) => {
+                                            let _ = writeln!(
+                                                stream,
+                                                "MCP server {name} is not attached on port {port}"
+                                            );
+                                        }
+                                        Err(error) => {
+                                            let _ = writeln!(stream, "error: {error}");
+                                        }
+                                    }
+                                }
+                            } else if request == "attachments" {
+                                let response = attachments::global()
+                                    .snapshot()
+                                    .and_then(|snapshot| format_external_snapshot(port, snapshot));
+                                match response {
+                                    Ok(response) => {
+                                        let _ = writeln!(stream, "{response}");
+                                    }
+                                    Err(error) => {
+                                        let _ = writeln!(stream, "error: {error}");
+                                    }
+                                }
+                            } else {
+                                match request {
+                                    "status" => {
+                                        let mut current = status.clone();
+                                        if let Ok(auth) =
+                                            AuthStore::new(port).and_then(|store| store.status())
+                                        {
+                                            current.auth_mode = auth.mode.as_str().into();
+                                            current.key_enabled = auth.key_enabled;
+                                            current.oauth_enabled = auth.oauth_enabled;
+                                        }
+                                        current.owned_children = tracked_children_snapshot()
+                                            .into_iter()
+                                            .map(|child| format!("{}:{}", child.role, child.pid))
+                                            .collect();
+                                        let status_json = serde_json::to_string(&current)
+                                            .unwrap_or_else(|_| "{}".into());
+                                        let _ = writeln!(stream, "{status_json}");
+                                    }
+                                    "stop" => {
+                                        thread_stop.store(true, Ordering::Release);
+                                        let _ = writeln!(stream, "stopping");
+                                    }
+                                    _ => {
+                                        let _ = writeln!(stream, "error: unknown command");
+                                    }
                                 }
                             }
                         }

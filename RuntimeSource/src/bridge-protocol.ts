@@ -70,6 +70,11 @@ export type BridgeCommand =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-list-servers" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-set-server"; server: McpServerConfiguration }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-set-runtime-server"; server: McpServerConfiguration }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-remove-runtime-server"; server: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "external-mcp-set-runtime-server"; server: McpServerConfiguration }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "external-mcp-remove-runtime-server"; server: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "external-mcp-list-tools"; server: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "external-mcp-call-tool"; server: string; tool: string; arguments?: Record<string, unknown> }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-remove-server"; server: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-list-tools"; server?: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-call-tool"; server: string; tool: string; arguments?: Record<string, unknown> }

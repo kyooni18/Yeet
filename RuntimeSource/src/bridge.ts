@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createInterface } from "node:readline";
+import { join } from "node:path";
 import process from "node:process";
 import { AuthManager, type ResolvedCredential } from "./auth.js";
 import { createDefaultCore } from "./defaults.js";
@@ -59,6 +60,8 @@ function denyPendingNativeApprovals(): void {
 }
 const mcp = new McpManager({ configDir: auth.configDir, nativeAppApproval: requestNativeAppApproval });
 await mcp.ensure();
+const externalMcp = new McpManager({ configDir: join(auth.configDir, "mcpserver", "external-runtime"), nativeAppApproval: requestNativeAppApproval });
+await externalMcp.ensure();
 const computerUse = new CodexComputerUse(mcp);
 const modelMetadata = new ModelMetadataCatalog();
 function writeApiCallLog(entry: ProviderFetchLog): void {
@@ -431,6 +434,19 @@ async function runMcpCallTool(command: Extract<BridgeCommand, { op: "mcp-call-to
   }
 }
 
+async function runExternalMcpCallTool(command: Extract<BridgeCommand, { op: "external-mcp-call-tool" }>): Promise<void> {
+  const controller = new AbortController();
+  active.set(command.id, controller);
+  try {
+    const toolResult = await externalMcp.callTool(command.server, command.tool, command.arguments ?? {}, controller.signal);
+    write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-tool-result", toolResult });
+  } catch (error) {
+    write(errorMessage(command.id, error));
+  } finally {
+    active.delete(command.id);
+  }
+}
+
 async function runComputerUseCall(command: Extract<BridgeCommand, { op: "computer-use-call" }>): Promise<void> {
   const controller = new AbortController();
   active.set(command.id, controller);
@@ -659,6 +675,21 @@ async function handle(command: BridgeCommand): Promise<void> {
     case "mcp-set-runtime-server":
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-server", server: await mcp.setRuntimeServer(command.server) });
       return;
+    case "mcp-remove-runtime-server":
+      write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-removed", removed: await mcp.removeRuntimeServer(command.server) });
+      return;
+    case "external-mcp-set-runtime-server":
+      write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-server", server: await externalMcp.setRuntimeServer(command.server) });
+      return;
+    case "external-mcp-remove-runtime-server":
+      write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-removed", removed: await externalMcp.removeRuntimeServer(command.server) });
+      return;
+    case "external-mcp-list-tools":
+      write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-tools", tools: await externalMcp.listTools(command.server) });
+      return;
+    case "external-mcp-call-tool":
+      void runExternalMcpCallTool(command);
+      return;
     case "mcp-remove-server":
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-removed", removed: await mcp.removeServer(command.server) });
       return;
@@ -700,6 +731,7 @@ async function handle(command: BridgeCommand): Promise<void> {
       active.clear();
       denyPendingNativeApprovals();
       await mcp.close();
+      await externalMcp.close();
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "done" });
       setTimeout(() => process.exit(0), 0);
       return;
