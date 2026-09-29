@@ -10,11 +10,11 @@ use ratatui::{
 
 pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     let bounds = frame.area();
-    if bounds.width < 12 || bounds.height < 6 {
+    if bounds.width < 16 || bounds.height < 5 {
         return;
     }
-    let width = bounds.width.min(52);
-    let height = bounds.height.min(8);
+    let width = bounds.width.min(42);
+    let height = bounds.height.min(6);
     let area = Rect::new(
         bounds.x + (bounds.width - width) / 2,
         bounds.y + (bounds.height - height) / 2,
@@ -22,15 +22,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         height,
     );
     theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Views · Enter new tab · Space current tab · Esc close ");
+    let block = theme::modal_block("Views");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    for (index, (name, description)) in
-        [("Sessions", "Conversation"), ("Files", "Workspace browser")]
-            .into_iter()
-            .enumerate()
-    {
+    for (index, name) in ["Sessions", "Files"].into_iter().enumerate() {
         if index as u16 >= inner.height {
             break;
         }
@@ -45,17 +41,16 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         };
         let line = Line::from(vec![
             Span::styled(if selected { " › " } else { "   " }, style),
-            Span::styled(format!("{name:<12}"), style),
-            Span::styled(description, style),
+            Span::styled(name, style),
         ]);
         frame.render_widget(
             Paragraph::new(line).style(style),
             Rect::new(inner.x, inner.y + index as u16, inner.width, 1),
         );
     }
-    if inner.height > 3 {
+    if inner.height >= 3 {
         frame.render_widget(
-            Paragraph::new("  ↑/k  ↓/j  ←/h back  →/l open")
+            Paragraph::new(" ↑↓/jk select  Enter/Space open  Esc")
                 .style(Style::default().fg(theme::muted())),
             Rect::new(inner.x, inner.bottom() - 1, inner.width, 1),
         );
