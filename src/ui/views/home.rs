@@ -29,17 +29,16 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     .split(content);
     draw_tabs(frame, rows[0]);
     let body = rows[1];
-    let rail_width = RAIL_WIDTH.min(body.width.saturating_sub(30));
+    // The reference workbench has a 232px context rail in a 1440px viewport.
+    // Scale that proportion down for terminal cells while retaining useful main space.
+    let rail_width = ((body.width as u32 * 232 / 1440) as u16)
+        .clamp(14, RAIL_WIDTH)
+        .min(body.width.saturating_sub(30));
     let work = Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
     draw_recent(frame, work[0]);
-    let main_and_inspector =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(work[1]);
-    draw_activity(frame, main_and_inspector[0]);
-    if body.width >= 110 {
-        draw_inspector(frame, main_and_inspector[1]);
-    } else {
-        frame.render_widget(Block::default().style(theme::base()), main_and_inspector[1]);
-    }
+    // The reference Overview is one surface: activity/change list above, provider
+    // usage anchored at the bottom. It does not have a second detail inspector.
+    draw_activity(frame, work[1]);
     let composer = Rect::new(
         bounds.x.saturating_add(rail_width),
         rows[2].y,
@@ -64,16 +63,17 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        ("⌂ Home", true, 16usize),
-        ("▤ MM305 crosswind tuning", false, 25),
-        ("▱ theme.rs", false, 17),
-        ("▣ Landing", false, 17),
-        ("⚙ guidance_taem.c", false, 21),
-        ("▣ #214", false, 12),
+        ("⌂ Home", true),
+        ("▤ MM305 crosswind tuning", false),
+        ("▱ theme.rs", false),
+        ("▣ Landing", false),
+        ("⚙ guidance_taem.c", false),
+        ("▣ #214", false),
     ];
     let mut spans = Vec::new();
     let mut used = 0usize;
-    for (label, active, width) in entries {
+    for (label, active) in entries {
+        let width = label.chars().count() + 4;
         if used + width > area.width as usize {
             break;
         }
@@ -106,12 +106,16 @@ fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let add_area = Rect::new(area.x, area.y, area.width, 2.min(area.height));
+    let add_height = 2.min(area.height);
     frame.render_widget(
         Paragraph::new("+")
             .alignment(ratatui::layout::Alignment::Center)
-            .style(Style::default().fg(theme::text()).bg(theme::code_background())),
-        add_area,
+            .style(
+                Style::default()
+                    .fg(theme::text())
+                    .bg(theme::code_background()),
+            ),
+        Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), add_height),
     );
     let rows = [
         ("/", "MM305 crosswind", "18s"),
@@ -126,22 +130,32 @@ fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
             break;
         }
         let selected = i == 0;
-        if selected {
-            frame.render_widget(
-                Block::default().style(Style::default().bg(theme::selected_color())),
-                Rect::new(area.x, y, area.width, 2.min(area.bottom() - y)),
-            );
-        }
+        let row = Rect::new(area.x, y, area.width, 1);
         let style = if selected {
-            Style::default().fg(theme::text()).add_modifier(ACTIVE)
+            Style::default()
+                .fg(theme::text())
+                .bg(theme::selected_color())
+                .add_modifier(ACTIVE)
         } else {
             Style::default().fg(theme::muted())
         };
+        if selected {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(theme::selected_color())),
+                row,
+            );
+        }
         let inner_width = area.width.saturating_sub(2) as usize;
-        let title_width = inner_width.saturating_sub(icon.len() + age.len() + 2);
+        let title_width =
+            inner_width.saturating_sub(icon.chars().count() + age.chars().count() + 2);
+        let fitted = super::super::task::fit(title, title_width);
+        let gap = " ".repeat(inner_width.saturating_sub(
+            icon.chars().count() + fitted.chars().count() + age.chars().count() + 2,
+        ));
         let line = Line::from(vec![
             Span::styled(format!("{icon} "), style),
-            Span::styled(super::super::task::fit(title, title_width), style),
+            Span::styled(fitted, style),
+            Span::raw(gap),
             Span::styled(format!(" {age}"), Style::default().fg(theme::muted())),
         ]);
         frame.render_widget(
@@ -152,75 +166,139 @@ fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
-    if area.width == 0 {
+    if area.width == 0 || area.height == 0 {
         return;
     }
     frame.render_widget(Block::default().style(theme::base()), area);
+    let usage_height = if area.height >= 6 { 3 } else { 0 };
+    let content_height = area.height.saturating_sub(usage_height);
     let rows = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(3),
-        Constraint::Min(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
     ])
-    .split(area);
-    let selected = Style::default()
+    .split(Rect::new(area.x, area.y, area.width, content_height));
+    let muted = Style::default().fg(theme::muted());
+    let active = Style::default()
         .fg(theme::text())
         .bg(theme::selected_color())
         .add_modifier(ACTIVE);
-    frame.render_widget(
-        Paragraph::new("▣  Verification: accept a 3.2 km floor?     Landing    4m").style(selected),
-        rows[0],
-    );
-    frame.render_widget(
-        Paragraph::new("▤  MM305 crosswind                                      18s")
-            .style(Style::default().fg(theme::muted())),
-        rows[1],
-    );
-    frame.render_widget(
-        Paragraph::new("▣  Landing                                               2 running   26m")
-            .style(Style::default().fg(theme::muted())),
-        rows[2],
-    );
-    frame.render_widget(
-        Paragraph::new("▤  TUI shell direction                                   3m")
-            .style(Style::default().fg(theme::muted())),
-        rows[3],
-    );
-    frame.render_widget(Paragraph::new("\n C  guidance_taem.c                         +18  -6\n C  taem_candidate_search.c                 +42  -13\n C  taem_candidate_search.h                  +8   -4").style(Style::default().fg(theme::muted())).wrap(Wrap { trim: false }), rows[4]);
-    frame.render_widget(
-        Paragraph::new(
-            "\n ▣  #214  Context rail focus order\n ▣  #219  Final-speed handoff threshold",
-        )
-        .style(Style::default().fg(theme::muted())),
-        rows[5],
-    );
-    if area.height >= 8 {
-        let y = area.bottom().saturating_sub(4);
-        frame.render_widget(Paragraph::new("anthropic     5h  ▰▰▰▱▱▱▱▱ 62%      week ▰▰▱▱▱▱▱▱ 31%\nopenai        5h  ▰▱▱▱▱▱▱▱ 12%      week ▰▱▱▱▱▱▱▱  4%").style(Style::default().fg(theme::muted())), Rect::new(area.x+5,y,area.width.saturating_sub(10),2));
+    let items = [
+        (
+            "▣  Verification: accept a 3.2 km floor?",
+            "Landing",
+            "4m",
+            true,
+        ),
+        ("▤  MM305 crosswind", "", "18s", false),
+        ("▣  Landing", "2 running", "26m", false),
+        ("▤  TUI shell direction", "", "3m", false),
+    ];
+    for (index, (title, context, age, selected)) in items.into_iter().enumerate() {
+        let row = rows[index];
+        if selected {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(theme::selected_color())),
+                row,
+            );
+        }
+        let suffix = if context.is_empty() {
+            age.to_owned()
+        } else {
+            format!("{context}  {age}")
+        };
+        let available = row.width as usize;
+        let title_width = available.saturating_sub(suffix.chars().count() + 1);
+        let title = super::super::task::fit(title, title_width);
+        let gap =
+            " ".repeat(available.saturating_sub(title.chars().count() + suffix.chars().count()));
+        let line = Line::from(vec![
+            Span::styled(title, if selected { active } else { muted }),
+            Span::raw(gap),
+            Span::styled(suffix, muted),
+        ]);
+        frame.render_widget(Paragraph::new(line), row);
     }
-}
-
-fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
-    if area.width == 0 {
-        return;
+    let changes_y = rows[4].y.saturating_add(1);
+    if changes_y < area.y.saturating_add(content_height) {
+        let changes: Vec<Line<'static>> = vec![
+            Line::from(vec![
+                Span::styled("  C  guidance_taem.c", muted),
+                Span::styled(
+                    "                       +18",
+                    Style::default().fg(theme::success()),
+                ),
+                Span::styled("  -6", Style::default().fg(theme::error())),
+            ]),
+            Line::from(vec![
+                Span::styled("  C  taem_candidate_search.c", muted),
+                Span::styled("           +42", Style::default().fg(theme::success())),
+                Span::styled("  -13", Style::default().fg(theme::error())),
+            ]),
+            Line::from(vec![
+                Span::styled("  C  taem_candidate_search.h", muted),
+                Span::styled("            +8", Style::default().fg(theme::success())),
+                Span::styled("  -4", Style::default().fg(theme::error())),
+            ]),
+            Line::from(Span::styled("  ▣  #214  Context rail focus order", muted)),
+            Line::from(Span::styled(
+                "  ▣  #219  Final-speed handoff threshold",
+                muted,
+            )),
+        ];
+        let change_area = Rect::new(
+            area.x,
+            changes_y,
+            area.width,
+            area.y
+                .saturating_add(content_height)
+                .saturating_sub(changes_y),
+        );
+        frame.render_widget(
+            Paragraph::new(changes).wrap(Wrap { trim: false }),
+            change_area,
+        );
     }
-    frame.render_widget(
-        Block::default().style(Style::default().bg(theme::surface_color())),
-        area,
-    );
-    let pad = 2.min(area.width);
-    let x = area.x + pad;
-    let width = area.width.saturating_sub(pad + 1);
-    let content = Rect::new(x, area.y + 2, width, area.height.saturating_sub(4));
-    let text = "Accept a 3.2 km floor?\n\nVerification · Landing · 4m ago\n\nSweep at 3 km misses final speed for headings above 270°.\n\nTightest flyable radius is 3.2 km; nominal is 12 km.\n\na   Accept 3.2 km floor\n\nb   Keep 3.0 km and add margin\n\nc   Have Planner re-sweep first";
-    frame.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().fg(theme::muted()))
-            .wrap(Wrap { trim: false }),
-        content,
-    );
+    if usage_height > 0 {
+        let y = area.bottom().saturating_sub(usage_height);
+        let provider_lines: Vec<Line<'static>> = vec![
+            Line::from(vec![
+                Span::styled("anthropic", muted),
+                Span::styled(
+                    "     5h  ▰▰▰▱▱▱▱▱  62%",
+                    Style::default().fg(theme::text_dim()),
+                ),
+                Span::styled(
+                    "     week  ▰▰▱▱▱▱▱▱  31%",
+                    Style::default().fg(theme::text_dim()),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("openai", muted),
+                Span::styled(
+                    "        5h  ▰▱▱▱▱▱▱▱  12%",
+                    Style::default().fg(theme::text_dim()),
+                ),
+                Span::styled(
+                    "     week  ▰▱▱▱▱▱▱▱   4%",
+                    Style::default().fg(theme::text_dim()),
+                ),
+            ]),
+        ];
+        frame.render_widget(
+            Paragraph::new(provider_lines),
+            Rect::new(
+                area.x + 5,
+                y,
+                area.width.saturating_sub(10),
+                2.min(usage_height),
+            ),
+        );
+    }
 }
 
 fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {

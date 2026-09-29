@@ -755,3 +755,8 @@ Agents working on this area should update it when:
 - a better interaction model is discovered
 
 Do not silently let implementation diverge from this file. Either follow it or update the whiteboard with the new decision and reason.
+
+
+## Current native Overview implementation note
+
+The first Home/Overview render slice now mirrors the desktop mockup's visible composition: stateful top tabs, compact recent-object rail, one wide main activity/change surface, provider usage at the bottom, prompt composer, and persistent status bar. At 144×44 cells the layout keeps the sidebar narrow and lets the activity list span the remaining width; this is a visual scaffold with representative sample rows, not yet data-backed unified Recent Objects or a complete implementation of the Overview document sections above. Keep future work aligned with this whiteboard rather than treating the screenshot scaffold as the final information architecture.
