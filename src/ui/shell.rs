@@ -2,7 +2,8 @@
 use super::{
     responsive,
     task::{self, TaskStatus},
-    theme, truncate_end, yeet_brand,
+    text::truncate_end,
+    theme, yeet_brand,
 };
 use crate::{app::App, model::SessionSummary};
 use ratatui::{

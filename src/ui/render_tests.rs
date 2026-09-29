@@ -1,6 +1,13 @@
 //! Cross-surface regressions for the terminal redesign.
-use super::*;
+use super::sessions::tools::{WorkEvent, tool_group_lines};
+use super::status::{status_aux_line, status_line};
+use super::{composer, draw, responsive, theme};
 use crate::model::{ConversationToolCall, ModelActivity, SessionSummary, ShellPermission};
+use crate::{
+    app::{App, Mode},
+    model::{ConversationEntry, ConversationKind, ToolCallStatus},
+};
+use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::TestBackend};
 
 fn render(app: &mut App, width: u16, height: u16) -> (String, ratatui::buffer::Buffer) {
@@ -280,5 +287,119 @@ fn approval_and_failure_remain_visible_above_modal_backdrop() {
         let (text, _) = render(&mut app, width, height);
         assert!(text.contains("Failed"));
         assert!(text.contains("Provider connection closed"));
+    }
+}
+
+#[cfg(test)]
+mod overall_layout_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn history_status_explains_return_shortcut_at_narrow_widths() {
+        let app = App {
+            follow_tail: false,
+            max_scroll: 200,
+            scroll_y: 40,
+            ..App::default()
+        };
+        for width in [20, 40, 80] {
+            let line = status_line(&app, width);
+            assert!(line.to_string().contains("Ctrl+End"));
+            assert!(line.width() <= width);
+        }
+    }
+
+    #[test]
+    fn missing_usage_is_not_shown_as_zero_percent() {
+        let mut app = App::default();
+        app.state.active_model_context_length = Some(100_000);
+        app.state.current_context_tokens = None;
+        assert!(status_line(&app, 120).to_string().contains("unavailable"));
+    }
+
+    #[test]
+    fn runtime_status_anchor_uses_raised_surface() {
+        let app = App::default();
+        let line = status_line(&app, 80);
+        assert_eq!(
+            line.spans.first().and_then(|span| span.style.bg),
+            Some(theme::surface_raised())
+        );
+    }
+
+    #[test]
+    fn wide_runtime_status_reads_like_an_instrument_panel() {
+        let mut app = App::default();
+        app.state.active_model = "openai/gpt-5.6-sol".into();
+        app.state.active_model_context_length = Some(262_144);
+        app.state.current_context_tokens = Some(58_300);
+        app.state.active_reasoning_level = "high".into();
+
+        let line = status_line(&app, 120);
+        let text = line.to_string();
+        assert!(text.contains("gpt-5.6-sol"));
+        assert!(text.contains("CTX 22%"));
+        assert!(text.contains("THINK high"));
+        assert!(text.contains("MODE ask"));
+        assert!(line.width() <= 120);
+        assert_eq!(line.spans[1].style.bg, Some(theme::surface_raised()));
+    }
+
+    #[test]
+    fn auxiliary_status_reports_usage_and_selection_shortcuts() {
+        let mut app = App::default();
+        app.state.token_usage.input_tokens = Some(12_500);
+        app.state.token_usage.output_tokens = Some(2_300);
+        app.state.token_usage.cached_input_tokens = Some(10_000);
+        app.state.token_usage.cache_measured_input_tokens = Some(12_500);
+        app.state.token_usage.model_calls = Some(4);
+
+        let rich = status_aux_line(&app, 120).to_string();
+        assert!(rich.contains("in 12.5k"));
+        assert!(rich.contains("out 2.3k"));
+        assert!(rich.contains("cache 80%"));
+        assert!(rich.contains("calls 4"));
+        for width in [12, 20, 40, 80] {
+            assert!(status_aux_line(&app, width).width() <= width);
+        }
+
+        app.selection_start = Some((1, 1));
+        app.selection_end = Some((2, 1));
+        let selected = status_aux_line(&app, 80).to_string();
+        assert!(selected.contains("Ctrl+C"));
+        assert!(selected.contains("Esc"));
+    }
+
+    #[test]
+    fn responsive_status_uses_second_row_only_when_space_allows() {
+        assert_eq!(
+            responsive::metrics(Rect::new(0, 0, 80, 24)).status_height,
+            2
+        );
+        assert_eq!(
+            responsive::metrics(Rect::new(0, 0, 60, 14)).status_height,
+            1
+        );
+        assert_eq!(
+            responsive::metrics(Rect::new(0, 0, 180, 40)).status_height,
+            2
+        );
+    }
+
+    #[test]
+    fn shell_renders_from_small_terminal_to_ultrawide() {
+        for (width, height) in [(32, 8), (60, 14), (80, 24), (120, 40), (180, 40)] {
+            let mut app = App::default();
+            app.conversation.push(ConversationEntry {
+                id: "message".into(),
+                kind: ConversationKind::User {
+                    content: "Review these changes".into(),
+                },
+            });
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            assert!(app.transcript_area.3 > 0);
+        }
     }
 }

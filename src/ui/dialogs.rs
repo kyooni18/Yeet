@@ -1,6 +1,7 @@
 //! Modal dialogs and settings forms.
+use super::responsive::modal_rect;
+use super::text::{cell_width, compact_number, truncate_end, truncate_middle};
 use super::theme;
-use super::{cell_width, centered_rect, compact_number, truncate_end, truncate_middle};
 use crate::{
     app::{App, SettingsEditKind, SettingsSection},
     model::{CapabilityToggleItem, reasoning_levels_for_model},
@@ -16,6 +17,10 @@ use ratatui::{
     prelude::{Line, Modifier, Span, Style, Stylize, Text},
     widgets::{List, ListItem, ListState, Paragraph, Wrap},
 };
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    modal_rect(area, percent_x, percent_y)
+}
 
 #[path = "dialogs/capabilities.rs"]
 mod capabilities;

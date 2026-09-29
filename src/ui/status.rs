@@ -1,5 +1,9 @@
 //! Compact runtime/session status rows shown below the composer.
-use super::{compact_number, task, theme, truncate_middle};
+use super::{
+    task,
+    text::{compact_number, truncate_middle},
+    theme,
+};
 use crate::app::App;
 use ratatui::{
     Frame,

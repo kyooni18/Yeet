@@ -151,11 +151,8 @@ pub(super) fn modal_block_with_accent(title: impl AsRef<str>, accent: Color) -> 
         .border_style(Style::default().fg(accent))
         .padding(Padding::horizontal(1))
         .title(
-            Line::from(format!(" {heading} ")).style(
-                Style::default()
-                    .fg(accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Line::from(format!(" {heading} "))
+                .style(Style::default().fg(accent).add_modifier(Modifier::BOLD)),
         );
     if !hint.is_empty() {
         block =
@@ -172,11 +169,8 @@ pub(super) fn panel_block(title: impl AsRef<str>) -> Block<'static> {
         .border_style(Style::default().fg(border_dim()))
         .padding(Padding::horizontal(1))
         .title(
-            Line::from(format!(" {title} ")).style(
-                Style::default()
-                    .fg(accent())
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Line::from(format!(" {title} "))
+                .style(Style::default().fg(accent()).add_modifier(Modifier::BOLD)),
         )
 }
 pub(super) fn modal_backdrop(frame: &mut Frame<'_>, area: Rect) {
@@ -197,4 +191,33 @@ pub(super) fn modal_backdrop(frame: &mut Frame<'_>, area: Rect) {
     );
     frame.render_widget(Clear, area);
     frame.render_widget(Block::default().style(modal_surface()), area);
+}
+
+pub fn initialize_theme() {
+    let settings = crate::config::ConfigStore::default()
+        .theme_settings()
+        .unwrap_or_default();
+    let runtime = crate::model::RuntimeSettingsState {
+        appearance: settings.appearance.unwrap_or_else(|| "auto".into()),
+        theme_dark: settings.dark.unwrap_or_else(|| "kanagawa".into()),
+        theme_light: settings.light.unwrap_or_else(|| "adwaita".into()),
+        ..Default::default()
+    };
+    apply_runtime_theme(&runtime);
+}
+
+pub(crate) fn apply_runtime_theme(settings: &crate::model::RuntimeSettingsState) {
+    let appearance = match std::env::var("YEET_THEME_MODE")
+        .ok()
+        .as_deref()
+        .unwrap_or(settings.appearance.as_str())
+    {
+        value if value.eq_ignore_ascii_case("light") => Appearance::Light,
+        _ => Appearance::Dark,
+    };
+    let theme_name = match appearance {
+        Appearance::Dark => settings.theme_dark.as_str(),
+        Appearance::Light => settings.theme_light.as_str(),
+    };
+    initialize(appearance, Some(theme_name));
 }

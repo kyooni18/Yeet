@@ -174,3 +174,65 @@ fn composer_hint(streaming: bool, width: u16) -> Line<'static> {
     spans.push(Span::raw(" "));
     Line::from(spans)
 }
+
+#[cfg(test)]
+mod composer_viewport_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn long_draft_shows_visible_range_and_follows_cursor() {
+        let mut app = App::default();
+        app.input = (1..=12)
+            .map(|n| format!("draft {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.cursor = app.input.chars().count();
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut app, frame.area()))
+            .unwrap();
+        let contents = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(contents.contains("Lines 10–12 of 12"));
+        assert!(contents.contains("draft 12"));
+        app.cursor = 0;
+        terminal
+            .draw(|frame| draw(frame, &mut app, frame.area()))
+            .unwrap();
+        let contents = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(contents.contains("Lines 1–3 of 12"));
+        assert!(contents.contains("draft 1"));
+    }
+
+    #[test]
+    fn multiline_draft_shows_compact_metadata_when_not_scrolled() {
+        let mut app = App::default();
+        app.input = "alpha\nbeta\ngamma".into();
+        app.cursor = app.input.chars().count();
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &mut app, frame.area()))
+            .unwrap();
+        let contents = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(contents.contains("3 lines"));
+        assert!(contents.contains("16 chars"));
+    }
+}
