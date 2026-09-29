@@ -32,7 +32,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
 
     let home_style = if active == Active::Home {
         Style::default()
-            .fg(theme::accent())
+            .fg(theme::muted())
             .bg(theme::surface_raised())
     } else {
         Style::default().fg(theme::muted())
@@ -51,9 +51,9 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
             Style::default().fg(theme::muted())
         };
         let icon_style = if is_active {
-            style.fg(theme::accent())
+            style.fg(theme::muted()).remove_modifier(Modifier::BOLD)
         } else {
-            style
+            Style::default().fg(theme::muted())
         };
         spans.push(Span::styled(format!(" {icon} "), icon_style));
         spans.push(Span::styled(fit(label, tab_width), style));

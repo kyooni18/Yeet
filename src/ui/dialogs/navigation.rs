@@ -282,7 +282,14 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
         };
         let title_budget = row_width.saturating_sub(2 + cell_width(badge));
         let title = Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default().fg(theme::accent())),
+            Span::styled(
+                format!("{marker} "),
+                Style::default().fg(if current {
+                    theme::accent()
+                } else {
+                    theme::muted()
+                }),
+            ),
             Span::styled(
                 truncate_end(&item.session.display_title(), title_budget),
                 Style::default().fg(theme::text()).bold(),

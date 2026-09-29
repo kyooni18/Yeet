@@ -128,9 +128,9 @@ fn draw_list(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         let color = if changed {
             theme::warning()
         } else if entry.is_dir {
-            theme::accent()
-        } else {
             theme::text()
+        } else {
+            theme::text_dim()
         };
         let mut style = Style::default().fg(color);
         if selected {
