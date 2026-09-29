@@ -6,7 +6,7 @@ use crate::{
     app::{App, SettingsEditKind, SettingsSection},
     model::{CapabilityToggleItem, reasoning_levels_for_model},
 };
-#[path = "dialogs/navigation.rs"]
+#[path = "navigation.rs"]
 mod navigation;
 
 pub(super) use navigation::{draw_goal, draw_models, draw_reasoning, draw_sessions};
@@ -22,7 +22,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     modal_rect(area, percent_x, percent_y)
 }
 
-#[path = "dialogs/capabilities.rs"]
+#[path = "capabilities.rs"]
 mod capabilities;
 pub(super) use capabilities::{draw_capabilities, draw_capability_detail};
 
