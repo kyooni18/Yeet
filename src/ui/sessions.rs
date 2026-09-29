@@ -1,5 +1,4 @@
 //! Active session/conversation view. `Mode::Sessions` remains the session picker.
-mod legacy;
 pub(super) mod tools;
 use super::text::{format_elapsed, prefixed_wrapped_line, truncate_end, truncate_middle};
 use super::{markdown::markdown_lines, responsive, shell, task, theme};
@@ -16,7 +15,7 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
-use tools::{WorkEvent, reasoning_summary_render_lines, tool_group_lines};
+use tools::{WorkItem, work_group_lines, work_groups};
 
 pub(super) fn draw(
     frame: &mut Frame<'_>,
@@ -24,15 +23,7 @@ pub(super) fn draw(
     area: Rect,
     viewport_shape: responsive::Shape,
 ) {
-    match viewport_shape {
-        responsive::Shape::Tiny | responsive::Shape::ShortWide | responsive::Shape::Compact => {
-            legacy::draw(frame, app, area, viewport_shape)
-        }
-        responsive::Shape::Portrait
-        | responsive::Shape::Standard
-        | responsive::Shape::Wide
-        | responsive::Shape::UltraWide => draw_desktop(frame, app, area, viewport_shape),
-    }
+    draw_desktop(frame, app, area, viewport_shape)
 }
 
 fn draw_desktop(
@@ -41,10 +32,19 @@ fn draw_desktop(
     area: Rect,
     viewport_shape: responsive::Shape,
 ) {
-    let area = area.inner(Margin {
-        horizontal: 1,
-        vertical: u16::from(area.height > 4),
-    });
+    let area = if viewport_shape == responsive::Shape::Portrait && area.height > 7 {
+        Rect::new(
+            area.x + 1,
+            area.y + 4,
+            area.width.saturating_sub(2),
+            area.height - 5,
+        )
+    } else {
+        area.inner(Margin {
+            horizontal: 1,
+            vertical: u16::from(area.height > 4),
+        })
+    };
     frame.render_widget(
         Block::default().style(Style::default().bg(theme::code_background())),
         area,
@@ -228,21 +228,26 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
             continue;
         }
 
-        let starts_tool_work = matches!(&entry.kind, ConversationKind::ToolCall { .. })
-            || summary_only_reasoning(app, entry).is_some();
-        if starts_tool_work {
+        if matches!(
+            &entry.kind,
+            ConversationKind::ToolCall { .. } | ConversationKind::Reasoning { .. }
+        ) {
             let mut end = index;
-            let mut events = Vec::new();
+            let mut items = Vec::new();
             while end < app.conversation.len() {
                 let current = &app.conversation[end];
                 match &current.kind {
-                    ConversationKind::ToolCall { tool_call } => {
-                        events.push(WorkEvent::Tool(tool_call));
-                    }
+                    ConversationKind::ToolCall { tool_call } => items.push(WorkItem::Tool(tool_call)),
                     ConversationKind::Reasoning { .. } => {
-                        match summary_only_reasoning(app, current) {
-                            Some(summary) => events.push(WorkEvent::Reasoning(summary)),
-                            None => break,
+                        if let Some(summary) = summary_only_reasoning(app, current) {
+                            items.push(WorkItem::Summary(summary));
+                        } else if let Some((text, _)) = reasoning_parts(app, current)
+                            && !text.trim().is_empty()
+                        {
+                            let live = app.state.is_streaming
+                                && app.state.active_reasoning_entry_id.as_deref()
+                                    == Some(current.id.as_str());
+                            items.push(WorkItem::Reasoning { text, live });
                         }
                     }
                     ConversationKind::Activity { activity } if !terminal_activity(activity) => {}
@@ -250,23 +255,14 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
                 }
                 end += 1;
             }
-
-            if events
-                .iter()
-                .any(|event| matches!(event, WorkEvent::Tool(_)))
-            {
-                index = end;
-                let work = tool_group_lines(&events, width);
-                if !work.is_empty() {
-                    if rendered_any && !previous_compact {
-                        lines.push(Line::default());
-                    }
-                    lines.extend(work);
-                    rendered_any = true;
-                    previous_compact = true;
-                }
-                continue;
+            index = end;
+            let work = work_group_lines(&work_groups(&items), width, app.tools_expanded);
+            if !work.is_empty() {
+                lines.extend(work);
+                rendered_any = true;
+                previous_compact = true;
             }
+            continue;
         }
 
         let compact = compact_transcript_entry(&entry.kind);
@@ -278,7 +274,7 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
         if rendered_any && (!compact || !previous_compact) {
             if previous_compact && matches!(entry.kind, ConversationKind::Assistant { .. }) {
                 lines.push(Line::styled(
-                    "─".repeat(width.saturating_sub(2) as usize),
+                    "─".repeat(width as usize),
                     Style::default().fg(theme::border_dim()),
                 ));
             } else {
@@ -382,47 +378,16 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             };
             let mut lines = Vec::new();
             for line in session_markdown_lines(content) {
-                lines.extend(prefixed_wrapped_line(Span::raw("  "), line, width));
+                lines.extend(prefixed_wrapped_line(Span::raw(""), line, width));
             }
-            let tool_events = tool_calls.iter().map(WorkEvent::Tool).collect::<Vec<_>>();
-            lines.extend(tool_group_lines(&tool_events, width));
+            let items = tool_calls.iter().map(WorkItem::Tool).collect::<Vec<_>>();
+            lines.extend(work_group_lines(&work_groups(&items), width, app.tools_expanded));
             lines
         }
-        ConversationKind::Reasoning { content, summary } => {
-            let (content, summary) =
-                reasoning_parts(app, entry).unwrap_or((content.as_str(), summary.as_deref()));
-            let mut lines = vec![Line::from(vec![
-                Span::styled("  \u{f02d} ", Style::default().fg(theme::muted())),
-                Span::styled(
-                    "Thinking",
-                    Style::default()
-                        .fg(theme::text_dim())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])];
-            if let Some(summary) = summary {
-                lines.extend(reasoning_summary_render_lines(
-                    summary,
-                    width,
-                    "  │ • ",
-                    "  │   ",
-                ));
-            }
-            for line in session_markdown_lines(content) {
-                lines.extend(prefixed_wrapped_line(
-                    Span::styled("  │ ", Style::default().fg(theme::surface_color())),
-                    line.style(Style::default().fg(theme::muted())),
-                    width,
-                ));
-            }
-            lines
-        }
+        ConversationKind::Reasoning { .. } | ConversationKind::ToolCall { .. } => Vec::new(),
         ConversationKind::Activity { activity } => {
             let latest = app.state.active_activity_entry_id.as_deref() == Some(entry.id.as_str());
             vec![activity_line(app, activity, false, latest, width)]
-        }
-        ConversationKind::ToolCall { tool_call } => {
-            tool_group_lines(&[WorkEvent::Tool(tool_call)], width)
         }
         ConversationKind::Skill {
             name,
@@ -493,9 +458,9 @@ fn user_message_lines(content: &str, width: u16) -> Vec<Line<'static>> {
         )];
     }
     let bubble_width = if width >= 90 {
-        ((u32::from(width) * 58 / 100) as u16).min(72)
+        ((u32::from(width) * 50 / 100) as u16).min(72)
     } else {
-        width.saturating_sub(2)
+        ((u32::from(width) * 80 / 100) as u16).max(6)
     };
     let indent = usize::from(width - bubble_width);
     let surface = theme::surface();
@@ -512,9 +477,9 @@ fn user_message_lines(content: &str, width: u16) -> Vec<Line<'static>> {
     }
     for source in content.split('\n') {
         for row in prefixed_wrapped_line(
-            Span::styled(" ", surface),
+            Span::styled("  ", surface),
             Line::styled(source.to_owned(), surface),
-            bubble_width.saturating_sub(1),
+            bubble_width.saturating_sub(2),
         ) {
             let right_padding = (bubble_width as usize).saturating_sub(row.width());
             let mut spans = vec![Span::raw(" ".repeat(indent))];

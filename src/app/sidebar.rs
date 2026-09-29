@@ -14,6 +14,9 @@ impl App {
         if !(event.modifiers - KeyModifiers::SHIFT).is_empty() {
             return SidebarKey::Ignored;
         }
+        if matches!(event.code, KeyCode::Tab | KeyCode::BackTab) {
+            return self.cycle_session(event.code == KeyCode::BackTab);
+        }
         if !self.sidebar_focus {
             let can_focus = self.input.is_empty()
                 && !self.sidebar_nav_ids.is_empty()
@@ -58,6 +61,27 @@ impl App {
         SidebarKey::Handled
     }
 
+    /// Tab / Shift+Tab: load the next / previous session listed in the sidebar.
+    fn cycle_session(&mut self, backwards: bool) -> SidebarKey {
+        let ids: Vec<&String> = self.sidebar_nav_ids.iter().flatten().collect();
+        if !self.input.is_empty() || ids.len() < 2 {
+            return SidebarKey::Ignored;
+        }
+        let current = ids
+            .iter()
+            .position(|id| Some(id.as_str()) == self.state.current_session_id.as_deref());
+        let next = match (current, backwards) {
+            (Some(index), false) => (index + 1) % ids.len(),
+            (Some(index), true) => (index + ids.len() - 1) % ids.len(),
+            (None, false) => 0,
+            (None, true) => ids.len() - 1,
+        };
+        self.sidebar_load_request = Some(ids[next].clone());
+        self.follow_tail = true;
+        self.sidebar_focus = false;
+        SidebarKey::Handled
+    }
+
     fn current_sidebar_index(&self) -> usize {
         self.sidebar_nav_ids
             .iter()
@@ -97,5 +121,11 @@ mod tests {
         app.handle_sidebar_key(&key(KeyCode::Enter));
         assert!(!app.sidebar_focus);
         assert_eq!(app.take_sidebar_load_request().as_deref(), Some("b"));
+
+        app.state.current_session_id = Some("b".into());
+        app.handle_sidebar_key(&key(KeyCode::Tab));
+        assert_eq!(app.take_sidebar_load_request().as_deref(), Some("a"));
+        app.handle_sidebar_key(&KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(app.take_sidebar_load_request().as_deref(), Some("a"));
     }
 }

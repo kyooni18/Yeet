@@ -1,5 +1,4 @@
 //! Cross-surface regressions for the terminal redesign.
-use super::sessions::tools::{WorkEvent, tool_group_lines};
 use super::status::{status_line, usage_line};
 use super::{composer, draw, theme};
 use crate::model::{ConversationToolCall, ModelActivity, SessionSummary, ShellPermission};
@@ -52,6 +51,40 @@ fn views_switcher_renders_vertical_choices() {
 }
 
 #[test]
+fn portrait_session_picker_is_a_grouped_full_screen_list() {
+    let mut app = App::default();
+    app.mode = Mode::Sessions;
+    app.state.saved_sessions.push(SessionSummary {
+        id: "selected".into(),
+        title: "Selected conversation".into(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        model: "test".into(),
+        message_count: 1,
+    });
+    app.state.current_session_id = Some("selected".into());
+    let (text, _) = render(&mut app, 58, 48);
+    assert!(text.contains("Selected conversation"), "{text}");
+    assert!(text.contains("New session"), "{text}");
+    assert!(text.contains("1 session"), "{text}");
+    assert!(!text.contains("Enter open"), "{text}");
+}
+
+#[test]
+fn portrait_files_shows_selected_file_details_without_a_tab_bar() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("sample.rs"), "one\ntwo\n").unwrap();
+    let mut app = App::default();
+    app.files = Some(crate::app::files::FilesState::open(
+        dir.path().to_path_buf(),
+    ));
+    app.mode = Mode::Files;
+    let (text, _) = render(&mut app, 58, 48);
+    assert!(text.contains("sample.rs"), "{text}");
+    assert!(text.contains("2 lines"), "{text}");
+    assert!(!text.contains("Home"), "{text}");
+}
+
+#[test]
 fn unfocused_composer_uses_quieter_surface_than_focused_input() {
     let mut app = App::default();
     let bounds = ratatui::layout::Rect::new(0, 0, 60, 5);
@@ -63,7 +96,7 @@ fn unfocused_composer_uses_quieter_surface_than_focused_input() {
     let (x, y, _, _) = app.composer_area;
     assert_eq!(
         focused.backend().buffer()[(x, y)].bg,
-        theme::surface_raised()
+        theme::surface_color()
     );
 
     app.mode = Mode::Settings;
@@ -72,10 +105,7 @@ fn unfocused_composer_uses_quieter_surface_than_focused_input() {
         .draw(|frame| composer::draw(frame, &mut app, bounds))
         .unwrap();
     let (x, y, _, _) = app.composer_area;
-    assert_eq!(
-        unfocused.backend().buffer()[(x, y)].bg,
-        theme::surface_color()
-    );
+    assert_eq!(unfocused.backend().buffer()[(x, y)].bg, theme::background());
 }
 
 #[test]
@@ -178,13 +208,13 @@ fn session_user_bubble_is_right_aligned_and_assistant_prose_is_unframed() {
         "user bubble should sit on the right: {user_x}, {:?}",
         app.transcript_area
     );
-    assert_eq!(user_row[user_x].bg, theme::user_surface());
+    assert_eq!(user_row[user_x].bg, theme::surface_color());
     assert_eq!(
         buffer[(app.transcript_area.0, 0)].bg,
-        theme::surface_color()
+        theme::code_background()
     );
     let (composer_x, composer_y, _, _) = app.composer_area;
-    assert_eq!(buffer[(composer_x, composer_y)].bg, theme::surface_raised());
+    assert_eq!(buffer[(composer_x, composer_y)].bg, theme::surface_color());
 }
 
 #[test]
@@ -217,28 +247,6 @@ fn empty_session_and_picker_remain_readable_at_responsive_widths() {
             "{width}x{height}: {text}"
         );
     }
-}
-
-#[test]
-fn stopped_tool_groups_keep_errors_visible_and_hide_suppressed_calls() {
-    let mut call: ConversationToolCall = serde_json::from_value(serde_json::json!({
-        "id": "call", "name": "run_shell", "arguments": "{\"command\":\"cargo test\"}", "status": "failed"
-    })).unwrap();
-    let failed = tool_group_lines(&[WorkEvent::Tool(&call)], 80);
-    assert!(
-        failed
-            .iter()
-            .any(|line| line.to_string().contains("Failed"))
-    );
-    call.status = ToolCallStatus::Completed;
-    let completed = tool_group_lines(&[WorkEvent::Tool(&call)], 80);
-    assert_eq!(completed.len(), 1);
-    assert!(!completed[0].to_string().contains("Activity"));
-    assert!(completed[0].to_string().starts_with("  │ "));
-    assert_eq!(completed[0].spans[0].style.fg, Some(theme::surface_color()));
-    assert_eq!(completed[0].spans[2].style.fg, Some(theme::text_dim()));
-    call.status = ToolCallStatus::Suppressed;
-    assert!(tool_group_lines(&[WorkEvent::Tool(&call)], 80).is_empty());
 }
 
 #[test]
@@ -419,7 +427,7 @@ fn user_bubble_padding_rows_are_adjacent_to_message() {
     let (x, y, w, _) = app.transcript_area;
     let column = x + w - 4;
     let lit: Vec<u16> = (y..y + 6)
-        .filter(|&row| buf[(column, row)].bg == theme::user_surface())
+        .filter(|&row| buf[(column, row)].bg == theme::surface_color())
         .collect();
     assert_eq!(lit.len(), 3, "{lit:?}");
     assert_eq!(

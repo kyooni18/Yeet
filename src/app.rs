@@ -121,6 +121,7 @@ pub struct App {
     pub(crate) composer_width: u16,
     pub(crate) composer_scroll: usize,
     pub transcript_cells: Vec<Vec<String>>,
+    pub tools_expanded: bool,
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
     pub transcript_context_menu: Option<TranscriptContextMenu>,
@@ -182,6 +183,7 @@ impl Default for App {
             composer_width: 0,
             composer_scroll: 0,
             transcript_cells: Vec::new(),
+            tools_expanded: false,
             selection_start: None,
             selection_end: None,
             transcript_context_menu: None,
@@ -777,6 +779,7 @@ impl App {
             KeyCode::Char('j') if self.input.is_empty() => self.scroll_down(3),
             KeyCode::Up if self.input.is_empty() => self.scroll_up(3),
             KeyCode::Down if self.input.is_empty() => self.scroll_down(3),
+            KeyCode::Char('e') if self.input.is_empty() => self.tools_expanded = !self.tools_expanded,
             KeyCode::Char('g') if self.input.is_empty() => self.jump_to_transcript_start(),
             KeyCode::Char('G') if self.input.is_empty() => self.jump_to_transcript_end(),
             KeyCode::End if event.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1187,25 +1190,29 @@ impl App {
             KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down => {
                 let count = self.filtered_session_picker_items().len();
-                self.popup_index = cmp::min(self.popup_index + 1, count.saturating_sub(1));
+                self.popup_index = cmp::min(self.popup_index + 1, count);
             }
             KeyCode::Home => self.popup_index = 0,
             KeyCode::End => {
-                self.popup_index = self.filtered_session_picker_items().len().saturating_sub(1);
+                self.popup_index = self.filtered_session_picker_items().len();
             }
             KeyCode::PageUp => self.popup_index = self.popup_index.saturating_sub(8),
             KeyCode::PageDown => {
                 let count = self.filtered_session_picker_items().len();
-                self.popup_index =
-                    cmp::min(self.popup_index.saturating_add(8), count.saturating_sub(1));
+                self.popup_index = cmp::min(self.popup_index.saturating_add(8), count);
             }
             KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 backend.send(FrontendCommand::NewSession)?;
                 self.close_popup();
             }
             KeyCode::Enter => {
-                let id = self
-                    .filtered_session_picker_items()
+                let items = self.filtered_session_picker_items();
+                if self.popup_index == items.len() {
+                    backend.send(FrontendCommand::NewSession)?;
+                    self.close_popup();
+                    return Ok(());
+                }
+                let id = items
                     .get(self.popup_index)
                     .map(|item| item.session.id.clone());
                 if let Some(session_id) = id {
@@ -1447,7 +1454,7 @@ impl App {
             Mode::Models => self.filtered_models().len(),
             Mode::Reasoning => reasoning_levels_for_model(&self.state.active_model).len(),
             Mode::Goal => 2,
-            Mode::Sessions => self.filtered_session_picker_items().len(),
+            Mode::Sessions => self.filtered_session_picker_items().len() + 1,
             Mode::Capabilities => self.filtered_capabilities().len(),
             Mode::Auth => self.state.auth_providers.len(),
             Mode::Providers => self.state.provider_configurations.len(),

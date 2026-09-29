@@ -19,6 +19,15 @@ pub(super) fn session_tab() -> &'static str {
     if nerd() { "\u{f27a}" } else { "▤" }
 }
 
+pub(super) fn chevron(expanded: bool) -> &'static str {
+    match (expanded, nerd()) {
+        (true, true) => "\u{f078}",
+        (false, true) => "\u{f054}",
+        (true, false) => "▾",
+        (false, false) => "▸",
+    }
+}
+
 pub(super) fn workspace() -> &'static str {
     if nerd() { "\u{f07b}" } else { "▣" }
 }

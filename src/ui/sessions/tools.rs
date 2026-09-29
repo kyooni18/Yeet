@@ -1,100 +1,7 @@
 //! Compact tool traces and backend operation summaries.
 use super::*;
+use crate::ui::icons;
 use serde_json::Value;
-
-#[cfg(test)]
-pub(in crate::ui) fn tool_activity_line(
-    call: &crate::model::ConversationToolCall,
-    width: u16,
-) -> Line<'static> {
-    tool_activity_line_count(call, width, 1, "    ")
-}
-
-fn tool_activity_line_count(
-    call: &crate::model::ConversationToolCall,
-    width: u16,
-    count: usize,
-    rail: &str,
-) -> Line<'static> {
-    tool_activity_line_count_with_style(call, width, count, rail, false)
-}
-
-fn tool_activity_line_count_with_style(
-    call: &crate::model::ConversationToolCall,
-    width: u16,
-    count: usize,
-    rail: &str,
-    legacy: bool,
-) -> Line<'static> {
-    let active = matches!(
-        call.status,
-        ToolCallStatus::Preparing | ToolCallStatus::AwaitingPermission | ToolCallStatus::Running
-    );
-    let failed = matches!(
-        call.status,
-        ToolCallStatus::Failed
-            | ToolCallStatus::Cancelled
-            | ToolCallStatus::Interrupted
-            | ToolCallStatus::TimedOut
-    );
-    let icon_name = if legacy {
-        tool_icon_legacy(&call.name)
-    } else {
-        tool_icon(&call.name)
-    };
-    let icon = format!("{} {} ", tool_status_glyph(call), icon_name);
-    let icon_style = if failed {
-        Style::default().fg(theme::error())
-    } else if active {
-        Style::default().fg(theme::accent())
-    } else {
-        Style::default().fg(theme::muted())
-    };
-    let text_style = if failed {
-        Style::default().fg(theme::error())
-    } else if active {
-        Style::default().fg(theme::text())
-    } else {
-        Style::default().fg(theme::text_dim())
-    };
-
-    let width = usize::from(width);
-    let rail = truncate_end(rail, width);
-    let rail_width = Span::raw(&rail).width();
-    let icon_budget = width.saturating_sub(rail_width);
-    let icon = truncate_end(&icon, icon_budget);
-    let duration = (!legacy && count == 1)
-        .then_some(call.duration_ms)
-        .flatten()
-        .filter(|_| width >= 48)
-        .map(|milliseconds| format!("  {}", format_elapsed(milliseconds as u128)))
-        .unwrap_or_default();
-    let remaining = icon_budget
-        .saturating_sub(Span::raw(&icon).width())
-        .saturating_sub(Span::raw(&duration).width());
-    let detail = if count > 1 {
-        format!("{} ×{count}", compact_tool_pattern_detail(call))
-    } else if legacy {
-        tool_activity_detail_legacy(call)
-    } else {
-        tool_activity_detail(call)
-    };
-    let text = task::fit(&detail, remaining);
-
-    Line::from(vec![
-        Span::styled(
-            rail,
-            Style::default().fg(if legacy {
-                theme::muted()
-            } else {
-                theme::surface_color()
-            }),
-        ),
-        Span::styled(icon, icon_style),
-        Span::styled(text, text_style),
-        Span::styled(duration, Style::default().fg(theme::muted())),
-    ])
-}
 
 fn tool_call_status_bucket(call: &crate::model::ConversationToolCall) -> u8 {
     match call.status {
@@ -141,10 +48,6 @@ fn humanize_tool_name(name: &str) -> String {
     }
 }
 
-fn compact_tool_pattern_detail(call: &crate::model::ConversationToolCall) -> String {
-    tool_pattern_label(&call.name)
-}
-
 fn tool_icon(name: &str) -> &'static str {
     // Font Awesome's Nerd Font codepoints cover the mockup's pixel icons in a
     // terminal cell. The active terminal font controls their final shape.
@@ -162,43 +65,8 @@ fn tool_icon(name: &str) -> &'static str {
     }
 }
 
-fn tool_icon_legacy(name: &str) -> &'static str {
-    match name {
-        "apply_file_edits" | "task_notes" => "✎",
-        "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "⌕",
-        "read_file" | "read_files" | "read_artifact" | "read_document" | "web_read" => "▤",
-        "run_shell" | "shell_job" => "⌘",
-        "list_files" => "≡",
-        "analyze_data" => "▦",
-        "computer_use" | "desktop_control" => "◇",
-        "activate_capability" => "◇",
-        "context_history" => "↺",
-        _ => "·",
-    }
-}
-
-fn tool_activity_detail(call: &crate::model::ConversationToolCall) -> String {
-    let title = tool_activity_title(call);
-    match tool_activity_summary(call) {
-        Some(summary) if !summary.is_empty() => format!("{title} · {summary}"),
-        _ => title,
-    }
-}
-
-fn tool_activity_detail_legacy(call: &crate::model::ConversationToolCall) -> String {
-    let title = tool_activity_title_legacy(call);
-    match tool_activity_summary_legacy(call) {
-        Some(summary) if !summary.is_empty() => format!("{title} · {summary}"),
-        _ => title,
-    }
-}
-
 pub(in crate::ui) fn tool_activity_title(call: &crate::model::ConversationToolCall) -> String {
     tool_activity_title_with_style(call, false)
-}
-
-fn tool_activity_title_legacy(call: &crate::model::ConversationToolCall) -> String {
-    tool_activity_title_with_style(call, true)
 }
 
 fn tool_activity_title_with_style(
@@ -341,10 +209,6 @@ pub(in crate::ui) fn tool_activity_summary(
     tool_activity_summary_with_style(call, false)
 }
 
-fn tool_activity_summary_legacy(call: &crate::model::ConversationToolCall) -> Option<String> {
-    tool_activity_summary_with_style(call, true)
-}
-
 fn tool_activity_summary_with_style(
     call: &crate::model::ConversationToolCall,
     legacy: bool,
@@ -397,19 +261,6 @@ fn tool_activity_summary_with_style(
         });
     }
     summary
-}
-
-fn tool_status_glyph(call: &crate::model::ConversationToolCall) -> &'static str {
-    match call.status {
-        ToolCallStatus::Preparing => "◌",
-        ToolCallStatus::AwaitingPermission => "?",
-        ToolCallStatus::Running => "●",
-        ToolCallStatus::Completed => "✓",
-        ToolCallStatus::Failed => "×",
-        ToolCallStatus::Cancelled | ToolCallStatus::Interrupted => "—",
-        ToolCallStatus::TimedOut => "!",
-        ToolCallStatus::Suppressed => "·",
-    }
 }
 
 fn short_tool_path(path: &str) -> String {
@@ -717,134 +568,6 @@ pub(super) fn chronological_activity_rows<'a>(events: &[WorkEvent<'a>]) -> Vec<A
     rows
 }
 
-fn activity_reasoning_lines(
-    item: &str,
-    width: u16,
-    rail: &str,
-    legacy: bool,
-) -> Vec<Line<'static>> {
-    let rendered = markdown_lines(item);
-    if rendered.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::new();
-    for (index, line) in rendered.into_iter().enumerate() {
-        let prefix = if index == 0 {
-            format!("{rail}● ")
-        } else {
-            "  │   ".to_owned()
-        };
-        lines.extend(prefixed_wrapped_line(
-            Span::styled(
-                prefix,
-                Style::default().fg(if legacy {
-                    theme::accent()
-                } else {
-                    theme::surface_color()
-                }),
-            ),
-            line.style(Style::default().fg(theme::text())),
-            width,
-        ));
-    }
-    lines
-}
-
-pub(in crate::ui) fn tool_group_lines(events: &[WorkEvent<'_>], width: u16) -> Vec<Line<'static>> {
-    let calls = events
-        .iter()
-        .filter_map(|event| match *event {
-            WorkEvent::Tool(call) if !matches!(call.status, ToolCallStatus::Suppressed) => {
-                Some(call)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if calls.is_empty() {
-        return Vec::new();
-    }
-
-    let rows = chronological_activity_rows(events);
-    if rows.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::new();
-    for row in &rows {
-        let rail = "  │ ";
-        match row {
-            ActivityRow::Reasoning(item) => {
-                lines.extend(activity_reasoning_lines(item, width, rail, false));
-            }
-            ActivityRow::Tool { call, count } => {
-                lines.push(tool_activity_line_count(call, width, *count, rail));
-            }
-        }
-    }
-
-    lines
-}
-
-const LEGACY_COLLAPSED_ACTIVITY_EVENT_LIMIT: usize = 6;
-
-pub(super) fn tool_group_lines_legacy(
-    events: &[WorkEvent<'_>],
-    width: u16,
-    expanded: bool,
-) -> Vec<Line<'static>> {
-    let calls = events
-        .iter()
-        .filter_map(|event| match *event {
-            WorkEvent::Tool(call) if !matches!(call.status, ToolCallStatus::Suppressed) => {
-                Some(call)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if calls.is_empty() {
-        return Vec::new();
-    }
-
-    let rows = chronological_activity_rows(events);
-    let needs_attention = calls
-        .iter()
-        .filter(|call| !matches!(call.status, ToolCallStatus::Completed))
-        .count();
-    let visible_rows = if expanded || needs_attention > 0 {
-        rows.len()
-    } else {
-        rows.len().min(LEGACY_COLLAPSED_ACTIVITY_EVENT_LIMIT)
-    };
-    let hidden_rows = rows.len().saturating_sub(visible_rows);
-    let mut lines = Vec::new();
-    if hidden_rows > 0 {
-        let overflow = format!(
-            "  │ … {hidden_rows} earlier event{}",
-            if hidden_rows == 1 { "" } else { "s" }
-        );
-        lines.push(Line::styled(
-            truncate_end(&overflow, usize::from(width)),
-            Style::default().fg(theme::muted()),
-        ));
-    }
-
-    for row in rows.iter().skip(hidden_rows) {
-        let rail = "  │ ";
-        match row {
-            ActivityRow::Reasoning(item) => {
-                lines.extend(activity_reasoning_lines(item, width, rail, true));
-            }
-            ActivityRow::Tool { call, count } => {
-                lines.push(tool_activity_line_count_with_style(
-                    call, width, *count, rail, true,
-                ));
-            }
-        }
-    }
-    lines
-}
-
 pub(in crate::ui) fn reasoning_summary_items(summary: &str) -> Vec<String> {
     let summary = summary.trim();
     if summary.is_empty()
@@ -928,12 +651,12 @@ pub(in crate::ui) fn reasoning_summary_render_lines(
 mod tool_summary_layout_tests {
     use super::*;
 
-    fn call(status: ToolCallStatus) -> crate::model::ConversationToolCall {
+    pub(super) fn call(name: &str, status: ToolCallStatus) -> crate::model::ConversationToolCall {
         crate::model::ConversationToolCall {
-            id: "summary-test".into(),
+            id: format!("{name}-test"),
             index: None,
             call_id: None,
-            name: "run_shell".into(),
+            name: name.into(),
             arguments: r#"{"purpose":"Verify Rust changes","command":"cargo check"}"#.into(),
             status,
             label: None,
@@ -951,87 +674,305 @@ mod tool_summary_layout_tests {
     }
 
     #[test]
-    fn status_rows_show_semantic_tool_detail() {
-        for status in [
-            ToolCallStatus::Running,
-            ToolCallStatus::Completed,
-            ToolCallStatus::Failed,
-            ToolCallStatus::Suppressed,
-        ] {
-            let line = tool_activity_line(&call(status), 100);
-            let text = line.to_string();
-            assert!(text.contains("command"), "{text}");
-            assert!(!text.contains("run_shell"));
-            assert!(text.contains("cargo check"), "{text}");
+    fn summaries_use_compact_file_language() {
+        let mut search = call("search_workspace", ToolCallStatus::Completed);
+        search.arguments =
+            serde_json::json!({"query": "elapsed_ms", "path": "src/ui.rs"}).to_string();
+        assert_eq!(
+            tool_activity_summary(&search).as_deref(),
+            Some("src/ui.rs for elapsed_ms")
+        );
+        let shell = call("run_shell", ToolCallStatus::Completed);
+        assert_eq!(tool_activity_summary(&shell).as_deref(), Some("cargo check"));
+    }
+
+    #[test]
+    fn groups_collapse_unless_active_or_failed_and_fit_any_width() {
+        let done = call("read_file", ToolCallStatus::Completed);
+        let items = [WorkItem::Tool(&done)];
+        let collapsed = work_group_lines(&work_groups(&items), 80, false);
+        assert_eq!(collapsed.len(), 1);
+        let expanded = work_group_lines(&work_groups(&items), 80, true);
+        assert!(expanded.len() > 1);
+
+        let running = call("apply_file_edits", ToolCallStatus::Running);
+        let failed = call("search_workspace", ToolCallStatus::Failed);
+        for tool in [&running, &failed] {
+            let items = [WorkItem::Tool(tool)];
+            let lines = work_group_lines(&work_groups(&items), 80, false);
+            assert!(lines.len() > 2, "active or failed groups stay expanded");
+            for width in [24, 40, 60] {
+                assert!(
+                    work_group_lines(&work_groups(&items), width, false)
+                        .iter()
+                        .all(|line| line.width() <= usize::from(width))
+                );
+            }
         }
     }
 
     #[test]
-    fn narrow_unicode_summaries_fit_terminal_cells() {
-        let mut call = call(ToolCallStatus::Completed);
-        call.arguments = serde_json::json!({"purpose": "检查界面 🦀 ".repeat(50)}).to_string();
-        for width in [0, 1, 4, 12, 24, 40, 80] {
-            let line = tool_activity_line(&call, width);
-            assert!(line.width() <= usize::from(width));
+    fn summary_reasoning_titles_the_tool_group_and_suppressed_calls_vanish() {
+        let read = call("read_file", ToolCallStatus::Completed);
+        let hidden = call("run_shell", ToolCallStatus::Suppressed);
+        let items = [
+            WorkItem::Summary("**Analyzed recent logs**"),
+            WorkItem::Tool(&read),
+            WorkItem::Tool(&hidden),
+        ];
+        let text = work_group_lines(&work_groups(&items), 80, false)[0].to_string();
+        assert!(text.contains("Analyzed recent logs"), "{text}");
+        let items = [WorkItem::Tool(&hidden)];
+        assert!(work_group_lines(&work_groups(&items), 80, false).is_empty());
+    }
+}
+
+fn tool_verb(name: &str) -> &'static str {
+    match name {
+        "apply_file_edits" => "edit",
+        "task_notes" => "notes",
+        "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "search",
+        "read_file" | "read_files" | "read_artifact" | "read_document" | "web_read" => "read",
+        "run_shell" | "shell_job" => "run",
+        "list_files" => "list",
+        "analyze_data" => "analyze",
+        "computer_use" | "desktop_control" => "computer",
+        "activate_capability" => "enable",
+        "context_history" => "recall",
+        _ => "tool",
+    }
+}
+
+fn is_active(call: &crate::model::ConversationToolCall) -> bool {
+    tool_call_status_bucket(call) == 1
+}
+
+fn is_failed(call: &crate::model::ConversationToolCall) -> bool {
+    tool_call_status_bucket(call) == 2
+}
+
+/// One collapsible unit of agent work in the transcript.
+pub(in crate::ui) enum WorkGroup<'a> {
+    Tools {
+        calls: Vec<&'a crate::model::ConversationToolCall>,
+        title: Option<String>,
+    },
+    Reasoning {
+        text: String,
+        live: bool,
+    },
+}
+
+pub(in crate::ui) enum WorkItem<'a> {
+    Tool(&'a crate::model::ConversationToolCall),
+    Summary(&'a str),
+    Reasoning { text: &'a str, live: bool },
+}
+
+pub(in crate::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGroup<'a>> {
+    let mut groups: Vec<WorkGroup<'a>> = Vec::new();
+    let mut open = false;
+    let mut pending_title: Option<String> = None;
+    for item in items {
+        match item {
+            WorkItem::Tool(call) => {
+                if matches!(call.status, ToolCallStatus::Suppressed) {
+                    continue;
+                }
+                if !open {
+                    groups.push(WorkGroup::Tools {
+                        calls: Vec::new(),
+                        title: pending_title.take(),
+                    });
+                    open = true;
+                }
+                if let Some(WorkGroup::Tools { calls, .. }) = groups.last_mut() {
+                    calls.push(call);
+                }
+            }
+            WorkItem::Summary(summary) => {
+                let title = reasoning_summary_items(summary)
+                    .into_iter()
+                    .next()
+                    .map(|line| line.replace('*', "").trim().to_owned())
+                    .filter(|line| !line.is_empty());
+                match (open, groups.last_mut()) {
+                    (true, Some(WorkGroup::Tools { title: slot, .. })) if slot.is_none() => {
+                        *slot = title;
+                    }
+                    (false, _) if pending_title.is_none() => pending_title = title,
+                    _ => {}
+                }
+            }
+            WorkItem::Reasoning { text, live } => {
+                open = false;
+                groups.push(WorkGroup::Reasoning {
+                    text: (*text).to_owned(),
+                    live: *live,
+                });
+            }
         }
     }
+    groups
+}
 
-    #[test]
-    fn activity_rows_use_compact_file_language() {
-        let mut edit = call(ToolCallStatus::Completed);
-        edit.name = "apply_file_edits".into();
-        edit.arguments = serde_json::json!({
-            "changes": [{
-                "path": "src/ui.rs",
-                "edits": [{
-                    "kind": "replace",
-                    "range": {"start": 1, "end": 48},
-                    "text": (0..46).map(|_| "line").collect::<Vec<_>>().join("\n")
-                }]
-            }]
-        })
-        .to_string();
-        assert_eq!(
-            tool_activity_line(&edit, 100).to_string(),
-            "    ✓ \u{f040} Edited · src/ui.rs +46 −48"
-        );
+fn spinner() -> &'static str {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() / 180)
+        .unwrap_or(0);
+    ["|", "/", "-", "\\"][(tick % 4) as usize]
+}
 
-        let mut search = call(ToolCallStatus::Completed);
-        search.name = "search_workspace".into();
-        search.arguments = serde_json::json!({
-            "query": "elapsed_ms",
-            "path": "src/ui.rs"
-        })
-        .to_string();
-        assert_eq!(
-            tool_activity_line(&search, 100).to_string(),
-            "    ✓ \u{f002} Searched · src/ui.rs for elapsed_ms"
-        );
-
-        let mut context = call(ToolCallStatus::Completed);
-        context.name = "context_history".into();
-        assert_eq!(
-            tool_activity_line(&context, 100).to_string(),
-            "    ✓ \u{f1da} Read context"
-        );
-        context.status = ToolCallStatus::Failed;
-        assert_eq!(
-            tool_activity_line(&context, 100).to_string(),
-            "    × \u{f1da} Failed · Read context"
-        );
-
-        let mut tools = call(ToolCallStatus::Completed);
-        tools.name = "search_tools".into();
-        assert_eq!(
-            tool_activity_line(&tools, 100).to_string(),
-            "    ✓ \u{f002} Found tools"
-        );
-
-        let mut unknown = call(ToolCallStatus::Completed);
-        unknown.name = "mystery_plugin".into();
-        assert_eq!(
-            tool_activity_line(&unknown, 100).to_string(),
-            "    ✓ \u{f013} Mystery plugin · Verify Rust changes"
-        );
+fn group_icons(calls: &[&crate::model::ConversationToolCall]) -> String {
+    let mut icons: Vec<&str> = Vec::new();
+    for call in calls {
+        let icon = tool_icon(&call.name);
+        if !icons.contains(&icon) {
+            icons.push(icon);
+        }
     }
+    icons.truncate(3);
+    icons.join(" ")
+}
+
+fn fallback_group_title(calls: &[&crate::model::ConversationToolCall]) -> String {
+    let mut labels: Vec<String> = Vec::new();
+    for call in calls {
+        let label = tool_pattern_label(&call.name);
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    labels.truncate(3);
+    labels.join(" · ")
+}
+
+/// Collapsed one-line summaries with a tree of calls when expanded. Groups
+/// with running or failed calls are always expanded.
+pub(in crate::ui) fn work_group_lines(
+    groups: &[WorkGroup<'_>],
+    width: u16,
+    expand_all: bool,
+) -> Vec<Line<'static>> {
+    let width = usize::from(width);
+    let muted = Style::default().fg(theme::muted());
+    let mut lines = Vec::new();
+    for group in groups {
+        match group {
+            WorkGroup::Tools { calls, title } => {
+                if calls.is_empty() {
+                    continue;
+                }
+                let active = calls.iter().any(|call| is_active(call));
+                let failed = calls.iter().any(|call| is_failed(call));
+                let expanded = expand_all || active || failed;
+                let icons = group_icons(calls);
+                let title = title
+                    .clone()
+                    .unwrap_or_else(|| fallback_group_title(calls));
+                let lead = if active {
+                    format!(" {} ", spinner())
+                } else {
+                    " ".to_owned()
+                };
+                let chevron = format!(" {}", icons::chevron(expanded));
+                let budget = width.saturating_sub(
+                    Span::raw(&lead).width()
+                        + Span::raw(&icons).width()
+                        + 1
+                        + Span::raw(&chevron).width(),
+                );
+                let title_style = if active {
+                    Style::default().fg(theme::text()).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::text_dim())
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        lead,
+                        Style::default()
+                            .fg(theme::text())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(icons, muted),
+                    Span::raw(" "),
+                    Span::styled(task::fit(&title, budget), title_style),
+                    Span::styled(chevron, muted),
+                ]));
+                if expanded {
+                    let events = calls.iter().map(|call| WorkEvent::Tool(call)).collect::<Vec<_>>();
+                    for row in chronological_activity_rows(&events) {
+                        let ActivityRow::Tool { call, count } = row else {
+                            continue;
+                        };
+                        let failed = is_failed(call);
+                        let mut target = tool_activity_summary(call)
+                            .or_else(|| call.detail.clone())
+                            .unwrap_or_default();
+                        if count > 1 {
+                            target = format!("{target} ×{count}");
+                        }
+                        let verb = format!(" {:<7}", tool_verb(&call.name));
+                        let used = 2 + 3 + 1 + Span::raw(&verb).width();
+                        let target = task::fit(&target, width.saturating_sub(used + 1));
+                        let icon_style = if failed {
+                            Style::default().fg(theme::error_subtle())
+                        } else {
+                            muted
+                        };
+                        lines.push(Line::from(vec![
+                            Span::styled(" │", Style::default().fg(theme::border_dim())),
+                            Span::raw("   "),
+                            Span::styled(tool_icon(&call.name), icon_style),
+                            Span::styled(verb, Style::default().fg(theme::text_dim())),
+                            Span::styled(target, Style::default().fg(theme::text())),
+                        ]));
+                    }
+                    lines.push(Line::default());
+                }
+            }
+            WorkGroup::Reasoning { text, live } => {
+                let first = text
+                    .lines()
+                    .map(|line| line.trim().trim_start_matches(['#', '*', '-', ' ']))
+                    .find(|line| !line.is_empty())
+                    .unwrap_or_default()
+                    .replace('*', "");
+                let expanded = expand_all;
+                let lead = if *live {
+                    format!(" {} ", spinner())
+                } else {
+                    " ".to_owned()
+                };
+                let icon = "\u{f02d}";
+                let head = format!("Reasoning · {first}");
+                let chevron = format!(" {}", icons::chevron(expanded));
+                let budget = width.saturating_sub(
+                    Span::raw(&lead).width() + 2 + Span::raw(&chevron).width(),
+                );
+                lines.push(Line::from(vec![
+                    Span::styled(lead, Style::default().fg(theme::text())),
+                    Span::styled(icon.to_owned(), muted),
+                    Span::raw(" "),
+                    Span::styled(
+                        task::fit(&head, budget),
+                        Style::default().fg(theme::text_dim()),
+                    ),
+                    Span::styled(chevron, muted),
+                ]));
+                if expanded {
+                    for line in session_markdown_lines(text) {
+                        lines.extend(prefixed_wrapped_line(
+                            Span::styled(" │   ", Style::default().fg(theme::border_dim())),
+                            line.style(muted),
+                            width as u16,
+                        ));
+                    }
+                    lines.push(Line::default());
+                }
+            }
+        }
+    }
+    lines
 }
