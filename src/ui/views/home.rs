@@ -14,8 +14,11 @@ const ACTIVE: Modifier = Modifier::BOLD;
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let bounds = frame.area();
-    frame.render_widget(Block::default().style(theme::base()), bounds);
     if bounds.width < 45 || bounds.height < 5 {
+        return;
+    }
+    if bounds.width < 110 {
+        draw_compact(frame, app, bounds);
         return;
     }
     let status_height = 1.min(bounds.height);
@@ -175,12 +178,11 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
     let usage_height = if area.height >= 6 { 3 } else { 0 };
     let content_height = area.height.saturating_sub(usage_height);
     let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(2),
+        Constraint::Length(2),
+        Constraint::Length(2),
+        Constraint::Length(3),
         Constraint::Min(1),
     ])
     .split(Rect::new(area.x, area.y, area.width, content_height));
@@ -223,9 +225,9 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
             Span::raw(gap),
             Span::styled(suffix, muted),
         ]);
-        frame.render_widget(Paragraph::new(line), row);
+        frame.render_widget(Paragraph::new(line), Rect::new(row.x, row.y, row.width, 1));
     }
-    let changes_y = rows[4].y.saturating_add(1);
+    let changes_y = rows[5].y;
     if changes_y < area.y.saturating_add(content_height) {
         let changes: Vec<Line<'static>> = vec![
             Line::from(vec![
@@ -343,6 +345,42 @@ fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
         Line::from(Span::styled("c   Have Planner re-sweep first", body)),
     ];
     frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), content);
+}
+
+fn draw_compact(frame: &mut Frame<'_>, app: &mut App, bounds: Rect) {
+    let status_height = 1.min(bounds.height);
+    let content_height = bounds.height.saturating_sub(status_height);
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(status_height),
+    ])
+    .split(bounds);
+    let tabs = format!("⌂ Home  ·  {}", app.state.active_model);
+    frame.render_widget(
+        Paragraph::new(super::super::task::fit(&tabs, rows[0].width as usize)).style(
+            Style::default()
+                .fg(theme::text())
+                .bg(theme::code_background()),
+        ),
+        rows[0],
+    );
+    // A compact terminal has no room for desktop tabs, context rail and split
+    // inspector at once. Preserve the interaction order with a full-width work
+    // surface and composer at the bottom.
+    draw_activity(frame, rows[1]);
+    draw_composer(frame, app, rows[2]);
+    status::draw(
+        frame,
+        app,
+        Rect::new(
+            bounds.x,
+            bounds.y + content_height,
+            bounds.width,
+            status_height,
+        ),
+    );
 }
 
 fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
