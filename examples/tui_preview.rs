@@ -10,10 +10,45 @@ use serde_json::json;
 use yeet::{
     app::{App, Mode},
     model::{
-        ConversationEntry, ConversationKind, ModelActivity, SessionSummary, ShellPermission,
-        WorkspaceSummary,
+        ConversationEntry, ConversationKind, ConversationToolCall, ModelActivity, SessionSummary,
+        ShellPermission, ToolCallStatus, WorkspaceSummary,
     },
 };
+
+fn tool_event(
+    id: &str,
+    name: &str,
+    label: &str,
+    detail: &str,
+    status: ToolCallStatus,
+    result: Option<&str>,
+    error: Option<&str>,
+) -> ConversationEntry {
+    ConversationEntry {
+        id: id.to_owned(),
+        kind: ConversationKind::ToolCall {
+            tool_call: ConversationToolCall {
+                id: id.to_owned(),
+                index: None,
+                call_id: None,
+                name: name.to_owned(),
+                arguments: "{}".into(),
+                status,
+                label: Some(label.to_owned()),
+                detail: Some(detail.to_owned()),
+                started_at: None,
+                ended_at: None,
+                duration_ms: None,
+                attempt: None,
+                parent_call_id: None,
+                parallel_group_id: None,
+                job_id: None,
+                result: result.map(str::to_owned),
+                error: error.map(str::to_owned),
+            },
+        },
+    }
+}
 
 fn color(color: Color, fallback: &str) -> String {
     match color {
@@ -45,13 +80,15 @@ fn main() -> anyhow::Result<()> {
         path: "/workspace/Yeet".into(),
         display_name: "Yeet".into(),
         updated_at: None,
-        session_count: 3,
+        session_count: 5,
         is_current: true,
     }];
     app.state.saved_sessions = [
+        "MM305 crosswind tuning",
         "Refine the terminal experience",
-        "Investigate startup time",
-        "Add keyboard shortcuts",
+        "Runtime MCP attach",
+        "Provider cleanup",
+        "Foundation memory",
     ]
     .iter()
     .enumerate()
@@ -73,6 +110,92 @@ fn main() -> anyhow::Result<()> {
         ];
     }
     match scene {
+        "session" => {
+            app.state.current_session_id = Some("session-0".into());
+            app.state.is_streaming = true;
+            app.state.active_assistant_entry_id = Some("live-answer".into());
+            app.state.active_assistant_text = "The session preview uses the real transcript renderer and streaming state. The tool steps below show how completed work, an error, and a live operation appear in sequence.".into();
+            app.state.active_activity_entry_id = Some("live-activity".into());
+            app.state.active_run_id = Some("run-preview".into());
+            app.state.current_context_tokens = Some(8_420);
+            app.conversation = vec![
+                ConversationEntry {
+                    id: "session-user".into(),
+                    kind: ConversationKind::User {
+                        content: "Inspect the current session layout and make the activity stream easier to scan.".into(),
+                    },
+                },
+                ConversationEntry {
+                    id: "session-reasoning".into(),
+                    kind: ConversationKind::Reasoning {
+                        content: "I’ll check the view structure, inspect the render path, and keep the active session state attached to the existing shell.".into(),
+                        summary: Some("Reviewing the UI integration points".into()),
+                    },
+                },
+                tool_event(
+                    "read-complete",
+                    "read_file",
+                    "Read",
+                    "src/ui/shell.rs",
+                    ToolCallStatus::Completed,
+                    Some("Inspected shell layout and session context."),
+                    None,
+                ),
+                tool_event(
+                    "read-failed",
+                    "read_file",
+                    "Read",
+                    "missing reference file",
+                    ToolCallStatus::Failed,
+                    None,
+                    Some("File does not exist"),
+                ),
+                tool_event(
+                    "edit-running",
+                    "apply_file_edits",
+                    "Edit",
+                    "src/ui/sessions.rs",
+                    ToolCallStatus::Running,
+                    None,
+                    None,
+                ),
+                ConversationEntry {
+                    id: "live-activity".into(),
+                    kind: ConversationKind::Activity {
+                        activity: ModelActivity {
+                            phase: json!("working"),
+                            title: "Rendering the active session".into(),
+                            detail: Some("Checking conversation and tool progress".into()),
+                            run_id: Some("run-preview".into()),
+                        },
+                    },
+                },
+                ConversationEntry {
+                    id: "live-answer".into(),
+                    kind: ConversationKind::Assistant {
+                        content: String::new(),
+                        tool_calls: vec![],
+                    },
+                },
+            ];
+        }
+        "empty-session" => {
+            app.state.current_session_id = Some("session-empty".into());
+            app.state.saved_sessions.insert(
+                0,
+                SessionSummary {
+                    id: "session-empty".into(),
+                    title: "New session".into(),
+                    updated_at: "preview".into(),
+                    model: app.state.active_model.clone(),
+                    message_count: 0,
+                },
+            );
+            app.conversation.clear();
+        }
+        "session-picker" => {
+            app.mode = Mode::Sessions;
+        }
         "working" | "history" => {
             app.state.is_streaming = true;
             app.state.active_activity_entry_id = Some("live".into());

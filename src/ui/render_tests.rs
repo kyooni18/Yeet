@@ -136,7 +136,7 @@ fn generic_legacy_done_activity_is_hidden_but_informative_completion_survives() 
 }
 
 #[test]
-fn user_and_assistant_have_distinct_readable_surfaces() {
+fn session_user_bubble_is_right_aligned_and_assistant_prose_is_unframed() {
     let mut app = App {
         conversation: vec![
             ConversationEntry {
@@ -155,28 +155,30 @@ fn user_and_assistant_have_distinct_readable_surfaces() {
         ],
         ..App::default()
     };
-    let (text, buffer) = render(&mut app, 80, 24);
-    assert!(text.contains("▌ You"));
-    assert!(text.contains("◆ Yeet"));
-    let rail = buffer
-        .content
-        .iter()
-        .find(|cell| cell.symbol() == "▌")
-        .unwrap();
-    assert_eq!(rail.fg, theme::user());
-    assert_eq!(rail.bg, theme::user_surface());
+    let (text, buffer) = render(&mut app, 140, 38);
+    assert!(text.contains("Review the layout"));
     assert!(text.contains("Here is the review."));
-    assert!(text.contains("│ Here is the review."));
-    let assistant_y = text
+    assert!(!text.contains("▌ You"));
+    assert!(!text.contains("◆ Yeet"));
+    assert!(!text.contains("│ Here is the review."));
+    let user_y = text
         .lines()
-        .position(|line| line.contains("Here is the review."))
-        .unwrap();
-    let assistant_row = &buffer.content[assistant_y * 80..(assistant_y + 1) * 80];
-    let assistant_rail = assistant_row
+        .enumerate()
+        .skip(usize::from(app.transcript_area.1))
+        .take(usize::from(app.transcript_area.3))
+        .find_map(|(y, line)| line.contains("Review the layout").then_some(y))
+        .expect("user message row inside transcript");
+    let user_row = &buffer.content[user_y * 140..(user_y + 1) * 140];
+    let user_x = user_row
         .iter()
-        .find(|cell| cell.symbol() == "│")
-        .unwrap();
-    assert_eq!(assistant_rail.fg, theme::border_dim());
+        .position(|cell| cell.symbol() == "R")
+        .expect("user message text");
+    assert!(
+        user_x > usize::from(app.transcript_area.0 + app.transcript_area.2 / 3),
+        "user bubble should sit on the right: {user_x}, {:?}",
+        app.transcript_area
+    );
+    assert_eq!(user_row[user_x].bg, theme::surface_color());
     assert_eq!(
         buffer[(app.transcript_area.0, 0)].bg,
         theme::surface_color()
@@ -186,26 +188,57 @@ fn user_and_assistant_have_distinct_readable_surfaces() {
 }
 
 #[test]
+fn empty_session_and_picker_remain_readable_at_responsive_widths() {
+    for (width, height) in [(80, 24), (140, 38)] {
+        let mut app = App::default();
+        app.state.current_session_id = Some("fresh-session".into());
+        let (text, _) = render(&mut app, width, height);
+        assert!(text.contains("New session"), "{width}x{height}: {text}");
+        assert!(text.contains("Write a message below"), "{width}x{height}");
+
+        app.state.saved_sessions.push(SessionSummary {
+            id: "fresh-session".into(),
+            title: "Restored session".into(),
+            updated_at: "preview".into(),
+            model: "test-model".into(),
+            message_count: 3,
+        });
+        let (text, _) = render(&mut app, width, height);
+        assert!(
+            text.contains("Conversation unavailable"),
+            "{width}x{height}: {text}"
+        );
+
+        app.mode = Mode::Sessions;
+        let (text, _) = render(&mut app, width, height);
+        assert!(text.contains("Sessions"), "{width}x{height}: {text}");
+        assert!(
+            text.contains("Restored session"),
+            "{width}x{height}: {text}"
+        );
+    }
+}
+
+#[test]
 fn stopped_tool_groups_keep_errors_visible_and_hide_suppressed_calls() {
     let mut call: ConversationToolCall = serde_json::from_value(serde_json::json!({
         "id": "call", "name": "run_shell", "arguments": "{\"command\":\"cargo test\"}", "status": "failed"
     })).unwrap();
-    let app = App::default();
-    let failed = tool_group_lines(&app, &[WorkEvent::Tool(&call)], 80, false);
+    let failed = tool_group_lines(&[WorkEvent::Tool(&call)], 80);
     assert!(
         failed
             .iter()
             .any(|line| line.to_string().contains("Failed"))
     );
     call.status = ToolCallStatus::Completed;
-    let completed = tool_group_lines(&app, &[WorkEvent::Tool(&call)], 80, false);
+    let completed = tool_group_lines(&[WorkEvent::Tool(&call)], 80);
     assert_eq!(completed.len(), 1);
     assert!(!completed[0].to_string().contains("Activity"));
     assert!(completed[0].to_string().starts_with("  │ "));
-    assert_eq!(completed[0].spans[0].style.fg, Some(theme::muted()));
+    assert_eq!(completed[0].spans[0].style.fg, Some(theme::surface_color()));
     assert_eq!(completed[0].spans[2].style.fg, Some(theme::text_dim()));
     call.status = ToolCallStatus::Suppressed;
-    assert!(tool_group_lines(&app, &[WorkEvent::Tool(&call)], 80, false).is_empty());
+    assert!(tool_group_lines(&[WorkEvent::Tool(&call)], 80).is_empty());
 }
 
 #[test]

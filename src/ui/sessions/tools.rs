@@ -51,7 +51,15 @@ fn tool_activity_line_count(
     let rail_width = Span::raw(&rail).width();
     let icon_budget = width.saturating_sub(rail_width);
     let icon = truncate_end(&icon, icon_budget);
-    let remaining = icon_budget.saturating_sub(Span::raw(&icon).width());
+    let duration = (count == 1)
+        .then_some(call.duration_ms)
+        .flatten()
+        .filter(|_| width >= 48)
+        .map(|milliseconds| format!("  {}", format_elapsed(milliseconds as u128)))
+        .unwrap_or_default();
+    let remaining = icon_budget
+        .saturating_sub(Span::raw(&icon).width())
+        .saturating_sub(Span::raw(&duration).width());
     let detail = if count > 1 {
         format!("{} ×{count}", compact_tool_pattern_detail(call))
     } else {
@@ -60,9 +68,10 @@ fn tool_activity_line_count(
     let text = task::fit(&detail, remaining);
 
     Line::from(vec![
-        Span::styled(rail, Style::default().fg(theme::muted())),
+        Span::styled(rail, Style::default().fg(theme::surface_color())),
         Span::styled(icon, icon_style),
         Span::styled(text, text_style),
+        Span::styled(duration, Style::default().fg(theme::muted())),
     ])
 }
 
@@ -79,8 +88,6 @@ fn tool_call_status_bucket(call: &crate::model::ConversationToolCall) -> u8 {
         ToolCallStatus::Suppressed => 3,
     }
 }
-
-const COLLAPSED_ACTIVITY_EVENT_LIMIT: usize = 6;
 
 fn tool_pattern_label(name: &str) -> String {
     match name {
@@ -118,18 +125,19 @@ fn compact_tool_pattern_detail(call: &crate::model::ConversationToolCall) -> Str
 }
 
 fn tool_icon(name: &str) -> &'static str {
+    // Font Awesome's Nerd Font codepoints cover the mockup's pixel icons in a
+    // terminal cell. The active terminal font controls their final shape.
     match name {
-        "apply_file_edits" => "✎",
-        "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "⌕",
-        "read_file" | "read_files" | "read_artifact" | "read_document" | "web_read" => "▤",
-        "run_shell" | "shell_job" => "⌘",
-        "list_files" => "≡",
-        "analyze_data" => "▦",
-        "computer_use" | "desktop_control" => "◇",
-        "activate_capability" => "◇",
-        "task_notes" => "✎",
-        "context_history" => "↺",
-        _ => "·",
+        "apply_file_edits" | "task_notes" => "\u{f040}",
+        "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "\u{f002}",
+        "read_file" | "read_files" | "read_artifact" | "read_document" | "web_read" => "\u{f02d}",
+        "run_shell" | "shell_job" => "\u{f120}",
+        "list_files" => "\u{f07b}",
+        "analyze_data" => "\u{f080}",
+        "computer_use" | "desktop_control" => "\u{f108}",
+        "activate_capability" => "\u{f0e7}",
+        "context_history" => "\u{f1da}",
+        _ => "\u{f013}",
     }
 }
 
@@ -249,11 +257,19 @@ pub(in crate::ui) fn tool_activity_title(call: &crate::model::ConversationToolCa
         _ => fallback_verb.as_str(),
     };
 
+    let verb = call
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or(verb);
     let outcome = match call.status {
         ToolCallStatus::Failed => Some("Failed"),
         ToolCallStatus::TimedOut => Some("Timed out"),
         ToolCallStatus::Cancelled => Some("Cancelled"),
         ToolCallStatus::Interrupted => Some("Interrupted"),
+        ToolCallStatus::AwaitingPermission => Some("Approval needed"),
+        ToolCallStatus::Preparing => Some("Preparing"),
         _ => None,
     };
     outcome
@@ -264,26 +280,34 @@ pub(in crate::ui) fn tool_activity_title(call: &crate::model::ConversationToolCa
 pub(in crate::ui) fn tool_activity_summary(
     call: &crate::model::ConversationToolCall,
 ) -> Option<String> {
-    let mut summary = match call.name.as_str() {
-        "apply_file_edits" => Some(edit_activity_detail(call)),
-        "search_workspace" | "search_artifact" | "web_search" => Some(search_activity_detail(call)),
-        "read_file" | "read_files" => Some(read_activity_detail(call)),
-        "run_shell" => tool_json_string(call, &["command"])
-            .map(|value| compact_tool_text(&value, 88))
-            .or_else(|| tool_argument_summary(&call.arguments, 88)),
-        "shell_job" => tool_json_string(call, &["command", "job", "action", "id"])
-            .map(|value| compact_tool_text(&value, 88))
-            .or_else(|| tool_argument_summary(&call.arguments, 88)),
-        "web_read" => tool_json_string(call, &["url", "href", "ref_id", "refId"])
-            .map(|value| compact_tool_text(&value, 88))
-            .or_else(|| tool_argument_summary(&call.arguments, 88)),
-        "list_files" => tool_json_string(call, &["path"])
-            .map(|value| short_tool_path(&value))
-            .or_else(|| tool_argument_summary(&call.arguments, 88)),
-        "search_tools" | "task_notes" | "context_history" => None,
-        _ => tool_argument_summary(&call.arguments, 88),
-    }
-    .filter(|value| !value.trim().is_empty());
+    let mut summary = call
+        .detail
+        .as_deref()
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty())
+        .map(str::to_owned)
+        .or_else(|| match call.name.as_str() {
+            "apply_file_edits" => Some(edit_activity_detail(call)),
+            "search_workspace" | "search_artifact" | "web_search" => {
+                Some(search_activity_detail(call))
+            }
+            "read_file" | "read_files" => Some(read_activity_detail(call)),
+            "run_shell" => tool_json_string(call, &["command"])
+                .map(|value| compact_tool_text(&value, 88))
+                .or_else(|| tool_argument_summary(&call.arguments, 88)),
+            "shell_job" => tool_json_string(call, &["command", "job", "action", "id"])
+                .map(|value| compact_tool_text(&value, 88))
+                .or_else(|| tool_argument_summary(&call.arguments, 88)),
+            "web_read" => tool_json_string(call, &["url", "href", "ref_id", "refId"])
+                .map(|value| compact_tool_text(&value, 88))
+                .or_else(|| tool_argument_summary(&call.arguments, 88)),
+            "list_files" => tool_json_string(call, &["path"])
+                .map(|value| short_tool_path(&value))
+                .or_else(|| tool_argument_summary(&call.arguments, 88)),
+            "search_tools" | "task_notes" | "context_history" => None,
+            _ => tool_argument_summary(&call.arguments, 88),
+        })
+        .filter(|value| !value.trim().is_empty());
 
     if matches!(
         call.status,
@@ -609,6 +633,9 @@ pub(super) fn chronological_activity_rows<'a>(events: &[WorkEvent<'a>]) -> Vec<A
                     && previous.name == call.name
                     && tool_call_status_bucket(previous) == 0
                     && tool_call_status_bucket(call) == 0
+                    && previous.label == call.label
+                    && previous.detail == call.detail
+                    && previous.arguments == call.arguments
                 {
                     *count += 1;
                 } else {
@@ -634,7 +661,7 @@ fn activity_reasoning_lines(item: &str, width: u16, rail: &str) -> Vec<Line<'sta
             "  │   ".to_owned()
         };
         lines.extend(prefixed_wrapped_line(
-            Span::styled(prefix, Style::default().fg(theme::accent())),
+            Span::styled(prefix, Style::default().fg(theme::surface_color())),
             line.style(Style::default().fg(theme::text())),
             width,
         ));
@@ -642,12 +669,7 @@ fn activity_reasoning_lines(item: &str, width: u16, rail: &str) -> Vec<Line<'sta
     lines
 }
 
-pub(in crate::ui) fn tool_group_lines(
-    _app: &App,
-    events: &[WorkEvent<'_>],
-    width: u16,
-    expanded: bool,
-) -> Vec<Line<'static>> {
+pub(in crate::ui) fn tool_group_lines(events: &[WorkEvent<'_>], width: u16) -> Vec<Line<'static>> {
     let calls = events
         .iter()
         .filter_map(|event| match *event {
@@ -666,32 +688,8 @@ pub(in crate::ui) fn tool_group_lines(
         return Vec::new();
     }
 
-    let needs_attention = |call: &crate::model::ConversationToolCall| {
-        !matches!(call.status, ToolCallStatus::Completed)
-    };
-    let attention = calls.iter().filter(|call| needs_attention(call)).count();
-
-    let visible_rows = if expanded || attention > 0 {
-        rows.len()
-    } else {
-        rows.len().min(COLLAPSED_ACTIVITY_EVENT_LIMIT)
-    };
-    let hidden_rows = rows.len().saturating_sub(visible_rows);
-    let first_visible = hidden_rows;
-
     let mut lines = Vec::new();
-    if hidden_rows > 0 {
-        let overflow = format!(
-            "  │ … {hidden_rows} earlier event{}",
-            if hidden_rows == 1 { "" } else { "s" }
-        );
-        lines.push(Line::styled(
-            truncate_end(&overflow, usize::from(width)),
-            Style::default().fg(theme::muted()),
-        ));
-    }
-
-    for row in rows.iter().skip(first_visible) {
+    for row in &rows {
         let rail = "  │ ";
         match row {
             ActivityRow::Reasoning(item) => {
@@ -773,7 +771,10 @@ pub(in crate::ui) fn reasoning_summary_render_lines(
                 continuation_prefix
             };
             lines.extend(prefixed_wrapped_line(
-                Span::styled(prefix.to_owned(), Style::default().fg(theme::border_dim())),
+                Span::styled(
+                    prefix.to_owned(),
+                    Style::default().fg(theme::surface_color()),
+                ),
                 line.style(Style::default().fg(theme::text_dim())),
                 width,
             ));
@@ -851,7 +852,7 @@ mod tool_summary_layout_tests {
         .to_string();
         assert_eq!(
             tool_activity_line(&edit, 100).to_string(),
-            "    ✓ ✎ Edited · src/ui.rs +46 −48"
+            "    ✓ \u{f040} Edited · src/ui.rs +46 −48"
         );
 
         let mut search = call(ToolCallStatus::Completed);
@@ -863,33 +864,33 @@ mod tool_summary_layout_tests {
         .to_string();
         assert_eq!(
             tool_activity_line(&search, 100).to_string(),
-            "    ✓ ⌕ Searched · src/ui.rs for elapsed_ms"
+            "    ✓ \u{f002} Searched · src/ui.rs for elapsed_ms"
         );
 
         let mut context = call(ToolCallStatus::Completed);
         context.name = "context_history".into();
         assert_eq!(
             tool_activity_line(&context, 100).to_string(),
-            "    ✓ ↺ Read context"
+            "    ✓ \u{f1da} Read context"
         );
         context.status = ToolCallStatus::Failed;
         assert_eq!(
             tool_activity_line(&context, 100).to_string(),
-            "    × ↺ Failed · Read context"
+            "    × \u{f1da} Failed · Read context"
         );
 
         let mut tools = call(ToolCallStatus::Completed);
         tools.name = "search_tools".into();
         assert_eq!(
             tool_activity_line(&tools, 100).to_string(),
-            "    ✓ ⌕ Found tools"
+            "    ✓ \u{f002} Found tools"
         );
 
         let mut unknown = call(ToolCallStatus::Completed);
         unknown.name = "mystery_plugin".into();
         assert_eq!(
             tool_activity_line(&unknown, 100).to_string(),
-            "    ✓ · Mystery plugin · Verify Rust changes"
+            "    ✓ \u{f013} Mystery plugin · Verify Rust changes"
         );
     }
 }

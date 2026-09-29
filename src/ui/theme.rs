@@ -102,9 +102,6 @@ pub(super) fn text_dim() -> Color {
 pub(super) fn user() -> Color {
     color(active().user)
 }
-pub(super) fn user_surface() -> Color {
-    color(active().user_surface)
-}
 pub(super) fn error() -> Color {
     color(active().error)
 }

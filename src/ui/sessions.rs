@@ -9,7 +9,7 @@ use crate::{
 use ratatui::{
     Frame,
     layout::{Margin, Rect},
-    prelude::{Line, Modifier, Span, Style, Text},
+    prelude::{Line, Modifier, Span, Style, Stylize, Text},
     widgets::{
         Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Wrap,
@@ -27,6 +27,10 @@ pub(super) fn draw(
         horizontal: 1,
         vertical: u16::from(area.height > 4),
     });
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::code_background())),
+        area,
+    );
     let transcript_area = (area.x, area.y, area.width, area.height);
     let previous_area = app.transcript_area;
     if previous_area.2 > 0 && previous_area.3 > 0 && previous_area != transcript_area {
@@ -36,7 +40,31 @@ pub(super) fn draw(
     if app.conversation.is_empty() {
         app.max_scroll = 0;
         app.scroll_y = 0;
-        shell::draw_welcome(frame, area, viewport_shape);
+        app.transcript_cells.clear();
+        if app.state.current_session_id.is_some() {
+            let (title, detail) = if app.state.is_streaming {
+                (
+                    "Waiting for a response",
+                    "The conversation will appear here as it arrives.",
+                )
+            } else if app.sessions().iter().any(|session| {
+                Some(session.id.as_str()) == app.state.current_session_id.as_deref()
+                    && session.message_count > 0
+            }) {
+                (
+                    "Conversation unavailable",
+                    "Choose the session again with Alt+S to reload it.",
+                )
+            } else {
+                (
+                    "New session",
+                    "Write a message below to begin this conversation.",
+                )
+            };
+            draw_empty_session(frame, area, title, detail);
+        } else {
+            shell::draw_welcome(frame, area, viewport_shape);
+        }
         return;
     }
     let text = transcript_text(app, area.width);
@@ -68,6 +96,20 @@ pub(super) fn draw(
             &mut state,
         );
     }
+}
+
+fn draw_empty_session(frame: &mut Frame<'_>, area: Rect, title: &str, detail: &str) {
+    let width = area.width.saturating_sub(4).min(72);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height / 3;
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(title, Style::default().fg(theme::text()).bold()),
+            Line::default(),
+            Line::styled(detail, Style::default().fg(theme::muted())),
+        ]),
+        Rect::new(x, y, width, area.height.saturating_sub(y - area.y).min(3)),
+    );
 }
 
 fn draw_selection(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -158,12 +200,6 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
     let mut rendered_any = false;
     let mut previous_compact = false;
     let mut index = 0;
-    let latest_turn_start = app
-        .conversation
-        .iter()
-        .rposition(|entry| matches!(entry.kind, ConversationKind::User { .. }))
-        .unwrap_or(0);
-
     while index < app.conversation.len() {
         let entry = &app.conversation[index];
         if matches!(
@@ -175,27 +211,21 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
         }
 
         let starts_tool_work = matches!(&entry.kind, ConversationKind::ToolCall { .. })
-            || matches!(
-                &entry.kind,
-                ConversationKind::Reasoning {
-                    content,
-                    summary: Some(summary),
-                } if content.trim().is_empty() && !summary.trim().is_empty()
-            );
+            || summary_only_reasoning(app, entry).is_some();
         if starts_tool_work {
-            let start = index;
             let mut end = index;
             let mut events = Vec::new();
             while end < app.conversation.len() {
-                match &app.conversation[end].kind {
+                let current = &app.conversation[end];
+                match &current.kind {
                     ConversationKind::ToolCall { tool_call } => {
                         events.push(WorkEvent::Tool(tool_call));
                     }
-                    ConversationKind::Reasoning {
-                        content,
-                        summary: Some(summary),
-                    } if content.trim().is_empty() && !summary.trim().is_empty() => {
-                        events.push(WorkEvent::Reasoning(summary.as_str()));
+                    ConversationKind::Reasoning { .. } => {
+                        match summary_only_reasoning(app, current) {
+                            Some(summary) => events.push(WorkEvent::Reasoning(summary)),
+                            None => break,
+                        }
                     }
                     ConversationKind::Activity { activity } if !terminal_activity(activity) => {}
                     _ => break,
@@ -208,29 +238,76 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
                 .any(|event| matches!(event, WorkEvent::Tool(_)))
             {
                 index = end;
-                lines.extend(tool_group_lines(
-                    app,
-                    &events,
-                    width,
-                    app.state.is_streaming && start >= latest_turn_start,
-                ));
-                rendered_any = true;
-                previous_compact = true;
+                let work = tool_group_lines(&events, width);
+                if !work.is_empty() {
+                    if rendered_any && !previous_compact {
+                        lines.push(Line::default());
+                    }
+                    lines.extend(work);
+                    rendered_any = true;
+                    previous_compact = true;
+                }
                 continue;
             }
         }
 
         let compact = compact_transcript_entry(&entry.kind);
-        if rendered_any && (!compact || !previous_compact) {
-            lines.push(Line::from(""));
+        let entry_content = entry_lines(app, entry, width);
+        if entry_content.is_empty() {
+            index += 1;
+            continue;
         }
-        lines.extend(entry_lines(app, entry, width));
+        if rendered_any && (!compact || !previous_compact) {
+            if previous_compact && matches!(entry.kind, ConversationKind::Assistant { .. }) {
+                lines.push(Line::styled(
+                    "─".repeat(width.saturating_sub(2) as usize),
+                    Style::default().fg(theme::border_dim()),
+                ));
+            } else {
+                lines.push(Line::default());
+            }
+        }
+        lines.extend(entry_content);
         rendered_any = true;
-        previous_compact = compact;
+        previous_compact = compact
+            || matches!(&entry.kind, ConversationKind::Assistant { tool_calls, .. } if !tool_calls.is_empty());
         index += 1;
     }
 
     Text::from(lines)
+}
+
+fn reasoning_parts<'a>(
+    app: &'a App,
+    entry: &'a ConversationEntry,
+) -> Option<(&'a str, Option<&'a str>)> {
+    let ConversationKind::Reasoning { content, summary } = &entry.kind else {
+        return None;
+    };
+    if app.state.active_reasoning_entry_id.as_deref() != Some(entry.id.as_str()) {
+        return Some((content, summary.as_deref()));
+    }
+    Some((
+        if app.state.active_reasoning_text.is_empty() {
+            content
+        } else {
+            &app.state.active_reasoning_text
+        },
+        if app.state.active_reasoning_summary.is_empty() {
+            summary.as_deref()
+        } else {
+            Some(&app.state.active_reasoning_summary)
+        },
+    ))
+}
+
+fn summary_only_reasoning<'a>(app: &'a App, entry: &'a ConversationEntry) -> Option<&'a str> {
+    let (content, summary) = reasoning_parts(app, entry)?;
+    content
+        .trim()
+        .is_empty()
+        .then_some(summary?.trim())
+        .filter(|summary| !summary.is_empty())
 }
 
 fn compact_transcript_entry(kind: &ConversationKind) -> bool {
@@ -272,77 +349,32 @@ fn visible_terminal_activity(activity: &crate::model::ModelActivity) -> bool {
 
 fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'static>> {
     match &entry.kind {
-        ConversationKind::User { content } => {
-            let mut lines = vec![
-                Line::from(Span::styled(
-                    "▌ You",
-                    Style::default()
-                        .fg(theme::user())
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .style(Style::default().bg(theme::user_surface())),
-            ];
-            for line in content.lines() {
-                lines.extend(prefixed_wrapped_line(
-                    Span::styled("▌ ", Style::default().fg(theme::user())),
-                    Line::from(Span::styled(
-                        line.to_owned(),
-                        Style::default().fg(theme::text()),
-                    )),
-                    width,
-                ));
-            }
-            for line in &mut lines {
-                line.style = line.style.bg(theme::user_surface());
-                let padding = usize::from(width).saturating_sub(line.width());
-                line.spans.push(Span::raw(" ".repeat(padding)));
-            }
-            lines
-        }
+        ConversationKind::User { content } => user_message_lines(content, width),
         ConversationKind::Assistant {
             content,
             tool_calls,
         } => {
-            let content =
-                if app.state.active_assistant_entry_id.as_deref() == Some(entry.id.as_str()) {
-                    &app.state.active_assistant_text
-                } else {
-                    content
-                };
-            let mut lines = if content.trim().is_empty() {
-                Vec::new()
+            let content = if app.state.active_assistant_entry_id.as_deref()
+                == Some(entry.id.as_str())
+                && !app.state.active_assistant_text.is_empty()
+            {
+                &app.state.active_assistant_text
             } else {
-                vec![Line::styled("◆ Yeet", theme::brand())]
+                content
             };
-            for line in markdown_lines(content) {
-                lines.extend(prefixed_wrapped_line(
-                    Span::styled("  │ ", Style::default().fg(theme::border_dim())),
-                    line,
-                    width,
-                ));
+            let mut lines = Vec::new();
+            for line in session_markdown_lines(content) {
+                lines.extend(prefixed_wrapped_line(Span::raw("  "), line, width));
             }
             let tool_events = tool_calls.iter().map(WorkEvent::Tool).collect::<Vec<_>>();
-            lines.extend(tool_group_lines(
-                app,
-                &tool_events,
-                width,
-                app.state.is_streaming,
-            ));
+            lines.extend(tool_group_lines(&tool_events, width));
             lines
         }
         ConversationKind::Reasoning { content, summary } => {
             let (content, summary) =
-                if app.state.active_reasoning_entry_id.as_deref() == Some(entry.id.as_str()) {
-                    (
-                        app.state.active_reasoning_text.as_str(),
-                        (!app.state.active_reasoning_summary.is_empty())
-                            .then_some(app.state.active_reasoning_summary.as_str()),
-                    )
-                } else {
-                    (content.as_str(), summary.as_deref())
-                };
+                reasoning_parts(app, entry).unwrap_or((content.as_str(), summary.as_deref()));
             let mut lines = vec![Line::from(vec![
-                Span::styled("  ◇ ", Style::default().fg(theme::accent_warm())),
+                Span::styled("  \u{f02d} ", Style::default().fg(theme::accent_warm())),
                 Span::styled(
                     "Thinking",
                     Style::default()
@@ -358,9 +390,9 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                     "  │   ",
                 ));
             }
-            for line in markdown_lines(content) {
+            for line in session_markdown_lines(content) {
                 lines.extend(prefixed_wrapped_line(
-                    Span::styled("  │ ", Style::default().fg(theme::border_dim())),
+                    Span::styled("  │ ", Style::default().fg(theme::surface_color())),
                     line.style(Style::default().fg(theme::muted())),
                     width,
                 ));
@@ -371,12 +403,9 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             let latest = app.state.active_activity_entry_id.as_deref() == Some(entry.id.as_str());
             vec![activity_line(app, activity, false, latest, width)]
         }
-        ConversationKind::ToolCall { tool_call } => tool_group_lines(
-            app,
-            &[WorkEvent::Tool(tool_call)],
-            width,
-            app.state.is_streaming,
-        ),
+        ConversationKind::ToolCall { tool_call } => {
+            tool_group_lines(&[WorkEvent::Tool(tool_call)], width)
+        }
         ConversationKind::Skill {
             name,
             content,
@@ -424,6 +453,65 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             })
             .collect(),
     }
+}
+
+fn session_markdown_lines(content: &str) -> Vec<Line<'static>> {
+    let mut lines = markdown_lines(content);
+    for line in &mut lines {
+        for span in &mut line.spans {
+            if span.style.bg == Some(theme::code_background()) {
+                span.style = span.style.bg(theme::surface_color());
+            }
+        }
+    }
+    lines
+}
+
+fn user_message_lines(content: &str, width: u16) -> Vec<Line<'static>> {
+    if width < 8 {
+        return vec![Line::styled(
+            truncate_end(content, width as usize),
+            theme::surface(),
+        )];
+    }
+    let bubble_width = if width >= 90 {
+        ((u32::from(width) * 58 / 100) as u16).min(72)
+    } else {
+        width.saturating_sub(2)
+    };
+    let indent = usize::from(width - bubble_width);
+    let surface = theme::surface();
+    let blank = || {
+        Line::from(vec![
+            Span::raw(" ".repeat(indent)),
+            Span::styled(" ".repeat(bubble_width as usize), surface),
+        ])
+    };
+    let mut lines = Vec::new();
+    if width >= 90 {
+        lines.push(blank());
+    }
+    for source in content.split('\n') {
+        for row in prefixed_wrapped_line(
+            Span::styled(" ", surface),
+            Line::styled(source.to_owned(), surface),
+            bubble_width.saturating_sub(1),
+        ) {
+            let right_padding = (bubble_width as usize).saturating_sub(row.width());
+            let mut spans = vec![Span::raw(" ".repeat(indent))];
+            spans.extend(
+                row.spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content.into_owned(), surface.patch(span.style))),
+            );
+            spans.push(Span::styled(" ".repeat(right_padding), surface));
+            lines.push(Line::from(spans));
+        }
+    }
+    if width >= 90 {
+        lines.push(blank());
+    }
+    lines
 }
 
 fn activity_line(

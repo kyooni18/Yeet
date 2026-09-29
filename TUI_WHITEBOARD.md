@@ -574,7 +574,32 @@ Use cached/event-driven/background refreshed state.
 
 ## Current code reality
 
-As of this whiteboard, the existing native TUI shell is still conversation/session-centric.
+### Sessions implementation slice (2026-09-29)
+
+The active Sessions view is integrated into the existing conversation shell,
+using `TUI-Mockup.fig` → `Desktop / Session` as its visual reference. This is
+a deliberately scoped slice; the workbench tabs and other views described below
+remain future work.
+
+- `Mode::Chat` hosts the active conversation. `Mode::Sessions` remains the
+  searchable session picker, with its existing loading and keyboard behavior.
+- `src/ui.rs` is a facade. `src/ui/sessions.rs` owns the transcript viewport,
+  selection, and message presentation; `src/ui/sessions/tools.rs` owns tool traces.
+  Shared rendering, text layout, and live progress live in concern-based modules
+  under `src/ui/`; the arbitrary `ui_parts` includes are removed.
+- Reuse the shell's workspace/session rail, responsive geometry, theme tokens,
+  composer, status, and overlays. No replacement shell or global tabs are added.
+- Conversation entries and live bridge fields are the source of displayed data.
+  Mockup text belongs only in design references, never in runtime state. Missing
+  conversation data has an explicit empty/unavailable state.
+- Tool rows keep their recorded order and use backend operation labels/details
+  when present. The backend updates the current activity entry in place, so
+  its live title and detail are also shown in the persistent task strip.
+- Use Nerd Font equivalents for the mockup's raster/vector tool icons. The
+  terminal controls the actual font; the application keeps the selected theme.
+
+The initial whiteboard described the native TUI as conversation/session-centric.
+It remains the current shell and now hosts the active session conversation view.
 
 Key current implementation:
 
@@ -596,7 +621,9 @@ Key current implementation:
 
 The implementation should evolve these concepts rather than bolt a second unrelated shell beside them.
 
-The current session sidebar code in src/ui/shell.rs is a migration target, not the intended final model.
+`src/ui/shell.rs` continues to own the workspace/session rail for this view. Its
+rows remain compact and session-oriented; a future non-session view may provide
+different contextual content within the same shell.
 
 ## Migration strategy
 

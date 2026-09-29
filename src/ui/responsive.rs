@@ -103,8 +103,8 @@ pub(super) fn metrics(area: Rect) -> Metrics {
             input_min_lines: if area.height >= 28 { 2 } else { 1 },
             input_max_lines: 7,
             horizontal_margin: 3,
-            content_max_width: 112,
-            sidebar_width: sidebar_width(area, 32),
+            content_max_width: 136,
+            sidebar_width: sidebar_width(area, 30),
         },
         Shape::UltraWide => Metrics {
             shape,
@@ -115,8 +115,8 @@ pub(super) fn metrics(area: Rect) -> Metrics {
             input_min_lines: if area.height >= 28 { 2 } else { 1 },
             input_max_lines: if area.height >= 36 { 8 } else { 6 },
             horizontal_margin: 4,
-            content_max_width: 120,
-            sidebar_width: sidebar_width(area, 34),
+            content_max_width: 136,
+            sidebar_width: sidebar_width(area, 30),
         },
     }
 }

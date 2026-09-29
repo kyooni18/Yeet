@@ -29,6 +29,10 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App) -> Rect {
     } else {
         bounds
     };
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::code_background())),
+        body,
+    );
     let rows = Layout::vertical([
         Constraint::Length(adaptive.header_height),
         Constraint::Min(1),
@@ -169,7 +173,7 @@ fn shell_sidebar_width(bounds: Rect, adaptive: responsive::Metrics) -> Option<u1
 
 fn sidebar_block() -> Block<'static> {
     Block::default()
-        .style(theme::surface())
+        .style(theme::base())
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(theme::border_dim()))
         .padding(Padding::new(1, 1, 1, 1))
@@ -422,7 +426,7 @@ fn append_workspace_sessions(
                 .iter()
                 .enumerate()
                 .filter(|(candidate, _)| *candidate != index)
-                .take(2)
+                .take(4)
                 .map(|(_, session)| session_row(session, false, app)),
         );
     } else {
@@ -435,7 +439,7 @@ fn append_workspace_sessions(
         rows.extend(
             sessions
                 .iter()
-                .take(2)
+                .take(4)
                 .map(|session| session_row(session, false, app)),
         );
     }

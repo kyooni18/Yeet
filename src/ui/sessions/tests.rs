@@ -31,9 +31,8 @@ mod compact_tool_group_tests {
         calls[0].status = ToolCallStatus::Failed;
         calls[1].status = ToolCallStatus::Running;
         let events = calls.iter().map(WorkEvent::Tool).collect::<Vec<_>>();
-        let app = App::default();
-        let lines = tool_group_lines(&app, &events, 100, true);
-        assert_eq!(lines.len(), 3); // one row per adjacent status/action group
+        let lines = tool_group_lines(&events, 100);
+        assert_eq!(lines.len(), 8); // distinct operations retain their transcript order
         let text = lines
             .iter()
             .map(Line::to_string)
@@ -47,11 +46,13 @@ mod compact_tool_group_tests {
         assert!(!text.contains("pattern"));
         assert!(text.contains("Failed · Ran command"));
         assert!(text.contains("Running command"));
-        assert!(text.contains("Shell ×6"));
-        assert_eq!(tool_group_lines(&app, &events, 100, false).len(), 3);
+        for index in 0..8 {
+            assert!(text.contains(&format!("Check {index}")), "{text}");
+        }
+        assert_eq!(tool_group_lines(&events, 100).len(), 8);
         for width in [0, 1, 2, 12, 24, 80] {
             assert!(
-                tool_group_lines(&app, &events, width, true)
+                tool_group_lines(&events, width)
                     .iter()
                     .all(|line| line.width() <= usize::from(width))
             );
@@ -79,15 +80,23 @@ mod compact_tool_group_tests {
             result: None,
             error: None,
         };
-        let calls = [
+        let mut calls = [
             call("1", "web_search"),
             call("2", "web_read"),
             call("3", "web_search"),
             call("4", "web_read"),
         ];
+        for (call, (label, detail)) in calls.iter_mut().zip([
+            ("Search", "searched source alpha"),
+            ("Read", "read source alpha"),
+            ("Search", "searched source beta"),
+            ("Read", "read source beta"),
+        ]) {
+            call.label = Some(label.into());
+            call.detail = Some(detail.into());
+        }
         let events = calls.iter().map(WorkEvent::Tool).collect::<Vec<_>>();
-        let app = App::default();
-        let text = tool_group_lines(&app, &events, 100, false)
+        let text = tool_group_lines(&events, 100)
             .iter()
             .map(Line::to_string)
             .collect::<Vec<_>>()
@@ -95,8 +104,13 @@ mod compact_tool_group_tests {
 
         assert!(!text.contains("Activity"));
         assert!(text.lines().all(|line| line.starts_with("  │ ")));
-        assert!(!text.contains("Search web ×2"));
-        assert!(!text.contains("Read web ×2"));
+        let first_search = text.find("searched source alpha").expect("first search");
+        let first_read = text.find("read source alpha").expect("first read");
+        let second_search = text.find("searched source beta").expect("second search");
+        let second_read = text.find("read source beta").expect("second read");
+        assert!(first_search < first_read);
+        assert!(first_read < second_search);
+        assert!(second_search < second_read);
         let rows = chronological_activity_rows(&events);
         assert_eq!(rows.len(), 4);
     }
@@ -169,11 +183,11 @@ mod compact_tool_group_tests {
             .join("\n");
 
         let reasoning_1 = text.find("Checking sources").expect("first reasoning");
-        let search = text.find("⌕").expect("search tool");
+        let search = text.find('\u{f002}').expect("search tool Nerd Font icon");
         let reasoning_2 = text
             .find("Cross-checking claims")
             .expect("second reasoning");
-        let read = text.find("▤").expect("read tool");
+        let read = text.find('\u{f02d}').expect("read tool Nerd Font icon");
         assert!(reasoning_1 < search);
         assert!(search < reasoning_2);
         assert!(reasoning_2 < read);
@@ -226,5 +240,61 @@ mod compact_tool_group_tests {
             }),
             "{summary_line:?}"
         );
+    }
+
+    #[test]
+    fn streaming_reasoning_summary_uses_live_state_in_tool_trace() {
+        let call = crate::model::ConversationToolCall {
+            id: "live-search".into(),
+            index: None,
+            call_id: None,
+            name: "web_search".into(),
+            arguments: "{}".into(),
+            status: ToolCallStatus::Running,
+            label: Some("Search".into()),
+            detail: Some("current query".into()),
+            started_at: None,
+            ended_at: None,
+            duration_ms: None,
+            attempt: None,
+            parent_call_id: None,
+            parallel_group_id: None,
+            job_id: None,
+            result: None,
+            error: None,
+        };
+        let mut app = App::default();
+        app.state.is_streaming = true;
+        app.state.active_reasoning_entry_id = Some("reasoning".into());
+        app.state.active_reasoning_summary = "**Live qualification check**".into();
+        app.conversation = vec![
+            ConversationEntry {
+                id: "reasoning".into(),
+                kind: ConversationKind::Reasoning {
+                    content: String::new(),
+                    summary: Some("Stale persisted summary".into()),
+                },
+            },
+            ConversationEntry {
+                id: "search".into(),
+                kind: ConversationKind::ToolCall {
+                    tool_call: call.clone(),
+                },
+            },
+        ];
+
+        let transcript = transcript_text(&app, 100);
+        let text = transcript
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Live qualification check"), "{text}");
+        assert!(!text.contains("Stale persisted summary"), "{text}");
+        assert!(text.contains("current query"), "{text}");
+        let reasoning = text.find("Live qualification check").unwrap();
+        let search = text.find("current query").unwrap();
+        assert!(reasoning < search);
     }
 }

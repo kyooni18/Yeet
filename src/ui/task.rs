@@ -495,7 +495,13 @@ pub(super) fn live_operation(app: &App) -> Option<LiveOperation> {
         });
     }
 
-    None
+    app.state.is_streaming.then(|| {
+        let (label, detail) = live_activity(app);
+        LiveOperation {
+            label,
+            detail: detail.map(str::to_owned),
+        }
+    })
 }
 
 fn live_reasoning_detail(app: &App) -> Option<String> {
