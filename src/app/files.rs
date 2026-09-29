@@ -32,6 +32,7 @@ pub struct FilesState {
     pub hints: bool,
     pub count: Option<usize>,
     pub find: Option<String>,
+    pub find_locked: bool,
     pub tabs: Vec<PathBuf>,
     pub active_tab: Option<usize>,
     pub changed: HashMap<String, String>,
@@ -132,6 +133,7 @@ impl FilesState {
     fn set_dir(&mut self, dir: PathBuf) {
         self.dir = dir;
         self.find = None;
+        self.find_locked = false;
         self.reload();
     }
 
@@ -173,6 +175,9 @@ impl FilesState {
     /// Raw text entry while the find prompt is open; everything else goes
     /// through the keymap.
     pub fn handle_find_key(&mut self, event: KeyEvent) -> bool {
+        if self.find_locked {
+            return false;
+        }
         let Some(query) = self.find.as_mut() else {
             return false;
         };
@@ -182,9 +187,13 @@ impl FilesState {
                 if query.is_empty() {
                     self.find = None;
                 } else {
-                    self.open_selected(false);
-                    return true;
+                    self.find_locked = true;
                 }
+                return true;
+            }
+            KeyCode::Up | KeyCode::Down => {
+                self.move_cursor(if event.code == KeyCode::Up { -1 } else { 1 });
+                return true;
             }
             KeyCode::Backspace => {
                 query.pop();
@@ -202,6 +211,12 @@ impl FilesState {
     pub fn apply(&mut self, action: Action) -> FilesOutcome {
         match action {
             Action::Close if self.hints => self.hints = false,
+            Action::Close if self.find.is_some() => {
+                self.find = None;
+                self.find_locked = false;
+                self.cursor = 0;
+                self.refresh_detail();
+            }
             Action::Close | Action::FocusInput => return FilesOutcome::Close,
             Action::ToggleHints => self.hints = !self.hints,
             Action::ToggleInfo => self.info = !self.info,
@@ -215,8 +230,8 @@ impl FilesState {
                 self.refresh_detail();
             }
             Action::Find => {
-                self.find = Some(String::new());
-                self.cursor = 0;
+                self.find.get_or_insert_with(String::new);
+                self.find_locked = false;
             }
             Action::ParentFolder => self.go_parent(),
             Action::OpenAsTab => self.open_selected(true),
@@ -419,6 +434,10 @@ mod tests {
             key(&mut files, KeyCode::Char(c));
         }
         assert_eq!(files.visible().len(), 1);
+        key(&mut files, KeyCode::Enter);
+        assert!(files.find_locked);
+        key(&mut files, KeyCode::Char('j'));
+        assert_eq!(files.find.as_deref(), Some("bet"));
         key(&mut files, KeyCode::Esc);
         assert_eq!(files.visible().len(), 3);
 

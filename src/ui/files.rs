@@ -78,7 +78,10 @@ fn draw_location(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         Line::from(vec![
             Span::styled(" / ", Style::default().fg(theme::accent())),
             Span::styled(query.clone(), Style::default().fg(theme::text())),
-            Span::styled("▌", Style::default().fg(theme::accent())),
+            Span::styled(
+                if files.find_locked { "" } else { "▌" },
+                Style::default().fg(theme::accent()),
+            ),
         ])
     } else {
         let parts: Vec<String> = files
