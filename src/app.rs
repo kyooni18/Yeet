@@ -44,6 +44,7 @@ pub enum Mode {
     Status,
     Help,
     Files,
+    Views,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +95,8 @@ pub struct App {
     pub input: String,
     pub cursor: usize,
     pub mode: Mode,
+    pub views_origin: Mode,
+    pub views_index: usize,
     pub popup_filter: String,
     pub popup_index: usize,
     pub capability_detail_id: Option<String>,
@@ -153,6 +156,8 @@ impl Default for App {
             input: String::new(),
             cursor: 0,
             mode: Mode::Chat,
+            views_origin: Mode::Chat,
+            views_index: 0,
             popup_filter: String::new(),
             popup_index: 0,
             capability_detail_id: None,
@@ -444,6 +449,10 @@ impl App {
             }
             Mode::Files => {
                 self.handle_files_key(event);
+                Ok(())
+            }
+            Mode::Views => {
+                self.handle_views_key(event);
                 Ok(())
             }
             Mode::Chat => self.handle_chat_key(event, backend),
@@ -808,7 +817,11 @@ impl App {
                     self.follow_tail = true;
                     return Ok(());
                 }
-                if self.state.is_streaming && !text.starts_with('/') && text != "?" {
+                if self.state.is_streaming
+                    && !text.starts_with('/')
+                    && text != "?"
+                    && text != "./views"
+                {
                     return Ok(());
                 }
                 match text.as_str() {
@@ -822,6 +835,7 @@ impl App {
                     "/goal" => self.open_goal(),
                     "/sessions" => self.open_sessions(backend)?,
                     "/files" => self.open_files(),
+                    "/views" | "./views" => self.open_views(),
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
                     "/permissions" => {
@@ -1393,6 +1407,41 @@ impl App {
         self.clear_editor();
     }
 
+    fn open_views(&mut self) {
+        self.views_origin = if self.mode == Mode::Files {
+            Mode::Files
+        } else {
+            Mode::Chat
+        };
+        self.views_index = usize::from(self.views_origin == Mode::Files);
+        self.mode = Mode::Views;
+    }
+
+    fn handle_views_key(&mut self, event: KeyEvent) {
+        if !event.modifiers.is_empty() {
+            return;
+        }
+        match event.code {
+            KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
+                self.mode = self.views_origin;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.views_index = self.views_index.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.views_index = (self.views_index + 1).min(1);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Right => {
+                if self.views_index == 0 {
+                    self.mode = Mode::Chat;
+                } else {
+                    self.open_files();
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn clamp_popup_selection(&mut self) {
         let count = match self.mode {
             Mode::Models => self.filtered_models().len(),
@@ -1684,6 +1733,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/permissions", "Sandbox and permission settings"),
     ("/sessions", "Browse saved chats"),
     ("/files", "Browse workspace files"),
+    ("/views", "Switch between Sessions and Files"),
     ("/capabilities", "Toggle skills, capabilities, and MCP"),
     ("/skyline", "Attach or detach Skyline coordination"),
     ("/image", "Queue an image for the next turn"),

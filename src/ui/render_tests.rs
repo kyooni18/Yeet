@@ -39,6 +39,17 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
 }
 
 #[test]
+fn views_switcher_renders_vertical_choices() {
+    let mut app = App::default();
+    app.mode = Mode::Views;
+    let (text, _) = render(&mut app, 60, 16);
+    let lines = text.lines().collect::<Vec<_>>();
+    let sessions = lines.iter().position(|line| line.contains("Sessions"));
+    let files = lines.iter().position(|line| line.contains("Files"));
+    assert!(sessions.is_some_and(|row| files == Some(row + 1)), "{text}");
+}
+
+#[test]
 fn unfocused_composer_uses_quieter_surface_than_focused_input() {
     let mut app = App::default();
     let bounds = ratatui::layout::Rect::new(0, 0, 60, 5);

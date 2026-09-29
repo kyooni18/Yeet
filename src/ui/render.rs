@@ -1,5 +1,5 @@
 //! Existing app shell, composer, status, and overlay orchestration.
-use super::{chrome, composer, dialogs, responsive, sessions, shell, status, task, theme};
+use super::{chrome, composer, dialogs, responsive, sessions, shell, status, task, theme, views};
 use crate::app::{App, Mode};
 use composer::draw as draw_input;
 use dialogs::{
@@ -17,8 +17,11 @@ use ratatui::{
 use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
-    if app.mode == Mode::Files {
+    if app.mode == Mode::Files || (app.mode == Mode::Views && app.views_origin == Mode::Files) {
         super::files::draw(frame, app);
+        if app.mode == Mode::Views {
+            views::draw(frame, app);
+        }
         return;
     }
     if app.state.is_streaming {
@@ -121,6 +124,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         }
         Mode::Status => draw_status_dialog(frame, app),
         Mode::Help => draw_help(frame),
+        Mode::Views => views::draw(frame, app),
         Mode::Chat | Mode::Files => {}
     }
 

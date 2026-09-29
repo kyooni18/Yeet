@@ -218,6 +218,7 @@ impl FilesState {
             Action::ParentFolder => self.go_parent(),
             Action::OpenAsTab => self.open_selected(true),
             Action::OpenEntry => self.open_selected(false),
+            Action::OpenViews => {}
             Action::MoveDown => self.move_cursor(1),
             Action::MoveUp => self.move_cursor(-1),
             Action::MoveTop => self.move_cursor(isize::MIN / 2),
@@ -292,16 +293,24 @@ impl App {
     }
 
     pub(crate) fn handle_files_key(&mut self, event: KeyEvent) {
+        if self
+            .files
+            .as_mut()
+            .is_some_and(|files| files.handle_find_key(event))
+        {
+            return;
+        }
         let Some(files) = self.files.as_mut() else {
             self.mode = Mode::Chat;
             return;
         };
-        if files.handle_find_key(event) {
-            return;
-        }
         let Some(action) = self.keymap.lookup(Context::Files, &event) else {
             return;
         };
+        if action == Action::OpenViews {
+            self.open_views();
+            return;
+        }
         if files.apply(action) == FilesOutcome::Close {
             self.mode = Mode::Chat;
         }

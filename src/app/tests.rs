@@ -339,6 +339,43 @@ fn new_command_is_suggested() {
 }
 
 #[test]
+fn views_switcher_navigates_and_opens_existing_views() {
+    let mut app = App::default();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.input = "/vie".into();
+    assert!(
+        app.command_suggestions()
+            .iter()
+            .any(|(name, _)| name == "/views")
+    );
+
+    app.open_views();
+    assert_eq!(app.views_index, 0);
+    app.handle_views_key(key(KeyCode::Char('j')));
+    assert_eq!(app.views_index, 1);
+    app.handle_views_key(key(KeyCode::Char('k')));
+    assert_eq!(app.views_index, 0);
+    app.handle_views_key(key(KeyCode::Right));
+    assert_eq!(app.mode, Mode::Chat);
+
+    app.open_views();
+    app.handle_views_key(key(KeyCode::Down));
+    app.handle_views_key(key(KeyCode::Enter));
+    assert_eq!(app.mode, Mode::Files);
+    app.open_views();
+    assert_eq!(app.views_index, 1);
+    app.handle_views_key(key(KeyCode::Left));
+    assert_eq!(app.mode, Mode::Files);
+    app.open_views();
+    app.handle_views_key(key(KeyCode::Char(' ')));
+    assert_eq!(app.mode, Mode::Files);
+    app.open_views();
+    app.handle_views_key(key(KeyCode::Up));
+    app.handle_views_key(key(KeyCode::Char('l')));
+    assert_eq!(app.mode, Mode::Chat);
+}
+
+#[test]
 fn goal_command_is_suggested() {
     let app = App {
         input: "/goa".into(),
@@ -509,6 +546,7 @@ fn ctrl_c_interrupts_streaming_non_chat_modes_without_stealing_chat_copy() {
         Mode::Status,
         Mode::Help,
         Mode::Files,
+        Mode::Views,
         Mode::Debate,
     ] {
         assert!(

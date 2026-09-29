@@ -14,6 +14,7 @@ mod tabbar;
 mod task;
 mod text;
 mod theme;
+mod views;
 mod yeet_brand;
 
 pub use render::draw;
