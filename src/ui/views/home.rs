@@ -36,9 +36,11 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         .min(body.width.saturating_sub(30));
     let work = Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
     draw_recent(frame, work[0]);
-    // The reference Overview is one surface: activity/change list above, provider
-    // usage anchored at the bottom. It does not have a second detail inspector.
-    draw_activity(frame, work[1]);
+    // The mockup's main surface is a 50/50 activity and detail-inspector split.
+    let panes =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(work[1]);
+    draw_activity(frame, panes[0]);
+    draw_inspector(frame, panes[1]);
     let composer = Rect::new(
         bounds.x.saturating_add(rail_width),
         rows[2].y,
@@ -299,6 +301,48 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
             ),
         );
     }
+}
+
+fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::surface_color())),
+        area,
+    );
+    let pad = 2.min(area.width);
+    let content = Rect::new(
+        area.x + pad,
+        area.y + 2.min(area.height),
+        area.width.saturating_sub(pad + 1),
+        area.height.saturating_sub(4),
+    );
+    let title = Style::default().fg(theme::text()).add_modifier(ACTIVE);
+    let secondary = Style::default().fg(theme::muted());
+    let body = Style::default().fg(theme::text_dim());
+    let text = vec![
+        Line::from(Span::styled("Accept a 3.2 km floor?", title)),
+        Line::raw(""),
+        Line::from(Span::styled("Verification · Landing · 4m ago", secondary)),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Sweep at 3 km misses Final speed for headings above 270°.",
+            body,
+        )),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Tightest flyable radius is 3.2 km; nominal is 12 km.",
+            body,
+        )),
+        Line::raw(""),
+        Line::from(Span::styled("a   Accept 3.2 km floor", title)),
+        Line::raw(""),
+        Line::from(Span::styled("b   Keep 3.0 km and add margin", body)),
+        Line::raw(""),
+        Line::from(Span::styled("c   Have Planner re-sweep first", body)),
+    ];
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), content);
 }
 
 fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
