@@ -344,10 +344,12 @@ fn views_switcher_navigates_and_opens_existing_views() {
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     app.input = "/vie".into();
     assert!(
-        app.command_suggestions()
+        !app.command_suggestions()
             .iter()
             .any(|(name, _)| name == "/views")
     );
+    app.input = "./views".into();
+    assert!(app.command_suggestions().is_empty());
 
     app.open_views();
     assert_eq!(app.views_index, 0);

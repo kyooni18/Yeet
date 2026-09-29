@@ -835,7 +835,7 @@ impl App {
                     "/goal" => self.open_goal(),
                     "/sessions" => self.open_sessions(backend)?,
                     "/files" => self.open_files(),
-                    "/views" | "./views" => self.open_views(),
+                    "./views" => self.open_views(),
                     "/capabilities" => self.open_capabilities(backend)?,
                     "/settings" => self.open_settings(backend)?,
                     "/permissions" => {
@@ -1733,7 +1733,6 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/permissions", "Sandbox and permission settings"),
     ("/sessions", "Browse saved chats"),
     ("/files", "Browse workspace files"),
-    ("/views", "Switch between Sessions and Files"),
     ("/capabilities", "Toggle skills, capabilities, and MCP"),
     ("/skyline", "Attach or detach Skyline coordination"),
     ("/image", "Queue an image for the next turn"),
