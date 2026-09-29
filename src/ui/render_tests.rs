@@ -27,8 +27,8 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
         let mut app = App::default();
         let (text, _) = render(&mut app, width, height);
         assert!(text.contains('+'), "composer at {width}x{height}");
-        if height >= 24 {
-            assert!(text.contains("What are we building?"));
+        if height >= 24 && width >= 110 {
+            assert!(text.contains("Verification: accept a 3.2 km floor?"));
         }
     }
 }

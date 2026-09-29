@@ -1,5 +1,6 @@
 //! Tests for the parent module.
 
+use super::input::byte_index;
 use super::*;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
