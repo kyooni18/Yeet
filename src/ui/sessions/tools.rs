@@ -518,51 +518,26 @@ fn summarize_values(values: &[&str]) -> String {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(in crate::ui) enum WorkEvent<'a> {
-    Reasoning(&'a str),
-    Tool(&'a crate::model::ConversationToolCall),
-}
-
-pub(in crate::ui) enum ActivityRow<'a> {
-    Reasoning(String),
-    Tool {
-        call: &'a crate::model::ConversationToolCall,
-        count: usize,
-    },
-}
-
-pub(super) fn chronological_activity_rows<'a>(events: &[WorkEvent<'a>]) -> Vec<ActivityRow<'a>> {
-    let mut rows = Vec::new();
-    for event in events {
-        match *event {
-            WorkEvent::Reasoning(summary) => {
-                rows.extend(
-                    reasoning_summary_items(summary)
-                        .into_iter()
-                        .map(ActivityRow::Reasoning),
-                );
-            }
-            WorkEvent::Tool(call) => {
-                if matches!(call.status, ToolCallStatus::Suppressed) {
-                    continue;
-                }
-                if let Some(ActivityRow::Tool {
-                    call: previous,
-                    count,
-                }) = rows.last_mut()
-                    && previous.name == call.name
+fn collapse_repeats<'a>(
+    calls: &[&'a crate::model::ConversationToolCall],
+) -> Vec<(&'a crate::model::ConversationToolCall, usize)> {
+    let mut rows: Vec<(&crate::model::ConversationToolCall, usize)> = Vec::new();
+    for &call in calls {
+        if matches!(call.status, ToolCallStatus::Suppressed) {
+            continue;
+        }
+        match rows.last_mut() {
+            Some((previous, count))
+                if previous.name == call.name
                     && tool_call_status_bucket(previous) == 0
                     && tool_call_status_bucket(call) == 0
                     && previous.label == call.label
                     && previous.detail == call.detail
-                    && previous.arguments == call.arguments
-                {
-                    *count += 1;
-                } else {
-                    rows.push(ActivityRow::Tool { call, count: 1 });
-                }
+                    && previous.arguments == call.arguments =>
+            {
+                *count += 1;
             }
+            _ => rows.push((call, 1)),
         }
     }
     rows
@@ -620,33 +595,6 @@ pub(in crate::ui) fn reasoning_summary_items(summary: &str) -> Vec<String> {
         .collect()
 }
 
-pub(in crate::ui) fn reasoning_summary_render_lines(
-    summary: &str,
-    width: u16,
-    first_prefix: &str,
-    continuation_prefix: &str,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for item in reasoning_summary_items(summary) {
-        for (index, line) in markdown_lines(&item).into_iter().enumerate() {
-            let prefix = if index == 0 {
-                first_prefix
-            } else {
-                continuation_prefix
-            };
-            lines.extend(prefixed_wrapped_line(
-                Span::styled(
-                    prefix.to_owned(),
-                    Style::default().fg(theme::surface_color()),
-                ),
-                line.style(Style::default().fg(theme::text_dim())),
-                width,
-            ));
-        }
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tool_summary_layout_tests {
     use super::*;
@@ -683,7 +631,10 @@ mod tool_summary_layout_tests {
             Some("src/ui.rs for elapsed_ms")
         );
         let shell = call("run_shell", ToolCallStatus::Completed);
-        assert_eq!(tool_activity_summary(&shell).as_deref(), Some("cargo check"));
+        assert_eq!(
+            tool_activity_summary(&shell).as_deref(),
+            Some("cargo check")
+        );
     }
 
     #[test]
@@ -868,9 +819,7 @@ pub(in crate::ui) fn work_group_lines(
                 let failed = calls.iter().any(|call| is_failed(call));
                 let expanded = expand_all || active || failed;
                 let icons = group_icons(calls);
-                let title = title
-                    .clone()
-                    .unwrap_or_else(|| fallback_group_title(calls));
+                let title = title.clone().unwrap_or_else(|| fallback_group_title(calls));
                 let lead = if active {
                     format!(" {} ", spinner())
                 } else {
@@ -884,7 +833,9 @@ pub(in crate::ui) fn work_group_lines(
                         + Span::raw(&chevron).width(),
                 );
                 let title_style = if active {
-                    Style::default().fg(theme::text()).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(theme::text())
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme::text_dim())
                 };
@@ -901,11 +852,7 @@ pub(in crate::ui) fn work_group_lines(
                     Span::styled(chevron, muted),
                 ]));
                 if expanded {
-                    let events = calls.iter().map(|call| WorkEvent::Tool(call)).collect::<Vec<_>>();
-                    for row in chronological_activity_rows(&events) {
-                        let ActivityRow::Tool { call, count } = row else {
-                            continue;
-                        };
+                    for (call, count) in collapse_repeats(calls) {
                         let failed = is_failed(call);
                         let mut target = tool_activity_summary(call)
                             .or_else(|| call.detail.clone())
@@ -948,9 +895,8 @@ pub(in crate::ui) fn work_group_lines(
                 let icon = "\u{f02d}";
                 let head = format!("Reasoning · {first}");
                 let chevron = format!(" {}", icons::chevron(expanded));
-                let budget = width.saturating_sub(
-                    Span::raw(&lead).width() + 2 + Span::raw(&chevron).width(),
-                );
+                let budget = width
+                    .saturating_sub(Span::raw(&lead).width() + 2 + Span::raw(&chevron).width());
                 lines.push(Line::from(vec![
                     Span::styled(lead, Style::default().fg(theme::text())),
                     Span::styled(icon.to_owned(), muted),
