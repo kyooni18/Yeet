@@ -201,7 +201,7 @@ Usage: ./install.sh [--build]
 Without options, download and install the latest Yeet release.
 
   --build    Build and install the source checkout containing this script.
-  -h, --help Show this help.
+  -h|--help Show this help.
 EOF
       exit 0
       ;;

@@ -9,8 +9,8 @@ cd "$ROOT"
 "$DOCKER" build --tag "$IMAGE" .
 
 
-# The repository installer's explicit --build path must build from source,
-# install RuntimeSource, and persist the user-local binary directory into PATH.
+# The repository installer builds from source, installs RuntimeSource, and
+# persists the user-local binary directory into PATH on Linux.
 SOURCE_INSTALL_IMAGE="${IMAGE}-source-install"
 cleanup_source_install_image() {
   "$DOCKER" image rm "$SOURCE_INSTALL_IMAGE" >/dev/null 2>&1 || true
