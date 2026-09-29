@@ -48,6 +48,20 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         views::home::draw(frame, app);
         return;
     }
+    if app.mode == Mode::Chat
+        && app.conversation.is_empty()
+        && !app.state.is_streaming
+        && app.state.current_session_id.is_none()
+        && frame.area().width >= 45
+        && frame.area().width < 110
+        && app.input.is_empty()
+        && app.state.pending_shell_permission.is_none()
+        && app.state.pending_native_app_permission.is_none()
+        && app.state.error_message.is_none()
+    {
+        views::home::draw(frame, app);
+        return;
+    }
     frame.render_widget(Block::default().style(theme::base()), frame.area());
     let adaptive = responsive::metrics(frame.area());
     let full = frame.area();
