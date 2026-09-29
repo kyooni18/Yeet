@@ -1,16 +1,6 @@
 # Yeet TUI Workbench Whiteboard
 
 Status: living design whiteboard, not a frozen specification.
-Audience: any agent working on Yeet native TUI / workbench UX.
-Scope: native TUI first. Remote/Web UI may borrow concepts later, but does not drive this design.
-
-## North star
-
-Move Yeet away from a session-centric chat application and toward an IDE-like AI workbench.
-
-A session remains a useful object, but it is no longer the root of the UX.
-
-The workbench should answer three different questions with three different surfaces:
 
 1. Top tabs: What view state do I have open?
 2. Context rail: What nearby/recent things are relevant to this view?
@@ -759,4 +749,4 @@ Do not silently let implementation diverge from this file. Either follow it or u
 
 ## Current native Overview implementation note
 
-The Home/Overview renderer currently matches the desktop mockup's major pane split: stateful tabs, compact recent rail, activity/change pane, detail inspector pane, provider usage, composer, and status bar. A 144×44 terminal preview and the mockup export were checked side by side; this verifies composition at representative dimensions, not pixel-perfect identity. Terminal glyphs, font metrics, colors, and dynamic data still vary by environment, and the rail/activity content remains representative sample data rather than a unified live object model.
+The Home/Overview renderer now includes the mockup's separate Sessions rail before the activity list and inspector. It has been compared at 144×44 terminal cells against the 1440×864 Desktop / Overview frame, so this is only a coarse structural comparison, not exact visual parity. Fixture content, pane widths, terminal glyphs, and font metrics remain different. Do not claim literal identity; record and resolve differences at the intended output scale.

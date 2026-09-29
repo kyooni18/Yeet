@@ -9,7 +9,6 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
-const RAIL_WIDTH: u16 = 23;
 const ACTIVE: Modifier = Modifier::BOLD;
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
@@ -32,22 +31,22 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     .split(content);
     draw_tabs(frame, rows[0]);
     let body = rows[1];
-    // The reference workbench has a 232px context rail in a 1440px viewport.
-    // Scale that proportion down for terminal cells while retaining useful main space.
-    let rail_width = ((body.width as u32 * 232 / 1440) as u16)
-        .clamp(14, RAIL_WIDTH)
+    // The Desktop / Overview mockup includes a separate Sessions rail.
+    let sessions_width = ((body.width as u32 * 232 / 1440) as u16)
+        .clamp(16, 24)
         .min(body.width.saturating_sub(30));
-    let work = Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
-    draw_recent(frame, work[0]);
-    // The mockup's main surface is a 50/50 activity and detail-inspector split.
+    let columns =
+        Layout::horizontal([Constraint::Length(sessions_width), Constraint::Min(1)]).split(body);
+    draw_sessions_rail(frame, columns[0]);
+    let work = columns[1];
     let panes =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(work[1]);
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(work);
     draw_activity(frame, panes[0]);
     draw_inspector(frame, panes[1]);
     let composer = Rect::new(
-        bounds.x.saturating_add(rail_width),
+        bounds.x.saturating_add(sessions_width),
         rows[2].y,
-        rows[2].width.saturating_sub(rail_width),
+        rows[2].width.saturating_sub(sessions_width),
         rows[2].height,
     );
     draw_composer(frame, app, composer);
@@ -103,7 +102,7 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
     );
 }
 
-fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
+fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Block::default().style(Style::default().bg(theme::surface_color())),
         area,
@@ -111,48 +110,40 @@ fn draw_recent(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    frame.render_widget(
-        Paragraph::new("+")
-            .alignment(ratatui::layout::Alignment::Center)
-            .style(
-                Style::default()
-                    .fg(theme::text())
-                    .bg(theme::code_background()),
-            ),
-        Rect::new(
-            area.x + 1,
-            area.y,
-            area.width.saturating_sub(2),
-            2.min(area.height),
-        ),
-    );
-    let rows = [
-        ("▤", "MM305 crosswind", "18s"),
-        ("▣", "Landing", "2 running  26m"),
-        ("▤", "TUI shell direction", "3m"),
+    let inner = area.width.saturating_sub(2) as usize;
+    let entries = [
+        ("/", "MM305 crosswind", "18s", true),
+        ("?", "TUI shell direction", "3m", false),
+        ("●", "Runtime MCP attach", "", false),
+        ("·", "Provider cleanup", "21m", false),
+        ("·", "Foundation memory", "43m", false),
     ];
-    for (index, (icon, title, trailing)) in rows.iter().enumerate() {
-        let y = area.y.saturating_add(2 + index as u16 * 2);
+    for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
+        let y = area.y.saturating_add(2 + index as u16);
         if y >= area.bottom() {
             break;
         }
-        let width = area.width.saturating_sub(2);
-        let style = Style::default().fg(theme::muted());
-        let inner_width = width as usize;
-        let trailing_width = trailing.chars().count();
-        let title_width = inner_width.saturating_sub(icon.chars().count() + trailing_width + 2);
-        let title = super::super::task::fit(title, title_width);
-        let gap = " ".repeat(
-            inner_width
-                .saturating_sub(icon.chars().count() + title.chars().count() + trailing_width + 2),
-        );
+        let style = if selected {
+            Style::default()
+                .fg(theme::text())
+                .bg(theme::selected_color())
+                .add_modifier(ACTIVE)
+        } else {
+            Style::default().fg(theme::muted())
+        };
+        let age_width = age.chars().count();
+        let title = super::super::task::fit(title, inner.saturating_sub(age_width + 4));
+        let gap = " ".repeat(inner.saturating_sub(title.chars().count() + age_width + 3));
         let line = Line::from(vec![
-            Span::styled(format!("{icon} "), style),
+            Span::styled(format!("{icon}  "), style),
             Span::styled(title, style),
             Span::raw(gap),
-            Span::styled(format!(" {trailing}"), style),
+            Span::styled(age, style),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(area.x + 1, y, width, 1));
+        frame.render_widget(
+            Paragraph::new(line).style(style),
+            Rect::new(area.x + 1, y, area.width.saturating_sub(2), 1),
+        );
     }
 }
 
