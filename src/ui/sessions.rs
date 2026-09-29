@@ -1,4 +1,5 @@
 //! Active session/conversation view. `Mode::Sessions` remains the session picker.
+mod legacy;
 pub(super) mod tools;
 use super::text::{format_elapsed, prefixed_wrapped_line, truncate_end, truncate_middle};
 use super::{markdown::markdown_lines, responsive, shell, task, theme};
@@ -18,6 +19,23 @@ use ratatui::{
 use tools::{WorkEvent, reasoning_summary_render_lines, tool_group_lines};
 
 pub(super) fn draw(
+    frame: &mut Frame<'_>,
+    app: &mut App,
+    area: Rect,
+    viewport_shape: responsive::Shape,
+) {
+    match viewport_shape {
+        responsive::Shape::Tiny
+        | responsive::Shape::ShortWide
+        | responsive::Shape::Portrait
+        | responsive::Shape::Compact => legacy::draw(frame, app, area, viewport_shape),
+        responsive::Shape::Standard | responsive::Shape::Wide | responsive::Shape::UltraWide => {
+            draw_desktop(frame, app, area, viewport_shape)
+        }
+    }
+}
+
+fn draw_desktop(
     frame: &mut Frame<'_>,
     app: &mut App,
     area: Rect,
