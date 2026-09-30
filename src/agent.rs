@@ -77,6 +77,7 @@ pub struct AgentCoordinator {
     context_key: String,
     context_memory: context::ContextMemory,
     cache_continuity: cache::ContinuityTracker,
+    observation_cache: cache::ObservationCache,
     previous_turn_working_state: Option<String>,
     attached_skills: HashSet<String>,
     skill_instruction_history: HashSet<String>,
@@ -146,6 +147,7 @@ impl AgentCoordinator {
             mut last_context_updates,
         } = self.prepare_turn(request, goal_mode)?;
         let bridge = self.bridge.client()?;
+        self.observation_cache.start_turn();
         let mut jev_attempted = false;
         let mut last_jev_instruction: Option<String> = None;
         loop {
@@ -244,6 +246,7 @@ impl AgentCoordinator {
             );
 
             let capability_snapshot = self.registry.runtime_capability_snapshot(&selected_tools);
+            self.observation_cache.bind_window(self.context_memory.id());
             let mut stable_request_overlays = turn_stable_overlays.clone();
             stable_request_overlays
                 .push(Message::system(turn_context_orientation.clone()).request_only());
@@ -368,7 +371,11 @@ impl AgentCoordinator {
             request.attached_capabilities = attached_capabilities
                 .as_deref()
                 .map(session::runtime_attached_capabilities);
-            let attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
+            let mut attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
+            let update_plans = self.observation_cache.take_plans();
+            if !update_plans.is_empty() {
+                attempt_cache_diagnostics["contextCacheUpdates"] = json!(update_plans);
+            }
             if attempt_cache_diagnostics["wireHistoryPrefixRewriteDetected"] == json!(true) {
                 bail!(
                     "Previously submitted context changed within this window; start an explicit context rollover instead of rewriting history."
@@ -382,6 +389,7 @@ impl AgentCoordinator {
                 diagnostics: attempt_cache_diagnostics.clone(),
             });
 
+            self.observation_cache.mark_submitted();
             let mut stream = bridge.stream(&request)?;
             let mut text = String::new();
             let mut emitted_text = String::new();
@@ -476,6 +484,7 @@ impl AgentCoordinator {
                 finish_usage.clone(),
             ));
             loop_budget.observe_usage(finish_usage.as_ref());
+            self.observation_cache.observe_usage(finish_usage.as_ref());
 
             let (mut calls, malformed_calls) = collect_tool_calls(decoded, partial);
             if !malformed_calls.is_empty() {
@@ -987,7 +996,7 @@ impl AgentCoordinator {
                 workspace_write_generation = current_write_generation;
                 let (normalized, output_images) =
                     normalize_tool_output_for_model(&content, vision_enabled);
-                let (model_content, externally_bounded) =
+                let (mut model_content, externally_bounded) =
                     self.registry
                         .bound_round_output(call, normalized, &mut round_output_budget)?;
                 if externally_bounded && !tool_discovery::is_side_tool(&call.name) {
@@ -1006,6 +1015,38 @@ impl AgentCoordinator {
                 }
                 if local_file_lookup && call.name == "read_artifact" && succeeded {
                     local_lookup_recovery_calls += 1;
+                }
+                if succeeded
+                    && call.name == "read_file"
+                    && !externally_bounded
+                    && self.observation_cache.prepare_read_update(
+                        &mut self.history,
+                        &mut model_content,
+                        model,
+                        cache::ObservationPolicy {
+                            prefix_overhead_tokens: (serde_json::to_vec(&(
+                                &request.tools,
+                                &request.deferred_tools,
+                            ))?
+                            .len() as u64)
+                                .div_ceil(3),
+                            may_retire: !goal_mode.load(Ordering::Acquire),
+                        },
+                        || {
+                            let (provider, local_model) = model.split_once('/')?;
+                            bridge
+                                .list_model_info(provider)
+                                .ok()?
+                                .into_iter()
+                                .find(|entry| entry.id == local_model || entry.id == model)?
+                                .pricing
+                        },
+                    )
+                {
+                    // A costed, deliberate prefix retirement starts a new local
+                    // continuity baseline. Provider cache keys stay stable so
+                    // the unchanged prefix before the retirement can still hit.
+                    self.cache_continuity = Default::default();
                 }
                 let recorded_content = model_content.clone();
                 let goal_observation_item = self.history.len();

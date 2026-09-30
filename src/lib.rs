@@ -4,6 +4,7 @@ pub mod backend;
 pub mod background;
 pub mod cli;
 pub mod config;
+pub mod context_cache;
 pub mod core;
 pub mod debate;
 pub mod edit;
