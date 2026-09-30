@@ -164,8 +164,6 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         ("·", "Provider cleanup", "21m", false),
         ("·", "Foundation memory", "43m", false),
     ];
-    let age_px = [198u16, 206, 206, 198, 198];
-    let title_width_px = [166u16, 174, 174, 166, 166];
     for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
         let y = area.y + py(52 + index as u16 * 28);
         if y >= area.bottom() {
@@ -185,8 +183,12 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         };
         let icon_x = area.x + px(if index == 0 { 13 } else { 12 });
         let title_x = area.x + px(30);
-        let age_x = area.x + px(age_px[index]);
-        let title_width = px(title_width_px[index]);
+        // At narrow terminal widths the title takes precedence over recency; keep
+        // the age at the right edge only when the rail can fit both without clipping.
+        let show_age = area.width >= 30;
+        let age_width = if show_age { age.len() as u16 } else { 0 };
+        let age_x = area.right().saturating_sub(age_width);
+        let title_width = age_x.saturating_sub(title_x + u16::from(show_age));
         frame.render_widget(
             Paragraph::new(icon).style(Style::default().fg(fg)),
             Rect::new(icon_x, y, 1, 1),
@@ -201,10 +203,12 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
             ),
             Rect::new(title_x, y, title_width, 1),
         );
-        frame.render_widget(
-            Paragraph::new(age).style(Style::default().fg(Color::Rgb(0x72, 0x71, 0x69))),
-            Rect::new(age_x, y, age.len() as u16, 1),
-        );
+        if show_age {
+            frame.render_widget(
+                Paragraph::new(age).style(Style::default().fg(Color::Rgb(0x72, 0x71, 0x69))),
+                Rect::new(age_x, y, age_width, 1),
+            );
+        }
     }
 }
 
