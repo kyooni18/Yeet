@@ -75,17 +75,17 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        ("Home", "Home", true),
-        ("MM305 crosswind tuning", "MM305 crosswind tuning", false),
-        ("theme.rs", "theme.rs", false),
-        ("Landing", "Landing", false),
-        ("guidance_taem.c", "guidance_taem.c", false),
-        ("#214", "#214", false),
+        ("⌂", "Home", true),
+        ("▤", "MM305 crosswind tuning", false),
+        ("▱", "theme.rs", false),
+        ("♟", "Landing", false),
+        ("⑂", "guidance_taem.c", false),
+        ("▣", "#214", false),
         ("+", "+", false),
     ];
     let starts = [0u32, 175, 423, 547, 653, 835, 916];
     let ends = [160u32, 423, 547, 653, 835, 895, 964];
-    for (index, (_, label, active)) in entries.into_iter().enumerate() {
+    for (index, (icon, label, active)) in entries.into_iter().enumerate() {
         let x = area.x + (area.width as u32 * starts[index] / 1440) as u16;
         if x >= area.right() {
             break;
@@ -102,6 +102,11 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         };
         let tab_area = Rect::new(x, area.y, width, area.height);
         frame.render_widget(Block::default().style(style), tab_area);
+        let icon_x = x + (area.width as u32 * 15 / 1440) as u16;
+        frame.render_widget(
+            Paragraph::new(icon).style(style),
+            Rect::new(icon_x, area.y, 2.min(area.right().saturating_sub(icon_x)), 1),
+        );
         let label_x = x + (area.width as u32 * if index == 0 { 36 } else { 21 } / 1440) as u16;
         let label_right = area
             .x
@@ -115,6 +120,7 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(theme::border())),
         Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
+    );
     );
 }
 
