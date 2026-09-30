@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import process from "node:process";
 import { AuthManager, type ResolvedCredential } from "./auth.js";
+import { AntigravityLocalClient } from "./antigravity-local.js";
 import { createDefaultCore } from "./defaults.js";
 import { CodexComputerUse } from "./codex-computer-use.js";
 import { codexCliVersion } from "./codex-version.js";
@@ -12,6 +13,7 @@ import { McpManager } from "./mcp.js";
 import { ModelMetadataCatalog } from "./model-metadata.js";
 import { applyCacheCostPolicy, applyOpenAIFlexAuthPolicy, cheapestModel, estimateUsageCostUsd, estimatedRequestTokens, inputCostEquivalentTokens } from "./pricing.js";
 import { AntigravityProvider } from "./providers/antigravity.js";
+import { AntigravityLocalProvider } from "./providers/antigravity-local.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { GeminiProvider } from "./providers/gemini.js";
 import { OpenAIChatProvider } from "./providers/openai-chat.js";
@@ -35,7 +37,8 @@ import {
   type SerializedBridgeError,
 } from "./bridge-protocol.js";
 
-const auth = new AuthManager();
+const antigravityLocal = new AntigravityLocalClient();
+const auth = new AuthManager({ antigravityLocalClient: antigravityLocal });
 await auth.ensure();
 const skills = new SkillRegistry({ configDir: auth.configDir });
 await skills.ensure();
@@ -248,9 +251,15 @@ async function refreshProvider(providerId: string): Promise<void> {
       }));
       return;
     }
-    case "antigravity":
-      core.register(new AntigravityProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
+    case "antigravity": {
+      const localStatus = await antigravityLocal.getAuthStatus().catch(() => undefined);
+      if (localStatus?.hasValidAuth || !credential) {
+        core.register(new AntigravityLocalProvider({ client: antigravityLocal }));
+      } else {
+        core.register(new AntigravityProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
+      }
       return;
+    }
     case "anthropic":
       core.register(new AnthropicProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
       return;

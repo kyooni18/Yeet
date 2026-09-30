@@ -10,6 +10,7 @@ import type { FetchLike } from "./types.js";
 import { defaultConfigDirectory } from "./platform.js";
 import { claudeUsageLabel, durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
 import { loginGeminiOAuth, refreshGeminiOAuth, setupGeminiCodeAssist } from "./gemini-oauth.js";
+import { AntigravityLocalClient } from "./antigravity-local.js";
 
 export type AuthMethod = "none" | "api-key" | "browser" | "environment";
 
@@ -114,6 +115,7 @@ export interface AuthManagerOptions {
   claudeOAuthToken?: () => Promise<string | undefined> | string | undefined;
   claudeLogin?: () => Promise<void>;
   claudeLogout?: () => Promise<void>;
+  antigravityLocalClient?: AntigravityLocalClient;
 }
 
 const ENV_KEYS: Record<string, string> = {
@@ -132,7 +134,7 @@ const CREDENTIAL_ALIASES: Record<string, readonly string[]> = {
   "opencode-go": ["opencode"],
 };
 const RESERVED_PROVIDER_IDS = new Set(["openai", "codex-cli", "anthropic", "antigravity", "gemini", "gemini-web", "claude", "claude-api", "openrouter", "opencode", "opencode-go"]);
-const BROWSER_PROVIDER_IDS = new Set(["codex-cli", "gemini-web", "claude"]);
+const BROWSER_PROVIDER_IDS = new Set(["codex-cli", "antigravity", "gemini-web", "claude"]);
 const API_KEY_PROVIDER_IDS = new Set(["openai", "anthropic", "claude-api", "gemini"]);
 
 
@@ -371,6 +373,7 @@ export class AuthManager {
   readonly #claudeOAuthToken: () => Promise<string | undefined>;
   readonly #claudeLogin: () => Promise<void>;
   readonly #claudeLogout: () => Promise<void>;
+  readonly #antigravityLocal: AntigravityLocalClient;
   readonly #usageCache = new Map<string, { expiresAt: number; usage: ProviderUsageStatus }>();
 
   constructor(options: AuthManagerOptions = {}) {
@@ -383,6 +386,7 @@ export class AuthManager {
     this.#claudeOAuthToken = async () => await claudeOAuthToken();
     this.#claudeLogin = options.claudeLogin ?? (() => runClaudeAuthCommand("login"));
     this.#claudeLogout = options.claudeLogout ?? (() => runClaudeAuthCommand("logout"));
+    this.#antigravityLocal = options.antigravityLocalClient ?? new AntigravityLocalClient();
   }
 
   async ensure(): Promise<void> {
@@ -491,9 +495,12 @@ export class AuthManager {
 
   async logout(provider: string): Promise<AuthStatus> {
     if (provider === "claude") await this.#claudeLogout();
+    if (provider === "antigravity") {
+      await this.#antigravityLocal.logout().catch(() => undefined);
+    }
     const data = await this.#readCredentials();
     delete data.providers[provider];
-    if (provider === "gemini-web") delete data.oauthClients["gemini-web"];
+    if (provider === "gemini-web") delete data.oauthClients[provider];
     await this.#writeCredentials(data);
     return this.status(provider);
   }
@@ -502,6 +509,14 @@ export class AuthManager {
     await this.ensure();
     let data = await this.#readCredentials();
     let stored = this.#storedCredential(data, provider);
+
+    if (provider === "antigravity") {
+      const local = await this.#antigravityLocal.getAuthStatus().catch(() => undefined);
+      if (local?.hasValidAuth) {
+        return { provider, authenticated: true, method: "browser", configDir: this.configDir };
+      }
+      if (stored?.type === "oauth") stored = undefined;
+    }
 
 
     if (!stored && API_KEY_PROVIDER_IDS.has(provider) && process.env.ANTHROPIC_API_KEY && ["anthropic", "claude-api"].includes(provider)) {
@@ -556,6 +571,9 @@ export class AuthManager {
         case "gemini-web":
           usage = await this.#geminiUsage("gemini-web");
           break;
+        case "antigravity":
+          usage = await this.#antigravityUsage();
+          break;
         default:
           usage = unavailableUsage(provider, "none", "No plan-usage adapter is available for this provider.");
           break;
@@ -567,7 +585,9 @@ export class AuthManager {
           ? "anthropic-oauth-api"
           : normalized === "gemini-web"
             ? "gemini-code-assist-api"
-            : normalized;
+            : normalized === "antigravity"
+              ? "antigravity-local"
+              : normalized;
       usage = unavailableUsage(provider, source, error instanceof Error ? error.message : String(error));
     }
 
@@ -693,6 +713,48 @@ export class AuthManager {
     };
   }
 
+  async #antigravityUsage(): Promise<ProviderUsageStatus> {
+    const payload = await this.#antigravityLocal.getAvailableModels(true);
+    const response = asObject(payload.response);
+    const models = asObject(response.models ?? payload.models);
+    const windows: ProviderUsageWindow[] = [];
+
+    for (const [id, raw] of Object.entries(models)) {
+      const model = asObject(raw);
+      if (model.isInternal === true) continue;
+      const quota = asObject(model.quotaInfo ?? model.quota_info);
+      const remaining = percent(quota.remainingFraction ?? quota.remaining_fraction, true);
+      if (remaining === undefined) continue;
+      const label = typeof model.displayName === "string" && model.displayName.trim()
+        ? model.displayName
+        : typeof model.display_name === "string" && model.display_name.trim()
+          ? model.display_name
+          : id;
+      windows.push(usageWindow(
+        id,
+        label,
+        Math.max(0, 100 - remaining),
+        resetIso(quota.resetTime ?? quota.reset_time),
+      ));
+    }
+
+    windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
+    const plan = typeof response.userTier === "string"
+      ? response.userTier
+      : typeof response.user_tier === "string"
+        ? response.user_tier
+        : undefined;
+    return {
+      provider: "antigravity",
+      available: windows.length > 0,
+      source: "antigravity-local",
+      fetchedAt: new Date().toISOString(),
+      ...(plan ? { plan } : {}),
+      windows,
+      ...(windows.length === 0 ? { message: "Antigravity did not report model quota windows for this account." } : {}),
+    };
+  }
+
   async #claudeUsage(): Promise<ProviderUsageStatus> {
     const accessToken = (await this.#claudeOAuthToken())?.trim();
     if (!accessToken) {
@@ -782,6 +844,8 @@ export class AuthManager {
     let data = await this.#readCredentials();
     let stored = this.#storedCredential(data, provider);
 
+    if (provider === "antigravity" && stored?.type === "oauth") stored = undefined;
+
     if (stored?.type === "oauth" && this.#expiresSoon(stored.expiresAt)) {
       if ((provider === "openai" || provider === "codex-cli") && stored.refreshToken) {
         stored = await this.#refreshOpenAI(stored);
@@ -840,6 +904,9 @@ export class AuthManager {
       case "codex-cli":
         await this.#loginOpenAI("codex-cli", options);
         return this.status(provider);
+      case "antigravity":
+        await this.#antigravityLocal.loginInBrowser(options.timeoutMs);
+        return this.status("antigravity");
       case "gemini":
       case "gemini-web":
         await this.#loginGemini("gemini-web", options);
@@ -1040,6 +1107,7 @@ export class AuthManager {
     }
   }
 
+
   async #loginGemini(provider: string, options: BrowserLoginOptions): Promise<void> {
     const current = await this.#readCredentials();
     const existing = current.oauthClients[provider];
@@ -1086,6 +1154,7 @@ export class AuthManager {
     };
     await this.#writeCredentials(latest);
   }
+
 
   async #refreshGemini(
     credential: OAuthCredentialRecord,

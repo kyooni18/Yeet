@@ -1,4 +1,5 @@
 export * from "./antigravity.js";
+export * from "./antigravity-local.js";
 export * from "./anthropic.js";
 export * from "./gemini.js";
 export * from "./openai.js";
