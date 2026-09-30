@@ -1,6 +1,9 @@
 //! Cross-surface regressions for the terminal redesign.
-use super::status::{status_line, usage_line};
-use super::{composer, draw, theme};
+use super::components::{
+    composer,
+    status::{status_line, usage_line},
+};
+use super::{draw, theme};
 use crate::model::{ModelActivity, SessionSummary, ShellPermission};
 use crate::{
     app::{App, Mode},

@@ -4,13 +4,13 @@
 //! and intentionally quiet.  This avoids repaint-only animation competing with
 //! transcript readability or input responsiveness.
 
-use super::{responsive, theme};
+use super::super::{responsive, theme};
 use crate::app::{App, Mode};
 use ratatui::{Frame, prelude::Color};
 
 const MIN_GUIDE_GUTTER: u16 = 2;
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     if app.mode != Mode::Chat
         || app.state.pending_shell_permission.is_some()
         || app.state.pending_native_app_permission.is_some()

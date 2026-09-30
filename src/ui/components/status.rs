@@ -1,5 +1,5 @@
 //! One-row status bar: working directory on the left, model and context on the right.
-use super::{
+use super::super::{
     task,
     text::{compact_number, truncate_middle},
     theme,
@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let width = area.width as usize;
     if width == 0 {
         return;
@@ -49,7 +49,7 @@ fn desktop_line(app: &App, width: usize) -> Line<'static> {
 }
 
 /// Floating usage pill shown above the composer on desktop shapes.
-pub(super) fn usage_line(app: &App, width: usize) -> Option<Line<'static>> {
+pub(crate) fn usage_line(app: &App, width: usize) -> Option<Line<'static>> {
     let usage = &app.state.token_usage;
     let value = Style::default().fg(theme::secondary());
     let label = Style::default().fg(theme::muted());
@@ -133,7 +133,7 @@ pub(super) fn usage_line(app: &App, width: usize) -> Option<Line<'static>> {
     Some(Line::from(spans))
 }
 
-pub(super) fn working_directory() -> String {
+pub(crate) fn working_directory() -> String {
     let dir = std::env::current_dir().unwrap_or_default();
     if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from)
         && let Ok(rest) = dir.strip_prefix(&home)
@@ -147,7 +147,7 @@ pub(super) fn working_directory() -> String {
     dir.display().to_string()
 }
 
-pub(super) fn status_line(app: &App, width: usize) -> Line<'static> {
+pub(crate) fn status_line(app: &App, width: usize) -> Line<'static> {
     if !app.follow_tail && app.max_scroll > 0 {
         let remaining = app.max_scroll.saturating_sub(app.scroll_y);
         let candidates = [

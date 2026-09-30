@@ -1,6 +1,7 @@
 //! Responsive application shell around the conversation.
 use super::{
-    responsive, tabbar,
+    components::tabbar,
+    responsive,
     task::{self, TaskStatus},
     text::truncate_end,
     theme, yeet_brand,

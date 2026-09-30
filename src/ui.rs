@@ -1,14 +1,11 @@
 //! Native ratatui UI facade. View implementation lives in `src/ui/`.
-mod chrome;
-mod composer;
+mod components;
 mod dialogs;
 mod icons;
 mod markdown;
 mod render;
 mod responsive;
 mod shell;
-mod status;
-mod tabbar;
 mod task;
 mod text;
 mod theme;

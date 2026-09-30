@@ -1,5 +1,10 @@
 //! Full-screen keyboard file browser (`Mode::Files`).
-use super::super::{composer, icons, responsive, status, tabbar, task::fit, theme};
+use super::super::{
+    components::{composer, status, tabbar},
+    icons, responsive,
+    task::fit,
+    theme,
+};
 use crate::app::{
     App,
     files::FilesState,

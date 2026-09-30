@@ -1,6 +1,6 @@
 //! One-row tab bar shared by the session and files views: home, the session
 //! tab, one tab per opened file, and a trailing `+`.
-use super::{icons, shell::conversation_title, task::fit, theme};
+use super::super::{icons, shell::conversation_title, task::fit, theme};
 use crate::app::App;
 use ratatui::{
     Frame,
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Active {
+pub(crate) enum Active {
     Home,
     Session,
     Files,
@@ -19,7 +19,7 @@ pub(super) enum Active {
 
 const NARROW: u16 = 70;
 
-pub(super) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active) {
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active) {
     if area.width == 0 || area.height == 0 {
         return;
     }

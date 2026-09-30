@@ -1,5 +1,5 @@
 //! Home workbench view: recent objects, workspace activity, and focused details.
-use super::super::{status, theme};
+use super::super::{components::status, theme};
 use crate::app::App;
 use ratatui::{
     Frame,

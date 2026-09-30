@@ -1,7 +1,7 @@
 //! Composer surface: a borderless prompt row (`›` marker, text, caret).
-use super::theme;
+use super::super::theme;
 use crate::app::{App, Mode};
-pub(super) use crate::text_layout::layout;
+pub(crate) use crate::text_layout::layout;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 /// `text_x` is the column the draft starts at, so it can line up with the transcript.
-pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16) {
+pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16) {
     let focused = app.mode == Mode::Chat
         && app.state.pending_shell_permission.is_none()
         && app.state.pending_native_app_permission.is_none();
@@ -22,7 +22,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16
         })),
         area,
     );
-    let portrait = super::responsive::shape(frame.area()) == super::responsive::Shape::Portrait;
+    let portrait =
+        super::super::responsive::shape(frame.area()) == super::super::responsive::Shape::Portrait;
     let top = u16::from(area.height >= 2);
     let bottom = u16::from(portrait && area.height >= 3);
     let text_x = text_x
