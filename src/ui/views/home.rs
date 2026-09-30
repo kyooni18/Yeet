@@ -1,5 +1,5 @@
 use super::super::{
-    components::status,
+    components::{composer, status, tabbar},
     support::{icons, theme},
 };
 use crate::app::App;
@@ -14,6 +14,9 @@ use ratatui::{
 const ACTIVE: Modifier = Modifier::BOLD;
 
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    app.transcript_area = (0, 0, 0, 0);
+    app.sidebar_area = (0, 0, 0, 0);
+    app.sidebar_session_targets.clear();
     let bounds = frame.area();
     if bounds.width < 45 || bounds.height < 5 {
         return;
@@ -23,12 +26,12 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         return;
     }
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme::background())),
+        Block::default().style(Style::default().bg(theme::code_background())),
         bounds,
     );
     let scale_x = |px: u16| bounds.width as u32 * px as u32 / 1440;
     let scale_y = |px: u16| (bounds.height as u32 * px as u32 + 432) / 864;
-    let tab_height = scale_y(34).max(1) as u16;
+    let tab_height = 1;
     let composer_height = scale_y(36).max(1) as u16;
     let status_height = scale_y(24).max(1) as u16;
     let rows = Layout::vertical([
@@ -38,7 +41,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Constraint::Length(status_height),
     ])
     .split(bounds);
-    draw_tabs(frame, rows[0]);
+    tabbar::draw(frame, app, rows[0], tabbar::Active::Home);
     let body = Rect::new(
         bounds.x,
         bounds.y.saturating_add(tab_height),
@@ -60,17 +63,37 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     );
     let activity_width = scale_x(540).min(columns[1].width as u32) as u16;
     let content_inset = scale_x(30) as u16;
-    // The inspector begins 54px after the activity pane in the 1440px mockup.
-    let inspector_start = scale_x(624) as u16;
-    let panes = Layout::horizontal([
-        Constraint::Length(content_inset),
-        Constraint::Length(activity_width),
-        Constraint::Length(inspector_start.saturating_sub(content_inset + activity_width)),
-        Constraint::Min(1),
-    ])
-    .split(columns[1]);
-    draw_activity(frame, panes[1]);
-    draw_inspector(frame, app, panes[3]);
+    let inspector_x = bounds.x + scale_x(832) as u16;
+    let inspector = Rect::new(
+        inspector_x,
+        body.y,
+        bounds.right().saturating_sub(inspector_x),
+        body.height,
+    );
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::background())),
+        inspector,
+    );
+    let inspector_inset = scale_x(24) as u16;
+    draw_activity(
+        frame,
+        Rect::new(
+            columns[1].x + content_inset,
+            body.y,
+            activity_width,
+            body.height,
+        ),
+    );
+    draw_inspector(
+        frame,
+        app,
+        Rect::new(
+            inspector.x + inspector_inset,
+            inspector.y,
+            inspector.width.saturating_sub(inspector_inset * 2),
+            inspector.height,
+        ),
+    );
     draw_composer(
         frame,
         app,
@@ -89,7 +112,14 @@ fn draw_compact(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Block::default().style(Style::default().bg(theme::background())),
         area,
     );
-    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    tabbar::draw(frame, app, rows[0], tabbar::Active::Home);
     let title = Line::from(vec![
         Span::styled(
             " Overview",
@@ -124,56 +154,10 @@ fn draw_compact(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Line::from("  taem_candidate_search.h  +8  −4"),
     ])
     .wrap(Wrap { trim: true });
-    frame.render_widget(body, rows[0]);
-    status::draw(frame, app, rows[1]);
+    frame.render_widget(body, rows[1]);
+    draw_composer(frame, app, rows[2]);
+    status::draw(frame, app, rows[3]);
 }
-fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let entries = [
-        (icons::home(), "Home", true),
-        (icons::session_tab(), "MM305 crosswind tuning", false),
-        (icons::folder(false), "theme.rs", false),
-        (icons::agent_tab(), "Landing", false),
-        (icons::diff_tab(), "guidance_taem.c", false),
-        (icons::issue_tab(), "#214", false),
-        ("", "+", false),
-    ];
-    let mut x = area.x;
-    for (icon, label, active) in entries {
-        let text = if icon.is_empty() {
-            format!("  {label}  ")
-        } else {
-            format!(" {icon} {label} ")
-        };
-        // Tabs must reserve actual terminal cells, rather than scaled pixels:
-        // scaling a glyph's padding can make it touch or overwrite its label.
-        let width = (text.chars().count() as u16)
-            .max(if active { area.width * 160 / 1440 } else { 0 })
-            .min(area.right().saturating_sub(x));
-        if width == 0 {
-            break;
-        }
-        let style = if active {
-            Style::default()
-                .fg(theme::text())
-                .bg(theme::surface_color())
-                .add_modifier(ACTIVE)
-        } else {
-            Style::default().fg(theme::muted()).bg(theme::background())
-        };
-        let tab = Rect::new(x, area.y, width, area.height);
-        frame.render_widget(Block::default().style(style), tab);
-        frame.render_widget(Paragraph::new(text).style(style), tab);
-        x += width;
-    }
-    frame.render_widget(
-        Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(theme::border())),
-        Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
-    );
-}
-
 fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -206,7 +190,7 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         ("·", "Foundation memory", "43m", false),
     ];
     for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
-        let row_y = area.y + py(52 + index as u16 * 28);
+        let row_y = area.y + py(52).max(2) + index as u16 * py(28).max(1);
         if row_y >= area.bottom() {
             break;
         }
@@ -227,7 +211,7 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         let title_x = area.x + px(30);
         let show_age = area.width >= 23;
         let age_width = if show_age { age.len() as u16 } else { 0 };
-        let age_x = area.right().saturating_sub(age_width);
+        let age_x = area.right().saturating_sub(age_width + 1);
         let title_width = age_x.saturating_sub(title_x + u16::from(show_age));
         frame.render_widget(
             Paragraph::new(icon).style(Style::default().fg(fg)),
@@ -254,100 +238,139 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
 
 fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme::background())),
+        Block::default().style(Style::default().bg(theme::code_background())),
         area,
     );
-    let content_height = area.height.saturating_sub(5);
+    let step = ((area.height as u32 * 28 + 385) / 770).max(1) as u16;
+    let body = Style::default().fg(Color::Rgb(0xa6, 0xa6, 0x9c));
     let muted = Style::default().fg(theme::muted());
-    let active = Style::default()
-        .fg(theme::text())
-        .bg(theme::selected_color())
-        .add_modifier(ACTIVE);
-    let items = [
+    let selected_bg = Color::Rgb(0x25, 0x26, 0x33);
+    let at = |px: u16| area.x + (area.width as u32 * px as u32 / 540) as u16;
+    let label_x = at(52).max(area.x + 4);
+    let icon_x = at(24).max(area.x + 2);
+    let context_x = at(330);
+    let age_x = at(422);
+    let bottom = area.bottom().saturating_sub(5);
+    let put = |frame: &mut Frame<'_>, x: u16, y: u16, text: &str, style: Style, width: u16| {
+        frame.render_widget(Paragraph::new(text).style(style), Rect::new(x, y, width, 1));
+    };
+    for (index, (icon, title, context, age)) in [
         (
+            icons::agent_tab(),
             "Verification: accept a 3.2 km floor?",
             "Landing",
             "4m",
-            true,
         ),
-        ("▤  MM305 crosswind", "", "18s", false),
-        ("▣  Landing", "2 running", "26m", false),
-        ("▤  TUI shell direction", "", "3m", false),
-    ];
-    for (index, (title, context, age, selected)) in items.into_iter().enumerate() {
-        let y = area.y.saturating_add(1 + index as u16 * 2);
-        if y >= area.y.saturating_add(content_height) {
+        (icons::session_tab(), "MM305 crosswind", "", "18s"),
+        (icons::agent_tab(), "Landing", "2 running", "26m"),
+        (icons::session_tab(), "TUI shell direction", "", "3m"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let y = area.y + 2 + index as u16 * step;
+        if y >= bottom {
             break;
         }
-        let row = Rect::new(area.x, y, area.width, 1);
+        let selected = index == 0;
+        let style = if selected {
+            Style::default().fg(theme::text()).bg(selected_bg)
+        } else {
+            body
+        };
         if selected {
             frame.render_widget(
-                Block::default().style(Style::default().bg(theme::selected_color())),
-                row,
+                Block::default().style(Style::default().bg(selected_bg)),
+                Rect::new(area.x, y, area.width, 1),
             );
         }
-        let mut suffix = if context.is_empty() {
-            age.to_owned()
+        let title_len = title.chars().count() as u16;
+        let show_context = !context.is_empty() && label_x + title_len + 2 <= context_x;
+        let show_age = label_x + title_len + 1 <= age_x;
+        let end = if show_context {
+            context_x.saturating_sub(2)
+        } else if show_age {
+            age_x.saturating_sub(1)
         } else {
-            format!("{context}  {age}")
+            area.right()
         };
-        let prefix = if selected {
-            format!("  {}  ", icons::agent_tab())
-        } else {
-            "  ".to_owned()
-        };
-        let title = title
-            .replace("▤", icons::session_tab())
-            .replace("▣", icons::agent_tab());
-        let title_budget = row.width as usize - prefix.chars().count().min(row.width as usize);
-        // Keep the decision readable before spending cells on its metadata.
-        if selected && title.chars().count() + suffix.chars().count() + 2 > title_budget {
-            suffix.clear();
-        }
-        let title = super::super::task::fit(
-            &title,
-            title_budget
-                .saturating_sub(suffix.chars().count() + if suffix.is_empty() { 0 } else { 2 }),
+        put(frame, icon_x, y, icon, style, 1);
+        put(
+            frame,
+            label_x,
+            y,
+            &super::super::task::fit(title, end.saturating_sub(label_x) as usize),
+            style,
+            end.saturating_sub(label_x),
         );
-        let used = prefix.chars().count() + title.chars().count() + suffix.chars().count();
-        let gap = " ".repeat((row.width as usize).saturating_sub(used));
-        let line = Line::from(vec![
-            Span::styled(prefix, if selected { active } else { muted }),
-            Span::styled(title, if selected { active } else { muted }),
-            Span::raw(gap),
-            Span::styled(suffix, muted),
-        ]);
-        frame.render_widget(Paragraph::new(line), row);
+        if show_context {
+            put(
+                frame,
+                context_x,
+                y,
+                context,
+                muted,
+                age_x.saturating_sub(context_x + 1),
+            );
+        }
+        if show_age {
+            put(
+                frame,
+                age_x,
+                y,
+                age,
+                muted,
+                area.right().saturating_sub(age_x),
+            );
+        }
     }
-    let files = [
+    for (index, (file, added, removed)) in [
         ("guidance_taem.c", "+18", "−6"),
         ("taem_candidate_search.c", "+42", "−13"),
         ("taem_candidate_search.h", "+8", "−4"),
-    ];
-    for (index, (file, added, removed)) in files.into_iter().enumerate() {
-        let y = area.y.saturating_add(10 + index as u16 * 2);
-        if y >= area.y.saturating_add(content_height) {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let y = area.y + (8 + index as u16) * step;
+        if y >= bottom {
             break;
         }
-        let added_x = area.right().saturating_sub(15);
-        let removed_x = area.right().saturating_sub(9);
-        let file_x = area.x + 4;
-        let file = super::super::task::fit(file, added_x.saturating_sub(file_x + 2) as usize);
-        for (x, text, style) in [
-            (
-                area.x + 2,
-                icons::file(&file),
-                Style::default().fg(theme::accent()),
-            ),
-            (file_x, file.as_str(), muted),
-            (added_x, added, Style::default().fg(theme::success())),
-            (removed_x, removed, Style::default().fg(theme::error())),
-        ] {
-            frame.render_widget(
-                Paragraph::new(text).style(style),
-                Rect::new(x, y, area.right().saturating_sub(x), 1),
-            );
-        }
+        let added_x = context_x.max(label_x + 8);
+        let removed_x = at(374).max(added_x + 4);
+        let fitted = super::super::task::fit(file, added_x.saturating_sub(label_x + 2) as usize);
+        put(
+            frame,
+            icon_x,
+            y,
+            icons::file(file),
+            Style::default().fg(theme::accent()),
+            1,
+        );
+        put(
+            frame,
+            label_x,
+            y,
+            &fitted,
+            body,
+            added_x.saturating_sub(label_x + 1),
+        );
+        put(
+            frame,
+            added_x,
+            y,
+            added,
+            Style::default().fg(Color::Rgb(0x76, 0x94, 0x6a)),
+            3,
+        );
+        put(
+            frame,
+            removed_x,
+            y,
+            removed,
+            Style::default().fg(Color::Rgb(0xc3, 0x40, 0x43)),
+            3,
+        );
     }
     for (index, issue) in [
         "#214  Context rail focus order",
@@ -356,16 +379,21 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
     .into_iter()
     .enumerate()
     {
-        let y = area.y.saturating_add(17 + index as u16 * 2);
-        if y < area.y.saturating_add(content_height) {
-            let issue = super::super::task::fit(issue, area.width.saturating_sub(5) as usize);
-            frame.render_widget(
-                Paragraph::new(format!("  {}  {issue}", icons::issue_tab())).style(muted),
-                Rect::new(area.x, y, area.width, 1),
-            );
+        let y = area.y + (12 + index as u16) * step;
+        if y >= bottom {
+            break;
         }
+        put(frame, icon_x, y, icons::issue_tab(), body, 1);
+        put(
+            frame,
+            label_x,
+            y,
+            &super::super::task::fit(issue, area.right().saturating_sub(label_x) as usize),
+            body,
+            area.right().saturating_sub(label_x),
+        );
     }
-    if content_height >= 10 {
+    if area.height >= 12 {
         draw_provider_usage(frame, area);
     }
 }
@@ -376,12 +404,12 @@ fn draw_provider_usage(frame: &mut Frame<'_>, area: Rect) {
     }
     let label = Style::default().fg(theme::muted());
     let value = Style::default().fg(theme::text_dim());
-    let track = Style::default().bg(Color::Rgb(0x45, 0x47, 0x60));
-    let fill = Style::default().bg(Color::Rgb(0x7e, 0x9c, 0xd8));
+    let track = Style::default().fg(Color::Rgb(0x45, 0x47, 0x60));
+    let fill = Style::default().fg(Color::Rgb(0x7e, 0x9c, 0xd8));
     let at = |px: u16| area.x + area.width * px / 540;
     for (row, provider, usage, week_usage) in [
         (0u16, "anthropic", "62%", "31%"),
-        (2, "openai", "12%", "4%"),
+        (1, "openai", "12%", "4%"),
     ] {
         let y = area.bottom().saturating_sub(4).saturating_add(row);
         if y >= area.bottom() {
@@ -398,24 +426,24 @@ fn draw_provider_usage(frame: &mut Frame<'_>, area: Rect) {
         put(at(24), provider, label);
         put(at(140), "5h", label);
         put(at(272), usage, value);
-        put(at(352), "week", label);
-        put(at(508), week_usage, value);
+        put(at(322), "week", label);
+        put(at(478), week_usage, value);
         for (start, percent) in [
             (166u16, if row == 0 { 62 } else { 12 }),
-            (400u16, if row == 0 { 31 } else { 4 }),
+            (370u16, if row == 0 { 31 } else { 4 }),
         ] {
             let x = at(start);
             let width = (area.width * 96 / 540).min(area.right().saturating_sub(x));
             let meter_y = y;
             if width > 0 && meter_y < area.bottom() {
                 frame.render_widget(
-                    Paragraph::new(" ".repeat(width as usize)).style(track),
+                    Paragraph::new("━".repeat(width as usize)).style(track),
                     Rect::new(x, meter_y, width, 1),
                 );
                 let filled = (width * percent).div_ceil(100);
                 if filled > 0 {
                     frame.render_widget(
-                        Paragraph::new(" ".repeat(filled as usize)).style(fill),
+                        Paragraph::new("━".repeat(filled as usize)).style(fill),
                         Rect::new(x, meter_y, filled, 1),
                     );
                 }
@@ -428,16 +456,15 @@ fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let px = |value: u16| (value * area.width + 350) / 700;
-    let py = |value: u16| (value * area.height + 385) / 770;
+    let step = ((area.height as u32 * 28 + 385) / 770).max(1) as u16;
     let heading = Style::default()
         .fg(Color::Rgb(0xd7, 0xd7, 0xa7))
         .add_modifier(ACTIVE);
     let body = Style::default().fg(Color::Rgb(0xa6, 0xa6, 0x9c));
     let subdued = Style::default().fg(Color::Rgb(0x72, 0x71, 0x69));
     let put = |frame: &mut Frame<'_>, x: u16, y: u16, text: &str, style: Style| {
-        let x = area.x.saturating_add(px(x));
-        let y = area.y.saturating_add(py(y));
+        let x = area.x.saturating_add(x);
+        let y = area.y.saturating_add(y);
         if x < area.right() && y < area.bottom() {
             frame.render_widget(
                 Paragraph::new(super::super::task::fit(
@@ -450,13 +477,19 @@ fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
         }
     };
 
-    put(frame, 0, 28, "Accept a 3.2 km floor?", heading);
-    put(frame, 0, 56, "Verification · Landing · 4m ago", subdued);
-    let copy_y = area.y + py(112);
-    let copy = Paragraph::new("Sweep at 3 km misses Final speed for headings above 270°.\n\nTightest flyable radius is 3.2 km; nominal is 12 km.")
+    put(frame, 0, 2, "Accept a 3.2 km floor?", heading);
+    put(
+        frame,
+        0,
+        2 + step,
+        "Verification · Landing · 4m ago",
+        subdued,
+    );
+    let copy_y = area.y + 6 * step;
+    let copy = Paragraph::new("Sweep at 3 km misses Final speed for headings above 270°.\nTightest flyable radius is 3.2 km; nominal is 12 km.")
         .style(body).wrap(Wrap { trim: true });
     let copy_height = copy.line_count(area.width) as u16;
-    let choices_y = (area.y + py(230)).max(copy_y + copy_height + 1);
+    let choices_y = (area.y + 10 * step).max(copy_y + copy_height + 1);
     frame.render_widget(
         copy,
         Rect::new(
@@ -475,11 +508,11 @@ fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
     .into_iter()
     .enumerate()
     {
-        let y = choices_y.saturating_sub(area.y) + index as u16 * 2;
+        let y = choices_y.saturating_sub(area.y) + index as u16 * step;
         if area.y + y < area.bottom() {
             frame.render_widget(
                 Paragraph::new(format!("{key}   {label}")).style(if index == 0 {
-                    heading
+                    heading.remove_modifier(ACTIVE)
                 } else {
                     body
                 }),
@@ -489,35 +522,19 @@ fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
     }
 }
 
-fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_composer(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.height == 0 {
         return;
     }
-    let style = Style::default()
-        .fg(theme::text())
-        .bg(Color::Rgb(0x2a, 0x2a, 0x37));
-    let prompt = if app.input.is_empty() {
-        "Ask Yeet..."
-    } else {
-        &app.input
-    };
-    frame.render_widget(Block::default().style(style), area);
-    let y = area.y + area.height.saturating_sub(1) / 2;
     let inset = (area.width as u32 * 30 / 1208).max(2) as u16;
-    frame.render_widget(
-        Paragraph::new("+").style(style),
-        Rect::new(area.x + inset, y, 1, 1),
-    );
-    let text_x = area.x + inset + 3;
-    let send_x = area.right().saturating_sub(3);
-    frame.render_widget(
-        Paragraph::new(prompt).style(style),
-        Rect::new(text_x, y, send_x.saturating_sub(text_x + 1), 1),
-    );
-    frame.render_widget(
-        Paragraph::new("→").style(style.fg(theme::muted())),
-        Rect::new(send_x, y, 1, 1),
-    );
+    composer::draw(frame, app, area, area.x + inset + 3);
+    if app.input.is_empty() {
+        let (x, y, width, height) = app.composer_area;
+        frame.render_widget(
+            Paragraph::new("Ask Yeet...").style(Style::default().fg(theme::text())),
+            Rect::new(x, y, width, height),
+        );
+    }
 }
 
 #[cfg(test)]

@@ -949,9 +949,9 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
             "Ctrl+B/F  page empty",
             "g/G  oldest / latest",
             "/settings  runtime",
-            "/status  usage",
+            "Ctrl+O  view launcher",
             "/login  auth",
-            "Ctrl+C  quit idle",
+            "Ctrl+Tab  switch tabs",
         ];
         let mut lines =
             vec![Line::from(help_columns("EDIT / SEND", "NAV / COMMANDS", width)).bold()];

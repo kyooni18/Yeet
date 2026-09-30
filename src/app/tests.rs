@@ -350,6 +350,7 @@ fn views_switcher_navigates_and_opens_existing_views() {
             .any(|(name, _)| name == "/views")
     );
 
+    app.home_override = Some(true);
     app.open_views();
     assert_eq!(app.views_index, 0);
     app.handle_views_key(key(KeyCode::Char('j')));
@@ -357,23 +358,25 @@ fn views_switcher_navigates_and_opens_existing_views() {
     app.handle_views_key(key(KeyCode::Char('k')));
     assert_eq!(app.views_index, 0);
     app.handle_views_key(key(KeyCode::Right));
-    assert_eq!(app.mode, Mode::Chat);
-
+    assert!(app.home_visible());
     app.open_views();
     app.handle_views_key(key(KeyCode::Down));
     app.handle_views_key(key(KeyCode::Enter));
-    assert_eq!(app.mode, Mode::Files);
+    assert_eq!(app.mode, Mode::Chat);
+    assert!(!app.home_visible());
     app.open_views();
-    assert_eq!(app.views_index, 1);
-    app.handle_views_key(key(KeyCode::Left));
-    assert_eq!(app.mode, Mode::Files);
-    app.open_views();
+    app.handle_views_key(key(KeyCode::Down));
     app.handle_views_key(key(KeyCode::Char(' ')));
+    assert_eq!(app.mode, Mode::Files);
+    app.open_views();
+    assert_eq!(app.views_index, 2);
+    app.handle_views_key(key(KeyCode::Left));
     assert_eq!(app.mode, Mode::Files);
     app.open_views();
     app.handle_views_key(key(KeyCode::Up));
     app.handle_views_key(key(KeyCode::Char('l')));
     assert_eq!(app.mode, Mode::Chat);
+    assert!(!app.home_visible());
 }
 
 #[test]

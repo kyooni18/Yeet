@@ -1,6 +1,6 @@
 //! Existing app shell, composer, status, and overlay orchestration.
 use super::{
-    components::{chrome, composer, status},
+    components::{chrome, composer, status, tabbar},
     dialogs, shell,
     support::{responsive, theme},
     task, views,
@@ -22,6 +22,20 @@ use ratatui::{
 use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    app.tab_targets.clear();
+    app.view_targets.clear();
+    let area = frame.area();
+    let active = app.active_workbench_tab();
+    let show_tabs = match active {
+        tabbar::Active::Home => area.width >= 45,
+        tabbar::Active::Files | tabbar::Active::File(_) => {
+            responsive::shape(area) != responsive::Shape::Portrait
+        }
+        _ => true,
+    };
+    if show_tabs {
+        app.tab_targets = tabbar::targets(app, Rect::new(area.x, area.y, area.width, 1), active);
+    }
     if app.mode == Mode::Sessions && responsive::shape(frame.area()) == responsive::Shape::Portrait
     {
         views::session_picker::draw(frame, app);
@@ -40,31 +54,21 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
             .unwrap_or_else(|| task::live_activity(app).0);
         app.sync_activity_label(&activity_label);
     }
-    if app.mode == Mode::Chat
-        && app.conversation.is_empty()
-        && !app.state.is_streaming
-        && app.state.current_session_id.is_none()
-        && frame.area().width >= 110
-        && app.input.is_empty()
-        && app.state.pending_shell_permission.is_none()
-        && app.state.pending_native_app_permission.is_none()
-        && app.state.error_message.is_none()
-    {
-        views::home::draw(frame, app);
-        return;
-    }
-    if app.mode == Mode::Chat
-        && app.conversation.is_empty()
-        && !app.state.is_streaming
-        && app.state.current_session_id.is_none()
+    let home = app.home_visible()
+        && (app.mode == Mode::Chat || (app.mode == Mode::Views && app.views_origin == Mode::Chat));
+    if home
         && frame.area().width >= 45
-        && frame.area().width < 110
-        && app.input.is_empty()
         && app.state.pending_shell_permission.is_none()
         && app.state.pending_native_app_permission.is_none()
         && app.state.error_message.is_none()
     {
+        if app.home_override.is_none() {
+            app.home_override = Some(true);
+        }
         views::home::draw(frame, app);
+        if app.mode == Mode::Views {
+            views::draw(frame, app);
+        }
         return;
     }
     frame.render_widget(Block::default().style(theme::base()), frame.area());

@@ -6,6 +6,8 @@ use std::{
 
 pub mod files;
 mod input;
+mod navigation;
+pub use navigation::WorkbenchTab;
 pub mod keymap;
 mod selection;
 mod settings;
@@ -96,6 +98,9 @@ pub struct App {
     pub input: String,
     pub cursor: usize,
     pub mode: Mode,
+    pub home_override: Option<bool>,
+    pub(crate) tab_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
+    pub(crate) view_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub views_origin: Mode,
     pub views_index: usize,
     pub popup_filter: String,
@@ -158,6 +163,9 @@ impl Default for App {
             input: String::new(),
             cursor: 0,
             mode: Mode::Chat,
+            home_override: None,
+            tab_targets: Vec::new(),
+            view_targets: Vec::new(),
             views_origin: Mode::Chat,
             views_index: 0,
             popup_filter: String::new(),
@@ -421,6 +429,10 @@ impl App {
 
         if Self::should_interrupt_active_non_chat(&event, self.state.is_streaming, self.mode) {
             backend.send(FrontendCommand::Interrupt)?;
+            return Ok(());
+        }
+
+        if self.handle_workbench_key(&event) {
             return Ok(());
         }
 
@@ -704,6 +716,7 @@ impl App {
             sidebar::SidebarKey::Handled => return Ok(()),
             sidebar::SidebarKey::NewSession => {
                 backend.send(FrontendCommand::NewSession)?;
+                self.home_override = Some(false);
                 self.follow_tail = true;
                 return Ok(());
             }
@@ -730,6 +743,7 @@ impl App {
                 }
                 KeyCode::Char('n') => {
                     backend.send(FrontendCommand::NewSession)?;
+                    self.home_override = Some(false);
                     self.follow_tail = true;
                     return Ok(());
                 }
@@ -817,6 +831,7 @@ impl App {
                 if text == "/new" {
                     self.record_input_history(&text);
                     backend.send(FrontendCommand::NewSession)?;
+                    self.home_override = Some(false);
                     self.input.clear();
                     self.cursor = 0;
                     self.command_index = 0;
@@ -852,6 +867,7 @@ impl App {
                     "/login" => self.open_auth(backend)?,
                     "/provider" | "/providers" => self.open_providers(backend)?,
                     _ => {
+                        self.home_override = Some(false);
                         if let Some((command, args)) = self.extension_command_invocation(&text) {
                             backend.send(FrontendCommand::ExtensionCommand { command, args })?;
                         } else {
@@ -1206,12 +1222,14 @@ impl App {
             }
             KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 backend.send(FrontendCommand::NewSession)?;
+                self.home_override = Some(false);
                 self.close_popup();
             }
             KeyCode::Enter => {
                 let items = self.filtered_session_picker_items();
                 if self.popup_index == items.len() {
                     backend.send(FrontendCommand::NewSession)?;
+                    self.home_override = Some(false);
                     self.close_popup();
                     return Ok(());
                 }
@@ -1224,6 +1242,7 @@ impl App {
                         return Ok(());
                     }
                     backend.send(FrontendCommand::LoadSession { session_id })?;
+                    self.home_override = Some(false);
                     self.close_popup();
                     self.follow_tail = true;
                 }
@@ -1417,13 +1436,19 @@ impl App {
         self.clear_editor();
     }
 
-    fn open_views(&mut self) {
+    pub(crate) fn open_views(&mut self) {
         self.views_origin = if self.mode == Mode::Files {
             Mode::Files
         } else {
             Mode::Chat
         };
-        self.views_index = usize::from(self.views_origin == Mode::Files);
+        self.views_index = if self.views_origin == Mode::Files {
+            2
+        } else if self.home_visible() {
+            0
+        } else {
+            1
+        };
         self.mode = Mode::Views;
     }
 
@@ -1439,14 +1464,15 @@ impl App {
                 self.views_index = self.views_index.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.views_index = (self.views_index + 1).min(1);
+                self.views_index = (self.views_index + 1).min(2);
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Right => {
-                if self.views_index == 0 {
-                    self.mode = Mode::Chat;
-                } else {
-                    self.open_files();
-                }
+                let tab = [
+                    WorkbenchTab::Home,
+                    WorkbenchTab::Session,
+                    WorkbenchTab::Files,
+                ][self.views_index.min(2)];
+                self.activate_workbench_tab(tab);
             }
             _ => {}
         }

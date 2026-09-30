@@ -219,11 +219,22 @@ fn main() -> anyhow::Result<()> {
             app.files = Some(files);
             app.mode = Mode::Files;
         }
-        "home" => {
-            // Render the actual empty-chat Home workbench without the Views overlay.
+        "home" | "home-launcher" => {
             app.mode = Mode::Chat;
-            app.state.current_session_id = None;
+            app.home_override = Some(true);
             app.conversation.clear();
+            app.input =
+                "Compare roll-rate peaks with MM304; flag touchdown dispersion above 150 m.".into();
+            app.cursor = app.input.chars().count();
+            let root = std::env::current_dir()?;
+            let mut files = FilesState::open(root.join("src"));
+            files.tabs = vec![root.join("src/theme.rs"), root.join("src/ui/views/home.rs")];
+            app.files = Some(files);
+            if scene == "home-launcher" {
+                app.mode = Mode::Views;
+                app.views_origin = Mode::Chat;
+                app.views_index = 0;
+            }
         }
         "views" => {
             app.files = Some(FilesState::open(std::env::current_dir()?));

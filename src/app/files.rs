@@ -199,6 +199,47 @@ impl FilesState {
         self.active_tab = Some(index);
     }
 
+    pub(crate) fn activate_tab(&mut self, index: usize) -> bool {
+        let Some(path) = self.tabs.get(index).cloned() else {
+            return false;
+        };
+        if let Some(parent) = path.parent() {
+            if self.dir != parent {
+                self.set_dir(parent.to_path_buf());
+            }
+        }
+        self.changed_only = false;
+        self.find = None;
+        self.find_locked = false;
+        if let Some(cursor) = self
+            .visible()
+            .iter()
+            .position(|entry| self.dir.join(&entry.name) == path)
+        {
+            self.cursor = cursor;
+        }
+        self.active_tab = Some(index);
+        self.refresh_detail();
+        true
+    }
+
+    pub(crate) fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.tabs.remove(index);
+        match self.active_tab {
+            Some(active) if active == index => {
+                self.active_tab = None;
+                if !self.tabs.is_empty() {
+                    self.activate_tab(index.min(self.tabs.len() - 1));
+                }
+            }
+            Some(active) if active > index => self.active_tab = Some(active - 1),
+            _ => {}
+        }
+    }
+
     /// Raw text entry while the find prompt is open; everything else goes
     /// through the keymap.
     pub fn handle_find_key(&mut self, event: KeyEvent) -> bool {
@@ -270,13 +311,13 @@ impl FilesState {
             Action::MoveBottom => self.move_cursor(isize::MAX / 2),
             Action::NextTab if !self.tabs.is_empty() => {
                 let next = self.active_tab.map_or(0, |i| (i + 1) % self.tabs.len());
-                self.active_tab = Some(next);
+                self.activate_tab(next);
             }
             Action::NextTab => {}
             Action::PrevTab if !self.tabs.is_empty() => {
                 let len = self.tabs.len();
                 let prev = self.active_tab.map_or(len - 1, |i| (i + len - 1) % len);
-                self.active_tab = Some(prev);
+                self.activate_tab(prev);
             }
             Action::PrevTab => {}
             Action::PageDown => self.move_cursor(PAGE),

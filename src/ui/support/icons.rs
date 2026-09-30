@@ -20,7 +20,7 @@ pub(in crate::ui) fn session_tab() -> &'static str {
 }
 
 pub(in crate::ui) fn agent_tab() -> &'static str {
-    if nerd() { "\u{f544}" } else { "♟" }
+    if nerd() { "\u{f06a9}" } else { "♟" }
 }
 
 pub(in crate::ui) fn diff_tab() -> &'static str {
@@ -81,6 +81,7 @@ pub(in crate::ui) fn file(name: &str) -> &'static str {
             Some("py") => "\u{e73c}",
             Some("js" | "jsx") => "\u{e74e}",
             Some("ts" | "tsx") => "\u{e628}",
+            Some("c" | "h" | "cpp") => "\u{e61e}",
             _ => "\u{f121}",
         },
         (Kind::Doc, true) => "\u{e73e}",

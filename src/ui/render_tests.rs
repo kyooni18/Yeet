@@ -42,7 +42,7 @@ fn views_switcher_renders_vertical_choices() {
     app.mode = Mode::Views;
     let (text, _) = render(&mut app, 60, 16);
     let lines = text.lines().collect::<Vec<_>>();
-    let sessions = lines.iter().position(|line| line.contains("Sessions"));
+    let sessions = lines.iter().position(|line| line.contains("Session"));
     let files = lines.iter().position(|line| line.contains("Files"));
     assert!(sessions.is_some_and(|row| files == Some(row + 1)), "{text}");
     assert!(!text.contains("Workspace browser"));

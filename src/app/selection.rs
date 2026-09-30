@@ -12,6 +12,23 @@ pub struct TranscriptContextMenu {
 
 impl App {
     pub fn handle_mouse(&mut self, event: MouseEvent) {
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+            let targets = if self.mode == Mode::Views {
+                &self.view_targets
+            } else if matches!(self.mode, Mode::Chat | Mode::Files) {
+                &self.tab_targets
+            } else {
+                return;
+            };
+            if let Some(tab) = targets
+                .iter()
+                .find(|(area, _)| area.contains((event.column, event.row).into()))
+                .map(|(_, tab)| *tab)
+            {
+                self.activate_workbench_tab(tab);
+                return;
+            }
+        }
         if self.mode != Mode::Chat {
             return;
         }
