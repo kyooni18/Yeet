@@ -406,7 +406,7 @@ fn draw_provider_usage(frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
-fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
     let height = area.height;
     let muted = Style::default().fg(theme::muted());
     let active = Style::default()
