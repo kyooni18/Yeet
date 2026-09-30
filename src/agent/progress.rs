@@ -39,6 +39,37 @@ pub(super) fn tool_execution_succeeded(
     true
 }
 
+/// Completed detached checks carry their original command in the structured result.
+/// Launch acknowledgements and periodic running snapshots are not verification.
+pub(super) fn is_validation_tool_result(call: &ToolCall, content: &str) -> bool {
+    if tool_result_is_replay(content) {
+        return false;
+    }
+    if call.name == "shell_job" {
+        if !matches!(
+            call.arguments.get("action").and_then(Value::as_str),
+            Some("check" | "wait")
+        ) {
+            return false;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(content) else {
+            return false;
+        };
+        return value.get("status").and_then(Value::as_str) == Some("completed")
+            && value
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| {
+                    is_validation_tool_call(&ToolCall {
+                        id: call.id.clone(),
+                        name: "run_shell".into(),
+                        arguments: serde_json::json!({"command": command}),
+                    })
+                });
+    }
+    is_validation_tool_call(call)
+}
+
 /// Detects shell calls whose command actually performs post-change validation.
 pub(super) fn is_validation_tool_call(call: &ToolCall) -> bool {
     if call.name != "run_shell"
@@ -59,7 +90,16 @@ pub(super) fn is_validation_tool_call(call: &ToolCall) -> bool {
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    if shell_fragment_is_validation(&command) {
+    // Only count a trailing validation command: a later successful command can
+    // mask a failed check. Respect quotes so echoed command text is not evidence.
+    // Do not infer validation from pipelines, asynchronous commands, or a
+    // conditional fallback that may not have executed. False negatives are safer.
+    if command.contains('|') || command.replace("&&", "").contains('&') {
+        return false;
+    }
+    let segments = crate::shell::split_shell_segments(&command);
+    let command = segments.last().map(String::as_str).unwrap_or_default();
+    if shell_fragment_is_validation(command) {
         return true;
     }
 
@@ -504,6 +544,53 @@ mod tests {
             "run_shell",
             json!({"command":"cargo check","purpose":"Verify compilation"}),
         )));
+    }
+
+    #[test]
+    fn validation_recognizes_compound_commands_and_completed_jobs() {
+        for command in [
+            "cd app && cargo check",
+            "pwd; cargo test",
+            "cd app\nnpm run build",
+        ] {
+            assert!(is_validation_tool_call(&call(
+                "run_shell",
+                json!({"command":command})
+            )));
+        }
+        for command in [
+            "echo 'cargo check'",
+            "cargo test; echo done",
+            "true || cargo test",
+            "cargo test | cat",
+            "cargo test &",
+        ] {
+            assert!(!is_validation_tool_call(&call(
+                "run_shell",
+                json!({"command":command})
+            )));
+        }
+        let job = call("shell_job", json!({"action":"wait","jobId":"check-1"}));
+        for status in ["running", "stopping", "forgotten"] {
+            assert!(!is_validation_tool_result(
+                &job,
+                &json!({"status":status,"command":"cargo check"}).to_string()
+            ));
+        }
+        let completed =
+            json!({"status":"completed","command":"cargo check","succeeded":true}).to_string();
+        assert!(is_validation_tool_result(&job, &completed));
+        assert!(!is_validation_tool_result(
+            &call("shell_job", json!({"action":"stop"})),
+            &completed
+        ));
+        assert!(!is_validation_tool_result(
+            &call(
+                "run_shell",
+                json!({"command":"cargo check","background":true})
+            ),
+            "{\"status\":\"running\"}"
+        ));
     }
 
     #[test]

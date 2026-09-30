@@ -1336,7 +1336,7 @@ fn status_signal(_: &std::process::ExitStatus) -> i32 {
     0
 }
 
-fn split_shell_segments(command: &str) -> Vec<String> {
+pub(crate) fn split_shell_segments(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut quote = None;

@@ -42,9 +42,8 @@ use policy::{
     should_preserve_web_tool_surface, task_guidance, task_profile_with_history,
 };
 use progress::{
-    classify_tool_error, content_fingerprint, is_inspection_tool, is_validation_tool_call,
-    round_semantic_fingerprint, tool_execution_succeeded, tool_failure_fingerprint,
-    tool_made_progress, tool_result_is_replay, tool_signature,
+    classify_tool_error, content_fingerprint, is_inspection_tool, round_semantic_fingerprint,
+    tool_execution_succeeded, tool_failure_fingerprint, tool_made_progress, tool_signature,
 };
 use runaway::{RunawayDecision, RunawayDetector, RunawayRound};
 use session_controls::{
@@ -791,11 +790,19 @@ impl AgentCoordinator {
                     }
 
                     let warning = execution_evidence.completion_warning(&blocker);
-                    if !emitted_text.is_empty() {
-                        emit(AgentEvent::DiscardAssistantText(emitted_text));
-                    }
-                    emit(AgentEvent::TextDelta(warning.clone()));
-                    self.history.push(Message::assistant(warning, None));
+                    let final_text = if text.trim().is_empty() {
+                        warning.clone()
+                    } else {
+                        format!("{text}\n\n{warning}")
+                    };
+                    // Preserve useful completion details; append the coordinator's
+                    // verification caveat rather than replacing the entire answer.
+                    emit(AgentEvent::TextDelta(if emitted_text.is_empty() {
+                        final_text.clone()
+                    } else {
+                        format!("\n\n{warning}")
+                    }));
+                    self.history.push(Message::assistant(final_text, None));
                     emit(AgentEvent::Finished {
                         reason: finish_reason,
                         usage: finish_usage,
@@ -1079,8 +1086,7 @@ impl AgentCoordinator {
                     self.context_memory.flush()?;
                 }
                 let mutation_tool = is_mutation_tool(&call.name);
-                let validation_call =
-                    is_validation_tool_call(call) && !tool_result_is_replay(&content);
+                let validation_call = progress::is_validation_tool_result(call, &content);
                 execution_evidence.observe_tool(
                     call,
                     &content,
