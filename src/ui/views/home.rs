@@ -49,7 +49,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     );
     let columns = Layout::horizontal([Constraint::Length(scale_x(232) as u16), Constraint::Min(1)])
         .split(body);
-    draw_sessions_rail(frame, columns[0]);
+    draw_sessions_rail(
+        frame,
+        Rect::new(
+            columns[0].x,
+            columns[0].y,
+            columns[0].width,
+            columns[0].height + composer_height,
+        ),
+    );
     let activity_width = scale_x(540).min(columns[1].width as u32) as u16;
     let content_inset = scale_x(30) as u16;
     // The inspector begins 54px after the activity pane in the 1440px mockup.
@@ -124,24 +132,29 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        (icons::home(), "Home", true, 0u16),
-        (icons::session_tab(), "MM305 crosswind tuning", false, 175),
-        (icons::folder(false), "theme.rs", false, 423),
-        (icons::agent_tab(), "Landing", false, 547),
-        (icons::diff_tab(), "guidance_taem.c", false, 653),
-        (icons::issue_tab(), "#214", false, 835),
-        ("", "+", false, 916),
+        (icons::home(), "Home", true),
+        (icons::session_tab(), "MM305 crosswind tuning", false),
+        (icons::folder(false), "theme.rs", false),
+        (icons::agent_tab(), "Landing", false),
+        (icons::diff_tab(), "guidance_taem.c", false),
+        (icons::issue_tab(), "#214", false),
+        ("", "+", false),
     ];
-    let ends = [160u16, 423, 547, 653, 835, 895, 964];
-    for (index, (icon, label, active, start)) in entries.into_iter().enumerate() {
-        let start_px = (area.width as u32 * start as u32 / 1440) as u16;
-        let end_px = (area.width as u32 * ends[index] as u32 / 1440) as u16;
-        let x = area.x.saturating_add(start_px);
-        if x >= area.right() {
+    let mut x = area.x;
+    for (icon, label, active) in entries {
+        let text = if icon.is_empty() {
+            format!("  {label}  ")
+        } else {
+            format!(" {icon} {label} ")
+        };
+        // Tabs must reserve actual terminal cells, rather than scaled pixels:
+        // scaling a glyph's padding can make it touch or overwrite its label.
+        let width = (text.chars().count() as u16)
+            .max(if active { area.width * 160 / 1440 } else { 0 })
+            .min(area.right().saturating_sub(x));
+        if width == 0 {
             break;
         }
-        let tab_right = area.x.saturating_add(end_px).min(area.right());
-        let width = tab_right.saturating_sub(x);
         let style = if active {
             Style::default()
                 .fg(theme::text())
@@ -150,29 +163,10 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         } else {
             Style::default().fg(theme::muted()).bg(theme::background())
         };
-        frame.render_widget(
-            Block::default().style(style),
-            Rect::new(x, area.y, width, area.height),
-        );
-        if !icon.is_empty() {
-            let icon_offset = if index == 0 { 15 } else { 0 };
-            let icon_x = x + (area.width as u32 * icon_offset / 1440) as u16;
-            frame.render_widget(
-                Paragraph::new(icon).style(style),
-                Rect::new(
-                    icon_x,
-                    area.y,
-                    2.min(area.right().saturating_sub(icon_x)),
-                    1,
-                ),
-            );
-        }
-        let label_offset = if index == 0 { 36 } else { 21 };
-        let label_x = x + (area.width as u32 * label_offset / 1440) as u16;
-        frame.render_widget(
-            Paragraph::new(label).style(style),
-            Rect::new(label_x, area.y, tab_right.saturating_sub(label_x), 1),
-        );
+        let tab = Rect::new(x, area.y, width, area.height);
+        frame.render_widget(Block::default().style(style), tab);
+        frame.render_widget(Paragraph::new(text).style(style), tab);
+        x += width;
     }
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(theme::border())),
@@ -231,7 +225,7 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         };
         let icon_x = area.x + px(if index == 0 { 13 } else { 12 });
         let title_x = area.x + px(30);
-        let show_age = area.width >= 30;
+        let show_age = area.width >= 23;
         let age_width = if show_age { age.len() as u16 } else { 0 };
         let age_x = area.right().saturating_sub(age_width);
         let title_width = age_x.saturating_sub(title_x + u16::from(show_age));
@@ -263,7 +257,7 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         Block::default().style(Style::default().bg(theme::background())),
         area,
     );
-    let content_height = area.height;
+    let content_height = area.height.saturating_sub(5);
     let muted = Style::default().fg(theme::muted());
     let active = Style::default()
         .fg(theme::text())
@@ -292,16 +286,29 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
                 row,
             );
         }
-        let suffix = if context.is_empty() {
+        let mut suffix = if context.is_empty() {
             age.to_owned()
         } else {
             format!("{context}  {age}")
         };
+        let prefix = if selected {
+            format!("  {}  ", icons::agent_tab())
+        } else {
+            "  ".to_owned()
+        };
+        let title = title
+            .replace("▤", icons::session_tab())
+            .replace("▣", icons::agent_tab());
+        let title_budget = row.width as usize - prefix.chars().count().min(row.width as usize);
+        // Keep the decision readable before spending cells on its metadata.
+        if selected && title.chars().count() + suffix.chars().count() + 2 > title_budget {
+            suffix.clear();
+        }
         let title = super::super::task::fit(
-            title,
-            (row.width as usize).saturating_sub(suffix.chars().count() + 3),
+            &title,
+            title_budget
+                .saturating_sub(suffix.chars().count() + if suffix.is_empty() { 0 } else { 2 }),
         );
-        let prefix = if selected { "    ▸ " } else { "      " };
         let used = prefix.chars().count() + title.chars().count() + suffix.chars().count();
         let gap = " ".repeat((row.width as usize).saturating_sub(used));
         let line = Line::from(vec![
@@ -322,14 +329,25 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         if y >= area.y.saturating_add(content_height) {
             break;
         }
-        let file = super::super::task::fit(file, area.width.saturating_sub(13) as usize);
-        let line = Line::from(vec![
-            Span::styled(format!("  C   {file}          "), muted),
-            Span::styled(added, Style::default().fg(theme::success())),
-            Span::raw("  "),
-            Span::styled(removed, Style::default().fg(theme::error())),
-        ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+        let added_x = area.right().saturating_sub(15);
+        let removed_x = area.right().saturating_sub(9);
+        let file_x = area.x + 4;
+        let file = super::super::task::fit(file, added_x.saturating_sub(file_x + 2) as usize);
+        for (x, text, style) in [
+            (
+                area.x + 2,
+                icons::file(&file),
+                Style::default().fg(theme::accent()),
+            ),
+            (file_x, file.as_str(), muted),
+            (added_x, added, Style::default().fg(theme::success())),
+            (removed_x, removed, Style::default().fg(theme::error())),
+        ] {
+            frame.render_widget(
+                Paragraph::new(text).style(style),
+                Rect::new(x, y, area.right().saturating_sub(x), 1),
+            );
+        }
     }
     for (index, issue) in [
         "#214  Context rail focus order",
@@ -342,7 +360,7 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         if y < area.y.saturating_add(content_height) {
             let issue = super::super::task::fit(issue, area.width.saturating_sub(5) as usize);
             frame.render_widget(
-                Paragraph::new(format!("  ▣  {issue}")).style(muted),
+                Paragraph::new(format!("  {}  {issue}", icons::issue_tab())).style(muted),
                 Rect::new(area.x, y, area.width, 1),
             );
         }
@@ -388,13 +406,13 @@ fn draw_provider_usage(frame: &mut Frame<'_>, area: Rect) {
         ] {
             let x = at(start);
             let width = (area.width * 96 / 540).min(area.right().saturating_sub(x));
-            let meter_y = y.saturating_add(1);
+            let meter_y = y;
             if width > 0 && meter_y < area.bottom() {
                 frame.render_widget(
                     Paragraph::new(" ".repeat(width as usize)).style(track),
                     Rect::new(x, meter_y, width, 1),
                 );
-                let filled = width * percent / 100;
+                let filled = (width * percent).div_ceil(100);
                 if filled > 0 {
                     frame.render_widget(
                         Paragraph::new(" ".repeat(filled as usize)).style(fill),
@@ -434,19 +452,19 @@ fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
 
     put(frame, 0, 28, "Accept a 3.2 km floor?", heading);
     put(frame, 0, 56, "Verification · Landing · 4m ago", subdued);
-    put(
-        frame,
-        0,
-        112,
-        "Sweep at 3 km misses Final speed for headings above 270°.",
-        body,
-    );
-    put(
-        frame,
-        0,
-        140,
-        "Tightest flyable radius is 3.2 km; nominal is 12 km.",
-        body,
+    let copy_y = area.y + py(112);
+    let copy = Paragraph::new("Sweep at 3 km misses Final speed for headings above 270°.\n\nTightest flyable radius is 3.2 km; nominal is 12 km.")
+        .style(body).wrap(Wrap { trim: true });
+    let copy_height = copy.line_count(area.width) as u16;
+    let choices_y = (area.y + py(230)).max(copy_y + copy_height + 1);
+    frame.render_widget(
+        copy,
+        Rect::new(
+            area.x,
+            copy_y,
+            area.width,
+            copy_height.min(area.bottom().saturating_sub(copy_y)),
+        ),
     );
 
     for (index, (key, label)) in [
@@ -457,14 +475,17 @@ fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
     .into_iter()
     .enumerate()
     {
-        let y = 230 + index as u16 * 28;
-        put(
-            frame,
-            0,
-            y,
-            &format!("{key}   {label}"),
-            if index == 0 { heading } else { body },
-        );
+        let y = choices_y.saturating_sub(area.y) + index as u16 * 2;
+        if area.y + y < area.bottom() {
+            frame.render_widget(
+                Paragraph::new(format!("{key}   {label}")).style(if index == 0 {
+                    heading
+                } else {
+                    body
+                }),
+                Rect::new(area.x, area.y + y, area.width, 1),
+            );
+        }
     }
 }
 
@@ -480,20 +501,66 @@ fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         &app.input
     };
-    let line = Line::from(vec![
-        Span::styled(
-            "+  ",
-            Style::default()
-                .fg(theme::secondary())
-                .bg(Color::Rgb(0x2a, 0x2a, 0x37)),
-        ),
-        Span::styled(prompt, style),
-        Span::styled(
-            " →",
-            Style::default()
-                .fg(theme::muted())
-                .bg(Color::Rgb(0x2a, 0x2a, 0x37)),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line).style(style), area);
+    frame.render_widget(Block::default().style(style), area);
+    let y = area.y + area.height.saturating_sub(1) / 2;
+    let inset = (area.width as u32 * 30 / 1208).max(2) as u16;
+    frame.render_widget(
+        Paragraph::new("+").style(style),
+        Rect::new(area.x + inset, y, 1, 1),
+    );
+    let text_x = area.x + inset + 3;
+    let send_x = area.right().saturating_sub(3);
+    frame.render_widget(
+        Paragraph::new(prompt).style(style),
+        Rect::new(text_x, y, send_x.saturating_sub(text_x + 1), 1),
+    );
+    frame.render_widget(
+        Paragraph::new("→").style(style.fg(theme::muted())),
+        Rect::new(send_x, y, 1, 1),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn home_keeps_copy_and_change_counts_readable_after_resize() {
+        for (width, height) in [(110, 28), (144, 44), (203, 41)] {
+            let mut app = App::default();
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = buffer
+                .content
+                .chunks(width as usize)
+                .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+                .collect();
+            let text = rows.join("\n");
+            assert!(
+                text.contains("Verification: accept a 3.2 km floor?"),
+                "{width}x{height}"
+            );
+            assert!(
+                text.contains("270°."),
+                "inspector copy clipped at {width}x{height}"
+            );
+            assert!(
+                text.contains("12 km."),
+                "inspector copy clipped at {width}x{height}"
+            );
+            let changed: Vec<&String> = rows
+                .iter()
+                .filter(|row| row.contains("+18") || row.contains("+42") || row.contains("+8"))
+                .collect();
+            assert_eq!(changed.len(), 3);
+            let column = |row: &str, needle: &str| {
+                let byte = row.find(needle).unwrap();
+                row[..byte].chars().count()
+            };
+            assert_eq!(column(changed[0], "+18"), column(changed[1], "+42"));
+            assert_eq!(column(changed[1], "+42"), column(changed[2], "+8"));
+        }
+    }
 }
