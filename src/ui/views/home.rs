@@ -1,4 +1,3 @@
-//! Home workbench view: recent objects, workspace activity, and focused details.
 use super::super::{
     components::status,
     support::{icons, theme},
@@ -23,16 +22,11 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         draw_compact(frame, app, bounds);
         return;
     }
-
     frame.render_widget(
         Block::default().style(Style::default().bg(theme::background())),
         bounds,
     );
-    // OpenPencil's SVG group transform (-36 px) moves the title bar out of the
-    // 864 px artboard; tabs therefore occupy rows 0..34 and the rail starts at 34.
     let scale_x = |px: u16| bounds.width as u32 * px as u32 / 1440;
-    // Round design-pixel heights to the nearest terminal row. Ceiling here adds
-    // an entire cell to the tab bar at 54 rows and shifts every pane downward.
     let scale_y = |px: u16| (bounds.height as u32 * px as u32 + 432) / 864;
     let tab_height = scale_y(34).max(1) as u16;
     let composer_height = scale_y(36).max(1) as u16;
@@ -57,7 +51,6 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         .split(body);
     draw_sessions_rail(frame, columns[0]);
     let activity_width = scale_x(540).min(columns[1].width as u32) as u16;
-    // Reference main frame places content at x+30 and inspector at x+600.
     let content_inset = scale_x(30) as u16;
     let inspector_start = scale_x(600) as u16;
     let panes = Layout::horizontal([
@@ -68,9 +61,62 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     ])
     .split(columns[1]);
     draw_activity(frame, panes[1]);
-    draw_inspector(frame, panes[3]);
-    draw_composer(frame, app, rows[2]);
+    draw_inspector(frame, app, panes[3]);
+    draw_composer(
+        frame,
+        app,
+        Rect::new(
+            bounds.x + scale_x(232) as u16,
+            rows[2].y,
+            bounds.width.saturating_sub(scale_x(232) as u16),
+            rows[2].height,
+        ),
+    );
     status::draw(frame, app, rows[3]);
+}
+
+fn draw_compact(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::background())),
+        area,
+    );
+    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+    let title = Line::from(vec![
+        Span::styled(
+            " Overview",
+            Style::default().fg(theme::text()).add_modifier(ACTIVE),
+        ),
+        Span::styled("  •  Yeet workspace", Style::default().fg(theme::muted())),
+    ]);
+    let body = Paragraph::new(vec![
+        title,
+        Line::from(""),
+        Line::from(Span::styled(
+            "Now",
+            Style::default().fg(theme::text()).add_modifier(ACTIVE),
+        )),
+        Line::from("  Verification: accept a 3.2 km floor?"),
+        Line::from("  Landing · 4m ago"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Recent Activity",
+            Style::default().fg(theme::text()).add_modifier(ACTIVE),
+        )),
+        Line::from("  MM305 crosswind tuning · 18s"),
+        Line::from("  Landing · 2 running · 26m"),
+        Line::from("  TUI shell direction · 3m"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Changed Files",
+            Style::default().fg(theme::text()).add_modifier(ACTIVE),
+        )),
+        Line::from("  guidance_taem.c  +18  −6"),
+        Line::from("  taem_candidate_search.c  +42  −13"),
+        Line::from("  taem_candidate_search.h  +8  −4"),
+    ])
+    .wrap(Wrap { trim: true });
+    frame.render_widget(body, rows[0]);
+    status::draw(frame, app, rows[1]);
 }
 fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
@@ -360,66 +406,95 @@ fn draw_provider_usage(frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
-fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let content = Rect::new(area.x, area.y, area.width, area.height);
-    let title = Style::default().fg(theme::text()).add_modifier(ACTIVE);
-    let secondary = Style::default().fg(theme::muted());
-    let body = Style::default().fg(theme::text_dim());
-    let text = vec![
-        Line::from(Span::styled("Accept a 3.2 km floor?", title)),
-        Line::from(Span::styled("Verification · Landing · 4m ago", secondary)),
-        Line::from(Span::styled(
-            "Sweep at 3 km misses Final speed for headings above 270°.",
-            body,
-        )),
-        Line::from(Span::styled(
-            "Tightest flyable radius is 3.2 km; nominal is 12 km.",
-            body,
-        )),
-        Line::from(Span::styled("a   Accept 3.2 km floor", title)),
-        Line::from(Span::styled("b   Keep 3.0 km and add margin", body)),
-        Line::from(Span::styled("c   Have Planner re-sweep first", body)),
+fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    let height = area.height;
+    let muted = Style::default().fg(theme::muted());
+    let active = Style::default()
+        .fg(theme::text())
+        .bg(theme::selected_color())
+        .add_modifier(ACTIVE);
+    let items = [
+        (
+            "Verification: accept a 3.2 km floor?",
+            "Landing",
+            "4m",
+            true,
+        ),
+        ("MM305 crosswind", "", "18s", false),
+        ("Landing", "2 running", "26m", false),
+        ("TUI shell direction", "", "3m", false),
     ];
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), content);
-}
-
-fn draw_compact(frame: &mut Frame<'_>, app: &mut App, bounds: Rect) {
-    let status_height = 1.min(bounds.height);
-    let content_height = bounds.height.saturating_sub(status_height);
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(status_height),
-    ])
-    .split(bounds);
-    let tabs = format!("⌂ Home  ·  {}", app.state.active_model);
-    frame.render_widget(
-        Paragraph::new(super::super::task::fit(&tabs, rows[0].width as usize)).style(
-            Style::default()
-                .fg(theme::text())
-                .bg(theme::code_background()),
-        ),
-        rows[0],
-    );
-    // A compact terminal has no room for desktop tabs, context rail and split
-    // inspector at once. Preserve the interaction order with a full-width work
-    // surface and composer at the bottom.
-    draw_activity(frame, rows[1]);
-    draw_composer(frame, app, rows[2]);
-    status::draw(
-        frame,
-        app,
-        Rect::new(
-            bounds.x,
-            bounds.y + content_height,
-            bounds.width,
-            status_height,
-        ),
-    );
+    for (index, (title, context, age, selected)) in items.into_iter().enumerate() {
+        let y = area.y.saturating_add(3 + index as u16 * 2);
+        if y >= area.bottom() {
+            break;
+        }
+        let row = Rect::new(area.x, y, area.width, 1);
+        if selected {
+            frame.render_widget(
+                Block::default().style(Style::default().bg(Color::Rgb(0x32, 0x32, 0x40))),
+                row,
+            );
+        }
+        let suffix = if context.is_empty() {
+            age.to_owned()
+        } else {
+            format!("{context}  {age}")
+        };
+        let prefix = if selected { "  ▸ " } else { "    " };
+        let title = super::super::task::fit(
+            title,
+            (row.width as usize).saturating_sub(prefix.len() + suffix.len() + 1),
+        );
+        let gap = " "
+            .repeat((row.width as usize).saturating_sub(prefix.len() + title.len() + suffix.len()));
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(prefix, if selected { active } else { muted }),
+                Span::styled(title, if selected { active } else { muted }),
+                Span::raw(gap),
+                Span::styled(suffix, muted),
+            ])),
+            row,
+        );
+    }
+    let files = [
+        ("guidance_taem.c", "+18", "−6"),
+        ("taem_candidate_search.c", "+42", "−13"),
+        ("taem_candidate_search.h", "+8", "−4"),
+    ];
+    for (index, (file, added, removed)) in files.into_iter().enumerate() {
+        let y = area.y.saturating_add(12 + index as u16 * 2);
+        if y < area.bottom() {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(format!("  C   {file}          "), muted),
+                    Span::styled(added, Style::default().fg(theme::success())),
+                    Span::raw("  "),
+                    Span::styled(removed, Style::default().fg(theme::error())),
+                ])),
+                Rect::new(area.x, y, area.width, 1),
+            );
+        }
+    }
+    for (index, issue) in [
+        "#214  Context rail focus order",
+        "#219  Final-speed handoff threshold",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let y = area.y.saturating_add(19 + index as u16 * 2);
+        if y < area.bottom() {
+            frame.render_widget(
+                Paragraph::new(format!("  ▣  {issue}")).style(muted),
+                Rect::new(area.x, y, area.width, 1),
+            );
+        }
+    }
+    if height >= 10 {
+        draw_provider_usage(frame, area);
+    }
 }
 
 fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -428,7 +503,7 @@ fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
     let style = Style::default()
         .fg(theme::text())
-        .bg(theme::surface_color());
+        .bg(Color::Rgb(0x2a, 0x2a, 0x37));
     let prompt = if app.input.is_empty() {
         "Ask Yeet..."
     } else {
@@ -439,14 +514,14 @@ fn draw_composer(frame: &mut Frame<'_>, app: &App, area: Rect) {
             "+  ",
             Style::default()
                 .fg(theme::secondary())
-                .bg(theme::surface_color()),
+                .bg(Color::Rgb(0x2a, 0x2a, 0x37)),
         ),
         Span::styled(prompt, style),
         Span::styled(
             " →",
             Style::default()
                 .fg(theme::muted())
-                .bg(theme::surface_color()),
+                .bg(Color::Rgb(0x2a, 0x2a, 0x37)),
         ),
     ]);
     frame.render_widget(Paragraph::new(line).style(style), area);
