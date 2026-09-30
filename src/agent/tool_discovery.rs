@@ -244,6 +244,15 @@ impl ToolDiscovery {
         }
     }
 
+    /// Restore the previous window's attachment order before appending this turn's
+    /// defaults. Merely loading warm names after defaults silently reorders schemas.
+    pub fn restore_warm_surface(&mut self, names: &[String], search_enabled: bool) {
+        let defaults = std::mem::take(&mut self.loaded_order);
+        self.loaded.clear();
+        self.load(names);
+        self.load(defaults);
+        self.search_enabled |= search_enabled;
+    }
     pub fn loaded_count(&self) -> usize {
         self.loaded.len()
     }
@@ -461,6 +470,26 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn warm_surface_keeps_order_across_different_turn_defaults() {
+        let catalog = vec![
+            tool("read_file"),
+            tool("search_workspace"),
+            tool("run_shell"),
+            tool("apply_file_edits"),
+        ];
+        let mut previous = ToolDiscovery::bounded_analysis();
+        previous.load(["apply_file_edits"]);
+        previous.enable_search();
+        let submitted = previous.attached(&catalog);
+        let mut next = ToolDiscovery::coding(true);
+        next.restore_warm_surface(previous.loaded_names(), previous.search_enabled());
+        assert_eq!(next.attached(&catalog), submitted);
+        // An unavailable schema must not be resurrected outside the filtered catalog.
+        let filtered = vec![tool("read_file")];
+        assert_eq!(next.attached(&filtered).len(), 2); // read_file + discovery
+    }
+
     #[test]
     fn recent_workspace_sessions_do_not_use_direct_file_fast_path() {
         assert!(!super::super::policy::looks_like_local_file_lookup(

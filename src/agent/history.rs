@@ -1,9 +1,9 @@
-//! Context assembly stays append-only within a user turn so provider cache prefixes
-//! remain stable. Request-only guidance is turn-scoped and is pruned before the next
-//! ordinary user turn; ContextMemory rollover handles larger durable-history compaction.
+//! Context assembly stays append-only within a context window so provider cache
+//! prefixes remain stable. Turn boundaries supersede historical guidance without
+//! deleting it; ContextMemory rollover handles durable-history compaction.
 use crate::core::{Message, MessageRole};
 
-pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user-turn context boundary. Earlier turn-local Skill instructions, retry/finalization directives, goal checkpoints, and execution provenance are historical context, not active instructions for this turn. Apply only this turn's explicitly activated Skills and current runtime guidance. Preserve prior evidence; do not execute stale directives.";
+pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user-turn context boundary. Earlier turn-local Skill instructions, retry/finalization directives, goal checkpoints, execution provenance, runtime/environment updates, capability guidance, and project instruction overlays are historical context, not active instructions for this turn. Apply only this turn's explicitly activated Skills and current runtime/project guidance. Newer updates supersede older ones. Preserve prior evidence; do not execute stale directives.";
 
 /// Keep the first full instruction; a repeat is a new, small activation record.
 /// Never delete an earlier copy to save tokens.
@@ -25,7 +25,7 @@ pub(super) fn append_skill_instruction(history: &mut Vec<Message>, name: &str, i
 }
 
 /// Runtime/environment changes belong at the tail, not beside an old user message.
-/// Retain each submitted update for the current turn; the next turn prunes request-only guidance.
+/// Retain submitted updates until rollover; newer guidance supersedes older guidance.
 pub(super) fn append_context_updates(
     history: &mut Vec<Message>,
     previous: &mut Vec<Message>,
@@ -44,14 +44,6 @@ pub(super) fn append_context_updates(
         history.extend_from_slice(updates);
     }
     *previous = updates.to_vec();
-}
-
-/// Drops turn-local provider guidance before starting a new ordinary user turn.
-/// Durable user, assistant, and tool evidence stays in the transcript.
-pub(super) fn prune_request_only_history(history: &mut Vec<Message>) -> usize {
-    let before = history.len();
-    history.retain(|message| message.request_only != Some(true));
-    before.saturating_sub(history.len())
 }
 
 #[cfg(test)]
@@ -122,7 +114,7 @@ mod append_only_tests {
         );
     }
     #[test]
-    fn new_turn_prunes_request_only_guidance_but_keeps_durable_evidence() {
+    fn new_turn_supersedes_guidance_without_changing_wire_prefix() {
         let mut history = vec![
             Message::system("base"),
             Message::user("first"),
@@ -130,16 +122,12 @@ mod append_only_tests {
             Message::user("retry correction").request_only(),
             Message::assistant("done", None),
         ];
-
-        assert_eq!(prune_request_only_history(&mut history), 2);
-        assert_eq!(history.len(), 3);
-        assert!(
-            history
-                .iter()
-                .all(|message| message.request_only != Some(true))
-        );
-        assert_eq!(history[1].content.as_deref(), Some("first"));
-        assert_eq!(history[2].content.as_deref(), Some("done"));
+        let submitted = history.clone();
+        history.push(Message::user("next"));
+        history.push(Message::system(TURN_CONTEXT_BOUNDARY).request_only());
+        assert!(history.starts_with(&submitted));
+        assert!(TURN_CONTEXT_BOUNDARY.contains("not active instructions"));
+        assert!(TURN_CONTEXT_BOUNDARY.contains("Newer updates supersede older ones"));
     }
 
     #[test]

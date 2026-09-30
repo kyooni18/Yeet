@@ -219,10 +219,8 @@ impl AgentCoordinator {
         if profile == TaskProfile::Agent && !local_file_lookup {
             // Preserve the provider-visible tool envelope across ordinary turns. New
             // tools may append, but a new user message must not shrink a warmed prefix.
-            tool_discovery.load(self.warm_tool_names.iter().map(String::as_str));
-            if self.warm_tool_search_enabled {
-                tool_discovery.enable_search();
-            }
+            tool_discovery
+                .restore_warm_surface(&self.warm_tool_names, self.warm_tool_search_enabled);
         }
         promote_agent_orchestration_tool(
             &mut tool_discovery,

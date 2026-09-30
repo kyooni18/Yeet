@@ -24,6 +24,7 @@ pub(super) struct ContinuityTracker {
     previous_wire_history: Option<Vec<Message>>,
     previous_base_prefix: Option<Vec<Message>>,
     previous_tool_envelope_hash: Option<String>,
+    previous_tool_names: Vec<String>,
     cache_epoch: u64,
 }
 
@@ -104,7 +105,56 @@ impl ContinuityTracker {
             )
         };
 
+        let tool_names: Vec<String> = request
+            .tools
+            .iter()
+            .flatten()
+            .chain(request.deferred_tools.iter().flatten())
+            .map(|tool| tool.name.clone())
+            .collect();
+        // Canonical adapter-input bytes, not provider tokenization or the final
+        // provider body. Include partial-message matches, unlike prefix_continuity.
+        let serialized_wire_lcp_bytes = self.previous_wire_history.as_ref().map(|previous| {
+            let previous = serde_json::to_vec(previous).unwrap_or_default();
+            let current = serde_json::to_vec(&current_wire).unwrap_or_default();
+            previous
+                .iter()
+                .zip(&current)
+                .take_while(|(a, b)| a == b)
+                .count()
+        });
         if let Some(object) = value.as_object_mut() {
+            object.insert("diagnosticSurface".into(), json!("canonical-adapter-input"));
+            object.insert(
+                "serializedWireHistoryLcpBytes".into(),
+                json!(serialized_wire_lcp_bytes),
+            );
+            object.insert(
+                "contextWindowChanged".into(),
+                json!(self.scope.is_some() && !same_scope),
+            );
+            object.insert(
+                "previousToolEnvelopeHash".into(),
+                json!(self.previous_tool_envelope_hash),
+            );
+            object.insert(
+                "addedToolNames".into(),
+                json!(
+                    tool_names
+                        .iter()
+                        .filter(|name| !self.previous_tool_names.contains(name))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            object.insert(
+                "removedToolNames".into(),
+                json!(
+                    self.previous_tool_names
+                        .iter()
+                        .filter(|name| !tool_names.contains(name))
+                        .collect::<Vec<_>>()
+                ),
+            );
             object.insert("stableHistoryMessages".into(), json!(current.len()));
             object.insert(
                 "previousStableHistoryMessages".into(),
@@ -160,6 +210,7 @@ impl ContinuityTracker {
         self.previous_wire_history = Some(current_wire);
         self.previous_base_prefix = Some(current_base);
         self.previous_tool_envelope_hash = tool_envelope_hash;
+        self.previous_tool_names = tool_names;
         value
     }
 }
@@ -740,6 +791,36 @@ mod continuity_guard_tests {
             .into(),
         );
         request
+    }
+
+    #[test]
+    fn transition_diagnostics_report_lcp_tools_and_rollover() {
+        let mut tracker = ContinuityTracker::default();
+        let mut first = request("window-1", "agent", vec![Message::user("task")]);
+        first.tools = Some(vec![ToolDefinition::new("read_file", "read", json!({}))]);
+        let initial = tracker.diagnostics(&first);
+        assert_eq!(initial["addedToolNames"], json!(["read_file"]));
+        let mut next = first.clone();
+        next.messages.push(Message::assistant("done", None));
+        next.tools = Some(vec![ToolDefinition::new("run_shell", "shell", json!({}))]);
+        let transition = tracker.diagnostics(&next);
+        assert_eq!(
+            transition["previousToolEnvelopeHash"],
+            initial["toolEnvelopeHash"]
+        );
+        assert_eq!(transition["addedToolNames"], json!(["run_shell"]));
+        assert_eq!(transition["removedToolNames"], json!(["read_file"]));
+        let bytes = serde_json::to_vec(&canonical_wire_history(&first)).unwrap();
+        assert_eq!(
+            transition["serializedWireHistoryLcpBytes"],
+            json!(bytes.len() - 1)
+        );
+        let rollover = tracker.diagnostics(&request(
+            "window-2",
+            "agent",
+            vec![Message::user("handoff")],
+        ));
+        assert_eq!(rollover["contextWindowChanged"], json!(true));
     }
 
     #[test]
