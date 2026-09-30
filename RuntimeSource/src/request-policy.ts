@@ -110,9 +110,15 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
 
   if (geminiRoute) {
     const generationConfig = record(existing.generationConfig);
-    if (generationConfig.thinkingConfig !== undefined) return request;
-    const thinkingConfig = geminiThinkingConfig(routedModel, requested ?? "low");
-    if (!thinkingConfig || (!requested && !auxiliary)) return request;
+    const supported = geminiThinkingConfig(routedModel, requested ?? "low");
+    if (!supported) return request;
+    const explicit = generationConfig.thinkingConfig;
+    const thinkingConfig = {
+      ...(explicit !== undefined ? record(explicit) : requested || auxiliary ? supported : {}),
+      // Thought summaries power live reasoning status; leave explicit opt-outs intact.
+      ...(!auxiliary && record(explicit).includeThoughts === undefined ? { includeThoughts: true } : {}),
+    };
+    if (auxiliary && explicit !== undefined) return request;
     return {
       ...request,
       providerOptions: {

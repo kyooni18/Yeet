@@ -573,6 +573,7 @@ export class OpenAIProvider implements ProviderAdapter {
 
     let started = false;
     let completedRaw: any;
+    let summaryPart: string | undefined;
     const tools = new Map<number, { id?: string; name?: string; argumentsText: string }>();
 
     for await (const event of parseSSE(response)) {
@@ -612,6 +613,11 @@ export class OpenAIProvider implements ProviderAdapter {
         // plaintext reasoning. OpenAI itself may never emit this event.
         yield { type: "reasoning-delta", delta: raw.delta };
       } else if (raw.type === "response.reasoning_summary_text.delta" && typeof raw.delta === "string") {
+        const part = `${raw.item_id ?? raw.output_index ?? 0}:${raw.summary_index ?? 0}`;
+        if (summaryPart !== undefined && summaryPart !== part) {
+          yield { type: "reasoning-summary-delta", delta: "\n\n" };
+        }
+        summaryPart = part;
         yield { type: "reasoning-summary-delta", delta: raw.delta };
       } else if (raw.type === "response.output_item.added" && raw.item?.type === "function_call") {
         const index = raw.output_index ?? 0;

@@ -1509,6 +1509,19 @@ test("reasoning policy maps levels by routed provider capability", () => {
   assert.equal(policy("codex-cli/codex-mini-latest", { reasoningLevel: "high" }).providerOptions, undefined);
 });
 
+test("Gemini reasoning status requests summaries without changing automatic effort or opt-outs", () => {
+  const policy = (model, providerOptions, metadata) => withReasoningPolicy({
+    model, messages: [{ role: "user", content: "x" }], providerOptions, metadata,
+  });
+  for (const model of ["gemini/gemini-3.8-flash", "gemini/gemini-2.5-pro", "opencode/google/gemini-3.8-flash"]) {
+    assert.deepEqual(policy(model).providerOptions.generationConfig.thinkingConfig, { includeThoughts: true });
+    assert.deepEqual(policy(model, { generationConfig: { thinkingConfig: { thinkingBudget: 512, includeThoughts: false } } })
+      .providerOptions.generationConfig.thinkingConfig, { thinkingBudget: 512, includeThoughts: false });
+    assert.equal(policy(model, undefined, { purpose: "session-title" }).providerOptions.generationConfig.thinkingConfig.includeThoughts, undefined);
+  }
+  assert.equal(policy("gemini/gemini-2.0-flash").providerOptions, undefined);
+});
+
 test("finish normalization and synthetic tool ids preserve protocol semantics", () => {
   assert.equal(normalizeFinishReason("model_context_window_exceeded"), "context_length");
   assert.equal(normalizeFinishReason("max_prompt_tokens"), "context_length");
@@ -2641,7 +2654,9 @@ test("OpenAI Responses stream preserves exposed reasoning summary and plaintext 
     apiKey: "test",
     fetch: async () => sseResponse([
       { type: "response.created", response: { id: "resp_reason", model: "gpt-test" } },
-      { type: "response.reasoning_summary_text.delta", delta: "Inspecting" },
+      { type: "response.reasoning_summary_text.delta", item_id: "reason-1", summary_index: 0, delta: "Inspecting" },
+      { type: "response.reasoning_summary_text.delta", item_id: "reason-1", summary_index: 0, delta: " inputs" },
+      { type: "response.reasoning_summary_text.delta", item_id: "reason-1", summary_index: 1, delta: "Checking constraints" },
       { type: "response.reasoning_text.delta", delta: "full reasoning" },
       { type: "response.output_text.delta", delta: "answer" },
       { type: "response.completed", response: { status: "completed", output: [], usage: {} } },
@@ -2650,6 +2665,7 @@ test("OpenAI Responses stream preserves exposed reasoning summary and plaintext 
   const events = [];
   for await (const event of provider.stream({ model: "gpt-test", messages: [{ role: "user", content: "go" }] })) events.push(event);
   assert.ok(events.some((event) => event.type === "reasoning-summary-delta" && event.delta === "Inspecting"));
+  assert.equal(events.filter((event) => event.type === "reasoning-summary-delta").map((event) => event.delta).join(""), "Inspecting inputs\n\nChecking constraints");
   assert.ok(events.some((event) => event.type === "reasoning-delta" && event.delta === "full reasoning"));
   assert.ok(events.some((event) => event.type === "text-delta" && event.delta === "answer"));
 });

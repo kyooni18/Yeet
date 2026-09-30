@@ -316,7 +316,7 @@ impl SharedSession {
         } else {
             &self.state.active_reasoning_summary
         };
-        let title = reasoning_status(text, summary).unwrap_or_else(|| "Reasoning".into());
+        let title = reasoning_status(text).unwrap_or_else(|| "Reasoning".into());
         self.set_activity("reasoning", &title, None);
 
         let has_summary = !self.state.active_reasoning_summary.trim().is_empty();
@@ -509,8 +509,9 @@ impl SharedSession {
     }
 }
 
-/// Read complete Markdown titles only: token boundaries can split either `**`.
-fn reasoning_status(text: &str, summary: bool) -> Option<String> {
+/// Prefer complete Markdown titles, then the latest readable provider text.
+/// Token boundaries can split either `**`, so partial titles are never shown.
+fn reasoning_status(text: &str) -> Option<String> {
     let mut rest = text;
     let mut latest = None;
     while let Some(start) = rest.find("**") {
@@ -522,12 +523,21 @@ fn reasoning_status(text: &str, summary: bool) -> Option<String> {
         }
         rest = &rest[end + 2..];
     }
-    if latest.is_none() && summary && !text.contains('*') {
+    if latest.is_none() && !text.contains("**") {
         latest = text
             .lines()
             .rev()
             .find(|line| !line.trim().is_empty())
-            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "));
+            .map(|line| {
+                line.trim()
+                    .trim_start_matches('#')
+                    .trim()
+                    .trim_matches(|ch| matches!(ch, '*' | '_' | '`'))
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|title| !title.is_empty());
     }
     latest.map(|title| {
         if title.chars().count() > 120 {
@@ -562,7 +572,7 @@ mod reasoning_status_tests {
     fn latest_title_wins_without_markdown_seams() {
         let text = "**Planning PDF generation****Designing equations****Implementing fractions**";
         assert_eq!(
-            reasoning_status(text, true).as_deref(),
+            reasoning_status(text).as_deref(),
             Some("Implementing fractions")
         );
         assert!(reasoning_titles_only(text));
@@ -571,20 +581,61 @@ mod reasoning_status_tests {
     #[test]
     fn incomplete_title_keeps_previous_purpose() {
         assert_eq!(
-            reasoning_status("**Planning****Implementing*", true).as_deref(),
+            reasoning_status("**Planning****Implementing*").as_deref(),
             Some("Planning")
         );
-        assert_eq!(reasoning_status("**Planning*", true), None);
+        assert_eq!(reasoning_status("**Planning*"), None);
         assert!(reasoning_titles_only("**Planning*"));
     }
 
     #[test]
-    fn prose_is_not_treated_as_a_title() {
+    fn provider_prose_is_readable_but_stays_in_the_transcript() {
         assert!(!reasoning_titles_only("**Planning**\nDetailed explanation"));
-        assert_eq!(reasoning_status("Detailed explanation", false), None);
         assert_eq!(
-            reasoning_status("First step\nCurrent step", true).as_deref(),
+            reasoning_status("Detailed explanation").as_deref(),
+            Some("Detailed explanation")
+        );
+        assert_eq!(
+            reasoning_status("First step\nCurrent step").as_deref(),
             Some("Current step")
+        );
+    }
+
+    #[test]
+    fn provider_statuses_prefer_summary_and_clear_when_work_changes() {
+        for model in [
+            "anthropic/claude-test",
+            "gemini/gemini-test",
+            "openrouter/test",
+        ] {
+            let mut session = SharedSession::new(model.into(), "auto".into());
+            session.append_reasoning("### Inspecting inputs", false);
+            let title = |session: &SharedSession| {
+                session
+                    .state
+                    .conversation
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .find_map(|entry| match &entry.kind {
+                        ConversationKind::Activity { activity } => Some(activity.title.clone()),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            assert_eq!(title(&session), "Inspecting inputs");
+            session.append_reasoning("Checking constraints", true);
+            session.append_reasoning("\nDetailed provider prose", false);
+            assert_eq!(title(&session), "Checking constraints");
+            session.set_activity("tool", "Reading file", None);
+            assert!(session.state.active_reasoning_entry_id.is_none());
+            assert!(session.state.active_reasoning_summary.is_empty());
+            session.append_reasoning("New step", false);
+            assert_eq!(title(&session), "New step");
+        }
+        assert_eq!(
+            reasoning_status(&"한".repeat(130)).unwrap().chars().count(),
+            120
         );
     }
 
