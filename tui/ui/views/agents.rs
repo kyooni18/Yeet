@@ -9,7 +9,10 @@ use super::super::{
 };
 use crate::{
     model::{AgentActivityItem, AgentActivityKind, AgentMemberItem},
-    tui::app::{App, agents::AgentAction},
+    tui::app::{
+        App,
+        agents::{AGENT_ROLES, AgentAction},
+    },
 };
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -111,6 +114,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     composer::draw(frame, app, composer_area, main_x + inset + 3);
     if app.input.is_empty() {
         let hint = match app.selected_agent() {
+            _ if let Some(role) = app.agents.adding => format!(
+                "Describe the new {}'s task · Tab role · Esc cancel",
+                AGENT_ROLES[role]
+            ),
             Some(member) if member.status == "stopped" => {
                 format!("{} is stopped", member.description)
             }
@@ -131,6 +138,17 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.height < 3 {
         return;
     }
+    let add = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1);
+    let (add_label, add_style) = match app.agents.adding {
+        Some(role) => (
+            format!("+  New {}", AGENT_ROLES[role]),
+            theme::surface().fg(theme::accent()).add_modifier(BOLD),
+        ),
+        None => ("+  Add agent".to_owned(), theme::surface()),
+    };
+    frame.render_widget(Paragraph::new(add_label).style(add_style).centered(), add);
+    app.agents.targets.push((add, AgentAction::Add));
+    draw_rail_actions(frame, app, area);
     let members = app.agent_members();
     let running = members.iter().filter(|m| m.status == "running").count();
     let title = conversation_title(app).to_owned();
@@ -174,9 +192,11 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             !group_selected && app.agents.selected.as_deref() == Some(member.id.as_str()),
         ));
     }
+    // Rows sit between the Add button and the bottom action row.
+    let last = area.bottom().saturating_sub(4);
     for (index, (id, line, selected)) in rows.into_iter().enumerate() {
-        let y = area.y + 1 + index as u16;
-        if y >= area.bottom() {
+        let y = area.y + 3 + index as u16;
+        if y >= last {
             break;
         }
         let row = Rect::new(area.x, y, area.width, 1);
@@ -188,6 +208,59 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         }
         frame.render_widget(Paragraph::new(line), row);
         app.agents.targets.push((row, AgentAction::Select(id)));
+    }
+}
+
+/// Stop and Remove for the selection, pinned to the bottom of the rail.
+fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+    if area.height < 8 {
+        return;
+    }
+    let members = app.agent_members();
+    let (stop, remove, stoppable, removable) = match app.selected_agent() {
+        Some(member) => ("■ Stop", "× Remove", member.status != "stopped", true),
+        None => (
+            "■ Stop all",
+            "× Clear",
+            members.iter().any(|member| member.status != "stopped"),
+            members.iter().any(|member| member.status == "stopped"),
+        ),
+    };
+    let y = area.bottom().saturating_sub(2);
+    frame.render_widget(
+        Paragraph::new("─".repeat(area.width as usize))
+            .style(Style::default().fg(theme::hairline())),
+        Rect::new(area.x, y - 1, area.width, 1),
+    );
+    let style = |enabled: bool| {
+        if enabled {
+            Style::default().fg(theme::text_dim())
+        } else {
+            muted()
+        }
+    };
+    let stop_area = Rect::new(
+        area.x + 2,
+        y,
+        (stop.chars().count() as u16).min(area.width),
+        1,
+    );
+    let remove_width = remove.chars().count() as u16;
+    let remove_area = Rect::new(
+        area.right().saturating_sub(remove_width + 2),
+        y,
+        remove_width,
+        1,
+    );
+    frame.render_widget(Paragraph::new(stop).style(style(stoppable)), stop_area);
+    if remove_area.x > stop_area.right() {
+        frame.render_widget(Paragraph::new(remove).style(style(removable)), remove_area);
+        if removable {
+            app.agents.targets.push((remove_area, AgentAction::Remove));
+        }
+    }
+    if stoppable {
+        app.agents.targets.push((stop_area, AgentAction::Stop));
     }
 }
 
@@ -223,7 +296,7 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if members.is_empty() {
         frame.render_widget(
             Paragraph::new(
-                "Agents appear here when Yeet delegates work. Each member's messages, tool use, and results show up as they happen.",
+                "Agents appear here when Yeet delegates work, or add one yourself with + Add agent (a). Each member's messages, tool use, and results show up as they happen.",
             )
             .style(muted())
             .wrap(Wrap { trim: true }),
@@ -284,6 +357,9 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Rect::new(area.x, top, area.width, pill_y.saturating_sub(top + 1)),
     );
     let pill = match &selected {
+        _ if let Some(role) = app.agents.adding => {
+            format!(" New {} · Tab to change role ", AGENT_ROLES[role])
+        }
         Some(member) => format!(
             " {} · {} ",
             member.description,
@@ -788,6 +864,8 @@ mod tests {
         let group = screen(&mut terminal, &mut app);
         for expected in [
             "1/2",
+            "+  Add agent",
+            "× Clear",
             "waiting",
             "Stop all",
             "Yeet → Planner",

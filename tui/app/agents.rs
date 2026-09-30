@@ -1,5 +1,5 @@
 //! Agent view (`Mode::Agents`): the active Agent Group's rail selection,
-//! steering composer, and stop action.
+//! steering composer, and the add, stop, and remove actions.
 use super::{App, Mode, WorkbenchTab};
 use crate::model::{AgentMemberItem, FrontendCommand};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -11,7 +11,14 @@ pub enum AgentAction {
     Select(Option<String>),
     Steer,
     Stop,
+    /// Start composing a new member's task.
+    Add,
+    /// Remove the selected member, or clear stopped members from the group row.
+    Remove,
 }
+
+/// Roles a user can pick for a new member, in Tab order.
+pub const AGENT_ROLES: [&str; 3] = ["researcher", "implementer", "verifier"];
 
 #[derive(Debug, Default)]
 pub struct AgentsState {
@@ -19,6 +26,8 @@ pub struct AgentsState {
     pub open: bool,
     /// Selected member id; `None` shows the whole group.
     pub selected: Option<String>,
+    /// Index into `AGENT_ROLES` while the composer drafts a new member.
+    pub adding: Option<usize>,
     pub(crate) targets: Vec<(Rect, AgentAction)>,
 }
 
@@ -76,25 +85,55 @@ impl App {
         }
     }
 
+    /// Removes the selected member, or every stopped member on the group row.
+    fn remove_agent_command(&mut self) -> Option<FrontendCommand> {
+        match self.selected_agent() {
+            Some(member) => {
+                let agent_id = Some(member.id.clone());
+                self.agents.selected = None;
+                Some(FrontendCommand::RemoveAgent { agent_id })
+            }
+            None => self
+                .agent_members()
+                .iter()
+                .any(|member| member.status == "stopped")
+                .then_some(FrontendCommand::RemoveAgent { agent_id: None }),
+        }
+    }
+
+    fn start_adding_agent(&mut self) {
+        self.agents.adding = Some(self.agents.adding.unwrap_or(0));
+        self.input_focused = true;
+    }
+
     /// Sends the draft to the selected member, or to the primary agent from
-    /// the group row. The draft stays put when it cannot be delivered.
+    /// the group row, or launches a new member while adding. The draft stays
+    /// put when it cannot be delivered.
     fn submit_agent_draft(&mut self) -> Option<FrontendCommand> {
         let text = self.input.trim().to_owned();
         if text.is_empty() {
             return None;
         }
-        let command = match self.selected_agent() {
-            Some(member) if member.status == "stopped" => return None,
-            Some(member) => FrontendCommand::MessageAgent {
-                agent_id: member.id.clone(),
-                message: text.clone(),
-            },
-            None if self.state.is_streaming => return None,
-            None => FrontendCommand::Submit {
-                text: text.clone(),
-                images: Vec::new(),
-                attachment_ids: Vec::new(),
-            },
+        let command = if let Some(role) = self.agents.adding.take() {
+            FrontendCommand::SpawnAgent {
+                role: AGENT_ROLES[role].into(),
+                description: short_description(&text),
+                prompt: text.clone(),
+            }
+        } else {
+            match self.selected_agent() {
+                Some(member) if member.status == "stopped" => return None,
+                Some(member) => FrontendCommand::MessageAgent {
+                    agent_id: member.id.clone(),
+                    message: text.clone(),
+                },
+                None if self.state.is_streaming => return None,
+                None => FrontendCommand::Submit {
+                    text: text.clone(),
+                    images: Vec::new(),
+                    attachment_ids: Vec::new(),
+                },
+            }
         };
         self.record_input_history(&text);
         self.input.clear();
@@ -114,6 +153,11 @@ impl App {
                 None
             }
             AgentAction::Stop => self.stop_agent_command(),
+            AgentAction::Add => {
+                self.start_adding_agent();
+                None
+            }
+            AgentAction::Remove => self.remove_agent_command(),
         }
     }
 
@@ -127,7 +171,15 @@ impl App {
                 return None;
             }
             match event.code {
+                KeyCode::Esc if self.agents.adding.is_some() => self.agents.adding = None,
                 KeyCode::Esc => self.input_focused = false,
+                KeyCode::Tab | KeyCode::BackTab if self.agents.adding.is_some() => {
+                    let step = if event.code == KeyCode::Tab { 1 } else { 2 };
+                    self.agents.adding = self
+                        .agents
+                        .adding
+                        .map(|role| (role + step) % AGENT_ROLES.len());
+                }
                 KeyCode::Enter if event.modifiers.contains(KeyModifiers::SHIFT) => {
                     self.insert_char('\n')
                 }
@@ -160,6 +212,8 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => self.select_agent_row(isize::MAX / 2),
             KeyCode::Char('i' | 's') | KeyCode::Enter | KeyCode::Tab => self.input_focused = true,
             KeyCode::Char('x') => return self.stop_agent_command(),
+            KeyCode::Char('a' | '+') => self.start_adding_agent(),
+            KeyCode::Char('d') | KeyCode::Delete => return self.remove_agent_command(),
             KeyCode::Char('q') => self.close_agents(),
             _ => {}
         }
@@ -173,6 +227,16 @@ impl App {
             .find(|(area, _)| area.contains((column, row).into()))
             .map(|(_, action)| action.clone())
     }
+}
+
+/// A rail label from the task: its first few words.
+fn short_description(task: &str) -> String {
+    let words: Vec<&str> = task.split_whitespace().take(4).collect();
+    let mut label = words.join(" ");
+    if label.chars().count() > 28 {
+        label = label.chars().take(27).collect::<String>() + "…";
+    }
+    label
 }
 
 #[cfg(test)]
@@ -218,10 +282,28 @@ mod tests {
         assert_eq!(app.agents.selected.as_deref(), Some("docs"));
         assert!(app.handle_agents_key(key(KeyCode::Char('x'))).is_none());
 
+        assert!(matches!(
+            app.handle_agents_key(key(KeyCode::Char('d'))),
+            Some(FrontendCommand::RemoveAgent { agent_id: Some(ref id) }) if id == "docs"
+        ));
+
         app.handle_agents_key(key(KeyCode::Char('g')));
         assert!(matches!(
             app.handle_agents_key(key(KeyCode::Char('x'))),
             Some(FrontendCommand::StopAgent { agent_id: None })
         ));
+
+        // Adding drafts a task, Tab picks the role, Enter launches it.
+        app.handle_agents_key(key(KeyCode::Char('a')));
+        app.handle_agents_key(key(KeyCode::Tab));
+        for character in "Check guidance code for radius limits".chars() {
+            app.handle_agents_key(key(KeyCode::Char(character)));
+        }
+        assert!(matches!(
+            app.handle_agents_key(key(KeyCode::Enter)),
+            Some(FrontendCommand::SpawnAgent { ref role, ref description, .. })
+                if role == "implementer" && description == "Check guidance code for"
+        ));
+        assert_eq!(app.agents.adding, None);
     }
 }
