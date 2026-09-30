@@ -446,10 +446,9 @@ pub(super) struct LiveOperation {
 
 pub(super) fn live_operation(app: &App) -> Option<LiveOperation> {
     if app.state.active_reasoning_entry_id.is_some() {
-        return Some(LiveOperation {
-            label: live_activity(app).0,
-            detail: live_reasoning_detail(app),
-        });
+        let label = live_activity(app).0;
+        let detail = live_reasoning_detail(app).filter(|detail| detail != &label);
+        return Some(LiveOperation { label, detail });
     }
 
     if let Some(call) = latest_turn(app)

@@ -109,3 +109,20 @@ test('reasoning and tools preserve transcript order and strip markdown from summ
   await expect(rows.nth(3)).toContainText(/Command|Run shell/)
   await expect(group).not.toContainText('**')
 })
+
+
+test('current tools replace stale reasoning while full model summaries remain expandable', async ({ page }) => {
+  await resetConversation(page, [
+    { id: 'old-reasoning', kind: { type: 'reasoning', content: '', summary: '**Inspecting inputs****Checking constraints**' } },
+    toolEntry('current-read', 'running'),
+  ])
+  const group = page.locator('.activity-group')
+  const header = group.locator('.activity-group__header')
+  await expect(header).toContainText(/Reading file|Read file/)
+  await expect(header).toContainText('src/file-current-read.rs')
+  await header.click()
+  const reasoning = group.locator('.trace-disclosure').filter({ hasText: 'Reasoning' })
+  await expect(reasoning.locator('.trace-disclosure__row')).toContainText('Checking constraints')
+  await reasoning.locator('.trace-disclosure__row').click()
+  await expect(reasoning.locator('.trace-detail__content')).toContainText('Inspecting inputs')
+})

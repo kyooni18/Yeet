@@ -410,8 +410,14 @@ fn transcript_content(app: &App, width: u16) -> (Text<'static>, Vec<usize>) {
                         items.push(WorkItem::Tool(tool_call))
                     }
                     ConversationKind::Reasoning { .. } => {
-                        if let Some(summary) = summary_only_reasoning(app, current) {
-                            items.push(WorkItem::Summary(summary));
+                        if let Some(summary) = summary_reasoning(app, current) {
+                            let live = app.state.is_streaming
+                                && app.state.active_reasoning_entry_id.as_deref()
+                                    == Some(current.id.as_str());
+                            items.push(WorkItem::Summary {
+                                text: summary,
+                                live,
+                            });
                         } else if let Some((text, _)) = reasoning_parts(app, current)
                             && !text.trim().is_empty()
                         {
@@ -498,13 +504,9 @@ fn reasoning_parts<'a>(
     ))
 }
 
-fn summary_only_reasoning<'a>(app: &'a App, entry: &'a ConversationEntry) -> Option<&'a str> {
-    let (content, summary) = reasoning_parts(app, entry)?;
-    content
-        .trim()
-        .is_empty()
-        .then_some(summary?.trim())
-        .filter(|summary| !summary.is_empty())
+fn summary_reasoning<'a>(app: &'a App, entry: &'a ConversationEntry) -> Option<&'a str> {
+    let (_, summary) = reasoning_parts(app, entry)?;
+    summary.map(str::trim).filter(|summary| !summary.is_empty())
 }
 
 fn compact_transcript_entry(kind: &ConversationKind) -> bool {

@@ -14,6 +14,7 @@ export function reasoningName(value: string): string {
     case 'low': return 'Low'
     case 'medium': return 'Medium'
     case 'high': return 'High'
+    case 'max': return 'Max'
     case 'xhigh':
     case 'extra-high':
     case 'extra_high': return 'Extra High'
@@ -40,4 +41,15 @@ export function formatReset(value?: string | null): string {
   const hours = Math.round(minutes / 60)
   if (hours < 48) return `${hours}h`
   return `${Math.round(hours / 24)}d`
+}
+
+/** Keep the web effort selector aligned with the native model capabilities. */
+export function reasoningLevelsForModel(model: string): string[] {
+  const segments = model.split('/')
+  const name = ['openrouter', 'opencode', 'opencode-go'].includes(segments[0] ?? '')
+    ? segments.slice(segments.length > 2 ? 2 : 1).join('/') : segments.slice(1).join('/')
+  const version = /^gpt-(\d+)(?:\.(\d+))?/.exec(name)
+  const extended = (version && (Number(version[1]) > 5 || (Number(version[1]) === 5 && Number(version[2] ?? 0) >= 6)))
+    || /^claude-(?:(?:fable|mythos|opus|sonnet)-5|opus-4[.-][78])/.test(name)
+  return extended ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] : ['auto', 'low', 'medium', 'high']
 }

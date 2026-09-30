@@ -155,3 +155,20 @@ test('completed tools stay collapsed while failed tools open prominently with st
   await expect(toolRow).toContainText('Failed')
   await expect(toolRow).toContainText('pnpm test')
 })
+
+
+test('hidden reasoning and provider-managed tools show the live phase without invented reasoning', async ({ page }) => {
+  await emit(page, { type: 'conversation_entry', version: 1, sequence: 2, revision: 2,
+    entry: { id: 'provider-phase', kind: { type: 'activity', activity: { phase: 'reasoning', title: 'Thinking', detail: 'Waiting for a model summary' } } },
+  })
+  await emit(page, { type: 'state_update', version: 1, sequence: 3, revision: 3,
+    patch: { is_streaming: true, active_activity_entry_id: 'provider-phase' },
+  })
+  const header = page.locator('.activity-group__header').last()
+  await expect(header).toContainText('Thinking')
+  await expect(page.locator('.activity-group__summary').last()).toHaveClass(/is-active/)
+  await emit(page, { type: 'conversation_entry', version: 1, sequence: 4, revision: 4,
+    entry: { id: 'provider-phase', kind: { type: 'activity', activity: { phase: 'provider-tool', title: 'Searching web', detail: 'Provider-managed tool' } } },
+  })
+  await expect(header).toContainText('Searching web')
+})

@@ -674,16 +674,33 @@ mod tool_summary_layout_tests {
     }
 
     #[test]
-    fn summary_reasoning_titles_the_tool_group_and_suppressed_calls_vanish() {
+    fn model_summaries_expand_independently_and_suppressed_calls_vanish() {
         let read = call("read_file", ToolCallStatus::Completed);
         let hidden = call("run_shell", ToolCallStatus::Suppressed);
         let items = [
-            WorkItem::Summary("**Analyzed recent logs**"),
+            WorkItem::Summary {
+                text: "**Analyzed recent logs**",
+                live: false,
+            },
             WorkItem::Tool(&read),
             WorkItem::Tool(&hidden),
         ];
         let text = work_group_lines(&work_groups(&items), 80, false)[0].to_string();
         assert!(text.contains("Analyzed recent logs"), "{text}");
+        let summary = "Checking inputs\nComparing the actual provider formats";
+        let groups = work_groups(&[WorkItem::Summary {
+            text: summary,
+            live: false,
+        }]);
+        let expanded = work_group_lines(&groups, 80, true)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            expanded.contains("Comparing the actual provider formats"),
+            "{expanded}"
+        );
         let items = [WorkItem::Tool(&hidden)];
         assert!(work_group_lines(&work_groups(&items), 80, false).is_empty());
     }
@@ -722,19 +739,19 @@ pub(in crate::ui) enum WorkGroup<'a> {
     Reasoning {
         text: String,
         live: bool,
+        summary: bool,
     },
 }
 
 pub(in crate::ui) enum WorkItem<'a> {
     Tool(&'a crate::model::ConversationToolCall),
-    Summary(&'a str),
+    Summary { text: &'a str, live: bool },
     Reasoning { text: &'a str, live: bool },
 }
 
 pub(in crate::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGroup<'a>> {
     let mut groups: Vec<WorkGroup<'a>> = Vec::new();
     let mut open = false;
-    let mut pending_title: Option<String> = None;
     for item in items {
         match item {
             WorkItem::Tool(call) => {
@@ -744,7 +761,7 @@ pub(in crate::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGroup<'a
                 if !open {
                     groups.push(WorkGroup::Tools {
                         calls: Vec::new(),
-                        title: pending_title.take(),
+                        title: None,
                     });
                     open = true;
                 }
@@ -752,30 +769,20 @@ pub(in crate::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGroup<'a
                     calls.push(call);
                 }
             }
-            WorkItem::Summary(summary) => {
-                let title = reasoning_summary_items(summary)
-                    .into_iter()
-                    .next()
-                    .map(|line| line.replace('*', "").trim().to_owned())
-                    .filter(|line| !line.is_empty());
-                match (open, groups.last_mut()) {
-                    (true, Some(WorkGroup::Tools { title: slot, .. })) if slot.is_none() => {
-                        *slot = title;
-                    }
-                    // A fresh summary after a titled group opens the next step.
-                    (true, _) if title.is_some() => {
-                        open = false;
-                        pending_title = title;
-                    }
-                    (false, _) if pending_title.is_none() => pending_title = title,
-                    _ => {}
-                }
+            WorkItem::Summary { text, live } => {
+                open = false;
+                groups.push(WorkGroup::Reasoning {
+                    text: (*text).to_owned(),
+                    live: *live,
+                    summary: true,
+                });
             }
             WorkItem::Reasoning { text, live } => {
                 open = false;
                 groups.push(WorkGroup::Reasoning {
                     text: (*text).to_owned(),
                     live: *live,
+                    summary: false,
                 });
             }
         }
@@ -928,9 +935,21 @@ pub(super) fn work_group_lines_selected(
                     lines.push(Line::default());
                 }
             }
-            WorkGroup::Reasoning { text, live } => {
+            WorkGroup::Reasoning {
+                text,
+                live,
+                summary,
+            } => {
                 headers.push(lines.len());
-                let first = text
+                let summary_items = reasoning_summary_items(text);
+                let current = if *live {
+                    summary_items.last()
+                } else {
+                    summary_items.first()
+                };
+                let first = current
+                    .map(String::as_str)
+                    .unwrap_or(text)
                     .lines()
                     .map(|line| line.trim().trim_start_matches(['#', '*', '-', ' ']))
                     .find(|line| !line.is_empty())
@@ -943,7 +962,12 @@ pub(super) fn work_group_lines_selected(
                     " ".to_owned()
                 };
                 let icon = "\u{f02d}";
-                let head = format!("Reasoning · {first}");
+                let label = if *summary {
+                    "Model summary"
+                } else {
+                    "Reasoning"
+                };
+                let head = format!("{label} · {first}");
                 let chevron = format!(" {}", icons::chevron(expanded));
                 let budget = width
                     .saturating_sub(Span::raw(&lead).width() + 2 + Span::raw(&chevron).width());
@@ -955,7 +979,7 @@ pub(super) fn work_group_lines_selected(
                     Span::styled(chevron, muted),
                 ]));
                 if expanded {
-                    for line in session_markdown_lines(text) {
+                    for line in session_markdown_lines(&text.replace("****", "**\n\n**")) {
                         lines.extend(prefixed_wrapped_line(
                             Span::styled(" │   ", rail),
                             line.style(muted),

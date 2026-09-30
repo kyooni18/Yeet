@@ -1,7 +1,7 @@
 import { BarChart3, CheckCircle2, ChevronRight, ChevronsUpDown, Cpu, Flag, Folder, Layers3, Lightbulb, Lock, Settings, ShieldCheck, X } from '@/components/Icons'
 import { ProviderIcon } from '@/components/ProviderIcon'
 import { remoteStore, useRemote } from '@/store/remoteStore'
-import { formatReset, formatTokens, reasoningName, shortModelName } from '@/ui/format'
+import { formatReset, formatTokens, reasoningLevelsForModel, reasoningName, shortModelName } from '@/ui/format'
 
 function Toggle({
   checked,
@@ -99,7 +99,7 @@ export function QuickPanel({
                 aria-label="Reasoning"
                 disabled={!canMutate}
               >
-                {['auto', 'low', 'medium', 'high'].map((level) => <option key={level} value={level}>{reasoningName(level)}</option>)}
+                {reasoningLevelsForModel(remote.state.active_model).map((level) => <option key={level} value={level}>{reasoningName(level)}</option>)}
               </select>
             </label>
             <div className="quick-row">

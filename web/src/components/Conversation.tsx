@@ -89,9 +89,10 @@ interface TraceDetail {
 
 function lastUsefulLine(value: string): string {
   return value
+    .replaceAll('****', '\n')
     .replaceAll('**', '')
     .split('\n')
-    .map((line) => line.trim())
+    .map((line) => line.trim().replace(/^#{1,6}\s+/, '').replace(/^[*_`]+|[*_`]+$/g, '').trim())
     .filter(Boolean)
     .at(-1) ?? ''
 }
@@ -587,8 +588,10 @@ function ReasoningTrace({
   summary?: string | null
   isActive: boolean
 }) {
-  const detail = content.trim().replaceAll('**', '')
-  const compact = (summary?.trim() || content.trim()).replaceAll('**', '')
+  const readable = (value: string) => value.trim().replaceAll('****', '\n\n').replaceAll('**', '')
+  const detail = readable(content)
+  const modelSummary = summary?.trim() ? readable(summary) : ''
+  const compact = modelSummary || detail
   if (!detail && !compact) return null
 
   return (
@@ -597,14 +600,14 @@ function ReasoningTrace({
       title={isActive ? 'Thinking' : 'Reasoning'}
       summary={lastUsefulLine(compact || detail)}
       isActive={isActive}
-      details={[{ title: 'Reasoning', content: detail || compact }]}
+      details={[...(modelSummary ? [{ title: 'Model summary', content: modelSummary }] : []), ...(detail ? [{ title: 'Reasoning', content: detail }] : [])]}
     />
   )
 }
 
 type ActivityEvent =
   | { type: 'reasoning'; id: string; content: string; summary?: string | null; isActive: boolean }
-  | { type: 'activity'; id: string; activity: ModelActivity }
+  | { type: 'activity'; id: string; activity: ModelActivity; isActive: boolean }
   | { type: 'tool'; tool: ConversationToolCall }
   | { type: 'skill'; id: string; name: string; content: string; status?: string | null }
   | { type: 'mcp'; id: string; server: string; name: string; content: string; isError: boolean }
@@ -662,7 +665,8 @@ function activityEventID(event: ActivityEvent): string {
 
 function activityEventIsActive(event: ActivityEvent): boolean {
   switch (event.type) {
-    case 'reasoning': return event.isActive
+    case 'reasoning':
+    case 'activity': return event.isActive
     case 'tool': return toolIsActive(event.tool)
     case 'skill': return event.status === 'running' || event.status === 'started'
     default: return false
@@ -680,9 +684,18 @@ function activityEventAwaitsPermission(event: ActivityEvent): boolean {
 }
 
 function activityHeaderSummary(group: ActivityGroup): string {
+  // Current work takes precedence over an earlier model summary.
   for (let index = group.events.length - 1; index >= 0; index -= 1) {
     const event = group.events[index]
-    if (event.type === 'reasoning') {
+    if (event.type === 'tool' && toolIsActive(event.tool)) {
+      const detail = toolSummary(event.tool)
+      return detail ? `${toolTitle(event.tool)} · ${detail}` : toolTitle(event.tool)
+    }
+    if (event.type === 'activity' && event.isActive) {
+      const detail = event.activity.detail ? lastUsefulLine(event.activity.detail) : ''
+      return detail ? `${event.activity.title} · ${detail}` : event.activity.title
+    }
+    if (event.type === 'reasoning' && event.isActive) {
       const value = lastUsefulLine(event.summary || event.content)
       if (value) return value
     }
@@ -696,8 +709,7 @@ function activityHeaderSummary(group: ActivityGroup): string {
     }
     if (event.type === 'activity') {
       const detail = event.activity.detail ? lastUsefulLine(event.activity.detail) : ''
-      if (detail) return detail
-      if (event.activity.title.trim()) return event.activity.title.trim()
+      return detail ? `${event.activity.title} · ${detail}` : event.activity.title
     }
   }
 
@@ -719,6 +731,7 @@ function ActivityEventView({ event }: { event: ActivityEvent }) {
       return (
         <TraceDisclosure
           icon={<Info size={12} strokeWidth={1.8} />}
+          isActive={event.isActive}
           title={event.activity.title}
           summary={event.activity.detail}
           details={event.activity.detail ? [{ title: 'Details', content: event.activity.detail }] : []}
@@ -935,6 +948,7 @@ function buildDisplayItems(
   activeReasoningEntryID: string | null | undefined,
   activeReasoningText: string,
   activeReasoningSummary: string,
+  activeActivityEntryID: string | null | undefined,
 ): DisplayItem[] {
   const items: DisplayItem[] = []
   let pending: ActivityEvent[] = []
@@ -975,7 +989,7 @@ function buildDisplayItems(
 
       case 'activity':
         if (shouldDisplayActivity(entry.kind.activity)) {
-          pending.push({ type: 'activity', id: entry.id, activity: entry.kind.activity })
+          pending.push({ type: 'activity', id: entry.id, activity: entry.kind.activity, isActive: streaming && entry.id === activeActivityEntryID })
         }
         break
 
@@ -1078,6 +1092,7 @@ export function Conversation({ onEditLast }: { onEditLast: (content: string) => 
       remote.state.active_reasoning_entry_id,
       remote.state.active_reasoning_text,
       remote.state.active_reasoning_summary,
+      remote.state.active_activity_entry_id,
     ),
     [
       remote.entries,
@@ -1086,6 +1101,7 @@ export function Conversation({ onEditLast }: { onEditLast: (content: string) => 
       remote.state.active_reasoning_entry_id,
       remote.state.active_reasoning_text,
       remote.state.active_reasoning_summary,
+      remote.state.active_activity_entry_id,
       remote.revision,
     ],
   )
