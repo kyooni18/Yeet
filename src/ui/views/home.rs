@@ -53,25 +53,19 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
             .height
             .saturating_sub(tab_height + composer_height + status_height),
     );
-    let rail_width = scale_x(232).min(body.width as u32 / 3) as u16;
-    let rail_gap = scale_x(30).min(body.width.saturating_sub(rail_width) as u32) as u16;
-    let columns = Layout::horizontal([
-        Constraint::Length(rail_width),
-        Constraint::Length(rail_gap),
-        Constraint::Min(1),
-    ])
-    .split(body);
+    let columns = Layout::horizontal([Constraint::Length(scale_x(232) as u16), Constraint::Min(1)])
+        .split(body);
     draw_sessions_rail(frame, columns[0]);
-    let activity_width = scale_x(540).min(columns[2].width as u32) as u16;
-    // Reference main-frame offset is x=232; pane starts at x=262 (30 px inset).
-    let pane_inset = (scale_x(30) as u16).min(columns[2].width);
+    let activity_width = scale_x(540).min(columns[1].width as u32) as u16;
+    // Reference main frame places content at x+30 and inspector at x+600.
+    let content_inset = scale_x(30) as u16;
+    let inspector_start = scale_x(600) as u16;
     let panes = Layout::horizontal([
-        Constraint::Length(pane_inset),
+        Constraint::Length(content_inset),
         Constraint::Length(activity_width),
-        Constraint::Length(pane_inset),
+        Constraint::Length(inspector_start.saturating_sub(content_inset + activity_width)),
         Constraint::Min(1),
     ])
-    .split(columns[2]);
     draw_activity(frame, panes[1]);
     draw_inspector(frame, panes[3]);
     draw_composer(frame, app, rows[2]);
