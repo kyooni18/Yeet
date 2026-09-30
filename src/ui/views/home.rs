@@ -21,11 +21,12 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         return;
     }
 
-    // Desktop / Overview mockup geometry translated at ten pixels per terminal cell.
-    let scale = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
-    let tab_height = scale(34).max(1);
-    let composer_height = scale(36).max(1);
-    let status_height = scale(24).max(1);
+    // Translate mockup pixels to terminal cells independently on each axis.
+    let scale_x = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
+    let scale_y = |px: u16| ((bounds.height as u32 * px as u32 + 863) / 864) as u16;
+    let tab_height = scale_y(34).max(1);
+    let composer_height = scale_y(36).max(1);
+    let status_height = scale_y(24).max(1);
     let rows = Layout::vertical([
         Constraint::Length(tab_height),
         Constraint::Min(1),
@@ -36,8 +37,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     draw_tabs(frame, rows[0]);
 
     let body = rows[1];
-    let rail_width = scale(232).min(body.width / 3);
-    let rail_gap = scale(30).min(body.width.saturating_sub(rail_width));
+    let rail_width = scale_x(232).min(body.width / 3);
+    let rail_gap = scale_x(30).min(body.width.saturating_sub(rail_width));
     let columns = Layout::horizontal([
         Constraint::Length(rail_width),
         Constraint::Length(rail_gap),
@@ -46,8 +47,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     .split(body);
     draw_sessions_rail(frame, columns[0]);
 
-    let activity_width = scale(540).min(columns[2].width);
-    let pane_gap = scale(60).min(columns[2].width.saturating_sub(activity_width));
+    let activity_width = scale_x(540).min(columns[2].width);
+    let pane_gap = scale_x(54).min(columns[2].width.saturating_sub(activity_width));
     let panes = Layout::horizontal([
         Constraint::Length(activity_width),
         Constraint::Length(pane_gap),
