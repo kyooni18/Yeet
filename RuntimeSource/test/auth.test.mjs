@@ -439,6 +439,8 @@ test("Claude web login uses Claude Code auth and stays separate from the Anthrop
   assert.deepEqual(await provider.listModels(), ["claude-test"]);
   assert.equal(requestHeaders.get("authorization"), "Bearer claude-oauth-token");
   assert.equal(requestHeaders.get("anthropic-beta"), "oauth-2025-04-20");
+  assert.equal(requestHeaders.get("user-agent"), "claude-cli/1.0.0");
+  assert.equal(requestHeaders.get("x-app"), "cli");
 });
 
 test("OpenAI plan usage comes directly from the ChatGPT WHAM usage API", async () => {

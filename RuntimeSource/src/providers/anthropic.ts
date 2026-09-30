@@ -344,6 +344,10 @@ export class AnthropicProvider implements ProviderAdapter {
         ? { authorization: `Bearer ${this.#accessToken}` }
         : { "x-api-key": this.#apiKey! }),
       ...(betas.length > 0 ? { "anthropic-beta": betas.join(",") } : {}),
+      // Claude subscription OAuth credentials are Claude Code credentials, not
+      // general Anthropic API tokens. The service validates the Claude Code
+      // client identity in addition to the OAuth beta and bearer token.
+      ...(this.id === "claude" && this.#accessToken ? { "user-agent": "claude-cli/1.0.0", "x-app": "cli" } : {}),
       "anthropic-version": this.#version,
       "content-type": "application/json",
     };
