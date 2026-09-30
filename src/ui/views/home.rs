@@ -25,22 +25,28 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Block::default().style(Style::default().bg(theme::background())),
         bounds,
     );
+    let scale_x = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
+    let scale_y = |px: u16| ((bounds.height as u32 * px as u32 + 863) / 864) as u16;
+    let tab_height = scale_y(34).max(1);
+    let composer_height = scale_y(36).max(1);
+    let status_height = scale_y(24).max(1);
+    let top_gap = scale_y(36);
     let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(2),
+        Constraint::Length(top_gap),
+        Constraint::Length(tab_height),
         Constraint::Min(1),
-        Constraint::Length(2),
-        Constraint::Length(1),
+        Constraint::Length(composer_height),
+        Constraint::Length(status_height),
     ])
     .split(bounds);
     draw_tabs(frame, rows[1]);
     let body = rows[2];
-    let rail_width = 232.min(body.width / 3);
+    let rail_width = scale_x(232).min(body.width / 3);
     let columns =
         Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
     draw_sessions_rail(frame, columns[0]);
-    let activity_width = 540.min(columns[1].width);
-    let pane_gap = 54.min(columns[1].width.saturating_sub(activity_width));
+    let activity_width = scale_x(540).min(columns[1].width);
+    let pane_gap = scale_x(54).min(columns[1].width.saturating_sub(activity_width));
     let panes = Layout::horizontal([
         Constraint::Length(activity_width),
         Constraint::Length(pane_gap),
