@@ -31,7 +31,8 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
         let (text, _) = render(&mut app, width, height);
         assert!(text.contains('+'), "composer at {width}x{height}");
         if height >= 24 && width >= 110 {
-            assert!(text.contains("Verification: accept a 3.2 km floor?"));
+            assert!(text.contains("Recent views"));
+            assert!(text.contains("No saved sessions"));
         }
     }
 }
@@ -42,10 +43,10 @@ fn views_switcher_renders_vertical_choices() {
     app.mode = Mode::Views;
     let (text, _) = render(&mut app, 60, 16);
     let lines = text.lines().collect::<Vec<_>>();
-    let sessions = lines.iter().position(|line| line.contains("Session"));
+    let session = lines.iter().position(|line| line.contains("Session"));
     let files = lines.iter().position(|line| line.contains("Files"));
-    assert!(sessions.is_some_and(|row| files == Some(row + 1)), "{text}");
-    assert!(!text.contains("Workspace browser"));
+    assert!(session.is_some_and(|row| files == Some(row + 1)), "{text}");
+    assert!(text.contains("Workspace overview"));
     assert!(!text.contains("new tab"));
 }
 
@@ -444,14 +445,34 @@ fn user_bubble_padding_rows_are_adjacent_to_message() {
 }
 
 #[test]
+fn home_overview_layout_tracks_mockup_regions_at_desktop_preview_size() {
+    let mut app = App::default();
+    let (text, buffer) = render(&mut app, 144, 44);
+    let cell = |x: u16, y: u16| &buffer[(x, y)];
+
+    // Home uses the same tab layout as other views and distinct pane surfaces.
+    assert_eq!(cell(0, 0).bg, theme::surface_color());
+    assert_eq!(cell(1, 6).bg, theme::background());
+    assert_eq!(cell(40, 18).bg, theme::code_background());
+    assert_eq!(cell(100, 18).bg, theme::background());
+    assert_eq!(cell(30, 41).bg, theme::surface_color());
+    assert_eq!(cell(0, 43).bg, theme::status_background());
+    assert!(text.contains("Recent views"));
+    assert!(text.contains("No views opened yet"));
+    assert!(text.contains("Changed files"));
+    assert!(text.contains("Ask Yeet..."));
+    assert!(text.contains("Provider usage not reported"));
+}
+
+#[test]
 fn home_workbench_renders_activity_inspector_and_composer() {
     let mut app = App::default();
     let (text, _) = render(&mut app, 144, 44);
     for expected in [
         "Home",
-        "MM305 crosswind",
-        "Verification",
-        "3.2 km",
+        "No saved sessions",
+        "No agent tasks",
+        "Changed files",
         "Ask Yeet",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");

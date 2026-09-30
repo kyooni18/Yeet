@@ -22,6 +22,8 @@ use ratatui::{
 use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    app.observe_workbench_view();
+    app.home_targets.clear();
     app.tab_targets.clear();
     app.view_targets.clear();
     let area = frame.area();
@@ -39,6 +41,13 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     if app.mode == Mode::Sessions && responsive::shape(frame.area()) == responsive::Shape::Portrait
     {
         views::session_picker::draw(frame, app);
+        return;
+    }
+    if app.mode == Mode::Diff || (app.mode == Mode::Views && app.views_origin == Mode::Diff) {
+        views::diff::draw(frame, app);
+        if app.mode == Mode::Views {
+            views::draw(frame, app);
+        }
         return;
     }
     if app.mode == Mode::Files || (app.mode == Mode::Views && app.views_origin == Mode::Files) {
@@ -182,7 +191,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Mode::Status => draw_status_dialog(frame, app),
         Mode::Help => draw_help(frame),
         Mode::Views => views::draw(frame, app),
-        Mode::Chat | Mode::Files => {}
+        Mode::Chat | Mode::Files | Mode::Diff => {}
     }
 
     if app.state.pending_shell_permission.is_some()

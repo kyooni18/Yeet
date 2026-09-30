@@ -11,7 +11,9 @@ use ratatui::{
 
 /// `text_x` is the column the draft starts at, so it can line up with the transcript.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16) {
-    let focused = app.mode == Mode::Chat
+    let focused = app.input_focused
+        && !app.sidebar_focus
+        && app.mode == Mode::Chat
         && app.state.pending_shell_permission.is_none()
         && app.state.pending_native_app_permission.is_none();
     frame.render_widget(

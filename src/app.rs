@@ -5,6 +5,9 @@ use std::{
 };
 
 pub mod files;
+mod home;
+pub(crate) use home::HomeAction;
+pub mod diff;
 mod input;
 mod navigation;
 pub use navigation::WorkbenchTab;
@@ -47,6 +50,7 @@ pub enum Mode {
     Status,
     Help,
     Files,
+    Diff,
     Views,
 }
 
@@ -88,6 +92,13 @@ enum PermissionPromptAction {
 
 pub struct App {
     pub files: Option<files::FilesState>,
+    pub home: crate::workbench::HomeState,
+    pub recent_views: crate::workbench::RecentViews,
+    pub(crate) observed_resource: Option<crate::workbench::ResourceTarget>,
+    pub(crate) home_targets: Vec<(ratatui::layout::Rect, home::HomeAction)>,
+    pub(crate) workbench_command: Option<FrontendCommand>,
+    pub diff_tabs: Vec<diff::DiffState>,
+    pub active_diff: usize,
     pub keymap: keymap::Keymap,
     pub debate_models: crate::debate::DebateModels,
     pub debate_field: usize,
@@ -96,6 +107,7 @@ pub struct App {
     pub conversation: Vec<ConversationEntry>,
     pub state: BridgeState,
     pub input: String,
+    pub input_focused: bool,
     pub cursor: usize,
     pub mode: Mode,
     pub home_override: Option<bool>,
@@ -155,6 +167,13 @@ impl Default for App {
     fn default() -> Self {
         Self {
             files: None,
+            home: Default::default(),
+            recent_views: Default::default(),
+            observed_resource: None,
+            home_targets: Vec::new(),
+            workbench_command: None,
+            diff_tabs: Vec::new(),
+            active_diff: 0,
             keymap: keymap::Keymap::default(),
             debate_models: Default::default(),
             debate_field: 0,
@@ -163,6 +182,7 @@ impl Default for App {
             conversation: Vec::new(),
             state: BridgeState::default(),
             input: String::new(),
+            input_focused: true,
             cursor: 0,
             mode: Mode::Chat,
             home_override: None,
@@ -304,6 +324,9 @@ impl App {
         }
 
         if self.mode == Mode::Chat {
+            if !self.input_focused || self.sidebar_focus {
+                return;
+            }
             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
             self.insert_text(&normalized);
             return;
@@ -440,6 +463,12 @@ impl App {
         if self.handle_workbench_key(&event) {
             return Ok(());
         }
+        if self.handle_home_key(&event) {
+            if let Some(command) = self.take_workbench_command() {
+                backend.send(command)?;
+            }
+            return Ok(());
+        }
 
         match self.mode {
             Mode::Debate => {
@@ -465,6 +494,10 @@ impl App {
                     _ if !self.state.is_streaming => self.edit_debate_form(event),
                     _ => {}
                 }
+                Ok(())
+            }
+            Mode::Diff => {
+                self.handle_diff_key(event);
                 Ok(())
             }
             Mode::Files => {
@@ -705,16 +738,37 @@ impl App {
         )
     }
 
-    fn handle_chat_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+    /// Focus transitions belong to the session view, never to global shortcuts.
+    fn handle_chat_focus_key(&mut self, event: &KeyEvent) -> bool {
         if event.code == KeyCode::Esc {
+            self.input_focused = false;
             if self.transcript_context_menu.is_some() {
                 self.transcript_context_menu = None;
-                return Ok(());
+                return true;
             }
             if self.selection_start.is_some() || self.selection_end.is_some() {
                 self.clear_transcript_selection();
-                return Ok(());
+                return true;
             }
+        }
+        if event.code == KeyCode::Esc {
+            self.sidebar_focus = false;
+            return true;
+        }
+        if (!self.input_focused || self.sidebar_focus)
+            && event.code == KeyCode::Char('i')
+            && event.modifiers.is_empty()
+        {
+            self.input_focused = true;
+            self.sidebar_focus = false;
+            return true;
+        }
+        false
+    }
+
+    fn handle_chat_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        if self.handle_chat_focus_key(&event) {
+            return Ok(());
         }
         match self.handle_sidebar_key(&event) {
             sidebar::SidebarKey::Ignored => {}
@@ -726,7 +780,7 @@ impl App {
                 return Ok(());
             }
         }
-        if self.handle_chat_editing_key(&event) {
+        if self.input_focused && !self.sidebar_focus && self.handle_chat_editing_key(&event) {
             return Ok(());
         }
         if event.modifiers.contains(KeyModifiers::CONTROL) {
@@ -760,7 +814,7 @@ impl App {
                     self.scroll_down(10);
                     return Ok(());
                 }
-                KeyCode::Char('p') => {
+                KeyCode::Char('p') if self.input_focused => {
                     self.history_up();
                     return Ok(());
                 }
@@ -768,10 +822,34 @@ impl App {
             }
         }
 
+        // Unfocused navigation must not fall through to draft editing or submission.
+        if !self.input_focused {
+            match event.code {
+                KeyCode::Char('j' | 'k' | 'e' | 'g' | 'G')
+                    if !event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {}
+                KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::F(_) => {}
+                KeyCode::Char('m' | 's' | 'f' | 'r' | 'k')
+                    if event.modifiers.contains(KeyModifiers::ALT) => {}
+                _ => return Ok(()),
+            }
+        }
+
         match event.code {
             KeyCode::Esc => {}
-            KeyCode::Up if event.modifiers.contains(KeyModifiers::ALT) => self.history_up(),
-            KeyCode::Down if event.modifiers.contains(KeyModifiers::ALT) => self.history_down(),
+            KeyCode::Up if self.input_focused && event.modifiers.contains(KeyModifiers::ALT) => {
+                self.history_up()
+            }
+            KeyCode::Down if self.input_focused && event.modifiers.contains(KeyModifiers::ALT) => {
+                self.history_down()
+            }
             KeyCode::F(2) | KeyCode::Char('m')
                 if event.code == KeyCode::F(2) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
@@ -795,15 +873,13 @@ impl App {
             }
             KeyCode::PageUp => self.scroll_up(10),
             KeyCode::PageDown => self.scroll_down(10),
-            KeyCode::Char('k') if self.input.is_empty() => self.scroll_up(3),
-            KeyCode::Char('j') if self.input.is_empty() => self.scroll_down(3),
-            KeyCode::Up if self.input.is_empty() => self.scroll_up(3),
-            KeyCode::Down if self.input.is_empty() => self.scroll_down(3),
-            KeyCode::Char('e') if self.input.is_empty() => {
-                self.tools_expanded = !self.tools_expanded
-            }
-            KeyCode::Char('g') if self.input.is_empty() => self.jump_to_transcript_start(),
-            KeyCode::Char('G') if self.input.is_empty() => self.jump_to_transcript_end(),
+            KeyCode::Char('k') if !self.input_focused => self.scroll_up(3),
+            KeyCode::Char('j') if !self.input_focused => self.scroll_down(3),
+            KeyCode::Up if !self.input_focused => self.scroll_up(3),
+            KeyCode::Down if !self.input_focused => self.scroll_down(3),
+            KeyCode::Char('e') if !self.input_focused => self.tools_expanded = !self.tools_expanded,
+            KeyCode::Char('g') if !self.input_focused => self.jump_to_transcript_start(),
+            KeyCode::Char('G') if !self.input_focused => self.jump_to_transcript_end(),
             KeyCode::End if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.jump_to_transcript_end();
             }
@@ -1442,12 +1518,14 @@ impl App {
     }
 
     pub(crate) fn open_views(&mut self) {
-        self.views_origin = if self.mode == Mode::Files {
-            Mode::Files
+        self.views_origin = if matches!(self.mode, Mode::Files | Mode::Diff) {
+            self.mode
         } else {
             Mode::Chat
         };
-        self.views_index = if self.views_origin == Mode::Files {
+        self.views_index = if self.views_origin == Mode::Diff {
+            3
+        } else if self.views_origin == Mode::Files {
             2
         } else if self.home_visible() {
             0
@@ -1469,14 +1547,15 @@ impl App {
                 self.views_index = self.views_index.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.views_index = (self.views_index + 1).min(2);
+                self.views_index = (self.views_index + 1).min(3);
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Right => {
                 let tab = [
                     WorkbenchTab::Home,
                     WorkbenchTab::Session,
                     WorkbenchTab::Files,
-                ][self.views_index.min(2)];
+                    WorkbenchTab::NewDiff,
+                ][self.views_index.min(3)];
                 self.activate_workbench_tab(tab);
             }
             _ => {}

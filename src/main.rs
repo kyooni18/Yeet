@@ -184,8 +184,8 @@ fn run_remote_tui(options: RemoteOptions) -> Result<()> {
                 }
                 RemoteInput::Mouse(mouse) => {
                     app.handle_mouse(mouse);
-                    if let Some(session_id) = app.take_sidebar_load_request() {
-                        backend.send(yeet::model::FrontendCommand::LoadSession { session_id })?;
+                    if let Some(command) = app.take_workbench_command() {
+                        backend.send(command)?;
                     }
                 }
                 RemoteInput::Resize { cols, rows } if cols != width || rows != height => {
@@ -396,10 +396,8 @@ fn event_loop(
                         Event::Key(key) => app.handle_key(key, backend)?,
                         Event::Mouse(mouse) => {
                             app.handle_mouse(mouse);
-                            if let Some(session_id) = app.take_sidebar_load_request() {
-                                backend.send(yeet::model::FrontendCommand::LoadSession {
-                                    session_id,
-                                })?;
+                            if let Some(command) = app.take_workbench_command() {
+                                backend.send(command)?;
                             }
                         }
                         Event::Paste(text) => app.handle_paste(&text),

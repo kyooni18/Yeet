@@ -1089,3 +1089,38 @@ fn sidebar_session_click_requests_load_without_starting_selection() {
     assert_eq!(app.take_clipboard_request().as_deref(), Some("hello"));
     assert!(app.transcript_context_menu.is_none());
 }
+
+#[test]
+fn session_focus_is_explicit_and_preserves_draft() {
+    let mut app = App::default();
+    app.input = "keep draft".into();
+    app.cursor = 4;
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    assert!(app.handle_chat_focus_key(&key(KeyCode::Esc)));
+    assert!(!app.input_focused);
+    app.handle_paste("ignored");
+    assert_eq!(app.input, "keep draft");
+    assert_eq!(app.cursor, 4);
+    assert!(app.handle_chat_focus_key(&key(KeyCode::Char('i'))));
+    assert!(app.input_focused);
+    assert_eq!(app.input, "keep draft");
+    assert!(!app.handle_chat_focus_key(&key(KeyCode::Char('i'))));
+    app.handle_paste("i");
+    assert_eq!(app.input, "keepi draft");
+}
+
+#[test]
+fn files_insert_shortcut_focuses_files_search_not_session() {
+    let mut app = App::default();
+    app.input_focused = false;
+    app.input = "session draft".into();
+    app.open_files();
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    app.handle_files_key(key(KeyCode::Char('i')));
+    assert_eq!(app.mode, Mode::Files);
+    assert_eq!(app.files.as_ref().unwrap().find.as_deref(), Some(""));
+    app.handle_files_key(key(KeyCode::Char('x')));
+    assert_eq!(app.files.as_ref().unwrap().find.as_deref(), Some("x"));
+    assert!(!app.input_focused);
+    assert_eq!(app.input, "session draft");
+}

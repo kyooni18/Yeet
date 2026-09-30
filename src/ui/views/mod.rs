@@ -1,5 +1,6 @@
 //! View-specific renderers and the top-level view switcher.
 
+pub(super) mod diff;
 pub(super) mod files;
 pub(super) mod home;
 pub(super) mod session_picker;
@@ -35,6 +36,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         (WorkbenchTab::Home, "Home", "Workspace overview"),
         (WorkbenchTab::Session, "Session", "Current conversation"),
         (WorkbenchTab::Files, "Files", "Browse workspace files"),
+        (WorkbenchTab::NewDiff, "Diff", "Review Git changes"),
     ]
     .into_iter()
     .enumerate()

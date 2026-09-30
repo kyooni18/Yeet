@@ -223,6 +223,20 @@ impl FilesState {
         true
     }
 
+    /// Open a stable resource path from any workbench view.
+    pub fn open_path(&mut self, path: PathBuf, diff: bool) {
+        self.diff = diff;
+        let index = self
+            .tabs
+            .iter()
+            .position(|tab| tab == &path)
+            .unwrap_or_else(|| {
+                self.tabs.push(path);
+                self.tabs.len() - 1
+            });
+        self.activate_tab(index);
+    }
+
     pub(crate) fn close_tab(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
@@ -285,7 +299,11 @@ impl FilesState {
                 self.cursor = 0;
                 self.refresh_detail();
             }
-            Action::Close | Action::FocusInput => return FilesOutcome::Close,
+            Action::Close => return FilesOutcome::Close,
+            Action::FocusInput => {
+                self.find.get_or_insert_with(String::new);
+                self.find_locked = false;
+            }
             Action::ToggleHints => self.hints = !self.hints,
             Action::ToggleInfo => self.info = !self.info,
             Action::ToggleChangedOnly => {
@@ -477,6 +495,14 @@ impl App {
         let Some(action) = self.keymap.lookup(Context::Files, &event) else {
             return;
         };
+        if action == Action::ToggleDiff {
+            let path = files
+                .active_tab
+                .and_then(|i| files.tabs.get(i).cloned())
+                .or_else(|| files.selected_path());
+            self.open_diff(path.filter(|p| !p.is_dir()));
+            return;
+        }
         if action == Action::OpenViews {
             self.open_views();
             return;

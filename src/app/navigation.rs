@@ -9,6 +9,9 @@ pub enum WorkbenchTab {
     Files,
     File(usize),
     CloseFile(usize),
+    Diff(usize),
+    CloseDiff(usize),
+    NewDiff,
     Launcher,
 }
 
@@ -23,6 +26,10 @@ impl App {
     }
 
     pub fn active_workbench_tab(&self) -> WorkbenchTab {
+        if self.mode == Mode::Diff || (self.mode == Mode::Views && self.views_origin == Mode::Diff)
+        {
+            return WorkbenchTab::Diff(self.active_diff);
+        }
         if self.mode == Mode::Files
             || (self.mode == Mode::Views && self.views_origin == Mode::Files)
         {
@@ -43,6 +50,7 @@ impl App {
             tabs.push(WorkbenchTab::Files);
             tabs.extend((0..files.tabs.len()).map(WorkbenchTab::File));
         }
+        tabs.extend((0..self.diff_tabs.len()).map(WorkbenchTab::Diff));
         tabs
     }
 
@@ -75,6 +83,26 @@ impl App {
                     files.close_tab(index);
                 }
             }
+            WorkbenchTab::NewDiff => self.open_diff(None),
+            WorkbenchTab::Diff(i) => {
+                if i < self.diff_tabs.len() {
+                    self.active_diff = i;
+                    self.mode = Mode::Diff;
+                }
+            }
+            WorkbenchTab::CloseDiff(i) => {
+                if i < self.diff_tabs.len() {
+                    self.diff_tabs.remove(i);
+                    if self.active_diff > i {
+                        self.active_diff -= 1;
+                    }
+                    self.active_diff = self.active_diff.min(self.diff_tabs.len().saturating_sub(1));
+                    if self.diff_tabs.is_empty() && self.mode == Mode::Diff {
+                        self.mode = Mode::Chat;
+                        self.home_override = Some(true);
+                    }
+                }
+            }
             WorkbenchTab::Launcher => self.open_views(),
         }
         // Old hit targets belong to the previous frame.
@@ -83,7 +111,7 @@ impl App {
     }
 
     pub(crate) fn handle_workbench_key(&mut self, event: &KeyEvent) -> bool {
-        if !matches!(self.mode, Mode::Chat | Mode::Files) {
+        if !matches!(self.mode, Mode::Chat | Mode::Files | Mode::Diff) {
             return false;
         }
         if !event.modifiers.contains(KeyModifiers::CONTROL) {
@@ -110,6 +138,7 @@ impl App {
                 WorkbenchTab::File(index) => {
                     self.activate_workbench_tab(WorkbenchTab::CloseFile(index))
                 }
+                WorkbenchTab::Diff(i) => self.activate_workbench_tab(WorkbenchTab::CloseDiff(i)),
                 _ => self.activate_workbench_tab(WorkbenchTab::Home),
             },
             KeyCode::Char(c @ '1'..='9') => {

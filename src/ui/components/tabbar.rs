@@ -34,6 +34,17 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
                 Active::Home => (icons::home(), "Home".to_owned()),
                 Active::Session => (icons::session_tab(), conversation_title(app).to_owned()),
                 Active::Files => (icons::folder(false), "Files".to_owned()),
+                Active::Diff(index) => (
+                    icons::diff_tab(),
+                    format!(
+                        "Diff · {}",
+                        app.diff_tabs[index]
+                            .root
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    ),
+                ),
                 Active::File(index) => {
                     let label = app
                         .files
@@ -56,7 +67,7 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
             let label = fit(&label, 26);
             let text = format!(" {icon} {label} ");
             let width = (Span::raw(&text).width() as u16
-                + if matches!(target, Active::File(_)) {
+                + if matches!(target, Active::File(_) | Active::Diff(_)) {
                     2
                 } else {
                     0
@@ -121,7 +132,7 @@ pub(crate) fn targets(app: &App, area: Rect, active: Active) -> Vec<(Rect, Activ
         .into_iter()
         .flat_map(|tab| {
             let mut targets = vec![(tab.area, tab.target)];
-            if let Active::File(index) = tab.target {
+            if let Active::File(index) | Active::Diff(index) = tab.target {
                 targets.insert(
                     0,
                     (
@@ -131,7 +142,11 @@ pub(crate) fn targets(app: &App, area: Rect, active: Active) -> Vec<(Rect, Activ
                             2,
                             tab.area.height,
                         ),
-                        Active::CloseFile(index),
+                        if matches!(tab.target, Active::Diff(_)) {
+                            Active::CloseDiff(index)
+                        } else {
+                            Active::CloseFile(index)
+                        },
                     ),
                 );
             }
@@ -168,17 +183,17 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
         let text_area = Rect::new(
             tab.area.x,
             tab.area.y,
-            tab.area
-                .width
-                .saturating_sub(if matches!(tab.target, Active::File(_)) {
+            tab.area.width.saturating_sub(
+                if matches!(tab.target, Active::File(_) | Active::Diff(_)) {
                     2
                 } else {
                     0
-                }),
+                },
+            ),
             1,
         );
         frame.render_widget(Paragraph::new(tab.text).style(style), text_area);
-        if matches!(tab.target, Active::File(_)) {
+        if matches!(tab.target, Active::File(_) | Active::Diff(_)) {
             frame.render_widget(
                 Paragraph::new("×").style(style.fg(theme::muted())),
                 Rect::new(tab.area.right().saturating_sub(2), tab.area.y, 1, 1),

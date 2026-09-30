@@ -15,7 +15,7 @@ impl App {
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             let targets = if self.mode == Mode::Views {
                 &self.view_targets
-            } else if matches!(self.mode, Mode::Chat | Mode::Files) {
+            } else if matches!(self.mode, Mode::Chat | Mode::Files | Mode::Diff) {
                 &self.tab_targets
             } else {
                 return;
@@ -29,13 +29,44 @@ impl App {
                 return;
             }
         }
+        if self.mode == Mode::Diff {
+            self.handle_diff_mouse(event);
+            return;
+        }
         if self.mode != Mode::Chat {
             return;
+        }
+        if self.home_visible() && !self.home_targets.is_empty() {
+            if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+                && let Some(action) = self
+                    .home_targets
+                    .iter()
+                    .find(|(area, _)| area.contains((event.column, event.row).into()))
+                    .map(|(_, action)| action.clone())
+            {
+                self.apply_home_action(action);
+                return;
+            }
+            if matches!(
+                event.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            ) {
+                self.home
+                    .select_next(if event.kind == MouseEventKind::ScrollUp {
+                        -3
+                    } else {
+                        3
+                    });
+                self.input_focused = false;
+                return;
+            }
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
             && self.point_in_composer(event.column, event.row)
         {
             self.clear_transcript_selection();
+            self.input_focused = true;
+            self.sidebar_focus = false;
             let (x, y, _, _) = self.composer_area;
             let row = self
                 .composer_scroll

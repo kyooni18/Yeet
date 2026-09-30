@@ -223,10 +223,28 @@ fn main() -> anyhow::Result<()> {
             app.mode = Mode::Chat;
             app.home_override = Some(true);
             app.conversation.clear();
-            app.input =
-                "Compare roll-rate peaks with MM304; flag touchdown dispersion above 150 m.".into();
+            app.input = "Review the Home resource model and navigation changes.".into();
             app.cursor = app.input.chars().count();
             let root = std::env::current_dir()?;
+            app.state.known_workspaces[0].path = root.display().to_string();
+            for (index, session) in app.state.saved_sessions.iter_mut().enumerate() {
+                session.title = [
+                    "Home resource model",
+                    "Session navigation",
+                    "Git review",
+                    "Provider usage",
+                    "Workspace memory",
+                ][index]
+                    .into();
+                session.updated_at =
+                    (chrono::Utc::now() - chrono::Duration::minutes(index as i64 * 8)).to_rfc3339();
+            }
+            for path in ["src/app/home.rs", "src/workbench/content.rs"] {
+                app.recent_views
+                    .visit(yeet::workbench::ResourceTarget::File(root.join(path)), path);
+            }
+            app.home
+                .set_git_snapshot(yeet::workbench::GitSnapshot::load(&root));
             let mut files = FilesState::open(root.join("src"));
             files.tabs = vec![root.join("src/theme.rs"), root.join("src/ui/views/home.rs")];
             app.files = Some(files);
