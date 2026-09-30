@@ -79,16 +79,6 @@ impl ToolRegistry {
             }
             allow_write = true;
         }
-        let _mutation_guard = if restricted.is_some() {
-            if background {
-                bail!(
-                    "Mutating shell commands cannot run detached. Run this command in the foreground so Yeet can hold the workspace mutation lease until it finishes."
-                );
-            }
-            self.workspace_mutation_guard()?
-        } else {
-            None
-        };
         let cache_safe_inspection = restricted.is_none() && shell_is_inspection(&command);
         if !background && !allow_write && cache_safe_inspection {
             let signature = normalize_shell_inspection(&command);

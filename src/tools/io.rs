@@ -492,6 +492,17 @@ impl ToolRegistry {
         } else {
             DEFAULT_INLINE_BYTES
         };
+        // Other sessions and external tools may mutate a previously read file.
+        // Verify its content before suppressing an apparently duplicate read.
+        if !refresh
+            && let Some(cached) = self
+                .read_cache
+                .get(&cache_path)
+                .and_then(|entries| entries.first())
+            && local_snapshot_handle_for_path(Path::new(&path))? != cached.snapshot
+        {
+            self.invalidate_workspace_cache_for_paths(&HashSet::from([cache_path.clone()]));
+        }
         let cached_before = self
             .read_cache
             .get(&cache_path)

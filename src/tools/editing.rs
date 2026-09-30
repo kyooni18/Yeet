@@ -24,7 +24,12 @@ impl ToolRegistry {
 
     /// Applies validated structured file changes and records mutation diagnostics.
     pub(super) fn apply_file_edits(&mut self, arguments: &Value) -> Result<String> {
-        let _mutation_guard = self.workspace_mutation_guard()?;
+        // Separate sessions use separate edit daemons. Serialize only the
+        // transaction's snapshot validation and commit, never the whole task.
+        let _edit_guard = edit_lock::WorkspaceEditLock::acquire(
+            &crate::platform::default_config_directory(),
+            &self.workspace_root,
+        )?;
         self.sync_edit_state();
         let mut request = arguments.clone();
         normalize_legacy_edit_shapes(&mut request);
@@ -367,7 +372,7 @@ impl ToolRegistry {
     }
 
     /// Invalidates source/search/list caches affected by known changed paths.
-    fn invalidate_workspace_cache_for_paths(&mut self, changed_paths: &HashSet<String>) {
+    pub(super) fn invalidate_workspace_cache_for_paths(&mut self, changed_paths: &HashSet<String>) {
         self.read_cache
             .retain(|path, _| !changed_paths.contains(path));
         self.edit_snapshots

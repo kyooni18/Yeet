@@ -3,6 +3,54 @@
 use super::*;
 
 #[test]
+fn active_sessions_can_edit_the_same_file_without_finishing_their_tasks() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::write(root.join("shared.txt"), "one\ntwo\n").unwrap();
+    let registry = || {
+        ToolRegistry::new_with_bridge_handle(
+            BridgeHandle::lazy_for_workspace(root.clone()),
+            root.clone(),
+            WorkerRegistry::new(Vec::new()).unwrap(),
+            PermissionBroker::default(),
+        )
+        .unwrap()
+    };
+    let mut first = registry();
+    let mut second = registry();
+    first.begin_task("task-a");
+    second.begin_task("task-b");
+    let read = json!({"path":"shared.txt","startLine":1,"endLine":2});
+    first.read_file(read.as_object().unwrap()).unwrap();
+    second.read_file(read.as_object().unwrap()).unwrap();
+    let change = |line, text| {
+        json!({
+            "diagnostics": false,
+            "changes": [{"path":"shared.txt", "edits":[{
+                "kind":"replace", "range":{"start":line,"end":line}, "text":text
+            }]}]
+        })
+    };
+    first.apply_file_edits(&change(1, "ONE")).unwrap();
+    // Another session's old local read must not silently overwrite live edits.
+    let stale = second.apply_file_edits(&change(1, "obsolete")).unwrap_err();
+    assert!(
+        stale.to_string().contains("changed after it was read"),
+        "{stale}"
+    );
+    second.read_file(read.as_object().unwrap()).unwrap();
+    second.apply_file_edits(&change(2, "TWO")).unwrap();
+    first.read_file(read.as_object().unwrap()).unwrap();
+    first.apply_file_edits(&change(1, "FINAL")).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("shared.txt")).unwrap(),
+        "FINAL\nTWO\n"
+    );
+    first.finish_task("task-a");
+    second.finish_task("task-b");
+}
+
+#[test]
 fn read_only_workspace_tools_do_not_start_sidecars() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();

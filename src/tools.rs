@@ -31,10 +31,10 @@ mod bridge_handle;
 mod capability_runtime;
 mod computer_use;
 mod definitions;
+mod edit_lock;
 mod editing;
 mod environment;
 mod io;
-mod mutation_lease;
 mod paths;
 mod service_backends;
 mod session_capabilities;
@@ -183,7 +183,6 @@ pub struct ToolRegistry {
     session_store: Option<SessionStore>,
     active_session_id: Option<String>,
     active_task_id: Option<String>,
-    mutation_lease: Option<mutation_lease::WorkspaceMutationLease>,
 }
 
 impl ToolRegistry {
@@ -270,7 +269,6 @@ impl ToolRegistry {
             session_store: None,
             active_session_id: None,
             active_task_id: None,
-            mutation_lease: None,
         })
     }
 
@@ -795,7 +793,6 @@ impl ToolRegistry {
                     if self.disabled_capabilities.contains("builtin:shell") {
                         bail!("Shell is disabled for this session; Skill scripts cannot execute");
                     }
-                    let _mutation_guard = self.workspace_mutation_guard()?;
                     return self.run_skill_script(&skill, &object, model, cancel);
                 }
                 if let Some(skill) = self.skill_tool_map.get(other) {
@@ -812,11 +809,6 @@ impl ToolRegistry {
                         bail!("MCP server {server} is disabled for this session");
                     }
                     let read_only = self.read_only_mcp_tools.contains(other);
-                    let _mutation_guard = if read_only {
-                        None
-                    } else {
-                        self.workspace_mutation_guard()?
-                    };
                     let result = self
                         .bridge_client()?
                         .call_mcp_tool_cancellable(&server, &tool, &object, cancel)?
@@ -834,7 +826,6 @@ impl ToolRegistry {
                     return Ok(result);
                 }
                 if let Some((worker, tool)) = self.worker_tool_map.get(other).cloned() {
-                    let _mutation_guard = self.workspace_mutation_guard()?;
                     let result =
                         self.workers
                             .execute(&worker, &tool, &object, &self.workspace_root)?;
@@ -853,46 +844,11 @@ impl ToolRegistry {
     }
 
     pub fn begin_task(&mut self, task_id: &str) {
-        if self.active_task_id.as_deref() != Some(task_id) {
-            self.mutation_lease = None;
-            self.active_task_id = Some(task_id.to_owned());
-        }
-    }
-
-    pub(super) fn ensure_workspace_mutation_lease(&mut self) -> Result<()> {
-        if self.mutation_lease.is_some() {
-            return Ok(());
-        }
-        let Some(task_id) = self.active_task_id.as_deref() else {
-            return Ok(());
-        };
-        self.mutation_lease = Some(mutation_lease::WorkspaceMutationLease::acquire(
-            &crate::platform::default_config_directory(),
-            &self.workspace_root,
-            self.active_session_id.as_deref(),
-            task_id,
-        )?);
-        Ok(())
-    }
-
-    fn workspace_mutation_guard(
-        &mut self,
-    ) -> Result<Option<mutation_lease::WorkspaceMutationLease>> {
-        if self.active_task_id.is_some() {
-            self.ensure_workspace_mutation_lease()?;
-            return Ok(None);
-        }
-        Ok(Some(mutation_lease::WorkspaceMutationLease::acquire(
-            &crate::platform::default_config_directory(),
-            &self.workspace_root,
-            self.active_session_id.as_deref(),
-            "direct-tool-call",
-        )?))
+        self.active_task_id = Some(task_id.to_owned());
     }
 
     pub fn finish_task(&mut self, task_id: &str) {
         if self.active_task_id.as_deref() == Some(task_id) {
-            self.mutation_lease = None;
             self.active_task_id = None;
         }
         self.reset_model_evidence_window();
