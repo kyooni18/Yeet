@@ -36,14 +36,14 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
                 Active::Files => (icons::folder(false), "Files".to_owned()),
                 Active::Diff(index) => (
                     icons::diff_tab(),
-                    format!(
-                        "Diff · {}",
-                        app.diff_tabs[index]
-                            .root
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    ),
+                    app.diff_tabs[index]
+                        .paths
+                        .get(app.diff_tabs[index].selected)
+                        .and_then(|path| path.file_name())
+                        .or_else(|| app.diff_tabs[index].root.file_name())
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
                 ),
                 Active::File(index) => {
                     let label = app

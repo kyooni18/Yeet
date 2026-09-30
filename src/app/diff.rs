@@ -11,9 +11,11 @@ pub struct DiffState {
     pub paths: Vec<PathBuf>,
     pub selected: usize,
     pub statuses: Vec<String>,
+    pub totals: crate::workbench::ChangeStats,
     pub original_paths: Vec<Option<PathBuf>>,
     pub file_targets: Vec<(ratatui::layout::Rect, usize)>,
     pub full_target: Option<ratatui::layout::Rect>,
+    pub changes_target: Option<ratatui::layout::Rect>,
     pub body_target: ratatui::layout::Rect,
     pub lines: Vec<String>,
     pub full: bool,
@@ -93,34 +95,20 @@ impl DiffState {
         self.base = git(&self.root, &["rev-parse", "--short", "HEAD"])
             .map(|o| String::from_utf8_lossy(&o).trim().into())
             .unwrap_or_default();
-        match git(
-            &self.root,
-            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-        ) {
-            Ok(o) => {
-                self.paths.clear();
-                self.statuses.clear();
-                self.original_paths.clear();
-                let mut entries = o.split(|b| *b == 0).filter(|e| !e.is_empty());
-                while let Some(e) = entries.next() {
-                    if e.len() < 4 {
-                        continue;
-                    }
-                    let original = if e[..2].contains(&b'R') || e[..2].contains(&b'C') {
-                        entries.next().map(bytes_path)
-                    } else {
-                        None
-                    };
-                    self.original_paths.push(original);
-                    self.paths.push(bytes_path(&e[3..]));
-                    self.statuses
-                        .push(String::from_utf8_lossy(&e[..2]).into_owned());
-                }
+        let snapshot = crate::workbench::GitSnapshot::load(&self.root);
+        self.paths.clear();
+        self.statuses.clear();
+        self.original_paths.clear();
+        self.totals = Default::default();
+        self.error = snapshot.message;
+        for change in snapshot.changes {
+            if let Some(stats) = change.stats {
+                self.totals.added += stats.added;
+                self.totals.removed += stats.removed;
             }
-            Err(e) => {
-                self.paths.clear();
-                self.error = Some(e);
-            }
+            self.paths.push(change.path);
+            self.statuses.push(change.status);
+            self.original_paths.push(change.previous_path);
         }
         self.selected = self.selected.min(self.paths.len().saturating_sub(1));
         if let Some(p) = old {
@@ -182,15 +170,6 @@ impl DiffState {
         self.scroll = 0;
         self.patch();
     }
-}
-#[cfg(unix)]
-fn bytes_path(b: &[u8]) -> PathBuf {
-    use std::os::unix::ffi::OsStrExt;
-    PathBuf::from(std::ffi::OsStr::from_bytes(b))
-}
-#[cfg(not(unix))]
-fn bytes_path(b: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(b).as_ref())
 }
 impl App {
     pub(crate) fn open_diff(&mut self, path: Option<PathBuf>) {
@@ -307,8 +286,10 @@ impl App {
                     s.selected = i;
                     s.scroll = 0;
                     s.patch();
-                } else if s.full_target.is_some_and(|r| r.contains(point)) {
-                    s.full = !s.full;
+                } else if s.full_target.is_some_and(|r| r.contains(point))
+                    || s.changes_target.is_some_and(|r| r.contains(point))
+                {
+                    s.full = s.full_target.is_some_and(|r| r.contains(point));
                     s.scroll = 0;
                     s.patch();
                 }

@@ -204,6 +204,62 @@ fn main() -> anyhow::Result<()> {
         "session-picker" => {
             app.mode = Mode::Sessions;
         }
+        "diff" => {
+            let root = std::env::current_dir()?;
+            let mut state = yeet::app::diff::DiffState::default();
+            state.root = root;
+            state.paths = [
+                "guidance/guidance_taem.c",
+                "guidance/guidance_taem.h",
+                "team/candidate_search.c",
+                "team/candidate_search.h",
+                "tests/team_candidates.c",
+                "tests/mm305-sweep.txt",
+            ]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+            state.statuses = vec![" M".into(); 6];
+            state.original_paths = vec![None; 6];
+            state.totals = yeet::workbench::ChangeStats {
+                added: 73,
+                removed: 29,
+            };
+            state.base = "8f3a2c1".into();
+            state.branch = "candidate search".into();
+            state.full = true;
+            state.lines = [
+                "diff --git a/guidance/guidance_taem.c b/guidance/guidance_taem.c",
+                "--- a/guidance/guidance_taem.c",
+                "+++ b/guidance/guidance_taem.c",
+                "@@ -418,6 +418,8 @@ select_team_mode · energy branch",
+                "     const double e_nominal = hac_energy_nominal(state);",
+                "-    if (energy > e_s_turn) {",
+                "-        return TEAM_S_TURN;",
+                "-    }",
+                "+    if (energy >= e_s_turn) return TEAM_S_TURN;",
+                "+    if (energy < e_low) {",
+                "+        const double requested = radius_for_energy(energy);",
+                "+        hac_radius = clamp(requested, HAC_MIN_RADIUS, nominal_radius);",
+                "+    }",
+                "     candidate.hac_radius_m = hac_radius;",
+                "     return TEAM_HAC;",
+                "@@ -451,3 +453,4 @@ rank_candidate · Final delivery",
+                "     double score = final_speed_shortfall * SHORTFALL_COST;",
+                "-    score += radius_delta * RADIUS_BIAS;",
+                "+    if (final_speed_shortfall <= PREDICTION_NOISE_MPS)",
+                "+        score += geometry_cost + lead_arc_penalty;",
+                "     candidate.score = score;",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+            app.diff_tabs.push(state);
+            app.mode = Mode::Diff;
+            app.input =
+                "Compare roll-rate peaks with MM304; flag touchdown dispersion above 150 m.".into();
+            app.cursor = app.input.chars().count();
+        }
         "files" => {
             let dir = std::env::current_dir()?.join("src/ui");
             let mut files = FilesState::open(dir);
