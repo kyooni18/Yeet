@@ -21,6 +21,7 @@ use crate::{
 };
 
 use super::{AgentGroupRuntime, AgentLimits};
+use crate::{agents::AgentGroupHandle, core::ToolCall};
 
 struct ScriptedLauncher;
 
@@ -121,4 +122,26 @@ fn stop_cancel_and_replace_settle_work_without_notifications() {
 
     thread::sleep(Duration::from_millis(50));
     assert!(group.take_notifications().is_empty());
+}
+
+#[test]
+fn batch_prestart_launches_background_agent_before_foreground_finishes() {
+    let group = runtime();
+    let handle = AgentGroupHandle::new(group.clone());
+    let calls =
+        [("fg", "block", false), ("bg", "audit", true)].map(|(id, prompt, background)| ToolCall {
+            id: id.into(),
+            name: "agent".into(),
+            arguments: serde_json::json!({
+                "description": prompt,
+                "prompt": prompt,
+                "role": "researcher",
+                "run_in_background": background,
+            }),
+        });
+    handle.prestart(&calls, "m", None);
+    // The foreground agent blocks, yet the background one already runs.
+    let items = group.task_items();
+    assert_eq!(items.len(), 2);
+    group.replace_group();
 }

@@ -29,8 +29,8 @@ type Launch = std::result::Result<(AgentId, AgentTaskId), String>;
 #[derive(Clone)]
 pub(crate) struct AgentGroupHandle {
     runtime: AgentGroupRuntime,
-    /// Foreground `agent` calls launched before their turn in a tool batch,
-    /// keyed by tool call id, so one response's agents run concurrently.
+    /// `agent` calls launched before their turn in a tool batch, keyed by
+    /// tool call id, so one response's agents all start together.
     prestarted: Arc<Mutex<HashMap<String, Launch>>>,
 }
 
@@ -60,21 +60,22 @@ impl AgentGroupHandle {
         self.runtime.take_notifications()
     }
 
-    /// Launches every foreground `agent` call of a batch up front; each call
-    /// then only waits for its own agent when the batch reaches it.
+    /// Launches every `agent` call of a batch up front, so neither a later
+    /// foreground agent nor a background one waits behind an earlier
+    /// foreground agent. Each call then only waits for its own agent.
     pub(crate) fn prestart(&self, calls: &[ToolCall], model: &str, session: Option<String>) {
-        let foreground = calls
+        let requests = calls
             .iter()
             .filter(|call| call.name == AGENT_TOOL)
             .filter_map(|call| {
                 let request = commands::parse_spawn(call.arguments.as_object()?).ok()?;
-                (!request.background).then_some((call.id.clone(), request))
+                Some((call.id.clone(), request))
             })
             .collect::<Vec<_>>();
-        if foreground.len() < 2 {
+        if requests.len() < 2 {
             return;
         }
-        for (call_id, request) in foreground {
+        for (call_id, request) in requests {
             let launched = self
                 .runtime
                 .spawn(request, model, session.clone())
