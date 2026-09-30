@@ -8,11 +8,14 @@ use crate::{
     core::ToolDefinition,
 };
 
+/// Model-visible delegation tool name, kept stable for restored sessions.
+pub(crate) const DELEGATE_TOOL: &str = "propose_agent_tasks";
+
 pub(super) const MAX_PROPOSED_TASKS: usize = 4;
 
-pub(super) fn tool_definition() -> ToolDefinition {
+pub(crate) fn tool_definition() -> ToolDefinition {
     ToolDefinition::new(
-        "propose_agent_tasks",
+        DELEGATE_TOOL,
         "Propose 1-4 bounded, independent tasks that could benefit from parallel workers. The runtime scheduler decides admission, enforces concurrency/budget/write policy, and returns structured findings. Use researcher for read-only inspection/research, implementer for a bounded code change, and verifier for tests or independent validation. Workers cannot spawn workers.",
         json!({
             "type":"object",

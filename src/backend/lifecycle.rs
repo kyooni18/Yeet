@@ -9,7 +9,7 @@ impl BackendService {
     /// Restores a persisted session and rebinds coordinator runtime state.
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
-        self.agent_orchestrator.begin_run();
+        self.agent_groups.replace_active_group();
         let stored = self.store.load(id)?;
         let rebase = |path: &String| {
             crate::session_store::resolve_workspace_path(
@@ -109,9 +109,9 @@ impl BackendService {
             coordinator.set_protected_write_paths([protected]);
             coordinator.set_session_runtime(self.store.clone(), Some(stored.id.clone()));
             coordinator.set_retained_debate_knowledge(retained_knowledge);
-            coordinator.set_agent_orchestrator(match restored_agent_mode {
+            coordinator.set_agent_group(match restored_agent_mode {
                 AgentMode::Single => None,
-                AgentMode::Adaptive => Some(self.agent_orchestrator.clone()),
+                AgentMode::Adaptive => Some(self.agent_groups.handle()),
             });
             coordinator.restore_session_environment(
                 stored_working_directory.as_deref(),
@@ -138,7 +138,7 @@ impl BackendService {
     pub(super) fn new_session(&mut self) {
         let _ = self.set_goal_enabled(false);
         self.interrupt();
-        self.agent_orchestrator.begin_run();
+        self.agent_groups.replace_active_group();
         let _ = self.invalidate_active_turn_for_replacement();
         if let Ok(mut coordinator) = self.coordinator.lock() {
             coordinator.replace_model_history(Vec::new());
@@ -187,7 +187,7 @@ impl BackendService {
             coordinator.set_protected_write_paths(Vec::<PathBuf>::new());
             coordinator.set_session_runtime(self.store.clone(), None);
             coordinator.set_retained_debate_knowledge(Vec::new());
-            coordinator.set_agent_orchestrator(None);
+            coordinator.set_agent_group(None);
             let _ = coordinator.restore_session_environment(None, &[]);
         }
         self.publish_state();
@@ -338,7 +338,7 @@ impl BackendService {
     /// Emits the latest bridge state with current permission prompts attached.
     pub(super) fn publish_state(&self) {
         let mut state = self.shared.lock_or_recover();
-        state.state.agent_tasks = self.agent_orchestrator.snapshots();
+        state.state.agent_tasks = self.agent_groups.task_items();
         state.state.pending_shell_permission = self.permission.pending_shell();
         state.state.pending_native_app_permission = self.permission.pending_native_app();
         let _ = self

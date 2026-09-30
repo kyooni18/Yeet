@@ -1,7 +1,9 @@
-//! Executes admitted group tasks on child coordinators.
+//! The live Agent Group: executes admitted tasks on child coordinators.
 //!
-//! Group lifetime is still scoped to one delegation call: admitted tasks run
-//! on scoped threads and the call returns after every child finishes.
+//! Only `AgentGroupSupervisor` constructs or replaces a runtime; everything
+//! else reaches it through `AgentGroupHandle`. Group lifetime is still scoped
+//! to one delegation call: admitted tasks run on scoped threads and the call
+//! returns after every child finishes.
 
 use std::{
     sync::{
@@ -22,26 +24,27 @@ use crate::{
         runtime::{AgentRuntimeFactory, RunManager},
         task::{AgentTaskId, AgentTaskStatus},
     },
-    core::{MessageRole, ToolDefinition, Usage},
+    core::{MessageRole, Usage},
     model::AgentTaskItem,
 };
 
 use super::{
-    AgentLimits, commands,
+    AgentLimits,
+    commands::parse_proposed_tasks,
     scheduler::{self, Admission},
     state::{AgentGroupState, GroupRuntimeState},
 };
 
 #[derive(Clone)]
-pub(crate) struct AdaptiveAgentOrchestrator {
+pub(crate) struct AgentGroupRuntime {
     factory: AgentRuntimeFactory,
     run_manager: RunManager,
     limits: AgentLimits,
     state: Arc<Mutex<GroupRuntimeState>>,
 }
 
-impl AdaptiveAgentOrchestrator {
-    pub(crate) fn bind_parent_agent(&self, id: AgentId) {
+impl AgentGroupRuntime {
+    pub(crate) fn bind_primary_agent(&self, id: AgentId) {
         self.lock_state().group.primary_agent = Some(id);
     }
 
@@ -58,11 +61,9 @@ impl AdaptiveAgentOrchestrator {
         }
     }
 
-    pub(crate) fn tool_definition() -> ToolDefinition {
-        commands::tool_definition()
-    }
-
-    pub(crate) fn begin_run(&self) {
+    /// Cancels every worker and starts a fresh group generation, keeping the
+    /// bound primary agent.
+    pub(crate) fn replace_group(&self) {
         let mut state = self.lock_state();
         for cancel in state.cancels.values() {
             cancel.store(true, Ordering::Release);
@@ -73,14 +74,14 @@ impl AdaptiveAgentOrchestrator {
         state.cancels.clear();
     }
 
-    pub(crate) fn execute(
+    pub(crate) fn delegate(
         &self,
         arguments: &Map<String, Value>,
         model: &str,
         active_session_id: Option<String>,
         parent_cancel: &AtomicBool,
     ) -> Result<String> {
-        let proposed = commands::parse_proposed_tasks(arguments)?;
+        let proposed = parse_proposed_tasks(arguments)?;
         if parent_cancel.load(Ordering::Acquire) {
             bail!("parent run is cancelled");
         }
@@ -123,7 +124,7 @@ impl AdaptiveAgentOrchestrator {
         Ok(json!({"admitted":values.len(),"findings":values}).to_string())
     }
 
-    pub(crate) fn snapshots(&self) -> Vec<AgentTaskItem> {
+    pub(crate) fn task_items(&self) -> Vec<AgentTaskItem> {
         self.lock_state().group.task_items()
     }
 

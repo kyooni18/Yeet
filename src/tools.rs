@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    agents::group::AdaptiveAgentOrchestrator,
+    agents::{AgentGroupHandle, group::commands::DELEGATE_TOOL},
     core::{BridgeClient, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
@@ -159,7 +159,7 @@ pub struct ToolRegistry {
     active_workers: HashSet<String>,
     skyline_handle: Option<String>,
     disabled_capabilities: HashSet<String>,
-    agent_orchestrator: Option<AdaptiveAgentOrchestrator>,
+    agent_group: Option<AgentGroupHandle>,
     read_cache: HashMap<String, Vec<ReadCacheEntry>>,
     edit_snapshots: HashMap<String, String>,
     edit_read_coverage: HashMap<String, EditReadCoverage>,
@@ -245,7 +245,7 @@ impl ToolRegistry {
             active_workers: HashSet::new(),
             skyline_handle: None,
             disabled_capabilities: HashSet::new(),
-            agent_orchestrator: None,
+            agent_group: None,
             read_cache: HashMap::new(),
             edit_snapshots: HashMap::new(),
             edit_read_coverage: HashMap::new(),
@@ -304,27 +304,23 @@ impl ToolRegistry {
     }
 
     pub(crate) fn bind_runtime_agent(&self, id: crate::agents::AgentId) {
-        if let Some(orchestrator) = &self.agent_orchestrator {
-            orchestrator.bind_parent_agent(id);
+        if let Some(group) = &self.agent_group {
+            group.bind_primary_agent(id);
         }
     }
 
-    pub(crate) fn set_agent_orchestrator(
-        &mut self,
-        orchestrator: Option<AdaptiveAgentOrchestrator>,
-    ) {
-        const TOOL: &str = "propose_agent_tasks";
-        self.agent_orchestrator = orchestrator;
-        if self.agent_orchestrator.is_some() {
-            let definition = AdaptiveAgentOrchestrator::tool_definition();
-            self.active_tools.insert(TOOL.into(), definition);
+    pub(crate) fn set_agent_group(&mut self, group: Option<AgentGroupHandle>) {
+        self.agent_group = group;
+        if self.agent_group.is_some() {
+            let definition = AgentGroupHandle::tool_definition();
+            self.active_tools.insert(DELEGATE_TOOL.into(), definition);
         } else {
-            self.active_tools.remove(TOOL);
+            self.active_tools.remove(DELEGATE_TOOL);
         }
     }
 
     pub(crate) fn agent_orchestration_enabled(&self) -> bool {
-        self.agent_orchestrator.is_some()
+        self.agent_group.is_some()
     }
 
     pub fn runtime_capability_snapshot(&self, visible_tools: &[ToolDefinition]) -> Value {
@@ -642,11 +638,11 @@ impl ToolRegistry {
             }
             "skyline" => self.execute_skyline(&object),
             "deploy_agent" => self.deploy_agent(&object, cancel),
-            "propose_agent_tasks" => self
-                .agent_orchestrator
+            DELEGATE_TOOL => self
+                .agent_group
                 .as_ref()
                 .ok_or_else(|| anyhow!("adaptive agent orchestration is not enabled"))?
-                .execute(&object, model, self.active_session_id.clone(), cancel),
+                .delegate_tasks(&object, model, self.active_session_id.clone(), cancel),
             "read_file" => self.read_file(&object),
             // Hidden compatibility alias for restored sessions created before
             // read_file absorbed batch reads. New requests never expose this schema.

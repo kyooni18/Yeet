@@ -167,11 +167,8 @@ impl AgentCoordinator {
         self.registry.set_protected_write_paths(paths);
     }
 
-    pub(crate) fn set_agent_orchestrator(
-        &mut self,
-        orchestrator: Option<crate::agents::group::AdaptiveAgentOrchestrator>,
-    ) {
-        self.registry.set_agent_orchestrator(orchestrator);
+    pub(crate) fn set_agent_group(&mut self, group: Option<crate::agents::AgentGroupHandle>) {
+        self.registry.set_agent_group(group);
     }
 
     pub fn session_environment(&self) -> (String, Vec<String>) {
