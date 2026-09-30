@@ -1,6 +1,6 @@
 //! Compact tool traces and backend operation summaries.
 use super::*;
-use crate::ui::icons;
+use crate::ui::support::icons;
 use serde_json::Value;
 
 fn tool_call_status_bucket(call: &crate::model::ConversationToolCall) -> u8 {

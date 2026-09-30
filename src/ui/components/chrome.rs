@@ -4,7 +4,7 @@
 //! and intentionally quiet.  This avoids repaint-only animation competing with
 //! transcript readability or input responsiveness.
 
-use super::super::{responsive, theme};
+use super::super::support::{responsive, theme};
 use crate::app::{App, Mode};
 use ratatui::{Frame, prelude::Color};
 

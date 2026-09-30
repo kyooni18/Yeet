@@ -4,7 +4,7 @@ pub(super) mod files;
 pub(super) mod home;
 pub(super) mod session_picker;
 pub(super) mod sessions;
-use super::theme;
+use super::support::theme;
 use crate::app::App;
 use ratatui::{
     Frame,

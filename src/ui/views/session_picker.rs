@@ -1,5 +1,5 @@
 //! Full-screen session picker for portrait terminals.
-use super::super::{components::status, task::fit, theme};
+use super::super::{components::status, support::theme, task::fit};
 use crate::app::App;
 use ratatui::{
     Frame,

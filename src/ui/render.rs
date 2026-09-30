@@ -1,7 +1,9 @@
 //! Existing app shell, composer, status, and overlay orchestration.
 use super::{
     components::{chrome, composer, status},
-    dialogs, responsive, shell, task, theme, views,
+    dialogs, shell,
+    support::{responsive, theme},
+    task, views,
 };
 use crate::app::{App, Mode};
 use composer::draw as draw_input;

@@ -11,15 +11,15 @@ fn nerd() -> bool {
     })
 }
 
-pub(super) fn home() -> &'static str {
+pub(in crate::ui) fn home() -> &'static str {
     if nerd() { "\u{f015}" } else { "⌂" }
 }
 
-pub(super) fn session_tab() -> &'static str {
+pub(in crate::ui) fn session_tab() -> &'static str {
     if nerd() { "\u{f27a}" } else { "▤" }
 }
 
-pub(super) fn chevron(expanded: bool) -> &'static str {
+pub(in crate::ui) fn chevron(expanded: bool) -> &'static str {
     match (expanded, nerd()) {
         (true, true) => "\u{f078}",
         (false, true) => "\u{f054}",
@@ -28,11 +28,11 @@ pub(super) fn chevron(expanded: bool) -> &'static str {
     }
 }
 
-pub(super) fn workspace() -> &'static str {
+pub(in crate::ui) fn workspace() -> &'static str {
     if nerd() { "\u{f07b}" } else { "▣" }
 }
 
-pub(super) fn session(current: bool) -> &'static str {
+pub(in crate::ui) fn session(current: bool) -> &'static str {
     match (current, nerd()) {
         (true, true) => "\u{f111}",
         (false, true) => "\u{f10c}",
@@ -41,7 +41,7 @@ pub(super) fn session(current: bool) -> &'static str {
     }
 }
 
-pub(super) fn folder(open: bool) -> &'static str {
+pub(in crate::ui) fn folder(open: bool) -> &'static str {
     match (open, nerd()) {
         (true, true) => "\u{f07c}",
         (false, true) => "\u{f07b}",
@@ -50,7 +50,7 @@ pub(super) fn folder(open: bool) -> &'static str {
     }
 }
 
-pub(super) fn file(name: &str) -> &'static str {
+pub(in crate::ui) fn file(name: &str) -> &'static str {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     let kind = match ext.as_deref() {
         Some(

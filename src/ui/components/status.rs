@@ -1,8 +1,10 @@
 //! One-row status bar: working directory on the left, model and context on the right.
 use super::super::{
+    support::{
+        text::{compact_number, truncate_middle},
+        theme,
+    },
     task,
-    text::{compact_number, truncate_middle},
-    theme,
 };
 use crate::app::App;
 use ratatui::{

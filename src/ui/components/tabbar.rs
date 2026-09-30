@@ -1,6 +1,10 @@
 //! One-row tab bar shared by the session and files views: home, the session
 //! tab, one tab per opened file, and a trailing `+`.
-use super::super::{icons, shell::conversation_title, task::fit, theme};
+use super::super::{
+    shell::conversation_title,
+    support::{icons, theme},
+    task::fit,
+};
 use crate::app::App;
 use ratatui::{
     Frame,

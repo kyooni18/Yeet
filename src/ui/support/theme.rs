@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Padding},
 };
 
-pub(super) use crate::theme::Appearance;
+pub(in crate::ui) use crate::theme::Appearance;
 use crate::theme::{Palette, Rgb};
 
 static ACTIVE: OnceLock<RwLock<Palette>> = OnceLock::new();
@@ -19,7 +19,7 @@ fn active() -> Palette {
     *lock.read().expect("theme lock poisoned")
 }
 
-pub(super) fn initialize(appearance: Appearance, name_or_path: Option<&str>) {
+pub(in crate::ui) fn initialize(appearance: Appearance, name_or_path: Option<&str>) {
     let palette = crate::theme::resolve_palette(appearance, name_or_path).palette;
     let lock = ACTIVE.get_or_init(|| RwLock::new(palette));
     *lock.write().expect("theme lock poisoned") = palette;
@@ -46,25 +46,25 @@ fn color(rgb: Rgb) -> Color {
     Color::Rgb(rgb.red, rgb.green, rgb.blue)
 }
 
-pub(super) fn background() -> Color {
+pub(in crate::ui) fn background() -> Color {
     color(active().background)
 }
-pub(super) fn surface_color() -> Color {
+pub(in crate::ui) fn surface_color() -> Color {
     color(active().surface)
 }
-pub(super) fn surface_raised() -> Color {
+pub(in crate::ui) fn surface_raised() -> Color {
     color(active().surface_raised)
 }
-pub(super) fn composer_info_surface() -> Color {
+pub(in crate::ui) fn composer_info_surface() -> Color {
     color(active().surface.mix(active().surface_raised, 0.25))
 }
-pub(super) fn composer_info_border() -> Color {
+pub(in crate::ui) fn composer_info_border() -> Color {
     color(active().surface_raised.mix(active().border, 0.15))
 }
-pub(super) fn code_background() -> Color {
+pub(in crate::ui) fn code_background() -> Color {
     color(active().code_background)
 }
-pub(super) fn selected_color() -> Color {
+pub(in crate::ui) fn selected_color() -> Color {
     let selected = color(active().selected);
     if selected == surface_raised() || selected == surface_color() {
         // Some palettes intentionally reuse their visual/raised surface for
@@ -75,93 +75,96 @@ pub(super) fn selected_color() -> Color {
         selected
     }
 }
-pub(super) fn muted() -> Color {
+pub(in crate::ui) fn muted() -> Color {
     color(active().muted)
 }
-pub(super) fn border() -> Color {
+pub(in crate::ui) fn border() -> Color {
     color(active().border)
 }
-pub(super) fn border_dim() -> Color {
+pub(in crate::ui) fn border_dim() -> Color {
     color(active().border_dim)
 }
-pub(super) fn accent() -> Color {
+pub(in crate::ui) fn accent() -> Color {
     color(active().accent)
 }
-pub(super) fn accent_hot() -> Color {
+pub(in crate::ui) fn accent_hot() -> Color {
     color(active().accent_hot)
 }
-pub(super) fn accent_warm() -> Color {
+pub(in crate::ui) fn accent_warm() -> Color {
     color(active().accent_warm)
 }
-pub(super) fn warning() -> Color {
+pub(in crate::ui) fn warning() -> Color {
     color(active().warning)
 }
-pub(super) fn success() -> Color {
+pub(in crate::ui) fn success() -> Color {
     color(active().success)
 }
-pub(super) fn text() -> Color {
+pub(in crate::ui) fn text() -> Color {
     color(active().text)
 }
-pub(super) fn text_dim() -> Color {
+pub(in crate::ui) fn text_dim() -> Color {
     color(active().text_dim)
 }
 /// Neutral grey between body text and muted, used for secondary labels.
-pub(super) fn secondary() -> Color {
+pub(in crate::ui) fn secondary() -> Color {
     color(active().text.mix(active().muted, 0.5))
 }
 /// Barely-visible rule on the conversation canvas (tree rails, dividers).
-pub(super) fn hairline() -> Color {
+pub(in crate::ui) fn hairline() -> Color {
     color(active().code_background.mix(active().surface, 0.8))
 }
 /// Current-row highlight inside the session rail.
-pub(super) fn rail_selected() -> Color {
+pub(in crate::ui) fn rail_selected() -> Color {
     color(active().background.mix(active().surface, 0.5))
 }
-pub(super) fn status_background() -> Color {
+pub(in crate::ui) fn status_background() -> Color {
     color(active().code_background.mix(Rgb::new(0, 0, 0), 0.1))
 }
-pub(super) fn meter_track() -> Color {
+pub(in crate::ui) fn meter_track() -> Color {
     color(active().surface_raised.mix(active().border, 0.5))
 }
-pub(super) fn user() -> Color {
+pub(in crate::ui) fn user() -> Color {
     color(active().user)
 }
-pub(super) fn error() -> Color {
+pub(in crate::ui) fn error() -> Color {
     color(active().error)
 }
-pub(super) fn error_subtle() -> Color {
+pub(in crate::ui) fn error_subtle() -> Color {
     color(active().error.mix(active().background, 0.45))
 }
 
-pub(super) fn base() -> Style {
+pub(in crate::ui) fn base() -> Style {
     Style::default().fg(text()).bg(background())
 }
 
-pub(super) fn surface() -> Style {
+pub(in crate::ui) fn surface() -> Style {
     base().bg(surface_color())
 }
 
-pub(super) fn modal_surface() -> Style {
+pub(in crate::ui) fn modal_surface() -> Style {
     base().bg(surface_raised())
 }
 
-pub(super) fn brand() -> Style {
+pub(in crate::ui) fn brand() -> Style {
     Style::default()
         .fg(accent_hot())
         .add_modifier(Modifier::BOLD)
 }
 
-pub(super) fn selected() -> Style {
+pub(in crate::ui) fn selected() -> Style {
     Style::default()
         .fg(accent_hot())
         .bg(selected_color())
         .add_modifier(Modifier::BOLD)
 }
 
-pub(super) fn modal_block(title: impl AsRef<str>) -> Block<'static> {
+pub(in crate::ui) fn modal_block(title: impl AsRef<str>) -> Block<'static> {
     modal_block_with_accent(title, accent())
 }
-pub(super) fn modal_block_with_accent(title: impl AsRef<str>, accent: Color) -> Block<'static> {
+pub(in crate::ui) fn modal_block_with_accent(
+    title: impl AsRef<str>,
+    accent: Color,
+) -> Block<'static> {
     let title = title.as_ref().trim();
     let (heading, hint) = title.split_once(" · ").unwrap_or((title, ""));
     let mut block = Block::default()
@@ -180,7 +183,7 @@ pub(super) fn modal_block_with_accent(title: impl AsRef<str>, accent: Color) -> 
     }
     block
 }
-pub(super) fn panel_block(title: impl AsRef<str>) -> Block<'static> {
+pub(in crate::ui) fn panel_block(title: impl AsRef<str>) -> Block<'static> {
     let title = title.as_ref().trim().to_owned();
     Block::default()
         .borders(Borders::ALL)
@@ -193,7 +196,7 @@ pub(super) fn panel_block(title: impl AsRef<str>) -> Block<'static> {
                 .style(Style::default().fg(accent()).add_modifier(Modifier::BOLD)),
         )
 }
-pub(super) fn modal_backdrop(frame: &mut Frame<'_>, area: Rect) {
+pub(in crate::ui) fn modal_backdrop(frame: &mut Frame<'_>, area: Rect) {
     let bounds = frame.area();
     frame
         .buffer_mut()

@@ -1,5 +1,5 @@
 //! Composer surface: a borderless prompt row (`›` marker, text, caret).
-use super::super::theme;
+use super::super::support::theme;
 use crate::app::{App, Mode};
 pub(crate) use crate::text_layout::layout;
 use ratatui::{
@@ -22,8 +22,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16
         })),
         area,
     );
-    let portrait =
-        super::super::responsive::shape(frame.area()) == super::super::responsive::Shape::Portrait;
+    let portrait = super::super::support::responsive::shape(frame.area())
+        == super::super::support::responsive::Shape::Portrait;
     let top = u16::from(area.height >= 2);
     let bottom = u16::from(portrait && area.height >= 3);
     let text_x = text_x

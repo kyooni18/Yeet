@@ -3,7 +3,7 @@ use super::components::{
     composer,
     status::{status_line, usage_line},
 };
-use super::{draw, theme};
+use super::{draw, support::theme};
 use crate::model::{ModelActivity, SessionSummary, ShellPermission};
 use crate::{
     app::{App, Mode},

@@ -1,10 +1,8 @@
 //! Responsive application shell around the conversation.
 use super::{
     components::tabbar,
-    responsive,
+    support::{responsive, text::truncate_end, theme, yeet_brand},
     task::{self, TaskStatus},
-    text::truncate_end,
-    theme, yeet_brand,
 };
 use crate::{app::App, model::SessionSummary};
 use ratatui::{

@@ -1,6 +1,6 @@
 //! Model, Goal, session, and reasoning navigation dialogs.
 
-use crate::ui::text::compact_number;
+use crate::ui::support::text::compact_number;
 
 use super::*;
 
@@ -278,7 +278,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
         .iter()
         .map(|item| {
             let current = app.state.current_session_id.as_deref() == Some(item.session.id.as_str());
-            let marker = crate::ui::icons::session(current);
+            let marker = crate::ui::support::icons::session(current);
             let badge = if current && row_width >= 20 {
                 " · current"
             } else {
@@ -336,7 +336,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
                 title,
                 Line::from(vec![
                     Span::styled(
-                        format!("{} ", crate::ui::icons::workspace()),
+                        format!("{} ", crate::ui::support::icons::workspace()),
                         workspace_style,
                     ),
                     Span::styled(workspace, workspace_style),

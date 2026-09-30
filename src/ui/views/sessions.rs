@@ -1,7 +1,16 @@
 //! Active session/conversation view. `Mode::Sessions` remains the session picker.
 pub(in crate::ui) mod tools;
-use super::super::text::{format_elapsed, prefixed_wrapped_line, truncate_end, truncate_middle};
-use super::super::{markdown::markdown_lines, responsive, shell, task, theme};
+
+use super::super::{
+    shell,
+    support::{
+        markdown::markdown_lines,
+        responsive,
+        text::{format_elapsed, prefixed_wrapped_line, truncate_end, truncate_middle},
+        theme,
+    },
+    task,
+};
 use crate::{
     app::App,
     model::{ConversationEntry, ConversationKind, ToolCallStatus},

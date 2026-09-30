@@ -2,7 +2,7 @@
 use super::theme;
 use ratatui::prelude::{Line, Modifier, Span, Style};
 
-pub(super) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
+pub(in crate::ui) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
     // Preserve every source row so intentional Markdown line breaks survive in
     // the TUI instead of streamed reasoning collapsing into one paragraph.
     let source: Vec<&str> = content.split('\n').collect();

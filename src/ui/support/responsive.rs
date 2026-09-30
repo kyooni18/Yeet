@@ -7,7 +7,7 @@
 use ratatui::layout::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Shape {
+pub(in crate::ui) enum Shape {
     Tiny,
     ShortWide,
     Portrait,
@@ -18,7 +18,7 @@ pub(super) enum Shape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Metrics {
+pub(in crate::ui) struct Metrics {
     pub shape: Shape,
     pub header_height: u16,
     pub status_height: u16,
@@ -31,7 +31,7 @@ pub(super) struct Metrics {
     pub sidebar_width: Option<u16>,
 }
 
-pub(super) fn metrics(area: Rect) -> Metrics {
+pub(in crate::ui) fn metrics(area: Rect) -> Metrics {
     let shape = shape(area);
     match shape {
         Shape::Tiny => Metrics {
@@ -121,7 +121,7 @@ pub(super) fn metrics(area: Rect) -> Metrics {
     }
 }
 
-pub(super) fn shape(area: Rect) -> Shape {
+pub(in crate::ui) fn shape(area: Rect) -> Shape {
     if area.width < 34 || area.height < 9 {
         return Shape::Tiny;
     }
@@ -147,7 +147,7 @@ pub(super) fn shape(area: Rect) -> Shape {
     Shape::Standard
 }
 
-pub(super) fn modal_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+pub(in crate::ui) fn modal_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
     if area.width == 0 || area.height == 0 {
         return area;
     }

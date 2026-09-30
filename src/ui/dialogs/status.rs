@@ -1,5 +1,6 @@
 //! Status and provider-usage dialog presentation.
-use super::super::{
+use super::super::support::{
+    responsive,
     text::{compact_number, truncate_end, truncate_middle},
     theme,
 };
@@ -11,7 +12,7 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    super::super::responsive::modal_rect(area, percent_x, percent_y)
+    responsive::modal_rect(area, percent_x, percent_y)
 }
 
 pub(crate) fn draw_status_dialog(frame: &mut Frame<'_>, app: &App) {

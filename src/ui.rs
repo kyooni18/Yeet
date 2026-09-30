@@ -1,20 +1,15 @@
 //! Native ratatui UI facade. View implementation lives in `src/ui/`.
 mod components;
 mod dialogs;
-mod icons;
-mod markdown;
 mod render;
-mod responsive;
 mod shell;
+mod support;
 mod task;
-mod text;
-mod theme;
 mod views;
-mod yeet_brand;
 
 pub use render::draw;
-pub(crate) use theme::apply_runtime_theme;
-pub use theme::initialize_theme;
+pub(crate) use support::theme::apply_runtime_theme;
+pub use support::theme::initialize_theme;
 
 #[cfg(test)]
 mod render_tests;

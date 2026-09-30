@@ -1,5 +1,6 @@
 //! Responsive terminal wordmark and wordmark.
-use super::{responsive, task, theme};
+use super::{responsive, theme};
+use crate::ui::task;
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -14,7 +15,7 @@ const WORDMARK: [&str; 4] = [
     "  ▀    ▀▀▀▀  ▀▀▀▀    ▀  ",
 ];
 
-pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape) {
+pub(in crate::ui) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape) {
     if area.is_empty() {
         return;
     }
