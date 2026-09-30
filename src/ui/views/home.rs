@@ -62,32 +62,23 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        ("Home", "  ⌂  Home", true),
-        (
-            "MM305 crosswind tuning",
-            "  ▤ MM305 crosswind tuning",
-            false,
-        ),
-        ("theme.rs", "  ▱ theme.rs", false),
-        ("Landing", "  ▣ Landing", false),
-        ("guidance_taem.c", "  ⚙ guidance_taem.c", false),
-        ("#214", "  ▣ #214", false),
+        ("Home", "Home", true),
+        ("MM305 crosswind tuning", "MM305 crosswind tuning", false),
+        ("theme.rs", "theme.rs", false),
+        ("Landing", "Landing", false),
+        ("guidance_taem.c", "guidance_taem.c", false),
+        ("#214", "#214", false),
         ("+", "+", false),
     ];
-    // Match the mockup's tab origins and reserve the same pixel-scaled widths.
+    let widths = [160u32, 248, 124, 106, 182, 60, 48];
     let mut x = area.x;
-    let tab_widths = [160u32, 248, 160, 96, 160, 72, 48]
-        .into_iter()
-        .zip(entries)
-        .map(|(px, (_, label, _))| {
-            ((area.width as u32 * px + 1439) / 1440).max(label.chars().count() as u32 + 2) as u16
-        })
-        .collect::<Vec<_>>();
-    for (index, (_name, label, active)) in entries.into_iter().enumerate() {
+    for (index, (_, label, active)) in entries.into_iter().enumerate() {
         if x >= area.right() {
             break;
         }
-        let width = tab_widths[index].min(area.right() - x);
+        let width = ((area.width as u32 * widths[index] + 1439) / 1440)
+            .max(label.chars().count() as u32)
+            .min((area.right() - x) as u32) as u16;
         let style = if active {
             Style::default()
                 .fg(theme::text())
@@ -96,10 +87,8 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         } else {
             Style::default().fg(theme::muted()).bg(theme::background())
         };
-
-        let text = super::super::task::fit(label, width as usize);
         frame.render_widget(
-            Paragraph::new(text).style(style),
+            Paragraph::new(label).style(style),
             Rect::new(x, area.y, width, area.height),
         );
         x += width;
