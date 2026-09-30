@@ -7,7 +7,9 @@
 
 use std::sync::Arc;
 
-use crate::model::AgentTaskItem;
+use anyhow::{Result, anyhow};
+
+use crate::model::{AgentGroupItem, AgentTaskItem};
 
 use super::{
     group::{AgentGroupRuntime, AgentLimits, AgentNotification, ChangeListener},
@@ -65,4 +67,30 @@ impl AgentGroupSupervisor {
     pub(crate) fn task_items(&self) -> Vec<AgentTaskItem> {
         self.active.task_items()
     }
+
+    pub(crate) fn group_item(&self) -> AgentGroupItem {
+        self.active.group_item()
+    }
+
+    /// Queues a message the user typed to one member.
+    pub(crate) fn message(&self, agent_id: &str, message: String) -> Result<()> {
+        self.active.steer(parse_id(agent_id)?, message).map(|_| ())
+    }
+
+    /// Stops one member, or every member when `agent_id` is `None`.
+    pub(crate) fn stop(&self, agent_id: Option<&str>) -> Result<()> {
+        match agent_id {
+            Some(id) => self.active.stop(parse_id(id)?),
+            None => {
+                self.active.stop_all();
+                Ok(())
+            }
+        }
+    }
+}
+
+fn parse_id(value: &str) -> Result<super::AgentId> {
+    value
+        .parse()
+        .map_err(|_| anyhow!("invalid agent id: {value}"))
 }

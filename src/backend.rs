@@ -85,9 +85,10 @@ pub(crate) use sync::{EventSender, SessionCatalog};
 use sync::{LockExt, apply_session_catalog_locked};
 use titles::{fallback_title, generate_session_title, prepare_title_request};
 pub use transport::Backend;
+pub(crate) use transport::tool_detail;
 use transport::{
     cache_status_line, pretty_json, state_envelope, state_envelope_without_conversation,
-    tool_activity_title, tool_detail,
+    tool_activity_title,
 };
 
 use crate::background::Wake;
@@ -349,6 +350,10 @@ impl BackendService {
             FrontendCommand::SetGoal { enabled } => self.set_goal_enabled(enabled),
             FrontendCommand::SetAgentMode { mode } => self.set_agent_mode(mode),
             FrontendCommand::SetAutonomyMode { mode } => self.set_autonomy_mode(mode),
+            FrontendCommand::MessageAgent { agent_id, message } => {
+                self.agent_groups.message(&agent_id, message)
+            }
+            FrontendCommand::StopAgent { agent_id } => self.agent_groups.stop(agent_id.as_deref()),
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
                 Ok(())
@@ -586,6 +591,7 @@ impl BackendService {
             let mut shared = self.shared.lock_or_recover();
             shared.state.agent_mode = mode;
             shared.state.agent_tasks = self.agent_groups.task_items();
+            shared.state.agent_group = self.agent_groups.group_item();
             if shared.state.current_session_id.is_some() {
                 persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
             }
@@ -783,6 +789,7 @@ impl BackendService {
             let mut shared = self.shared.lock_or_recover();
             shared.state.goal_mode = goal_enabled;
             shared.state.agent_tasks = self.agent_groups.task_items();
+            shared.state.agent_group = self.agent_groups.group_item();
             shared.state.error_message = None;
             shared.state.is_streaming = true;
             shared.state.active_assistant_entry_id = None;
@@ -961,6 +968,7 @@ impl BackendService {
                                 let session_id = state.state.current_session_id.clone();
                                 apply_agent_event(&mut state, event);
                                 state.state.agent_tasks = agent_groups.task_items();
+                                state.state.agent_group = agent_groups.group_item();
                                 state.state.pending_shell_permission = permission.pending_shell();
                                 state.state.pending_native_app_permission =
                                     permission.pending_native_app();

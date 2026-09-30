@@ -87,6 +87,63 @@ pub struct AgentTaskItem {
     pub summary: Option<String>,
 }
 
+/// Frontend projection of the active Agent Group: who is in it and what
+/// they have been doing. Complements the flat `agent_tasks` list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentGroupItem {
+    pub members: Vec<AgentMemberItem>,
+    /// Oldest first; capped by the backend.
+    pub activity: Vec<AgentActivityItem>,
+    /// RFC 3339 time of the first member launch.
+    pub started_at: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentMemberItem {
+    pub id: String,
+    pub description: String,
+    pub role: String,
+    pub model: String,
+    /// `running`, `idle`, or `stopped`.
+    pub status: String,
+    /// Wire status of the member's most recent task.
+    pub task_status: String,
+    pub summary: Option<String>,
+    pub started_at: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentActivityItem {
+    pub at: String,
+    /// Member id, or `None` for the primary agent.
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub kind: AgentActivityKind,
+    /// Tool name for `Tool` activity.
+    pub tool: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActivityKind {
+    #[default]
+    Message,
+    /// A message the user sent to a member directly.
+    Steer,
+    Tool,
+    Finished,
+    Failed,
+    Stopped,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomyMode {
@@ -128,6 +185,7 @@ pub struct BridgeState {
     pub goal_mode: bool,
     pub agent_mode: AgentMode,
     pub agent_tasks: Vec<AgentTaskItem>,
+    pub agent_group: AgentGroupItem,
     pub autonomy_mode: AutonomyMode,
     pub error_message: Option<String>,
     pub active_model: String,
@@ -188,6 +246,7 @@ impl BridgeState {
             goal_mode: self.goal_mode,
             agent_mode: self.agent_mode,
             agent_tasks: self.agent_tasks.clone(),
+            agent_group: self.agent_group.clone(),
             autonomy_mode: self.autonomy_mode,
             error_message: self.error_message.clone(),
             active_model: self.active_model.clone(),

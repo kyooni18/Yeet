@@ -19,6 +19,16 @@ pub(crate) enum MemberStatus {
     Stopped,
 }
 
+impl MemberStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Idle => "idle",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
 /// A group member. Its `id` is the process-wide registry identity.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +40,8 @@ pub(crate) struct AgentMember {
     pub parent: Option<AgentId>,
     pub status: MemberStatus,
     pub current_task: Option<AgentTaskId>,
+    /// RFC 3339 launch time.
+    pub started_at: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

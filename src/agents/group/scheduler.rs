@@ -93,6 +93,7 @@ mod tests {
             parent: None,
             status,
             current_task: None,
+            started_at: String::new(),
         }
     }
 

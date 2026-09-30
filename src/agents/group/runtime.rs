@@ -23,7 +23,7 @@ use crate::{
         member::{AgentMember, MemberLauncher, MemberSpec, MemberStatus},
         task::{AgentTask, AgentTaskId, AgentTaskStatus, SpawnRequest},
     },
-    model::AgentTaskItem,
+    model::{AgentActivityKind, AgentGroupItem, AgentTaskItem},
 };
 
 use super::{
@@ -35,8 +35,8 @@ use super::{
 
 const WAIT_CANCEL_CHECK: Duration = Duration::from_millis(250);
 
-/// Receives the current task list after every group change.
-pub(crate) type ChangeListener = Arc<dyn Fn(Vec<AgentTaskItem>) + Send + Sync>;
+/// Receives the current task list and group projection after every change.
+pub(crate) type ChangeListener = Arc<dyn Fn(Vec<AgentTaskItem>, AgentGroupItem) + Send + Sync>;
 
 /// State shared between the runtime, its handles, and member threads.
 pub(super) struct GroupShared {
@@ -74,8 +74,11 @@ impl GroupShared {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         if let Some(listener) = listener {
-            let items = self.lock().group.task_items();
-            listener(items);
+            let (items, group) = {
+                let state = self.lock();
+                (state.group.task_items(), state.group.group_item())
+            };
+            listener(items, group);
         }
     }
 }
@@ -162,7 +165,15 @@ impl AgentGroupRuntime {
                 parent,
                 status: MemberStatus::Running,
                 current_task: None,
+                started_at: chrono::Utc::now().to_rfc3339(),
             });
+            state.group.record(
+                None,
+                Some(member_id),
+                AgentActivityKind::Message,
+                None,
+                &task.description,
+            );
             state.group.tasks.push(task);
             let mut slot = MemberSlot::default();
             slot.inbox.push_back((task_id, request.prompt));
@@ -185,8 +196,22 @@ impl AgentGroupRuntime {
         Ok((member_id, task_id))
     }
 
-    /// Queues a follow-up for an existing member; it runs in the background.
+    /// Queues a follow-up from the primary agent; it runs in the background.
     pub(crate) fn send(&self, to: AgentId, message: String) -> Result<AgentTaskId> {
+        self.queue_message(to, message, AgentActivityKind::Message)
+    }
+
+    /// Queues a message the user typed to a member directly.
+    pub(crate) fn steer(&self, to: AgentId, message: String) -> Result<AgentTaskId> {
+        self.queue_message(to, message, AgentActivityKind::Steer)
+    }
+
+    fn queue_message(
+        &self,
+        to: AgentId,
+        message: String,
+        kind: AgentActivityKind,
+    ) -> Result<AgentTaskId> {
         let task_id = {
             let mut state = self.shared.lock();
             let member = state
@@ -195,10 +220,9 @@ impl AgentGroupRuntime {
                 .ok_or_else(|| anyhow!("unknown agent: {to}"))?
                 .clone();
             scheduler::admit_message(&self.shared.limits, &state.group, &member)?;
-            let slot = state
-                .slots
-                .get_mut(&to)
-                .ok_or_else(|| anyhow!("agent {to} is no longer running"))?;
+            if !state.slots.contains_key(&to) {
+                bail!("agent {to} is no longer running");
+            }
             let task = AgentTask::queued(
                 to,
                 member.role,
@@ -206,6 +230,11 @@ impl AgentGroupRuntime {
                 true,
             );
             let task_id = task.id;
+            state.group.record(None, Some(to), kind, None, &message);
+            let slot = state
+                .slots
+                .get_mut(&to)
+                .ok_or_else(|| anyhow!("agent {to} is no longer running"))?;
             slot.inbox.push_back((task_id, message));
             state.group.tasks.push(task);
             if let Some(member) = state.group.member_mut(to) {
@@ -247,6 +276,22 @@ impl AgentGroupRuntime {
         }
         self.retire(id, "stopped");
         Ok(())
+    }
+
+    /// Stops every live member.
+    pub(crate) fn stop_all(&self) {
+        let live = self
+            .shared
+            .lock()
+            .group
+            .members
+            .iter()
+            .filter(|member| member.status != MemberStatus::Stopped)
+            .map(|member| member.id)
+            .collect::<Vec<_>>();
+        for id in live {
+            self.retire(id, "stopped");
+        }
     }
 
     /// Cancels foreground work left over from an earlier primary turn or
@@ -301,6 +346,10 @@ impl AgentGroupRuntime {
         self.shared.lock().group.task_items()
     }
 
+    pub(crate) fn group_item(&self) -> AgentGroupItem {
+        self.shared.lock().group.group_item()
+    }
+
     /// Settles one task as cancelled without announcing it.
     fn cancel_task(&self, task_id: AgentTaskId) {
         {
@@ -339,6 +388,9 @@ impl AgentGroupRuntime {
             if let Some(member) = state.group.member_mut(id) {
                 member.status = MemberStatus::Stopped;
                 member.current_task = None;
+                state
+                    .group
+                    .record(Some(id), None, AgentActivityKind::Stopped, None, reason);
             }
         }
         self.shared.changed();

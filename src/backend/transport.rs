@@ -133,7 +133,7 @@ pub(super) fn tool_activity_title(name: &str) -> String {
 }
 
 /// Extracts the most useful short argument for a running tool activity row.
-pub(super) fn tool_detail(call: &ToolCall) -> Option<String> {
+pub(crate) fn tool_detail(call: &ToolCall) -> Option<String> {
     let args = &call.arguments;
     // Prefer the agent's existing intent over implementation details for every tool.
     if let Some(purpose) = args.get("purpose").and_then(Value::as_str) {

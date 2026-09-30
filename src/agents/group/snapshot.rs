@@ -5,7 +5,8 @@ use serde_json::{Value, json};
 
 use crate::{
     agents::{member::AgentMember, task::AgentTask},
-    model::AgentTaskItem,
+    core::Usage,
+    model::{AgentGroupItem, AgentMemberItem, AgentTaskItem},
 };
 
 use super::state::AgentGroupState;
@@ -27,6 +28,44 @@ impl AgentGroupState {
     /// The flat task list the bridge currently exposes to frontends.
     pub(crate) fn task_items(&self) -> Vec<AgentTaskItem> {
         self.tasks.iter().map(task_item).collect()
+    }
+
+    /// Members, recent activity, and usage for the frontend Agent view.
+    pub(crate) fn group_item(&self) -> AgentGroupItem {
+        AgentGroupItem {
+            members: self
+                .members
+                .iter()
+                .map(|member| self.member_item(member))
+                .collect(),
+            activity: self.activity.iter().cloned().collect(),
+            started_at: self.members.first().map(|member| member.started_at.clone()),
+            input_tokens: self.usage.input_tokens.unwrap_or_default(),
+            output_tokens: self.usage.output_tokens.unwrap_or_default(),
+        }
+    }
+
+    fn member_item(&self, member: &AgentMember) -> AgentMemberItem {
+        let mut usage = Usage::default();
+        let mut latest = None;
+        for task in self.tasks.iter().filter(|task| task.assignee == member.id) {
+            usage.accumulate(&task.usage);
+            latest = Some(task);
+        }
+        AgentMemberItem {
+            id: member.id.to_string(),
+            description: member.description.clone(),
+            role: member.role.as_str().into(),
+            model: member.model.clone(),
+            status: member.status.as_str().into(),
+            task_status: latest
+                .map(|task| task.status.as_str().to_owned())
+                .unwrap_or_default(),
+            summary: latest.and_then(|task| task.summary.clone()),
+            started_at: member.started_at.clone(),
+            input_tokens: usage.input_tokens.unwrap_or_default(),
+            output_tokens: usage.output_tokens.unwrap_or_default(),
+        }
     }
 }
 

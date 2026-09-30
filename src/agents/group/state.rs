@@ -20,11 +20,15 @@ use crate::{
         task::{AgentTask, AgentTaskId},
     },
     core::Usage,
+    model::{AgentActivityItem, AgentActivityKind},
 };
 
 use super::snapshot::AgentNotification;
 
 pub(crate) type AgentGroupId = Uuid;
+
+/// Frontends only need recent history; older entries are dropped.
+const ACTIVITY_LIMIT: usize = 200;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +44,8 @@ pub(crate) struct AgentGroupState {
     pub usage: Usage,
     /// Usage in the current budget window (one primary turn).
     pub window_usage: Usage,
+    /// Recent member activity, oldest first.
+    pub activity: VecDeque<AgentActivityItem>,
 }
 
 impl AgentGroupState {
@@ -52,7 +58,30 @@ impl AgentGroupState {
             tasks: Vec::new(),
             usage: Usage::default(),
             window_usage: Usage::default(),
+            activity: VecDeque::new(),
         }
+    }
+
+    /// Appends one activity entry. `from`/`to` of `None` is the primary agent.
+    pub(crate) fn record(
+        &mut self,
+        from: Option<AgentId>,
+        to: Option<AgentId>,
+        kind: AgentActivityKind,
+        tool: Option<String>,
+        text: &str,
+    ) {
+        if self.activity.len() == ACTIVITY_LIMIT {
+            self.activity.pop_front();
+        }
+        self.activity.push_back(AgentActivityItem {
+            at: chrono::Utc::now().to_rfc3339(),
+            from: from.map(|id| id.to_string()),
+            to: to.map(|id| id.to_string()),
+            kind,
+            tool,
+            text: first_line(text),
+        });
     }
 
     pub(crate) fn member(&self, id: AgentId) -> Option<&AgentMember> {
@@ -116,5 +145,18 @@ impl GroupRuntimeState {
             slots: HashMap::new(),
             notifications: Vec::new(),
         }
+    }
+}
+
+/// The first non-empty line, bounded so one entry cannot flood the wire.
+fn first_line(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    match line.char_indices().nth(240) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_owned(),
     }
 }

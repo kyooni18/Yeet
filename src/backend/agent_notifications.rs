@@ -14,9 +14,10 @@ impl BackendService {
         let shared = self.shared.clone();
         let tx = self.tx.clone();
         self.agent_groups
-            .set_change_listener(Arc::new(move |items: Vec<AgentTaskItem>| {
+            .set_change_listener(Arc::new(move |items: Vec<AgentTaskItem>, group| {
                 let mut state = shared.lock_or_recover();
                 state.state.agent_tasks = items;
+                state.state.agent_group = group;
                 let _ = tx.send(BackendEvent::Envelope(state_envelope_without_conversation(
                     &state.state,
                 )));

@@ -9,5 +9,6 @@ mod runtime;
 pub(crate) use model::{AgentMember, AgentRole, MemberStatus};
 pub(crate) use prompt::{worker_prompt, worker_reasoning_level};
 pub(crate) use runtime::{
-    CoordinatorLauncher, MemberLauncher, MemberRunner, MemberSpec, RunOutcome, RunReport,
+    CoordinatorLauncher, MemberLauncher, MemberProgress, MemberRunner, MemberSpec, RunOutcome,
+    RunReport,
 };

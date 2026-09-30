@@ -71,6 +71,16 @@ pub enum FrontendCommand {
     SetAutonomyMode {
         mode: AutonomyMode,
     },
+    /// Queues a user message for a group member; it runs in the background.
+    MessageAgent {
+        agent_id: String,
+        message: String,
+    },
+    /// Stops a group member, or every member when `agent_id` is `None`.
+    StopAgent {
+        #[serde(default)]
+        agent_id: Option<String>,
+    },
     RequestSessions,
     LoadSession {
         session_id: String,

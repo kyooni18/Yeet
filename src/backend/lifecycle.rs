@@ -342,6 +342,7 @@ impl BackendService {
     pub(super) fn publish_state(&self) {
         let mut state = self.shared.lock_or_recover();
         state.state.agent_tasks = self.agent_groups.task_items();
+        state.state.agent_group = self.agent_groups.group_item();
         state.state.pending_shell_permission = self.permission.pending_shell();
         state.state.pending_native_app_permission = self.permission.pending_native_app();
         let _ = self

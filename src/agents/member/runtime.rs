@@ -46,18 +46,29 @@ impl RunOutcome {
     }
 }
 
+/// What a runner reports while it works.
+pub(crate) enum MemberProgress<'a> {
+    Usage(&'a Usage),
+    /// A tool started; `detail` is its short argument summary.
+    Tool {
+        name: &'a str,
+        detail: String,
+    },
+}
+
 pub(crate) struct RunReport {
     pub outcome: RunOutcome,
     pub summary: String,
 }
 
 pub(crate) trait MemberRunner: Send {
-    /// Runs one input to completion. `on_usage` observes usage as it accrues.
+    /// Runs one input to completion. `on_progress` observes usage and tool
+    /// starts as they happen.
     fn run(
         &mut self,
         input: &str,
         cancel: Arc<AtomicBool>,
-        on_usage: &mut dyn FnMut(&Usage),
+        on_progress: &mut dyn FnMut(MemberProgress<'_>),
     ) -> Result<RunReport>;
 }
 
@@ -115,7 +126,7 @@ impl MemberRunner for CoordinatorRunner {
         &mut self,
         input: &str,
         cancel: Arc<AtomicBool>,
-        on_usage: &mut dyn FnMut(&Usage),
+        on_progress: &mut dyn FnMut(MemberProgress<'_>),
     ) -> Result<RunReport> {
         let prompt = if self.started {
             input.to_owned()
@@ -137,7 +148,13 @@ impl MemberRunner for CoordinatorRunner {
             },
             |event| match event {
                 AgentEvent::ModelAttemptFinished(_, Some(usage))
-                | AgentEvent::AuxiliaryUsage { usage, .. } => on_usage(&usage),
+                | AgentEvent::AuxiliaryUsage { usage, .. } => {
+                    on_progress(MemberProgress::Usage(&usage))
+                }
+                AgentEvent::ToolExecutionStarted(call) => on_progress(MemberProgress::Tool {
+                    name: &call.name,
+                    detail: crate::backend::tool_detail(&call).unwrap_or_default(),
+                }),
                 _ => {}
             },
         )?;

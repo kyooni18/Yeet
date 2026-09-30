@@ -11,13 +11,12 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::{
-    agents::{
-        AgentId,
-        member::{AgentRole, MemberLauncher, MemberRunner, MemberSpec, RunOutcome, RunReport},
-        task::{AgentTaskStatus, SpawnRequest},
+use crate::agents::{
+    AgentId,
+    member::{
+        AgentRole, MemberLauncher, MemberProgress, MemberRunner, MemberSpec, RunOutcome, RunReport,
     },
-    core::Usage,
+    task::{AgentTaskStatus, SpawnRequest},
 };
 
 use super::{AgentGroupRuntime, AgentLimits};
@@ -42,7 +41,7 @@ impl MemberRunner for ScriptedRunner {
         &mut self,
         input: &str,
         cancel: Arc<AtomicBool>,
-        _on_usage: &mut dyn FnMut(&Usage),
+        _on_progress: &mut dyn FnMut(MemberProgress<'_>),
     ) -> Result<RunReport> {
         self.runs += 1;
         while input.contains("block") {
@@ -98,10 +97,31 @@ fn follow_up_messages_reuse_the_member() {
     let (agent, first) = group.spawn(request("scan", false), "m", None).unwrap();
     group.wait(first, &never()).unwrap();
 
-    let follow_up = group.send(agent, "dig deeper".into()).unwrap();
+    let follow_up = group.steer(agent, "dig deeper".into()).unwrap();
     let task = group.wait(follow_up, &never()).unwrap();
     assert_eq!(task.summary.as_deref(), Some("dig deeper #2"));
     assert_eq!(group.take_notifications().len(), 1);
+
+    // The frontend projection names who did what, in order.
+    use crate::model::AgentActivityKind::*;
+    let view = group.group_item();
+    assert_eq!(view.members.len(), 1);
+    assert_eq!(view.members[0].status, "idle");
+    assert_eq!(view.members[0].summary.as_deref(), Some("dig deeper #2"));
+    let trail = view
+        .activity
+        .iter()
+        .map(|entry| (entry.kind, entry.text.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        trail,
+        [
+            (Message, "inspect"),
+            (Finished, "scan #1"),
+            (Steer, "dig deeper"),
+            (Finished, "dig deeper #2"),
+        ]
+    );
 }
 
 #[test]

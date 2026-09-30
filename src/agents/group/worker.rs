@@ -18,10 +18,11 @@ use anyhow::anyhow;
 use crate::{
     agents::{
         AgentId,
-        member::{AgentRole, MemberRunner, MemberStatus, RunOutcome, RunReport},
+        member::{AgentRole, MemberProgress, MemberRunner, MemberStatus, RunOutcome, RunReport},
         task::{AgentTaskId, AgentTaskStatus},
     },
     core::Usage,
+    model::AgentActivityKind,
 };
 
 use super::{runtime::GroupShared, snapshot::notification, state::GroupRuntimeState};
@@ -41,10 +42,17 @@ impl MemberThread {
             self.shared.changed();
             let shared = self.shared.clone();
             let generation = self.generation;
+            let member = self.member;
             let (result, panicked) = match catch_unwind(AssertUnwindSafe(|| {
-                self.runner.run(&input, cancel.clone(), &mut |usage| {
-                    record_usage(&shared, generation, task_id, usage)
-                })
+                self.runner
+                    .run(&input, cancel.clone(), &mut |progress| match progress {
+                        MemberProgress::Usage(usage) => {
+                            record_usage(&shared, generation, task_id, usage)
+                        }
+                        MemberProgress::Tool { name, detail } => {
+                            record_tool(&shared, generation, member, name, &detail)
+                        }
+                    })
             })) {
                 Ok(result) => (result, false),
                 // A runner that unwound may hold broken state: retire it.
@@ -147,8 +155,23 @@ impl MemberThread {
                 });
             }
         }
+        let task = task.clone();
+        let kind = if matches!(
+            task.status,
+            AgentTaskStatus::Failed | AgentTaskStatus::Cancelled
+        ) {
+            AgentActivityKind::Failed
+        } else {
+            AgentActivityKind::Finished
+        };
+        state.group.record(
+            Some(self.member),
+            None,
+            kind,
+            None,
+            task.summary.as_deref().unwrap_or(task.status.as_str()),
+        );
         if task.background {
-            let task = task.clone();
             if let Some(member) = state.group.member(self.member) {
                 let notice = notification(member, &task);
                 state.notifications.push(notice);
@@ -170,6 +193,24 @@ fn completed_status(role: AgentRole, outcome: RunOutcome) -> AgentTaskStatus {
         (RunOutcome::CompletedUnverified, _) => AgentTaskStatus::NeedsVerification,
         (RunOutcome::Paused, _) => AgentTaskStatus::Reported,
     }
+}
+
+fn record_tool(shared: &GroupShared, generation: u64, member: AgentId, name: &str, detail: &str) {
+    {
+        let mut state = shared.lock();
+        if state.group.generation != generation {
+            return;
+        }
+        let text = if detail.is_empty() { name } else { detail };
+        state.group.record(
+            Some(member),
+            None,
+            AgentActivityKind::Tool,
+            Some(name.to_owned()),
+            text,
+        );
+    }
+    shared.changed();
 }
 
 /// Accrues usage and cancels every running member once the window budget
