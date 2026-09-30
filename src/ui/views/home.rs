@@ -63,15 +63,17 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     .split(body);
     draw_sessions_rail(frame, columns[0]);
     let activity_width = scale_x(540).min(columns[2].width as u32) as u16;
-    let pane_gap = scale_x(54).min(columns[2].width.saturating_sub(activity_width) as u32) as u16;
+    // Reference main-frame offset is x=232; pane starts at x=262 (30 px inset).
+    let pane_inset = scale_x(30).min(columns[2].width) as u16;
     let panes = Layout::horizontal([
+        Constraint::Length(pane_inset),
         Constraint::Length(activity_width),
-        Constraint::Length(pane_gap),
+        Constraint::Length(pane_inset),
         Constraint::Min(1),
     ])
     .split(columns[2]);
-    draw_activity(frame, panes[0]);
-    draw_inspector(frame, panes[2]);
+    draw_activity(frame, panes[1]);
+    draw_inspector(frame, panes[3]);
     draw_composer(frame, app, rows[2]);
     status::draw(frame, app, rows[3]);
 }
@@ -363,35 +365,23 @@ fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let pad = 2.min(area.width);
-    let content = Rect::new(
-        area.x + pad,
-        area.y + 2.min(area.height),
-        area.width.saturating_sub(pad + 1),
-        area.height.saturating_sub(4),
-    );
+    let content = Rect::new(area.x, area.y, area.width, area.height);
     let title = Style::default().fg(theme::text()).add_modifier(ACTIVE);
     let secondary = Style::default().fg(theme::muted());
     let body = Style::default().fg(theme::text_dim());
     let text = vec![
         Line::from(Span::styled("Accept a 3.2 km floor?", title)),
-        Line::raw(""),
         Line::from(Span::styled("Verification · Landing · 4m ago", secondary)),
-        Line::raw(""),
         Line::from(Span::styled(
             "Sweep at 3 km misses Final speed for headings above 270°.",
             body,
         )),
-        Line::raw(""),
         Line::from(Span::styled(
             "Tightest flyable radius is 3.2 km; nominal is 12 km.",
             body,
         )),
-        Line::raw(""),
         Line::from(Span::styled("a   Accept 3.2 km floor", title)),
-        Line::raw(""),
         Line::from(Span::styled("b   Keep 3.0 km and add margin", body)),
-        Line::raw(""),
         Line::from(Span::styled("c   Have Planner re-sweep first", body)),
     ];
     frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), content);
