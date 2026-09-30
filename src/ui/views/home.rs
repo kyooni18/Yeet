@@ -25,43 +25,33 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Block::default().style(Style::default().bg(theme::background())),
         bounds,
     );
-    let scale_x = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
-    let scale_y = |px: u16| ((bounds.height as u32 * px as u32 + 863) / 864) as u16;
-    let tab_height = scale_y(34).max(1);
-    let composer_height = scale_y(36).max(1);
-    let status_height = scale_y(24).max(1);
     let rows = Layout::vertical([
-        Constraint::Length(tab_height),
+        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Min(1),
-        Constraint::Length(composer_height),
-        Constraint::Length(status_height),
+        Constraint::Length(2),
+        Constraint::Length(1),
     ])
     .split(bounds);
-    draw_tabs(frame, rows[0]);
-    let body = rows[1];
-    let rail_width = ((bounds.width as u32 * 232 + 1439) / 1440) as u16;
-    let rail_width = rail_width.min(body.width / 3);
-    let rail_gap = scale_x(262).saturating_sub(rail_width);
-    let columns = Layout::horizontal([
-        Constraint::Length(rail_width),
-        Constraint::Length(rail_gap),
-        Constraint::Min(1),
-    ])
-    .split(body);
+    draw_tabs(frame, rows[1]);
+    let body = rows[2];
+    let rail_width = 232.min(body.width / 3);
+    let columns =
+        Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
     draw_sessions_rail(frame, columns[0]);
-    let activity_width = scale_x(540).min(columns[2].width);
-    let pane_gap = scale_x(54).min(columns[2].width.saturating_sub(activity_width));
+    let activity_width = 540.min(columns[1].width);
+    let pane_gap = 54.min(columns[1].width.saturating_sub(activity_width));
     let panes = Layout::horizontal([
         Constraint::Length(activity_width),
         Constraint::Length(pane_gap),
         Constraint::Min(1),
     ])
-    .split(columns[2]);
+    .split(columns[1]);
     draw_activity(frame, panes[0]);
     draw_inspector(frame, panes[2]);
     draw_usage(frame, panes[0]);
-    draw_composer(frame, app, rows[2]);
-    status::draw(frame, app, rows[3]);
+    draw_composer(frame, app, rows[3]);
+    status::draw(frame, app, rows[4]);
 }
 
 fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
@@ -69,18 +59,20 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        ("Home", "⌂ Home", true),
-        ("MM305 crosswind tuning", "▤ MM305 crosswind tuning", false),
-        ("theme.rs", "▱ theme.rs", false),
-        ("Landing", "▣ Landing", false),
-        ("guidance_taem.c", "⚙ guidance_taem.c", false),
-        ("#214", "▣ #214", false),
+        ("Home", "  ⌂  Home", true),
+        (
+            "MM305 crosswind tuning",
+            "  ▤ MM305 crosswind tuning",
+            false,
+        ),
+        ("theme.rs", "  ▱ theme.rs", false),
+        ("Landing", "  ▣ Landing", false),
+        ("guidance_taem.c", "  ⚙ guidance_taem.c", false),
+        ("#214", "  ▣ #214", false),
         ("+", "+", false),
     ];
-    // Allocate by visible terminal cells, not mockup pixels; keeping every title readable
-    // avoids clipping the fixed sample tabs at ordinary desktop terminal widths.
-    let inset = 1;
-    let mut x = area.x + inset;
+    // Match the mockup's tab origins and reserve the same pixel-scaled widths.
+    let mut x = area.x;
     let tab_widths = [160u32, 248, 160, 96, 160, 72, 48]
         .into_iter()
         .zip(entries)
@@ -119,6 +111,10 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::surface_color())),
+        area,
+    );
     let entries = [
         ("/", "MM305 crosswind", "18s", true),
         ("?", "TUI shell direction", "3m", false),
@@ -149,17 +145,24 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         } else {
             Style::default().fg(theme::muted())
         };
-        let prefix = format!("{icon} ");
+        let prefix = "  ";
         let age_width = Span::raw(age).width();
-        let prefix_width = Span::raw(&prefix).width();
+        let prefix_width = Span::raw(prefix).width();
         let title = super::super::task::fit(
             title,
-            (area.width as usize).saturating_sub(age_width + prefix_width + 1),
+            (area.width as usize).saturating_sub(age_width + prefix_width + 4),
         );
         let used_width = prefix_width + Span::raw(&title).width() + age_width;
-        let gap = " ".repeat((area.width as usize).saturating_sub(used_width));
+        let gap = " ".repeat((area.width as usize).saturating_sub(used_width + 2));
+        let icon_style = if selected {
+            Style::default().fg(theme::text()).add_modifier(ACTIVE)
+        } else {
+            Style::default().fg(theme::muted())
+        };
         let line = Line::from(vec![
             Span::styled(prefix, style),
+            Span::styled(icon, icon_style),
+            Span::raw(" "),
             Span::styled(title, style),
             Span::raw(gap),
             Span::styled(age, Style::default().fg(theme::muted())),
@@ -212,11 +215,11 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
             title,
             (row.width as usize).saturating_sub(suffix.chars().count() + 3),
         );
-        let gap = " ".repeat(
-            (row.width as usize).saturating_sub(3 + title.chars().count() + suffix.chars().count()),
-        );
+        let prefix = if selected { "    ▸ " } else { "      " };
+        let used = prefix.chars().count() + title.chars().count() + suffix.chars().count();
+        let gap = " ".repeat((row.width as usize).saturating_sub(used));
         let line = Line::from(vec![
-            Span::styled(" ▸ ", if selected { active } else { muted }),
+            Span::styled(prefix, if selected { active } else { muted }),
             Span::styled(title, if selected { active } else { muted }),
             Span::raw(gap),
             Span::styled(suffix, muted),
