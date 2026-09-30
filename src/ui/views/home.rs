@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::{Color, Line, Span, Style},
     style::Modifier,
-    widgets::{Block, Paragraph},
+    widgets::{Block, Paragraph, Wrap},
 };
 
 const ACTIVE: Modifier = Modifier::BOLD;
@@ -398,7 +398,7 @@ fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
         Line::raw(""),
         Line::from(Span::styled("c   Have Planner re-sweep first", body)),
     ];
-    frame.render_widget(Paragraph::new(text), content);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), content);
 }
 
 fn draw_compact(frame: &mut Frame<'_>, app: &mut App, bounds: Rect) {
