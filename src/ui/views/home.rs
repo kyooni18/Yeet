@@ -52,7 +52,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     draw_sessions_rail(frame, columns[0]);
     let activity_width = scale_x(540).min(columns[1].width as u32) as u16;
     let content_inset = scale_x(30) as u16;
-    let inspector_start = scale_x(600) as u16;
+    // The inspector begins 54px after the activity pane in the 1440px mockup.
+    let inspector_start = scale_x(624) as u16;
     let panes = Layout::horizontal([
         Constraint::Length(content_inset),
         Constraint::Length(activity_width),
@@ -211,11 +212,12 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         ("·", "Foundation memory", "43m", false),
     ];
     for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
-        let y = area.y + py(52 + index as u16 * 28);
-        if y >= area.bottom() {
+        let row_y = area.y + py(52 + index as u16 * 28);
+        if row_y >= area.bottom() {
             break;
         }
-        let row = Rect::new(area.x, y, area.width, py(28).max(1));
+        let height = py(28).max(1).min(area.bottom() - row_y);
+        let row = Rect::new(area.x, row_y, area.width, height);
         if selected {
             frame.render_widget(
                 Block::default().style(Style::default().bg(Color::Rgb(0x25, 0x26, 0x33))),
@@ -229,15 +231,13 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         };
         let icon_x = area.x + px(if index == 0 { 13 } else { 12 });
         let title_x = area.x + px(30);
-        // At narrow terminal widths the title takes precedence over recency; keep
-        // the age at the right edge only when the rail can fit both without clipping.
         let show_age = area.width >= 30;
         let age_width = if show_age { age.len() as u16 } else { 0 };
         let age_x = area.right().saturating_sub(age_width);
         let title_width = age_x.saturating_sub(title_x + u16::from(show_age));
         frame.render_widget(
             Paragraph::new(icon).style(Style::default().fg(fg)),
-            Rect::new(icon_x, y, 1, 1),
+            Rect::new(icon_x, row_y, 1, 1),
         );
         frame.render_widget(
             Paragraph::new(super::super::task::fit(title, title_width as usize)).style(
@@ -247,12 +247,12 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
                     Modifier::empty()
                 }),
             ),
-            Rect::new(title_x, y, title_width, 1),
+            Rect::new(title_x, row_y, title_width, 1),
         );
         if show_age {
             frame.render_widget(
                 Paragraph::new(age).style(Style::default().fg(Color::Rgb(0x72, 0x71, 0x69))),
-                Rect::new(age_x, y, age_width, 1),
+                Rect::new(age_x, row_y, age_width, 1),
             );
         }
     }
@@ -407,93 +407,64 @@ fn draw_provider_usage(frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn draw_inspector(frame: &mut Frame<'_>, _app: &mut App, area: Rect) {
-    let height = area.height;
-    let muted = Style::default().fg(theme::muted());
-    let active = Style::default()
-        .fg(theme::text())
-        .bg(theme::selected_color())
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let px = |value: u16| (value * area.width + 350) / 700;
+    let py = |value: u16| (value * area.height + 385) / 770;
+    let heading = Style::default()
+        .fg(Color::Rgb(0xd7, 0xd7, 0xa7))
         .add_modifier(ACTIVE);
-    let items = [
-        (
-            "Verification: accept a 3.2 km floor?",
-            "Landing",
-            "4m",
-            true,
-        ),
-        ("MM305 crosswind", "", "18s", false),
-        ("Landing", "2 running", "26m", false),
-        ("TUI shell direction", "", "3m", false),
-    ];
-    for (index, (title, context, age, selected)) in items.into_iter().enumerate() {
-        let y = area.y.saturating_add(3 + index as u16 * 2);
-        if y >= area.bottom() {
-            break;
-        }
-        let row = Rect::new(area.x, y, area.width, 1);
-        if selected {
+    let body = Style::default().fg(Color::Rgb(0xa6, 0xa6, 0x9c));
+    let subdued = Style::default().fg(Color::Rgb(0x72, 0x71, 0x69));
+    let put = |frame: &mut Frame<'_>, x: u16, y: u16, text: &str, style: Style| {
+        let x = area.x.saturating_add(px(x));
+        let y = area.y.saturating_add(py(y));
+        if x < area.right() && y < area.bottom() {
             frame.render_widget(
-                Block::default().style(Style::default().bg(Color::Rgb(0x32, 0x32, 0x40))),
-                row,
+                Paragraph::new(super::super::task::fit(
+                    text,
+                    area.right().saturating_sub(x) as usize,
+                ))
+                .style(style),
+                Rect::new(x, y, area.right().saturating_sub(x), 1),
             );
         }
-        let suffix = if context.is_empty() {
-            age.to_owned()
-        } else {
-            format!("{context}  {age}")
-        };
-        let prefix = if selected { "  ▸ " } else { "    " };
-        let title = super::super::task::fit(
-            title,
-            (row.width as usize).saturating_sub(prefix.len() + suffix.len() + 1),
-        );
-        let gap = " "
-            .repeat((row.width as usize).saturating_sub(prefix.len() + title.len() + suffix.len()));
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(prefix, if selected { active } else { muted }),
-                Span::styled(title, if selected { active } else { muted }),
-                Span::raw(gap),
-                Span::styled(suffix, muted),
-            ])),
-            row,
-        );
-    }
-    let files = [
-        ("guidance_taem.c", "+18", "−6"),
-        ("taem_candidate_search.c", "+42", "−13"),
-        ("taem_candidate_search.h", "+8", "−4"),
-    ];
-    for (index, (file, added, removed)) in files.into_iter().enumerate() {
-        let y = area.y.saturating_add(12 + index as u16 * 2);
-        if y < area.bottom() {
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(format!("  C   {file}          "), muted),
-                    Span::styled(added, Style::default().fg(theme::success())),
-                    Span::raw("  "),
-                    Span::styled(removed, Style::default().fg(theme::error())),
-                ])),
-                Rect::new(area.x, y, area.width, 1),
-            );
-        }
-    }
-    for (index, issue) in [
-        "#214  Context rail focus order",
-        "#219  Final-speed handoff threshold",
+    };
+
+    put(frame, 0, 28, "Accept a 3.2 km floor?", heading);
+    put(frame, 0, 56, "Verification · Landing · 4m ago", subdued);
+    put(
+        frame,
+        0,
+        112,
+        "Sweep at 3 km misses Final speed for headings above 270°.",
+        body,
+    );
+    put(
+        frame,
+        0,
+        140,
+        "Tightest flyable radius is 3.2 km; nominal is 12 km.",
+        body,
+    );
+
+    for (index, (key, label)) in [
+        ("a", "Accept 3.2 km floor"),
+        ("b", "Keep 3.0 km and add margin"),
+        ("c", "Have Planner re-sweep first"),
     ]
     .into_iter()
     .enumerate()
     {
-        let y = area.y.saturating_add(19 + index as u16 * 2);
-        if y < area.bottom() {
-            frame.render_widget(
-                Paragraph::new(format!("  ▣  {issue}")).style(muted),
-                Rect::new(area.x, y, area.width, 1),
-            );
-        }
-    }
-    if height >= 10 {
-        draw_provider_usage(frame, area);
+        let y = 230 + index as u16 * 28;
+        put(
+            frame,
+            0,
+            y,
+            &format!("{key}   {label}"),
+            if index == 0 { heading } else { body },
+        );
     }
 }
 
