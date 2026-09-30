@@ -11,6 +11,70 @@ pub struct TranscriptContextMenu {
 }
 
 impl App {
+    /// Navigate rendered work headers, not the composer or hidden/suppressed entries.
+    pub(crate) fn handle_work_selection_key(&mut self, event: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        if self.input_focused
+            || self.sidebar_focus
+            || self.home_visible()
+            || event
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return false;
+        }
+        match event.code {
+            KeyCode::Up | KeyCode::Char('k') => self.select_work(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.select_work(1),
+            KeyCode::Enter | KeyCode::Char(' ' | 'e') if self.selected_work.is_some() => {
+                let index = self.selected_work.unwrap();
+                if !self.expanded_work.remove(&index) {
+                    self.expanded_work.insert(index);
+                }
+                self.clear_transcript_selection();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn select_work(&mut self, direction: isize) {
+        if self.work_rows.is_empty() {
+            if direction < 0 {
+                self.scroll_up(3);
+            } else {
+                self.scroll_down(3);
+            }
+            return;
+        }
+        let index = if let Some(current) = self.selected_work {
+            current
+                .saturating_add_signed(direction)
+                .min(self.work_rows.len() - 1)
+        } else if direction > 0 {
+            self.work_rows
+                .iter()
+                .position(|row| *row >= self.scroll_y)
+                .unwrap_or(self.work_rows.len() - 1)
+        } else {
+            let bottom = self.scroll_y.saturating_add(self.transcript_area.3);
+            self.work_rows
+                .iter()
+                .rposition(|row| *row < bottom)
+                .unwrap_or(0)
+        };
+        self.selected_work = Some(index);
+        self.follow_tail = false;
+        let row = self.work_rows[index];
+        let height = self.transcript_area.3.max(1);
+        if row < self.scroll_y {
+            self.scroll_y = row;
+        } else if row >= self.scroll_y.saturating_add(height) {
+            self.scroll_y = row.saturating_sub(height - 1).min(self.max_scroll);
+        }
+        self.clear_transcript_selection();
+    }
+
     pub fn handle_mouse(&mut self, event: MouseEvent) {
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             let targets = if self.mode == Mode::Views {
@@ -106,6 +170,17 @@ impl App {
                     let end = self.clamp_to_transcript(event.column, event.row);
                     if end == start {
                         self.clear_transcript_selection();
+                        if !self.input_focused {
+                            let row = self
+                                .scroll_y
+                                .saturating_add(event.row.saturating_sub(self.transcript_area.1));
+                            if let Some(index) =
+                                self.work_rows.iter().position(|target| *target == row)
+                            {
+                                self.selected_work = Some(index);
+                                self.follow_tail = false;
+                            }
+                        }
                     } else {
                         self.selection_end = Some(end);
                     }

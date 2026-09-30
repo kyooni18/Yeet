@@ -142,6 +142,9 @@ pub struct App {
     pub(crate) transcript_cache: Option<crate::ui::TranscriptCache>,
     pub(crate) transcript_revision: u64,
     pub tools_expanded: bool,
+    pub(crate) selected_work: Option<usize>,
+    pub(crate) expanded_work: std::collections::BTreeSet<usize>,
+    pub(crate) work_rows: Vec<u16>,
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
     pub transcript_context_menu: Option<TranscriptContextMenu>,
@@ -217,6 +220,9 @@ impl Default for App {
             transcript_cache: None,
             transcript_revision: 0,
             tools_expanded: false,
+            selected_work: None,
+            expanded_work: Default::default(),
+            work_rows: Vec::new(),
             selection_start: None,
             selection_end: None,
             transcript_context_menu: None,
@@ -278,6 +284,11 @@ impl App {
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.conversation = conversation;
             self.clear_transcript_selection();
+        }
+        if self.state.current_session_id != next.current_session_id {
+            self.selected_work = None;
+            self.expanded_work.clear();
+            self.work_rows.clear();
         }
         self.state = next;
         if provider_configurations_changed {
@@ -820,6 +831,10 @@ impl App {
                 }
                 _ => {}
             }
+        }
+
+        if self.handle_work_selection_key(&event) {
+            return Ok(());
         }
 
         // Unfocused navigation must not fall through to draft editing or submission.

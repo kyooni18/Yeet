@@ -74,3 +74,41 @@ fn cached_viewport_matches_full_transcript_and_invalidates_on_updates() {
     });
     assert_ne!(old, TranscriptKey::for_app(&app, 80));
 }
+
+#[test]
+fn reasoning_work_headers_select_and_expand_independently() {
+    let mut app = App::default();
+    app.input_focused = false;
+    app.conversation = (0..2)
+        .map(|index| ConversationEntry {
+            id: index.to_string(),
+            kind: ConversationKind::Reasoning {
+                content: format!("Step {index}\n\nDetail {index}"),
+                summary: None,
+            },
+        })
+        .collect();
+    let (collapsed, headers) = transcript_content(&app, 60);
+    assert_eq!(headers.len(), 2);
+    app.selected_work = Some(1);
+    app.expanded_work.insert(1);
+    let (expanded, headers) = transcript_content(&app, 60);
+    assert!(expanded.lines.len() > collapsed.lines.len());
+    assert!(
+        expanded.lines[headers[1]]
+            .style
+            .add_modifier
+            .contains(Modifier::REVERSED)
+    );
+    let text = expanded.to_string();
+    assert!(text.contains("Detail 1"));
+    assert!(!text.contains("Detail 0"));
+    app.input_focused = true;
+    let (focused, headers) = transcript_content(&app, 60);
+    assert!(
+        !focused.lines[headers[1]]
+            .style
+            .add_modifier
+            .contains(Modifier::REVERSED)
+    );
+}

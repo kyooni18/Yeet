@@ -34,6 +34,8 @@ struct TranscriptKey {
     entries: usize,
     width: u16,
     expanded: bool,
+    selected_work: Option<usize>,
+    expanded_work: std::collections::BTreeSet<usize>,
     palette: crate::theme::Palette,
     streaming: bool,
     assistant_id: Option<String>,
@@ -52,6 +54,11 @@ impl TranscriptKey {
             && self.entries == app.conversation.len()
             && self.width == width
             && self.expanded == app.tools_expanded
+            && self.selected_work
+                == app
+                    .selected_work
+                    .filter(|_| !app.input_focused && !app.sidebar_focus)
+            && self.expanded_work == app.expanded_work
             && self.palette == theme::active_palette()
             && self.streaming == app.state.is_streaming
             && self.assistant_id == app.state.active_assistant_entry_id
@@ -70,6 +77,10 @@ impl TranscriptKey {
             entries: app.conversation.len(),
             width,
             expanded: app.tools_expanded,
+            selected_work: app
+                .selected_work
+                .filter(|_| !app.input_focused && !app.sidebar_focus),
+            expanded_work: app.expanded_work.clone(),
             palette: theme::active_palette(),
             streaming: app.state.is_streaming,
             assistant_id: app.state.active_assistant_entry_id.clone(),
@@ -90,6 +101,7 @@ pub(crate) struct TranscriptCache {
     text: Text<'static>,
     starts: Vec<usize>,
     rows: usize,
+    work_lines: Vec<usize>,
 }
 
 impl TranscriptCache {
@@ -131,6 +143,7 @@ impl TranscriptCache {
             text,
             starts,
             rows,
+            work_lines: Vec::new(),
         }
     }
 }
@@ -177,6 +190,7 @@ fn draw_desktop(
         app.max_scroll = 0;
         app.scroll_y = 0;
         app.transcript_cells.clear();
+        app.work_rows.clear();
         if app.state.current_session_id.is_some() {
             let (title, detail) = if app.state.is_streaming {
                 (
@@ -208,15 +222,26 @@ fn draw_desktop(
         .as_ref()
         .is_none_or(|cache| !cache.key.matches(app, area.width))
     {
-        app.transcript_cache = Some(TranscriptCache::new(
-            TranscriptKey::for_app(app, area.width),
-            transcript_text(app, area.width),
-        ));
+        let (text, work_lines) = transcript_content(app, area.width);
+        let mut cache = TranscriptCache::new(TranscriptKey::for_app(app, area.width), text);
+        cache.work_lines = work_lines;
+        app.transcript_cache = Some(cache);
     }
     let cache = app
         .transcript_cache
         .as_ref()
         .expect("transcript layout cached");
+    app.work_rows = cache
+        .work_lines
+        .iter()
+        .map(|line| cache.starts[*line].min(u16::MAX as usize) as u16)
+        .collect();
+    if app
+        .selected_work
+        .is_some_and(|index| index >= app.work_rows.len())
+    {
+        app.selected_work = None;
+    }
     app.max_scroll = cache.rows.min(u16::MAX as usize) as u16;
     app.max_scroll = app.max_scroll.saturating_sub(area.height);
     if app.follow_tail {
@@ -351,7 +376,13 @@ pub(in crate::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
     );
 }
 
+#[cfg(test)]
 fn transcript_text(app: &App, width: u16) -> Text<'static> {
+    transcript_content(app, width).0
+}
+
+fn transcript_content(app: &App, width: u16) -> (Text<'static>, Vec<usize>) {
+    let mut work_lines = Vec::new();
     let mut lines = Vec::new();
     let mut rendered_any = false;
     let mut previous_compact = false;
@@ -396,11 +427,20 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
                 end += 1;
             }
             index = end;
-            let work = work_group_lines(&work_groups(&items), width, app.tools_expanded);
+            let (work, headers) = tools::work_group_lines_selected(
+                &work_groups(&items),
+                width,
+                app.tools_expanded,
+                app.selected_work
+                    .filter(|_| !app.input_focused && !app.sidebar_focus),
+                &app.expanded_work,
+                work_lines.len(),
+            );
             if !work.is_empty() {
                 if rendered_any && !previous_compact {
                     lines.push(Line::default());
                 }
+                work_lines.extend(headers.into_iter().map(|line| lines.len() + line));
                 lines.extend(work);
                 rendered_any = true;
                 previous_compact = true;
@@ -431,7 +471,7 @@ fn transcript_text(app: &App, width: u16) -> Text<'static> {
         index += 1;
     }
 
-    Text::from(lines)
+    (Text::from(lines), work_lines)
 }
 
 fn reasoning_parts<'a>(

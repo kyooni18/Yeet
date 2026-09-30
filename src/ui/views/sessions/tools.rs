@@ -822,12 +822,26 @@ pub(in crate::ui) fn work_group_lines(
     width: u16,
     expand_all: bool,
 ) -> Vec<Line<'static>> {
+    work_group_lines_selected(groups, width, expand_all, None, &Default::default(), 0).0
+}
+
+pub(super) fn work_group_lines_selected(
+    groups: &[WorkGroup<'_>],
+    width: u16,
+    expand_all: bool,
+    selected: Option<usize>,
+    expanded_work: &std::collections::BTreeSet<usize>,
+    base: usize,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     let width = usize::from(width);
     let muted = Style::default().fg(theme::muted());
     let secondary = Style::default().fg(theme::secondary());
     let rail = Style::default().fg(theme::hairline());
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for group in groups {
+    let mut headers = Vec::new();
+    for (local, group) in groups.iter().enumerate() {
+        let index = base + local;
+        let expand_all = expand_all || expanded_work.contains(&index);
         match group {
             WorkGroup::Tools { calls, title } => {
                 if calls.is_empty() {
@@ -840,6 +854,7 @@ pub(in crate::ui) fn work_group_lines(
                 if expanded && lines.last().is_some_and(|line| line.width() > 0) {
                     lines.push(Line::default());
                 }
+                headers.push(lines.len());
                 let icons = group_icons(calls);
                 let title = title.clone().unwrap_or_else(|| fallback_group_title(calls));
                 let lead = if active {
@@ -914,6 +929,7 @@ pub(in crate::ui) fn work_group_lines(
                 }
             }
             WorkGroup::Reasoning { text, live } => {
+                headers.push(lines.len());
                 let first = text
                     .lines()
                     .map(|line| line.trim().trim_start_matches(['#', '*', '-', ' ']))
@@ -950,6 +966,15 @@ pub(in crate::ui) fn work_group_lines(
                 }
             }
         }
+        if selected == Some(index) {
+            if let Some(&header) = headers.last() {
+                lines[header] = lines[header].clone().style(
+                    Style::default()
+                        .bg(theme::code_background())
+                        .add_modifier(Modifier::REVERSED),
+                );
+            }
+        }
     }
-    lines
+    (lines, headers)
 }

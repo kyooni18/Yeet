@@ -754,3 +754,12 @@ The Home/Overview renderer uses the mockup's Desktop / Overview shell geometry a
 ### TUI responsiveness
 
 Keep transcript styling/wrapped-row offsets cached across input and scrolling frames. Invalidate for conversation replacement, active streamed content, width, tool expansion, session and palette changes. Render only logical lines intersecting the viewport rather than wrapping all preceding scrollback. Cache memory scales with transcript text, not an entire terminal-sized scrollback buffer. Drain bounded input bursts per frame; cap backend processing by elapsed time as well as event count so background activity cannot indefinitely starve input.
+
+### Session work selection
+
+With the composer unfocused (`Esc`), Up/Down or k/j select visible reasoning
+and tool-work headers and keep the selected header in view. Enter, Space, or e
+expands the selected work unit; the draft is never edited/submitted by these keys.
+Selection is hidden while the composer or session rail has focus. A click on a
+work header also selects it when the composer is unfocused; drag-to-copy remains
+independent. Active/failed tool groups retain automatic expansion.

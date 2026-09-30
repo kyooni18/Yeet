@@ -1124,3 +1124,32 @@ fn files_insert_shortcut_focuses_files_search_not_session() {
     assert!(!app.input_focused);
     assert_eq!(app.input, "session draft");
 }
+
+#[test]
+fn unfocused_work_navigation_and_expansion_preserve_draft() {
+    let mut app = App::default();
+    app.home_override = Some(false);
+    app.input = "keep this draft".into();
+    app.cursor = 4;
+    app.input_focused = false;
+    app.work_rows = vec![2, 20, 40];
+    app.transcript_area = (0, 0, 80, 10);
+    app.max_scroll = 50;
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    assert!(app.handle_work_selection_key(&key(KeyCode::Down)));
+    assert_eq!(app.selected_work, Some(0));
+    app.handle_work_selection_key(&key(KeyCode::Char('j')));
+    assert_eq!(app.selected_work, Some(1));
+    assert_eq!(app.scroll_y, 11);
+    app.handle_work_selection_key(&key(KeyCode::Enter));
+    assert!(app.expanded_work.contains(&1));
+    app.handle_work_selection_key(&key(KeyCode::Char(' ')));
+    assert!(!app.expanded_work.contains(&1));
+    assert_eq!(app.input, "keep this draft");
+    assert_eq!(app.cursor, 4);
+    app.input_focused = true;
+    assert!(!app.handle_work_selection_key(&key(KeyCode::Down)));
+    app.input_focused = false;
+    app.sidebar_focus = true;
+    assert!(!app.handle_work_selection_key(&key(KeyCode::Down)));
+}
