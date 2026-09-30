@@ -265,10 +265,10 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
   const maxMessageBreakpoints = automaticCacheEnabled
     ? 0
     : Math.max(0, (cacheCapabilities.maxExplicitBreakpoints ?? 0) - reservedPrefixBreakpoints);
-  const body: Record<string, unknown> = {
+  return {
     ...providerOptions,
     model: request.model,
-    max_tokens: request.maxTokens ?? providerOptions.max_tokens ?? 4_096,
+    max_tokens: request.maxTokens ?? 4_096,
     messages: mapMessages(
       split.messages,
       promptCacheEnabled,
@@ -280,7 +280,7 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
     ),
     stream,
     ...(split.system ? { system: mapSystem(split.system, promptCacheEnabled, explicitCacheControl) } : {}),
-    ...(request.temperature !== undefined && !["adaptive", "enabled"].includes(String((providerOptions.thinking as any)?.type)) ? { temperature: request.temperature } : {}),
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
     ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice) } : {}),
     ...(request.providerMetadata ? { metadata: request.providerMetadata } : {}),
@@ -289,13 +289,6 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
       ? { cache_control: blockCacheControl(requestedCacheControl) }
       : {}),
   };
-  if (["adaptive", "enabled"].includes(String((providerOptions.thinking as any)?.type))) {
-    // Thinking-enabled models restrict or reject sampling controls.
-    delete body.temperature;
-    delete body.top_p;
-    delete body.top_k;
-  }
-  return body;
 }
 
 function cacheCreationTokens(value: any): number | undefined {
@@ -345,7 +338,6 @@ export class AnthropicProvider implements ProviderAdapter {
     const betas = [
       ...(this.#accessToken ? ["oauth-2025-04-20"] : []),
       ...(request && contextManagementForRequest(request) !== undefined ? [CONTEXT_MANAGEMENT_BETA] : []),
-      ...((request?.providerOptions?.thinking as any)?.display === "updates" ? ["thinking-display-updates-2026-08-18"] : []),
     ];
     return {
       ...(this.#accessToken

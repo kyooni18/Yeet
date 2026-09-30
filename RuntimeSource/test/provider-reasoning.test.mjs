@@ -9,18 +9,22 @@ const sse = (events) => new Response(events.map((event) => `data: ${JSON.stringi
 const messages = [{ role: 'user', content: 'Inspect the file' }];
 const collect = async (stream) => { const events = []; for await (const event of stream) events.push(event); return events; };
 
-test('native thinking policy enables visible summaries without overwriting opt-outs or auxiliary calls', () => {
+test('Claude display handling preserves execution policy and explicit thinking choices', () => {
   for (const provider of ['anthropic', 'claude', 'claude-api', 'opencode', 'opencode-go']) {
     const request = { model: `${provider}/claude-sonnet-4-6`, messages, metadata: { reasoningLevel: 'high' } };
     const prepared = withReasoningPolicy(request);
-    assert.deepEqual(prepared.providerOptions.thinking, { type: 'adaptive', display: 'summarized' });
+    assert.equal(prepared.providerOptions.thinking, undefined);
     assert.equal(prepared.providerOptions.output_config.effort, 'high');
     assert.equal(prepared.providerOptions.reasoning, undefined);
     const explicit = withReasoningPolicy({ ...request, providerOptions: { thinking: { type: 'disabled' }, output_config: { effort: 'low' } } });
     assert.deepEqual(explicit.providerOptions, { thinking: { type: 'disabled' }, output_config: { effort: 'low' } });
   }
   const legacy = withReasoningPolicy({ model: 'claude-api/claude-sonnet-4-5', messages, maxTokens: 4096, metadata: { reasoningLevel: 'high' } });
-  assert.deepEqual(legacy.providerOptions.thinking, { type: 'enabled', budget_tokens: 2048 });
+  assert.equal(legacy.providerOptions, undefined);
+  const untouched = { model: 'claude/claude-sonnet-4-6', messages };
+  assert.equal(withReasoningPolicy(untouched), untouched);
+  const manual = { ...untouched, providerOptions: { thinking: { type: 'enabled', budget_tokens: 1024 } } };
+  assert.equal(withReasoningPolicy(manual), manual);
   assert.equal(withReasoningPolicy({ model: 'anthropic/claude-sonnet-4-5', messages, toolChoice: 'required' }).providerOptions, undefined);
   assert.equal(withReasoningPolicy({ model: 'anthropic/claude-sonnet-4-5', messages, maxTokens: 1024 }).providerOptions, undefined);
   const openai = withReasoningPolicy({ model: 'codex-cli/gpt-6-sol', messages, providerOptions: { reasoning: { effort: 'high' } } });
@@ -41,7 +45,8 @@ test('Claude signed thinking and native chat reasoning survive a streamed tool r
     ]);
   } });
   const events = await collect(claude.stream({ model: 'claude-sonnet-4-6', messages, temperature: 0.2, providerOptions: { thinking: { type: 'adaptive', display: 'summarized' } } }));
-  assert.equal(claudeBody.temperature, undefined);
+  assert.equal(claudeBody.temperature, 0.2);
+  assert.deepEqual(claudeBody.thinking, { type: 'adaptive', display: 'summarized' });
   assert.ok(events.some((event) => event.type === 'reasoning-start'));
   assert.equal(events.filter((event) => event.type === 'reasoning-summary-delta').map((event) => event.delta).join(''), 'Checking the file');
   assert.deepEqual(events.at(-1).providerState.data.thinkingBlocks, [{ type: 'thinking', thinking: 'Checking the file', signature: 'signed-state' }]);

@@ -105,31 +105,13 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
 
   if (anthropicRoute) {
     const outputConfig = record(existing.output_config);
-    const effort = anthropicEffort(routedModel, requested ?? "low");
-    const adaptive = effort !== undefined || /^claude-mythos-preview(?:-|$)/.test(routedModel);
-    const manual = /^claude-(?:sonnet|opus|haiku)-4(?:[.-](?:1|5))?(?:-|$)/.test(routedModel)
-      || /^claude-3[.-]7-sonnet(?:-|$)/.test(routedModel);
-    let thinking = existing.thinking;
-    if (!auxiliary && thinking === undefined) {
-      if (adaptive) thinking = { type: "adaptive", display: "summarized" };
-      else if (manual && request.toolChoice !== "required" && typeof request.toolChoice !== "object") {
-        const maximum = request.maxTokens ?? 4_096;
-        const desired = requested === "low" ? 1_024 : requested === "medium" ? 8_192 : requested ? 24_576 : 1_024;
-        const budget = Math.min(desired, Math.floor(maximum / 2));
-        if (budget >= 1_024) thinking = { type: "enabled", budget_tokens: budget };
-      }
-    } else if (!auxiliary && ["adaptive", "enabled"].includes(String(record(thinking).type))
-        && record(thinking).display === undefined && adaptive) {
-      thinking = { ...record(thinking), display: "summarized" };
-    }
-    if (thinking === existing.thinking && (outputConfig.effort !== undefined || !effort || (!requested && !auxiliary))) return request;
-    const options = {
-      ...existing,
-      ...(thinking !== undefined ? { thinking } : {}),
-      ...(outputConfig.effort === undefined && effort && (requested || auxiliary)
-        ? { output_config: { ...outputConfig, effort } } : {}),
+    if (outputConfig.effort !== undefined) return request;
+    const effort = anthropicEffort(routedModel, requested ?? (auxiliary ? "low" : "high"));
+    if (!effort || (!requested && !auxiliary)) return request;
+    return {
+      ...request,
+      providerOptions: { ...existing, output_config: { ...outputConfig, effort } },
     };
-    return { ...request, providerOptions: options };
   }
 
   if (geminiRoute) {
