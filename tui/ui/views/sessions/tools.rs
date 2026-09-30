@@ -26,7 +26,7 @@ fn humanize_tool_name(name: &str) -> String {
     }
 }
 
-fn tool_icon(name: &str) -> &'static str {
+pub(in crate::tui::ui) fn tool_icon(name: &str) -> &'static str {
     // Font Awesome's Nerd Font codepoints cover the mockup's pixel icons in a
     // terminal cell. The active terminal font controls their final shape.
     match name {

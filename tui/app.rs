@@ -5,6 +5,7 @@ use std::{
 };
 
 mod actions;
+pub mod agents;
 pub mod files;
 mod home;
 pub(crate) use home::HomeAction;
@@ -52,6 +53,7 @@ pub enum Mode {
     Help,
     Files,
     Diff,
+    Agents,
     Views,
 }
 
@@ -93,6 +95,7 @@ enum PermissionPromptAction {
 
 pub struct App {
     pub files: Option<files::FilesState>,
+    pub agents: agents::AgentsState,
     pub home: crate::workbench::HomeState,
     pub recent_views: crate::workbench::RecentViews,
     pub(crate) observed_resource: Option<crate::workbench::ResourceTarget>,
@@ -174,6 +177,7 @@ impl Default for App {
     fn default() -> Self {
         Self {
             files: None,
+            agents: Default::default(),
             home: Default::default(),
             recent_views: Default::default(),
             observed_resource: None,
@@ -543,6 +547,12 @@ impl App {
             }
             Mode::Files => {
                 self.handle_files_key(event);
+                Ok(())
+            }
+            Mode::Agents => {
+                if let Some(command) = self.handle_agents_key(event) {
+                    backend.send(command)?;
+                }
                 Ok(())
             }
             Mode::Views => {
@@ -1563,12 +1573,14 @@ impl App {
     }
 
     pub(crate) fn open_views(&mut self) {
-        self.views_origin = if matches!(self.mode, Mode::Files | Mode::Diff) {
+        self.views_origin = if matches!(self.mode, Mode::Files | Mode::Diff | Mode::Agents) {
             self.mode
         } else {
             Mode::Chat
         };
-        self.views_index = if self.views_origin == Mode::Diff {
+        self.views_index = if self.views_origin == Mode::Agents {
+            4
+        } else if self.views_origin == Mode::Diff {
             3
         } else if self.views_origin == Mode::Files {
             2
@@ -1592,7 +1604,7 @@ impl App {
                 self.views_index = self.views_index.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.views_index = (self.views_index + 1).min(3);
+                self.views_index = (self.views_index + 1).min(4);
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Right => {
                 let tab = [
@@ -1600,7 +1612,8 @@ impl App {
                     WorkbenchTab::Session,
                     WorkbenchTab::Files,
                     WorkbenchTab::NewDiff,
-                ][self.views_index.min(3)];
+                    WorkbenchTab::Agents,
+                ][self.views_index.min(4)];
                 self.activate_workbench_tab(tab);
             }
             _ => {}

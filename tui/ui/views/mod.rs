@@ -1,5 +1,6 @@
 //! View-specific renderers and the top-level view switcher.
 
+pub(super) mod agents;
 pub(super) mod diff;
 pub(super) mod files;
 pub(super) mod home;
@@ -21,7 +22,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
     let floating = crate::tui::kit::FloatingView {
         width: 58,
-        height: 9,
+        height: 10,
         modal: true,
     };
     let area = floating.area(bounds);
@@ -35,6 +36,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         (WorkbenchTab::Session, "Session", "Current conversation"),
         (WorkbenchTab::Files, "Files", "Browse workspace files"),
         (WorkbenchTab::NewDiff, "Diff", "Review Git changes"),
+        (WorkbenchTab::Agents, "Agents", "Delegated agent group"),
     ]
     .into_iter()
     .enumerate()

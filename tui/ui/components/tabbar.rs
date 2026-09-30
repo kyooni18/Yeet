@@ -34,6 +34,7 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
                 Active::Home => (icons::home(), "Home".to_owned()),
                 Active::Session => (icons::session_tab(), conversation_title(app).to_owned()),
                 Active::Files => (icons::folder(false), "Files".to_owned()),
+                Active::Agents => (icons::agent_tab(), "Agents".to_owned()),
                 Active::Diff(id) => {
                     let state = &app.diff_tabs.get(id).expect("listed diff instance").state;
                     (

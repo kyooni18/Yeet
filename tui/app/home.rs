@@ -193,9 +193,8 @@ impl App {
                 }
                 self.follow_tail = true;
             }
-            ResourceTarget::CurrentSession | ResourceTarget::Task(_) => {
-                self.activate_workbench_tab(WorkbenchTab::Session)
-            }
+            ResourceTarget::CurrentSession => self.activate_workbench_tab(WorkbenchTab::Session),
+            ResourceTarget::Task(_) => self.activate_workbench_tab(WorkbenchTab::Agents),
             ResourceTarget::Files(path) => {
                 if let Some(files) = &mut self.files {
                     files.open_browser(path);

@@ -116,7 +116,7 @@ fn follow_up_messages_reuse_the_member() {
     assert_eq!(
         trail,
         [
-            (Message, "inspect"),
+            (Message, "scan"),
             (Finished, "scan #1"),
             (Steer, "dig deeper"),
             (Finished, "dig deeper #2"),

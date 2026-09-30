@@ -16,6 +16,7 @@ pub enum WorkbenchTab {
     Diff(SurfaceId),
     CloseDiff(SurfaceId),
     NewDiff,
+    Agents,
     Launcher,
 }
 
@@ -26,6 +27,11 @@ impl App {
     }
 
     pub fn active_workbench_tab(&self) -> WorkbenchTab {
+        if self.mode == Mode::Agents
+            || (self.mode == Mode::Views && self.views_origin == Mode::Agents)
+        {
+            return WorkbenchTab::Agents;
+        }
         if self.mode == Mode::Diff || (self.mode == Mode::Views && self.views_origin == Mode::Diff)
         {
             return self
@@ -49,6 +55,9 @@ impl App {
 
     pub fn workbench_tabs(&self) -> Vec<WorkbenchTab> {
         let mut tabs = vec![WorkbenchTab::Home, WorkbenchTab::Session];
+        if self.agents.open || !self.agent_members().is_empty() {
+            tabs.push(WorkbenchTab::Agents);
+        }
         if let Some(files) = &self.files {
             tabs.push(WorkbenchTab::Files);
             tabs.extend(
@@ -139,6 +148,7 @@ impl App {
                 }
             }
             WorkbenchTab::NewDiff => self.open_diff(None),
+            WorkbenchTab::Agents => self.open_agents(),
             WorkbenchTab::Diff(id) => {
                 if self.diff_tabs.activate(id) {
                     self.mode = Mode::Diff;
@@ -162,7 +172,10 @@ impl App {
     }
 
     pub(crate) fn handle_workbench_key(&mut self, event: &KeyEvent) -> bool {
-        if !matches!(self.mode, Mode::Chat | Mode::Files | Mode::Diff) {
+        if !matches!(
+            self.mode,
+            Mode::Chat | Mode::Files | Mode::Diff | Mode::Agents
+        ) {
             return false;
         }
         if !event.modifiers.contains(KeyModifiers::CONTROL) {
@@ -190,6 +203,7 @@ impl App {
                     self.activate_workbench_tab(WorkbenchTab::CloseFile(index))
                 }
                 WorkbenchTab::Diff(i) => self.activate_workbench_tab(WorkbenchTab::CloseDiff(i)),
+                WorkbenchTab::Agents => self.close_agents(),
                 _ => self.activate_workbench_tab(WorkbenchTab::Home),
             },
             KeyCode::Char(c @ '1'..='9') => {

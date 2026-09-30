@@ -311,6 +311,164 @@ fn main() -> anyhow::Result<()> {
                 app.views_index = 0;
             }
         }
+        "agents" | "agent" => {
+            use yeet::model::{
+                AgentActivityItem, AgentActivityKind as Kind, AgentGroupItem, AgentMemberItem,
+            };
+            let at = |seconds: i64| {
+                (chrono::Utc::now() - chrono::Duration::seconds(seconds)).to_rfc3339()
+            };
+            let member =
+                |name: &str, status: &str, task: &str, started: i64, tokens: (u64, u64)| {
+                    AgentMemberItem {
+                        id: name.into(),
+                        description: name.into(),
+                        role: "researcher".into(),
+                        model: "opus-5.5 (high)".into(),
+                        status: status.into(),
+                        task_status: task.into(),
+                        summary: None,
+                        started_at: at(started),
+                        input_tokens: tokens.0,
+                        output_tokens: tokens.1,
+                    }
+                };
+            let entry = |seconds,
+                         from: Option<&str>,
+                         to: Option<&str>,
+                         kind,
+                         tool: Option<&str>,
+                         text: &str| AgentActivityItem {
+                at: at(seconds),
+                from: from.map(Into::into),
+                to: to.map(Into::into),
+                kind,
+                tool: tool.map(Into::into),
+                text: text.into(),
+            };
+            app.state.agent_group = AgentGroupItem {
+                members: vec![
+                    member("Planner", "running", "running", 848, (312_000, 41_000)),
+                    member("Runtime", "running", "running", 700, (402_000, 52_000)),
+                    member(
+                        "Verification",
+                        "idle",
+                        "needs_verification",
+                        600,
+                        (250_000, 31_000),
+                    ),
+                    member("Telemetry", "idle", "reported", 900, (120_000, 12_000)),
+                    member("Docs", "idle", "reported", 1_200, (116_000, 12_000)),
+                ],
+                activity: vec![
+                    entry(
+                        848,
+                        None,
+                        Some("Planner"),
+                        Kind::Message,
+                        None,
+                        "Find the smallest radius that still delivers Final speed.",
+                    ),
+                    entry(
+                        540,
+                        Some("Runtime"),
+                        Some("Planner"),
+                        Kind::Message,
+                        None,
+                        "Guidance code still prefers the nominal radius.",
+                    ),
+                    entry(
+                        360,
+                        Some("Docs"),
+                        None,
+                        Kind::Tool,
+                        Some("web_read"),
+                        "NASA shuttle TAEM geometry reference",
+                    ),
+                    entry(
+                        300,
+                        Some("Planner"),
+                        Some("Verification"),
+                        Kind::Message,
+                        None,
+                        "Re-run the gate once the radius change lands.",
+                    ),
+                    entry(
+                        300,
+                        Some("Planner"),
+                        None,
+                        Kind::Finished,
+                        None,
+                        "Final-speed shortfall stays dominant inside the prediction-noise band",
+                    ),
+                    entry(
+                        240,
+                        Some("Verification"),
+                        None,
+                        Kind::Finished,
+                        None,
+                        "Offline heading sweep accepted",
+                    ),
+                    entry(
+                        180,
+                        Some("Verification"),
+                        Some("Planner"),
+                        Kind::Message,
+                        None,
+                        "Final speed misses at 3 km for headings above 270°.",
+                    ),
+                    entry(
+                        120,
+                        Some("Planner"),
+                        Some("Runtime"),
+                        Kind::Message,
+                        None,
+                        "Use 3 km as the floor and sweep upward from there.",
+                    ),
+                    entry(
+                        60,
+                        Some("Verification"),
+                        None,
+                        Kind::Tool,
+                        Some("run_shell"),
+                        "MM305 qualification gate",
+                    ),
+                    entry(
+                        60,
+                        Some("Runtime"),
+                        None,
+                        Kind::Tool,
+                        Some("apply_file_edits"),
+                        "guidance_taem.c +18 −6",
+                    ),
+                    entry(
+                        41,
+                        Some("Planner"),
+                        None,
+                        Kind::Tool,
+                        Some("read_file"),
+                        "NTRS TAEM energy notes §4.3",
+                    ),
+                    entry(
+                        2,
+                        Some("Planner"),
+                        None,
+                        Kind::Tool,
+                        Some("run_shell"),
+                        "Sweeping feasible radii against the Final-speed gate",
+                    ),
+                ],
+                started_at: Some(at(1_240)),
+                input_tokens: 1_200_000,
+                output_tokens: 148_000,
+            };
+            app.agents.open = true;
+            app.mode = Mode::Agents;
+            app.input_focused = false;
+            if scene == "agent" {
+                app.agents.selected = Some("Planner".into());
+            }
+        }
         "views" => {
             app.files = Some(FilesState::open(std::env::current_dir()?));
             app.mode = Mode::Views;

@@ -407,7 +407,7 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     );
     let label = match item.kind {
         ResourceKind::Session => "Open session →",
-        ResourceKind::Task => "Open task session →",
+        ResourceKind::Task => "Open agents →",
         ResourceKind::Diff => "Review diff →",
         ResourceKind::File => "Open file →",
         ResourceKind::View => "Open view →",

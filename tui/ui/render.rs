@@ -83,6 +83,7 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     app.diff_frame.begin(frame.area());
     app.observe_workbench_view();
     app.home_targets.clear();
+    app.agents.targets.clear();
     app.tab_targets.clear();
     app.view_targets.clear();
     app.transcript_area = (0, 0, 0, 0);
@@ -107,12 +108,19 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     }
     if !matches!(
         app.mode,
-        Mode::Chat | Mode::Files | Mode::Diff | Mode::Views
+        Mode::Chat | Mode::Files | Mode::Diff | Mode::Agents | Mode::Views
     ) {
         app.transcript_area = (0, 0, 0, 0);
         app.sidebar_area = (0, 0, 0, 0);
         app.sidebar_session_targets.clear();
         draw_auxiliary(frame, app);
+        return;
+    }
+    if app.mode == Mode::Agents || (app.mode == Mode::Views && app.views_origin == Mode::Agents) {
+        views::agents::draw(frame, app);
+        if app.mode == Mode::Views {
+            views::draw(frame, app);
+        }
         return;
     }
     if app.mode == Mode::Diff || (app.mode == Mode::Views && app.views_origin == Mode::Diff) {

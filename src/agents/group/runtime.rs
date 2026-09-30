@@ -172,7 +172,7 @@ impl AgentGroupRuntime {
                 Some(member_id),
                 AgentActivityKind::Message,
                 None,
-                &task.description,
+                &request.prompt,
             );
             state.group.tasks.push(task);
             let mut slot = MemberSlot::default();

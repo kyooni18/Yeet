@@ -102,7 +102,10 @@ impl App {
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             let targets = if self.mode == Mode::Views {
                 &self.view_targets
-            } else if matches!(self.mode, Mode::Chat | Mode::Files | Mode::Diff) {
+            } else if matches!(
+                self.mode,
+                Mode::Chat | Mode::Files | Mode::Diff | Mode::Agents
+            ) {
                 &self.tab_targets
             } else {
                 return;
@@ -118,6 +121,18 @@ impl App {
         }
         if self.mode == Mode::Diff {
             self.handle_diff_mouse(event);
+            return;
+        }
+        if self.mode == Mode::Agents {
+            if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+                && let Some(action) = self.agent_action_at(event.column, event.row)
+            {
+                self.workbench_command = self.apply_agent_action(action);
+            } else if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+                && self.point_in_composer(event.column, event.row)
+            {
+                self.input_focused = true;
+            }
             return;
         }
         if self.mode != Mode::Chat {
