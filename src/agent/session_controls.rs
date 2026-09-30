@@ -16,9 +16,10 @@ impl AgentCoordinator {
     }
 
     pub fn prepare_turn_history_checkpoint(&mut self) -> usize {
-        if history::prune_request_only_history(&mut self.history) > 0 {
-            self.cache_continuity = Default::default();
-        }
+        // Keep provider-visible history append-only across ordinary user turns.
+        // Request-only messages are superseded by later turn boundaries rather than
+        // physically removed; deleting them would invalidate the cached prefix that
+        // follows them. Explicit rewind/replace operations still reset continuity.
         self.history.len()
     }
 
@@ -30,6 +31,8 @@ impl AgentCoordinator {
         self.context_memory = context::ContextMemory::default();
         self.cache_continuity = cache::ContinuityTracker::default();
         self.previous_turn_working_state = None;
+        self.warm_tool_names.clear();
+        self.warm_tool_search_enabled = false;
         self.context_key = Uuid::new_v4().to_string();
         Ok(())
     }
@@ -46,6 +49,8 @@ impl AgentCoordinator {
         self.context_memory = context::ContextMemory::default();
         self.cache_continuity = cache::ContinuityTracker::default();
         self.previous_turn_working_state = None;
+        self.warm_tool_names.clear();
+        self.warm_tool_search_enabled = false;
         let attached_skills = self.attached_skills.drain().collect::<Vec<_>>();
         for skill in attached_skills {
             self.registry.deactivate_skill(&skill);

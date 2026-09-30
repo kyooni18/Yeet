@@ -238,6 +238,8 @@ pub(super) struct RequestMetadataInput<'a> {
     pub unresolved_failed_mutation: bool,
     pub verification_attempted: bool,
     pub verification_succeeded: bool,
+    pub turn_start_pruned_request_only_messages: usize,
+    pub turn_start_pruned_request_only_chars: usize,
 }
 
 pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<String, String> {
@@ -293,6 +295,14 @@ pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<Strin
             input.verification_succeeded.to_string(),
         ),
         ("expectedCacheReuses".into(), "1".into()),
+        (
+            "turnStartPrunedRequestOnlyMessages".into(),
+            input.turn_start_pruned_request_only_messages.to_string(),
+        ),
+        (
+            "turnStartPrunedRequestOnlyChars".into(),
+            input.turn_start_pruned_request_only_chars.to_string(),
+        ),
         (
             "turnCumulativeInputTokens".into(),
             input.loop_budget.cumulative_input_tokens().to_string(),

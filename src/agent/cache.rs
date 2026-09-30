@@ -384,13 +384,28 @@ pub(super) fn diagnostics(request: &CallRequest) -> Value {
         .collect::<Vec<_>>();
     let deferred_tool_order_json = serde_json::to_vec(&deferred_tool_order).unwrap_or_default();
     let breakpoint_plan_json = serde_json::to_vec(&breakpoint_indices).unwrap_or_default();
-    let system_instruction_chars = request
+    let system_messages = request
         .messages
         .iter()
         .filter(|message| message.role == MessageRole::System)
+        .collect::<Vec<_>>();
+    let system_instruction_chars = system_messages
+        .iter()
         .filter_map(|message| message.content.as_deref())
         .map(str::len)
         .sum::<usize>();
+    let system_messages_json = serde_json::to_vec(&system_messages).unwrap_or_default();
+    let request_only_messages = request
+        .messages
+        .iter()
+        .filter(|message| message.request_only == Some(true))
+        .collect::<Vec<_>>();
+    let request_only_chars = request_only_messages
+        .iter()
+        .filter_map(|message| message.content.as_deref())
+        .map(str::len)
+        .sum::<usize>();
+    let request_only_messages_json = serde_json::to_vec(&request_only_messages).unwrap_or_default();
     let model_visible_tool_result_chars = request
         .messages
         .iter()
@@ -524,6 +539,8 @@ pub(super) fn diagnostics(request: &CallRequest) -> Value {
         "searchLoadedToolCount",
         "deferredToolCount",
         "nativeDeferredToolsSupported",
+        "turnStartPrunedRequestOnlyMessages",
+        "turnStartPrunedRequestOnlyChars",
     ] {
         result.insert(
             key.into(),
@@ -630,6 +647,21 @@ pub(super) fn diagnostics(request: &CallRequest) -> Value {
     result.insert(
         "systemInstructionChars".into(),
         json!(system_instruction_chars),
+    );
+    result.insert("systemMessageCount".into(), json!(system_messages.len()));
+    result.insert(
+        "systemInstructionHash".into(),
+        json!(sha256_hex(&system_messages_json)),
+    );
+    result.insert("requestMessageCount".into(), json!(request.messages.len()));
+    result.insert(
+        "requestOnlyMessageCount".into(),
+        json!(request_only_messages.len()),
+    );
+    result.insert("requestOnlyChars".into(), json!(request_only_chars));
+    result.insert(
+        "requestOnlyHistoryHash".into(),
+        json!(sha256_hex(&request_only_messages_json)),
     );
     result.insert(
         "modelVisibleToolResultChars".into(),

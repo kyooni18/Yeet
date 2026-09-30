@@ -9,7 +9,7 @@ use std::collections::{HashSet, VecDeque};
 const RUNAWAY_WINDOW: usize = 6;
 const RUNAWAY_WARN_SCORE: i32 = 6;
 const RUNAWAY_ROLLOVER_SCORE: i32 = 12;
-const RUNAWAY_CONTEXT_CHARS: usize = 64 * 1024;
+const RUNAWAY_CONTEXT_BUDGET_PERCENT: usize = 40;
 
 #[derive(Debug, Clone)]
 pub(super) struct RunawayRound {
@@ -39,7 +39,11 @@ pub(super) struct RunawayDetector {
 }
 
 impl RunawayDetector {
-    pub(super) fn observe(&mut self, round: RunawayRound) -> RunawayDecision {
+    pub(super) fn observe(
+        &mut self,
+        round: RunawayRound,
+        context_budget_chars: usize,
+    ) -> RunawayDecision {
         if round.mutated {
             self.reset();
             self.recent.push_back(round);
@@ -77,7 +81,10 @@ impl RunawayDetector {
             .recent
             .front()
             .map(|previous| previous.request_context_chars);
-        let context_blowup = round.request_context_chars >= RUNAWAY_CONTEXT_CHARS
+        let context_pressure_floor =
+            context_budget_chars.saturating_mul(RUNAWAY_CONTEXT_BUDGET_PERCENT) / 100;
+        let context_blowup = context_budget_chars > 0
+            && round.request_context_chars >= context_pressure_floor
             && (previous_context.is_some_and(|previous| {
                 previous > 0 && round.request_context_chars >= previous.saturating_mul(5) / 4
             }) || window_start_context.is_some_and(|start| {
@@ -265,7 +272,7 @@ mod tests {
         let mut rolled = false;
         for _ in 0..8 {
             if matches!(
-                detector.observe(stalled_inspection()),
+                detector.observe(stalled_inspection(), 816_000),
                 RunawayDecision::Rollover(_)
             ) {
                 rolled = true;
@@ -283,18 +290,21 @@ mod tests {
         let mut detector = RunawayDetector::default();
         let failures = ["glob", "timeout", "different-timeout", "permission"];
         for (index, failure) in failures.into_iter().enumerate() {
-            let decision = detector.observe(RunawayRound {
-                progressed: index == 2,
-                mutated: false,
-                duplicate_inspection: false,
-                inspection_only: false,
-                semantic_fingerprint: format!("shell-attempt-{index}"),
-                failure_fingerprints: vec![failure.into()],
-                output_fingerprints: vec![index as u64 + 100],
-                request_context_chars: 20_000 + index * 2_000,
-                fresh_calls: 1,
-                repeated_calls: 0,
-            });
+            let decision = detector.observe(
+                RunawayRound {
+                    progressed: index == 2,
+                    mutated: false,
+                    duplicate_inspection: false,
+                    inspection_only: false,
+                    semantic_fingerprint: format!("shell-attempt-{index}"),
+                    failure_fingerprints: vec![failure.into()],
+                    output_fingerprints: vec![index as u64 + 100],
+                    request_context_chars: 20_000 + index * 2_000,
+                    fresh_calls: 1,
+                    repeated_calls: 0,
+                },
+                816_000,
+            );
             assert!(!matches!(decision, RunawayDecision::Rollover(_)));
         }
     }
@@ -303,13 +313,16 @@ mod tests {
     fn mutation_resets_loop_state() {
         let mut detector = RunawayDetector::default();
         for _ in 0..3 {
-            let _ = detector.observe(stalled_inspection());
+            let _ = detector.observe(stalled_inspection(), 816_000);
         }
 
         let mut mutation = stalled_inspection();
         mutation.mutated = true;
         mutation.progressed = true;
-        assert_eq!(detector.observe(mutation), RunawayDecision::Continue);
+        assert_eq!(
+            detector.observe(mutation, 816_000),
+            RunawayDecision::Continue
+        );
         assert_eq!(detector.score, 0);
         assert_eq!(detector.recent.len(), 1);
     }
@@ -319,7 +332,7 @@ mod tests {
         let mut detector = RunawayDetector::default();
         for _ in 0..8 {
             if matches!(
-                detector.observe(stalled_inspection()),
+                detector.observe(stalled_inspection(), 816_000),
                 RunawayDecision::Rollover(_)
             ) {
                 break;
@@ -332,6 +345,6 @@ mod tests {
         fresh.fresh_calls = 1;
         fresh.progressed = true;
         fresh.semantic_fingerprint = "read_file:src/new.rs".into();
-        assert_eq!(detector.observe(fresh), RunawayDecision::Continue);
+        assert_eq!(detector.observe(fresh, 816_000), RunawayDecision::Continue);
     }
 }

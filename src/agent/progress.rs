@@ -367,7 +367,26 @@ fn semantic_tool_family(call: &ToolCall) -> String {
                 .as_deref()
                 .unwrap_or("?")
         ),
-        "run_shell" => "run_shell".into(),
+        "run_shell" => {
+            // Different shell commands are different evidence actions. Collapsing every
+            // shell invocation into one family made normal inspect/build/test sequences
+            // look like a structural loop and could force an early context rollover.
+            let command_family = call
+                .arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|command| {
+                    command
+                        .split_whitespace()
+                        .take(2)
+                        .map(str::to_ascii_lowercase)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "?".into());
+            format!("run_shell:{command_family}")
+        }
         "apply_file_edits" => {
             let mut paths = call
                 .arguments

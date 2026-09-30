@@ -248,6 +248,10 @@ impl ToolDiscovery {
         self.loaded.len()
     }
 
+    pub fn loaded_names(&self) -> &[String] {
+        &self.loaded_order
+    }
+
     pub fn attached(&self, catalog: &[ToolDefinition]) -> Vec<ToolDefinition> {
         let catalog_by_name: HashMap<_, _> = catalog
             .iter()

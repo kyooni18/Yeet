@@ -80,6 +80,9 @@ pub(super) fn summarize_cache_events(content: &str) -> Value {
     let mut provider_comparison_reusable_tokens = 0u64;
     let mut stable_provider_reported_miss_attempts = 0u64;
     let mut stable_provider_unattributed_miss_attempts = 0u64;
+    let mut turn_boundary_pruned_request_only_messages = 0u64;
+    let mut turn_boundary_pruned_request_only_chars = 0u64;
+    let mut turns_with_pruned_request_only_history = 0u64;
 
     let mut root_model_attempts = 0u64;
     let mut repeated_tool_round_attempts = 0u64;
@@ -291,6 +294,15 @@ pub(super) fn summarize_cache_events(content: &str) -> Value {
         let root_attempt = tool_round == Some(0);
         if root_attempt {
             root_model_attempts += 1;
+            let pruned_messages =
+                u64_value(diagnostics.get("turnStartPrunedRequestOnlyMessages")).unwrap_or(0);
+            turn_boundary_pruned_request_only_messages =
+                turn_boundary_pruned_request_only_messages.saturating_add(pruned_messages);
+            turn_boundary_pruned_request_only_chars = turn_boundary_pruned_request_only_chars
+                .saturating_add(
+                    u64_value(diagnostics.get("turnStartPrunedRequestOnlyChars")).unwrap_or(0),
+                );
+            turns_with_pruned_request_only_history += u64::from(pruned_messages > 0);
         }
         if let Some(tool_round) = tool_round
             && !seen_tool_rounds.insert((run_id.clone(), tool_round))
@@ -603,6 +615,18 @@ pub(super) fn summarize_cache_events(content: &str) -> Value {
         rate(cost_equivalent_input_tokens, seen_runs.len() as u64)
     );
     put!("rootModelAttempts", root_model_attempts);
+    put!(
+        "turnBoundaryPrunedRequestOnlyMessages",
+        turn_boundary_pruned_request_only_messages
+    );
+    put!(
+        "turnBoundaryPrunedRequestOnlyChars",
+        turn_boundary_pruned_request_only_chars
+    );
+    put!(
+        "turnsWithPrunedRequestOnlyHistory",
+        turns_with_pruned_request_only_history
+    );
     put!("repeatedToolRoundAttempts", repeated_tool_round_attempts);
     put!("measuredAttempts", measured_attempts);
     put!("unreportedAttempts", unreported_attempts);

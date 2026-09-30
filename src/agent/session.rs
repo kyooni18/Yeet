@@ -36,6 +36,8 @@ impl AgentCoordinator {
             previous_turn_working_state: None,
             attached_skills: Default::default(),
             skill_instruction_history: Default::default(),
+            warm_tool_names: Vec::new(),
+            warm_tool_search_enabled: false,
         }
     }
     pub fn set_session_runtime(
@@ -49,6 +51,8 @@ impl AgentCoordinator {
             .rebind_session(previous_session_id.as_deref(), active_session_id.as_deref());
         if session_changed {
             self.observation_cache = Default::default();
+            self.warm_tool_names.clear();
+            self.warm_tool_search_enabled = false;
             self.context_key = active_session_id
                 .clone()
                 .unwrap_or_else(|| Uuid::new_v4().to_string());

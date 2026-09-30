@@ -81,6 +81,11 @@ pub struct AgentCoordinator {
     previous_turn_working_state: Option<String>,
     attached_skills: HashSet<String>,
     skill_instruction_history: HashSet<String>,
+    // Provider-visible tool schemas stay append-only across ordinary Agent turns.
+    // Shrinking the envelope at each user turn invalidates otherwise reusable prompt
+    // prefixes, so remember the warmed surface until an explicit session/history reset.
+    warm_tool_names: Vec<String>,
+    warm_tool_search_enabled: bool,
 }
 
 impl AgentCoordinator {
@@ -145,6 +150,8 @@ impl AgentCoordinator {
             turn_stable_overlays,
             mut turn_context_orientation,
             mut last_context_updates,
+            turn_start_pruned_request_only_messages,
+            turn_start_pruned_request_only_chars,
         } = self.prepare_turn(request, goal_mode)?;
         let bridge = self.bridge.client()?;
         self.observation_cache.start_turn();
@@ -354,6 +361,8 @@ impl AgentCoordinator {
                     unresolved_failed_mutation: execution_evidence.unresolved_failed_mutation(),
                     verification_attempted: execution_evidence.verification_attempted(),
                     verification_succeeded: execution_evidence.verification_succeeded(),
+                    turn_start_pruned_request_only_messages,
+                    turn_start_pruned_request_only_chars,
                 });
             jev::write_loop_metadata(
                 &mut request_metadata,
@@ -1185,6 +1194,10 @@ impl AgentCoordinator {
                 });
             }
             self.context_memory.flush()?;
+            if profile == TaskProfile::Agent && !local_file_lookup {
+                self.warm_tool_names = tool_discovery.loaded_names().to_vec();
+                self.warm_tool_search_enabled = tool_discovery.search_enabled();
+            }
             if round_progress {
                 consecutive_no_progress = 0;
             } else {
@@ -1202,18 +1215,21 @@ impl AgentCoordinator {
                 is_inspection_tool(&call.name)
                     || self.registry.is_read_only_extension_tool(&call.name)
             });
-            let runaway_decision = runaway_detector.observe(RunawayRound {
-                progressed: round_progress,
-                mutated: round_mutated,
-                duplicate_inspection,
-                inspection_only,
-                semantic_fingerprint,
-                failure_fingerprints: round_failure_fingerprints,
-                output_fingerprints: round_output_fingerprints,
-                request_context_chars,
-                fresh_calls: round_fresh_calls,
-                repeated_calls: round_repeated_calls,
-            });
+            let runaway_decision = runaway_detector.observe(
+                RunawayRound {
+                    progressed: round_progress,
+                    mutated: round_mutated,
+                    duplicate_inspection,
+                    inspection_only,
+                    semantic_fingerprint,
+                    failure_fingerprints: round_failure_fingerprints,
+                    output_fingerprints: round_output_fingerprints,
+                    request_context_chars,
+                    fresh_calls: round_fresh_calls,
+                    repeated_calls: round_repeated_calls,
+                },
+                rollover_budget.saturating_mul(3) as usize,
+            );
             let analysis_threshold = turn_state::analysis_inspection_threshold(bounded_explanation);
             if let RunawayDecision::Rollover(message) = &runaway_decision {
                 self.context_memory.rollover_requested = true;

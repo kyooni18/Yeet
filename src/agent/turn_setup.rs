@@ -53,6 +53,8 @@ pub(super) struct TurnSetup<'a> {
     pub(super) turn_stable_overlays: Vec<Message>,
     pub(super) turn_context_orientation: String,
     pub(super) last_context_updates: Vec<Message>,
+    pub(super) turn_start_pruned_request_only_messages: usize,
+    pub(super) turn_start_pruned_request_only_chars: usize,
 }
 
 impl AgentCoordinator {
@@ -71,12 +73,12 @@ impl AgentCoordinator {
             continuation,
             goal_retry_reason,
         } = request;
-        if !continuation && history::prune_request_only_history(&mut self.history) > 0 {
-            // Historical request-only guidance is intentionally absent from the new
-            // turn's wire history. Start a fresh local continuity epoch instead of
-            // treating that lifecycle cleanup as an accidental prefix rewrite.
-            self.cache_continuity = Default::default();
-        }
+        // Ordinary turn boundaries are append-only. Historical request-only
+        // guidance is superseded by TURN_CONTEXT_BOUNDARY and newer overlays, but
+        // remains on the wire so the provider can reuse the already-cached prefix.
+        // Physical pruning is reserved for explicit history replacement/rollover.
+        let turn_start_pruned_request_only_messages = 0usize;
+        let turn_start_pruned_request_only_chars = 0usize;
         let goal_epoch = self.context_memory.goal().map_or(0, |goal| goal.epoch);
         let goal_progress = self
             .context_memory
@@ -214,6 +216,14 @@ impl AgentCoordinator {
             TaskProfile::Agent => tool_discovery::ToolDiscovery::agent(),
             TaskProfile::Research => tool_discovery::ToolDiscovery::research(),
         };
+        if profile == TaskProfile::Agent && !local_file_lookup {
+            // Preserve the provider-visible tool envelope across ordinary turns. New
+            // tools may append, but a new user message must not shrink a warmed prefix.
+            tool_discovery.load(self.warm_tool_names.iter().map(String::as_str));
+            if self.warm_tool_search_enabled {
+                tool_discovery.enable_search();
+            }
+        }
         promote_agent_orchestration_tool(
             &mut tool_discovery,
             profile == TaskProfile::Agent && self.registry.agent_orchestration_enabled(),
@@ -328,6 +338,11 @@ impl AgentCoordinator {
             turn_stable_overlays.push(Message::system(guidance.clone()).request_only());
         }
 
+        if profile == TaskProfile::Agent && !local_file_lookup {
+            self.warm_tool_names = tool_discovery.loaded_names().to_vec();
+            self.warm_tool_search_enabled = tool_discovery.search_enabled();
+        }
+
         Ok(TurnSetup {
             model,
             reasoning_level,
@@ -380,6 +395,8 @@ impl AgentCoordinator {
             turn_stable_overlays,
             turn_context_orientation,
             last_context_updates,
+            turn_start_pruned_request_only_messages,
+            turn_start_pruned_request_only_chars,
         })
     }
 }
