@@ -30,17 +30,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let tab_height = scale_y(34).max(1);
     let composer_height = scale_y(36).max(1);
     let status_height = scale_y(24).max(1);
-    let top_gap = scale_y(36);
     let rows = Layout::vertical([
-        Constraint::Length(top_gap),
         Constraint::Length(tab_height),
         Constraint::Min(1),
         Constraint::Length(composer_height),
         Constraint::Length(status_height),
     ])
     .split(bounds);
-    draw_tabs(frame, rows[1]);
-    let body = rows[2];
+    draw_tabs(frame, rows[0]);
+    let body = rows[1];
     let rail_width = scale_x(232).min(body.width / 3);
     let columns =
         Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
@@ -55,9 +53,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     .split(columns[1]);
     draw_activity(frame, panes[0]);
     draw_inspector(frame, panes[2]);
-    draw_usage(frame, panes[0]);
-    draw_composer(frame, app, rows[3]);
-    status::draw(frame, app, rows[4]);
+    draw_composer(frame, app, rows[2]);
+    status::draw(frame, app, rows[3]);
 }
 
 fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
@@ -182,8 +179,7 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         Block::default().style(Style::default().bg(theme::background())),
         area,
     );
-    let usage_height = if area.height >= 6 { 3 } else { 0 };
-    let content_height = area.height.saturating_sub(usage_height);
+    let content_height = area.height;
     let muted = Style::default().fg(theme::muted());
     let active = Style::default()
         .fg(theme::text())
@@ -232,16 +228,17 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         ]);
         frame.render_widget(Paragraph::new(line), row);
     }
-    let rows = [
+    let files = [
         ("guidance_taem.c", "+18", "−6"),
         ("taem_candidate_search.c", "+42", "−13"),
         ("taem_candidate_search.h", "+8", "−4"),
     ];
-    for (i, (file, added, removed)) in rows.into_iter().enumerate() {
-        let y = area.y.saturating_add(10 + i as u16 * 2);
+    for (index, (file, added, removed)) in files.into_iter().enumerate() {
+        let y = area.y.saturating_add(10 + index as u16 * 2);
         if y >= area.y.saturating_add(content_height) {
             break;
         }
+        let file = super::super::task::fit(file, area.width.saturating_sub(13) as usize);
         let line = Line::from(vec![
             Span::styled(format!("  C   {file}          "), muted),
             Span::styled(added, Style::default().fg(theme::success())),
@@ -250,49 +247,22 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         ]);
         frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
     }
-    for (i, issue) in [
+    for (index, issue) in [
         "#214  Context rail focus order",
         "#219  Final-speed handoff threshold",
     ]
     .into_iter()
     .enumerate()
     {
-        let y = area.y.saturating_add(17 + i as u16 * 2);
+        let y = area.y.saturating_add(17 + index as u16 * 2);
         if y < area.y.saturating_add(content_height) {
+            let issue = super::super::task::fit(issue, area.width.saturating_sub(5) as usize);
             frame.render_widget(
                 Paragraph::new(format!("  ▣  {issue}")).style(muted),
                 Rect::new(area.x, y, area.width, 1),
             );
         }
     }
-}
-
-fn draw_usage(frame: &mut Frame<'_>, area: Rect) {
-    if area.width == 0 || area.height < 3 {
-        return;
-    }
-    let muted = Style::default().fg(theme::muted());
-    let provider_lines: Vec<Line<'static>> = vec![
-        Line::from(vec![
-            Span::styled("anthropic", muted),
-            Span::styled(" 5h ▰▰▰▱▱ 62%", Style::default().fg(theme::text_dim())),
-            Span::styled(" wk ▰▰▱▱ 31%", Style::default().fg(theme::text_dim())),
-        ]),
-        Line::from(vec![
-            Span::styled("openai", muted),
-            Span::styled(" 5h ▰▱▱▱▱ 12%", Style::default().fg(theme::text_dim())),
-            Span::styled(" wk ▰▱▱▱ 4%", Style::default().fg(theme::text_dim())),
-        ]),
-    ];
-    frame.render_widget(
-        Paragraph::new(provider_lines),
-        Rect::new(
-            area.x + 5.min(area.width),
-            area.bottom().saturating_sub(3),
-            area.width.saturating_sub(10),
-            2,
-        ),
-    );
 }
 
 fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
