@@ -33,4 +33,5 @@ pub mod tools;
 pub mod ui;
 pub mod update;
 pub mod web_search;
+pub mod workbench;
 pub mod workers;
