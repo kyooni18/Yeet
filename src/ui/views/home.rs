@@ -81,7 +81,7 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         ("♟", "Landing", false),
         ("⑂", "guidance_taem.c", false),
         ("▣", "#214", false),
-        ("+", "+", false),
+        ("", "+", false),
     ];
     let starts = [0u32, 175, 423, 547, 653, 835, 916];
     let ends = [160u32, 423, 547, 653, 835, 895, 964];
@@ -102,17 +102,24 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         };
         let tab_area = Rect::new(x, area.y, width, area.height);
         frame.render_widget(Block::default().style(style), tab_area);
-        let icon_x = x + (area.width as u32 * 15 / 1440) as u16;
-        frame.render_widget(
-            Paragraph::new(icon).style(style),
-            Rect::new(
-                icon_x,
-                area.y,
-                2.min(area.right().saturating_sub(icon_x)),
-                1,
-            ),
-        );
-        let label_x = x + (area.width as u32 * if index == 0 { 36 } else { 21 } / 1440) as u16;
+        if !icon.is_empty() {
+            let icon_x = x + if index == 0 {
+                (area.width as u32 * 15 / 1440) as u16
+            } else {
+                0
+            };
+            frame.render_widget(
+                Paragraph::new(icon).style(style),
+                Rect::new(
+                    icon_x,
+                    area.y,
+                    2.min(area.right().saturating_sub(icon_x)),
+                    1,
+                ),
+            );
+        }
+        let label_offset = if index == 0 { 36 } else { 30 };
+        let label_x = x + (area.width as u32 * label_offset / 1440) as u16;
         let label_right = area
             .x
             .saturating_add((area.width as u32 * ends[index] / 1440) as u16);
