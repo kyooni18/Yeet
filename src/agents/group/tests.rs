@@ -132,6 +132,9 @@ fn stop_cancel_and_replace_settle_work_without_notifications() {
     let task = group.wait(stopped, &never()).unwrap();
     assert_eq!(task.status, AgentTaskStatus::Cancelled);
     assert!(group.send(agent, "again".into()).is_err());
+    group.remove(agent).unwrap();
+    let view = group.group_item();
+    assert!(view.members.is_empty() && view.activity.is_empty());
 
     let (_, interrupted) = group.spawn(request("block", false), "m", None).unwrap();
     assert!(group.wait(interrupted, &AtomicBool::new(true)).is_err());

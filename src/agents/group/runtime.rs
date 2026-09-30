@@ -118,12 +118,37 @@ impl AgentGroupRuntime {
         self.shared.lock().group.primary_agent = Some(id);
     }
 
-    /// Launches a member and queues its first task.
+    /// Launches a member for the primary agent and queues its first task.
     pub(crate) fn spawn(
         &self,
         request: SpawnRequest,
         model: &str,
         active_session_id: Option<String>,
+    ) -> Result<(AgentId, AgentTaskId)> {
+        self.launch(
+            request,
+            model,
+            active_session_id,
+            AgentActivityKind::Message,
+        )
+    }
+
+    /// Launches a member the user created directly.
+    pub(crate) fn spawn_for_user(
+        &self,
+        request: SpawnRequest,
+        model: &str,
+        active_session_id: Option<String>,
+    ) -> Result<(AgentId, AgentTaskId)> {
+        self.launch(request, model, active_session_id, AgentActivityKind::Steer)
+    }
+
+    fn launch(
+        &self,
+        request: SpawnRequest,
+        model: &str,
+        active_session_id: Option<String>,
+        kind: AgentActivityKind,
     ) -> Result<(AgentId, AgentTaskId)> {
         let _admission = self
             .spawn_lock
@@ -167,13 +192,9 @@ impl AgentGroupRuntime {
                 current_task: None,
                 started_at: chrono::Utc::now().to_rfc3339(),
             });
-            state.group.record(
-                None,
-                Some(member_id),
-                AgentActivityKind::Message,
-                None,
-                &request.prompt,
-            );
+            state
+                .group
+                .record(None, Some(member_id), kind, None, &request.prompt);
             state.group.tasks.push(task);
             let mut slot = MemberSlot::default();
             slot.inbox.push_back((task_id, request.prompt));
@@ -276,6 +297,49 @@ impl AgentGroupRuntime {
         }
         self.retire(id, "stopped");
         Ok(())
+    }
+
+    /// Drops a member and its history from the group, stopping it first.
+    pub(crate) fn remove(&self, id: AgentId) -> Result<()> {
+        let live = match self.shared.lock().group.member(id) {
+            None => bail!("unknown agent: {id}"),
+            Some(member) => member.status != MemberStatus::Stopped,
+        };
+        if live {
+            self.retire(id, "removed");
+        }
+        {
+            let mut state = self.shared.lock();
+            let id_text = id.to_string();
+            state.slots.remove(&id);
+            let group = &mut state.group;
+            group.members.retain(|member| member.id != id);
+            group
+                .tasks
+                .retain(|task| task.assignee != id || task.status.is_active());
+            group.activity.retain(|entry| {
+                entry.from.as_deref() != Some(id_text.as_str())
+                    && entry.to.as_deref() != Some(id_text.as_str())
+            });
+        }
+        self.shared.changed();
+        Ok(())
+    }
+
+    /// Removes every stopped member.
+    pub(crate) fn remove_stopped(&self) {
+        let stopped = self
+            .shared
+            .lock()
+            .group
+            .members
+            .iter()
+            .filter(|member| member.status == MemberStatus::Stopped)
+            .map(|member| member.id)
+            .collect::<Vec<_>>();
+        for id in stopped {
+            let _ = self.remove(id);
+        }
     }
 
     /// Stops every live member.

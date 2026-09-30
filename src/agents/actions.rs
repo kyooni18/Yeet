@@ -76,6 +76,18 @@ pub enum FrontendCommand {
         agent_id: String,
         message: String,
     },
+    /// Launches a background group member on the active model.
+    SpawnAgent {
+        role: String,
+        description: String,
+        prompt: String,
+    },
+    /// Removes a member from the group, or every stopped member when
+    /// `agent_id` is `None`.
+    RemoveAgent {
+        #[serde(default)]
+        agent_id: Option<String>,
+    },
     /// Stops a group member, or every member when `agent_id` is `None`.
     StopAgent {
         #[serde(default)]

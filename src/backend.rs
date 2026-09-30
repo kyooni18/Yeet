@@ -354,6 +354,24 @@ impl BackendService {
                 self.agent_groups.message(&agent_id, message)
             }
             FrontendCommand::StopAgent { agent_id } => self.agent_groups.stop(agent_id.as_deref()),
+            FrontendCommand::RemoveAgent { agent_id } => {
+                self.agent_groups.remove(agent_id.as_deref())
+            }
+            FrontendCommand::SpawnAgent {
+                role,
+                description,
+                prompt,
+            } => {
+                let (model, session) = {
+                    let shared = self.shared.lock_or_recover();
+                    (
+                        shared.state.active_model.clone(),
+                        shared.state.current_session_id.clone(),
+                    )
+                };
+                self.agent_groups
+                    .spawn_for_user(&role, description, prompt, &model, session)
+            }
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
                 Ok(())

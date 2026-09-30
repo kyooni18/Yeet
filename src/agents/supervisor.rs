@@ -77,6 +77,38 @@ impl AgentGroupSupervisor {
         self.active.steer(parse_id(agent_id)?, message).map(|_| ())
     }
 
+    /// Launches a background member the user asked for from a frontend.
+    pub(crate) fn spawn_for_user(
+        &self,
+        role: &str,
+        description: String,
+        prompt: String,
+        model: &str,
+        session: Option<String>,
+    ) -> Result<()> {
+        let request = super::task::SpawnRequest {
+            role: super::member::AgentRole::parse(role)?,
+            description,
+            prompt,
+            background: true,
+        };
+        self.active
+            .spawn_for_user(request, model, session)
+            .map(|_| ())
+    }
+
+    /// Removes one member (stopping it first), or every stopped member when
+    /// `agent_id` is `None`.
+    pub(crate) fn remove(&self, agent_id: Option<&str>) -> Result<()> {
+        match agent_id {
+            Some(id) => self.active.remove(parse_id(id)?),
+            None => {
+                self.active.remove_stopped();
+                Ok(())
+            }
+        }
+    }
+
     /// Stops one member, or every member when `agent_id` is `None`.
     pub(crate) fn stop(&self, agent_id: Option<&str>) -> Result<()> {
         match agent_id {
