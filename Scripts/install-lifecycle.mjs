@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Installation owns Yeet processes only; never kill a shared Node/MCP client.
 import { execFileSync, spawn } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, existsSync, readdirSync, readlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, existsSync, readdirSync, readlinkSync, realpathSync, copyFileSync, cpSync, renameSync, rmSync, accessSync, constants } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -99,7 +99,10 @@ function supervisors() {
     for (const file of existsSync(folder) ? readdirSync(folder) : []) {
       if (!file.endsWith('.plist')) continue;
       const path = join(folder, file);
-      const plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path], { encoding: 'utf8' }));
+      let plist;
+      try {
+        plist = JSON.parse(execFileSync('plutil', ['-convert', 'json', '-o', '-', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+      } catch { continue; } // Unrelated empty/broken LaunchAgents are not ours.
       if (labels.has(plist.Label)) { agents.push({ kind: 'launchd', name: plist.Label, path, domain }); labels.delete(plist.Label); }
     }
     if (labels.size) throw new Error(`Cannot locate LaunchAgent files for ${[...labels].join(', ')}; no processes stopped.`);
@@ -119,7 +122,10 @@ function supervisors() {
 function manage(service, action) {
   if (service.kind === 'systemd') execFileSync('systemctl', ['--user', action, service.name], { stdio: 'inherit', timeout: 20000 });
   else if (action === 'stop') execFileSync('launchctl', ['bootout', `${service.domain}/${service.name}`], { stdio: 'inherit', timeout: 20000 });
-  else execFileSync('launchctl', ['bootstrap', service.domain, service.path], { stdio: 'inherit', timeout: 20000 });
+  else {
+    try { execFileSync('launchctl', ['print', `${service.domain}/${service.name}`], { stdio: 'ignore' }); return; } catch { /* Not loaded yet. */ }
+    execFileSync('launchctl', ['bootstrap', service.domain, service.path], { stdio: 'inherit', timeout: 20000 });
+  }
 }
 
 function cwd(pid) {
@@ -151,12 +157,37 @@ async function stop(stateFile, roots) {
   }
   const plan = restartPlan(owned);
   plan.supervisors = supervisors();
+  // A supervisor or another terminal can select a different installation on PATH.
+  plan.installations = [...new Set((process.env.PATH ?? '').split(':')
+    .map(folder => join(folder, 'yeet')).filter(path => existsSync(path))
+    .map(path => realpathSync(path)))];
+  for (const path of plan.installations) accessSync(dirname(path), constants.W_OK);
   writeFileSync(stateFile, JSON.stringify(plan), { mode: 0o600 });
   for (const service of plan.supervisors) manage(service, 'stop');
   console.log(`Stopping ${owned.length} Yeet processes and owned runtime/MCP children…`);
   await terminateProcesses(owned);
   const survivors = ownedProcesses(inventory(), process.getuid(), excluded);
   if (survivors.length) throw new Error(`Yeet processes remain (possibly supervised): ${survivors.map(p => p.pid).join(', ')}. Stop their supervisor and rerun installation.`);
+}
+
+function replaceCopies(stateFile, binary) {
+  const plan = JSON.parse(readFileSync(stateFile, 'utf8'));
+  const primary = realpathSync(binary);
+  const runtime = resolve(dirname(primary), '..', 'share', 'yeet', 'runtime');
+  for (const path of plan.installations ?? []) {
+    if (path === primary) continue;
+    const alternateRuntime = resolve(dirname(path), '..', 'share', 'yeet', 'runtime');
+    const stagedBinary = `${path}.yeet-new-${process.pid}`;
+    const stagedRuntime = `${alternateRuntime}.yeet-new-${process.pid}`;
+    copyFileSync(primary, stagedBinary);
+    mkdirSync(dirname(alternateRuntime), { recursive: true });
+    cpSync(runtime, stagedRuntime, { recursive: true });
+    // All owning processes are already stopped. Replace entire runtime trees.
+    rmSync(alternateRuntime, { recursive: true, force: true });
+    renameSync(stagedRuntime, alternateRuntime);
+    renameSync(stagedBinary, path);
+    console.log(`Replaced additional Yeet installation: ${path}`);
+  }
 }
 
 export async function terminateProcesses(owned) {
@@ -185,12 +216,16 @@ async function restart(stateFile, binary) {
   delete env.YEET_SOURCE_ROOT;
   for (const service of plan.supervisors ?? []) manage(service, 'start');
   for (const [i, service] of plan.services.entries()) {
-    const kind = service.args[0] === 'mcpserver' ? /mcp/i : service.args[0].includes('remote') ? /remote/i : /background/i;
-    if (plan.supervisors?.some(manager => kind.test(manager.name))) continue;
     const workdir = service.cwd && existsSync(service.cwd) ? service.cwd : process.cwd();
     if (service.args[0] === 'mcpserver') {
+      // Start is idempotent. A restored supervisor does not guarantee readiness.
       execFileSync(binary, service.args, { cwd: workdir, env, stdio: 'inherit', timeout: 20000 });
     } else {
+      const alreadyRunning = inventory().some(p => {
+        if (!names.has(basename(p.executable)) || p.uid !== process.getuid()) return false;
+        try { return JSON.stringify(argv(p.pid).slice(1)) === JSON.stringify(service.args); } catch { return false; }
+      });
+      if (alreadyRunning) continue;
       const fd = openSync(join(logs, `service-${i}.log`), 'a', 0o600);
       const child = spawn(binary, service.args, { cwd: workdir, env, detached: true, stdio: ['ignore', fd, fd] });
       await new Promise((r, reject) => { child.once('spawn', r); child.once('error', reject); });
@@ -202,11 +237,14 @@ async function restart(stateFile, binary) {
   console.log('Yeet services restarted with the replacement binary and runtime.');
   if (plan.stdio) console.log('External MCP clients must reconnect their stdio transport to the replacement binary.');
   const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
-  for (const terminal of plan.terminals ?? []) {
+  for (const [i, terminal] of (plan.terminals ?? []).entries()) {
     const command = `cd ${quote(terminal.cwd ?? process.cwd())} && exec ${quote(binary)} ${terminal.args.map(quote).join(' ')}`;
     if (process.platform === 'darwin') {
       // Reopen a terminal rather than attempting to reuse another shell's TTY.
-      execFileSync('osascript', ['-e', `tell application "Terminal" to do script ${JSON.stringify(command)}`], { stdio: 'inherit', timeout: 20000 });
+      // LaunchServices avoids AppleEvents permission dialogs during reinstall.
+      const script = join(logs, `reopen-${i}.command`);
+      writeFileSync(script, `#!/bin/sh\n${command}\n`, { mode: 0o700 });
+      execFileSync('open', ['-a', 'Terminal', script], { stdio: 'inherit', timeout: 20000 });
     } else if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
       const child = spawn('x-terminal-emulator', ['-e', '/bin/sh', '-c', command], { env, detached: true, stdio: 'ignore' });
       await new Promise((r, reject) => { child.once('spawn', r); child.once('error', reject); });
@@ -221,6 +259,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [mode, stateFile, binary] = process.argv.slice(2);
   try {
     if (mode === 'stop') await stop(stateFile, process.argv.slice(4));
+    else if (mode === 'replace-copies') replaceCopies(stateFile, binary);
     else if (mode === 'restart') await restart(stateFile, binary);
     else throw new Error('Expected stop STATE or restart STATE BINARY');
   } catch (e) { console.error(`Yeet installation lifecycle: ${e.message}`); process.exitCode = 1; }

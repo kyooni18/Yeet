@@ -127,6 +127,7 @@ install_artifacts() {
     [ ! -e "$bin_old" ] || mv "$bin_old" "$PREFIX/bin/yeet"
     die "replacement failed; previous installation restored (restart settings: $state_file)"
   fi
+  node "$lifecycle" replace-copies "$state_file" "$PREFIX/bin/yeet"
   node "$lifecycle" restart "$state_file" "$PREFIX/bin/yeet"
   rm -f "$state_file"
 

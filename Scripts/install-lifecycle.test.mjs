@@ -83,3 +83,25 @@ test('restart keeps exact arguments and paths, replaces MCP daemon mode with sta
   assert.equal(plan.interactive, true);
   assert.equal(plan.stdio, true);
 });
+
+test('additional PATH installations receive the same binary and complete runtime', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'yeet-copy-fixture-'));
+  try {
+    const primary = join(dir, 'primary/bin/yeet');
+    const alternate = join(dir, 'alternate/bin/yeet');
+    for (const path of [primary, alternate]) mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(primary, 'new binary', { mode: 0o755 });
+    writeFileSync(alternate, 'old binary', { mode: 0o755 });
+    const primaryRuntime = join(dir, 'primary/share/yeet/runtime');
+    const alternateRuntime = join(dir, 'alternate/share/yeet/runtime');
+    mkdirSync(primaryRuntime, { recursive: true }); mkdirSync(alternateRuntime, { recursive: true });
+    writeFileSync(join(primaryRuntime, 'bridge.js'), 'new runtime');
+    writeFileSync(join(alternateRuntime, 'stale.js'), 'old runtime');
+    const state = join(dir, 'state.json');
+    writeFileSync(state, JSON.stringify({ installations: [primary, alternate] }));
+    execFileSync(process.execPath, [new URL('./install-lifecycle.mjs', import.meta.url).pathname, 'replace-copies', state, primary]);
+    assert.equal(readFileSync(alternate, 'utf8'), 'new binary');
+    assert.equal(readFileSync(join(alternateRuntime, 'bridge.js'), 'utf8'), 'new runtime');
+    assert.equal(existsSync(join(alternateRuntime, 'stale.js')), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
