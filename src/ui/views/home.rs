@@ -78,23 +78,24 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        (icons::home(), "Home", true),
-        (icons::session_tab(), "MM305 crosswind tuning", false),
-        (icons::folder(false), "theme.rs", false),
-        (icons::agent_tab(), "Landing", false),
-        (icons::diff_tab(), "guidance_taem.c", false),
-        (icons::issue_tab(), "#214", false),
-        ("", "+", false),
+        (icons::home(), "Home", true, 0u16),
+        (icons::session_tab(), "MM305 crosswind tuning", false, 175),
+        (icons::folder(false), "theme.rs", false, 423),
+        (icons::agent_tab(), "Landing", false, 547),
+        (icons::diff_tab(), "guidance_taem.c", false, 653),
+        (icons::issue_tab(), "#214", false, 835),
+        ("", "+", false, 916),
     ];
-    let starts = [0u32, 175, 423, 547, 653, 835, 916];
-    let ends = [160u32, 423, 547, 653, 835, 895, 964];
-    for (index, (icon, label, active)) in entries.into_iter().enumerate() {
-        let x = area.x + (area.width as u32 * starts[index] / 1440) as u16;
+    let ends = [160u16, 423, 547, 653, 835, 895, 964];
+    for (index, (icon, label, active, start)) in entries.into_iter().enumerate() {
+        let start_px = (area.width as u32 * start as u32 / 1440) as u16;
+        let end_px = (area.width as u32 * ends[index] as u32 / 1440) as u16;
+        let x = area.x.saturating_add(start_px);
         if x >= area.right() {
             break;
         }
-        let width = ((area.width as u32 * (ends[index] - starts[index]) + 1439) / 1440)
-            .min((area.right() - x) as u32) as u16;
+        let tab_right = area.x.saturating_add(end_px).min(area.right());
+        let width = tab_right.saturating_sub(x);
         let style = if active {
             Style::default()
                 .fg(theme::text())
@@ -122,12 +123,9 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         }
         let label_offset = if index == 0 { 36 } else { 21 };
         let label_x = x + (area.width as u32 * label_offset / 1440) as u16;
-        let label_right = area
-            .x
-            .saturating_add((area.width as u32 * ends[index] / 1440) as u16);
         frame.render_widget(
             Paragraph::new(label).style(style),
-            Rect::new(label_x, area.y, label_right.saturating_sub(label_x), 1),
+            Rect::new(label_x, area.y, tab_right.saturating_sub(label_x), 1),
         );
     }
     frame.render_widget(
