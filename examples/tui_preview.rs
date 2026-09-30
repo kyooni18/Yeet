@@ -219,6 +219,12 @@ fn main() -> anyhow::Result<()> {
             app.files = Some(files);
             app.mode = Mode::Files;
         }
+        "home" => {
+            // Render the actual empty-chat Home workbench without the Views overlay.
+            app.mode = Mode::Chat;
+            app.state.current_session_id = None;
+            app.conversation.clear();
+        }
         "views" => {
             app.files = Some(FilesState::open(std::env::current_dir()?));
             app.mode = Mode::Views;
