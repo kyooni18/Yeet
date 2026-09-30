@@ -122,23 +122,25 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    let px = |value: u16| (value * area.width + 116) / 232;
+    let py = |value: u16| (value * area.height + 403) / 806;
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme::surface_color())),
+        Block::default().style(Style::default().bg(Color::Rgb(0x1f, 0x1f, 0x28))),
         area,
     );
-    let button = Rect::new(
-        area.x + 8 * area.width / 232,
-        area.y + 12 * area.height / 806,
-        216 * area.width / 232,
-        34 * area.height / 806,
-    );
+    let button = Rect::new(area.x + px(8), area.y + py(12), px(216), py(34).max(1));
     frame.render_widget(
-        Block::default().style(Style::default().bg(theme::selected_color())),
+        Block::default().style(Style::default().bg(Color::Rgb(0x2a, 0x2a, 0x37))),
         button,
     );
     frame.render_widget(
-        Paragraph::new("+").style(Style::default().fg(theme::text())),
-        Rect::new(button.x + button.width / 2, button.y, 4, 1),
+        Paragraph::new("+").style(Style::default().fg(Color::Rgb(0xd7, 0xd7, 0xa7))),
+        Rect::new(
+            button.x + button.width / 2,
+            button.y,
+            1.min(button.width),
+            1.min(button.height),
+        ),
     );
     let entries = [
         ("/", "MM305 crosswind", "18s", true),
@@ -147,40 +149,46 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         ("·", "Provider cleanup", "21m", false),
         ("·", "Foundation memory", "43m", false),
     ];
-    let offsets = [52u16, 80, 108, 136, 164];
+    let age_px = [198u16, 206, 206, 198, 198];
+    let title_width_px = [166u16, 174, 174, 166, 166];
     for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
-        let y = area.y + offsets[index] * area.height / 806;
+        let y = area.y + py(52 + index as u16 * 28);
         if y >= area.bottom() {
             break;
         }
-        let row = Rect::new(area.x, y, area.width, (28 * area.height / 806).max(1));
-        let style = if selected {
-            Style::default()
-                .fg(theme::text())
-                .bg(theme::rail_selected())
-                .add_modifier(ACTIVE)
-        } else {
-            Style::default().fg(theme::text_dim())
-        };
+        let row = Rect::new(area.x, y, area.width, py(28).max(1));
         if selected {
-            frame.render_widget(Block::default().style(style), row);
+            frame.render_widget(
+                Block::default().style(Style::default().bg(Color::Rgb(0x25, 0x26, 0x33))),
+                row,
+            );
         }
-        let age_width = age.chars().count() as u16;
-        let icon_x = area.x + 12 * area.width / 232;
-        let title_x = area.x + 30 * area.width / 232;
-        let right = area.right().saturating_sub(10 * area.width / 232);
-        let title_width = right.saturating_sub(title_x + age_width + 2);
+        let fg = if selected {
+            Color::Rgb(0xd7, 0xd7, 0xa7)
+        } else {
+            Color::Rgb(0xa6, 0xa6, 0x9c)
+        };
+        let icon_x = area.x + px(if index == 0 { 13 } else { 12 });
+        let title_x = area.x + px(30);
+        let age_x = area.x + px(age_px[index]);
+        let title_width = px(title_width_px[index]);
         frame.render_widget(
-            Paragraph::new(icon).style(style),
-            Rect::new(icon_x, y, 2, 1),
+            Paragraph::new(icon).style(Style::default().fg(fg)),
+            Rect::new(icon_x, y, 1, 1),
         );
         frame.render_widget(
-            Paragraph::new(super::super::task::fit(title, title_width as usize)).style(style),
+            Paragraph::new(super::super::task::fit(title, title_width as usize)).style(
+                Style::default().fg(fg).add_modifier(if selected {
+                    ACTIVE
+                } else {
+                    Modifier::empty()
+                }),
+            ),
             Rect::new(title_x, y, title_width, 1),
         );
         frame.render_widget(
-            Paragraph::new(age).style(Style::default().fg(theme::muted())),
-            Rect::new(right, y, age_width, 1),
+            Paragraph::new(age).style(Style::default().fg(Color::Rgb(0x72, 0x71, 0x69))),
+            Rect::new(age_x, y, age.len() as u16, 1),
         );
     }
 }
