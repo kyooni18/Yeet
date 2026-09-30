@@ -2,7 +2,7 @@ use std::{
     io,
     io::{IsTerminal, Write},
     process,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -311,6 +311,8 @@ fn read_remote_access_key() -> Result<String> {
 
 const TUI_STARTUP_NOTICE: &str = "YEET // STARTING RUNTIME...";
 const MAX_BACKEND_EVENTS_PER_FRAME: usize = 128;
+const MAX_INPUT_EVENTS_PER_FRAME: usize = 64;
+const BACKEND_FRAME_BUDGET: Duration = Duration::from_millis(4);
 
 fn run_tui() -> Result<()> {
     let mut stdout = io::stdout();
@@ -363,11 +365,15 @@ fn event_loop(
     let mut rendered_session = None;
 
     loop {
+        let backend_started = Instant::now();
         for _ in 0..MAX_BACKEND_EVENTS_PER_FRAME {
             let Some(event) = backend.try_recv() else {
                 break;
             };
             apply_backend_event(app, event);
+            if backend_started.elapsed() >= BACKEND_FRAME_BUDGET {
+                break;
+            }
         }
 
         // Crossterm 0.28 can spin inside its Unix event reader when a PTY read
@@ -382,40 +388,58 @@ fn event_loop(
             return Ok(());
         }
 
-        match terminal_events.recv_timeout(Duration::from_millis(16)) {
-            Ok(Ok(event)) => {
-                match event {
-                    Event::Key(key) => app.handle_key(key, backend)?,
-                    Event::Mouse(mouse) => {
-                        app.handle_mouse(mouse);
-                        if let Some(session_id) = app.take_sidebar_load_request() {
-                            backend
-                                .send(yeet::model::FrontendCommand::LoadSession { session_id })?;
+        let mut input = terminal_events.recv_timeout(Duration::from_millis(16));
+        for input_index in 0..MAX_INPUT_EVENTS_PER_FRAME {
+            match input {
+                Ok(Ok(event)) => {
+                    match event {
+                        Event::Key(key) => app.handle_key(key, backend)?,
+                        Event::Mouse(mouse) => {
+                            app.handle_mouse(mouse);
+                            if let Some(session_id) = app.take_sidebar_load_request() {
+                                backend.send(yeet::model::FrontendCommand::LoadSession {
+                                    session_id,
+                                })?;
+                            }
                         }
+                        Event::Paste(text) => app.handle_paste(&text),
+                        Event::Resize(width, height) => {
+                            terminal.resize(Rect::new(0, 0, width, height))?;
+                        }
+                        _ => {}
                     }
-                    Event::Paste(text) => app.handle_paste(&text),
-                    Event::Resize(width, height) => {
-                        terminal.resize(Rect::new(0, 0, width, height))?;
+                    if let Some(text) = app.take_clipboard_request() {
+                        copy_via_osc52(&text)?;
                     }
-                    _ => {}
                 }
-                if let Some(text) = app.take_clipboard_request() {
-                    copy_via_osc52(&text)?;
+                Ok(Err(error)) => {
+                    if terminal_input_disconnected().unwrap_or(false) {
+                        return Ok(());
+                    }
+                    return Err(anyhow::Error::new(error).context("failed to read terminal event"));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    if terminal_input_disconnected().unwrap_or(false) {
+                        return Ok(());
+                    }
+                    anyhow::bail!("terminal event reader stopped unexpectedly");
                 }
             }
-            Ok(Err(error)) => {
-                if terminal_input_disconnected().unwrap_or(false) {
-                    return Ok(());
-                }
-                return Err(anyhow::Error::new(error).context("failed to read terminal event"));
+            if app.quit {
+                return Ok(());
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                if terminal_input_disconnected().unwrap_or(false) {
-                    return Ok(());
-                }
-                anyhow::bail!("terminal event reader stopped unexpectedly");
+            // Do not dequeue an event we cannot process in this frame.
+            if input_index + 1 == MAX_INPUT_EVENTS_PER_FRAME {
+                break;
             }
+            input = match terminal_events.try_recv() {
+                Ok(event) => Ok(event),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+                }
+            };
         }
     }
 }

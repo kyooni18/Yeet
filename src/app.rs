@@ -127,6 +127,8 @@ pub struct App {
     pub(crate) composer_width: u16,
     pub(crate) composer_scroll: usize,
     pub transcript_cells: Vec<Vec<String>>,
+    pub(crate) transcript_cache: Option<crate::ui::TranscriptCache>,
+    pub(crate) transcript_revision: u64,
     pub tools_expanded: bool,
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
@@ -192,6 +194,8 @@ impl Default for App {
             composer_width: 0,
             composer_scroll: 0,
             transcript_cells: Vec::new(),
+            transcript_cache: None,
+            transcript_revision: 0,
             tools_expanded: false,
             selection_start: None,
             selection_end: None,
@@ -251,6 +255,7 @@ impl App {
         let sandbox_settings_changed = self.state.sandbox_settings != next.sandbox_settings;
         let runtime_settings_changed = self.state.runtime_settings != next.runtime_settings;
         if let Some(conversation) = next.conversation.take() {
+            self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.conversation = conversation;
             self.clear_transcript_selection();
         }

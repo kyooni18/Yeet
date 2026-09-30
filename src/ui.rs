@@ -13,3 +13,5 @@ pub use support::theme::initialize_theme;
 
 #[cfg(test)]
 mod render_tests;
+
+pub(crate) use views::sessions::TranscriptCache;

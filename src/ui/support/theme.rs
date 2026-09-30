@@ -14,6 +14,10 @@ use crate::theme::{Palette, Rgb};
 
 static ACTIVE: OnceLock<RwLock<Palette>> = OnceLock::new();
 
+pub(in crate::ui) fn active_palette() -> Palette {
+    active()
+}
+
 fn active() -> Palette {
     let lock = ACTIVE.get_or_init(|| RwLock::new(load_palette()));
     *lock.read().expect("theme lock poisoned")

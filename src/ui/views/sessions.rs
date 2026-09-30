@@ -26,6 +26,115 @@ use ratatui::{
 };
 use tools::{WorkItem, work_group_lines, work_groups};
 
+#[derive(Debug, PartialEq, Eq)]
+struct TranscriptKey {
+    revision: u64,
+    session_id: Option<String>,
+    conversation_ptr: usize,
+    entries: usize,
+    width: u16,
+    expanded: bool,
+    palette: crate::theme::Palette,
+    streaming: bool,
+    assistant_id: Option<String>,
+    assistant_text: String,
+    reasoning_id: Option<String>,
+    reasoning_text: String,
+    reasoning_summary: String,
+    activity_id: Option<String>,
+}
+
+impl TranscriptKey {
+    fn matches(&self, app: &App, width: u16) -> bool {
+        self.revision == app.transcript_revision
+            && self.session_id == app.state.current_session_id
+            && self.conversation_ptr == app.conversation.as_ptr() as usize
+            && self.entries == app.conversation.len()
+            && self.width == width
+            && self.expanded == app.tools_expanded
+            && self.palette == theme::active_palette()
+            && self.streaming == app.state.is_streaming
+            && self.assistant_id == app.state.active_assistant_entry_id
+            && self.assistant_text == app.state.active_assistant_text
+            && self.reasoning_id == app.state.active_reasoning_entry_id
+            && self.reasoning_text == app.state.active_reasoning_text
+            && self.reasoning_summary == app.state.active_reasoning_summary
+            && self.activity_id == app.state.active_activity_entry_id
+    }
+
+    fn for_app(app: &App, width: u16) -> Self {
+        Self {
+            revision: app.transcript_revision,
+            session_id: app.state.current_session_id.clone(),
+            conversation_ptr: app.conversation.as_ptr() as usize,
+            entries: app.conversation.len(),
+            width,
+            expanded: app.tools_expanded,
+            palette: theme::active_palette(),
+            streaming: app.state.is_streaming,
+            assistant_id: app.state.active_assistant_entry_id.clone(),
+            assistant_text: app.state.active_assistant_text.clone(),
+            reasoning_id: app.state.active_reasoning_entry_id.clone(),
+            reasoning_text: app.state.active_reasoning_text.clone(),
+            reasoning_summary: app.state.active_reasoning_summary.clone(),
+            activity_id: app.state.active_activity_entry_id.clone(),
+        }
+    }
+}
+
+/// Parsed/styled transcript plus wrapped-row offsets. Memory is proportional
+/// to transcript text, not terminal width times the entire scrollback height.
+#[derive(Debug)]
+pub(crate) struct TranscriptCache {
+    key: TranscriptKey,
+    text: Text<'static>,
+    starts: Vec<usize>,
+    rows: usize,
+}
+
+impl TranscriptCache {
+    fn viewport(&self, scroll: u16, height: u16) -> (Text<'static>, u16) {
+        let first = self
+            .starts
+            .partition_point(|row| *row <= scroll as usize)
+            .saturating_sub(1);
+        let end = self
+            .starts
+            .partition_point(|row| *row < scroll as usize + height as usize)
+            .min(self.text.lines.len());
+        let text = Text::from(self.text.lines[first..end].to_vec());
+        (
+            text,
+            (scroll as usize).saturating_sub(self.starts[first]) as u16,
+        )
+    }
+
+    fn new(key: TranscriptKey, mut text: Text<'static>) -> Self {
+        if text.lines.is_empty() {
+            text.lines.push(Line::default());
+        }
+        let mut rows = 0;
+        let starts = text
+            .lines
+            .iter()
+            .map(|line| {
+                let start = rows;
+                rows += Paragraph::new(line.clone())
+                    .wrap(Wrap { trim: false })
+                    .line_count(key.width.max(1))
+                    .max(1);
+                start
+            })
+            .collect();
+        Self {
+            key,
+            text,
+            starts,
+            rows,
+        }
+    }
+}
+
 pub(in crate::ui) fn draw(
     frame: &mut Frame<'_>,
     app: &mut App,
@@ -94,16 +203,36 @@ fn draw_desktop(
         }
         return;
     }
-    let text = transcript_text(app, area.width);
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
-    let line_count = paragraph.line_count(area.width.max(1)) as u16;
-    app.max_scroll = line_count.saturating_sub(area.height);
+    if app
+        .transcript_cache
+        .as_ref()
+        .is_none_or(|cache| !cache.key.matches(app, area.width))
+    {
+        app.transcript_cache = Some(TranscriptCache::new(
+            TranscriptKey::for_app(app, area.width),
+            transcript_text(app, area.width),
+        ));
+    }
+    let cache = app
+        .transcript_cache
+        .as_ref()
+        .expect("transcript layout cached");
+    app.max_scroll = cache.rows.min(u16::MAX as usize) as u16;
+    app.max_scroll = app.max_scroll.saturating_sub(area.height);
     if app.follow_tail {
         app.scroll_y = app.max_scroll;
     } else {
         app.scroll_y = app.scroll_y.min(app.max_scroll);
     }
-    frame.render_widget(paragraph.scroll((app.scroll_y, 0)), area);
+    // Start at the logical line containing the viewport, not at the beginning
+    // of the session. Paragraph only reflows the few visible logical lines.
+    let (text, offset) = cache.viewport(app.scroll_y, area.height);
+    frame.render_widget(
+        Paragraph::new(text)
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
+        area,
+    );
     capture_transcript_cells(frame, app, area);
     draw_selection(frame, app, area);
     if app.max_scroll > 0 && area.width > 1 {
