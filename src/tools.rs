@@ -303,6 +303,12 @@ impl ToolRegistry {
         self.artifacts_enabled = enabled;
     }
 
+    pub(crate) fn bind_runtime_agent(&self, id: crate::agents::AgentId) {
+        if let Some(orchestrator) = &self.agent_orchestrator {
+            orchestrator.bind_parent_agent(id);
+        }
+    }
+
     pub(crate) fn set_agent_orchestrator(
         &mut self,
         orchestrator: Option<AdaptiveAgentOrchestrator>,
@@ -336,6 +342,10 @@ impl ToolRegistry {
             "activeSessionId": self.active_session_id,
             "workspaceRoot": self.workspace_root,
         })
+    }
+
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
     }
 
     pub fn workspace_identity(&self) -> (String, Option<String>) {

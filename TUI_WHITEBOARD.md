@@ -805,3 +805,13 @@ migrated to `Tabs<T>`, and floating input/focus restoration still uses existing
 mode routing. Buttons currently share mouse geometry, not automatic keyboard
 focus/navigation. Selection/scroll states and declarative container composition
 remain follow-up work; do not claim a complete UI runtime yet.
+
+## Shared action and runtime agent boundary
+
+`src/actions.rs` owns frontend commands and navigation intents; model and TUI
+paths retain compatibility exports. `App::dispatch_action` interprets the common
+Action envelope: navigation stays local, commands use the existing Harness
+pipeline. Geometry, focus, and rendering remain in `tui/`. This is an incremental
+boundary, not a migration of every widget-specific action or editor keystroke.
+`src/agents/` owns process-wide runtime identity and snapshots, separate from
+conversation storage, provider history, UI state, and private model reasoning.

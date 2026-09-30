@@ -23,8 +23,33 @@ pub(super) fn runtime_attached_capabilities(values: &[String]) -> Vec<String> {
 }
 
 impl AgentCoordinator {
+    /// Bind identity before a run, including lineage for generated in-process agents.
+    pub fn register_runtime_agent(
+        &mut self,
+        name: impl Into<String>,
+        model: impl Into<String>,
+        parent_agent: Option<crate::agents::AgentId>,
+    ) -> anyhow::Result<crate::agents::AgentId> {
+        if self.runtime_agent_id.is_some() {
+            anyhow::bail!("runtime agent identity is already registered");
+        }
+        let id = crate::agents::global().register(
+            name,
+            model,
+            self.registry.workspace_root().to_path_buf(),
+            parent_agent,
+        )?;
+        self.runtime_agent_id = Some(id);
+        Ok(id)
+    }
+
+    pub fn runtime_agent_id(&self) -> Option<crate::agents::AgentId> {
+        self.runtime_agent_id
+    }
+
     pub(crate) fn new(bridge: BridgeHandle, registry: ToolRegistry) -> Self {
         Self {
+            runtime_agent_id: None,
             bridge,
             registry,
             history: vec![Message::system(SYSTEM_INSTRUCTION)],
@@ -63,5 +88,13 @@ impl AgentCoordinator {
                 .map(|id| store.directory.join(id).join("context")),
         );
         self.registry.set_session_runtime(store, active_session_id);
+    }
+}
+
+impl Drop for AgentCoordinator {
+    fn drop(&mut self) {
+        if let Some(id) = self.runtime_agent_id {
+            let _ = crate::agents::global().unregister(id);
+        }
     }
 }

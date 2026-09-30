@@ -210,6 +210,7 @@ pub(crate) struct AdaptiveAgentOrchestrator {
 #[derive(Default)]
 struct AdaptiveAgentState {
     generation: u64,
+    parent_agent: Option<crate::agents::AgentId>,
     total_started: usize,
     active: HashSet<String>,
     worker_cancels: HashMap<String, Arc<AtomicBool>>,
@@ -224,6 +225,10 @@ struct ProposedTask {
 }
 
 impl AdaptiveAgentOrchestrator {
+    pub(crate) fn bind_parent_agent(&self, id: crate::agents::AgentId) {
+        self.lock_state().parent_agent = Some(id);
+    }
+
     pub(crate) fn new(
         factory: AgentRuntimeFactory,
         run_manager: RunManager,
@@ -417,6 +422,18 @@ impl AdaptiveAgentOrchestrator {
         }
         let result = (|| -> Result<Value> {
             let mut coordinator = self.factory.build(active_session_id)?;
+            let parent_agent = {
+                let state = self.lock_state();
+                if state.generation != generation {
+                    bail!("agent worker belongs to a stale primary run");
+                }
+                state.parent_agent
+            };
+            let child_id =
+                coordinator.register_runtime_agent(task.role.as_str(), model, parent_agent)?;
+            if let Some(parent) = parent_agent {
+                crate::agents::global().connect(parent, child_id)?;
+            }
             let reasoning_level = worker_reasoning_level(model);
             let goal_mode = Arc::new(AtomicBool::new(true));
             let prompt = worker_prompt(task.role, &task.objective);

@@ -70,6 +70,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
 pub struct AgentCoordinator {
+    runtime_agent_id: Option<crate::agents::AgentId>,
     bridge: BridgeHandle,
     registry: ToolRegistry,
     history: Vec<Message>,

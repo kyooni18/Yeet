@@ -12,6 +12,18 @@ impl AgentCoordinator {
     where
         F: FnMut(AgentEvent),
     {
+        let registry = crate::agents::global();
+        let workspace = self.registry.workspace_root().to_path_buf();
+        let id = match self.runtime_agent_id {
+            Some(id) => id,
+            None => {
+                let id = registry.register("Yeet", request.model, workspace.clone(), None)?;
+                self.runtime_agent_id = Some(id);
+                id
+            }
+        };
+        let _run = registry.begin_run(id, request.model, workspace)?;
+        self.registry.bind_runtime_agent(id);
         let AgentRunRequest {
             input,
             images,
@@ -91,6 +103,14 @@ impl AgentCoordinator {
                 &goal_mode,
                 &goal_input,
                 &mut |event| {
+                    if let AgentEvent::GoalJudge { passed, reason } = &event {
+                        let _ = registry.record_decision(
+                            id,
+                            crate::agents::AgentDecision {
+                                summary: format!("Goal judge passed={passed}: {reason}"),
+                            },
+                        );
+                    }
                     // Successful tool execution separates independent outages. Judge
                     // responses alone must not reset a persistently failing judge lane.
                     if matches!(
@@ -190,6 +210,15 @@ impl AgentCoordinator {
                 }
             }
         }
+        let _ = registry.record_decision(
+            id,
+            crate::agents::AgentDecision {
+                summary: match &result {
+                    Ok(outcome) => format!("Run outcome: {outcome:?}"),
+                    Err(error) => format!("Run failed: {error}"),
+                },
+            },
+        );
         self.previous_turn_working_state = self.registry.working_state_summary();
         self.registry.finish_task(&task_id);
         settle_interrupted_context_batch(&mut self.history);

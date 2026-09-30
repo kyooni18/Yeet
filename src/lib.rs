@@ -1,4 +1,6 @@
+pub mod actions;
 pub mod agent;
+pub mod agents;
 pub mod backend;
 pub mod background;
 pub mod cli;

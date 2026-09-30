@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod actions;
 pub mod files;
 mod home;
 pub(crate) use home::HomeAction;

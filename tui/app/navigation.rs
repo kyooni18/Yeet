@@ -2,18 +2,7 @@
 use super::{App, Mode};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkbenchTab {
-    Home,
-    Session,
-    Files,
-    File(usize),
-    CloseFile(usize),
-    Diff(usize),
-    CloseDiff(usize),
-    NewDiff,
-    Launcher,
-}
+pub use crate::actions::NavigationAction as WorkbenchTab;
 
 impl App {
     pub fn home_visible(&self) -> bool {
@@ -55,6 +44,10 @@ impl App {
     }
 
     pub fn activate_workbench_tab(&mut self, tab: WorkbenchTab) {
+        self.apply_navigation(tab);
+    }
+
+    pub(crate) fn apply_navigation(&mut self, tab: WorkbenchTab) {
         match tab {
             WorkbenchTab::Home | WorkbenchTab::Session => {
                 self.home_override = Some(tab == WorkbenchTab::Home);
