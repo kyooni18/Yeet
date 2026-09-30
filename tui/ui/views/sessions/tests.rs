@@ -127,3 +127,50 @@ fn copying_user_bubbles_excludes_padding_and_keeps_content_indentation() {
         Some("hello\n  indented")
     );
 }
+
+#[test]
+fn summary_dropdown_keyboard_toggles_its_tool_list() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = App::default();
+    app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
+    app.input_focused = false;
+    app.input = "keep draft".into();
+    app.conversation = vec![
+        ConversationEntry {
+            id: "summary".into(),
+            kind: ConversationKind::Reasoning {
+                content: "private reasoning".into(),
+                summary: Some("Inspect the source\n\nCheck the implementation".into()),
+            },
+        },
+        ConversationEntry {
+            id: "tool".into(),
+            kind: ConversationKind::ToolCall {
+                tool_call: serde_json::from_value(serde_json::json!({
+                    "id":"tool", "name":"read_file",
+                    "arguments":"{\"path\":\"src/example.rs\"}", "status":"completed"
+                }))
+                .unwrap(),
+            },
+        },
+    ];
+    let (collapsed, headers) = transcript_content(&app, 90);
+    assert_eq!(headers.len(), 1, "the summary owns its following tools");
+    assert!(!collapsed.to_string().contains("src/example.rs"));
+    app.work_rows = headers.iter().map(|row| *row as u16).collect();
+    assert!(app.handle_work_selection_key(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
+    for key in [KeyCode::Char(' '), KeyCode::Enter] {
+        assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
+        let expanded = transcript_content(&app, 90).0.to_string();
+        assert!(expanded.contains("src/example.rs"));
+        assert!(expanded.contains("Check the implementation"));
+        assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
+        assert!(
+            !transcript_content(&app, 90)
+                .0
+                .to_string()
+                .contains("src/example.rs")
+        );
+    }
+    assert_eq!(app.input, "keep draft");
+}

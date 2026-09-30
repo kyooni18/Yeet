@@ -740,6 +740,7 @@ pub(in crate::tui::ui) enum WorkGroup<'a> {
         text: String,
         live: bool,
         summary: bool,
+        calls: Vec<&'a crate::model::ConversationToolCall>,
     },
 }
 
@@ -765,16 +766,23 @@ pub(in crate::tui::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGro
                     });
                     open = true;
                 }
-                if let Some(WorkGroup::Tools { calls, .. }) = groups.last_mut() {
-                    calls.push(call);
+                match groups.last_mut() {
+                    Some(WorkGroup::Tools { calls, .. })
+                    | Some(WorkGroup::Reasoning {
+                        calls,
+                        summary: true,
+                        ..
+                    }) => calls.push(call),
+                    _ => {}
                 }
             }
             WorkItem::Summary { text, live } => {
-                open = false;
+                open = true;
                 groups.push(WorkGroup::Reasoning {
                     text: (*text).to_owned(),
                     live: *live,
                     summary: true,
+                    calls: Vec::new(),
                 });
             }
             WorkItem::Reasoning { text, live } => {
@@ -783,6 +791,7 @@ pub(in crate::tui::ui) fn work_groups<'a>(items: &[WorkItem<'a>]) -> Vec<WorkGro
                     text: (*text).to_owned(),
                     live: *live,
                     summary: false,
+                    calls: Vec::new(),
                 });
             }
         }
@@ -939,6 +948,7 @@ pub(super) fn work_group_lines_selected(
                 text,
                 live,
                 summary,
+                calls,
             } => {
                 headers.push(lines.len());
                 let summary_items = reasoning_summary_items(text);
@@ -985,6 +995,23 @@ pub(super) fn work_group_lines_selected(
                             line.style(muted),
                             width as u16,
                         ));
+                    }
+                    if !calls.is_empty() {
+                        // Reuse the tool dropdown's presentation, but the summary
+                        // owns this list and its keyboard expansion state.
+                        let nested = WorkGroup::Tools {
+                            calls: calls.clone(),
+                            title: None,
+                        };
+                        let (tool_lines, _) = work_group_lines_selected(
+                            &[nested],
+                            width as u16,
+                            true,
+                            None,
+                            &std::collections::BTreeSet::new(),
+                            0,
+                        );
+                        lines.extend(tool_lines);
                     }
                     lines.push(Line::default());
                 }
