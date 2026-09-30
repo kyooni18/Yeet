@@ -1,0 +1,273 @@
+//! Existing app shell, composer, status, and overlay orchestration.
+use super::{
+    components::{chrome, composer, status, tabbar},
+    dialogs, shell,
+    support::{responsive, theme},
+    task, views,
+};
+use crate::tui::app::{App, Mode};
+use composer::draw as draw_input;
+use dialogs::{
+    draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_goal, draw_help,
+    draw_models, draw_permission, draw_provider_edit, draw_providers, draw_reasoning,
+    draw_sandbox_policy, draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
+    draw_status_dialog,
+};
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    prelude::{Line, Span, Style},
+    widgets::{Block, List, ListItem},
+};
+use status::draw as draw_status;
+
+pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    app.observe_workbench_view();
+    app.home_targets.clear();
+    app.tab_targets.clear();
+    app.view_targets.clear();
+    let area = frame.area();
+    let active = app.active_workbench_tab();
+    let show_tabs = match active {
+        tabbar::Active::Home => area.width >= 45,
+        tabbar::Active::Files | tabbar::Active::File(_) => {
+            responsive::shape(area) != responsive::Shape::Portrait
+        }
+        _ => true,
+    };
+    if show_tabs {
+        app.tab_targets = tabbar::targets(app, Rect::new(area.x, area.y, area.width, 1), active);
+    }
+    if app.mode == Mode::Sessions && responsive::shape(frame.area()) == responsive::Shape::Portrait
+    {
+        views::session_picker::draw(frame, app);
+        return;
+    }
+    if app.mode == Mode::Diff || (app.mode == Mode::Views && app.views_origin == Mode::Diff) {
+        views::diff::draw(frame, app);
+        if app.mode == Mode::Views {
+            views::draw(frame, app);
+        }
+        return;
+    }
+    if app.mode == Mode::Files || (app.mode == Mode::Views && app.views_origin == Mode::Files) {
+        views::files::draw(frame, app);
+        if app.mode == Mode::Views {
+            views::draw(frame, app);
+        }
+        return;
+    }
+    if app.state.is_streaming {
+        let activity_label = task::live_operation(app)
+            .map(|operation| operation.label)
+            .unwrap_or_else(|| task::live_activity(app).0);
+        app.sync_activity_label(&activity_label);
+    }
+    let home = app.home_visible()
+        && (app.mode == Mode::Chat || (app.mode == Mode::Views && app.views_origin == Mode::Chat));
+    if home
+        && frame.area().width >= 45
+        && app.state.pending_shell_permission.is_none()
+        && app.state.pending_native_app_permission.is_none()
+        && app.state.error_message.is_none()
+    {
+        if app.home_override.is_none() {
+            app.home_override = Some(true);
+        }
+        views::home::draw(frame, app);
+        if app.mode == Mode::Views {
+            views::draw(frame, app);
+        }
+        return;
+    }
+    frame.render_widget(Block::default().style(theme::base()), frame.area());
+    let adaptive = responsive::metrics(frame.area());
+    let full = frame.area();
+    let status_height = adaptive.status_height.min(full.height);
+    let main = Rect::new(full.x, full.y, full.width, full.height - status_height);
+    let status_area = Rect::new(full.x, main.bottom(), full.width, status_height);
+    let (sidebar_area, sidebar_targets) = shell::sidebar_session_targets(app, main);
+    app.set_sidebar_session_targets(sidebar_area, sidebar_targets);
+    if sidebar_area.2 > 0 {
+        app.sidebar_nav_ids = shell::sidebar_nav_ids(app);
+    } else {
+        app.sidebar_nav_ids.clear();
+        app.sidebar_focus = false;
+    }
+    let (pane, area) = shell::draw_shell(frame, app, main);
+    let suggestions = app.command_suggestions();
+    let requested_suggestion_height = if suggestions.is_empty() {
+        0
+    } else {
+        (suggestions.len() as u16 + 2)
+            .min(adaptive.suggestion_height)
+            .min(area.height / 3)
+    };
+    let portrait = adaptive.shape == responsive::Shape::Portrait;
+    let (input_inset, input_chrome) = (9, if portrait { 2 } else { 1 });
+    let input_rows = composer::layout(
+        &app.input,
+        app.cursor,
+        pane.width.saturating_sub(input_inset),
+    );
+    let input_height = (input_rows.lines.len() as u16)
+        .clamp(adaptive.input_min_lines, adaptive.input_max_lines)
+        + input_chrome;
+    let task_height = if portrait {
+        0
+    } else {
+        task::height(app).min(adaptive.task_height)
+    };
+    let suggestion_budget = area
+        .height
+        .saturating_sub(task_height.saturating_add(input_height).saturating_add(1));
+    let suggestion_height = if requested_suggestion_height >= 3 && suggestion_budget >= 3 {
+        requested_suggestion_height.min(suggestion_budget)
+    } else {
+        0
+    };
+    let usage = (status_area.width as usize >= 100)
+        .then(|| status::usage_line(app, pane.width.saturating_sub(4) as usize))
+        .flatten()
+        .filter(|_| area.height >= task_height + suggestion_height + input_height + 4);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(task_height),
+            Constraint::Length(suggestion_height),
+            Constraint::Length(u16::from(usage.is_some())),
+            Constraint::Length(input_height),
+        ])
+        .split(area);
+
+    views::sessions::draw(frame, app, chunks[0], adaptive.shape);
+    if suggestion_height > 0 {
+        draw_suggestions(frame, app, chunks[2], &suggestions);
+    }
+    task::draw(
+        frame,
+        app,
+        Rect::new(
+            chunks[1].x + 1,
+            chunks[1].y,
+            chunks[1].width.saturating_sub(2),
+            chunks[1].height,
+        ),
+    );
+    // The usage pill and composer span the whole pane; the composer text
+    // lines up with the transcript column.
+    if let Some(line) = usage {
+        let width = (line.width() as u16).min(pane.width.saturating_sub(4));
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(line),
+            Rect::new(pane.x + 2, chunks[3].y, width, 1),
+        );
+    }
+    let composer_area = Rect::new(pane.x, chunks[4].y, pane.width, chunks[4].height);
+    draw_input(frame, app, composer_area, area.x + 1);
+    draw_status(frame, app, status_area);
+    views::sessions::draw_context_menu(frame, app);
+
+    match app.mode {
+        Mode::Debate => dialogs::draw_debate(frame, app),
+        Mode::Models => draw_models(frame, app),
+        Mode::Reasoning => draw_reasoning(frame, app),
+        Mode::Goal => draw_goal(frame, app),
+        Mode::Sessions => draw_sessions(frame, app),
+        Mode::Capabilities => draw_capabilities(frame, app),
+        Mode::CapabilityDetail => draw_capability_detail(frame, app),
+        Mode::Auth => draw_auth(frame, app),
+        Mode::AuthKey => draw_auth_key(frame, app),
+        Mode::Providers => draw_providers(frame, app),
+        Mode::ProviderEdit => draw_provider_edit(frame, app),
+        Mode::Settings => draw_settings(frame, app),
+        Mode::SandboxPresets => draw_sandbox_presets(frame, app),
+        Mode::SandboxPolicy => draw_sandbox_policy(frame, app),
+        Mode::SettingsEdit => {
+            draw_sandbox_policy(frame, app);
+            draw_settings_edit(frame, app);
+        }
+        Mode::Status => draw_status_dialog(frame, app),
+        Mode::Help => draw_help(frame),
+        Mode::Views => views::draw(frame, app),
+        Mode::Chat | Mode::Files | Mode::Diff => {}
+    }
+
+    if app.state.pending_shell_permission.is_some()
+        || app.state.pending_native_app_permission.is_some()
+    {
+        draw_permission(frame, app);
+    }
+
+    chrome::draw(frame, app);
+}
+
+fn draw_suggestions(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    suggestions: &[(String, String)],
+) {
+    let list = suggestion_list(suggestions);
+    let mut state = ratatui::widgets::ListState::default().with_selected(Some(app.command_index));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn suggestion_list(suggestions: &[(String, String)]) -> List<'_> {
+    let items = suggestions.iter().map(|(name, description)| {
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                format!("{name:<14}  "),
+                Style::default().fg(theme::accent()),
+            ),
+            Span::styled(description.as_str(), Style::default().fg(theme::text_dim())),
+        ]))
+    });
+    List::new(items)
+        .block(theme::modal_block("Commands · ↑/↓ choose · Tab complete"))
+        .highlight_style(theme::selected())
+        .highlight_symbol("› ")
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::*;
+    use ratatui::{
+        buffer::Buffer,
+        widgets::{ListState, StatefulWidget},
+    };
+
+    #[test]
+    fn selection_highlights_the_whole_row_and_keeps_a_visible_marker() {
+        let suggestions = vec![
+            ("/help".into(), "Show help".into()),
+            ("/models".into(), "Choose model".into()),
+        ];
+        let area = Rect::new(0, 0, 64, 4);
+        let mut buffer = Buffer::empty(area);
+        let mut state = ListState::default().with_selected(Some(1));
+        StatefulWidget::render(suggestion_list(&suggestions), area, &mut buffer, &mut state);
+        assert_eq!(buffer[(2, 2)].symbol(), "›");
+        assert_eq!(buffer[(2, 1)].symbol(), " ");
+        for x in 2..62 {
+            assert_eq!(buffer[(x, 2)].bg, theme::selected_color(), "column {x}");
+            assert_ne!(buffer[(x, 1)].bg, theme::selected_color());
+        }
+    }
+
+    #[test]
+    fn long_commands_have_a_gap_before_the_description_and_selection_scrolls() {
+        let suggestions = vec![
+            ("/help".into(), "Help".into()),
+            ("/long-command-name".into(), "Description".into()),
+        ];
+        let area = Rect::new(0, 0, 64, 3);
+        let mut buffer = Buffer::empty(area);
+        let mut state = ListState::default().with_selected(Some(1));
+        StatefulWidget::render(suggestion_list(&suggestions), area, &mut buffer, &mut state);
+        let row: String = (0..area.width).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert!(row.contains("› /long-command-name  Description"), "{row}");
+        assert_eq!(state.offset(), 1);
+    }
+}

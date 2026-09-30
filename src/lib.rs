@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod app;
 pub mod backend;
 pub mod background;
 pub mod cli;
@@ -30,8 +29,13 @@ pub mod skyline;
 mod text_layout;
 pub mod theme;
 pub mod tools;
-pub mod ui;
 pub mod update;
 pub mod web_search;
 pub mod workbench;
 pub mod workers;
+
+#[path = "../tui/mod.rs"]
+pub mod tui;
+
+// Compatibility exports for callers migrating to the terminal subsystem.
+pub use tui::{app, ui};

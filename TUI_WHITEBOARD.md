@@ -763,3 +763,28 @@ expands the selected work unit; the draft is never edited/submitted by these key
 Selection is hidden while the composer or session rail has focus. A click on a
 work header also selects it when the composer is unfocused; drag-to-copy remains
 independent. Active/failed tool groups retain automatic expansion.
+
+## TUI subsystem ownership
+
+The terminal frontend lives in repository-root `tui/`, integrated into the
+existing Rust crate through `src/lib.rs`. This is a behavior-preserving first
+step, not a replacement renderer or a completed state-model rewrite.
+
+- `tui/app.rs` and `tui/app/`: existing UI state, input, selection, and navigation.
+- `tui/ui.rs` and `tui/ui/`: rendering, shell, components, dialogs, views, and
+  responsive layout helpers.
+- `tui/runtime.rs`: local terminal lifecycle/event loop and legacy remote-TUI
+  loop, including disconnect handling, clipboard integration, and cleanup.
+- `src/main.rs`: CLI dispatch and non-terminal remote commands only.
+- `crate::app` and `crate::ui`: compatibility re-exports; new terminal code
+  should use `crate::tui`.
+
+Backend services, shared theme definitions/text utilities, and reusable workbench
+resource collection remain outside `tui/`. They must not acquire dependencies on
+terminal focus or geometry. Historical source paths elsewhere in this document
+refer to the pre-relocation implementation.
+
+Next architectural steps stay incremental: shared layout/hit-test geometry,
+stable view-instance identities, explicit actions/effects, focus scopes and
+overlays, then reusable interaction behavior. Avoid creating empty abstractions
+or moving shared domain services just to fill out a directory tree.
