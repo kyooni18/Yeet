@@ -1079,7 +1079,7 @@ fn sidebar_session_click_requests_load_without_starting_selection() {
     });
     assert!(app.transcript_context_menu.is_some());
 
-    app.transcript_context_menu_area = (22, 5, 22, 4);
+    app.transcript_context_menu_area = (22, 5, 22, 5);
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 23,

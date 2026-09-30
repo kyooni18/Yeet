@@ -406,6 +406,16 @@ fn event_loop(
                         }
                         _ => {}
                     }
+                    if app.take_clipboard_paste_request() {
+                        match read_system_clipboard() {
+                            Ok(text) => {
+                                app.handle_paste(&text);
+                            }
+                            Err(error) => {
+                                app.backend_message = Some(format!("Paste failed: {error}"))
+                            }
+                        }
+                    }
                     if let Some(text) = app.take_clipboard_request() {
                         copy_via_osc52(&text)?;
                     }
@@ -641,7 +651,41 @@ fn remember_terminal_cleanup_error(
     }
 }
 
+fn read_system_clipboard() -> Result<String> {
+    #[cfg(target_os = "macos")]
+    let output = std::process::Command::new("pbpaste").output()?;
+    #[cfg(target_os = "windows")]
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+        .output()?;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let output = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        std::process::Command::new("wl-paste")
+            .arg("--no-newline")
+            .output()?
+    } else {
+        std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .output()?
+    };
+    anyhow::ensure!(output.status.success(), "system clipboard unavailable");
+    Ok(String::from_utf8(output.stdout)?)
+}
+
 fn copy_via_osc52(text: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::{Command, Stdio};
+        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
+            if let Some(mut stdin) = child.stdin.take() {
+                let written = stdin.write_all(text.as_bytes()).is_ok();
+                drop(stdin);
+                if child.wait().is_ok_and(|status| status.success()) && written {
+                    return Ok(());
+                }
+            }
+        }
+    }
     let payload = STANDARD.encode(text.as_bytes());
     let mut stdout = io::stdout();
     write!(stdout, "\x1b]52;c;{payload}\x07")?;

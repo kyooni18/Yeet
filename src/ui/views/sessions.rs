@@ -253,12 +253,12 @@ fn draw_desktop(
     // of the session. Paragraph only reflows the few visible logical lines.
     let (text, offset) = cache.viewport(app.scroll_y, area.height);
     frame.render_widget(
-        Paragraph::new(text)
+        Paragraph::new(text.clone())
             .wrap(Wrap { trim: false })
             .scroll((offset, 0)),
         area,
     );
-    capture_transcript_cells(frame, app, area);
+    capture_transcript_cells(app, area, &text, offset);
     draw_selection(frame, app, area);
     if app.max_scroll > 0 && area.width > 1 {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -319,12 +319,54 @@ fn draw_selection(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
 }
 
-fn capture_transcript_cells(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    let buffer = frame.buffer_mut();
+// Render a separate copy layer with decoration spans marked, retaining exact
+// terminal-cell coordinates (including wide Unicode graphemes).
+fn capture_transcript_cells(app: &mut App, area: Rect, text: &Text<'static>, offset: u16) {
+    use ratatui::{buffer::Buffer, widgets::Widget};
+    let ignored = ratatui::style::Color::Rgb(1, 2, 3);
+    let mut copy = text.clone();
+    for line in &mut copy.lines {
+        let bubble = line.spans.first().is_some_and(|span| {
+            span.style.bg.is_none() && span.content.chars().all(|ch| ch == ' ')
+        }) && line
+            .spans
+            .iter()
+            .skip(1)
+            .all(|span| span.style.bg == Some(theme::surface_color()));
+        let divider = line
+            .spans
+            .iter()
+            .all(|span| span.style.fg == Some(theme::hairline()));
+        let work_header = line.spans.len() == 5
+            && line.spans[2].content == " "
+            && line.spans[4].style.fg == Some(theme::muted());
+        let count = line.spans.len();
+        for (index, span) in line.spans.iter_mut().enumerate() {
+            let padding = bubble && (index == 0 || index == 1 || index + 1 == count);
+            let decoration = span.content.contains('\u{a0}')
+                || (span.content.contains('│')
+                    && span.content.chars().all(|ch| ch == '│' || ch == ' '));
+            if padding || divider || decoration || (work_header && (index < 3 || index == 4)) {
+                span.style = span.style.fg(ignored);
+            }
+        }
+    }
+    let mut buffer = Buffer::empty(area);
+    Paragraph::new(copy)
+        .wrap(Wrap { trim: false })
+        .scroll((offset, 0))
+        .render(area, &mut buffer);
     app.transcript_cells = (area.y..area.bottom())
         .map(|row| {
             (area.x..area.right())
-                .map(|column| buffer[(column, row)].symbol().to_owned())
+                .map(|column| {
+                    let cell = &buffer[(column, row)];
+                    if cell.fg == ignored {
+                        String::new()
+                    } else {
+                        cell.symbol().to_owned()
+                    }
+                })
                 .collect()
         })
         .collect();
@@ -336,12 +378,12 @@ pub(in crate::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
         return;
     };
     let screen = frame.area();
-    if screen.width < 18 || screen.height < 4 {
+    if screen.width < 18 || screen.height < 5 {
         app.transcript_context_menu_area = (0, 0, 0, 0);
         return;
     }
     let width = 22u16.min(screen.width);
-    let height = 4u16.min(screen.height);
+    let height = 5u16.min(screen.height);
     let x = menu
         .x
         .min(screen.right().saturating_sub(width))
@@ -359,7 +401,8 @@ pub(in crate::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
         theme::surface().fg(theme::muted())
     };
     let items = vec![
-        ListItem::new(Line::styled(" Copy", copy_style)),
+        ListItem::new(Line::styled(" Copy      ⌘C", copy_style)),
+        ListItem::new(Line::styled(" Paste     ⌘V", theme::surface())),
         ListItem::new(Line::styled(" Clear selection", theme::surface())),
     ];
     frame.render_widget(Clear, area);
@@ -673,7 +716,7 @@ fn user_message_lines(content: &str, width: u16) -> Vec<Line<'static>> {
     }
     for source in content.split('\n') {
         for row in prefixed_wrapped_line(
-            Span::styled("  ", surface),
+            Span::raw("  "),
             Line::styled(source.to_owned(), surface),
             bubble_width.saturating_sub(2),
         ) {

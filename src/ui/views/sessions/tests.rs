@@ -112,3 +112,18 @@ fn reasoning_work_headers_select_and_expand_independently() {
             .contains(Modifier::REVERSED)
     );
 }
+
+#[test]
+fn copying_user_bubbles_excludes_padding_and_keeps_content_indentation() {
+    let mut app = App::default();
+    let area = Rect::new(2, 3, 100, 8);
+    app.transcript_area = (area.x, area.y, area.width, area.height);
+    let text = Text::from(super::user_message_lines("hello\n  indented", area.width));
+    super::capture_transcript_cells(&mut app, area, &text, 0);
+    app.selection_start = Some((area.x, area.y));
+    app.selection_end = Some((area.right() - 1, area.bottom() - 1));
+    assert_eq!(
+        app.selected_transcript_text().as_deref(),
+        Some("hello\n  indented")
+    );
+}

@@ -150,6 +150,8 @@ pub struct App {
     pub transcript_context_menu: Option<TranscriptContextMenu>,
     pub transcript_context_menu_area: (u16, u16, u16, u16),
     pub(crate) clipboard_request: Option<String>,
+    pub(crate) clipboard_paste_request: bool,
+    pub(crate) context_menu_click: bool,
     pub(crate) sidebar_area: (u16, u16, u16, u16),
     pub(crate) sidebar_session_targets: Vec<(u16, String)>,
     pub(crate) sidebar_load_request: Option<String>,
@@ -228,6 +230,8 @@ impl Default for App {
             transcript_context_menu: None,
             transcript_context_menu_area: (0, 0, 0, 0),
             clipboard_request: None,
+            clipboard_paste_request: false,
+            context_menu_click: false,
             sidebar_area: (0, 0, 0, 0),
             sidebar_session_targets: Vec::new(),
             sidebar_load_request: None,
@@ -400,6 +404,29 @@ impl App {
     }
 
     pub fn handle_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        if event.modifiers.contains(KeyModifiers::SUPER) {
+            match event.code {
+                KeyCode::Char('c' | 'C') => {
+                    if !self.copy_transcript_selection()
+                        && self.input_focused
+                        && !self.input.is_empty()
+                    {
+                        self.clipboard_request = Some(self.input.clone());
+                    }
+                    return Ok(());
+                }
+                KeyCode::Char('v' | 'V') => {
+                    self.clipboard_paste_request = true;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        if self.transcript_context_menu.is_some() && event.code == KeyCode::Esc {
+            self.transcript_context_menu = None;
+            self.transcript_context_menu_area = (0, 0, 0, 0);
+            return Ok(());
+        }
         let mut event = event;
         // Preserve native macOS text-editing semantics before mapping the remaining
         // Command shortcuts onto the TUI's Control bindings.

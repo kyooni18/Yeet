@@ -76,6 +76,29 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, event: MouseEvent) {
+        if matches!(event.kind, MouseEventKind::Up(MouseButton::Left))
+            && std::mem::take(&mut self.context_menu_click)
+        {
+            return;
+        }
+        // An overlay owns its clicks before the composer, sidebar, and tabs.
+        if self.transcript_context_menu.is_some()
+            && matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            self.context_menu_click = true;
+            if self.point_in_transcript_context_menu(event.column, event.row) {
+                self.activate_transcript_context_menu(event.row);
+            } else {
+                self.transcript_context_menu = None;
+                self.transcript_context_menu_area = (0, 0, 0, 0);
+            }
+            return;
+        }
+        if self.transcript_context_menu.is_some()
+            && matches!(event.kind, MouseEventKind::Up(MouseButton::Left))
+        {
+            return;
+        }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             let targets = if self.mode == Mode::Views {
                 &self.view_targets
@@ -187,6 +210,11 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Right) if inside => {
+                if self.selected_transcript_text().is_none() {
+                    let (x, _, width, _) = self.transcript_area;
+                    self.selection_start = Some((x, event.row));
+                    self.selection_end = Some((x + width.saturating_sub(1), event.row));
+                }
                 self.transcript_context_menu = Some(TranscriptContextMenu {
                     x: event.column,
                     y: event.row,
@@ -254,8 +282,23 @@ impl App {
             lines.push(line.trim_end().to_owned());
         }
 
+        while lines.first().is_some_and(|line| line.is_empty()) {
+            lines.remove(0);
+        }
+        while lines.last().is_some_and(|line| line.is_empty()) {
+            lines.pop();
+        }
         let text = lines.join("\n");
         (!text.trim().is_empty()).then_some(text)
+    }
+
+    pub fn take_clipboard_paste_request(&mut self) -> bool {
+        let requested = std::mem::take(&mut self.clipboard_paste_request);
+        if requested && self.mode == Mode::Chat {
+            self.input_focused = true;
+            self.sidebar_focus = false;
+        }
+        requested
     }
 
     pub fn take_clipboard_request(&mut self) -> Option<String> {
@@ -346,14 +389,18 @@ impl App {
 
     fn activate_transcript_context_menu(&mut self, row: u16) {
         let (_, y, _, height) = self.transcript_context_menu_area;
-        if height < 4 {
+        if height < 5 {
             return;
         }
         match row.saturating_sub(y) {
             1 => {
                 self.copy_transcript_selection();
             }
-            2 => self.clear_transcript_selection(),
+            2 => {
+                self.clipboard_paste_request = true;
+                self.clear_transcript_selection();
+            }
+            3 => self.clear_transcript_selection(),
             _ => {}
         }
     }
