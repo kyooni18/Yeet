@@ -17,28 +17,6 @@ fn tool_call_status_bucket(call: &crate::model::ConversationToolCall) -> u8 {
     }
 }
 
-fn tool_pattern_label(name: &str) -> String {
-    match name {
-        "apply_file_edits" => "Edit files".into(),
-        "search_workspace" => "Search files".into(),
-        "search_artifact" => "Search output".into(),
-        "web_search" => "Search web".into(),
-        "search_tools" => "Find tools".into(),
-        "task_notes" => "Update notes".into(),
-        "context_history" => "Read context".into(),
-        "read_file" | "read_files" => "Read files".into(),
-        "read_artifact" => "Read output".into(),
-        "read_document" => "Read document".into(),
-        "web_read" => "Read web".into(),
-        "run_shell" | "shell_job" => "Shell".into(),
-        "list_files" => "List files".into(),
-        "analyze_data" => "Analyze data".into(),
-        "computer_use" | "desktop_control" => "Computer".into(),
-        "activate_capability" => "Activate capability".into(),
-        _ => humanize_tool_name(name),
-    }
-}
-
 fn humanize_tool_name(name: &str) -> String {
     let human = name.replace(['_', '-'], " ");
     let mut chars = human.chars();
@@ -54,7 +32,8 @@ fn tool_icon(name: &str) -> &'static str {
     match name {
         "apply_file_edits" | "task_notes" => "\u{f040}",
         "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "\u{f002}",
-        "read_file" | "read_files" | "read_artifact" | "read_document" | "web_read" => "\u{f02d}",
+        "read_file" | "read_files" | "read_artifact" | "read_document" => "\u{f15c}",
+        "web_read" => "\u{f02d}",
         "run_shell" | "shell_job" => "\u{f120}",
         "list_files" => "\u{f07b}",
         "analyze_data" => "\u{f080}",
@@ -116,9 +95,9 @@ fn tool_activity_title_with_style(
         }
         "read_file" | "read_files" => {
             if active {
-                "Reading"
+                "Reading File"
             } else {
-                "Read"
+                "Read File"
             }
         }
         "read_artifact" => {
@@ -137,16 +116,16 @@ fn tool_activity_title_with_style(
         }
         "web_read" => {
             if active {
-                "Reading web source"
+                "Reading Website"
             } else {
-                "Read web source"
+                "Read Website"
             }
         }
         "run_shell" => {
             if active {
-                "Running command"
+                "Running Shell"
             } else {
-                "Ran command"
+                "Ran Shell"
             }
         }
         "shell_job" => {
@@ -706,20 +685,28 @@ mod tool_summary_layout_tests {
     }
 }
 
-fn tool_verb(name: &str) -> &'static str {
-    match name {
-        "apply_file_edits" => "edit",
-        "task_notes" => "notes",
-        "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "search",
-        "read_file" | "read_files" | "read_artifact" | "read_document" | "web_read" => "read",
-        "run_shell" | "shell_job" => "run",
-        "list_files" => "list",
-        "analyze_data" => "analyze",
-        "computer_use" | "desktop_control" => "computer",
-        "activate_capability" => "enable",
-        "context_history" => "recall",
-        _ => "tool",
-    }
+fn tool_action_label(name: &str, active: bool) -> String {
+    let (past, present) = match name {
+        "apply_file_edits" => ("Edited Files", "Editing Files"),
+        "task_notes" => ("Updated Notes", "Updating Notes"),
+        "search_workspace" => ("Searched Files", "Searching Files"),
+        "search_artifact" => ("Searched Output", "Searching Output"),
+        "search_tools" => ("Searched Tools", "Searching Tools"),
+        "web_search" => ("Searched Web", "Searching Web"),
+        "read_file" | "read_files" => ("Read File", "Reading File"),
+        "read_artifact" => ("Read Output", "Reading Output"),
+        "read_document" => ("Read Document", "Reading Document"),
+        "web_read" => ("Read Website", "Reading Website"),
+        "run_shell" => ("Ran Shell", "Running Shell"),
+        "shell_job" => ("Checked Shell Job", "Checking Shell Job"),
+        "context_history" => ("Read Context", "Reading Context"),
+        "list_files" => ("Listed Files", "Listing Files"),
+        "analyze_data" => ("Analyzed Data", "Analyzing Data"),
+        "computer_use" | "desktop_control" => ("Used Computer", "Using Computer"),
+        "activate_capability" => ("Activated Capability", "Activating Capability"),
+        _ => return humanize_tool_name(name),
+    };
+    if active { present } else { past }.to_owned()
 }
 
 fn is_active(call: &crate::model::ConversationToolCall) -> bool {
@@ -809,20 +796,21 @@ pub(in crate::tui::ui) fn spinner() -> &'static str {
 
 fn group_icons(calls: &[&crate::model::ConversationToolCall]) -> String {
     let mut icons: Vec<&str> = Vec::new();
-    for call in calls {
+    for call in calls.iter().rev() {
         let icon = tool_icon(&call.name);
         if !icons.contains(&icon) {
             icons.push(icon);
         }
     }
     icons.truncate(3);
+    icons.reverse();
     icons.join(" ")
 }
 
 fn fallback_group_title(calls: &[&crate::model::ConversationToolCall]) -> String {
     let mut labels: Vec<String> = Vec::new();
     for call in calls {
-        let label = tool_pattern_label(&call.name);
+        let label = tool_action_label(&call.name, is_active(call));
         if !labels.contains(&label) {
             labels.push(label);
         }
@@ -914,13 +902,13 @@ pub(super) fn work_group_lines_selected(
                         if count > 1 {
                             target = format!("{target} ×{count}");
                         }
-                        let verb = format!(" {:<8}", tool_verb(&call.name));
+                        let action = format!(" {}", tool_action_label(&call.name, running));
                         let tail = if running {
                             format!(" {}", spinner())
                         } else {
                             String::new()
                         };
-                        let used = 2 + 3 + 1 + Span::raw(&verb).width() + tail.len();
+                        let used = 2 + 3 + Span::raw(&action).width() + tail.len();
                         let target = task::fit(&target, width.saturating_sub(used + 1));
                         let icon_style = if failed {
                             Style::default().fg(theme::error_subtle())
@@ -931,7 +919,7 @@ pub(super) fn work_group_lines_selected(
                             Span::styled(" │", rail),
                             Span::raw("   "),
                             Span::styled(tool_icon(&call.name), icon_style),
-                            Span::styled(verb, secondary),
+                            Span::styled(action, secondary),
                             Span::styled(target, secondary),
                             Span::styled(
                                 tail,
@@ -971,23 +959,32 @@ pub(super) fn work_group_lines_selected(
                 } else {
                     " ".to_owned()
                 };
-                let icon = "\u{f02d}";
-                let label = if *summary {
-                    "Model summary"
+                let title = if *summary {
+                    first
                 } else {
-                    "Reasoning"
+                    format!("Reasoning · {first}")
                 };
-                let head = format!("{label} · {first}");
+                let recent_tools = group_icons(calls);
                 let chevron = format!(" {}", icons::chevron(expanded));
-                let budget = width
-                    .saturating_sub(Span::raw(&lead).width() + 2 + Span::raw(&chevron).width());
-                lines.push(Line::from(vec![
+                let mut spans = vec![
                     Span::styled(lead, Style::default().fg(theme::text())),
-                    Span::styled(icon.to_owned(), secondary),
+                    Span::styled(icons::session_tab().to_owned(), secondary),
                     Span::raw(" "),
-                    Span::styled(task::fit(&head, budget), secondary),
-                    Span::styled(chevron, muted),
-                ]));
+                ];
+                let trailing = if recent_tools.is_empty() {
+                    chevron.clone()
+                } else {
+                    format!(" {recent_tools}{chevron}")
+                };
+                let prefix_width = spans.iter().map(Span::width).sum::<usize>();
+                let budget = width.saturating_sub(prefix_width + Span::raw(&trailing).width());
+                spans.push(Span::styled(task::fit(&title, budget), secondary));
+                if !recent_tools.is_empty() {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(recent_tools, secondary));
+                }
+                spans.push(Span::styled(chevron, muted));
+                lines.push(Line::from(spans));
                 if expanded {
                     for line in session_markdown_lines(&text.replace("****", "**\n\n**")) {
                         lines.extend(prefixed_wrapped_line(
