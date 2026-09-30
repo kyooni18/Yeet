@@ -152,6 +152,7 @@ impl RuntimeProcess {
                     if published.conversation.is_none() {
                         published.conversation = self.last_state.conversation.clone();
                     }
+                    published.session_activity = self.last_state.session_activity.clone();
                     self.last_state = published;
                 }
                 Some(envelope)
@@ -165,7 +166,40 @@ impl RuntimeProcess {
             }
         }
     }
+    pub(super) fn session_activity(
+        &self,
+    ) -> &std::collections::BTreeMap<String, crate::model::SessionActivity> {
+        &self.last_state.session_activity
+    }
 
+    pub(super) fn set_session_activity(
+        &mut self,
+        activity: &std::collections::BTreeMap<String, crate::model::SessionActivity>,
+    ) -> bool {
+        if self.last_state.session_activity == *activity {
+            return false;
+        }
+        self.last_state.session_activity = activity.clone();
+        true
+    }
+    pub(super) fn activity(&self) -> Option<(String, crate::model::SessionActivity)> {
+        use crate::model::SessionActivity;
+        let state = &self.last_state;
+        let status = if state.pending_shell_permission.is_some()
+            || state.pending_native_app_permission.is_some()
+        {
+            SessionActivity::WaitingForPermission
+        } else if state.is_streaming {
+            SessionActivity::Running
+        } else {
+            return None;
+        };
+        Some((state.current_session_id.clone()?, status))
+    }
+
+    pub(super) fn activity_snapshot(&self) -> BridgeState {
+        self.last_state.without_conversation()
+    }
     pub(super) fn state_snapshot(&self) -> BridgeState {
         self.last_state.clone()
     }
@@ -262,4 +296,45 @@ fn send_runtime_error(event_tx: &Sender<BridgeEnvelope>, daemon_wake: &Wake, err
         message: Some(error.to_string()),
     });
     daemon_wake.notify();
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    #[test]
+    fn daemon_activity_survives_worker_updates_and_clears_on_completion() {
+        let (command_tx, _) = mpsc::channel();
+        let (event_tx, events) = mpsc::channel();
+        let mut runtime = RuntimeProcess {
+            command_tx,
+            command_wake: Wake::new(),
+            events,
+            failed: Arc::new(AtomicBool::new(false)),
+            closed: Arc::new(AtomicBool::new(false)),
+            last_state: BridgeState {
+                current_session_id: Some("detached".into()),
+                is_streaming: true,
+                ..Default::default()
+            },
+        };
+        let activity = std::collections::BTreeMap::from([runtime.activity().unwrap()]);
+        assert!(runtime.set_session_activity(&activity));
+        assert!(!runtime.set_session_activity(&activity));
+        event_tx
+            .send(BridgeEnvelope {
+                kind: "state".into(),
+                state: Some(BridgeState {
+                    current_session_id: Some("detached".into()),
+                    ..Default::default()
+                }),
+                message: None,
+            })
+            .unwrap();
+        runtime.try_recv().unwrap();
+        assert_eq!(runtime.activity_snapshot().session_activity, activity);
+        assert!(runtime.activity().is_none());
+        assert!(runtime.set_session_activity(&Default::default()));
+        assert!(runtime.state_snapshot().session_activity.is_empty());
+    }
 }

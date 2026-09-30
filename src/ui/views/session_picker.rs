@@ -70,7 +70,9 @@ pub(in crate::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
         rows.push(Row::Session {
             index,
             title: item.session.display_title(),
-            age: if chrono::DateTime::parse_from_rfc3339(&item.session.updated_at).is_ok() {
+            age: if let Some(activity) = app.state.session_activity.get(&item.session.id) {
+                activity.label().to_owned()
+            } else if chrono::DateTime::parse_from_rfc3339(&item.session.updated_at).is_ok() {
                 item.session.updated_label().replace(" ago", "")
             } else {
                 String::new()
@@ -156,7 +158,7 @@ fn draw_row(frame: &mut Frame<'_>, row: &Row, area: Rect, selected_index: usize)
             }
             let marker = if *current { "/" } else { "·" };
             let age_width = if area.width >= 24 {
-                age.chars().count().min(8)
+                age.chars().count()
             } else {
                 0
             };

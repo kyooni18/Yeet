@@ -36,6 +36,7 @@ pub(super) fn publish_runtime_state(
     catalog_changed: &mut bool,
 ) {
     if let Some(state) = envelope.state.as_mut() {
+        state.session_activity = runtime.service.session_activity().clone();
         state.extension_commands = extensions.command_items();
         extensions.publish_state(state);
         let refreshed = runtime

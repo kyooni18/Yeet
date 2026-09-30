@@ -279,12 +279,15 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
         .map(|item| {
             let current = app.state.current_session_id.as_deref() == Some(item.session.id.as_str());
             let marker = crate::ui::support::icons::session(current);
-            let badge = if current && row_width >= 20 {
-                " · current"
+            let activity = app.state.session_activity.get(&item.session.id);
+            let badge = if let Some(activity) = activity {
+                format!(" · {}", activity.label())
+            } else if current && row_width >= 20 {
+                " · current".to_owned()
             } else {
-                ""
+                String::new()
             };
-            let title_budget = row_width.saturating_sub(2 + cell_width(badge));
+            let title_budget = row_width.saturating_sub(2 + cell_width(&badge));
             let title = Line::from(vec![
                 Span::styled(
                     format!("{marker} "),

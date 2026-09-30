@@ -96,6 +96,21 @@ pub enum AutonomyMode {
     Autonomous,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionActivity {
+    Running,
+    WaitingForPermission,
+}
+
+impl SessionActivity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::WaitingForPermission => "permission",
+        }
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BridgeState {
@@ -128,6 +143,8 @@ pub struct BridgeState {
     pub model_catalog: Vec<ModelCatalogItem>,
     pub is_loading_models: bool,
     pub saved_sessions: Vec<SessionSummary>,
+    /// Ephemeral activity for all sessions owned by the background service.
+    pub session_activity: std::collections::BTreeMap<String, SessionActivity>,
     pub known_workspaces: Vec<WorkspaceSummary>,
     pub workspace_session_groups: Vec<WorkspaceSessionGroup>,
     pub current_session_id: Option<String>,
@@ -186,6 +203,7 @@ impl BridgeState {
             model_catalog: self.model_catalog.clone(),
             is_loading_models: self.is_loading_models,
             saved_sessions: self.saved_sessions.clone(),
+            session_activity: self.session_activity.clone(),
             known_workspaces: self.known_workspaces.clone(),
             workspace_session_groups: self.workspace_session_groups.clone(),
             current_session_id: self.current_session_id.clone(),

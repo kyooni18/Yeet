@@ -1079,6 +1079,28 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
             }
         }
 
+        // Activity belongs to the daemon, not the persisted session catalog or
+        // the currently attached frontend. Include detached runtimes and remove
+        // retired/failed runs immediately.
+        let activity = runtimes
+            .iter()
+            .filter_map(|runtime| runtime.service.activity())
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for runtime in &mut runtimes {
+            if runtime.service.set_session_activity(&activity) {
+                let state =
+                    state_with_extension_commands(runtime.service.activity_snapshot(), &extensions);
+                broadcast_runtime_envelope(
+                    &mut clients,
+                    runtime.id,
+                    &BridgeEnvelope {
+                        kind: "state".into(),
+                        state: Some(state),
+                        message: None,
+                    },
+                );
+            }
+        }
         if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
             let heartbeat = BridgeEnvelope {
                 kind: "heartbeat".into(),
