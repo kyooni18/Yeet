@@ -36,6 +36,8 @@ cp -R RuntimeSource/skills "$STAGE/share/yeet/runtime/skills"
 cp RuntimeSource/package.json "$STAGE/share/yeet/runtime/package.json"
 cp README.md CHANGELOG.md LICENSE.txt "$STAGE/"
 cp install.sh "$STAGE/install.sh"
+mkdir -p "$STAGE/Scripts"
+cp Scripts/install-lifecycle.mjs "$STAGE/Scripts/install-lifecycle.mjs"
 chmod 755 "$STAGE/install.sh"
 [ -f "$STAGE/share/yeet/runtime/skills/pdf/SKILL.md" ] || {
   echo "Staged release is missing bundled PDF skill" >&2

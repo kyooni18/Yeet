@@ -97,7 +97,6 @@ install_artifacts() {
   bin_tmp="$PREFIX/bin/.yeet-install-$$"
   rm -f "$bin_tmp"
   install -m 755 "$binary" "$bin_tmp"
-  mv -f "$bin_tmp" "$PREFIX/bin/yeet"
 
   runtime_root="$PREFIX/share/yeet"
   runtime_new="$runtime_root/.runtime-new-$$"
@@ -108,15 +107,28 @@ install_artifacts() {
   cp -R "$runtime/skills" "$runtime_new/skills"
   cp "$runtime/package.json" "$runtime_new/package.json"
 
-  if [ -e "$runtime_root/runtime" ]; then
-    mv "$runtime_root/runtime" "$runtime_old"
+  lifecycle="$docs/Scripts/install-lifecycle.mjs"
+  [ -f "$lifecycle" ] || die "install source is missing process lifecycle helper"
+  if [ "$(uname -s)" = Darwin ]; then
+    need python3
+    need lsof
   fi
-  if mv "$runtime_new" "$runtime_root/runtime"; then
+  state_file="$runtime_root/.restart-$$.json"
+  node "$lifecycle" stop "$state_file" "$runtime_root/runtime" "$runtime"
+  bin_old="$PREFIX/bin/.yeet-old-$$"
+  [ ! -e "$PREFIX/bin/yeet" ] || mv "$PREFIX/bin/yeet" "$bin_old"
+  [ ! -e "$runtime_root/runtime" ] || mv "$runtime_root/runtime" "$runtime_old"
+  if mv "$runtime_new" "$runtime_root/runtime" && mv "$bin_tmp" "$PREFIX/bin/yeet"; then
     rm -rf "$runtime_old"
+    rm -f "$bin_old"
   else
+    rm -rf "$runtime_root/runtime"
     [ ! -e "$runtime_old" ] || mv "$runtime_old" "$runtime_root/runtime"
-    die "failed to install the Yeet runtime"
+    [ ! -e "$bin_old" ] || mv "$bin_old" "$PREFIX/bin/yeet"
+    die "replacement failed; previous installation restored (restart settings: $state_file)"
   fi
+  node "$lifecycle" restart "$state_file" "$PREFIX/bin/yeet"
+  rm -f "$state_file"
 
   for file in README.md CHANGELOG.md LICENSE.txt; do
     [ ! -f "$docs/$file" ] || cp "$docs/$file" "$PREFIX/share/doc/yeet/$file"
@@ -200,7 +212,8 @@ Usage: ./install.sh [--build]
 
 Without options, download and install the latest Yeet release.
 
-  --build    Build and install the source checkout containing this script.
+  --build    Build source, stop Yeet and its runtime/MCP children, replace all
+             artifacts, and restart background, remote, and HTTP MCP services.
   -h|--help Show this help.
 EOF
       exit 0

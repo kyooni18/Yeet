@@ -30,6 +30,15 @@ cd Yeet
 ./install.sh --build
 ```
 
+Source and release installers build or stage the replacement before stopping
+running Yeet executables and their runtime, tool, and MCP child processes. They
+replace the complete runtime tree and binary together, then restart background,
+remote, and HTTP MCP services with their previous arguments. Sessions, API keys,
+and MCP configuration are retained. Interactive sessions reopen in new terminal
+windows when a desktop terminal is available; headless terminals print the reopen
+command. External stdio MCP clients must reconnect. On macOS the process inventory also
+requires Python 3 and `lsof` to preserve arguments containing spaces.
+
 Windows source installation remains available through PowerShell:
 
 ```powershell
