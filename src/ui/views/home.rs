@@ -121,7 +121,6 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(theme::border())),
         Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
     );
-    );
 }
 
 fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
