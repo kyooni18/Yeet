@@ -25,11 +25,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Block::default().style(Style::default().bg(theme::background())),
         bounds,
     );
-    let scale_x = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
-    let scale_y = |px: u16| ((bounds.height as u32 * px as u32 + 863) / 864) as u16;
-    let tab_height = scale_y(34).max(1);
-    let composer_height = scale_y(36).max(1);
-    let status_height = scale_y(24).max(1);
+    // OpenPencil's SVG group transform (-36 px) moves the title bar out of the
+    // 864 px artboard; tabs therefore occupy rows 0..34 and the rail starts at 34.
+    let scale_x = |px: u16| bounds.width as u32 * px as u32 / 1440;
+    let scale_y = |px: u16| (bounds.height as u32 * px as u32 + 863) / 864;
+    let tab_height = scale_y(34).max(1) as u16;
+    let composer_height = scale_y(36).max(1) as u16;
+    let status_height = scale_y(24).max(1) as u16;
     let rows = Layout::vertical([
         Constraint::Length(tab_height),
         Constraint::Min(1),
@@ -38,27 +40,38 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     ])
     .split(bounds);
     draw_tabs(frame, rows[0]);
-    let body = rows[1];
-    let rail_width = scale_x(232).min(body.width / 3);
-    let columns =
-        Layout::horizontal([Constraint::Length(rail_width), Constraint::Min(1)]).split(body);
+    let body = Rect::new(
+        bounds.x,
+        bounds.y.saturating_add(tab_height),
+        bounds.width,
+        bounds
+            .height
+            .saturating_sub(tab_height + composer_height + status_height),
+    );
+    let rail_width = scale_x(232).min(body.width as u32 / 3) as u16;
+    let rail_gap = scale_x(30).min(body.width.saturating_sub(rail_width) as u32) as u16;
+    let columns = Layout::horizontal([
+        Constraint::Length(rail_width),
+        Constraint::Length(rail_gap),
+        Constraint::Min(1),
+    ])
+    .split(body);
     draw_sessions_rail(frame, columns[0]);
-    let activity_width = scale_x(540).min(columns[1].width);
-    let pane_gap = scale_x(54).min(columns[1].width.saturating_sub(activity_width));
+    let activity_width = scale_x(540).min(columns[2].width as u32) as u16;
+    let pane_gap = scale_x(54).min(columns[2].width.saturating_sub(activity_width) as u32) as u16;
     let panes = Layout::horizontal([
         Constraint::Length(activity_width),
         Constraint::Length(pane_gap),
         Constraint::Min(1),
     ])
-    .split(columns[1]);
+    .split(columns[2]);
     draw_activity(frame, panes[0]);
     draw_inspector(frame, panes[2]);
     draw_composer(frame, app, rows[2]);
     status::draw(frame, app, rows[3]);
 }
-
 fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
-    if area.width == 0 {
+    if area.width == 0 || area.height == 0 {
         return;
     }
     let entries = [
@@ -70,14 +83,14 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         ("#214", "#214", false),
         ("+", "+", false),
     ];
-    let widths = [160u32, 248, 124, 106, 182, 60, 48];
-    let mut x = area.x;
+    let starts = [0u32, 175, 423, 547, 653, 835, 916];
+    let ends = [160u32, 423, 547, 653, 835, 895, 964];
     for (index, (_, label, active)) in entries.into_iter().enumerate() {
+        let x = area.x + (area.width as u32 * starts[index] / 1440) as u16;
         if x >= area.right() {
             break;
         }
-        let width = ((area.width as u32 * widths[index] + 1439) / 1440)
-            .max(label.chars().count() as u32)
+        let width = ((area.width as u32 * (ends[index] - starts[index]) + 1439) / 1440)
             .min((area.right() - x) as u32) as u16;
         let style = if active {
             Style::default()
@@ -87,15 +100,21 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         } else {
             Style::default().fg(theme::muted()).bg(theme::background())
         };
+        let tab_area = Rect::new(x, area.y, width, area.height);
+        frame.render_widget(Block::default().style(style), tab_area);
+        let label_x = x + (area.width as u32 * if index == 0 { 36 } else { 21 } / 1440) as u16;
+        let label_right = area
+            .x
+            .saturating_add((area.width as u32 * ends[index] / 1440) as u16);
+        let label_width = label_right.saturating_sub(label_x);
         frame.render_widget(
             Paragraph::new(label).style(style),
-            Rect::new(x, area.y, width, area.height),
+            Rect::new(label_x, area.y, label_width, 1),
         );
-        x += width;
     }
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize)).style(Style::default().fg(theme::border())),
-        Rect::new(area.x, area.y + 1, area.width, 1),
+        Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
     );
 }
 
@@ -107,6 +126,20 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         Block::default().style(Style::default().bg(theme::surface_color())),
         area,
     );
+    let button = Rect::new(
+        area.x + 8 * area.width / 232,
+        area.y + 12 * area.height / 806,
+        216 * area.width / 232,
+        34 * area.height / 806,
+    );
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::selected_color())),
+        button,
+    );
+    frame.render_widget(
+        Paragraph::new("+").style(Style::default().fg(theme::text())),
+        Rect::new(button.x + button.width / 2, button.y, 4, 1),
+    );
     let entries = [
         ("/", "MM305 crosswind", "18s", true),
         ("?", "TUI shell direction", "3m", false),
@@ -114,52 +147,41 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         ("·", "Provider cleanup", "21m", false),
         ("·", "Foundation memory", "43m", false),
     ];
-    let add_button = format!("{:>width$}", "+", width = area.width.div_ceil(2) as usize);
-    frame.render_widget(
-        Paragraph::new(add_button).style(
-            Style::default()
-                .fg(theme::text())
-                .bg(theme::surface_color()),
-        ),
-        Rect::new(area.x, area.y, area.width, 2.min(area.height)),
-    );
+    let offsets = [52u16, 80, 108, 136, 164];
     for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
-        let row_offsets = [2u16, 4, 5, 6, 8];
-        let y = area.y.saturating_add(row_offsets[index]);
+        let y = area.y + offsets[index] * area.height / 806;
         if y >= area.bottom() {
             break;
         }
+        let row = Rect::new(area.x, y, area.width, (28 * area.height / 806).max(1));
         let style = if selected {
             Style::default()
                 .fg(theme::text())
-                .bg(theme::selected_color())
+                .bg(theme::rail_selected())
                 .add_modifier(ACTIVE)
         } else {
-            Style::default().fg(theme::muted())
+            Style::default().fg(theme::text_dim())
         };
-        let prefix = "  ";
-        let age_width = Span::raw(age).width();
-        let prefix_width = Span::raw(prefix).width();
-        let title = super::super::task::fit(
-            title,
-            (area.width as usize).saturating_sub(age_width + prefix_width + 4),
+        if selected {
+            frame.render_widget(Block::default().style(style), row);
+        }
+        let age_width = age.chars().count() as u16;
+        let icon_x = area.x + 12 * area.width / 232;
+        let title_x = area.x + 30 * area.width / 232;
+        let right = area.right().saturating_sub(10 * area.width / 232);
+        let title_width = right.saturating_sub(title_x + age_width + 2);
+        frame.render_widget(
+            Paragraph::new(icon).style(style),
+            Rect::new(icon_x, y, 2, 1),
         );
-        let used_width = prefix_width + Span::raw(&title).width() + age_width;
-        let gap = " ".repeat((area.width as usize).saturating_sub(used_width + 2));
-        let icon_style = if selected {
-            Style::default().fg(theme::text()).add_modifier(ACTIVE)
-        } else {
-            Style::default().fg(theme::muted())
-        };
-        let line = Line::from(vec![
-            Span::styled(prefix, style),
-            Span::styled(icon, icon_style),
-            Span::raw(" "),
-            Span::styled(title, style),
-            Span::raw(gap),
-            Span::styled(age, Style::default().fg(theme::muted())),
-        ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+        frame.render_widget(
+            Paragraph::new(super::super::task::fit(title, title_width as usize)).style(style),
+            Rect::new(title_x, y, title_width, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(age).style(Style::default().fg(theme::muted())),
+            Rect::new(right, y, age_width, 1),
+        );
     }
 }
 
