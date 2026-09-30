@@ -966,11 +966,7 @@ pub(super) fn work_group_lines_selected(
                 };
                 let recent_tools = group_icons(calls);
                 let chevron = format!(" {}", icons::chevron(expanded));
-                let mut spans = vec![
-                    Span::styled(lead, Style::default().fg(theme::text())),
-                    Span::styled(icons::session_tab().to_owned(), secondary),
-                    Span::raw(" "),
-                ];
+                let mut spans = vec![Span::styled(lead, Style::default().fg(theme::text()))];
                 let trailing = if recent_tools.is_empty() {
                     chevron.clone()
                 } else {
