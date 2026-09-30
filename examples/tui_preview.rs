@@ -254,7 +254,7 @@ fn main() -> anyhow::Result<()> {
             .into_iter()
             .map(str::to_owned)
             .collect();
-            app.diff_tabs.push(state);
+            app.diff_tabs.open("Diff", state);
             app.mode = Mode::Diff;
             app.input =
                 "Compare roll-rate peaks with MM304; flag touchdown dispersion above 150 m.".into();
@@ -302,7 +302,8 @@ fn main() -> anyhow::Result<()> {
             app.home
                 .set_git_snapshot(yeet::workbench::GitSnapshot::load(&root));
             let mut files = FilesState::open(root.join("src"));
-            files.tabs = vec![root.join("src/theme.rs"), root.join("src/ui/views/home.rs")];
+            files.open_path(root.join("src/theme.rs"), false);
+            files.open_path(root.join("src/ui/views/home.rs"), false);
             app.files = Some(files);
             if scene == "home-launcher" {
                 app.mode = Mode::Views;

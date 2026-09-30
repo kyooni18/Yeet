@@ -34,22 +34,26 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
                 Active::Home => (icons::home(), "Home".to_owned()),
                 Active::Session => (icons::session_tab(), conversation_title(app).to_owned()),
                 Active::Files => (icons::folder(false), "Files".to_owned()),
-                Active::Diff(index) => (
-                    icons::diff_tab(),
-                    app.diff_tabs[index]
-                        .paths
-                        .get(app.diff_tabs[index].selected)
-                        .and_then(|path| path.file_name())
-                        .or_else(|| app.diff_tabs[index].root.file_name())
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
+                Active::Diff(id) => {
+                    let state = &app.diff_tabs.get(id).expect("listed diff instance").state;
+                    (
+                        icons::diff_tab(),
+                        state
+                            .paths
+                            .get(state.selected)
+                            .and_then(|path| path.file_name())
+                            .or_else(|| state.root.file_name())
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                }
                 Active::File(index) => {
                     let label = app
                         .files
                         .as_ref()
                         .and_then(|files| files.tabs.get(index))
+                        .and_then(|view| view.state.resource.as_ref())
                         .and_then(|path| path.file_name())
                         .map(|name| name.to_string_lossy().into_owned())
                         .unwrap_or_default();

@@ -8,7 +8,7 @@ impl App {
     pub fn dispatch_action(&mut self, action: Action, backend: &mut Backend) -> anyhow::Result<()> {
         match action {
             Action::Navigate(target) => {
-                self.apply_navigation(target);
+                self.apply_shared_navigation(target);
                 Ok(())
             }
             Action::Command(command) => backend.send(command),

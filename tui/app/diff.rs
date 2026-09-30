@@ -19,14 +19,26 @@ pub struct DiffState {
     pub statuses: Vec<String>,
     pub totals: crate::workbench::ChangeStats,
     pub original_paths: Vec<Option<PathBuf>>,
-    pub hits: crate::tui::kit::HitMap<DiffAction>,
-    pub body_target: ratatui::layout::Rect,
     pub lines: Vec<String>,
     pub full: bool,
     pub scroll: usize,
     pub error: Option<String>,
     pub branch: String,
     pub base: String,
+}
+/// Only the most recently painted diff can receive pointer input.
+#[derive(Debug, Default)]
+pub struct DiffFrame {
+    pub view: Option<crate::tui::kit::SurfaceId>,
+    pub hits: crate::tui::kit::HitMap<DiffAction>,
+    pub body: ratatui::layout::Rect,
+}
+impl DiffFrame {
+    pub fn begin(&mut self, bounds: ratatui::layout::Rect) {
+        self.view = None;
+        self.hits.begin(bounds);
+        self.body = ratatui::layout::Rect::default();
+    }
 }
 fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let o = Command::new("git")
@@ -184,17 +196,23 @@ impl App {
             .or_else(|| self.files.as_ref().map(|f| f.dir.clone()))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let state = DiffState::open(&dir, path.as_deref());
-        self.active_diff = if let Some(i) = self.diff_tabs.iter().position(|s| s.root == state.root)
+        if let Some(id) = self
+            .diff_tabs
+            .views()
+            .iter()
+            .find(|view| view.state.root == state.root)
+            .map(|view| view.id)
         {
-            self.diff_tabs[i].reload();
+            self.diff_tabs.activate(id);
+            let existing = &mut self.diff_tabs.active_mut().unwrap().state;
+            existing.reload();
             if let Some(p) = path {
-                self.diff_tabs[i].select_path(&p);
+                existing.select_path(&p);
             }
-            i
         } else {
-            self.diff_tabs.push(state);
-            self.diff_tabs.len() - 1
-        };
+            self.diff_tabs.open("Diff", state);
+        }
+        self.diff_frame.begin(ratatui::layout::Rect::default());
         self.mode = Mode::Diff;
     }
     pub(crate) fn handle_diff_key(&mut self, e: KeyEvent) {
@@ -206,27 +224,21 @@ impl App {
         if matches!(e.code, KeyCode::Enter | KeyCode::Char('o')) {
             if let Some(p) = self
                 .diff_tabs
-                .get(self.active_diff)
-                .and_then(DiffState::selected_path)
+                .active()
+                .and_then(|view| view.state.selected_path())
                 .filter(|p| p.is_file())
             {
                 if self.files.is_none() {
                     self.open_files();
                 }
                 if let Some(f) = &mut self.files {
-                    let i = if let Some(i) = f.tabs.iter().position(|tab| *tab == p) {
-                        i
-                    } else {
-                        f.tabs.push(p);
-                        f.tabs.len() - 1
-                    };
-                    f.activate_tab(i);
+                    f.open_path(p, false);
                 }
                 self.mode = Mode::Files;
             }
             return;
         }
-        let Some(s) = self.diff_tabs.get_mut(self.active_diff) else {
+        let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) else {
             return;
         };
         match e.code {
@@ -275,28 +287,33 @@ impl App {
 impl App {
     pub(crate) fn handle_diff_mouse(&mut self, e: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
-        let Some(s) = self.diff_tabs.get_mut(self.active_diff) else {
+        if self.diff_frame.view != self.diff_tabs.active_id() {
+            return;
+        }
+        let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) else {
             return;
         };
         let point = (e.column, e.row).into();
         match e.kind {
-            MouseEventKind::Down(MouseButton::Left) => match s.hits.at(point).copied() {
-                Some(DiffAction::SelectFile(i)) => {
-                    s.selected = i;
-                    s.scroll = 0;
-                    s.patch();
+            MouseEventKind::Down(MouseButton::Left) => {
+                match self.diff_frame.hits.at(point).copied() {
+                    Some(DiffAction::SelectFile(i)) => {
+                        s.selected = i;
+                        s.scroll = 0;
+                        s.patch();
+                    }
+                    Some(DiffAction::Display(full)) => {
+                        s.full = full;
+                        s.scroll = 0;
+                        s.patch();
+                    }
+                    None => {}
                 }
-                Some(DiffAction::Display(full)) => {
-                    s.full = full;
-                    s.scroll = 0;
-                    s.patch();
-                }
-                None => {}
-            },
-            MouseEventKind::ScrollDown if s.body_target.contains(point) => {
+            }
+            MouseEventKind::ScrollDown if self.diff_frame.body.contains(point) => {
                 s.scroll = (s.scroll + 3).min(s.lines.len().saturating_sub(1))
             }
-            MouseEventKind::ScrollUp if s.body_target.contains(point) => {
+            MouseEventKind::ScrollUp if self.diff_frame.body.contains(point) => {
                 s.scroll = s.scroll.saturating_sub(3)
             }
             _ => {}
@@ -343,14 +360,35 @@ mod tests {
         app.handle_views_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Diff);
         assert_eq!(app.diff_tabs.len(), 1);
-        app.diff_tabs[0].select_path(&root.join("alpha.rs"));
-        assert!(app.diff_tabs[0].lines.iter().any(|l| l == "+unstaged"));
-        assert!(app.diff_tabs[0].lines.iter().any(|l| l == "-old"));
+        app.diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .select_path(&root.join("alpha.rs"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "+unstaged")
+        );
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "-old")
+        );
         let mut terminal = Terminal::new(TestBackend::new(144, 44)).unwrap();
         terminal
             .draw(|f| crate::tui::ui::draw(f, &mut app))
             .unwrap();
-        let control = app.diff_tabs[0]
+        let control = app
+            .diff_frame
             .hits
             .targets()
             .find(|(_, a)| *a == DiffAction::Display(true))
@@ -362,7 +400,7 @@ mod tests {
             row: control.y,
             modifiers: KeyModifiers::NONE,
         });
-        assert!(app.diff_tabs[0].full);
+        assert!(app.diff_tabs.active_mut().unwrap().state.full);
         let rendered = terminal
             .backend()
             .buffer()
@@ -373,28 +411,78 @@ mod tests {
         assert!(rendered.contains("changes only"));
         app.handle_diff_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Files);
-        assert_eq!(app.files.as_ref().unwrap().tabs[0], root.join("alpha.rs"));
+        assert_eq!(
+            app.files.as_ref().unwrap().tabs.views()[0]
+                .state
+                .resource
+                .clone()
+                .unwrap(),
+            root.join("alpha.rs")
+        );
         app.handle_files_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Diff);
         assert_eq!(app.diff_tabs.len(), 1);
         assert_eq!(app.input, "keep draft");
-        app.diff_tabs[0].select_path(&root.join("space name.txt"));
-        assert!(app.diff_tabs[0].lines.iter().any(|l| l == "+untracked"));
-        app.diff_tabs[0].select_path(&root.join("gone.txt"));
-        assert!(app.diff_tabs[0].lines.iter().any(|l| l == "-removed"));
-        std::fs::write(root.join("binary.bin"), [0, 1, 2, 3]).unwrap();
-        app.diff_tabs[0].reload();
-        app.diff_tabs[0].select_path(&root.join("binary.bin"));
+        app.diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .select_path(&root.join("space name.txt"));
         assert!(
-            app.diff_tabs[0]
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "+untracked")
+        );
+        app.diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .select_path(&root.join("gone.txt"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "-removed")
+        );
+        std::fs::write(root.join("binary.bin"), [0, 1, 2, 3]).unwrap();
+        app.diff_tabs.active_mut().unwrap().state.reload();
+        app.diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .select_path(&root.join("binary.bin"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
                 .lines
                 .iter()
                 .any(|l| l.contains("Binary files"))
         );
         run(&["mv", "alpha.rs", "renamed.rs"]);
-        app.diff_tabs[0].reload();
-        app.diff_tabs[0].select_path(&root.join("renamed.rs"));
-        assert!(app.diff_tabs[0].lines.iter().any(|l| l == "+unstaged"));
+        app.diff_tabs.active_mut().unwrap().state.reload();
+        app.diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .select_path(&root.join("renamed.rs"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "+unstaged")
+        );
         std::fs::write(root.join("clean.txt"), "unchanged\n").unwrap();
         run(&["add", "clean.txt"]);
         run(&[
@@ -406,18 +494,24 @@ mod tests {
             "-qm",
             "staged",
         ]);
-        app.diff_tabs[0].reload();
-        app.diff_tabs[0].select_path(&root.join("clean.txt"));
+        app.diff_tabs.active_mut().unwrap().state.reload();
+        app.diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .select_path(&root.join("clean.txt"));
         assert_eq!(
-            app.diff_tabs[0].selected_path(),
+            app.diff_tabs.active_mut().unwrap().state.selected_path(),
             Some(root.join("clean.txt"))
         );
-        assert!(app.diff_tabs[0].lines.is_empty());
+        assert!(app.diff_tabs.active_mut().unwrap().state.lines.is_empty());
         for (width, height) in [(80, 24), (40, 18), (8, 5), (4, 3)] {
             let mut t = Terminal::new(TestBackend::new(width, height)).unwrap();
             t.draw(|f| crate::tui::ui::draw(f, &mut app)).unwrap();
         }
-        app.activate_workbench_tab(super::super::WorkbenchTab::CloseDiff(0));
+        app.activate_workbench_tab(super::super::WorkbenchTab::CloseDiff(
+            app.diff_tabs.active_id().unwrap(),
+        ));
         assert!(app.diff_tabs.is_empty());
         assert_eq!(app.mode, Mode::Chat);
     }

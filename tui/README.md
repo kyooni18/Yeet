@@ -43,8 +43,12 @@ views; resolve input only against the latest painted geometry. Diff is the first
 consumer. `visible_start` is shared with the Home session list.
 
 `Tabs<T>` owns independent `View<T>` instances and stable IDs; it provides
-open/activate/close with neighboring-tab fallback. Existing workbench tab state
-is not migrated yet. `FloatingView` centralizes bounded centered placement and
+open/activate/close with neighboring-tab fallback. File and Diff tabs now use this store. File instances own their resource,
+rail directory/selection, filters and display options; the browser retains its
+own state. Terminal actions carry IDs; shared/wire index navigation is translated
+at the adapter boundary. Diff pointer geometry lives in a separate frame record,
+invalidated on navigation and each paint (including tiny frames). Home/Session
+remain existing singleton surfaces, not generic view instances. `FloatingView` centralizes bounded centered placement and
 modal blocking policy, used by the view-switcher layout. Its policy must still
 be applied by event routing; it is not an automatic focus manager.
 

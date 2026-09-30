@@ -54,7 +54,10 @@ mod tests {
         app.open_resource(ResourceTarget::File(path.clone()));
         app.open_resource(ResourceTarget::File(path.clone()));
         assert_eq!(app.mode, Mode::Files);
-        assert_eq!(app.files.as_ref().unwrap().tabs, vec![path.clone()]);
+        assert_eq!(
+            app.files.as_ref().unwrap().tabs.views()[0].state.resource,
+            Some(path.clone())
+        );
         assert_eq!(
             app.files.as_ref().unwrap().selected_path(),
             Some(path.clone())
@@ -67,7 +70,7 @@ mod tests {
         std::fs::remove_dir_all(root.join("nested")).unwrap();
         app.open_resource(ResourceTarget::Diff(path.clone()));
         assert_eq!(app.mode, Mode::Diff);
-        let diff = &app.diff_tabs[app.active_diff];
+        let diff = &app.diff_tabs.active().unwrap().state;
         assert!(diff.error.is_none(), "{:?}", diff.error);
         assert_eq!(diff.selected_path(), Some(path.clone()));
         assert!(diff.lines.iter().any(|line| line == "-before"));
@@ -111,11 +114,7 @@ impl App {
                 Some((target, title))
             }
             Mode::Files => self.files.as_ref().map(|files| {
-                if let Some(path) = files
-                    .active_tab
-                    .and_then(|index| files.tabs.get(index))
-                    .cloned()
-                {
+                if let Some(path) = files.active_resource().cloned() {
                     let title = path
                         .strip_prefix(self.workspace_path())
                         .unwrap_or(&path)
@@ -133,7 +132,8 @@ impl App {
                     (ResourceTarget::Files(files.dir.clone()), "Files".into())
                 }
             }),
-            Mode::Diff => self.diff_tabs.get(self.active_diff).and_then(|diff| {
+            Mode::Diff => self.diff_tabs.active().and_then(|view| {
+                let diff = &view.state;
                 diff.selected_path().map(|path| {
                     let title = path
                         .strip_prefix(&diff.root)
@@ -197,14 +197,11 @@ impl App {
                 self.activate_workbench_tab(WorkbenchTab::Session)
             }
             ResourceTarget::Files(path) => {
-                let tabs = self
-                    .files
-                    .as_ref()
-                    .map(|files| files.tabs.clone())
-                    .unwrap_or_default();
-                let mut files = FilesState::open(path);
-                files.tabs = tabs;
-                self.files = Some(files);
+                if let Some(files) = &mut self.files {
+                    files.open_browser(path);
+                } else {
+                    self.files = Some(FilesState::open(path));
+                }
                 self.mode = Mode::Files;
             }
             ResourceTarget::Diff(path) => self.open_diff(Some(path)),

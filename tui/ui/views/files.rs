@@ -58,7 +58,7 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         ])
         .split(area);
         let active = files
-            .active_tab
+            .active_tab()
             .map_or(tabbar::Active::Files, tabbar::Active::File);
         tabbar::draw(frame, app, rows[0], active);
         if files.diff {
@@ -83,7 +83,7 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     ])
     .split(area);
 
-    let active = match files.active_tab {
+    let active = match files.active_tab() {
         Some(index) => tabbar::Active::File(index),
         None => tabbar::Active::Files,
     };

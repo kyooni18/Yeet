@@ -4,7 +4,7 @@ use super::super::{
     support::{icons, theme},
 };
 use crate::tui::app::{
-    App, WorkbenchTab,
+    App,
     diff::{DiffAction, DiffState},
 };
 use ratatui::{
@@ -17,10 +17,7 @@ use std::path::PathBuf;
 
 pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
-    if let Some(s) = app.diff_tabs.get_mut(app.active_diff) {
-        s.hits.begin(area);
-        s.body_target = Rect::default();
-    }
+    app.diff_frame.begin(area);
     frame.render_widget(
         Block::default().style(theme::base().bg(theme::code_background())),
         area,
@@ -34,10 +31,13 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Constraint::Length(1),
     ])
     .split(area);
-    tabbar::draw(frame, app, rows[0], WorkbenchTab::Diff(app.active_diff));
-    let Some(s) = app.diff_tabs.get_mut(app.active_diff) else {
+    tabbar::draw(frame, app, rows[0], app.active_workbench_tab());
+    let Some(view) = app.diff_tabs.active_mut() else {
         return;
     };
+    let s = &mut view.state;
+    let geometry = &mut app.diff_frame;
+    geometry.view = Some(view.id);
     let cols = Layout::horizontal([
         Constraint::Length(if area.width >= 60 { area.width / 6 } else { 0 }),
         Constraint::Min(1),
@@ -49,7 +49,7 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     ])
     .split(rows[1]);
     let (rail, main, inspector) = (cols[0], cols[1], cols[2]);
-    draw_rail(frame, s, rail);
+    draw_rail(frame, s, geometry, rail);
     let inset = if main.width >= 50 { 4 } else { 1 };
     let heading = Rect::new(
         main.x + inset,
@@ -88,7 +88,7 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         } else {
             theme::base().fg(theme::muted())
         };
-        let mut ui = crate::tui::kit::Ui::new(frame, &mut s.hits, r);
+        let mut ui = crate::tui::kit::Ui::new(frame, &mut geometry.hits, r);
         ui.button(
             Rect::new(r.x, r.y, 11, 1),
             " full file ",
@@ -108,7 +108,7 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         main.width,
         main.height.saturating_sub(6),
     );
-    s.body_target = patch;
+    geometry.body = patch;
     let mut additions = 0;
     let mut deletions = 0;
     // Parse the whole patch before scrolling so line numbers remain correct.
@@ -190,7 +190,12 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     status::draw(frame, app, rows[2]);
 }
 
-fn draw_rail(frame: &mut Frame<'_>, s: &mut DiffState, rail: Rect) {
+fn draw_rail(
+    frame: &mut Frame<'_>,
+    s: &DiffState,
+    geometry: &mut crate::tui::app::diff::DiffFrame,
+    rail: Rect,
+) {
     if rail.width == 0 {
         return;
     }
@@ -249,7 +254,7 @@ fn draw_rail(frame: &mut Frame<'_>, s: &mut DiffState, rail: Rect) {
         };
         text(frame, r, &label, style);
         if let Some(i) = index {
-            s.hits.register(r, DiffAction::SelectFile(i));
+            geometry.hits.register(r, DiffAction::SelectFile(i));
         }
         last = r.y + 2;
     }
@@ -491,23 +496,26 @@ mod tests {
     #[test]
     fn review_rows_hide_headers_keep_numbers_and_fill_change_bands() {
         let mut app = App::default();
-        app.diff_tabs.push(DiffState {
-            paths: vec!["guidance/team.c".into()],
-            statuses: vec![" M".into()],
-            lines: [
-                "diff --git a/team.c b/team.c",
-                "--- a/team.c",
-                "+++ b/team.c",
-                "@@ -418,2 +418,2 @@ select_team_mode()",
-                "-old",
-                "+new",
-                " context",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-            ..Default::default()
-        });
+        app.diff_tabs.open(
+            "Diff",
+            DiffState {
+                paths: vec!["guidance/team.c".into()],
+                statuses: vec![" M".into()],
+                lines: [
+                    "diff --git a/team.c b/team.c",
+                    "--- a/team.c",
+                    "+++ b/team.c",
+                    "@@ -418,2 +418,2 @@ select_team_mode()",
+                    "-old",
+                    "+new",
+                    " context",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+                ..Default::default()
+            },
+        );
         let mut terminal = Terminal::new(TestBackend::new(144, 44)).unwrap();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer();
@@ -521,7 +529,7 @@ mod tests {
         assert!(contents.contains("418  -  old"));
         assert!(contents.contains("418  +  new"));
         assert!(contents.contains("419     context"));
-        let patch = app.diff_tabs[0].body_target;
+        let patch = app.diff_frame.body;
         for (label, color) in [("old", theme::error()), ("new", theme::success())] {
             let y = (patch.y..patch.bottom())
                 .find(|y| {
@@ -534,7 +542,8 @@ mod tests {
             assert_eq!(buffer[(patch.x, y)].bg, tint(color));
             assert_eq!(buffer[(patch.right() - 1, y)].bg, tint(color));
         }
-        let target = app.diff_tabs[0]
+        let target = app
+            .diff_frame
             .hits
             .targets()
             .find(|(_, a)| matches!(a, DiffAction::SelectFile(_)))
@@ -542,7 +551,7 @@ mod tests {
             .0;
         assert!(contents.contains("guidance"));
         assert!(target.y > 1);
-        app.diff_tabs[0].scroll = 3;
+        app.diff_tabs.active_mut().unwrap().state.scroll = 3;
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let contents = terminal
             .backend()

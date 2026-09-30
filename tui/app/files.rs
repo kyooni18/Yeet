@@ -6,10 +6,13 @@ use super::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{
     collections::HashMap,
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     process::Command,
     time::SystemTime,
 };
+
+use crate::tui::kit::{SurfaceId, Tabs};
 
 const PAGE: isize = 10;
 
@@ -22,7 +25,9 @@ pub struct FileEntry {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct FilesState {
+pub struct FileViewState {
+    /// Resource identity is independent of the current rail selection.
+    pub resource: Option<PathBuf>,
     pub dir: PathBuf,
     pub entries: Vec<FileEntry>,
     pub cursor: usize,
@@ -33,8 +38,6 @@ pub struct FilesState {
     pub count: Option<usize>,
     pub find: Option<String>,
     pub find_locked: bool,
-    pub tabs: Vec<PathBuf>,
-    pub active_tab: Option<usize>,
     pub recent_dirs: Vec<PathBuf>,
     pub changed: HashMap<String, String>,
     pub diff_lines: Vec<String>,
@@ -44,8 +47,39 @@ pub struct FilesState {
     pub git_commit: String,
 }
 
-impl FilesState {
-    pub fn open(dir: PathBuf) -> Self {
+/// The browser and every opened file own independent navigation/filter state.
+/// Deref exposes only the currently visible view to existing rendering helpers.
+#[derive(Debug, Clone, Default)]
+pub struct FilesState {
+    pub tabs: Tabs<FileViewState>,
+    browser: FileViewState,
+    showing_browser: bool,
+}
+impl Deref for FilesState {
+    type Target = FileViewState;
+    fn deref(&self) -> &Self::Target {
+        if !self.showing_browser
+            && let Some(view) = self.tabs.active()
+        {
+            &view.state
+        } else {
+            &self.browser
+        }
+    }
+}
+impl DerefMut for FilesState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        if !self.showing_browser
+            && let Some(view) = self.tabs.active_mut()
+        {
+            &mut view.state
+        } else {
+            &mut self.browser
+        }
+    }
+}
+impl FileViewState {
+    fn open(dir: PathBuf) -> Self {
         let mut state = Self {
             recent_dirs: vec![dir.clone()],
             dir,
@@ -54,7 +88,40 @@ impl FilesState {
         state.reload();
         state
     }
+}
 
+impl FilesState {
+    pub fn open(dir: PathBuf) -> Self {
+        Self {
+            browser: FileViewState::open(dir),
+            tabs: Tabs::default(),
+            showing_browser: true,
+        }
+    }
+
+    pub fn active_tab(&self) -> Option<SurfaceId> {
+        (!self.showing_browser)
+            .then(|| self.tabs.active_id())
+            .flatten()
+    }
+
+    pub(crate) fn activate_browser(&mut self) {
+        self.showing_browser = true;
+    }
+
+    pub(crate) fn open_browser(&mut self, dir: PathBuf) {
+        self.browser = FileViewState::open(dir);
+        self.showing_browser = true;
+    }
+
+    pub(crate) fn active_resource(&self) -> Option<&PathBuf> {
+        self.active_tab()
+            .and_then(|id| self.tabs.get(id))
+            .and_then(|view| view.state.resource.as_ref())
+    }
+}
+
+impl FileViewState {
     pub fn reload(&mut self) {
         self.changed = git_changes(&self.dir);
         self.git_branch = git(&self.dir, &["branch", "--show-current"])
@@ -86,6 +153,20 @@ impl FilesState {
         });
         self.entries = entries;
         self.cursor = 0;
+        self.refresh_detail();
+    }
+
+    pub(crate) fn reload_preserving_selection(&mut self) {
+        let selected = self.selected_path();
+        let cursor = self.cursor;
+        self.reload();
+        self.cursor = selected
+            .and_then(|path| {
+                self.visible()
+                    .iter()
+                    .position(|entry| self.dir.join(&entry.name) == path)
+            })
+            .unwrap_or(cursor);
         self.refresh_detail();
     }
 
@@ -179,7 +260,9 @@ impl FilesState {
             }
         }
     }
+}
 
+impl FilesState {
     fn open_selected(&mut self, as_tab: bool) {
         let Some(entry) = self.selected().cloned() else {
             return;
@@ -189,69 +272,71 @@ impl FilesState {
             self.set_dir(path);
             return;
         }
-        let index = match self.tabs.iter().position(|tab| *tab == path) {
-            Some(index) => index,
-            None => {
-                self.tabs.push(path);
-                self.tabs.len() - 1
-            }
-        };
-        self.active_tab = Some(index);
+        self.open_path(path, self.diff);
     }
 
-    pub(crate) fn activate_tab(&mut self, index: usize) -> bool {
-        let Some(path) = self.tabs.get(index).cloned() else {
+    pub(crate) fn activate_tab(&mut self, id: SurfaceId) -> bool {
+        if !self.tabs.activate(id) {
             return false;
-        };
-        if let Some(parent) = path.parent() {
-            if self.dir != parent {
-                self.set_dir(parent.to_path_buf());
-            }
         }
-        self.changed_only = false;
-        self.find = None;
-        self.find_locked = false;
-        if let Some(cursor) = self
-            .visible()
-            .iter()
-            .position(|entry| self.dir.join(&entry.name) == path)
-        {
-            self.cursor = cursor;
-        }
-        self.active_tab = Some(index);
-        self.refresh_detail();
+        self.showing_browser = false;
+        // Refresh external data while restoring the local selection and filters.
+        self.reload_preserving_selection();
         true
     }
 
-    /// Open a stable resource path from any workbench view.
+    /// Open a resource without resetting the state of an existing view.
     pub fn open_path(&mut self, path: PathBuf, diff: bool) {
-        self.diff = diff;
-        let index = self
+        if let Some(id) = self
             .tabs
+            .views()
             .iter()
-            .position(|tab| tab == &path)
-            .unwrap_or_else(|| {
-                self.tabs.push(path);
-                self.tabs.len() - 1
-            });
-        self.activate_tab(index);
-    }
-
-    pub(crate) fn close_tab(&mut self, index: usize) {
-        if index >= self.tabs.len() {
+            .find(|view| view.state.resource.as_ref() == Some(&path))
+            .map(|view| view.id)
+        {
+            self.activate_tab(id);
             return;
         }
-        self.tabs.remove(index);
-        match self.active_tab {
-            Some(active) if active == index => {
-                self.active_tab = None;
-                if !self.tabs.is_empty() {
-                    self.activate_tab(index.min(self.tabs.len() - 1));
-                }
-            }
-            Some(active) if active > index => self.active_tab = Some(active - 1),
-            _ => {}
+        let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let mut state = FileViewState::open(dir);
+        state.resource = Some(path.clone());
+        state.diff = diff;
+        if let Some(cursor) = state
+            .visible()
+            .iter()
+            .position(|entry| state.dir.join(&entry.name) == path)
+        {
+            state.cursor = cursor;
         }
+        state.refresh_detail();
+        self.tabs.open(
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            state,
+        );
+        self.showing_browser = false;
+    }
+
+    pub(crate) fn close_tab(&mut self, id: SurfaceId) {
+        if self.tabs.close(id).is_some() && self.tabs.is_empty() {
+            self.showing_browser = true;
+        }
+    }
+
+    fn cycle_tab(&mut self, back: bool) {
+        let len = self.tabs.len();
+        if len == 0 {
+            return;
+        }
+        let current = self
+            .active_tab()
+            .and_then(|id| self.tabs.views().iter().position(|view| view.id == id));
+        let next = match current {
+            Some(i) if back => (i + len - 1) % len,
+            Some(i) => (i + 1) % len,
+            None if back => len - 1,
+            None => 0,
+        };
+        self.activate_tab(self.tabs.views()[next].id);
     }
 
     /// Raw text entry while the find prompt is open; everything else goes
@@ -327,17 +412,8 @@ impl FilesState {
             Action::MoveUp => self.move_cursor(-1),
             Action::MoveTop => self.move_cursor(isize::MIN / 2),
             Action::MoveBottom => self.move_cursor(isize::MAX / 2),
-            Action::NextTab if !self.tabs.is_empty() => {
-                let next = self.active_tab.map_or(0, |i| (i + 1) % self.tabs.len());
-                self.activate_tab(next);
-            }
-            Action::NextTab => {}
-            Action::PrevTab if !self.tabs.is_empty() => {
-                let len = self.tabs.len();
-                let prev = self.active_tab.map_or(len - 1, |i| (i + len - 1) % len);
-                self.activate_tab(prev);
-            }
-            Action::PrevTab => {}
+            Action::NextTab => self.cycle_tab(false),
+            Action::PrevTab => self.cycle_tab(true),
             Action::PageDown => self.move_cursor(PAGE),
             Action::PageUp => self.move_cursor(-PAGE),
         }
@@ -445,17 +521,7 @@ impl App {
         let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let files = match self.files.take() {
             Some(mut files) => {
-                let selected = files.selected_path();
-                files.reload();
-                if let Some(selected) = selected
-                    && let Some(index) = files
-                        .visible()
-                        .iter()
-                        .position(|entry| files.dir.join(&entry.name) == selected)
-                {
-                    files.cursor = index;
-                    files.refresh_detail();
-                }
+                files.reload_preserving_selection();
                 files
             }
             None => FilesState::open(dir),
@@ -473,7 +539,7 @@ impl App {
             return;
         }
         let Some(files) = self.files.as_mut() else {
-            self.mode = Mode::Chat;
+            self.activate_workbench_tab(super::WorkbenchTab::Home);
             return;
         };
         if event.modifiers.is_empty()
@@ -497,8 +563,8 @@ impl App {
         };
         if action == Action::ToggleDiff {
             let path = files
-                .active_tab
-                .and_then(|i| files.tabs.get(i).cloned())
+                .active_resource()
+                .cloned()
                 .or_else(|| files.selected_path());
             self.open_diff(path.filter(|p| !p.is_dir()));
             return;
@@ -508,7 +574,7 @@ impl App {
             return;
         }
         if files.apply_counted(action, count.unwrap_or(1)) == FilesOutcome::Close {
-            self.mode = Mode::Chat;
+            self.activate_workbench_tab(super::WorkbenchTab::Home);
         }
     }
 }
@@ -517,6 +583,52 @@ impl App {
 mod tests {
     use super::*;
     use crate::tui::app::keymap::Keymap;
+
+    #[test]
+    fn file_instances_restore_filters_selection_and_browser_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("alpha.rs");
+        let second = dir.path().join("beta.rs");
+        std::fs::write(&first, "a").unwrap();
+        std::fs::write(&second, "b").unwrap();
+        let mut files = FilesState::open(dir.path().to_path_buf());
+        files.apply(Action::MoveDown);
+        files.find = Some("bet".into());
+        files.find_locked = true;
+        files.refresh_detail();
+        files.open_path(first.clone(), false);
+        let first_id = files.active_tab().unwrap();
+        files.info = true;
+        files.hints = true;
+        files.diff = true;
+        files.find = Some("alp".into());
+        files.find_locked = true;
+        files.count = Some(3);
+        files.open_path(second.clone(), false);
+        let second_id = files.active_tab().unwrap();
+        assert!(!files.info);
+        assert_eq!(files.find, None);
+        files.activate_tab(first_id);
+        assert!(files.info && files.hints && files.diff && files.find_locked);
+        assert_eq!(files.find.as_deref(), Some("alp"));
+        assert_eq!(files.count, Some(3));
+        assert_eq!(files.selected_path(), Some(first.clone()));
+        files.activate_browser();
+        assert_eq!(files.find.as_deref(), Some("bet"));
+        assert_eq!(files.selected_path(), Some(second.clone()));
+        files.open_path(first, false);
+        assert_eq!(files.active_tab(), Some(first_id));
+        assert!(files.diff, "reopening must not reset display options");
+        files.close_tab(first_id);
+        assert_eq!(files.active_tab(), Some(second_id));
+        files.close_tab(first_id); // stale identity must not close the neighbor
+        assert_eq!(files.tabs.len(), 1);
+        files.open_browser(dir.path().to_path_buf());
+        files.activate_tab(second_id);
+        assert_eq!(files.selected_path(), Some(second));
+        files.close_tab(second_id);
+        assert_eq!(files.active_tab(), None);
+    }
 
     #[test]
     fn reopening_files_keeps_the_selected_entry() {
@@ -557,7 +669,10 @@ mod tests {
 
         key(&mut files, KeyCode::Char('j'));
         key(&mut files, KeyCode::Char(' '));
-        assert_eq!(files.tabs, vec![root.join("alpha.rs")]);
+        assert_eq!(
+            files.tabs.views()[0].state.resource,
+            Some(root.join("alpha.rs"))
+        );
 
         key(&mut files, KeyCode::Char('p'));
         assert!(files.info);

@@ -51,6 +51,21 @@ impl<T> Tabs<T> {
             false
         }
     }
+    pub fn get(&self, id: SurfaceId) -> Option<&View<T>> {
+        self.views.iter().find(|view| view.id == id)
+    }
+    pub fn get_mut(&mut self, id: SurfaceId) -> Option<&mut View<T>> {
+        self.views.iter_mut().find(|view| view.id == id)
+    }
+    pub fn active_id(&self) -> Option<SurfaceId> {
+        self.active
+    }
+    pub fn len(&self) -> usize {
+        self.views.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.views.is_empty()
+    }
     pub fn active(&self) -> Option<&View<T>> {
         self.views.iter().find(|v| Some(v.id) == self.active)
     }

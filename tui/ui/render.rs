@@ -80,6 +80,7 @@ fn draw_auxiliary(frame: &mut Frame<'_>, app: &mut App) {
 }
 
 fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
+    app.diff_frame.begin(frame.area());
     app.observe_workbench_view();
     app.home_targets.clear();
     app.tab_targets.clear();

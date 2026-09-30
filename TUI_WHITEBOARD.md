@@ -816,3 +816,28 @@ pipeline. Geometry, focus, and rendering remain in `tui/`. This is an incrementa
 boundary, not a migration of every widget-specific action or editor keystroke.
 `src/agents/` owns process-wide runtime identity and snapshots, separate from
 conversation storage, provider history, UI state, and private model reasoning.
+
+## Stateful workbench tabs: first migration
+
+File and Diff views now use the shared `Tabs<T>` store. Terminal navigation,
+including painted tab actions, carries stable instance IDs rather than vector
+positions. Closing a tab cannot retarget an old action to its neighbor. The
+shared agent/wire navigation API retains positional compatibility; its adapter
+resolves an index to an instance ID at dispatch time.
+
+Each file view owns a typed `FileViewState`: resource identity, contextual rail
+directory and selection, filters/find lock, display options, hints and local
+count prefix. The browser owns a separate state. Switching or reopening a file
+restores its state and refreshes external data without clearing its filters;
+opening another browser directory preserves existing file views. Selection is
+clamped if external contents change. Diff instances retain independent review
+selection, display mode and scroll through the same tab lifecycle.
+
+Diff hit targets and patch bounds are now separate frame geometry, not fields
+of persistent `DiffState`. Navigation and every draw invalidate old geometry;
+pointer routing requires the currently painted instance identity. Empty/tiny
+frames cannot retain clickable controls from the previous frame.
+
+This is a bounded migration, not a complete component runtime: Home/Session
+remain singletons, other geometry still uses existing target collections, and
+focus/overlay lifecycle and narrower component inputs remain follow-up work.
