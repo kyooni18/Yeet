@@ -21,7 +21,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         return;
     }
 
-    // Translate mockup pixels to terminal cells independently on each axis.
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::background())),
+        bounds,
+    );
     let scale_x = |px: u16| (bounds.width as u32 * px as u32 / 1440) as u16;
     let scale_y = |px: u16| ((bounds.height as u32 * px as u32 + 863) / 864) as u16;
     let tab_height = scale_y(34).max(1);
@@ -35,10 +38,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     ])
     .split(bounds);
     draw_tabs(frame, rows[0]);
-
     let body = rows[1];
-    let rail_width = scale_x(232).min(body.width / 3);
-    let rail_gap = scale_x(30).min(body.width.saturating_sub(rail_width));
+    let rail_width = ((bounds.width as u32 * 232 + 1439) / 1440) as u16;
+    let rail_width = rail_width.min(body.width / 3);
+    let rail_gap = scale_x(262).saturating_sub(rail_width);
     let columns = Layout::horizontal([
         Constraint::Length(rail_width),
         Constraint::Length(rail_gap),
@@ -46,7 +49,6 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     ])
     .split(body);
     draw_sessions_rail(frame, columns[0]);
-
     let activity_width = scale_x(540).min(columns[2].width);
     let pane_gap = scale_x(54).min(columns[2].width.saturating_sub(activity_width));
     let panes = Layout::horizontal([
@@ -58,7 +60,6 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     draw_activity(frame, panes[0]);
     draw_inspector(frame, panes[2]);
     draw_usage(frame, panes[0]);
-
     draw_composer(frame, app, rows[2]);
     status::draw(frame, app, rows[3]);
 }
@@ -98,10 +99,9 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
                 .bg(theme::surface_color())
                 .add_modifier(ACTIVE)
         } else {
-            Style::default()
-                .fg(theme::muted())
-                .bg(theme::code_background())
+            Style::default().fg(theme::muted()).bg(theme::background())
         };
+
         let text = super::super::task::fit(label, width as usize);
         frame.render_widget(
             Paragraph::new(text).style(style),
@@ -126,32 +126,21 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         ("·", "Provider cleanup", "21m", false),
         ("·", "Foundation memory", "43m", false),
     ];
-    let button = Rect::new(
-        area.x + 1,
-        area.y + 1,
-        area.width.saturating_sub(2),
-        2.min(area.height),
-    );
+    let add_button = format!("{:>width$}", "+", width = area.width.div_ceil(2) as usize);
     frame.render_widget(
-        Paragraph::new(" + ").style(
+        Paragraph::new(add_button).style(
             Style::default()
                 .fg(theme::text())
-                .bg(theme::selected_color()),
+                .bg(theme::surface_color()),
         ),
-        button,
+        Rect::new(area.x, area.y, area.width, 2.min(area.height)),
     );
-    // Recent sessions are a compact list beneath the new-session control.
-    // Keep rows grouped at the same two-cell rhythm as the 28px mockup rows.
     for (index, (icon, title, age, selected)) in entries.into_iter().enumerate() {
-        let y = area.y.saturating_add(4 + index as u16 * 2);
+        let row_offsets = [2u16, 4, 5, 6, 8];
+        let y = area.y.saturating_add(row_offsets[index]);
         if y >= area.bottom() {
             break;
         }
-
-        let age_width = age.chars().count();
-        let title_width = area.width.saturating_sub(age_width as u16 + 5) as usize;
-        let fitted = super::super::task::fit(title, title_width);
-        let padding = " ".repeat(title_width.saturating_sub(fitted.chars().count()));
         let style = if selected {
             Style::default()
                 .fg(theme::text())
@@ -160,33 +149,32 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, area: Rect) {
         } else {
             Style::default().fg(theme::muted())
         };
+        let prefix = format!("{icon} ");
+        let age_width = Span::raw(age).width();
+        let prefix_width = Span::raw(&prefix).width();
+        let title = super::super::task::fit(
+            title,
+            (area.width as usize).saturating_sub(age_width + prefix_width + 1),
+        );
+        let used_width = prefix_width + Span::raw(&title).width() + age_width;
+        let gap = " ".repeat((area.width as usize).saturating_sub(used_width));
         let line = Line::from(vec![
-            Span::styled(format!("{icon} "), style),
-            Span::styled(fitted, style),
-            Span::raw(padding),
-            Span::raw("  "),
+            Span::styled(prefix, style),
+            Span::styled(title, style),
+            Span::raw(gap),
             Span::styled(age, Style::default().fg(theme::muted())),
         ]);
-        frame.render_widget(
-            Paragraph::new(line).style(style),
-            Rect::new(area.x + 1, y, area.width.saturating_sub(2), 1),
-        );
+        frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
     }
 }
 
 fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(Block::default().style(theme::base()), area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme::background())),
+        area,
+    );
     let usage_height = if area.height >= 6 { 3 } else { 0 };
     let content_height = area.height.saturating_sub(usage_height);
-    let rows = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Length(3),
-        Constraint::Min(1),
-    ])
-    .split(Rect::new(area.x, area.y, area.width, content_height));
     let muted = Style::default().fg(theme::muted());
     let active = Style::default()
         .fg(theme::text())
@@ -194,7 +182,7 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         .add_modifier(ACTIVE);
     let items = [
         (
-            "▣  Verification: accept a 3.2 km floor?",
+            "Verification: accept a 3.2 km floor?",
             "Landing",
             "4m",
             true,
@@ -204,7 +192,11 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         ("▤  TUI shell direction", "", "3m", false),
     ];
     for (index, (title, context, age, selected)) in items.into_iter().enumerate() {
-        let row = rows[index];
+        let y = area.y.saturating_add(1 + index as u16 * 2);
+        if y >= area.y.saturating_add(content_height) {
+            break;
+        }
+        let row = Rect::new(area.x, y, area.width, 1);
         if selected {
             frame.render_widget(
                 Block::default().style(Style::default().bg(theme::selected_color())),
@@ -216,54 +208,53 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
         } else {
             format!("{context}  {age}")
         };
-        let available = row.width as usize;
-        let title_width = available.saturating_sub(suffix.chars().count() + 1);
-        let title = super::super::task::fit(title, title_width);
-        let gap =
-            " ".repeat(available.saturating_sub(title.chars().count() + suffix.chars().count()));
+        let title = super::super::task::fit(
+            title,
+            (row.width as usize).saturating_sub(suffix.chars().count() + 3),
+        );
+        let gap = " ".repeat(
+            (row.width as usize).saturating_sub(3 + title.chars().count() + suffix.chars().count()),
+        );
         let line = Line::from(vec![
+            Span::styled(" ▸ ", if selected { active } else { muted }),
             Span::styled(title, if selected { active } else { muted }),
             Span::raw(gap),
             Span::styled(suffix, muted),
         ]);
-        frame.render_widget(Paragraph::new(line), Rect::new(row.x, row.y, row.width, 1));
+        frame.render_widget(Paragraph::new(line), row);
     }
-    let changes_y = rows[5].y;
-    if changes_y < area.y.saturating_add(content_height) {
-        let changes: Vec<Line<'static>> = vec![
-            Line::from(vec![
-                Span::styled("  C  guidance_taem.c", muted),
-                Span::styled(
-                    "                       +18",
-                    Style::default().fg(theme::success()),
-                ),
-                Span::styled("  -6", Style::default().fg(theme::error())),
-            ]),
-            Line::from(vec![
-                Span::styled("  C  taem_candidate_search.c", muted),
-                Span::styled("           +42", Style::default().fg(theme::success())),
-                Span::styled("  -13", Style::default().fg(theme::error())),
-            ]),
-            Line::from(vec![
-                Span::styled("  C  taem_candidate_search.h", muted),
-                Span::styled("            +8", Style::default().fg(theme::success())),
-                Span::styled("  -4", Style::default().fg(theme::error())),
-            ]),
-            Line::from(Span::styled("  ▣  #214  Context rail focus order", muted)),
-            Line::from(Span::styled(
-                "  ▣  #219  Final-speed handoff threshold",
-                muted,
-            )),
-        ];
-        let change_area = Rect::new(
-            area.x,
-            changes_y,
-            area.width,
-            area.y
-                .saturating_add(content_height)
-                .saturating_sub(changes_y),
-        );
-        frame.render_widget(Paragraph::new(changes), change_area);
+    let rows = [
+        ("guidance_taem.c", "+18", "−6"),
+        ("taem_candidate_search.c", "+42", "−13"),
+        ("taem_candidate_search.h", "+8", "−4"),
+    ];
+    for (i, (file, added, removed)) in rows.into_iter().enumerate() {
+        let y = area.y.saturating_add(10 + i as u16 * 2);
+        if y >= area.y.saturating_add(content_height) {
+            break;
+        }
+        let line = Line::from(vec![
+            Span::styled(format!("  C   {file}          "), muted),
+            Span::styled(added, Style::default().fg(theme::success())),
+            Span::raw("  "),
+            Span::styled(removed, Style::default().fg(theme::error())),
+        ]);
+        frame.render_widget(Paragraph::new(line), Rect::new(area.x, y, area.width, 1));
+    }
+    for (i, issue) in [
+        "#214  Context rail focus order",
+        "#219  Final-speed handoff threshold",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let y = area.y.saturating_add(17 + i as u16 * 2);
+        if y < area.y.saturating_add(content_height) {
+            frame.render_widget(
+                Paragraph::new(format!("  ▣  {issue}")).style(muted),
+                Rect::new(area.x, y, area.width, 1),
+            );
+        }
     }
 }
 
@@ -294,6 +285,7 @@ fn draw_usage(frame: &mut Frame<'_>, area: Rect) {
         ),
     );
 }
+
 fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
