@@ -105,7 +105,12 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         let icon_x = x + (area.width as u32 * 15 / 1440) as u16;
         frame.render_widget(
             Paragraph::new(icon).style(style),
-            Rect::new(icon_x, area.y, 2.min(area.right().saturating_sub(icon_x)), 1),
+            Rect::new(
+                icon_x,
+                area.y,
+                2.min(area.right().saturating_sub(icon_x)),
+                1,
+            ),
         );
         let label_x = x + (area.width as u32 * if index == 0 { 36 } else { 21 } / 1440) as u16;
         let label_right = area
