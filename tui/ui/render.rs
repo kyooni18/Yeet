@@ -24,7 +24,59 @@ use status::draw as draw_status;
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     app.toasts.expire(std::time::Instant::now());
     draw_content(frame, app);
+    // Global runtime attention is workbench chrome and never selects a view.
+    if app.state.pending_shell_permission.is_some()
+        || app.state.pending_native_app_permission.is_some()
+    {
+        draw_permission(frame, app);
+    }
+    chrome::draw(frame, app);
+    if let Some(error) = &app.state.error_message {
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new(format!("Failed: {error}")).style(theme::surface()),
+            Rect::new(
+                frame.area().x,
+                frame.area().y.saturating_add(1),
+                frame.area().width,
+                1,
+            ),
+        );
+    }
     app.toasts.paint(frame, theme::surface());
+}
+
+// Auxiliary workbench surfaces are peers, not dialogs painted on a transcript.
+fn draw_auxiliary(frame: &mut Frame<'_>, app: &mut App) {
+    frame.render_widget(Block::default().style(theme::base()), frame.area());
+    tabbar::draw(
+        frame,
+        app,
+        Rect::new(frame.area().x, frame.area().y, frame.area().width, 1),
+        app.active_workbench_tab(),
+    );
+    match app.mode {
+        Mode::Debate => dialogs::draw_debate(frame, app),
+        Mode::Models => draw_models(frame, app),
+        Mode::Reasoning => draw_reasoning(frame, app),
+        Mode::Goal => draw_goal(frame, app),
+        Mode::Sessions => draw_sessions(frame, app),
+        Mode::Capabilities => draw_capabilities(frame, app),
+        Mode::CapabilityDetail => draw_capability_detail(frame, app),
+        Mode::Auth => draw_auth(frame, app),
+        Mode::AuthKey => draw_auth_key(frame, app),
+        Mode::Providers => draw_providers(frame, app),
+        Mode::ProviderEdit => draw_provider_edit(frame, app),
+        Mode::Settings => draw_settings(frame, app),
+        Mode::SandboxPresets => draw_sandbox_presets(frame, app),
+        Mode::SandboxPolicy => draw_sandbox_policy(frame, app),
+        Mode::SettingsEdit => {
+            draw_sandbox_policy(frame, app);
+            draw_settings_edit(frame, app);
+        }
+        Mode::Status => draw_status_dialog(frame, app),
+        Mode::Help => draw_help(frame),
+        _ => {}
+    }
 }
 
 fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
@@ -32,6 +84,9 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     app.home_targets.clear();
     app.tab_targets.clear();
     app.view_targets.clear();
+    app.transcript_area = (0, 0, 0, 0);
+    app.sidebar_area = (0, 0, 0, 0);
+    app.sidebar_session_targets.clear();
     let area = frame.area();
     let active = app.active_workbench_tab();
     let show_tabs = match active {
@@ -47,6 +102,16 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     if app.mode == Mode::Sessions && responsive::shape(frame.area()) == responsive::Shape::Portrait
     {
         views::session_picker::draw(frame, app);
+        return;
+    }
+    if !matches!(
+        app.mode,
+        Mode::Chat | Mode::Files | Mode::Diff | Mode::Views
+    ) {
+        app.transcript_area = (0, 0, 0, 0);
+        app.sidebar_area = (0, 0, 0, 0);
+        app.sidebar_session_targets.clear();
+        draw_auxiliary(frame, app);
         return;
     }
     if app.mode == Mode::Diff || (app.mode == Mode::Views && app.views_origin == Mode::Diff) {
@@ -71,12 +136,7 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     }
     let home = app.home_visible()
         && (app.mode == Mode::Chat || (app.mode == Mode::Views && app.views_origin == Mode::Chat));
-    if home
-        && frame.area().width >= 45
-        && app.state.pending_shell_permission.is_none()
-        && app.state.pending_native_app_permission.is_none()
-        && app.state.error_message.is_none()
-    {
+    if home {
         if app.home_override.is_none() {
             app.home_override = Some(true);
         }
@@ -174,39 +234,9 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     draw_input(frame, app, composer_area, area.x + 1);
     draw_status(frame, app, status_area);
     views::sessions::draw_context_menu(frame, app);
-
-    match app.mode {
-        Mode::Debate => dialogs::draw_debate(frame, app),
-        Mode::Models => draw_models(frame, app),
-        Mode::Reasoning => draw_reasoning(frame, app),
-        Mode::Goal => draw_goal(frame, app),
-        Mode::Sessions => draw_sessions(frame, app),
-        Mode::Capabilities => draw_capabilities(frame, app),
-        Mode::CapabilityDetail => draw_capability_detail(frame, app),
-        Mode::Auth => draw_auth(frame, app),
-        Mode::AuthKey => draw_auth_key(frame, app),
-        Mode::Providers => draw_providers(frame, app),
-        Mode::ProviderEdit => draw_provider_edit(frame, app),
-        Mode::Settings => draw_settings(frame, app),
-        Mode::SandboxPresets => draw_sandbox_presets(frame, app),
-        Mode::SandboxPolicy => draw_sandbox_policy(frame, app),
-        Mode::SettingsEdit => {
-            draw_sandbox_policy(frame, app);
-            draw_settings_edit(frame, app);
-        }
-        Mode::Status => draw_status_dialog(frame, app),
-        Mode::Help => draw_help(frame),
-        Mode::Views => views::draw(frame, app),
-        Mode::Chat | Mode::Files | Mode::Diff => {}
+    if app.mode == Mode::Views {
+        views::draw(frame, app);
     }
-
-    if app.state.pending_shell_permission.is_some()
-        || app.state.pending_native_app_permission.is_some()
-    {
-        draw_permission(frame, app);
-    }
-
-    chrome::draw(frame, app);
 }
 
 fn draw_suggestions(

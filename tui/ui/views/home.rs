@@ -51,7 +51,7 @@ fn draw_compact(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     status::draw(frame, app, rows[3]);
 }
 
-fn draw_sessions_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.width == 0 || area.height < 3 {
         return;
     }
@@ -65,31 +65,36 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     );
     app.home_targets.push((button, HomeAction::NewSession));
     let count = area.height.saturating_sub(4) as usize;
-    let selected = app
-        .home
-        .content
-        .sessions
+    let content = &app.home.content;
+    let mut items = Vec::new();
+    for item in content
+        .recent_views
+        .iter()
+        .chain(&content.tasks)
+        .chain(&content.diffs)
+        .chain(&content.sessions)
+    {
+        if !items
+            .iter()
+            .any(|existing: &&ResourceItem| existing.target == item.target)
+        {
+            items.push(item);
+        }
+    }
+    let selected = items
         .iter()
         .position(|item| Some(&item.target) == app.home.selected.as_ref())
         .unwrap_or(0);
     let offset = crate::tui::kit::visible_start(selected, count);
-    if app.home.content.sessions.is_empty() {
+    if items.is_empty() {
         frame.render_widget(
-            Paragraph::new("No saved sessions")
+            Paragraph::new("No recent objects")
                 .style(Style::default().fg(theme::muted()))
                 .wrap(Wrap { trim: true }),
             Rect::new(area.x + 1, area.y + 3, area.width.saturating_sub(2), 2),
         );
     }
-    for (index, item) in app
-        .home
-        .content
-        .sessions
-        .iter()
-        .skip(offset)
-        .take(count)
-        .enumerate()
-    {
+    for (index, item) in items.iter().skip(offset).take(count).enumerate() {
         let row = Rect::new(area.x, area.y + 3 + index as u16, area.width, 1);
         let selected = Some(&item.target) == app.home.selected.as_ref();
         let style = if selected {
@@ -428,7 +433,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     app.sidebar_session_targets.clear();
     app.refresh_home(false);
     let bounds = frame.area();
-    if bounds.width < 45 || bounds.height < 5 {
+    if bounds.height < 5 {
         return;
     }
     if bounds.width < 110 {
@@ -462,7 +467,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     );
     let columns = Layout::horizontal([Constraint::Length(scale_x(232) as u16), Constraint::Min(1)])
         .split(body);
-    draw_sessions_rail(
+    draw_recent_rail(
         frame,
         app,
         Rect::new(

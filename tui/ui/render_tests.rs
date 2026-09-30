@@ -32,7 +32,7 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
         assert!(text.contains('+'), "composer at {width}x{height}");
         if height >= 24 && width >= 110 {
             assert!(text.contains("Recent views"));
-            assert!(text.contains("No saved sessions"));
+            assert!(text.contains("No recent objects"));
         }
     }
 }
@@ -159,6 +159,7 @@ fn generic_legacy_done_activity_is_hidden_but_informative_completion_survives() 
         ..App::default()
     };
 
+    app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
     let (text, _) = render(&mut app, 100, 24);
     assert!(!text.contains("· Done"), "{text}");
     assert!(text.contains("Validation complete"), "{text}");
@@ -185,6 +186,7 @@ fn session_user_bubble_is_right_aligned_and_assistant_prose_is_unframed() {
         ],
         ..App::default()
     };
+    app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
     let (text, buffer) = render(&mut app, 140, 38);
     assert!(text.contains("Review the layout"));
     assert!(text.contains("Here is the review."));
@@ -221,6 +223,7 @@ fn empty_session_and_picker_remain_readable_at_responsive_widths() {
     for (width, height) in [(80, 24), (140, 38)] {
         let mut app = App::default();
         app.state.current_session_id = Some("fresh-session".into());
+        app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
         let (text, _) = render(&mut app, width, height);
         assert!(text.contains("New session"), "{width}x{height}: {text}");
         assert!(text.contains("Write a message below"), "{width}x{height}");
@@ -261,6 +264,7 @@ fn sidebar_hit_targets_match_rendered_session_rows() {
         })
         .collect();
     app.state.current_session_id = Some("session-0".into());
+    app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
     let (text, _) = render(&mut app, 140, 38);
     let rows = text.lines().collect::<Vec<_>>();
     assert!(!app.sidebar_session_targets.is_empty());
@@ -383,6 +387,7 @@ mod overall_layout_tests {
                     content: "Review these changes".into(),
                 },
             });
+            app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| draw(frame, &mut app)).unwrap();
             assert!(app.transcript_area.3 > 0);
@@ -430,6 +435,7 @@ fn user_bubble_padding_rows_are_adjacent_to_message() {
         }],
         ..App::default()
     };
+    app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
     let (_, buf) = render(&mut app, 160, 20);
     let (x, y, w, _) = app.transcript_area;
     let column = x + w - 4;
@@ -470,7 +476,7 @@ fn home_workbench_renders_activity_inspector_and_composer() {
     let (text, _) = render(&mut app, 144, 44);
     for expected in [
         "Home",
-        "No saved sessions",
+        "No recent objects",
         "No agent tasks",
         "Changed files",
         "Ask Yeet",
