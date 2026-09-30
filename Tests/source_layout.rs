@@ -55,7 +55,12 @@ fn rust_source_files_do_not_return_to_monolithic_sizes() {
 #[test]
 fn extracted_responsibility_modules_stay_within_target() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let focused_roots = [root.join("agent"), root.join("backend"), root.join("tools")];
+    let focused_roots = [
+        root.join("agent"),
+        root.join("agents"),
+        root.join("backend"),
+        root.join("tools"),
+    ];
     let mut oversized = Vec::new();
     for focused_root in focused_roots {
         visit_rust_files(&focused_root, &mut |path| {
@@ -123,6 +128,18 @@ fn extracted_modules_explain_their_responsibility() {
         "agent/progress.rs",
         "agent/runaway.rs",
         "agent/tool_protocol.rs",
+        "agents/group/budget.rs",
+        "agents/group/commands.rs",
+        "agents/group/runtime.rs",
+        "agents/group/scheduler.rs",
+        "agents/group/snapshot.rs",
+        "agents/group/state.rs",
+        "agents/group/workspace.rs",
+        "agents/member/model.rs",
+        "agents/member/prompt.rs",
+        "agents/runtime/factory.rs",
+        "agents/runtime/run_manager.rs",
+        "agents/task/model.rs",
         "backend/debate_context.rs",
         "backend/debate_runtime.rs",
         "backend/events.rs",

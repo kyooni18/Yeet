@@ -9,10 +9,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
+    agents::group::AdaptiveAgentOrchestrator,
     core::{BridgeClient, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
-    orchestration::AdaptiveAgentOrchestrator,
     permission::PermissionBroker,
     project_settings::ServiceBackend,
     sandbox::{SandboxMode, SandboxStore},

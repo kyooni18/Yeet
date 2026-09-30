@@ -21,6 +21,10 @@ use crate::{
         AgentCoordinator, AgentEvent, AgentRunOutcome, AgentRunRequest,
         is_internal_coordinator_system_message,
     },
+    agents::{
+        group::{AdaptiveAgentOrchestrator, AgentLimits},
+        runtime::{AgentRuntimeFactory, RunManager},
+    },
     config::{ConfigStore, parse_context_length},
     core::{
         BridgeEvent, CallRequest, HarnessCapabilityDescriptor, ImageAttachment, Message, Usage,
@@ -34,7 +38,6 @@ use crate::{
         ToolCallStatus, WorkspaceSessionGroup, WorkspaceSummary, normalize_reasoning_level,
         reasoning_levels_for_model,
     },
-    orchestration::{AdaptiveAgentOrchestrator, AgentLimits, AgentRuntimeFactory, RunManager},
     permission::PermissionBroker,
     project_settings::{ProjectSettingsStore, ServiceBackend},
     sandbox::{

@@ -169,7 +169,7 @@ impl AgentCoordinator {
 
     pub(crate) fn set_agent_orchestrator(
         &mut self,
-        orchestrator: Option<crate::orchestration::AdaptiveAgentOrchestrator>,
+        orchestrator: Option<crate::agents::group::AdaptiveAgentOrchestrator>,
     ) {
         self.registry.set_agent_orchestrator(orchestrator);
     }

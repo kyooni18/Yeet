@@ -18,7 +18,6 @@ pub mod install;
 pub mod mcp_server;
 pub mod memory;
 pub mod model;
-mod orchestration;
 pub mod permission;
 mod platform;
 pub mod project_settings;
