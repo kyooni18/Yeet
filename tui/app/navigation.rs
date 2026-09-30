@@ -2,7 +2,7 @@
 use super::{App, Mode};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-pub use crate::actions::NavigationAction as WorkbenchTab;
+pub use crate::agents::actions::NavigationAction as WorkbenchTab;
 
 impl App {
     pub fn home_visible(&self) -> bool {

@@ -1,6 +1,6 @@
 //! Terminal adapter for shared intents; domain modules never depend on App.
 use super::App;
-use crate::{actions::Action, backend::Backend};
+use crate::{agents::actions::Action, backend::Backend};
 
 impl App {
     /// One entry point for frontend automation and shared UI actions.

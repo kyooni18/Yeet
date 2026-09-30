@@ -808,8 +808,9 @@ remain follow-up work; do not claim a complete UI runtime yet.
 
 ## Shared action and runtime agent boundary
 
-`src/actions.rs` owns frontend commands and navigation intents; model and TUI
-paths retain compatibility exports. `App::dispatch_action` interprets the common
+`src/agents/actions.rs` owns agent frontend commands and navigation intents,
+independent of Skyline. Root `actions`, model, and TUI paths retain compatibility
+exports. `App::dispatch_action` interprets the common
 Action envelope: navigation stays local, commands use the existing Harness
 pipeline. Geometry, focus, and rendering remain in `tui/`. This is an incremental
 boundary, not a migration of every widget-specific action or editor keystroke.

@@ -564,7 +564,7 @@ pub struct BridgeEnvelope {
     pub message: Option<String>,
 }
 
-pub use crate::actions::FrontendCommand;
+pub use crate::agents::actions::FrontendCommand;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]

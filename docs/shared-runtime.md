@@ -1,6 +1,7 @@
 # Shared actions and runtime agents
 
-- `actions`: application intents and existing backend commands (wire format unchanged).
+- `agents/actions`: agent-owned intents and existing backend commands (wire format unchanged).
+  This module is independent of Skyline; `actions` is only a compatibility re-export.
 - `agents/state`: serializable runtime identity, public decisions and relationships.
 - `agents/registry`: synchronized process-wide state and run lifecycle; no provider/UI dependencies.
 - `agent`: execution orchestrator; registers lazily, updates model/workspace each run,
@@ -8,6 +9,9 @@
 - `tui/app/actions`: adapter interpreting navigation locally and sending commands
   through the existing Harness pipeline. `WorkbenchTab` and `model::FrontendCommand`
   are compatibility re-exports, not duplicate state or command definitions.
+
+Canonical action imports come from `yeet::agents::actions::{Action, FrontendCommand, NavigationAction}`.
+Skyline remains a separate deployment/service capability, not the owner of agent actions.
 
 Hosts can use `App::dispatch_action(Action::Command(FrontendCommand::Submit { ... }), backend)`
 or `Action::Navigate(NavigationAction::Session)` without knowing the input device.
