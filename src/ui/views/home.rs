@@ -4,7 +4,7 @@ use crate::app::App;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    prelude::{Line, Span, Style},
+    prelude::{Color, Line, Span, Style},
     style::Modifier,
     widgets::{Block, Paragraph},
 };
@@ -272,6 +272,63 @@ fn draw_activity(frame: &mut Frame<'_>, area: Rect) {
                 Paragraph::new(format!("  ▣  {issue}")).style(muted),
                 Rect::new(area.x, y, area.width, 1),
             );
+        }
+    }
+    if content_height >= 10 {
+        draw_provider_usage(frame, area);
+    }
+}
+
+fn draw_provider_usage(frame: &mut Frame<'_>, area: Rect) {
+    if area.width == 0 || area.height < 3 {
+        return;
+    }
+    let label = Style::default().fg(theme::muted());
+    let value = Style::default().fg(theme::text_dim());
+    let track = Style::default().bg(Color::Rgb(0x45, 0x47, 0x60));
+    let fill = Style::default().bg(Color::Rgb(0x7e, 0x9c, 0xd8));
+    let at = |px: u16| area.x + area.width * px / 540;
+    for (row, provider, usage, week_usage) in [
+        (0u16, "anthropic", "62%", "31%"),
+        (2, "openai", "12%", "4%"),
+    ] {
+        let y = area.bottom().saturating_sub(4).saturating_add(row);
+        if y >= area.bottom() {
+            continue;
+        }
+        let mut put = |x: u16, text: &'static str, style: Style| {
+            if x < area.right() {
+                frame.render_widget(
+                    Paragraph::new(text).style(style),
+                    Rect::new(x, y, area.right() - x, 1),
+                );
+            }
+        };
+        put(at(24), provider, label);
+        put(at(140), "5h", label);
+        put(at(272), usage, value);
+        put(at(352), "week", label);
+        put(at(508), week_usage, value);
+        for (start, percent) in [
+            (166u16, if row == 0 { 62 } else { 12 }),
+            (400u16, if row == 0 { 31 } else { 4 }),
+        ] {
+            let x = at(start);
+            let width = (area.width * 96 / 540).min(area.right().saturating_sub(x));
+            let meter_y = y.saturating_add(1);
+            if width > 0 && meter_y < area.bottom() {
+                frame.render_widget(
+                    Paragraph::new(" ".repeat(width as usize)).style(track),
+                    Rect::new(x, meter_y, width, 1),
+                );
+                let filled = width * percent / 100;
+                if filled > 0 {
+                    frame.render_widget(
+                        Paragraph::new(" ".repeat(filled as usize)).style(fill),
+                        Rect::new(x, meter_y, filled, 1),
+                    );
+                }
+            }
         }
     }
 }
