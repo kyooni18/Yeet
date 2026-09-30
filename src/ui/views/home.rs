@@ -1,5 +1,8 @@
 //! Home workbench view: recent objects, workspace activity, and focused details.
-use super::super::{components::status, support::theme};
+use super::super::{
+    components::status,
+    support::{icons, theme},
+};
 use crate::app::App;
 use ratatui::{
     Frame,
@@ -75,12 +78,12 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         return;
     }
     let entries = [
-        ("⌂", "Home", true),
-        ("▤", "MM305 crosswind tuning", false),
-        ("▱", "theme.rs", false),
-        ("♟", "Landing", false),
-        ("⑂", "guidance_taem.c", false),
-        ("▣", "#214", false),
+        (icons::home(), "Home", true),
+        (icons::session_tab(), "MM305 crosswind tuning", false),
+        (icons::file("theme.rs"), "theme.rs", false),
+        (icons::workspace(), "Landing", false),
+        (icons::file("guidance_taem.c"), "guidance_taem.c", false),
+        (icons::workspace(), "#214", false),
         ("", "+", false),
     ];
     let starts = [0u32, 175, 423, 547, 653, 835, 916];
@@ -100,14 +103,12 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
         } else {
             Style::default().fg(theme::muted()).bg(theme::background())
         };
-        let tab_area = Rect::new(x, area.y, width, area.height);
-        frame.render_widget(Block::default().style(style), tab_area);
+        frame.render_widget(
+            Block::default().style(style),
+            Rect::new(x, area.y, width, area.height),
+        );
         if !icon.is_empty() {
-            let icon_x = x + if index == 0 {
-                (area.width as u32 * 15 / 1440) as u16
-            } else {
-                0
-            };
+            let icon_x = x + (area.width as u32 * if index == 0 { 15 } else { 11 } / 1440) as u16;
             frame.render_widget(
                 Paragraph::new(icon).style(style),
                 Rect::new(
@@ -118,16 +119,13 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
                 ),
             );
         }
-        // Icon and label origins in the mockup differ by about two terminal cells.
-        let label_offset = if index == 0 { 36 } else { 20 };
-        let label_x = x + (area.width as u32 * label_offset / 1440) as u16;
+        let label_x = x + (area.width as u32 * if index == 0 { 36 } else { 30 } / 1440) as u16;
         let label_right = area
             .x
             .saturating_add((area.width as u32 * ends[index] / 1440) as u16);
-        let label_width = label_right.saturating_sub(label_x);
         frame.render_widget(
             Paragraph::new(label).style(style),
-            Rect::new(label_x, area.y, label_width, 1),
+            Rect::new(label_x, area.y, label_right.saturating_sub(label_x), 1),
         );
     }
     frame.render_widget(
