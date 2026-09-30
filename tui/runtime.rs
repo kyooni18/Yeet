@@ -328,7 +328,13 @@ fn apply_backend_event(app: &mut App, event: BackendEvent) {
                     app.merge_state(state);
                 }
             }
-            "error" => app.backend_message = envelope.message,
+            "error" => {
+                if let Some(message) = &envelope.message {
+                    app.toasts
+                        .push(message.clone(), Instant::now(), Duration::from_secs(6));
+                }
+                app.backend_message = envelope.message;
+            }
             _ => {}
         },
     }

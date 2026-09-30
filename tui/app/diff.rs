@@ -5,6 +5,12 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffAction {
+    SelectFile(usize),
+    Display(bool),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DiffState {
     pub root: PathBuf,
@@ -13,9 +19,7 @@ pub struct DiffState {
     pub statuses: Vec<String>,
     pub totals: crate::workbench::ChangeStats,
     pub original_paths: Vec<Option<PathBuf>>,
-    pub file_targets: Vec<(ratatui::layout::Rect, usize)>,
-    pub full_target: Option<ratatui::layout::Rect>,
-    pub changes_target: Option<ratatui::layout::Rect>,
+    pub hits: crate::tui::kit::HitMap<DiffAction>,
     pub body_target: ratatui::layout::Rect,
     pub lines: Vec<String>,
     pub full: bool,
@@ -276,24 +280,19 @@ impl App {
         };
         let point = (e.column, e.row).into();
         match e.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(i) = s
-                    .file_targets
-                    .iter()
-                    .find(|(r, _)| r.contains(point))
-                    .map(|(_, i)| *i)
-                {
+            MouseEventKind::Down(MouseButton::Left) => match s.hits.at(point).copied() {
+                Some(DiffAction::SelectFile(i)) => {
                     s.selected = i;
                     s.scroll = 0;
                     s.patch();
-                } else if s.full_target.is_some_and(|r| r.contains(point))
-                    || s.changes_target.is_some_and(|r| r.contains(point))
-                {
-                    s.full = s.full_target.is_some_and(|r| r.contains(point));
+                }
+                Some(DiffAction::Display(full)) => {
+                    s.full = full;
                     s.scroll = 0;
                     s.patch();
                 }
-            }
+                None => {}
+            },
             MouseEventKind::ScrollDown if s.body_target.contains(point) => {
                 s.scroll = (s.scroll + 3).min(s.lines.len().saturating_sub(1))
             }
@@ -351,7 +350,12 @@ mod tests {
         terminal
             .draw(|f| crate::tui::ui::draw(f, &mut app))
             .unwrap();
-        let control = app.diff_tabs[0].full_target.unwrap();
+        let control = app.diff_tabs[0]
+            .hits
+            .targets()
+            .find(|(_, a)| *a == DiffAction::Display(true))
+            .unwrap()
+            .0;
         app.handle_mouse(crossterm::event::MouseEvent {
             kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
             column: control.x,

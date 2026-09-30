@@ -3,7 +3,10 @@ use super::super::{
     components::{composer, status, tabbar},
     support::{icons, theme},
 };
-use crate::tui::app::{App, WorkbenchTab, diff::DiffState};
+use crate::tui::app::{
+    App, WorkbenchTab,
+    diff::{DiffAction, DiffState},
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -14,6 +17,10 @@ use std::path::PathBuf;
 
 pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
+    if let Some(s) = app.diff_tabs.get_mut(app.active_diff) {
+        s.hits.begin(area);
+        s.body_target = Rect::default();
+    }
     frame.render_widget(
         Block::default().style(theme::base().bg(theme::code_background())),
         area,
@@ -31,9 +38,6 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let Some(s) = app.diff_tabs.get_mut(app.active_diff) else {
         return;
     };
-    s.file_targets.clear();
-    s.full_target = None;
-    s.changes_target = None;
     let cols = Layout::horizontal([
         Constraint::Length(if area.width >= 60 { area.width / 6 } else { 0 }),
         Constraint::Min(1),
@@ -84,16 +88,19 @@ pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         } else {
             theme::base().fg(theme::muted())
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" full file ", full_style),
-                Span::raw("  "),
-                Span::styled(" changes only ", changes_style),
-            ])),
-            r,
+        let mut ui = crate::tui::kit::Ui::new(frame, &mut s.hits, r);
+        ui.button(
+            Rect::new(r.x, r.y, 11, 1),
+            " full file ",
+            full_style,
+            DiffAction::Display(true),
         );
-        s.full_target = Some(Rect::new(r.x, r.y, 11, 1));
-        s.changes_target = Some(Rect::new(r.x + 13, r.y, 14, 1));
+        ui.button(
+            Rect::new(r.x + 13, r.y, 14, 1),
+            " changes only ",
+            changes_style,
+            DiffAction::Display(false),
+        );
     }
     let patch = Rect::new(
         main.x,
@@ -224,7 +231,7 @@ fn draw_rail(frame: &mut Frame<'_>, s: &mut DiffState, rail: Rect) {
         .iter()
         .position(|(_, i)| *i == Some(s.selected))
         .unwrap_or(0);
-    let start = selected_row.saturating_sub(available.saturating_sub(1));
+    let start = crate::tui::kit::visible_start(selected_row, available);
     let mut last = rail.y + 1;
     for (row, (label, index)) in rows.into_iter().skip(start).take(available).enumerate() {
         let r = Rect::new(rail.x, rail.y + 1 + row as u16, rail.width, 1);
@@ -242,7 +249,7 @@ fn draw_rail(frame: &mut Frame<'_>, s: &mut DiffState, rail: Rect) {
         };
         text(frame, r, &label, style);
         if let Some(i) = index {
-            s.file_targets.push((r, i));
+            s.hits.register(r, DiffAction::SelectFile(i));
         }
         last = r.y + 2;
     }
@@ -527,7 +534,12 @@ mod tests {
             assert_eq!(buffer[(patch.x, y)].bg, tint(color));
             assert_eq!(buffer[(patch.right() - 1, y)].bg, tint(color));
         }
-        let target = app.diff_tabs[0].file_targets[0].0;
+        let target = app.diff_tabs[0]
+            .hits
+            .targets()
+            .find(|(_, a)| matches!(a, DiffAction::SelectFile(_)))
+            .unwrap()
+            .0;
         assert!(contents.contains("guidance"));
         assert!(target.y > 1);
         app.diff_tabs[0].scroll = 3;

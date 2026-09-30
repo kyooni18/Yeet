@@ -19,14 +19,12 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     if bounds.width < 16 || bounds.height < 5 {
         return;
     }
-    let width = bounds.width.min(58);
-    let height = bounds.height.min(9);
-    let area = Rect::new(
-        bounds.x + (bounds.width - width) / 2,
-        bounds.y + (bounds.height - height) / 2,
-        width,
-        height,
-    );
+    let floating = crate::tui::kit::FloatingView {
+        width: 58,
+        height: 9,
+        modal: true,
+    };
+    let area = floating.area(bounds);
     theme::modal_backdrop(frame, area);
     let block = theme::modal_block("Open a view");
     let inner = block.inner(area);

@@ -788,3 +788,20 @@ Next architectural steps stay incremental: shared layout/hit-test geometry,
 stable view-instance identities, explicit actions/effects, focus scopes and
 overlays, then reusable interaction behavior. Avoid creating empty abstractions
 or moving shared domain services just to fill out a directory tree.
+
+## Shared UI kit: initial implementation
+
+`tui/kit` now contains a frame-local `Ui`, clipped typed `HitMap`, shared row
+visibility policy, stateful `View<T>`/`Tabs<T>` with stable instance IDs,
+`FloatingView` placement/blocking policy, and bounded expiring `Toasts`.
+Diff controls paint and register their geometry together and dispatch typed
+`DiffAction`s instead of storing separate per-control target fields. Diff and
+Home share row visibility calculations. The view switcher uses floating-surface
+placement. Backend error events enqueue six-second non-focus-taking toasts while
+retaining the existing backend error state; toast painting follows all view paths.
+
+This is deliberately an initial slice: existing workbench tabs have not yet been
+migrated to `Tabs<T>`, and floating input/focus restoration still uses existing
+mode routing. Buttons currently share mouse geometry, not automatic keyboard
+focus/navigation. Selection/scroll states and declarative container composition
+remain follow-up work; do not claim a complete UI runtime yet.

@@ -22,6 +22,12 @@ use ratatui::{
 use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    app.toasts.expire(std::time::Instant::now());
+    draw_content(frame, app);
+    app.toasts.paint(frame, theme::surface());
+}
+
+fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     app.observe_workbench_view();
     app.home_targets.clear();
     app.tab_targets.clear();

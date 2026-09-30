@@ -72,7 +72,7 @@ fn draw_sessions_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .iter()
         .position(|item| Some(&item.target) == app.home.selected.as_ref())
         .unwrap_or(0);
-    let offset = selected.saturating_sub(count.saturating_sub(1));
+    let offset = crate::tui::kit::visible_start(selected, count);
     if app.home.content.sessions.is_empty() {
         frame.render_widget(
             Paragraph::new("No saved sessions")

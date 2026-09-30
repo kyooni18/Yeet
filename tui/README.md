@@ -34,3 +34,20 @@ view tabs, contextual rails, and separate command-palette/view-switcher behavior
 cargo check --all-targets
 cargo test --lib tui::
 ```
+
+## Shared kit
+
+`kit::Ui` paints controls and records typed actions in `kit::HitMap` using the
+same clipped rectangle. Begin the hit map on every frame, including empty/tiny
+views; resolve input only against the latest painted geometry. Diff is the first
+consumer. `visible_start` is shared with the Home session list.
+
+`Tabs<T>` owns independent `View<T>` instances and stable IDs; it provides
+open/activate/close with neighboring-tab fallback. Existing workbench tab state
+is not migrated yet. `FloatingView` centralizes bounded centered placement and
+modal blocking policy, used by the view-switcher layout. Its policy must still
+be applied by event routing; it is not an automatic focus manager.
+
+`Toasts` retains at most four notifications, expires them against an explicit
+clock, and paints without hit targets or focus. Backend errors currently use it.
+The kit is an incremental foundation, not a completed declarative framework.

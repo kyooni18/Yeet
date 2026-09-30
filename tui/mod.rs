@@ -3,6 +3,7 @@
 //! Backend services and shared resource models remain outside this subsystem.
 //! The legacy `crate::app` and `crate::ui` exports are compatibility aliases.
 pub mod app;
+pub mod kit;
 mod runtime;
 pub mod ui;
 
