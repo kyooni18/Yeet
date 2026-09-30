@@ -1,5 +1,7 @@
 //! Model, Goal, session, and reasoning navigation dialogs.
 
+use crate::ui::text::compact_number;
+
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
