@@ -118,7 +118,8 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
                 ),
             );
         }
-        let label_offset = if index == 0 { 36 } else { 30 };
+        // Icon and label origins in the mockup differ by about two terminal cells.
+        let label_offset = if index == 0 { 36 } else { 20 };
         let label_x = x + (area.width as u32 * label_offset / 1440) as u16;
         let label_right = area
             .x
