@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 use crate::{
     config::ConfigStore,
     core::{BridgeClient, McpServerConfiguration, node_executable},
+    platform::replace_file,
     project_settings::{ProjectSettingsStore, ServiceBackend},
     web_search,
 };
@@ -116,11 +117,31 @@ fn install_binary() -> Result<String> {
             destination.display()
         ));
     }
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+    let parent = destination
+        .parent()
+        .context("Yeet binary destination has no parent directory")?;
+    fs::create_dir_all(parent)?;
+
+    // Do not overwrite a running executable in place. On macOS in particular,
+    // mutating the inode that backs a live linker-signed process can leave the
+    // kernel code-signature cache attached to stale pages, causing subsequent
+    // launches of the installed path to be killed with SIGKILL. Stage a fresh
+    // inode beside the destination and atomically replace the path instead.
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("Yeet binary destination has no file name")?;
+    let staging = parent.join(format!(".{name}.install-{}", std::process::id()));
+    if staging.exists() {
+        fs::remove_file(&staging)?;
     }
-    fs::copy(&source, &destination)
-        .with_context(|| format!("install {} to {}", source.display(), destination.display()))?;
+    fs::copy(&source, &staging)
+        .with_context(|| format!("stage {} at {}", source.display(), staging.display()))?;
+    if let Err(error) = replace_file(&staging, &destination) {
+        let _ = fs::remove_file(&staging);
+        return Err(error)
+            .with_context(|| format!("install {} to {}", source.display(), destination.display()));
+    }
     Ok(format!(
         "Installed Yeet binary to {}",
         destination.display()

@@ -3,6 +3,11 @@ import { Settings2, X } from '@/components/Icons'
 import { ProviderIcon } from '@/components/ProviderIcon'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 
+function providerDisplayName(provider: string): string {
+  if (provider.toLowerCase() === 'antigravity') return 'Google Antigravity'
+  return provider
+}
+
 function Switch({
   checked,
   onChange,
@@ -146,7 +151,7 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
                   <div className="settings-row provider-settings-row" key={provider.provider}>
                     <ProviderIcon provider={provider.provider} size={22} background />
                     <span>
-                      <strong>{provider.provider}</strong>
+                      <strong>{providerDisplayName(provider.provider)}</strong>
                       <small>{provider.authenticated ? provider.method : provider.error || 'Not signed in'}</small>
                     </span>
                     <button
