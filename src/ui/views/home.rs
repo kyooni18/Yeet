@@ -66,6 +66,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         Constraint::Length(inspector_start.saturating_sub(content_inset + activity_width)),
         Constraint::Min(1),
     ])
+    .split(columns[1]);
     draw_activity(frame, panes[1]);
     draw_inspector(frame, panes[3]);
     draw_composer(frame, app, rows[2]);
