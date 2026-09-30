@@ -31,7 +31,9 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     // OpenPencil's SVG group transform (-36 px) moves the title bar out of the
     // 864 px artboard; tabs therefore occupy rows 0..34 and the rail starts at 34.
     let scale_x = |px: u16| bounds.width as u32 * px as u32 / 1440;
-    let scale_y = |px: u16| (bounds.height as u32 * px as u32 + 863) / 864;
+    // Round design-pixel heights to the nearest terminal row. Ceiling here adds
+    // an entire cell to the tab bar at 54 rows and shifts every pane downward.
+    let scale_y = |px: u16| (bounds.height as u32 * px as u32 + 432) / 864;
     let tab_height = scale_y(34).max(1) as u16;
     let composer_height = scale_y(36).max(1) as u16;
     let status_height = scale_y(24).max(1) as u16;
