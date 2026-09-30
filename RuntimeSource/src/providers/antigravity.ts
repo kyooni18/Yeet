@@ -239,6 +239,7 @@ function requestBody(request: ProviderCallRequest, provider: string, stream: boo
   const mappings = mapTools(request.tools);
   const state = continued?.state;
   return {
+    ...(request.providerOptions ?? {}),
     agent: request.model,
     input: requestInput(request.messages, continued ? continued.index + 1 : 0, state),
     environment: state?.environmentId ?? "remote",
@@ -438,7 +439,7 @@ export class AntigravityProvider implements ProviderAdapter {
       if (!event || typeof event !== "object") continue;
       const eventType = typeof event.event_type === "string" ? event.event_type : message.event;
 
-      if (eventType === "interaction.created") {
+      if (eventType === "interaction.created" || eventType === "interaction.start") {
         interaction = event.interaction ?? interaction;
         if (!started) {
           started = true;
@@ -459,6 +460,7 @@ export class AntigravityProvider implements ProviderAdapter {
           const initial = textFromContent(step.content);
           if (initial) yield { type: "text-delta", delta: initial };
         } else if (step?.type === "thought") {
+          yield { type: "reasoning-start" };
           const initial = textFromContent(Array.isArray(step.summary) ? step.summary : step.summary ? [step.summary] : []);
           if (initial) yield { type: "reasoning-summary-delta", delta: initial };
         } else if (step?.type === "function_call" && typeof step.id === "string" && typeof step.name === "string") {
@@ -470,6 +472,12 @@ export class AntigravityProvider implements ProviderAdapter {
             yield { type: "tool-call-delta", index, id: step.id, name: originalName };
             if (initialArguments) yield { type: "tool-call-delta", index, argumentsDelta: initialArguments };
           }
+        } else if (typeof step?.type === "string" && step.type.endsWith("_call")) {
+          const title = step.type === "google_search_call" ? "Searching web"
+            : step.type === "code_execution_call" ? "Running remote code"
+            : step.type === "url_context_call" ? "Reading web page"
+            : `Running ${step.type.replace(/_call$/, "").replaceAll("_", " ")}`;
+          yield { type: "activity", title, detail: "Antigravity remote environment" };
         }
         continue;
       }

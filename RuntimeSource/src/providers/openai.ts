@@ -305,7 +305,8 @@ function reasoningSummary(raw: any): string | undefined {
     .filter((item: any) => item.type === "reasoning")
     .flatMap((item: any) => item.summary ?? [])
     .map((part: any) => typeof part?.text === "string" ? part.text : "")
-    .join("");
+    .filter(Boolean)
+    .join("\n\n");
   return text || undefined;
 }
 
@@ -574,6 +575,7 @@ export class OpenAIProvider implements ProviderAdapter {
     let started = false;
     let completedRaw: any;
     let summaryPart: string | undefined;
+    const summaryTexts = new Map<string, string>();
     const tools = new Map<number, { id?: string; name?: string; argumentsText: string }>();
 
     for await (const event of parseSSE(response)) {
@@ -612,13 +614,28 @@ export class OpenAIProvider implements ProviderAdapter {
         // Supported by some Responses-compatible endpoints that expose
         // plaintext reasoning. OpenAI itself may never emit this event.
         yield { type: "reasoning-delta", delta: raw.delta };
-      } else if (raw.type === "response.reasoning_summary_text.delta" && typeof raw.delta === "string") {
+      } else if ((raw.type === "response.reasoning_summary_text.delta" && typeof raw.delta === "string")
+          || (raw.type === "response.reasoning_summary_text.done" && typeof raw.text === "string")) {
         const part = `${raw.item_id ?? raw.output_index ?? 0}:${raw.summary_index ?? 0}`;
+        const previous = summaryTexts.get(part) ?? "";
+        const delta = raw.type.endsWith(".done")
+          ? raw.text.startsWith(previous) ? raw.text.slice(previous.length) : ""
+          : raw.delta;
+        if (!delta) continue;
+        summaryTexts.set(part, previous + delta);
         if (summaryPart !== undefined && summaryPart !== part) {
           yield { type: "reasoning-summary-delta", delta: "\n\n" };
         }
         summaryPart = part;
-        yield { type: "reasoning-summary-delta", delta: raw.delta };
+        yield { type: "reasoning-summary-delta", delta };
+      } else if (raw.type === "response.output_item.added" && raw.item?.type === "reasoning") {
+        yield { type: "reasoning-start" };
+      } else if (raw.type === "response.web_search_call.in_progress"
+          || raw.type === "response.file_search_call.in_progress"
+          || raw.type === "response.code_interpreter_call.in_progress") {
+        const title = raw.type.includes("web_search") ? "Searching web"
+          : raw.type.includes("file_search") ? "Searching files" : "Running remote code";
+        yield { type: "activity", title, detail: "Provider-managed tool" };
       } else if (raw.type === "response.output_item.added" && raw.item?.type === "function_call") {
         const index = raw.output_index ?? 0;
         const current: { id?: string; name?: string; argumentsText: string } = {

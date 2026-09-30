@@ -322,7 +322,9 @@ impl SharedSession {
         let has_summary = !self.state.active_reasoning_summary.trim().is_empty();
         let has_transcript_prose = !self.state.active_reasoning_text.trim().is_empty()
             && !reasoning_titles_only(&self.state.active_reasoning_text);
-        if !has_summary && !has_transcript_prose {
+        let has_title =
+            !has_transcript_prose && reasoning_status(&self.state.active_reasoning_text).is_some();
+        if !has_summary && !has_transcript_prose && !has_title {
             return;
         }
 
@@ -340,7 +342,13 @@ impl SharedSession {
         } else {
             String::new()
         };
-        let summary = has_summary.then(|| self.state.active_reasoning_summary.clone());
+        let summary = if has_summary {
+            Some(self.state.active_reasoning_summary.clone())
+        } else if has_title {
+            Some(self.state.active_reasoning_text.clone())
+        } else {
+            None
+        };
         if let Some(entry) = self
             .conversation_mut()
             .iter_mut()
@@ -515,21 +523,28 @@ fn reasoning_status(text: &str) -> Option<String> {
     let mut rest = text;
     let mut latest = None;
     while let Some(start) = rest.find("**") {
+        let starts_line = rest[..start]
+            .rsplit('\n')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .is_empty();
         rest = &rest[start + 2..];
         let Some(end) = rest.find("**") else { break };
         let title = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
-        if !title.is_empty() {
+        if starts_line && !title.is_empty() {
             latest = Some(title);
         }
         rest = &rest[end + 2..];
     }
-    if latest.is_none() && !text.contains("**") {
+    if latest.is_none() && !reasoning_titles_only(text) {
         latest = text
             .lines()
             .rev()
             .find(|line| !line.trim().is_empty())
             .map(|line| {
-                line.trim()
+                line.replace("**", "")
+                    .trim()
                     .trim_start_matches('#')
                     .trim()
                     .trim_matches(|ch| matches!(ch, '*' | '_' | '`'))
@@ -592,6 +607,10 @@ mod reasoning_status_tests {
     fn provider_prose_is_readable_but_stays_in_the_transcript() {
         assert!(!reasoning_titles_only("**Planning**\nDetailed explanation"));
         assert_eq!(
+            reasoning_status("Inspect the **input** carefully").as_deref(),
+            Some("Inspect the input carefully")
+        );
+        assert_eq!(
             reasoning_status("Detailed explanation").as_deref(),
             Some("Detailed explanation")
         );
@@ -637,6 +656,17 @@ mod reasoning_status_tests {
             reasoning_status(&"한".repeat(130)).unwrap().chars().count(),
             120
         );
+    }
+
+    #[test]
+    fn title_only_reasoning_is_retained_after_the_segment_ends() {
+        let mut session = SharedSession::new("openrouter/test".into(), "auto".into());
+        session.append_reasoning("**Checking sources**", false);
+        session.set_activity("responding", "Responding", None);
+        assert!(session.conversation_mut().iter().any(|entry| matches!(
+            &entry.kind, ConversationKind::Reasoning { content, summary }
+                if content.is_empty() && summary.as_deref() == Some("**Checking sources**")
+        )));
     }
 
     #[test]

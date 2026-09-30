@@ -78,6 +78,7 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
   const routedModel = parsed.model.includes("/") ? parsed.model.slice(parsed.model.indexOf("/") + 1) : parsed.model;
   const anthropicRoute = parsed.provider === "anthropic"
     || parsed.provider === "claude"
+    || parsed.provider === "claude-api"
     || (openCode && routedModel.startsWith("claude-"));
   const geminiRoute = parsed.provider === "gemini"
     || parsed.provider === "gemini-web"
@@ -85,7 +86,12 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
 
   if (["openai", "codex-cli", "opencode", "opencode-go"].includes(parsed.provider)
       && /^(?:gpt-|o\d|muse-spark-|grok-)/.test(routedModel)) {
-    if (existing.reasoning !== undefined) return request;
+    if (existing.reasoning !== undefined) {
+      const reasoning = record(existing.reasoning);
+      return reasoning.summary !== undefined ? request : {
+        ...request, providerOptions: { ...existing, reasoning: { ...reasoning, summary: "auto" } },
+      };
+    }
     const effort = requested
       ? normalizeOpenAIEffort(routedModel, requested)
       : auxiliary
@@ -99,13 +105,31 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
 
   if (anthropicRoute) {
     const outputConfig = record(existing.output_config);
-    if (outputConfig.effort !== undefined) return request;
-    const effort = anthropicEffort(routedModel, requested ?? (auxiliary ? "low" : "high"));
-    if (!effort || (!requested && !auxiliary)) return request;
-    return {
-      ...request,
-      providerOptions: { ...existing, output_config: { ...outputConfig, effort } },
+    const effort = anthropicEffort(routedModel, requested ?? "low");
+    const adaptive = effort !== undefined || /^claude-mythos-preview(?:-|$)/.test(routedModel);
+    const manual = /^claude-(?:sonnet|opus|haiku)-4(?:[.-](?:1|5))?(?:-|$)/.test(routedModel)
+      || /^claude-3[.-]7-sonnet(?:-|$)/.test(routedModel);
+    let thinking = existing.thinking;
+    if (!auxiliary && thinking === undefined) {
+      if (adaptive) thinking = { type: "adaptive", display: "summarized" };
+      else if (manual && request.toolChoice !== "required" && typeof request.toolChoice !== "object") {
+        const maximum = request.maxTokens ?? 4_096;
+        const desired = requested === "low" ? 1_024 : requested === "medium" ? 8_192 : requested ? 24_576 : 1_024;
+        const budget = Math.min(desired, Math.floor(maximum / 2));
+        if (budget >= 1_024) thinking = { type: "enabled", budget_tokens: budget };
+      }
+    } else if (!auxiliary && ["adaptive", "enabled"].includes(String(record(thinking).type))
+        && record(thinking).display === undefined && adaptive) {
+      thinking = { ...record(thinking), display: "summarized" };
+    }
+    if (thinking === existing.thinking && (outputConfig.effort !== undefined || !effort || (!requested && !auxiliary))) return request;
+    const options = {
+      ...existing,
+      ...(thinking !== undefined ? { thinking } : {}),
+      ...(outputConfig.effort === undefined && effort && (requested || auxiliary)
+        ? { output_config: { ...outputConfig, effort } } : {}),
     };
+    return { ...request, providerOptions: options };
   }
 
   if (geminiRoute) {
@@ -146,7 +170,7 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
   // only `reasoning` while preserving native tools and the rest of the request.
   if ([
     "openai", "codex-cli", "opencode", "opencode-go", "openrouter",
-    "anthropic", "claude", "gemini", "gemini-web",
+    "anthropic", "claude", "claude-api", "antigravity", "gemini", "gemini-web",
   ].includes(parsed.provider)) return request;
 
   if (requested && existing.reasoning === undefined

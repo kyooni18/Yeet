@@ -428,10 +428,25 @@ function geminiReasoningTokens(metadata: any): number | undefined {
   const candidates = metadata?.candidatesTokenCount;
   const total = metadata?.totalTokenCount;
   if ([prompt, candidates, total].every((value) => typeof value === "number" && Number.isFinite(value))) {
-    const derived = total - prompt - candidates;
+    const derived = total - prompt - candidates - (metadata?.toolUsePromptTokenCount ?? 0);
     if (derived >= 0) return derived;
   }
   return undefined;
+}
+
+function geminiOutputTokens(metadata: any): number | undefined {
+  const candidates = metadata?.candidatesTokenCount;
+  const thoughts = geminiReasoningTokens(metadata);
+  if (typeof candidates !== "number" && thoughts === undefined) return undefined;
+  // Thinking is billed at the output rate and is separate from candidate tokens.
+  return (typeof candidates === "number" ? candidates : 0) + (thoughts ?? 0);
+}
+
+function geminiInputTokens(metadata: any): number | undefined {
+  const prompt = metadata?.promptTokenCount;
+  const toolPrompt = metadata?.toolUsePromptTokenCount;
+  if (typeof prompt !== "number" && typeof toolPrompt !== "number") return undefined;
+  return (typeof prompt === "number" ? prompt : 0) + (typeof toolPrompt === "number" ? toolPrompt : 0);
 }
 
 export class GeminiProvider implements ProviderAdapter {
@@ -639,8 +654,8 @@ export class GeminiProvider implements ProviderAdapter {
     )?.thoughtSignature;
     const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model, textThoughtSignature);
     const normalizedUsage = usage(
-      raw.usageMetadata?.promptTokenCount,
-      raw.usageMetadata?.candidatesTokenCount,
+      geminiInputTokens(raw.usageMetadata),
+      geminiOutputTokens(raw.usageMetadata),
       raw.usageMetadata?.totalTokenCount,
       raw.usageMetadata?.cachedContentTokenCount,
       undefined,
@@ -652,7 +667,7 @@ export class GeminiProvider implements ProviderAdapter {
       provider: this.id,
       model: request.model,
       text: parts.filter((part: any) => part.thought !== true && typeof part.text === "string").map((part: any) => part.text).join(""),
-      ...(reasoning ? { reasoning } : {}),
+      ...(reasoning ? { reasoningSummary: reasoning } : {}),
       toolCalls,
       ...(providerState ? { providerState } : {}),
       finishReason: geminiFinish(candidate.finishReason, toolCalls.length > 0),
@@ -693,8 +708,8 @@ export class GeminiProvider implements ProviderAdapter {
       const candidate = raw.candidates?.[0];
       if (raw.usageMetadata) {
         finalUsage = usage(
-          raw.usageMetadata.promptTokenCount,
-          raw.usageMetadata.candidatesTokenCount,
+          geminiInputTokens(raw.usageMetadata),
+          geminiOutputTokens(raw.usageMetadata),
           raw.usageMetadata.totalTokenCount,
           raw.usageMetadata.cachedContentTokenCount,
           undefined,
@@ -708,7 +723,7 @@ export class GeminiProvider implements ProviderAdapter {
       let hasTools = false;
       for (const part of parts) {
         if (typeof part.text === "string" && part.text) {
-          if (part.thought === true) yield { type: "reasoning-delta", delta: part.text };
+          if (part.thought === true) yield { type: "reasoning-summary-delta", delta: part.text };
           else {
             if (typeof part.thoughtSignature === "string" && part.thoughtSignature) {
               textThoughtSignature = part.thoughtSignature;

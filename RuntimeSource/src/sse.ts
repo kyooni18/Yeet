@@ -35,13 +35,16 @@ export async function* parseSSE(response: Response): AsyncGenerator<SSEMessage> 
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+      buffer += decoder.decode(value, { stream: true });
 
       while (true) {
-        const newline = buffer.indexOf("\n");
+        const newline = buffer.search(/[\r\n]/);
         if (newline < 0) break;
+        // Keep a trailing CR until the next chunk tells us whether it is CRLF.
+        if (buffer[newline] === "\r" && newline + 1 === buffer.length) break;
         const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
+        const separator = buffer[newline] === "\r" && buffer[newline + 1] === "\n" ? 2 : 1;
+        buffer = buffer.slice(newline + separator);
 
         if (line === "") {
           const message = flush();
@@ -63,8 +66,8 @@ export async function* parseSSE(response: Response): AsyncGenerator<SSEMessage> 
 
     buffer += decoder.decode();
     if (buffer.length > 0) {
-      const line = buffer;
-      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      const line = buffer.replace(/\r$/, "");
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
     }
     const message = flush();
     if (message) yield message;

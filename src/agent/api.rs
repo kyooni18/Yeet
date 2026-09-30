@@ -28,6 +28,11 @@ pub enum AgentEvent {
     },
     ModelAttemptFinished(Value, Option<Usage>),
     Start,
+    ReasoningStart,
+    ProviderActivity {
+        title: String,
+        detail: Option<String>,
+    },
     ReasoningDelta(String),
     ReasoningSummaryDelta(String),
     TextDelta(String),

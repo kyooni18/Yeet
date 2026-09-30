@@ -70,7 +70,8 @@ function reasoningDetailsField(value: any, field: "text" | "summary"): string | 
   if (!Array.isArray(value?.reasoning_details)) return undefined;
   const text = value.reasoning_details
     .map((part: any) => part && typeof part === "object" && typeof part[field] === "string" ? part[field] : "")
-    .join("");
+    .filter(Boolean)
+    .join(field === "summary" ? "\n\n" : "");
   return text || undefined;
 }
 
@@ -132,21 +133,20 @@ function stableSessionId(value: string | undefined): string | undefined {
   return `yeet-${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function chatReasoningDetails(message: Message, provider: string, model: string): any[] {
+function chatReasoningState(message: Message, provider: string, model: string): any {
   const state = message.providerState;
-  if (!state || state.provider !== provider || state.protocol !== "openai-chat-completions") return [];
-  if (state.model && state.model !== model) return [];
-  const data = state.data as any;
-  return Array.isArray(data?.reasoningDetails) ? data.reasoningDetails : [];
+  if (!state || state.provider !== provider || state.protocol !== "openai-chat-completions") return undefined;
+  if (state.model && state.model !== model) return undefined;
+  return state.data;
 }
 
-function chatProviderState(reasoningDetails: any[], provider: string, model: string): ProviderState | undefined {
-  if (reasoningDetails.length === 0) return undefined;
+function chatProviderState(reasoningDetails: any[], provider: string, model: string, reasoningContent?: string): ProviderState | undefined {
+  if (reasoningDetails.length === 0 && reasoningContent === undefined) return undefined;
   return {
     provider,
     protocol: "openai-chat-completions",
     model,
-    data: { reasoningDetails },
+    data: { reasoningDetails, ...(reasoningContent !== undefined ? { reasoningContent } : {}) },
   };
 }
 
@@ -162,7 +162,9 @@ function appendReasoningDetails(target: any[], value: unknown): void {
         ? "summary"
         : undefined;
     const last = target.at(-1) as Record<string, any> | undefined;
-    if (mergeKey && last && last.type === type && typeof detail[mergeKey] === "string") {
+    if (mergeKey && last && last.type === type && typeof detail[mergeKey] === "string"
+        && (detail.id === undefined || last.id === undefined || detail.id === last.id)
+        && (detail.index === undefined || last.index === undefined || detail.index === last.index)) {
       last[mergeKey] = `${typeof last[mergeKey] === "string" ? last[mergeKey] : ""}${detail[mergeKey]}`;
       for (const key of ["signature", "id", "format", "index"]) {
         if ((last[key] === undefined || last[key] === null || last[key] === "")
@@ -220,14 +222,15 @@ function mapMessages(
       continue;
     }
 
-    const reasoningDetails = message.role === "assistant"
-      ? chatReasoningDetails(message, providerId, model)
-      : [];
+    const reasoningState = message.role === "assistant" ? chatReasoningState(message, providerId, model) : undefined;
+    const reasoningDetails = Array.isArray(reasoningState?.reasoningDetails) ? reasoningState.reasoningDetails : [];
+    const reasoningContent = typeof reasoningState?.reasoningContent === "string" ? reasoningState.reasoningContent : undefined;
     if (message.role === "assistant" && message.toolCalls?.length) {
       output.push({
         role: "assistant",
         content: message.content ?? null,
         ...(reasoningDetails.length ? { reasoning_details: reasoningDetails } : {}),
+        ...(reasoningContent !== undefined ? { reasoning_content: reasoningContent } : {}),
         tool_calls: message.toolCalls.map((tool) => ({
           id: tool.id,
           type: "function",
@@ -245,6 +248,7 @@ function mapMessages(
         role: "assistant",
         content: chatContent(message, cacheIndexes.has(index)),
         ...(reasoningDetails.length ? { reasoning_details: reasoningDetails } : {}),
+        ...(reasoningContent !== undefined ? { reasoning_content: reasoningContent } : {}),
       });
       continue;
     }
@@ -677,7 +681,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
     const normalizedReasoningSummary = reasoningSummary(message);
     const reasoningDetails: any[] = [];
     appendReasoningDetails(reasoningDetails, message.reasoning_details);
-    const providerState = chatProviderState(reasoningDetails, this.id, request.model);
+    const providerState = chatProviderState(reasoningDetails, this.id, request.model, typeof message.reasoning_content === "string" ? message.reasoning_content : undefined);
     return {
       provider: this.id,
       model: raw.model ?? request.model,
@@ -790,6 +794,8 @@ export class OpenAIChatProvider implements ProviderAdapter {
     let finalUsage: ReturnType<typeof usage>;
     const tools = new Map<number, { id?: string; name?: string; argumentsText: string }>();
     const reasoningDetails: any[] = [];
+    let reasoningContent: string | undefined;
+    let summaryDetailKey: string | number | undefined;
 
     for await (const message of parseSSE(response)) {
       if (message.data === "[DONE]") break;
@@ -827,12 +833,20 @@ export class OpenAIChatProvider implements ProviderAdapter {
       if (choice.finish_reason != null) finishReason = normalizeFinishReason(choice.finish_reason);
       const delta = choice.delta ?? {};
       appendReasoningDetails(reasoningDetails, delta.reasoning_details);
+      if (typeof delta.reasoning_content === "string") reasoningContent = `${reasoningContent ?? ""}${delta.reasoning_content}`;
       const reasoning = reasoningText(delta);
       if (reasoning) {
         yield { type: "reasoning-delta", delta: reasoning };
       }
       const summary = reasoningSummary(delta);
       if (summary) {
+        const detail = Array.isArray(delta.reasoning_details)
+          ? delta.reasoning_details.find((part: any) => typeof part?.summary === "string" && part.summary) : undefined;
+        const key = detail?.index ?? detail?.id;
+        if (key !== undefined && summaryDetailKey !== undefined && key !== summaryDetailKey) {
+          yield { type: "reasoning-summary-delta", delta: "\n\n" };
+        }
+        if (key !== undefined) summaryDetailKey = key;
         yield { type: "reasoning-summary-delta", delta: summary };
       }
       if (typeof delta.content === "string" && delta.content) {
@@ -869,7 +883,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
       : finishReason === "unknown" && started
         ? "stop"
         : finishReason;
-    const normalizedProviderState = chatProviderState(reasoningDetails, this.id, request.model);
+    const normalizedProviderState = chatProviderState(reasoningDetails, this.id, request.model, reasoningContent);
     yield {
       type: "finish",
       finishReason: normalizedFinishReason,

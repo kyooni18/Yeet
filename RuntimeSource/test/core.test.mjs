@@ -2307,12 +2307,14 @@ test("Gemini derives reasoning tokens from total usage when thoughtsTokenCount i
     apiKey: "test",
     fetch: async () => jsonResponse({
       candidates: [{ content: { parts: [{ text: "answer" }] }, finishReason: "STOP" }],
-      usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 4, totalTokenCount: 11 },
+      usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 4, toolUsePromptTokenCount: 2, totalTokenCount: 13 },
     }),
   });
 
   const result = await provider.complete({ model: "gemini-test", messages: [{ role: "user", content: "go" }] });
   assert.equal(result.usage.reasoningTokens, 4);
+  assert.equal(result.usage.outputTokens, 8);
+  assert.equal(result.usage.inputTokens, 5);
 });
 
 test("OpenRouter keeps stable session affinity and forwards explicit cache breakpoints", async () => {
@@ -2708,7 +2710,7 @@ test("Anthropic stream preserves thinking deltas when provider exposes them", as
   });
   const events = [];
   for await (const event of provider.stream({ model: "claude-test", messages: [{ role: "user", content: "go" }] })) events.push(event);
-  assert.ok(events.some((event) => event.type === "reasoning-delta" && event.delta === "reasoning"));
+  assert.ok(events.some((event) => event.type === "reasoning-summary-delta" && event.delta === "reasoning"));
   assert.ok(events.some((event) => event.type === "reasoning-summary-delta" && event.delta === "summary"));
   assert.equal(events.at(-1).usage.reasoningTokens, 5);
 });
@@ -2732,6 +2734,7 @@ test("Gemini stream emits text and function calls", async () => {
   assert.deepEqual(tool.toolCall.arguments, { cmd: "pwd" });
   assert.equal(events.at(-1).finishReason, "tool_call");
   assert.equal(events.at(-1).usage.reasoningTokens, 4);
+  assert.equal(events.at(-1).usage.outputTokens, 7);
 });
 
 test("Gemini Code Assist discovers quota models and unwraps streamed responses", async () => {
@@ -2802,7 +2805,7 @@ test("Gemini stream separates thought parts from assistant text", async () => {
   });
   const events = [];
   for await (const event of provider.stream({ model: "gemini-test", messages: [{ role: "user", content: "go" }] })) events.push(event);
-  assert.ok(events.some((event) => event.type === "reasoning-delta" && event.delta === "reasoning"));
+  assert.ok(events.some((event) => event.type === "reasoning-summary-delta" && event.delta === "reasoning"));
   assert.ok(events.some((event) => event.type === "text-delta" && event.delta === "answer"));
 });
 

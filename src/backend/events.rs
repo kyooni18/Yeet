@@ -44,7 +44,11 @@ pub(super) fn agent_event_log_value(event: &AgentEvent) -> Option<Value> {
             "usage": usage,
         })),
         AgentEvent::Start => Some(json!({"type":"agent-response-started"})),
-        AgentEvent::ReasoningDelta(_)
+        AgentEvent::ProviderActivity { title, detail } => Some(json!({
+            "type": "agent-provider-activity", "title": title, "detail": detail,
+        })),
+        AgentEvent::ReasoningStart
+        | AgentEvent::ReasoningDelta(_)
         | AgentEvent::ReasoningSummaryDelta(_)
         | AgentEvent::TextDelta(_)
         | AgentEvent::ToolCallDelta { .. } => None,
@@ -114,6 +118,17 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
         }
         AgentEvent::ModelAttemptFinished(..) => {}
         AgentEvent::Start => state.set_activity("thinking", "Thinking", None),
+        AgentEvent::ProviderActivity { title, detail } => {
+            state.set_activity("provider-tool", &title, detail);
+        }
+        AgentEvent::ReasoningStart => {
+            state.seal_reasoning_segment();
+            state.set_activity(
+                "reasoning",
+                "Thinking",
+                Some("Waiting for a model summary".into()),
+            );
+        }
         AgentEvent::ReasoningDelta(delta) => {
             state.append_reasoning(&delta, false);
         }
@@ -449,6 +464,35 @@ pub(super) fn storage_model_history(mut history: Vec<Message>) -> Vec<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_phases_clear_stale_reasoning_without_inventing_a_transcript() {
+        let mut session = SharedSession::new("claude-api/test".into(), "auto".into());
+        apply_agent_event(&mut session, AgentEvent::ReasoningStart);
+        assert!(session.state.active_reasoning_entry_id.is_none());
+        apply_agent_event(
+            &mut session,
+            AgentEvent::ReasoningSummaryDelta("Checking sources".into()),
+        );
+        assert!(session.state.active_reasoning_entry_id.is_some());
+        apply_agent_event(
+            &mut session,
+            AgentEvent::ProviderActivity {
+                title: "Searching web".into(),
+                detail: Some("Provider-managed tool".into()),
+            },
+        );
+        assert!(session.state.active_reasoning_entry_id.is_none());
+        assert!(session.state.active_reasoning_summary.is_empty());
+        assert!(session.conversation_mut().iter().any(|entry| matches!(
+            &entry.kind, ConversationKind::Activity { activity } if activity.title == "Searching web"
+        )));
+        apply_agent_event(&mut session, AgentEvent::ReasoningStart);
+        assert!(session.state.active_reasoning_entry_id.is_none());
+        apply_agent_event(&mut session, AgentEvent::TextDelta("Answer".into()));
+        assert!(session.state.active_assistant_entry_id.is_some());
+        assert!(session.state.active_reasoning_entry_id.is_none());
+    }
 
     #[test]
     fn auxiliary_usage_does_not_double_count_a_started_model_call() {

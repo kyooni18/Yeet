@@ -80,7 +80,7 @@ export function promptCacheCapabilities(provider: string, model: string): Prompt
     return { provider, model, modes: ["implicit"] };
   }
 
-  if (provider === "anthropic" || provider === "claude") {
+  if (provider === "anthropic" || provider === "claude" || provider === "claude-api") {
     const minimum = anthropicMinimumCacheTokens(model);
     const cacheReadMultiplier = /^claude-(?:fable|mythos)-5\.1(?:-|$)/.test(model) ? 0.025 : 0.1;
     return {

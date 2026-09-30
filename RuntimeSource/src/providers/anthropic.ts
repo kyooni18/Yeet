@@ -1,3 +1,4 @@
+import { ProviderError } from "../errors.js";
 import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
 import type { ProviderFetchLogger } from "../http.js";
 import { parseSSE } from "../sse.js";
@@ -264,10 +265,10 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
   const maxMessageBreakpoints = automaticCacheEnabled
     ? 0
     : Math.max(0, (cacheCapabilities.maxExplicitBreakpoints ?? 0) - reservedPrefixBreakpoints);
-  return {
+  const body: Record<string, unknown> = {
     ...providerOptions,
     model: request.model,
-    max_tokens: request.maxTokens ?? 4_096,
+    max_tokens: request.maxTokens ?? providerOptions.max_tokens ?? 4_096,
     messages: mapMessages(
       split.messages,
       promptCacheEnabled,
@@ -279,7 +280,7 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
     ),
     stream,
     ...(split.system ? { system: mapSystem(split.system, promptCacheEnabled, explicitCacheControl) } : {}),
-    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    ...(request.temperature !== undefined && !["adaptive", "enabled"].includes(String((providerOptions.thinking as any)?.type)) ? { temperature: request.temperature } : {}),
     ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
     ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice) } : {}),
     ...(request.providerMetadata ? { metadata: request.providerMetadata } : {}),
@@ -288,6 +289,13 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
       ? { cache_control: blockCacheControl(requestedCacheControl) }
       : {}),
   };
+  if (["adaptive", "enabled"].includes(String((providerOptions.thinking as any)?.type))) {
+    // Thinking-enabled models restrict or reject sampling controls.
+    delete body.temperature;
+    delete body.top_p;
+    delete body.top_k;
+  }
+  return body;
 }
 
 function cacheCreationTokens(value: any): number | undefined {
@@ -337,6 +345,7 @@ export class AnthropicProvider implements ProviderAdapter {
     const betas = [
       ...(this.#accessToken ? ["oauth-2025-04-20"] : []),
       ...(request && contextManagementForRequest(request) !== undefined ? [CONTEXT_MANAGEMENT_BETA] : []),
+      ...((request?.providerOptions?.thinking as any)?.display === "updates" ? ["thinking-display-updates-2026-08-18"] : []),
     ];
     return {
       ...(this.#accessToken
@@ -400,11 +409,11 @@ export class AnthropicProvider implements ProviderAdapter {
     const transportAttempts = providerFetchAttempts(response);
     const raw = await readJson<any>(response);
     const text = (raw.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-    const reasoning = (raw.content ?? [])
+    const reasoningSummary = (raw.content ?? [])
       .filter((b: any) => b.type === "thinking" && typeof b.thinking === "string")
       .map((b: any) => b.thinking)
-      .join("");
-    const reasoningSummary = (raw.content ?? [])
+      .join("\n\n");
+    const extraSummary = (raw.content ?? [])
       .filter((b: any) => b.type === "thinking" && typeof b.summary === "string")
       .map((b: any) => b.summary)
       .join("");
@@ -435,8 +444,7 @@ export class AnthropicProvider implements ProviderAdapter {
       model: raw.model ?? request.model,
       ...(raw.id ? { id: raw.id } : {}),
       text,
-      ...(reasoning ? { reasoning } : {}),
-      ...(reasoningSummary ? { reasoningSummary } : {}),
+      ...(reasoningSummary || extraSummary ? { reasoningSummary: [reasoningSummary, extraSummary].filter(Boolean).join("\n\n") } : {}),
       toolCalls,
       ...(providerState ? { providerState } : {}),
       finishReason: normalizeFinishReason(raw.stop_reason),
@@ -499,7 +507,13 @@ export class AnthropicProvider implements ProviderAdapter {
         yield { type: "start", provider: this.id, model };
       }
 
-      if (raw.type === "content_block_start" && raw.content_block?.type === "tool_use") {
+      if (raw.type === "error") {
+        throw new ProviderError(raw.error?.message ?? "Anthropic stream failed", { provider: this.id, retryable: raw.error?.type === "overloaded_error" });
+      }
+      if (raw.type === "content_block_start" && raw.content_block?.type === "server_tool_use") {
+        const name = raw.content_block.name ?? "tool";
+        yield { type: "activity", title: name === "web_search" ? "Searching web" : name === "web_fetch" ? "Reading web page" : `Running ${name.replaceAll("_", " ")}`, detail: "Provider-managed tool" };
+      } else if (raw.type === "content_block_start" && raw.content_block?.type === "tool_use") {
         const index = raw.index ?? 0;
         tools.set(index, {
           id: raw.content_block.id,
@@ -518,6 +532,9 @@ export class AnthropicProvider implements ProviderAdapter {
           && (raw.content_block?.type === "thinking" || raw.content_block?.type === "redacted_thinking")) {
         const index = raw.index ?? 0;
         thinkingBlocks.set(index, { ...raw.content_block });
+        yield { type: "reasoning-start" };
+        if (raw.content_block.thinking) yield { type: "reasoning-summary-delta", delta: raw.content_block.thinking };
+        if (raw.content_block.summary) yield { type: "reasoning-summary-delta", delta: raw.content_block.summary };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "text_delta") {
         if (raw.delta.text) yield { type: "text-delta", delta: raw.delta.text };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "thinking_delta") {
@@ -525,13 +542,17 @@ export class AnthropicProvider implements ProviderAdapter {
         const current = thinkingBlocks.get(index) ?? { type: "thinking", thinking: "" };
         current.thinking = `${current.thinking ?? ""}${raw.delta.thinking ?? ""}`;
         thinkingBlocks.set(index, current);
-        if (raw.delta.thinking) yield { type: "reasoning-delta", delta: raw.delta.thinking };
+        if (raw.delta.thinking) yield { type: "reasoning-summary-delta", delta: raw.delta.thinking };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "signature_delta") {
         const index = raw.index ?? 0;
         const current = thinkingBlocks.get(index) ?? { type: "thinking", thinking: "" };
         current.signature = `${current.signature ?? ""}${raw.delta.signature ?? ""}`;
         thinkingBlocks.set(index, current);
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "thinking_summary_delta") {
+        const index = raw.index ?? 0;
+        const current = thinkingBlocks.get(index) ?? { type: "thinking", thinking: "" };
+        current.summary = `${current.summary ?? ""}${raw.delta.summary ?? ""}`;
+        thinkingBlocks.set(index, current);
         if (raw.delta.summary) yield { type: "reasoning-summary-delta", delta: raw.delta.summary };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "input_json_delta") {
         const index = raw.index ?? 0;

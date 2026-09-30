@@ -216,6 +216,7 @@ test("Antigravity streaming maps summaries, function deltas, and continuation st
 
   assert.equal(events[0].type, "start");
   assert.equal(events[0].id, "int_stream");
+  assert.ok(events.some((event) => event.type === "reasoning-start"));
   assert.deepEqual(events.find((event) => event.type === "reasoning-summary-delta"), {
     type: "reasoning-summary-delta",
     delta: "Checking the workspace.",

@@ -421,6 +421,10 @@ impl AgentCoordinator {
                 };
                 match event {
                     StreamEvent::Start => emit(AgentEvent::Start),
+                    StreamEvent::ReasoningStart => emit(AgentEvent::ReasoningStart),
+                    StreamEvent::Activity { title, detail } => {
+                        emit(AgentEvent::ProviderActivity { title, detail })
+                    }
                     StreamEvent::ReasoningDelta(delta) => emit(AgentEvent::ReasoningDelta(delta)),
                     StreamEvent::ReasoningSummaryDelta(delta) => {
                         emit(AgentEvent::ReasoningSummaryDelta(delta))

@@ -46,7 +46,7 @@ function requestCacheWriteRate(request: CallRequest, rates: ModelCostRates): num
   // Anthropic's 1-hour cache write is 2x ordinary input. Cache reads keep the
   // model's normal cache-read rate. The default 5-minute write continues to
   // use live model pricing (currently 1.25x on supported Claude models).
-  if ((provider === "anthropic" || provider === "claude") && ttl === "1h") return rates.input * 2;
+  if ((provider === "anthropic" || provider === "claude" || provider === "claude-api") && ttl === "1h") return rates.input * 2;
   return rates.cacheWrite ?? rates.input;
 }
 

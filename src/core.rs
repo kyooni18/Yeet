@@ -460,6 +460,11 @@ pub struct CallResult {
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Start,
+    ReasoningStart,
+    Activity {
+        title: String,
+        detail: Option<String>,
+    },
     ReasoningDelta(String),
     ReasoningSummaryDelta(String),
     TextDelta(String),
@@ -488,6 +493,14 @@ impl StreamEvent {
             .unwrap_or_default();
         Ok(match kind {
             "start" => Self::Start,
+            "reasoning-start" => Self::ReasoningStart,
+            "activity" => Self::Activity {
+                title: string_field(&value, "title")?,
+                detail: value
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            },
             "reasoning-delta" => Self::ReasoningDelta(string_field(&value, "delta")?),
             "reasoning-summary-delta" => {
                 Self::ReasoningSummaryDelta(string_field(&value, "delta")?)

@@ -99,6 +99,7 @@ test("Anthropic one-hour caching uses its real 2x write price for break-even and
     cacheWriteInputTokens: 20_000,
   };
   assert.equal(estimateUsageCostUsd(astra, usage, request), 0.66);
+  assert.equal(estimateUsageCostUsd(astra, usage, { ...request, model: "claude-api/claude-sonnet-5" }), 0.66);
   assert.equal(inputCostEquivalentTokens(astra, usage, request), 66_000);
 });
 

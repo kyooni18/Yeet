@@ -256,6 +256,10 @@ export interface CallResult {
 
 export type StreamEvent =
   | { type: "start"; provider: ProviderId; model: string; id?: string }
+  /** Provider entered a reasoning block, even when its text is hidden. */
+  | { type: "reasoning-start" }
+  /** A provider-managed operation; this does not ask the host to execute a tool. */
+  | { type: "activity"; title: string; detail?: string }
   /** Full provider-emitted reasoning/thinking content. Never synthesized by CallCore. */
   | { type: "reasoning-delta"; delta: string }
   /** Provider-emitted reasoning summary content. Never synthesized by CallCore. */
