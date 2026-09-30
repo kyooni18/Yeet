@@ -1,31 +1,31 @@
 //! Admission policy: decides which proposed tasks may start under the group's
 //! concurrency, total, budget, and write limits. It never runs agents itself.
 
-use uuid::Uuid;
+use crate::agents::task::{AgentTask, AgentTaskId, ProposedTask};
 
-use crate::agents::task::{AgentTaskStatus, ProposedTask};
-
-use super::{AgentLimits, WritePolicy, snapshot::AgentTaskSnapshot, state::AdaptiveAgentState};
+use super::{AgentLimits, WritePolicy, state::AgentGroupState};
 
 /// A task the scheduler accepted, bound to the generation that admitted it.
 pub(super) struct Admission {
     pub generation: u64,
-    pub task_id: String,
+    pub task_id: AgentTaskId,
     pub task: ProposedTask,
 }
 
-/// Admits a prefix of `proposed`, recording each admitted task in `state`.
+/// Admits a prefix of `proposed`, recording each admitted task in `group`.
 pub(super) fn admit(
     limits: &AgentLimits,
-    state: &mut AdaptiveAgentState,
+    group: &mut AgentGroupState,
     proposed: Vec<ProposedTask>,
 ) -> Vec<Admission> {
-    if limits.budget_exhausted(&state.usage) {
+    if limits.budget_exhausted(&group.usage) {
         return Vec::new();
     }
 
-    let remaining_total = limits.max_total.saturating_sub(state.total_started);
-    let remaining_concurrent = limits.max_concurrent.saturating_sub(state.active.len());
+    let remaining_total = limits.max_total.saturating_sub(group.total_started);
+    let remaining_concurrent = limits
+        .max_concurrent
+        .saturating_sub(group.active_task_count());
     let limit = proposed
         .len()
         .min(remaining_total)
@@ -34,10 +34,7 @@ pub(super) fn admit(
         return Vec::new();
     }
 
-    let mut writer_admitted = state
-        .tasks
-        .iter()
-        .any(|task| task.role.writes_workspace() && state.active.contains(&task.id));
+    let mut writer_admitted = group.has_active_writer();
     let mut admitted = Vec::new();
     for task in proposed.into_iter().take(limit) {
         if task.role.writes_workspace() {
@@ -52,21 +49,14 @@ pub(super) fn admit(
                 }
             }
         }
-        let id = Uuid::new_v4().to_string();
-        state.total_started += 1;
-        state.active.insert(id.clone());
-        state.tasks.push(AgentTaskSnapshot {
-            id: id.clone(),
-            role: task.role,
-            objective: task.objective.clone(),
-            status: AgentTaskStatus::Pending,
-            summary: None,
-        });
+        let record = AgentTask::admitted(&task);
+        group.total_started += 1;
         admitted.push(Admission {
-            generation: state.generation,
-            task_id: id,
+            generation: group.generation,
+            task_id: record.id,
             task,
         });
+        group.tasks.push(record);
     }
     admitted
 }
@@ -74,7 +64,7 @@ pub(super) fn admit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::member::AgentRole;
+    use crate::agents::{member::AgentRole, task::AgentTaskStatus};
 
     fn task(role: AgentRole) -> ProposedTask {
         ProposedTask {
@@ -86,16 +76,16 @@ mod tests {
     #[test]
     fn single_writer_admits_one_implementer_across_calls() {
         let limits = AgentLimits::default();
-        let mut state = AdaptiveAgentState::default();
+        let mut group = AgentGroupState::new(1, None);
         let first = admit(
             &limits,
-            &mut state,
+            &mut group,
             vec![task(AgentRole::Implementer), task(AgentRole::Implementer)],
         );
         assert_eq!(first.len(), 1);
-        let second = admit(&limits, &mut state, vec![task(AgentRole::Implementer)]);
+        let second = admit(&limits, &mut group, vec![task(AgentRole::Implementer)]);
         assert!(second.is_empty());
-        let reader = admit(&limits, &mut state, vec![task(AgentRole::Researcher)]);
+        let reader = admit(&limits, &mut group, vec![task(AgentRole::Researcher)]);
         assert_eq!(reader.len(), 1);
     }
 
@@ -106,11 +96,13 @@ mod tests {
             max_total: 3,
             ..AgentLimits::default()
         };
-        let mut state = AdaptiveAgentState::default();
+        let mut group = AgentGroupState::new(1, None);
         let researchers = || vec![task(AgentRole::Researcher); 4];
-        assert_eq!(admit(&limits, &mut state, researchers()).len(), 2);
-        assert!(admit(&limits, &mut state, researchers()).is_empty());
-        state.active.clear();
-        assert_eq!(admit(&limits, &mut state, researchers()).len(), 1);
+        assert_eq!(admit(&limits, &mut group, researchers()).len(), 2);
+        assert!(admit(&limits, &mut group, researchers()).is_empty());
+        for task in &mut group.tasks {
+            task.status = AgentTaskStatus::Reported;
+        }
+        assert_eq!(admit(&limits, &mut group, researchers()).len(), 1);
     }
 }

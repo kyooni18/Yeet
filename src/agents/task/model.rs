@@ -1,8 +1,14 @@
-//! Task lifecycle states and proposed (not yet admitted) work.
+//! Task identity, lifecycle states, and proposed (not yet admitted) work.
+//!
+//! A task is work; the member that performs it is referenced only through
+//! `assignee`, so task and member lifetimes stay independent.
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::agents::member::AgentRole;
+use crate::agents::{AgentId, member::AgentRole};
+
+pub(crate) type AgentTaskId = Uuid;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +36,11 @@ impl AgentTaskStatus {
             Self::Cancelled => "cancelled",
         }
     }
+
+    /// Admitted work that still occupies a concurrency slot.
+    pub(crate) fn is_active(self) -> bool {
+        matches!(self, Self::Pending | Self::Running)
+    }
 }
 
 /// Work requested by an agent before the scheduler has admitted it.
@@ -37,6 +48,32 @@ impl AgentTaskStatus {
 pub(crate) struct ProposedTask {
     pub role: AgentRole,
     pub objective: String,
+}
+
+/// Admitted work owned by an Agent Group.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentTask {
+    pub id: AgentTaskId,
+    /// The member role required to perform this task.
+    pub role: AgentRole,
+    pub objective: String,
+    pub status: AgentTaskStatus,
+    pub assignee: Option<AgentId>,
+    pub summary: Option<String>,
+}
+
+impl AgentTask {
+    pub(crate) fn admitted(proposed: &ProposedTask) -> Self {
+        Self {
+            id: AgentTaskId::new_v4(),
+            role: proposed.role,
+            objective: proposed.objective.clone(),
+            status: AgentTaskStatus::Pending,
+            assignee: None,
+            summary: None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,31 @@
-//! Member roles and the tool capabilities each role is denied.
+//! Member identity and roles, plus the tool capabilities each role is denied.
+//!
+//! `AgentMember` is identity only; live execution resources (the coordinator
+//! and its cancellation) are owned by the group runtime.
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::agents::{AgentId, task::AgentTaskId};
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MemberStatus {
+    Running,
+    Stopped,
+}
+
+/// A group member. Its `id` is the process-wide registry identity.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentMember {
+    pub id: AgentId,
+    pub role: AgentRole,
+    pub model: String,
+    pub parent: Option<AgentId>,
+    pub status: MemberStatus,
+    pub current_task: Option<AgentTaskId>,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

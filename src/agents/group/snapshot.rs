@@ -1,30 +1,22 @@
-//! Frontend-facing projections of group task state.
+//! Frontend-facing projections of group state.
 
-use serde::Serialize;
+use crate::{agents::task::AgentTask, model::AgentTaskItem};
 
-use crate::{
-    agents::{member::AgentRole, task::AgentTaskStatus},
-    model::AgentTaskItem,
-};
+use super::state::AgentGroupState;
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AgentTaskSnapshot {
-    pub id: String,
-    pub role: AgentRole,
-    pub objective: String,
-    pub status: AgentTaskStatus,
-    pub summary: Option<String>,
+impl AgentGroupState {
+    /// The flat task list the bridge currently exposes to frontends.
+    pub(crate) fn task_items(&self) -> Vec<AgentTaskItem> {
+        self.tasks.iter().map(task_item).collect()
+    }
 }
 
-impl AgentTaskSnapshot {
-    pub(super) fn to_item(&self) -> AgentTaskItem {
-        AgentTaskItem {
-            id: self.id.clone(),
-            role: self.role.as_str().into(),
-            objective: self.objective.clone(),
-            status: self.status.as_str().into(),
-            summary: self.summary.clone(),
-        }
+fn task_item(task: &AgentTask) -> AgentTaskItem {
+    AgentTaskItem {
+        id: task.id.to_string(),
+        role: task.role.as_str().into(),
+        objective: task.objective.clone(),
+        status: task.status.as_str().into(),
+        summary: task.summary.clone(),
     }
 }

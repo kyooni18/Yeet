@@ -18,9 +18,9 @@ use crate::{
     agent::{AgentEvent, AgentRunOutcome, AgentRunRequest},
     agents::{
         AgentId,
-        member::{AgentRole, worker_prompt, worker_reasoning_level},
+        member::{AgentMember, AgentRole, MemberStatus, worker_prompt, worker_reasoning_level},
         runtime::{AgentRuntimeFactory, RunManager},
-        task::AgentTaskStatus,
+        task::{AgentTaskId, AgentTaskStatus},
     },
     core::{MessageRole, ToolDefinition, Usage},
     model::AgentTaskItem,
@@ -29,7 +29,7 @@ use crate::{
 use super::{
     AgentLimits, commands,
     scheduler::{self, Admission},
-    state::AdaptiveAgentState,
+    state::{AgentGroupState, GroupRuntimeState},
 };
 
 #[derive(Clone)]
@@ -37,12 +37,12 @@ pub(crate) struct AdaptiveAgentOrchestrator {
     factory: AgentRuntimeFactory,
     run_manager: RunManager,
     limits: AgentLimits,
-    state: Arc<Mutex<AdaptiveAgentState>>,
+    state: Arc<Mutex<GroupRuntimeState>>,
 }
 
 impl AdaptiveAgentOrchestrator {
     pub(crate) fn bind_parent_agent(&self, id: AgentId) {
-        self.lock_state().parent_agent = Some(id);
+        self.lock_state().group.primary_agent = Some(id);
     }
 
     pub(crate) fn new(
@@ -54,7 +54,7 @@ impl AdaptiveAgentOrchestrator {
             factory,
             run_manager,
             limits,
-            state: Arc::new(Mutex::new(AdaptiveAgentState::default())),
+            state: Arc::new(Mutex::new(GroupRuntimeState::default())),
         }
     }
 
@@ -64,15 +64,13 @@ impl AdaptiveAgentOrchestrator {
 
     pub(crate) fn begin_run(&self) {
         let mut state = self.lock_state();
-        for cancel in state.worker_cancels.values() {
+        for cancel in state.cancels.values() {
             cancel.store(true, Ordering::Release);
         }
-        state.generation = state.generation.wrapping_add(1);
-        state.total_started = 0;
-        state.active.clear();
-        state.worker_cancels.clear();
-        state.tasks.clear();
-        state.usage = Usage::default();
+        let generation = state.group.generation.wrapping_add(1);
+        let primary_agent = state.group.primary_agent;
+        state.group = AgentGroupState::new(generation, primary_agent);
+        state.cancels.clear();
     }
 
     pub(crate) fn execute(
@@ -86,7 +84,7 @@ impl AdaptiveAgentOrchestrator {
         if parent_cancel.load(Ordering::Acquire) {
             bail!("parent run is cancelled");
         }
-        let admitted = scheduler::admit(&self.limits, &mut self.lock_state(), proposed);
+        let admitted = scheduler::admit(&self.limits, &mut self.lock_state().group, proposed);
         if admitted.is_empty() {
             return Ok(json!({
                 "admitted":0,
@@ -126,11 +124,7 @@ impl AdaptiveAgentOrchestrator {
     }
 
     pub(crate) fn snapshots(&self) -> Vec<AgentTaskItem> {
-        self.lock_state()
-            .tasks
-            .iter()
-            .map(|task| task.to_item())
-            .collect()
+        self.lock_state().group.task_items()
     }
 
     fn run_task(
@@ -144,28 +138,42 @@ impl AdaptiveAgentOrchestrator {
             task_id,
             task,
         } = admission;
-        self.update_task(generation, &task_id, AgentTaskStatus::Running, None);
+        self.update_task(generation, task_id, AgentTaskStatus::Running, None);
+        let run_id = task_id.to_string();
         let cancel = Arc::new(AtomicBool::new(false));
-        self.run_manager.register(task_id.clone(), cancel.clone());
-        if !self.register_worker_cancel(generation, &task_id, cancel.clone()) {
+        self.run_manager.register(run_id.clone(), cancel.clone());
+        if !self.register_worker_cancel(generation, task_id, cancel.clone()) {
             cancel.store(true, Ordering::Release);
-            self.run_manager.remove_matching(&task_id, &cancel);
+            self.run_manager.remove_matching(&run_id, &cancel);
             bail!("agent worker belongs to a stale primary run");
         }
         let result = (|| -> Result<Value> {
             let mut coordinator = self.factory.build(active_session_id)?;
             let parent_agent = {
                 let state = self.lock_state();
-                if state.generation != generation {
+                if state.group.generation != generation {
                     bail!("agent worker belongs to a stale primary run");
                 }
-                state.parent_agent
+                state.group.primary_agent
             };
             let child_id =
                 coordinator.register_runtime_agent(task.role.as_str(), model, parent_agent)?;
             if let Some(parent) = parent_agent {
                 crate::agents::global().connect(parent, child_id)?;
             }
+            self.with_group(generation, |group| {
+                group.assign(
+                    task_id,
+                    AgentMember {
+                        id: child_id,
+                        role: task.role,
+                        model: model.to_owned(),
+                        parent: parent_agent,
+                        status: MemberStatus::Running,
+                        current_task: None,
+                    },
+                )
+            });
             let reasoning_level = worker_reasoning_level(model);
             let goal_mode = Arc::new(AtomicBool::new(true));
             let prompt = worker_prompt(task.role, &task.objective);
@@ -237,7 +245,7 @@ impl AdaptiveAgentOrchestrator {
                     (AgentTaskStatus::Reported, "paused")
                 }
             };
-            self.update_task(generation, &task_id, status, Some(summary.clone()));
+            self.update_task(generation, task_id, status, Some(summary.clone()));
             Ok(json!({
                 "taskId":task_id,
                 "role":task.role.as_str(),
@@ -247,45 +255,51 @@ impl AdaptiveAgentOrchestrator {
                 "usage":usage,
             }))
         })();
-        self.run_manager.remove_matching(&task_id, &cancel);
-        self.finish_worker(generation, &task_id);
+        self.run_manager.remove_matching(&run_id, &cancel);
+        self.finish_worker(generation, task_id);
         if let Err(error) = &result {
             let status = if cancel.load(Ordering::Acquire) {
                 AgentTaskStatus::Cancelled
             } else {
                 AgentTaskStatus::Failed
             };
-            self.update_task(generation, &task_id, status, Some(error.to_string()));
+            self.update_task(generation, task_id, status, Some(error.to_string()));
         }
         result
     }
 
-    fn register_worker_cancel(&self, generation: u64, id: &str, cancel: Arc<AtomicBool>) -> bool {
+    fn register_worker_cancel(
+        &self,
+        generation: u64,
+        id: AgentTaskId,
+        cancel: Arc<AtomicBool>,
+    ) -> bool {
         let mut state = self.lock_state();
-        if state.generation != generation {
+        if state.group.generation != generation {
             return false;
         }
-        state.worker_cancels.insert(id.to_owned(), cancel);
+        state.cancels.insert(id, cancel);
         true
     }
 
-    fn finish_worker(&self, generation: u64, id: &str) {
+    /// Detaches a finished worker. Callers set the task's terminal status.
+    fn finish_worker(&self, generation: u64, id: AgentTaskId) {
         let mut state = self.lock_state();
-        if state.generation == generation {
-            state.active.remove(id);
-            state.worker_cancels.remove(id);
+        if state.group.generation == generation {
+            state.cancels.remove(&id);
+            state.group.release_task(id);
         }
     }
 
     fn record_usage_and_budget_exhausted(&self, generation: u64, usage: &Usage) -> bool {
         let mut state = self.lock_state();
-        if state.generation != generation {
+        if state.group.generation != generation {
             return true;
         }
-        state.usage.accumulate(usage);
-        let exhausted = self.limits.budget_exhausted(&state.usage);
+        state.group.usage.accumulate(usage);
+        let exhausted = self.limits.budget_exhausted(&state.group.usage);
         if exhausted {
-            for cancel in state.worker_cancels.values() {
+            for cancel in state.cancels.values() {
                 cancel.store(true, Ordering::Release);
             }
         }
@@ -295,23 +309,29 @@ impl AdaptiveAgentOrchestrator {
     fn update_task(
         &self,
         generation: u64,
-        id: &str,
+        id: AgentTaskId,
         status: AgentTaskStatus,
         summary: Option<String>,
     ) {
-        let mut state = self.lock_state();
-        if state.generation != generation {
-            return;
-        }
-        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == id) {
-            task.status = status;
-            if summary.is_some() {
-                task.summary = summary;
+        self.with_group(generation, |group| {
+            if let Some(task) = group.task_mut(id) {
+                task.status = status;
+                if summary.is_some() {
+                    task.summary = summary;
+                }
             }
+        });
+    }
+
+    /// Applies `update` only while `generation` is still the live group.
+    fn with_group(&self, generation: u64, update: impl FnOnce(&mut AgentGroupState)) {
+        let mut state = self.lock_state();
+        if state.group.generation == generation {
+            update(&mut state.group);
         }
     }
 
-    fn lock_state(&self) -> MutexGuard<'_, AdaptiveAgentState> {
+    fn lock_state(&self) -> MutexGuard<'_, GroupRuntimeState> {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
