@@ -64,7 +64,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     draw_sessions_rail(frame, columns[0]);
     let activity_width = scale_x(540).min(columns[2].width as u32) as u16;
     // Reference main-frame offset is x=232; pane starts at x=262 (30 px inset).
-    let pane_inset = scale_x(30).min(columns[2].width) as u16;
+    let pane_inset = (scale_x(30) as u16).min(columns[2].width);
     let panes = Layout::horizontal([
         Constraint::Length(pane_inset),
         Constraint::Length(activity_width),
