@@ -1013,11 +1013,10 @@ impl AgentCoordinator {
                     self.registry
                         .bound_round_output(call, normalized, &mut round_output_budget)?;
                 if externally_bounded && !tool_discovery::is_side_tool(&call.name) {
-                    // Foreground results may expose one trailing discovery step for
-                    // bounded artifact recovery. A recovery tool that itself
-                    // externalizes must not reopen discovery and create a
-                    // read_artifact -> search_tools -> read_artifact cycle.
-                    tool_discovery.enable_search();
+                    // Attach the artifact reader directly. Enabling search_tools
+                    // here cost two tool-envelope changes (gateway, then reader),
+                    // each a full prompt-cache miss, before recovery could start.
+                    tool_discovery.load(["read_artifact"]);
                 }
                 if local_file_lookup && call.name == "read_file" && succeeded {
                     local_lookup_read_calls += 1;

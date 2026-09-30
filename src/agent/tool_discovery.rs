@@ -8,6 +8,12 @@ pub(super) const SEARCH_TOOL: &str = "search_tools";
 const STABLE_INSPECTION_TOOLS: [&str; 2] = ["read_file", "search_workspace"];
 const STABLE_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
 const STABLE_BOUNDED_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
+// Long agent/coding turns almost always externalize a large result or detach a
+// shell job. Attaching these small schemas late changes the tool envelope, and
+// because tools precede every message the provider then misses the whole cached
+// prefix (observed as repeated 0% cache hits at 25-40k tokens). Paying a few
+// hundred prefix tokens from attempt one is far cheaper.
+const STABLE_LONG_TURN_TOOLS: [&str; 2] = ["read_artifact", "shell_job"];
 
 // These capabilities are recovery/context lookups, not ordinary workspace
 // evidence. A fuzzy search_tools query must not attach them just because their
@@ -65,6 +71,7 @@ impl ToolDiscovery {
         };
         discovery.load(STABLE_INSPECTION_TOOLS);
         discovery.load(STABLE_EXECUTION_TOOLS);
+        discovery.load(STABLE_LONG_TURN_TOOLS);
         discovery
     }
 
@@ -91,6 +98,7 @@ impl ToolDiscovery {
             discovery.load(["apply_file_edits"]);
         }
         discovery.load(STABLE_EXECUTION_TOOLS);
+        discovery.load(STABLE_LONG_TURN_TOOLS);
         discovery
     }
 
@@ -470,6 +478,24 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn long_turn_surfaces_attach_recovery_and_job_tools_up_front() {
+        let catalog = vec![
+            tool("read_file"),
+            tool("search_workspace"),
+            tool("run_shell"),
+            tool("read_artifact"),
+            tool("shell_job"),
+        ];
+        for mut discovery in [ToolDiscovery::agent(), ToolDiscovery::coding(false)] {
+            let before = discovery.attached(&catalog);
+            // Mid-turn promotions must be no-ops so the cached prefix survives.
+            discovery.load(["read_artifact", "shell_job"]);
+            assert_eq!(discovery.attached(&catalog), before);
+            assert_eq!(before.len(), 5);
+        }
+    }
+
     #[test]
     fn warm_surface_keeps_order_across_different_turn_defaults() {
         let catalog = vec![
