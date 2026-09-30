@@ -14,6 +14,7 @@ pub(crate) mod task;
 pub use registry::{AgentRegistry, RunGuard, global};
 pub use state::{AgentDecision, AgentId, AgentState, AgentStatus};
 
+pub(crate) use group::AgentNotification;
 pub(crate) use handle::AgentGroupHandle;
 pub(crate) use supervisor::AgentGroupSupervisor;
 

@@ -93,7 +93,7 @@ impl RuntimeProcess {
                                     // Commands often publish state synchronously. Forward
                                     // that state before accepting the next command so the
                                     // daemon routing cache cannot lag semantic transitions.
-                                    drain_backend_events(&service, &event_tx, &daemon_wake);
+                                    drain_backend_events(&mut service, &event_tx, &daemon_wake);
                                 }
                                 Err(TryRecvError::Empty) => break,
                                 Err(TryRecvError::Disconnected) => {
@@ -103,7 +103,7 @@ impl RuntimeProcess {
                             }
                         }
 
-                        drain_backend_events(&service, &event_tx, &daemon_wake);
+                        drain_backend_events(&mut service, &event_tx, &daemon_wake);
 
                         if service.is_closed() || !command_channel_open {
                             return;
@@ -276,7 +276,7 @@ fn handle_runtime_command(
 }
 
 fn drain_backend_events(
-    service: &BackendService,
+    service: &mut BackendService,
     event_tx: &Sender<BridgeEnvelope>,
     daemon_wake: &Wake,
 ) {

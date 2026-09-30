@@ -1,7 +1,7 @@
 //! Member identity and roles, plus the tool capabilities each role is denied.
 //!
 //! `AgentMember` is identity only; live execution resources (the coordinator
-//! and its cancellation) are owned by the group runtime.
+//! and its cancellation) are owned by the member's worker thread.
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,11 @@ use crate::agents::{AgentId, task::AgentTaskId};
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MemberStatus {
+    /// Has a run in progress or queued messages.
     Running,
+    /// Alive with its context intact, waiting for a message.
+    Idle,
+    /// Retired; its context is gone and it cannot be messaged.
     Stopped,
 }
 
@@ -20,6 +24,7 @@ pub(crate) enum MemberStatus {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentMember {
     pub id: AgentId,
+    pub description: String,
     pub role: AgentRole,
     pub model: String,
     pub parent: Option<AgentId>,

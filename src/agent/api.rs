@@ -78,6 +78,10 @@ pub enum AgentEvent {
         reason: String,
         usage: Option<Usage>,
     },
+    /// A background agent's result was handed to the primary agent.
+    AgentNotification {
+        headline: String,
+    },
 }
 
 pub struct AgentRunRequest<'a> {

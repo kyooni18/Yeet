@@ -1,11 +1,12 @@
 //! Agent Group state: serializable membership, tasks, and usage, kept apart
-//! from the live runtime resources (cancellation flags) that execute them.
+//! from the live runtime resources (inboxes, cancellation flags) that drive
+//! member threads.
 //!
-//! Tasks and members are stored in admission order so frontends render a
+//! Tasks and members are stored in creation order so frontends render a
 //! stable list.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{Arc, atomic::AtomicBool},
 };
 
@@ -21,19 +22,24 @@ use crate::{
     core::Usage,
 };
 
+use super::snapshot::AgentNotification;
+
 pub(crate) type AgentGroupId = Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentGroupState {
     pub id: AgentGroupId,
-    /// Bumped per primary run; late updates from older generations are ignored.
+    /// Bumped when the group is replaced; late updates from member threads
+    /// of an older generation are ignored.
     pub generation: u64,
     pub primary_agent: Option<AgentId>,
     pub members: Vec<AgentMember>,
     pub tasks: Vec<AgentTask>,
-    pub total_started: usize,
+    /// Usage since the group was created.
     pub usage: Usage,
+    /// Usage in the current budget window (one primary turn).
+    pub window_usage: Usage,
 }
 
 impl AgentGroupState {
@@ -44,105 +50,71 @@ impl AgentGroupState {
             primary_agent,
             members: Vec::new(),
             tasks: Vec::new(),
-            total_started: 0,
             usage: Usage::default(),
+            window_usage: Usage::default(),
         }
     }
 
-    pub(crate) fn active_task_count(&self) -> usize {
-        self.tasks
-            .iter()
-            .filter(|task| task.status.is_active())
-            .count()
+    pub(crate) fn member(&self, id: AgentId) -> Option<&AgentMember> {
+        self.members.iter().find(|member| member.id == id)
     }
 
-    pub(crate) fn has_active_writer(&self) -> bool {
-        self.tasks
-            .iter()
-            .any(|task| task.status.is_active() && task.role.writes_workspace())
+    pub(crate) fn member_mut(&mut self, id: AgentId) -> Option<&mut AgentMember> {
+        self.members.iter_mut().find(|member| member.id == id)
+    }
+
+    pub(crate) fn task(&self, id: AgentTaskId) -> Option<&AgentTask> {
+        self.tasks.iter().find(|task| task.id == id)
     }
 
     pub(crate) fn task_mut(&mut self, id: AgentTaskId) -> Option<&mut AgentTask> {
         self.tasks.iter_mut().find(|task| task.id == id)
     }
 
-    /// Adds a running member and makes it the assignee of `task_id`.
-    pub(crate) fn assign(&mut self, task_id: AgentTaskId, member: AgentMember) {
-        if let Some(task) = self.task_mut(task_id) {
-            task.assignee = Some(member.id);
-        }
-        self.members.push(AgentMember {
-            status: MemberStatus::Running,
-            current_task: Some(task_id),
-            ..member
-        });
+    /// Members running or holding queued work.
+    pub(crate) fn busy_member_count(&self) -> usize {
+        self.members
+            .iter()
+            .filter(|member| member.status == MemberStatus::Running)
+            .count()
     }
 
-    /// Stops whichever member is currently working on `task_id`.
-    pub(crate) fn release_task(&mut self, task_id: AgentTaskId) {
-        for member in &mut self.members {
-            if member.current_task == Some(task_id) {
-                member.status = MemberStatus::Stopped;
-                member.current_task = None;
-            }
-        }
+    pub(crate) fn live_member_count(&self) -> usize {
+        self.members
+            .iter()
+            .filter(|member| member.status != MemberStatus::Stopped)
+            .count()
+    }
+
+    pub(crate) fn has_busy_writer(&self) -> bool {
+        self.members
+            .iter()
+            .any(|member| member.status == MemberStatus::Running && member.role.writes_workspace())
     }
 }
 
-/// Live group state plus the runtime-only cancellation handles of its workers.
+/// Runtime-only resources for one member thread.
+#[derive(Default)]
+pub(super) struct MemberSlot {
+    pub inbox: VecDeque<(AgentTaskId, String)>,
+    pub running: Option<(AgentTaskId, Arc<AtomicBool>)>,
+    pub stop: bool,
+}
+
+/// Live group state plus the runtime-only resources of its member threads.
 pub(super) struct GroupRuntimeState {
     pub group: AgentGroupState,
-    pub cancels: HashMap<AgentTaskId, Arc<AtomicBool>>,
+    pub slots: HashMap<AgentId, MemberSlot>,
+    /// Background completions not yet delivered to the primary agent.
+    pub notifications: Vec<AgentNotification>,
 }
 
-impl Default for GroupRuntimeState {
-    fn default() -> Self {
+impl GroupRuntimeState {
+    pub(super) fn new(generation: u64, primary_agent: Option<AgentId>) -> Self {
         Self {
-            group: AgentGroupState::new(0, None),
-            cancels: HashMap::new(),
+            group: AgentGroupState::new(generation, primary_agent),
+            slots: HashMap::new(),
+            notifications: Vec::new(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::agents::{
-        member::AgentRole,
-        task::{AgentTaskStatus, ProposedTask},
-    };
-
-    #[test]
-    fn member_assignment_links_task_and_release_stops_member() {
-        let mut group = AgentGroupState::new(1, None);
-        let task = AgentTask::admitted(&ProposedTask {
-            role: AgentRole::Implementer,
-            objective: "fix".into(),
-        });
-        let task_id = task.id;
-        group.tasks.push(task);
-        assert!(group.has_active_writer());
-
-        let member_id = AgentId::new_v4();
-        group.assign(
-            task_id,
-            AgentMember {
-                id: member_id,
-                role: AgentRole::Implementer,
-                model: "m".into(),
-                parent: None,
-                status: MemberStatus::Stopped,
-                current_task: None,
-            },
-        );
-        assert_eq!(group.tasks[0].assignee, Some(member_id));
-        assert_eq!(group.members[0].status, MemberStatus::Running);
-
-        group.task_mut(task_id).unwrap().status = AgentTaskStatus::NeedsVerification;
-        group.release_task(task_id);
-        assert_eq!(group.members[0].status, MemberStatus::Stopped);
-        assert_eq!(group.members[0].current_task, None);
-        assert_eq!(group.active_task_count(), 0);
-        assert!(!group.has_active_writer());
     }
 }

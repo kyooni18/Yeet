@@ -2,4 +2,4 @@
 
 mod model;
 
-pub(crate) use model::{AgentTask, AgentTaskId, AgentTaskStatus, ProposedTask};
+pub(crate) use model::{AgentTask, AgentTaskId, AgentTaskStatus, SpawnRequest};

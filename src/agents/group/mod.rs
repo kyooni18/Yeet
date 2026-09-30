@@ -10,8 +10,14 @@ mod runtime;
 mod scheduler;
 mod snapshot;
 mod state;
+mod worker;
 mod workspace;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use budget::AgentLimits;
-pub(crate) use runtime::AgentGroupRuntime;
+pub(crate) use runtime::{AgentGroupRuntime, ChangeListener};
+pub(crate) use snapshot::AgentNotification;
+pub(crate) use snapshot::task_result;
 pub(crate) use workspace::WritePolicy;

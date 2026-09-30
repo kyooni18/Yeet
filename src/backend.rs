@@ -50,6 +50,7 @@ use crate::{
     workers::WorkerRegistry,
 };
 
+mod agent_notifications;
 mod capabilities;
 mod commands;
 mod debate_context;
@@ -206,11 +207,8 @@ impl BackendService {
             store.clone(),
         );
         let run_manager = RunManager::default();
-        let agent_groups = AgentGroupSupervisor::new(
-            runtime_factory.clone(),
-            run_manager.clone(),
-            AgentLimits::default(),
-        );
+        let agent_groups =
+            AgentGroupSupervisor::new(runtime_factory.clone(), AgentLimits::default());
         let coordinator = Arc::new(Mutex::new(runtime_factory.build(None)?));
         let mut session = SharedSession::new(model, reasoning_level);
         session.meta.working_directory = Some(workspace_root.display().to_string());
@@ -294,6 +292,7 @@ impl BackendService {
             tx,
             closed: false,
         };
+        backend.install_agent_group_listener();
         backend.refresh_context_length();
         backend.publish_state();
         Ok(backend)
@@ -448,7 +447,8 @@ impl BackendService {
         }
     }
 
-    pub(crate) fn try_recv(&self) -> Option<BackendEvent> {
+    pub(crate) fn try_recv(&mut self) -> Option<BackendEvent> {
+        self.deliver_agent_notifications();
         if let Some(event) = self.bridge.try_recv_event() {
             self.handle_bridge_event(event);
         }
@@ -774,7 +774,7 @@ impl BackendService {
         let autonomy_mode = self.shared.lock_or_recover().state.autonomy_mode;
         let goal_enabled = autonomy_mode != AutonomyMode::Manual;
         self.goal_mode.store(goal_enabled, Ordering::Release);
-        self.agent_groups.replace_active_group();
+        self.agent_groups.begin_turn();
         let history_start = self
             .coordinator
             .lock_or_recover()

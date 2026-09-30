@@ -259,6 +259,9 @@ impl BackendService {
     /// Requests cancellation for the active run and pending permission prompt.
     pub(super) fn interrupt(&self) {
         self.run_manager.cancel_all();
+        // Background agents are not interrupted: their bridge requests are
+        // detached and they are stopped only by stop_agent or group replacement.
+        self.agent_groups.cancel_foreground();
         self.bridge.interrupt_active_requests();
         if self.permission.pending_shell().is_some()
             || self.permission.pending_native_app().is_some()
@@ -353,6 +356,8 @@ impl BackendService {
         }
         self.closed = true;
         self.interrupt();
+        // interrupt() spares background agents; shutdown must not.
+        self.agent_groups.replace_active_group();
         self.permission.close();
         self.bridge.shutdown();
 

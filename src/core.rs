@@ -21,8 +21,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+mod detached_requests;
 mod mcp_runtime;
 mod runtime;
+pub(crate) use detached_requests::run_detached;
 use runtime::bridge_script;
 pub use runtime::{edit_daemon_script, node_executable, runtime_directory};
 
@@ -995,6 +997,7 @@ impl BridgeClient {
             .lock()
             .map_err(|_| anyhow!("bridge pending lock poisoned"))?
             .insert(id.clone(), tx);
+        detached_requests::note_request(&id);
         fields.insert("v".into(), json!(BRIDGE_PROTOCOL_VERSION));
         fields.insert("id".into(), json!(id));
         fields.insert("op".into(), json!(op));
@@ -1022,6 +1025,7 @@ impl BridgeClient {
             .lock()
             .map_err(|_| anyhow!("bridge pending lock poisoned"))?
             .insert(id.clone(), tx);
+        detached_requests::note_request(&id);
         fields.insert("v".into(), json!(BRIDGE_PROTOCOL_VERSION));
         fields.insert("id".into(), json!(id));
         fields.insert("op".into(), json!(op));
@@ -1067,6 +1071,7 @@ impl BridgeClient {
             .lock()
             .map_err(|_| anyhow!("bridge pending lock poisoned"))?
             .insert(id.clone(), tx);
+        detached_requests::note_request(&id);
         fields.insert("v".into(), json!(BRIDGE_PROTOCOL_VERSION));
         fields.insert("id".into(), json!(id));
         fields.insert("op".into(), json!(op));
@@ -1127,6 +1132,7 @@ impl BridgeClient {
             .lock()
             .map_err(|_| anyhow!("bridge pending lock poisoned"))?
             .insert(id.clone(), tx);
+        detached_requests::note_request(&id);
         if let Err(error) = self.write_value(
             &json!({ "v": BRIDGE_PROTOCOL_VERSION, "id": id, "op": "stream", "request": request }),
         ) {
@@ -1452,8 +1458,9 @@ impl BridgeClient {
             .lock()
             .map(|pending| pending.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
-        for target in targets {
-            self.cancel(&target);
+        let detached = detached_requests::retain_live(&targets);
+        for target in targets.iter().filter(|id| !detached.contains(*id)) {
+            self.cancel(target);
         }
     }
 
@@ -1482,6 +1489,7 @@ impl BridgeClient {
     }
 
     fn remove_pending(&self, id: &str) {
+        detached_requests::forget(id);
         if let Ok(mut pending) = self.inner.pending.lock() {
             pending.remove(id);
         }

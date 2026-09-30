@@ -1,108 +1,138 @@
-//! Admission policy: decides which proposed tasks may start under the group's
-//! concurrency, total, budget, and write limits. It never runs agents itself.
+//! Admission policy: decides whether new work may start under the group's
+//! budget, concurrency, membership, and write limits. It never runs agents.
+//!
+//! Rejections are returned as errors whose text is shown to the model, so
+//! they say what to do instead.
 
-use crate::agents::task::{AgentTask, AgentTaskId, ProposedTask};
+use anyhow::{Result, bail};
+
+use crate::agents::{
+    AgentId,
+    member::{AgentMember, AgentRole, MemberStatus},
+};
 
 use super::{AgentLimits, WritePolicy, state::AgentGroupState};
 
-/// A task the scheduler accepted, bound to the generation that admitted it.
-pub(super) struct Admission {
-    pub generation: u64,
-    pub task_id: AgentTaskId,
-    pub task: ProposedTask,
+/// Admits a new member. Returns an idle member to retire when the group is
+/// at its membership cap.
+pub(super) fn admit_spawn(
+    limits: &AgentLimits,
+    group: &AgentGroupState,
+    role: AgentRole,
+) -> Result<Option<AgentId>> {
+    admit_work(limits, group, role)?;
+    if group.live_member_count() < limits.max_members {
+        return Ok(None);
+    }
+    match group
+        .members
+        .iter()
+        .find(|member| member.status == MemberStatus::Idle)
+    {
+        Some(oldest_idle) => Ok(Some(oldest_idle.id)),
+        None => bail!(
+            "agent limit reached ({} live agents); stop an agent before launching another",
+            limits.max_members
+        ),
+    }
 }
 
-/// Admits a prefix of `proposed`, recording each admitted task in `group`.
-pub(super) fn admit(
+/// Admits a follow-up message. Busy members queue it without taking a new
+/// concurrency slot.
+pub(super) fn admit_message(
     limits: &AgentLimits,
-    group: &mut AgentGroupState,
-    proposed: Vec<ProposedTask>,
-) -> Vec<Admission> {
-    if limits.budget_exhausted(&group.usage) {
-        return Vec::new();
+    group: &AgentGroupState,
+    member: &AgentMember,
+) -> Result<()> {
+    match member.status {
+        MemberStatus::Stopped => bail!("agent {} was stopped and cannot be messaged", member.id),
+        MemberStatus::Running => Ok(()),
+        MemberStatus::Idle => admit_work(limits, group, member.role),
     }
+}
 
-    let remaining_total = limits.max_total.saturating_sub(group.total_started);
-    let remaining_concurrent = limits
-        .max_concurrent
-        .saturating_sub(group.active_task_count());
-    let limit = proposed
-        .len()
-        .min(remaining_total)
-        .min(remaining_concurrent);
-    if limit == 0 {
-        return Vec::new();
+fn admit_work(limits: &AgentLimits, group: &AgentGroupState, role: AgentRole) -> Result<()> {
+    if limits.budget_exhausted(&group.window_usage) {
+        bail!("the delegated-agent token/cost budget for this turn is exhausted");
     }
-
-    let mut writer_admitted = group.has_active_writer();
-    let mut admitted = Vec::new();
-    for task in proposed.into_iter().take(limit) {
-        if task.role.writes_workspace() {
-            match limits.write_policy {
-                WritePolicy::PrimaryOnly => continue,
-                WritePolicy::SingleWriter if writer_admitted => continue,
-                WritePolicy::SingleWriter => writer_admitted = true,
-                WritePolicy::IsolatedWorktree => {
-                    // Worktree isolation is a separate rollout stage. Fail closed
-                    // instead of silently sharing a writable checkout.
-                    continue;
-                }
+    if group.busy_member_count() >= limits.max_concurrent {
+        bail!(
+            "{} agents are already working; wait for their notifications before starting more",
+            limits.max_concurrent
+        );
+    }
+    if role.writes_workspace() {
+        match limits.write_policy {
+            WritePolicy::PrimaryOnly => {
+                bail!("implementer agents are disabled; only the primary agent may write")
+            }
+            WritePolicy::SingleWriter if group.has_busy_writer() => bail!(
+                "another implementer agent is working; only one may write to the workspace at a time"
+            ),
+            WritePolicy::SingleWriter => {}
+            // Worktree isolation is a separate rollout stage. Fail closed
+            // instead of silently sharing a writable checkout.
+            WritePolicy::IsolatedWorktree => {
+                bail!("isolated worktrees are not available yet")
             }
         }
-        let record = AgentTask::admitted(&task);
-        group.total_started += 1;
-        admitted.push(Admission {
-            generation: group.generation,
-            task_id: record.id,
-            task,
-        });
-        group.tasks.push(record);
     }
-    admitted
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{member::AgentRole, task::AgentTaskStatus};
 
-    fn task(role: AgentRole) -> ProposedTask {
-        ProposedTask {
+    fn member(role: AgentRole, status: MemberStatus) -> AgentMember {
+        AgentMember {
+            id: AgentId::new_v4(),
+            description: "work".into(),
             role,
-            objective: "work".into(),
+            model: "m".into(),
+            parent: None,
+            status,
+            current_task: None,
         }
     }
 
     #[test]
-    fn single_writer_admits_one_implementer_across_calls() {
+    fn single_writer_allows_one_busy_implementer() {
         let limits = AgentLimits::default();
         let mut group = AgentGroupState::new(1, None);
-        let first = admit(
-            &limits,
-            &mut group,
-            vec![task(AgentRole::Implementer), task(AgentRole::Implementer)],
-        );
-        assert_eq!(first.len(), 1);
-        let second = admit(&limits, &mut group, vec![task(AgentRole::Implementer)]);
-        assert!(second.is_empty());
-        let reader = admit(&limits, &mut group, vec![task(AgentRole::Researcher)]);
-        assert_eq!(reader.len(), 1);
+        assert!(admit_spawn(&limits, &group, AgentRole::Implementer).is_ok());
+        group
+            .members
+            .push(member(AgentRole::Implementer, MemberStatus::Running));
+        assert!(admit_spawn(&limits, &group, AgentRole::Implementer).is_err());
+        assert!(admit_spawn(&limits, &group, AgentRole::Researcher).is_ok());
+
+        let idle_writer = member(AgentRole::Implementer, MemberStatus::Idle);
+        assert!(admit_message(&limits, &group, &idle_writer).is_err());
+        group.members[0].status = MemberStatus::Idle;
+        assert!(admit_message(&limits, &group, &idle_writer).is_ok());
     }
 
     #[test]
-    fn concurrency_and_total_limits_bound_admission() {
+    fn membership_cap_retires_oldest_idle_member() {
         let limits = AgentLimits {
             max_concurrent: 2,
-            max_total: 3,
+            max_members: 2,
             ..AgentLimits::default()
         };
         let mut group = AgentGroupState::new(1, None);
-        let researchers = || vec![task(AgentRole::Researcher); 4];
-        assert_eq!(admit(&limits, &mut group, researchers()).len(), 2);
-        assert!(admit(&limits, &mut group, researchers()).is_empty());
-        for task in &mut group.tasks {
-            task.status = AgentTaskStatus::Reported;
-        }
-        assert_eq!(admit(&limits, &mut group, researchers()).len(), 1);
+        group
+            .members
+            .push(member(AgentRole::Researcher, MemberStatus::Running));
+        group
+            .members
+            .push(member(AgentRole::Researcher, MemberStatus::Idle));
+        let idle = group.members[1].id;
+        assert_eq!(
+            admit_spawn(&limits, &group, AgentRole::Researcher).unwrap(),
+            Some(idle)
+        );
+        group.members[1].status = MemberStatus::Running;
+        assert!(admit_spawn(&limits, &group, AgentRole::Researcher).is_err());
     }
 }

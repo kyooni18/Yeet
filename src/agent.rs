@@ -182,6 +182,7 @@ impl AgentCoordinator {
                 &mut retry_instruction,
                 &mut final_consistency_pending,
             );
+            self.deliver_agent_notifications(emit);
             model_attempts += 1;
             let mut tool_catalog = match profile {
                 TaskProfile::Research => self.registry.research_tools(),
@@ -860,6 +861,7 @@ impl AgentCoordinator {
                 None
             };
             let parallel_mcp_active = parallel_mcp_results.is_some();
+            self.registry.prepare_tool_batch(&calls, model);
             for call in &calls {
                 check_cancel(cancel)?;
                 let current_generation = self.registry.workspace_generation();

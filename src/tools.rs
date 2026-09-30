@@ -9,7 +9,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    agents::{AgentGroupHandle, group::commands::DELEGATE_TOOL},
+    agents::{
+        AgentGroupHandle, AgentNotification,
+        group::commands::{AGENT_TOOL, LEGACY_PROPOSE_TOOL, SEND_TOOL, STOP_TOOL},
+    },
     core::{BridgeClient, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
@@ -160,6 +163,8 @@ pub struct ToolRegistry {
     skyline_handle: Option<String>,
     disabled_capabilities: HashSet<String>,
     agent_group: Option<AgentGroupHandle>,
+    /// Identifies a delegated agent in permission prompts it raises.
+    permission_label: Option<String>,
     read_cache: HashMap<String, Vec<ReadCacheEntry>>,
     edit_snapshots: HashMap<String, String>,
     edit_read_coverage: HashMap<String, EditReadCoverage>,
@@ -246,6 +251,7 @@ impl ToolRegistry {
             skyline_handle: None,
             disabled_capabilities: HashSet::new(),
             agent_group: None,
+            permission_label: None,
             read_cache: HashMap::new(),
             edit_snapshots: HashMap::new(),
             edit_read_coverage: HashMap::new(),
@@ -312,11 +318,33 @@ impl ToolRegistry {
     pub(crate) fn set_agent_group(&mut self, group: Option<AgentGroupHandle>) {
         self.agent_group = group;
         if self.agent_group.is_some() {
-            let definition = AgentGroupHandle::tool_definition();
-            self.active_tools.insert(DELEGATE_TOOL.into(), definition);
+            for definition in AgentGroupHandle::tool_definitions() {
+                self.active_tools
+                    .insert(definition.name.clone(), definition);
+            }
         } else {
-            self.active_tools.remove(DELEGATE_TOOL);
+            for name in AgentGroupHandle::tool_names() {
+                self.active_tools.remove(name);
+            }
         }
+    }
+
+    /// Lets one response's foreground agent calls run concurrently.
+    pub(crate) fn prepare_tool_batch(&self, calls: &[ToolCall], model: &str) {
+        if let Some(group) = &self.agent_group {
+            group.prestart(calls, model, self.active_session_id.clone());
+        }
+    }
+
+    pub(crate) fn take_agent_notifications(&self) -> Vec<AgentNotification> {
+        self.agent_group
+            .as_ref()
+            .map(AgentGroupHandle::take_notifications)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn set_permission_label(&mut self, label: String) {
+        self.permission_label = Some(label);
     }
 
     pub(crate) fn agent_orchestration_enabled(&self) -> bool {
@@ -638,11 +666,11 @@ impl ToolRegistry {
             }
             "skyline" => self.execute_skyline(&object),
             "deploy_agent" => self.deploy_agent(&object, cancel),
-            DELEGATE_TOOL => self
+            AGENT_TOOL | SEND_TOOL | STOP_TOOL | LEGACY_PROPOSE_TOOL => self
                 .agent_group
                 .as_ref()
                 .ok_or_else(|| anyhow!("adaptive agent orchestration is not enabled"))?
-                .delegate_tasks(&object, model, self.active_session_id.clone(), cancel),
+                .execute(call, &object, model, self.active_session_id.clone(), cancel),
             "read_file" => self.read_file(&object),
             // Hidden compatibility alias for restored sessions created before
             // read_file absorbed batch reads. New requests never expose this schema.
@@ -1077,9 +1105,13 @@ impl ToolRegistry {
         if policy.mode == SandboxMode::Unlimited || policy.auto_approve {
             return Ok(true);
         }
+        let reason = match &self.permission_label {
+            Some(label) => format!("[{label}] {reason}"),
+            None => reason.into(),
+        };
         Ok(self
             .permission
-            .request(kind.into(), target.into(), operation.into(), reason.into()))
+            .request(kind.into(), target.into(), operation.into(), reason))
     }
 
     fn ensure_file_scope(&self, path: &str, write: bool) -> Result<()> {

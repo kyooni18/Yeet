@@ -399,9 +399,11 @@ impl AgentCoordinator {
     }
 }
 
+/// Attaches every agent tool together so the provider-visible tool envelope
+/// does not change when the model first launches or messages an agent.
 fn promote_agent_orchestration_tool(discovery: &mut tool_discovery::ToolDiscovery, enabled: bool) {
     if enabled {
-        discovery.load(["propose_agent_tasks"]);
+        discovery.load(crate::agents::AgentGroupHandle::tool_names());
     }
 }
 
@@ -439,11 +441,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adaptive_agent_tool_is_foreground_only_when_enabled() {
-        let catalog = vec![
-            ToolDefinition::new("read_file", "read", json!({"type":"object"})),
-            ToolDefinition::new("propose_agent_tasks", "delegate", json!({"type":"object"})),
-        ];
+    fn adaptive_agent_tools_attach_together_only_when_enabled() {
+        let mut catalog = vec![ToolDefinition::new(
+            "read_file",
+            "read",
+            json!({"type":"object"}),
+        )];
+        catalog.extend(crate::agents::AgentGroupHandle::tool_definitions());
 
         let mut disabled = tool_discovery::ToolDiscovery::goal();
         promote_agent_orchestration_tool(&mut disabled, false);
@@ -451,16 +455,14 @@ mod tests {
             disabled
                 .attached(&catalog)
                 .iter()
-                .all(|tool| tool.name != "propose_agent_tasks")
+                .all(|tool| tool.name == "read_file")
         );
 
         let mut enabled = tool_discovery::ToolDiscovery::goal();
         promote_agent_orchestration_tool(&mut enabled, true);
-        assert!(
-            enabled
-                .attached(&catalog)
-                .iter()
-                .any(|tool| tool.name == "propose_agent_tasks")
-        );
+        let attached = enabled.attached(&catalog);
+        for name in crate::agents::AgentGroupHandle::tool_names() {
+            assert!(attached.iter().any(|tool| tool.name == name));
+        }
     }
 }

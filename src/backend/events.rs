@@ -107,6 +107,10 @@ pub(super) fn agent_event_log_value(event: &AgentEvent) -> Option<Value> {
         AgentEvent::Finished { reason, usage } => {
             Some(json!({"type":"agent-response-finished", "reason":reason, "usage":usage}))
         }
+        AgentEvent::AgentNotification { headline } => Some(json!({
+            "type":"agent-group-notification",
+            "headline":headline,
+        })),
     }
 }
 
@@ -295,6 +299,9 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                 "Goal · judging",
                 Some(format!("Epoch {epoch} · {reason}")),
             );
+        }
+        AgentEvent::AgentNotification { headline } => {
+            state.append(ConversationKind::System { content: headline });
         }
         AgentEvent::GoalJudge { passed, reason } => {
             state.set_activity(

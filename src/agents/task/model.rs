@@ -1,12 +1,16 @@
-//! Task identity, lifecycle states, and proposed (not yet admitted) work.
+//! Task identity, lifecycle states, and requested (not yet admitted) work.
 //!
-//! A task is work; the member that performs it is referenced only through
-//! `assignee`, so task and member lifetimes stay independent.
+//! A task is one unit of work: a member's initial prompt or a later message
+//! to it. The member that performs it is referenced only through `assignee`,
+//! so task and member lifetimes stay independent.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::agents::{AgentId, member::AgentRole};
+use crate::{
+    agents::{AgentId, member::AgentRole},
+    core::Usage,
+};
 
 pub(crate) type AgentTaskId = Uuid;
 
@@ -37,17 +41,21 @@ impl AgentTaskStatus {
         }
     }
 
-    /// Admitted work that still occupies a concurrency slot.
+    /// Admitted work that is queued or executing.
     pub(crate) fn is_active(self) -> bool {
         matches!(self, Self::Pending | Self::Running)
     }
 }
 
-/// Work requested by an agent before the scheduler has admitted it.
+/// A request to launch a new member, before admission.
 #[derive(Debug, Clone)]
-pub(crate) struct ProposedTask {
+pub(crate) struct SpawnRequest {
     pub role: AgentRole,
-    pub objective: String,
+    pub description: String,
+    pub prompt: String,
+    /// Background work is announced through a notification instead of
+    /// being awaited by the caller.
+    pub background: bool,
 }
 
 /// Admitted work owned by an Agent Group.
@@ -55,23 +63,33 @@ pub(crate) struct ProposedTask {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentTask {
     pub id: AgentTaskId,
-    /// The member role required to perform this task.
+    pub assignee: AgentId,
     pub role: AgentRole,
-    pub objective: String,
+    pub description: String,
     pub status: AgentTaskStatus,
-    pub assignee: Option<AgentId>,
+    pub background: bool,
+    pub outcome: Option<String>,
     pub summary: Option<String>,
+    pub usage: Usage,
 }
 
 impl AgentTask {
-    pub(crate) fn admitted(proposed: &ProposedTask) -> Self {
+    pub(crate) fn queued(
+        assignee: AgentId,
+        role: AgentRole,
+        description: impl Into<String>,
+        background: bool,
+    ) -> Self {
         Self {
             id: AgentTaskId::new_v4(),
-            role: proposed.role,
-            objective: proposed.objective.clone(),
+            assignee,
+            role,
+            description: description.into(),
             status: AgentTaskStatus::Pending,
-            assignee: None,
+            background,
+            outcome: None,
             summary: None,
+            usage: Usage::default(),
         }
     }
 }
