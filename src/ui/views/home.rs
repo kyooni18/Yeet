@@ -80,10 +80,10 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
     let entries = [
         (icons::home(), "Home", true),
         (icons::session_tab(), "MM305 crosswind tuning", false),
-        (icons::file("theme.rs"), "theme.rs", false),
-        (icons::workspace(), "Landing", false),
-        (icons::file("guidance_taem.c"), "guidance_taem.c", false),
-        (icons::workspace(), "#214", false),
+        (icons::folder(false), "theme.rs", false),
+        (icons::agent_tab(), "Landing", false),
+        (icons::diff_tab(), "guidance_taem.c", false),
+        (icons::issue_tab(), "#214", false),
         ("", "+", false),
     ];
     let starts = [0u32, 175, 423, 547, 653, 835, 916];
@@ -108,7 +108,8 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
             Rect::new(x, area.y, width, area.height),
         );
         if !icon.is_empty() {
-            let icon_x = x + (area.width as u32 * if index == 0 { 15 } else { 11 } / 1440) as u16;
+            let icon_offset = if index == 0 { 15 } else { 0 };
+            let icon_x = x + (area.width as u32 * icon_offset / 1440) as u16;
             frame.render_widget(
                 Paragraph::new(icon).style(style),
                 Rect::new(
@@ -119,7 +120,8 @@ fn draw_tabs(frame: &mut Frame<'_>, area: Rect) {
                 ),
             );
         }
-        let label_x = x + (area.width as u32 * if index == 0 { 36 } else { 30 } / 1440) as u16;
+        let label_offset = if index == 0 { 36 } else { 21 };
+        let label_x = x + (area.width as u32 * label_offset / 1440) as u16;
         let label_right = area
             .x
             .saturating_add((area.width as u32 * ends[index] / 1440) as u16);

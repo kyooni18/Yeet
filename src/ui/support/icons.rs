@@ -19,6 +19,18 @@ pub(in crate::ui) fn session_tab() -> &'static str {
     if nerd() { "\u{f27a}" } else { "▤" }
 }
 
+pub(in crate::ui) fn agent_tab() -> &'static str {
+    if nerd() { "\u{f544}" } else { "♟" }
+}
+
+pub(in crate::ui) fn diff_tab() -> &'static str {
+    if nerd() { "\u{f407}" } else { "⑂" }
+}
+
+pub(in crate::ui) fn issue_tab() -> &'static str {
+    if nerd() { "\u{f06a}" } else { "▣" }
+}
+
 pub(in crate::ui) fn chevron(expanded: bool) -> &'static str {
     match (expanded, nerd()) {
         (true, true) => "\u{f078}",
