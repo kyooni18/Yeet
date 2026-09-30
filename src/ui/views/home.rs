@@ -363,10 +363,6 @@ fn draw_inspector(frame: &mut Frame<'_>, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    frame.render_widget(
-        Block::default().style(Style::default().bg(theme::surface_color())),
-        area,
-    );
     let pad = 2.min(area.width);
     let content = Rect::new(
         area.x + pad,
