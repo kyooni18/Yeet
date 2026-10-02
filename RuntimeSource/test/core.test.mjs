@@ -680,6 +680,30 @@ test("Anthropic removes unsupported root tool-schema unions while preserving nes
   assert.deepEqual(schema.properties.selector.oneOf, [{ type: "string" }, { type: "integer" }]);
 });
 
+test("Anthropic uses automatic tool choice for Sonnet 5.5 forced-tool requests", async () => {
+  const requests = [];
+  const provider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      requests.push(JSON.parse(init.body));
+      return jsonResponse({ model: "claude-sonnet-5-5", content: [], stop_reason: "end_turn", usage: {} });
+    },
+  });
+  const base = {
+    model: "claude-sonnet-5-5",
+    messages: [{ role: "user", content: "Use the tool." }],
+    tools: [{ name: "probe", inputSchema: { type: "object", properties: {} } }],
+    providerOptions: { output_config: { effort: "low" } },
+  };
+
+  await provider.complete({ ...base, toolChoice: "required" });
+  await provider.complete({ ...base, toolChoice: { name: "probe" } });
+
+  assert.deepEqual(requests.map((request) => request.tool_choice), [{ type: "auto" }, { type: "auto" }]);
+  assert.deepEqual(requests[0].output_config, { effort: "low" });
+  assert.deepEqual(requests[1].tools.map((tool) => tool.name), ["probe"]);
+});
+
 test("Anthropic and Gemini keep volatile coordinator overlays behind the stable system prefix", async () => {
   const messages = [
     { role: "system", content: "stable system" },

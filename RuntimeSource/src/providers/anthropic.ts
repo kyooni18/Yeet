@@ -26,7 +26,13 @@ export interface AnthropicProviderOptions {
   apiCallLogger?: ProviderFetchLogger;
 }
 
-function mapToolChoice(choice: ToolChoice | undefined): unknown {
+function mapToolChoice(choice: ToolChoice | undefined, model: string): unknown {
+  // Sonnet 5.5 currently rejects Anthropic's forced `tool` and `any` choices.
+  // Keep its schemas available and let the model select a tool instead.
+  if (/^claude-sonnet-5-5(?:-|$)/.test(model)
+      && (choice === "required" || (choice !== undefined && typeof choice === "object"))) {
+    return { type: "auto" };
+  }
   if (!choice || choice === "auto") return { type: "auto" };
   if (choice === "none") return { type: "none" };
   if (choice === "required") return { type: "any" };
@@ -282,7 +288,7 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
     ...(split.system ? { system: mapSystem(split.system, promptCacheEnabled, explicitCacheControl) } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
-    ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice) } : {}),
+    ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice, request.model) } : {}),
     ...(request.providerMetadata ? { metadata: request.providerMetadata } : {}),
     ...(contextManagement !== undefined ? { context_management: contextManagement } : {}),
     ...(automaticCacheEnabled
