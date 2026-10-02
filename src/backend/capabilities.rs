@@ -132,6 +132,10 @@ impl BackendService {
     }
 
     pub(super) fn toggle_capability(&self, id: &str) -> Result<bool> {
+        if id == "vision" {
+            // Legacy clients may still request this toggle. Image support is automatic.
+            return Ok(true);
+        }
         self.reload_project_capabilities()?;
         let harness = self.bridge.list_harness_capabilities()?;
         let is_harness = id == "web-search" || harness.iter().any(|capability| capability.id == id);
@@ -173,10 +177,6 @@ impl BackendService {
                     values.sort();
                     values.dedup();
                 }
-                clear_resolved_vision_detached_error(
-                    &mut shared.state.error_message,
-                    id == "vision" && !was_attached,
-                );
                 shared.meta.attached_capabilities = Some(values);
                 if let Some(name) = id.strip_prefix("skill:") {
                     shared

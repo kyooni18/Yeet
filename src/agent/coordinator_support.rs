@@ -134,7 +134,8 @@ pub(super) fn supports_anthropic_deferred_tool_references(model: &str) -> bool {
 }
 
 pub(super) fn attached_harness_flags(attached: Option<&[String]>) -> (bool, bool, bool) {
-    let vision_enabled = attached.is_none_or(|values| values.iter().any(|value| value == "vision"));
+    // Image support is an automatic request behavior, not a session capability.
+    let vision_enabled = true;
     let web_search_enabled =
         attached.is_none_or(|values| values.iter().any(|value| value == WEB_SEARCH_CAPABILITY_ID));
     let web_search_explicitly_attached =

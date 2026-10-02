@@ -319,6 +319,7 @@ impl BackendService {
                     attached.unwrap_or_else(|| default_attached_harness(&capabilities));
                 let mut lines = capabilities.into_iter().map(|capability| format!("{} [{}] — {}", capability.id, if effective.contains(&capability.id) { "attached" } else { "detached" }, capability.description)).collect::<Vec<_>>();
                 lines.push(format!("web-search [{}] — Default-attached live web search through Agent-Reach/Exa with managed SearXNG fallback.", if effective.iter().any(|value| value == "web-search") { "attached" } else { "detached" }));
+                lines.push("vision [automatic] — Image inputs are handled automatically when present.".into());
                 lines.push(format!("{SKYLINE_CAPABILITY_ID} [{}] — Explicit session-attached Skyline coordination through ~/.yeet/Skyline.", if effective.iter().any(|value| value == SKYLINE_CAPABILITY_ID) { "attached" } else { "detached" }));
                 let text = lines.join("\n");
                 self.append_system(if text.is_empty() { "No harness capabilities are available." } else { &text });
@@ -326,6 +327,10 @@ impl BackendService {
             "/attach" => {
                 let Some(id) = arguments.first() else { self.append_system("Usage: /attach capability-id"); return Ok(()); };
                 self.reload_project_capabilities()?;
+                if *id == "vision" {
+                    self.append_system("Vision is handled automatically when an image is present.");
+                    return Ok(());
+                }
                 if *id == SKYLINE_CAPABILITY_ID {
                     let attached = self
                         .shared
@@ -361,6 +366,10 @@ impl BackendService {
             "/detach" => {
                 let Some(id) = arguments.first() else { self.append_system("Usage: /detach capability-id"); return Ok(()); };
                 self.reload_project_capabilities()?;
+                if *id == "vision" {
+                    self.append_system("Vision is handled automatically when an image is present.");
+                    return Ok(());
+                }
                 if *id == SKYLINE_CAPABILITY_ID {
                     let attached = self
                         .shared

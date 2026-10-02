@@ -101,8 +101,6 @@ const CAPABILITY_STREAMING_LOCK_ERROR: &str =
     "Capabilities cannot be changed while a response is running.";
 const SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR: &str =
     "Session environment cannot be changed while a response is running.";
-const VISION_DETACHED_ERROR: &str =
-    "Vision is detached. Enable it in /capabilities or run /attach vision before sending images.";
 
 fn session_only_capability(id: &str) -> bool {
     id.starts_with("skill:") || id == SKYLINE_CAPABILITY_ID
@@ -135,12 +133,6 @@ fn clear_resolved_streaming_lock_error(error_message: &mut Option<String>) {
         error_message.as_deref(),
         Some(CAPABILITY_STREAMING_LOCK_ERROR | SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR)
     ) {
-        *error_message = None;
-    }
-}
-
-fn clear_resolved_vision_detached_error(error_message: &mut Option<String>, vision_attached: bool) {
-    if vision_attached && error_message.as_deref() == Some(VISION_DETACHED_ERROR) {
         *error_message = None;
     }
 }
@@ -776,18 +768,6 @@ impl BackendService {
             if !visible_user {
                 Vec::new()
             } else {
-                if (!images.is_empty() || !shared.meta.pending_images.is_empty())
-                    && shared
-                        .meta
-                        .attached_capabilities
-                        .as_ref()
-                        .is_some_and(|values| !values.iter().any(|value| value == "vision"))
-                {
-                    shared.state.error_message = Some(VISION_DETACHED_ERROR.into());
-                    drop(shared);
-                    self.publish_state();
-                    return Ok(());
-                }
                 images.extend(std::mem::take(&mut shared.meta.pending_images));
                 images
             }

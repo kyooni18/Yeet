@@ -25,7 +25,7 @@ import { createRequestCapabilityRegistry } from "./request-capabilities.js";
 import { withReasoningPolicy } from "./request-policy.js";
 import { SkillRegistry } from "./skills.js";
 import { parseModelId } from "./types.js";
-import { createVisionCapability, VISION_CAPABILITY_ID } from "./vision.js";
+import { prepareVisionRequest } from "./vision.js";
 import {
   BRIDGE_PROTOCOL_VERSION,
   type BridgeEvent,
@@ -328,8 +328,7 @@ async function runComplete(command: Extract<BridgeCommand, { op: "complete" }>):
   active.set(command.id, controller);
   try {
     await refreshProvider(parseModelId(command.request.model).provider);
-    ensureVisionAttached(command.request);
-    const costAware = await costAwareRequest(command.request);
+    const costAware = await costAwareRequest(prepareVisionRequest(command.request));
     const preparation = await harnessCapabilities.prepareWithUsage(costAware);
     const preparedRequest = withReasoningPolicy(preparation.request);
     const result = await core.complete({ ...preparedRequest, signal: controller.signal });
@@ -401,8 +400,7 @@ async function runStream(command: Extract<BridgeCommand, { op: "stream" }>): Pro
   active.set(command.id, controller);
   try {
     await refreshProvider(parseModelId(command.request.model).provider);
-    ensureVisionAttached(command.request);
-    const costAware = await costAwareRequest(command.request);
+    const costAware = await costAwareRequest(prepareVisionRequest(command.request));
     const preparation = await harnessCapabilities.prepareWithUsage(costAware);
     const preparedRequest = withReasoningPolicy(preparation.request);
     for await (const event of core.stream({ ...preparedRequest, signal: controller.signal })) {
@@ -419,14 +417,6 @@ async function runStream(command: Extract<BridgeCommand, { op: "stream" }>): Pro
     write(errorMessage(command.id, error));
   } finally {
     active.delete(command.id);
-  }
-}
-
-function ensureVisionAttached(request: import("./types.js").CallRequest): void {
-  if (!request.messages.some((message) => (message.images?.length ?? 0) > 0)) return;
-  const attached = request.attachedCapabilities ?? harnessCapabilities.defaultAttached();
-  if (!attached.includes(VISION_CAPABILITY_ID)) {
-    throw new Error("Vision capability is not attached to this request");
   }
 }
 

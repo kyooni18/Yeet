@@ -276,7 +276,6 @@ pub(super) fn retryable_goal_error(message: &str) -> bool {
         "no model selected",
         "unknown provider",
         "unsupported provider",
-        "vision capability is not attached",
         "exceed the fresh working-context budget",
         "workspace mutation lease",
         "previously submitted context changed",

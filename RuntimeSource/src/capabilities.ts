@@ -55,6 +55,9 @@ export class HarnessCapabilityRegistry {
       if (seen.has(id)) continue;
       seen.add(id);
       const module = this.#modules.get(id);
+      // Older sessions persisted vision as an attached capability. Ignore that
+      // legacy id now that validation runs automatically for image requests.
+      if (!module && id === "vision") continue;
       if (!module) throw new Error(`Unknown attached harness capability: ${id}`);
       if (module.prepareWithUsage) {
         const result = await module.prepareWithUsage(prepared);

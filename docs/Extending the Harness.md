@@ -20,10 +20,10 @@ runtime capability registry, add Node tests, and rebuild with:
 No Rust tool schema is needed for a request transform because the model never
 calls it directly.
 
-Vision is one such request capability. Image bytes live on the provider-neutral
-`Message.images` field and provider adapters are responsible for translating
-that field to their native multimodal request format. Keep local file paths out
-of provider payloads.
+Image handling is automatic and is not a user-toggleable request capability.
+Image bytes live on the provider-neutral `Message.images` field, and provider
+adapters translate that field to their native multimodal request format. Keep
+local file paths out of provider payloads.
 
 ## Direct tools
 
