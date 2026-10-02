@@ -134,7 +134,7 @@ export class AntigravityLocalProvider implements ProviderAdapter {
     if (!forceRefresh && this.#models.size > 0) return [...this.#models.values()];
     const entries = modelEntries(await this.#client.getAvailableModels(
       forceRefresh || this.#models.size === 0,
-      signal ? { signal } : {},
+      { launch: true, ...(signal ? { signal } : {}) },
     ));
     this.#models = new Map(entries.map((entry) => [entry.id, entry]));
     return entries;
