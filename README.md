@@ -151,9 +151,9 @@ cargo test --all-targets
 
 ## Frontend development
 
-UI structure and layout are specified in [`app/ui/ContentView.ui`](app/ui/ContentView.ui) and the meaningful regions under `app/ui`. Edit those design documents and ask an AI agent to synchronize the normal implementation; they are never interpreted at runtime.
+The future UI design specification starts at [`app/ui/ContentView.ui`](app/ui/ContentView.ui) and the meaningful regions under `app/ui`. Edit those design documents and ask an AI agent to synchronize the normal implementation; they are never interpreted at runtime.
 
-The primary cross-platform frontend is [`frontend/react-native`](frontend/react-native/README.md), using React Native and Expo for iOS, iPadOS, Android and web. [`frontend/desktop`](frontend/desktop/README.md) hosts its web export in Tauri 2 and connects to the existing Rust Harness for macOS, Windows and Linux. The current `web` client remains the release default during incremental parity work. See [`docs/FRONTEND_ARCHITECTURE.md`](docs/FRONTEND_ARCHITECTURE.md) for boundaries and migration details.
+The blank foundation for future user-designed UI is [`frontend/react-native`](frontend/react-native/README.md), using React Native and Expo for iOS, iPadOS, Android and web. [`frontend/desktop`](frontend/desktop/README.md) hosts its web export in Tauri 2 and connects to the existing Rust Harness for macOS, Windows and Linux. The current `web` client remains the release default during incremental parity work. See [`docs/FRONTEND_ARCHITECTURE.md`](docs/FRONTEND_ARCHITECTURE.md) for boundaries and migration details.
 
 ## Releases
 

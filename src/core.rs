@@ -26,7 +26,9 @@ mod mcp_runtime;
 mod runtime;
 pub(crate) use detached_requests::run_detached;
 use runtime::bridge_script;
-pub use runtime::{edit_daemon_script, node_executable, runtime_directory};
+pub use runtime::{
+    edit_daemon_script, node_executable, runtime_directory, set_host_runtime_directory,
+};
 
 pub const BRIDGE_PROTOCOL_VERSION: u64 = 1;
 const BRIDGE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);

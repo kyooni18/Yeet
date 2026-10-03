@@ -1,8 +1,0 @@
-FileBrowser
-
-# Show only filesystem capabilities actually exposed by the Rust core.
-VStack padding=12 spacing=8
-  WorkspacePath
-  FileCapabilityStatus
-  List grow=1 optional=true visible=browsingAvailable
-    FileRow

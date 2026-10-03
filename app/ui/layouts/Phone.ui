@@ -1,8 +1,0 @@
-Phone
-
-ZStack
-  VStack
-    NavigationBar
-    SessionView minWidth=0 grow=1
-  SessionList optional=true visible=sessionsOpen
-  ToolInspector optional=true visible=inspectorOpen

@@ -4,8 +4,6 @@
     "strict": true
   },
   "exclude": [
-    "node_modules",
-    "tests",
-    "playwright.config.*"
+    "node_modules"
   ]
 }

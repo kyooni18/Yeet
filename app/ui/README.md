@@ -1,7 +1,5 @@
-# UI layout specifications
+# UI design specifications
 
-Start with `ContentView.ui`. Edit meaningful regions here when asking an AI agent to change the design; the agent reads these files and updates normal frontend components. These files are never loaded by the application.
+The user will create the UI from scratch in OpenPencil. No layout is prescribed yet; ContentView.ui reserves the design entry point.
 
-Indentation describes containment. `VStack`, `HStack`, `ZStack`, `Scroll`, `List`, `Split`, `Group`, and `Spacer` describe simple layout intent. Names such as `SessionHeader` refer to meaningful implementation regions, not runtime tokens. Properties such as width, height, minWidth, maxWidth, grow, padding, spacing, align, visible, and optional are plain design notes. Visibility names describe intent; frontend code supplies the actual conditions. Platform thresholds, interaction details, accessibility and network behavior belong in implementation.
-
-Do not create files for every button or text primitive. No schema tooling, parser, code generator, or SwiftUI clone is needed.
+Once the user supplies or requests a design, describe meaningful regions with simple indentation-based layout notes. Agents read these files, inspect the implementation and update normal React Native components. These files are never loaded by the application. Do not create a parser, compiler, runtime renderer, or one file per primitive. Keep platform details in implementation code.

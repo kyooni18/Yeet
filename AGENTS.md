@@ -1,5 +1,7 @@
 # Yeet repository instructions
 
+Current scope is a blank native JavaScript frontend foundation. The user will create the UI in OpenPencil. Do not create screens, components, themes, navigation flows or proposed layouts until the user provides or requests the design.
+
 Read `app/ui/ContentView.ui` and the relevant `app/ui/**/*.ui` files before changing frontend implementation. These files are the source of truth for structure and layout. Inspect the existing implementation, then update normal components to match the specifications. Modify specifications only when the user asks for layout or design changes.
 
 The `.ui` notation is an AI-readable design document. Never add a parser, compiler, runtime interpreter, generic renderer, or primitive-per-file framework unless explicitly requested. Platform behavior, accessibility, endpoints, authentication, storage, and rendering details belong in implementation code. Preserve sensible native platform behavior.

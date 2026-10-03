@@ -1,8 +1,35 @@
 //! Locates the bundled JavaScript runtime and provider bridge executables.
 
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, sync::OnceLock};
 
 use anyhow::{Context, Result, bail};
+
+static HOST_RUNTIME_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+/// Selects packaged runtime assets for an embedding host without mutating the
+/// process environment. Set once during host startup, before creating a harness.
+/// An explicit YEET_RUNTIME_DIR remains authoritative.
+pub fn set_host_runtime_directory(path: impl Into<PathBuf>) -> Result<()> {
+    let path = path
+        .into()
+        .canonicalize()
+        .context("resolve host runtime directory")?;
+    if !path.join("dist/bridge.js").is_file() {
+        bail!(
+            "host runtime does not contain dist/bridge.js: {}",
+            path.display()
+        );
+    }
+    if let Some(previous) = HOST_RUNTIME_DIRECTORY.get() {
+        if previous != &path {
+            bail!("host runtime directory was already configured");
+        }
+        return Ok(());
+    }
+    HOST_RUNTIME_DIRECTORY
+        .set(path)
+        .map_err(|_| anyhow::anyhow!("host runtime directory was already configured"))
+}
 
 pub fn runtime_directory() -> Result<PathBuf> {
     if let Some(value) = env::var_os("YEET_RUNTIME_DIR") {
@@ -14,6 +41,9 @@ pub fn runtime_directory() -> Result<PathBuf> {
             "YEET_RUNTIME_DIR does not contain dist/bridge.js: {}",
             path.display()
         );
+    }
+    if let Some(path) = HOST_RUNTIME_DIRECTORY.get() {
+        return Ok(path.clone());
     }
     if let Ok(exe) = env::current_exe()
         && let Some(bin) = exe.parent()

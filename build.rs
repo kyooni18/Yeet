@@ -5,10 +5,26 @@ use std::{
 };
 
 fn main() -> io::Result<()> {
-    println!("cargo:rerun-if-changed=web/dist");
+    println!("cargo:rerun-if-env-changed=YEET_FRONTEND_DIST");
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let dist = manifest_dir.join("web/dist");
+    let dist = env::var_os("YEET_FRONTEND_DIST")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                manifest_dir.join(path)
+            }
+        })
+        .unwrap_or_else(|| manifest_dir.join("web/dist"));
+    println!("cargo:rerun-if-changed={}", dist.display());
+    if env::var_os("YEET_FRONTEND_DIST").is_some() && !dist.join("index.html").is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "YEET_FRONTEND_DIST must contain an exported index.html",
+        ));
+    }
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("remote_web_assets.rs");
     let mut files = Vec::new();
     if dist.is_dir() {
@@ -40,7 +56,8 @@ fn main() -> io::Result<()> {
         writeln!(generated, "    match path {{")?;
         for (relative, absolute) in files {
             let content_type = content_type(&relative);
-            let immutable = relative.starts_with("assets/");
+            let immutable =
+                relative.starts_with("assets/") || relative.starts_with("_expo/static/");
             writeln!(
                 generated,
                 "        {:?} => Some(EmbeddedWebAsset {{ bytes: include_bytes!({:?}), content_type: {:?}, immutable: {} }}),",

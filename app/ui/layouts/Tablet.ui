@@ -1,6 +1,0 @@
-Tablet
-
-HStack spacing=0
-  SessionList width=240 optional=true visible=sessionsOpen
-  SessionView minWidth=0 grow=1
-  ToolInspector width=280 optional=true visible=inspectorOpen

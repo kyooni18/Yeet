@@ -1,6 +1,0 @@
-Desktop
-
-HStack spacing=0
-  SessionList width=280
-  SessionView minWidth=360 grow=1
-  ToolInspector width=320 optional=true visible=inspectorOpen

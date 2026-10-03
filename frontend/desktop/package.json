@@ -1,0 +1,14 @@
+{
+  "name": "yeet-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "prepare:dev": "npm run prepare:runtime && npm --prefix ../react-native run web -- --port 8081",
+    "prepare:build": "npm run prepare:runtime && npm --prefix ../react-native run export:web",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check": "npm run prepare:runtime && cargo check --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": { "@tauri-apps/cli": "^2" }
+}

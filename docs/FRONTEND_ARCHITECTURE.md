@@ -1,23 +1,11 @@
-# Frontend architecture and migration
+# Frontend foundation
 
-`app/ui/ContentView.ui` is the design entry point. All `app/ui/**/*.ui` files describe human/AI-readable intent. Agents read them first and implement normal components; there is no runtime format, parser or renderer. Edit specifications when requesting design changes, then ask an agent to synchronize the implementation.
+The current scope is a native JavaScript UI foundation, with no actual UI implementation. The user will design the application from scratch in OpenPencil. Do not invent screens, visual components, a theme, navigation flows or layouts before the user supplies or requests the design.
 
-`frontend/react-native` is the primary Expo / React Native application for iOS, iPadOS, Android and web. `frontend/desktop` hosts its web export in Tauri 2 for macOS, Windows and Linux. `frontend/shared` contains reusable protocol/state/transport code, rather than a second backend. Rust remains in the existing root crate; moving it into crates/ would add churn without improving the boundary.
+`frontend/react-native` is an intentionally blank Expo / React Native app for iOS, iPadOS, Android and web. `App.tsx` exports ContentView; the Expo Router entry mounts it. `frontend/desktop` is the optional Tauri 2 host for its web export on macOS, Windows and Linux.
 
-The existing `web` application stays available during migration. Its production asset path `web/dist` remains the default until parity is verified. Existing release/install scripts continue to work. The new application is additive and does not remove the terminal UI or provider runtime.
+`app/ui/ContentView.ui` is reserved for the design specification. Future `.ui` files remain human/AI-readable design intent, without any parser, compiler, runtime interpreter or generic renderer. When a design is supplied, agents read the relevant specifications and implement normal components. Platform details remain in implementation code.
 
-## Boundaries
+`frontend/shared` reuses the existing Remote protocol, streaming store and transport logic. The blank app has an optional client adapter but no automatic connection or UI. Rust remains in the root crate and owns all business logic. Desktop uses the existing Harness through narrow commands/events, stages existing RuntimeSource resources, and requires Node for the provider bridge. No Yeet-MCP is used.
 
-Rust owns semantic state, sessions, tools, filesystem, providers, permissions and agent execution. Network clients use Remote JSON protocol v1; the desktop host wraps the existing Rust Harness directly. TypeScript manages presentation, subscriptions, drafts and platform interactions only.
-
-Keep snapshots, streaming reconciliation, sequence checks and reconnection in the shared client. Platform adapters own URL resolution, authentication/cookies, persistence, connectivity, timers, document picking, keyboard and clipboard behavior. Browser passkeys remain browser-specific. No filesystem browser should claim support until the core exposes browsing operations.
-
-## Migration checkpoints
-
-1. Establish layout specifications and repository agent rules.
-2. Extract reusable client contracts without changing legacy web behavior.
-3. Add Expo screens and native/web adapters, preserving semantic behavior.
-4. Add Tauri Harness integration and verify web export and host builds.
-5. Validate compatibility and document any platform validation limits before changing release defaults.
-
-Older project plans using SwiftUI/Compose as the primary UI stack are superseded by this Expo direction. Preserve native UX through platform adapters, rather than describing implementation details in `.ui` files.
+The existing `web` client and release/install workflows remain operational. `web/dist` remains the default embedded frontend; YEET_FRONTEND_DIST allows an explicit alternate export at build time. This is a foundation for later user-directed design implementation, not a replacement of the working UI.

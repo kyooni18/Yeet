@@ -1,7 +1,7 @@
 import type { BridgeState, FrontendCommand, RemoteServerMessage } from '../../../../shared/remote/protocol'
 import type { RemoteTransportEvents } from '../../../../shared/remote/transport'
 
-type CoreEvent = { type: string; state: BridgeState | null; message: string | null }
+type CoreEvent = { workspace?: string; type: string; state: BridgeState | null; message: string | null }
 type TauriBridge = {
   core: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> }
   event: { listen<T>(event: string, callback: (event: { payload: T }) => void): Promise<() => void> }
@@ -32,6 +32,7 @@ export class DesktopTransport {
       let initializing = true
       const buffered: CoreEvent[] = []
       const applyEvent = (event: CoreEvent) => {
+        if (event.workspace && event.workspace !== this.workspace) return
         if (event.state) this.snapshot(event.state)
         if (event.message && !event.state) this.events.onError(event.message)
       }
@@ -52,7 +53,12 @@ export class DesktopTransport {
       initializing = false
       for (const event of buffered) applyEvent(event)
       this.events.onOpen()
-    } catch (error) { this.events.onStatus('failed'); this.events.onError(String(error)) }
+    } catch (error) {
+      if (generation !== this.generation) return
+      this.connected = false
+      this.unsubscribe?.(); this.unsubscribe = null
+      this.events.onStatus('failed'); this.events.onError(String(error))
+    }
   }
   private snapshot(state: BridgeState): void {
     if (state.conversation != null) this.conversation = state.conversation

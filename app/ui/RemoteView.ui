@@ -1,8 +1,0 @@
-RemoteView
-
-VStack padding=24 spacing=16 align=center
-  ConnectionHeader
-  EndpointField
-  AuthenticationControls
-  ConnectionStatus
-  ConnectButton
