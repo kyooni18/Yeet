@@ -202,6 +202,8 @@ pub(super) fn is_inspection_tool(name: &str) -> bool {
             | "list_files"
             | "read_file"
             | "search_workspace"
+            | "outline"
+            | "find_symbol"
             | "web_search"
             | "web_read"
             | "read_document"

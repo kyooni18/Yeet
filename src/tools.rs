@@ -45,6 +45,7 @@ mod session_capabilities;
 mod shell_jobs;
 mod shell_runtime;
 mod support;
+mod symbol_tools;
 pub mod symbols;
 mod syntax_edit;
 mod token_efficiency;
@@ -682,6 +683,8 @@ impl ToolRegistry {
             // native directory and metadata inspection instead.
             "list_files" => self.list_files(&object),
             "search_workspace" => self.search_workspace(&object),
+            "outline" => self.outline_tool(&object),
+            "find_symbol" => self.find_symbol_tool(&object),
             "web_search" => self.web_search(&object, cancel),
             "web_read" => self.web_read(&object, cancel),
             "read_document" => self.read_document_tool(&object),

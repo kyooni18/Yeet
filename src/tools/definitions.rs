@@ -31,6 +31,12 @@ pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
         tools: &["search_workspace"],
     },
     BuiltinCapabilityDescriptor {
+        id: "builtin:code-symbols",
+        name: "Code Symbols",
+        description: "Navigate Rust/TypeScript/JavaScript code by declaration: outline lists a file's declarations with line numbers; find_symbol finds definitions and identifier references by exact name (best-effort, not type-aware).",
+        tools: &["outline", "find_symbol"],
+    },
+    BuiltinCapabilityDescriptor {
         id: "builtin:shell",
         name: "Shell",
         description: "Run commands with run_shell. In sandboxed mode, mutating or outside-project execution asks for approval; unlimited mode runs without sandbox restrictions. Builds/tests/noisy commands can use actor mode. Use run_shell background=true for detached work, then shell_job action=wait for event-driven completion or fixed-rate monitoring without model polling.",
@@ -108,6 +114,16 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
             "search_workspace",
             "Search text from the session cwd or another active context root. Matching is literal unless regex=true; narrow path when possible.",
             json!({"type":"object","properties":{"query":{"type":"string"},"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":100},"caseSensitive":{"type":"boolean"},"regex":{"type":"boolean"}},"required":["query"],"additionalProperties":false}),
+        ),
+        ToolDefinition::new(
+            "outline",
+            "List one Rust/TypeScript/JavaScript file's declarations (items and impl/class members) as line: signature, without bodies. Other languages return no symbols.",
+            json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
+        ),
+        ToolDefinition::new(
+            "find_symbol",
+            "Find definitions and references of one identifier across Rust/TypeScript/JavaScript sources under path (default: session cwd). Exact-name, syntax-based; same-named items in other modules are not distinguished.",
+            json!({"type":"object","properties":{"name":{"type":"string"},"path":{"type":"string"}},"required":["name"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "read_document",

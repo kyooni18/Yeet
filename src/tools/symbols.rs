@@ -208,7 +208,13 @@ fn field_text(node: Node<'_>, field: &str, source: &str) -> Option<String> {
 fn signature(node: Node<'_>, stop: Option<Node<'_>>, source: &str) -> String {
     let end = stop.map_or(node.end_byte(), |stop| stop.start_byte());
     let text = normalize_ws(source.get(node.start_byte()..end).unwrap_or_default());
-    let text = text.trim_end_matches(['=', '{', ';', ' ']).to_owned();
+    // Multi-line parameter lists normalize to "( a, b, )"; tidy them.
+    let text = text
+        .replace("( ", "(")
+        .replace(", )", ")")
+        .replace(" )", ")")
+        .trim_end_matches(['=', '{', ';', ' '])
+        .to_owned();
     if text.chars().count() <= MAX_SIGNATURE_CHARS {
         return text;
     }

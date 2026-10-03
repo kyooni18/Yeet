@@ -37,7 +37,7 @@ pub struct RepoMap {
 }
 
 /// A file's declarations and the identifier-like words it mentions.
-type FileSurface = (Arc<Vec<Symbol>>, Arc<HashSet<String>>);
+pub(super) type FileSurface = (Arc<Vec<Symbol>>, Arc<HashSet<String>>);
 
 struct ParsedFile {
     stamp: (u64, Option<SystemTime>),
@@ -59,7 +59,7 @@ pub fn build(root: &Path, token_budget: usize) -> Option<RepoMap> {
     let parsed: Vec<(String, FileSurface)> = files
         .into_iter()
         .filter_map(|relative| {
-            let surface = parse_cached(&root.join(&relative))?;
+            let surface = cached_surface(&root.join(&relative))?;
             Some((relative, surface))
         })
         .collect();
@@ -232,7 +232,7 @@ fn is_test_path(path: &str) -> bool {
     })
 }
 
-fn parse_cached(path: &Path) -> Option<FileSurface> {
+pub(super) fn cached_surface(path: &Path) -> Option<FileSurface> {
     let metadata = std::fs::metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
         return None;
@@ -269,7 +269,7 @@ fn parse_cached(path: &Path) -> Option<FileSurface> {
 /// Sorted workspace-relative paths of supported source files. Git's view
 /// (tracked plus untracked-but-not-ignored) is authoritative when available so
 /// .gitignore is respected; otherwise fall back to a bounded directory walk.
-fn source_files(root: &Path) -> Vec<String> {
+pub(super) fn source_files(root: &Path) -> Vec<String> {
     let mut files = git_files(root).unwrap_or_else(|| walk_files(root));
     files.retain(|path| symbols::supported(Path::new(path)));
     files.sort();

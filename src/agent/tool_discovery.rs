@@ -197,6 +197,31 @@ impl ToolDiscovery {
             self.enable_search();
         }
 
+        // Symbol navigation stays out of the default envelope. Attach it before
+        // the first attempt when the request is itself about locating code, so
+        // the tool list never changes mid-turn.
+        if [
+            "where is",
+            "where's",
+            "where are",
+            "defined",
+            "definition",
+            "references to",
+            "callers",
+            "call sites",
+            "who calls",
+            "usages",
+            "outline",
+            "find_symbol",
+            "정의",
+            "어디",
+        ]
+        .iter()
+        .any(|term| value.contains(term))
+        {
+            self.load(["outline", "find_symbol"]);
+        }
+
         let document_request = [
             "document",
             "pdf",

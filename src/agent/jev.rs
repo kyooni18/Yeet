@@ -437,6 +437,8 @@ fn builtin_read_only_tool(name: &str) -> bool {
             | "read_file"
             | "read_files"
             | "search_workspace"
+            | "outline"
+            | "find_symbol"
             | "web_search"
             | "web_read"
             | "read_document"

@@ -115,6 +115,8 @@ pub(super) fn tool_activity_title(name: &str) -> String {
         "read_file" | "read_files" => "Reading",
         "list_files" => "Scanning",
         "search_workspace" => "Searching",
+        "outline" => "Outlining",
+        "find_symbol" => "Finding symbol",
         "web_search" => "Searching web",
         "web_read" => "Reading web source",
         "read_artifact" => "Reading output",
