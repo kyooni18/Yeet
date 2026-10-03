@@ -8,6 +8,10 @@
 use super::*;
 
 const SMALL_TALK_MAX_WORDS: usize = 3;
+// A/B (3 runs per arm): on 3-4 file fixtures the map added ~2-4k uncached
+// tokens (+14-17% cost) because the first listing already shows everything;
+// on a 374-file repo cost fell ~11% (within noise). Small repos skip it.
+const MIN_SOURCE_FILES: usize = 25;
 
 pub(super) fn repo_map_overlay(
     history: &[Message],
@@ -22,6 +26,9 @@ pub(super) fn repo_map_overlay(
         std::path::Path::new(workspace_root),
         crate::tools::repo_map::DEFAULT_TOKEN_BUDGET,
     )?;
+    if map.source_files < MIN_SOURCE_FILES {
+        return None;
+    }
     unsent_overlay(history, map.text)
 }
 

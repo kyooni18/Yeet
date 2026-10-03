@@ -234,7 +234,11 @@ impl VerificationMonitor {
             }
             return Some(note.trim_end().to_owned());
         }
-        note.push_str(&format!("{} new errors", report.new_count));
+        note.push_str(&format!(
+            "{} new error{}",
+            report.new_count,
+            if report.new_count == 1 { "" } else { "s" }
+        ));
         if report.resolved > 0 || report.unchanged > 0 {
             note.push_str(&format!(
                 " ({} resolved, {} unchanged and not repeated)",
