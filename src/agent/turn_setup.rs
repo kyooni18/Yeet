@@ -266,6 +266,7 @@ impl AgentCoordinator {
         }
         if profile == TaskProfile::Agent
             && !local_file_lookup
+            && self.context_memory.policy.repo_map
             && let Some(repo_map) = repo_context::repo_map_overlay(
                 &self.history,
                 &workspace_root,

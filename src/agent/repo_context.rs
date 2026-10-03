@@ -10,7 +10,9 @@ use super::*;
 const SMALL_TALK_MAX_WORDS: usize = 3;
 // A/B (3 runs per arm): on 3-4 file fixtures the map added ~2-4k uncached
 // tokens (+14-17% cost) because the first listing already shows everything;
-// on a 374-file repo cost fell ~11% (within noise). Small repos skip it.
+// on a 374-file repo cost fell ~11% (within noise), and an identifier lookup
+// paid ~1.4k extra input tokens per model call for no fewer calls. The map is
+// therefore opt-in (context.repoMap), and small repos skip it even then.
 const MIN_SOURCE_FILES: usize = 25;
 
 pub(super) fn repo_map_overlay(

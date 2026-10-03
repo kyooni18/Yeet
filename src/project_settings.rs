@@ -91,6 +91,9 @@ pub struct ContextSettings {
     pub unknown_model_tokens: u64,
     pub warning_percent: u64,
     pub rollover_percent: u64,
+    /// Opt-in ranked repository outline overlay (.yeet/settings.json
+    /// `context.repoMap`). Off by default: three-run A/Bs showed no cost win.
+    pub repo_map: bool,
 }
 
 impl Default for ContextSettings {
@@ -100,6 +103,7 @@ impl Default for ContextSettings {
             unknown_model_tokens: 32_768,
             warning_percent: 70,
             rollover_percent: 90,
+            repo_map: false,
         }
     }
 }
