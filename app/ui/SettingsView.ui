@@ -1,0 +1,11 @@
+SettingsView
+
+VStack padding=16 spacing=16
+  SettingsHeader
+  Scroll grow=1
+    AppearanceSettings
+    ModelSettings
+    ProviderSettings
+    CapabilitySettings
+    MemorySettings
+    SandboxSettings

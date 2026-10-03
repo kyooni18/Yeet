@@ -1,0 +1,10 @@
+ContentView
+
+# Layout intent only. Connection/authentication gates the workbench.
+ZStack
+  RemoteView visible=connectionRequired
+  Group visible=authenticated
+    Desktop visible=desktop
+    Tablet visible=tablet
+    Phone visible=phone
+  SettingsView optional=true visible=settingsOpen

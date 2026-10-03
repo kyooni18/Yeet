@@ -1,0 +1,9 @@
+ToolInspector
+
+VStack padding=12 spacing=12
+  InspectorHeader
+  Scroll grow=1
+    AgentTasks optional=true
+    ToolActivityList
+    ToolResult optional=true
+  FileBrowser optional=true visible=filesOpen

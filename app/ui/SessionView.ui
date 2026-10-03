@@ -1,0 +1,8 @@
+SessionView
+
+VStack spacing=12
+  SessionHeader
+  ConnectionStatus
+  MessageList grow=1
+  PermissionPrompt optional=true visible=permissionPending
+  Composer

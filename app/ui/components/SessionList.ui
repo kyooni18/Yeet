@@ -1,0 +1,9 @@
+SessionList
+
+VStack padding=12 spacing=12
+  WorkspacePicker
+  SessionSearch
+  NewSessionButton
+  List grow=1
+    SessionRow
+  SettingsButton
