@@ -8,6 +8,7 @@ mod jev;
 mod job;
 mod limits;
 mod loop_budget;
+mod nested_instructions;
 mod phase;
 mod policy;
 mod progress;
@@ -1245,6 +1246,14 @@ impl AgentCoordinator {
                 },
                 rollover_budget.saturating_mul(3) as usize,
             );
+            let (session_cwd, _) = self.registry.session_environment();
+            let nested = nested_instructions::overlays_for_round(
+                &self.history,
+                &self.registry.workspace_root().to_string_lossy(),
+                &session_cwd,
+                &calls,
+            );
+            self.history.extend(nested);
             let verification_note = verification.after_round(
                 &mut self.registry,
                 &mut execution_evidence,
