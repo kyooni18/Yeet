@@ -114,7 +114,8 @@ fn collect_item(node: Node<'_>, source: &str, depth: u8, exported: bool, out: &m
     let body = node.child_by_field_name("body");
     let stop = match kind {
         // Data declarations keep their whole (truncated) text: fields are API.
-        "type_item" | "type_alias_declaration" | "const_item" | "static_item" => None,
+        "type_item" | "type_alias_declaration" => None,
+        "const_item" | "static_item" => node.child_by_field_name("value"),
         _ => body,
     };
     // Rust spells visibility explicitly; TypeScript members are public unless

@@ -144,7 +144,7 @@ pub(super) fn read_file_in_process(
     })
 }
 
-fn ignored_workspace_directory(name: &str) -> bool {
+pub(super) fn ignored_workspace_directory(name: &str) -> bool {
     WORKSPACE_IGNORED_DIRECTORIES.contains(&name)
 }
 

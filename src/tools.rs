@@ -39,6 +39,7 @@ mod editing;
 mod environment;
 mod io;
 mod paths;
+pub mod repo_map;
 mod service_backends;
 mod session_capabilities;
 mod shell_jobs;
