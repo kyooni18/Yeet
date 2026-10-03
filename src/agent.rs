@@ -19,6 +19,7 @@ mod tool_discovery;
 mod tool_protocol;
 mod turn_setup;
 mod turn_state;
+mod verify;
 use api::AgentTurnRequest;
 pub use api::{AgentEvent, AgentRunOutcome, AgentRunRequest};
 use cache::advance_turn_cache_breakpoints;
@@ -153,6 +154,7 @@ impl AgentCoordinator {
             mut last_context_updates,
             turn_start_pruned_request_only_messages,
             turn_start_pruned_request_only_chars,
+            mut verification,
         } = self.prepare_turn(request, goal_mode)?;
         let bridge = self.bridge.client()?;
         self.observation_cache.start_turn();
@@ -1243,6 +1245,20 @@ impl AgentCoordinator {
                 },
                 rollover_budget.saturating_mul(3) as usize,
             );
+            let verification_note = verification.after_round(
+                &mut self.registry,
+                &mut execution_evidence,
+                verify::RoundFacts {
+                    mutated: round_mutated,
+                    failed_mutation: round_failed_mutation,
+                    rollover: matches!(runaway_decision, RunawayDecision::Rollover(_)),
+                },
+                cancel,
+                emit,
+            );
+            if let Some(note) = verification_note {
+                self.history.push(Message::system(note).request_only());
+            }
             let analysis_threshold = turn_state::analysis_inspection_threshold(bounded_explanation);
             if let RunawayDecision::Rollover(message) = &runaway_decision {
                 self.context_memory.rollover_requested = true;

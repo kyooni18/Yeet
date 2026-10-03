@@ -30,6 +30,7 @@ use crate::{
 
 mod agent_deploy;
 mod artifact_output;
+mod auto_check;
 mod bridge_handle;
 mod capability_runtime;
 mod computer_use;

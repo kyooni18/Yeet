@@ -55,6 +55,7 @@ pub(super) struct TurnSetup<'a> {
     pub(super) last_context_updates: Vec<Message>,
     pub(super) turn_start_pruned_request_only_messages: usize,
     pub(super) turn_start_pruned_request_only_chars: usize,
+    pub(super) verification: verify::VerificationMonitor,
 }
 
 impl AgentCoordinator {
@@ -284,6 +285,17 @@ impl AgentCoordinator {
                 .request_only(),
             );
         }
+        let project_checks = verify::ProjectChecks::detect(std::path::Path::new(&workspace_root));
+        if profile == TaskProfile::Agent
+            && let Some(environment) = project_checks.describe()
+            && let Some(overlay) = repo_context::unsent_overlay(&self.history, environment)
+        {
+            turn_stable_overlays.push(overlay);
+        }
+        let verification = verify::VerificationMonitor::new(
+            project_checks,
+            profile == TaskProfile::Agent && !local_file_lookup && !planning_or_documentation,
+        );
         let turn_context_orientation = self.context_memory.orientation();
         let last_context_updates = Vec::new();
         if prior_context_requested && !local_file_lookup {
@@ -406,6 +418,7 @@ impl AgentCoordinator {
             last_context_updates,
             turn_start_pruned_request_only_messages,
             turn_start_pruned_request_only_chars,
+            verification,
         })
     }
 }

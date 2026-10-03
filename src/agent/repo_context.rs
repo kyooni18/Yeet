@@ -1,4 +1,4 @@
-//! Repository-map overlay for agent turns.
+//! Once-per-session overlays: the repository map and detected project checks.
 //!
 //! Stable overlays are re-appended on every user turn, so a large one would be
 //! paid uncached each turn. The map is attached only when a byte-identical copy
@@ -22,10 +22,16 @@ pub(super) fn repo_map_overlay(
         std::path::Path::new(workspace_root),
         crate::tools::repo_map::DEFAULT_TOKEN_BUDGET,
     )?;
+    unsent_overlay(history, map.text)
+}
+
+/// A request-only overlay for `text`, unless a byte-identical system message
+/// is already in the append-only history (and so still on the wire).
+pub(super) fn unsent_overlay(history: &[Message], text: String) -> Option<Message> {
     let already_sent = history.iter().any(|message| {
-        message.role == MessageRole::System && message.content.as_deref() == Some(&map.text)
+        message.role == MessageRole::System && message.content.as_deref() == Some(text.as_str())
     });
-    (!already_sent).then(|| Message::system(map.text).request_only())
+    (!already_sent).then(|| Message::system(text).request_only())
 }
 
 #[cfg(test)]
