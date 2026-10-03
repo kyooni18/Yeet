@@ -3,64 +3,33 @@ use super::theme;
 use ratatui::prelude::{Line, Modifier, Span, Style};
 
 pub(in crate::tui::ui) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
+    markdown_lines_fit(content, usize::MAX)
+}
+
+/// Like [`markdown_lines`], but code blocks are laid out as solid panels that
+/// never exceed `width` cells, so their background stays rectangular after
+/// the transcript wraps them.
+pub(in crate::tui::ui) fn markdown_lines_fit(content: &str, width: usize) -> Vec<Line<'static>> {
     // Preserve every source row so intentional Markdown line breaks survive in
     // the TUI instead of streamed reasoning collapsing into one paragraph.
     let source: Vec<&str> = content.split('\n').collect();
     let mut lines = Vec::new();
-    let mut code_fence: Option<(char, usize)> = None;
     let mut index = 0;
 
     while index < source.len() {
         let line = source[index];
 
-        if let Some((marker, minimum_len)) = code_fence {
-            if is_closing_fence(line, marker, minimum_len) {
-                lines.push(Line::from(Span::styled(
-                    "╰─",
-                    Style::default()
-                        .fg(theme::border_dim())
-                        .bg(theme::code_background()),
-                )));
-                code_fence = None;
-            } else {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "│ ",
-                        Style::default()
-                            .fg(theme::border_dim())
-                            .bg(theme::code_background()),
-                    ),
-                    Span::styled(
-                        line.to_owned(),
-                        Style::default()
-                            .fg(theme::text_dim())
-                            .bg(theme::code_background()),
-                    ),
-                ]));
-            }
-            index += 1;
-            continue;
-        }
-
         if let Some((marker, length, info)) = opening_fence(line) {
-            let label = fence_label(info);
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "╭─ ",
-                    Style::default()
-                        .fg(theme::border_dim())
-                        .bg(theme::code_background()),
-                ),
-                Span::styled(
-                    label,
-                    Style::default()
-                        .fg(theme::accent())
-                        .bg(theme::code_background())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            code_fence = Some((marker, length));
+            let indent = line.len() - line.trim_start().len();
             index += 1;
+            let body_start = index;
+            while index < source.len() && !is_closing_fence(source[index], marker, length) {
+                index += 1;
+            }
+            let body = &source[body_start..index];
+            // Skip the closing fence; an unfinished (streaming) block simply ends.
+            index += 1;
+            lines.extend(code_block_lines(indent, &fence_label(info), body, width));
             continue;
         }
 
@@ -159,6 +128,408 @@ fn is_closing_fence(line: &str, marker: char, minimum_len: usize) -> bool {
     let trimmed = line.trim();
     let length = trimmed.chars().take_while(|value| *value == marker).count();
     length >= minimum_len && trimmed.chars().skip(length).all(char::is_whitespace)
+}
+
+const CODE_PADDING: usize = 2;
+
+fn code_block_lines(
+    fence_indent: usize,
+    label: &str,
+    body: &[&str],
+    width: usize,
+) -> Vec<Line<'static>> {
+    let panel_style = Style::default().bg(theme::code_background());
+    let body: Vec<String> = body
+        .iter()
+        .map(|line| strip_indent(line, fence_indent).replace('\t', "    "))
+        .collect();
+
+    // Keep the panel nested under its list item while leaving room for code.
+    let indent = fence_indent.min(width.saturating_sub(12) / 2);
+    let available = width.saturating_sub(indent).max(1);
+    let padding = if available >= 16 { CODE_PADDING } else { 0 };
+    let natural = body
+        .iter()
+        .map(|line| cell_width(line))
+        .chain([cell_width(label)])
+        .max()
+        .unwrap_or(0)
+        + padding * 2;
+    let panel = natural.min(available);
+    let inner = panel.saturating_sub(padding * 2).max(1);
+
+    let row = |content: Vec<Span<'static>>, used: usize| {
+        let mut spans = Vec::with_capacity(content.len() + 3);
+        if indent > 0 {
+            spans.push(Span::raw(" ".repeat(indent)));
+        }
+        spans.push(Span::styled(" ".repeat(padding), panel_style));
+        spans.extend(content);
+        spans.push(Span::styled(
+            " ".repeat(panel.saturating_sub(padding + used)),
+            panel_style,
+        ));
+        Line::from(spans)
+    };
+
+    let mut lines = vec![row(
+        vec![Span::styled(
+            label.to_owned(),
+            panel_style
+                .fg(theme::muted())
+                .add_modifier(Modifier::ITALIC),
+        )],
+        cell_width(label).min(inner),
+    )];
+    let syntax = Syntax::for_label(label);
+    for line in &body {
+        for (content, used) in hard_wrap(highlight_code(line, &syntax, panel_style), inner) {
+            lines.push(row(content, used));
+        }
+    }
+    lines.push(row(Vec::new(), 0));
+    lines
+}
+
+fn strip_indent(line: &str, indent: usize) -> &str {
+    let removable = line
+        .bytes()
+        .take(indent)
+        .take_while(|byte| *byte == b' ')
+        .count();
+    &line[removable..]
+}
+
+fn cell_width(value: &str) -> usize {
+    Span::raw(value).width()
+}
+
+/// Splits styled spans into rows of at most `width` cells, returning each row
+/// with the cells it occupies so the caller can pad it to a solid panel.
+fn hard_wrap(spans: Vec<Span<'static>>, width: usize) -> Vec<(Vec<Span<'static>>, usize)> {
+    let mut rows = vec![(Vec::new(), 0usize)];
+    for span in spans {
+        let mut chunk = String::new();
+        for character in span.content.chars() {
+            let cells = cell_width(character.encode_utf8(&mut [0; 4]));
+            let (row, used) = rows.last_mut().expect("rows starts non-empty");
+            if *used + cells > width && *used > 0 {
+                if !chunk.is_empty() {
+                    row.push(Span::styled(std::mem::take(&mut chunk), span.style));
+                }
+                rows.push((Vec::new(), 0));
+            }
+            chunk.push(character);
+            rows.last_mut().expect("rows starts non-empty").1 += cells;
+        }
+        if !chunk.is_empty() {
+            rows.last_mut()
+                .expect("rows starts non-empty")
+                .0
+                .push(Span::styled(chunk, span.style));
+        }
+    }
+    rows
+}
+
+struct Syntax {
+    enabled: bool,
+    line_comments: &'static [&'static str],
+    single_quote_strings: bool,
+    backtick_strings: bool,
+    macros: bool,
+}
+
+impl Syntax {
+    fn for_label(label: &str) -> Self {
+        let label = label.to_ascii_lowercase();
+        let plain = matches!(
+            label.as_str(),
+            "code"
+                | "text"
+                | "txt"
+                | "plain"
+                | "plaintext"
+                | "output"
+                | "console"
+                | "log"
+                | "diff"
+                | "markdown"
+                | "md"
+        );
+        let hash = matches!(
+            label.as_str(),
+            "py" | "python"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "shell"
+                | "fish"
+                | "toml"
+                | "yaml"
+                | "yml"
+                | "rb"
+                | "ruby"
+                | "r"
+                | "perl"
+                | "make"
+                | "makefile"
+                | "dockerfile"
+                | "nix"
+                | "elixir"
+                | "ex"
+                | "conf"
+        );
+        let dash = matches!(label.as_str(), "sql" | "lua" | "haskell" | "hs" | "elm");
+        let rust = matches!(label.as_str(), "rust" | "rs");
+        Self {
+            enabled: !plain,
+            line_comments: if hash {
+                &["#"]
+            } else if dash {
+                &["--"]
+            } else {
+                &["//"]
+            },
+            single_quote_strings: !rust,
+            backtick_strings: matches!(
+                label.as_str(),
+                "js" | "javascript"
+                    | "jsx"
+                    | "ts"
+                    | "typescript"
+                    | "tsx"
+                    | "go"
+                    | "sh"
+                    | "bash"
+                    | "zsh"
+                    | "shell"
+            ),
+            macros: rust,
+        }
+    }
+}
+
+const KEYWORDS: &[&str] = &[
+    "as",
+    "async",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "crate",
+    "def",
+    "default",
+    "defer",
+    "del",
+    "do",
+    "elif",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "extern",
+    "false",
+    "final",
+    "finally",
+    "fn",
+    "for",
+    "from",
+    "func",
+    "function",
+    "go",
+    "guard",
+    "if",
+    "impl",
+    "import",
+    "in",
+    "interface",
+    "is",
+    "lambda",
+    "let",
+    "loop",
+    "match",
+    "mod",
+    "move",
+    "mut",
+    "new",
+    "nil",
+    "None",
+    "not",
+    "null",
+    "or",
+    "and",
+    "package",
+    "pass",
+    "private",
+    "protected",
+    "pub",
+    "public",
+    "raise",
+    "ref",
+    "return",
+    "self",
+    "Self",
+    "static",
+    "struct",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "throws",
+    "trait",
+    "true",
+    "True",
+    "False",
+    "try",
+    "type",
+    "typeof",
+    "unsafe",
+    "use",
+    "var",
+    "void",
+    "where",
+    "while",
+    "with",
+    "yield",
+    "then",
+    "fi",
+    "done",
+    "esac",
+    "local",
+    "echo",
+    "select",
+    "insert",
+    "update",
+    "delete",
+    "into",
+    "values",
+    "end",
+    "struct",
+    "protocol",
+    "extension",
+    "init",
+    "override",
+    "some",
+    "any",
+];
+
+fn highlight_code(line: &str, syntax: &Syntax, panel: Style) -> Vec<Span<'static>> {
+    let plain = panel.fg(theme::text());
+    if !syntax.enabled {
+        return if line.is_empty() {
+            Vec::new()
+        } else {
+            vec![Span::styled(line.to_owned(), plain)]
+        };
+    }
+
+    let keyword = panel.fg(theme::accent_hot());
+    let string = panel.fg(theme::success());
+    let number = panel.fg(theme::accent_warm());
+    let comment = panel.fg(theme::muted()).add_modifier(Modifier::ITALIC);
+    let function = panel.fg(theme::accent());
+    let type_name = panel.fg(theme::warning());
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut push = |text: &str, style: Style| {
+        if text.is_empty() {
+            return;
+        }
+        match spans.last_mut() {
+            Some(last) if last.style == style => last.content.to_mut().push_str(text),
+            _ => spans.push(Span::styled(text.to_owned(), style)),
+        }
+    };
+
+    let bytes = line.as_bytes();
+    let mut cursor = 0;
+    while cursor < line.len() {
+        let rest = &line[cursor..];
+        let previous_is_word = line[..cursor]
+            .chars()
+            .next_back()
+            .is_some_and(|value| value.is_alphanumeric() || value == '_');
+
+        if syntax
+            .line_comments
+            .iter()
+            .any(|marker| rest.starts_with(marker))
+            && !(rest.starts_with('#') && previous_is_word)
+            && !rest.starts_with("#[")
+            && !rest.starts_with("#!")
+        {
+            push(rest, comment);
+            break;
+        }
+
+        let quote = bytes[cursor];
+        let is_string_quote = quote == b'"'
+            || (quote == b'\'' && syntax.single_quote_strings)
+            || (quote == b'`' && syntax.backtick_strings);
+        // Rust char literals such as 'a' or '\n', without catching lifetimes.
+        let rust_char = quote == b'\''
+            && !syntax.single_quote_strings
+            && (rest.get(2..3) == Some("'")
+                || (rest.get(1..2) == Some("\\") && rest.get(3..4) == Some("'")));
+        if is_string_quote || rust_char {
+            let mut end = cursor + 1;
+            while end < line.len() {
+                match bytes[end] {
+                    b'\\' => end += 2,
+                    value if value == quote => {
+                        end += 1;
+                        break;
+                    }
+                    _ => end += 1,
+                }
+            }
+            let end = end.min(line.len());
+            push(&line[cursor..end], string);
+            cursor = end;
+            continue;
+        }
+
+        let first = rest.chars().next().unwrap_or(' ');
+        if first.is_ascii_digit() && !previous_is_word {
+            let length = rest
+                .find(|value: char| {
+                    !(value.is_ascii_alphanumeric() || value == '_' || value == '.')
+                })
+                .unwrap_or(rest.len());
+            push(&rest[..length], number);
+            cursor += length;
+            continue;
+        }
+
+        if first.is_alphabetic() || first == '_' {
+            let length = rest
+                .find(|value: char| !(value.is_alphanumeric() || value == '_'))
+                .unwrap_or(rest.len());
+            let word = &rest[..length];
+            let after = rest[length..].chars().next();
+            let style = if KEYWORDS.contains(&word) {
+                keyword
+            } else if after == Some('(') || (syntax.macros && after == Some('!')) {
+                function
+            } else if first.is_uppercase() {
+                type_name
+            } else {
+                plain
+            };
+            push(word, style);
+            cursor += length;
+            continue;
+        }
+
+        let length = first.len_utf8();
+        push(&rest[..length], plain);
+        cursor += length;
+    }
+    spans
 }
 
 fn atx_heading(line: &str) -> Option<(usize, &str)> {
@@ -479,27 +850,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fenced_code_renders_as_a_labeled_terminal_panel() {
-        let lines = markdown_lines("~~~rust\nlet value = 42;\n~~~");
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0].to_string(), "╭─ rust");
-        assert_eq!(lines[1].to_string(), "│ let value = 42;");
-        assert_eq!(lines[2].to_string(), "╰─");
+    fn fenced_code_renders_as_a_solid_panel_nested_under_its_list_item() {
+        let source = "- Tuple struct:\n  ```rust\n  let p = Point(3, 4);\n  let long_name = 1;\n  ```\nafter";
+        let lines = markdown_lines_fit(source, 40);
+        let panel: Vec<String> = lines[1..5].iter().map(|line| line.to_string()).collect();
+        assert_eq!(panel[0].trim_end(), "    rust");
+        assert_eq!(panel[1].trim_end(), "    let p = Point(3, 4);");
+        // Every panel row is padded to the same width so the background is a rectangle.
+        assert!(
+            panel
+                .iter()
+                .all(|row| cell_width(row) == cell_width(&panel[0]))
+        );
+        assert_eq!(lines[5].to_string(), "after");
+    }
+
+    #[test]
+    fn long_code_lines_wrap_inside_the_panel_and_unfinished_fences_stream() {
+        let lines = markdown_lines_fit(
+            "~~~{.swift}\n**not markdown yet** and a fairly long tail",
+            24,
+        );
+        assert!(lines.iter().all(|line| line.width() <= 24));
+        assert!(lines[1].to_string().contains("**not markdown"));
         assert!(
             lines
                 .iter()
                 .flat_map(|line| line.spans.iter())
-                .all(|span| { span.style.bg == Some(theme::code_background()) })
+                .all(|span| span.style.bg == Some(theme::code_background()))
         );
-        assert_eq!(lines[0].spans[1].style.fg, Some(theme::accent()));
-    }
-
-    #[test]
-    fn unfinished_fence_preserves_streaming_code_without_fake_closure() {
-        let lines = markdown_lines("~~~{.swift}\n**not markdown yet**");
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].to_string(), "╭─ swift");
-        assert_eq!(lines[1].to_string(), "│ **not markdown yet**");
     }
 
     #[test]

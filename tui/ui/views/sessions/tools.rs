@@ -982,7 +982,10 @@ pub(super) fn work_group_lines_selected(
                 spans.push(Span::styled(chevron, muted));
                 lines.push(Line::from(spans));
                 if expanded {
-                    for line in session_markdown_lines(&text.replace("****", "**\n\n**")) {
+                    for line in session_markdown_lines(
+                        &text.replace("****", "**\n\n**"),
+                        width.saturating_sub(5),
+                    ) {
                         lines.extend(prefixed_wrapped_line(
                             Span::styled(" │   ", rail),
                             line.style(muted),

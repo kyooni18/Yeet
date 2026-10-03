@@ -4,7 +4,7 @@ pub(in crate::tui::ui) mod tools;
 use super::super::{
     shell,
     support::{
-        markdown::markdown_lines,
+        markdown::markdown_lines_fit,
         responsive,
         text::{format_elapsed, prefixed_wrapped_line, truncate_end, truncate_middle},
         theme,
@@ -605,7 +605,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                 content
             };
             let mut lines = Vec::new();
-            for line in session_markdown_lines(content) {
+            for line in session_markdown_lines(content, usize::from(width)) {
                 lines.extend(prefixed_wrapped_line(Span::raw(""), line, width));
             }
             let items = tool_calls.iter().map(WorkItem::Tool).collect::<Vec<_>>();
@@ -637,7 +637,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
                     Style::default().fg(theme::muted()),
                 ),
             ])];
-            lines.extend(markdown_lines(content));
+            lines.extend(markdown_lines_fit(content, usize::from(width)));
             lines
         }
         ConversationKind::Mcp {
@@ -670,8 +670,8 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
     }
 }
 
-fn session_markdown_lines(content: &str) -> Vec<Line<'static>> {
-    let mut lines = markdown_lines(content);
+fn session_markdown_lines(content: &str, width: usize) -> Vec<Line<'static>> {
+    let mut lines = markdown_lines_fit(content, width);
     for line in &mut lines {
         for span in &mut line.spans {
             if span.style.bg == Some(theme::code_background()) {
