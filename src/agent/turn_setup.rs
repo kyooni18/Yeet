@@ -263,6 +263,17 @@ impl AgentCoordinator {
         if let Some(project_instructions) = load_project_instructions(&workspace_root) {
             turn_stable_overlays.push(Message::system(project_instructions).request_only());
         }
+        if profile == TaskProfile::Agent
+            && !local_file_lookup
+            && let Some(repo_map) = repo_context::repo_map_overlay(
+                &self.history,
+                &workspace_root,
+                input,
+                implementation_requested || looks_like_coding_request(input),
+            )
+        {
+            turn_stable_overlays.push(repo_map);
+        }
         let (session_cwd, context_roots) = self.registry.session_environment();
         if session_cwd != workspace_root || context_roots.len() > 1 {
             turn_stable_overlays.push(

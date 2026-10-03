@@ -11,6 +11,7 @@ mod loop_budget;
 mod phase;
 mod policy;
 mod progress;
+mod repo_context;
 mod runaway;
 mod session;
 mod session_controls;
