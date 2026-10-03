@@ -97,7 +97,8 @@ pub(super) struct VerificationMonitor {
     previous_errors: Option<BTreeSet<String>>,
 }
 
-pub(super) struct RoundFacts {
+pub(super) struct RoundFacts<'a> {
+    pub calls: &'a [ToolCall],
     pub mutated: bool,
     pub failed_mutation: bool,
     pub rollover: bool,
@@ -120,7 +121,7 @@ impl VerificationMonitor {
         &mut self,
         registry: &mut ToolRegistry,
         evidence: &mut turn_state::TurnExecutionEvidence,
-        round: RoundFacts,
+        round: RoundFacts<'_>,
         cancel: &AtomicBool,
         emit: &mut F,
     ) -> Option<String>
@@ -259,6 +260,35 @@ impl VerificationMonitor {
     }
 }
 
+impl AgentCoordinator {
+    /// End-of-round runtime feedback: nested directory instructions for the
+    /// paths this round touched, then the verification note, both request-only.
+    pub(super) fn append_round_feedback<F>(
+        &mut self,
+        verification: &mut VerificationMonitor,
+        evidence: &mut turn_state::TurnExecutionEvidence,
+        round: RoundFacts<'_>,
+        cancel: &AtomicBool,
+        emit: &mut F,
+    ) where
+        F: FnMut(AgentEvent),
+    {
+        let (session_cwd, _) = self.registry.session_environment();
+        let nested = nested_instructions::overlays_for_round(
+            &self.history,
+            &self.registry.workspace_root().to_string_lossy(),
+            &session_cwd,
+            round.calls,
+        );
+        self.history.extend(nested);
+        if let Some(note) =
+            verification.after_round(&mut self.registry, evidence, round, cancel, emit)
+        {
+            self.history.push(Message::system(note).request_only());
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ErrorReport {
     current: BTreeSet<String>,
@@ -373,6 +403,7 @@ mod tests {
                 &mut registry,
                 &mut evidence,
                 RoundFacts {
+                    calls: &[],
                     mutated,
                     failed_mutation: false,
                     rollover: false,

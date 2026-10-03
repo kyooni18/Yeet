@@ -1246,28 +1246,19 @@ impl AgentCoordinator {
                 },
                 rollover_budget.saturating_mul(3) as usize,
             );
-            let (session_cwd, _) = self.registry.session_environment();
-            let nested = nested_instructions::overlays_for_round(
-                &self.history,
-                &self.registry.workspace_root().to_string_lossy(),
-                &session_cwd,
-                &calls,
-            );
-            self.history.extend(nested);
-            let verification_note = verification.after_round(
-                &mut self.registry,
+            let round = verify::RoundFacts {
+                calls: &calls,
+                mutated: round_mutated,
+                failed_mutation: round_failed_mutation,
+                rollover: matches!(runaway_decision, RunawayDecision::Rollover(_)),
+            };
+            self.append_round_feedback(
+                &mut verification,
                 &mut execution_evidence,
-                verify::RoundFacts {
-                    mutated: round_mutated,
-                    failed_mutation: round_failed_mutation,
-                    rollover: matches!(runaway_decision, RunawayDecision::Rollover(_)),
-                },
+                round,
                 cancel,
                 emit,
             );
-            if let Some(note) = verification_note {
-                self.history.push(Message::system(note).request_only());
-            }
             let analysis_threshold = turn_state::analysis_inspection_threshold(bounded_explanation);
             if let RunawayDecision::Rollover(message) = &runaway_decision {
                 self.context_memory.rollover_requested = true;
