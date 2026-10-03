@@ -131,6 +131,9 @@ fn is_closing_fence(line: &str, marker: char, minimum_len: usize) -> bool {
 }
 
 const CODE_PADDING: usize = 2;
+// NBSP: ratatui wraps a full-width row ending in plain spaces into two rows,
+// which splits the panel background.
+const PANEL_SPACE: &str = "\u{a0}";
 
 fn code_block_lines(
     fence_indent: usize,
@@ -163,10 +166,10 @@ fn code_block_lines(
         if indent > 0 {
             spans.push(Span::raw(" ".repeat(indent)));
         }
-        spans.push(Span::styled(" ".repeat(padding), panel_style));
+        spans.push(Span::styled(PANEL_SPACE.repeat(padding), panel_style));
         spans.extend(content);
         spans.push(Span::styled(
-            " ".repeat(panel.saturating_sub(padding + used)),
+            PANEL_SPACE.repeat(panel.saturating_sub(padding + used)),
             panel_style,
         ));
         Line::from(spans)
@@ -853,7 +856,10 @@ mod tests {
     fn fenced_code_renders_as_a_solid_panel_nested_under_its_list_item() {
         let source = "- Tuple struct:\n  ```rust\n  let p = Point(3, 4);\n  let long_name = 1;\n  ```\nafter";
         let lines = markdown_lines_fit(source, 40);
-        let panel: Vec<String> = lines[1..5].iter().map(|line| line.to_string()).collect();
+        let panel: Vec<String> = lines[1..5]
+            .iter()
+            .map(|line| line.to_string().replace(PANEL_SPACE, " "))
+            .collect();
         assert_eq!(panel[0].trim_end(), "    rust");
         assert_eq!(panel[1].trim_end(), "    let p = Point(3, 4);");
         // Every panel row is padded to the same width so the background is a rectangle.
