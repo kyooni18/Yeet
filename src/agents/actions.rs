@@ -3,7 +3,7 @@
 //! Independent of Skyline deployment and orchestration. Adapters interpret
 //! these intents; this module never renders UI or starts a Skyline service.
 
-use crate::model::{AgentMode, AutonomyMode, SandboxAction};
+use crate::model::{AgentMode, AutonomyMode, SandboxAction, SwarmSettings};
 use serde::{Deserialize, Serialize};
 
 /// Stable navigation intents shared by keyboard, mouse and other frontends.
@@ -135,6 +135,9 @@ pub enum FrontendCommand {
     },
     SetJevLoopMode {
         mode: String,
+    },
+    SetSwarmSettings {
+        settings: SwarmSettings,
     },
     SetOpenAiFlex {
         enabled: bool,

@@ -50,6 +50,11 @@ impl AgentGroupHandle {
         TOOL_NAMES
     }
 
+    /// Auto-deploy guidance for the primary agent's turn, if enabled.
+    pub(crate) fn deploy_guidance(&self) -> Option<String> {
+        self.runtime.deploy_guidance()
+    }
+
     /// Records the coordinator that delegates into this group.
     pub(crate) fn bind_primary_agent(&self, id: AgentId) {
         self.runtime.bind_primary_agent(id);

@@ -190,7 +190,13 @@ impl BackendService {
             coordinator.set_agent_group(None);
             let _ = coordinator.restore_session_environment(None, &[]);
         }
-        self.publish_state();
+        let auto_deploy = self
+            .config
+            .swarm_settings()
+            .is_ok_and(|swarm| swarm.auto_deploy);
+        if !(auto_deploy && self.set_agent_mode(AgentMode::Adaptive).is_ok()) {
+            self.publish_state();
+        }
     }
 
     /// Compacts coordinator history and records the transition in the transcript.

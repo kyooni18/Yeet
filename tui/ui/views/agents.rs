@@ -192,8 +192,10 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             !group_selected && app.agents.selected.as_deref() == Some(member.id.as_str()),
         ));
     }
-    // Rows sit between the Add button and the bottom action row.
-    let last = area.bottom().saturating_sub(4);
+    // Rows sit between the Add button and the swarm/action rows.
+    let last = area
+        .bottom()
+        .saturating_sub(if area.height >= 10 { 5 } else { 4 });
     for (index, (id, line, selected)) in rows.into_iter().enumerate() {
         let y = area.y + 3 + index as u16;
         if y >= last {
@@ -227,6 +229,26 @@ fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         ),
     };
     let y = area.bottom().saturating_sub(2);
+    if area.height >= 10 {
+        let swarm = Rect::new(area.x + 2, y - 2, area.width.saturating_sub(4), 1);
+        let settings = &app.state.runtime_settings.swarm;
+        let label = match (app.swarm_enabled(), settings.auto_deploy) {
+            (false, _) => "⚙ Swarm off".to_owned(),
+            (true, auto) => format!(
+                "⚙ Swarm {}×{}",
+                settings.max_concurrent,
+                if auto { " auto" } else { "" }
+            ),
+        };
+        let label = fit(&label, swarm.width as usize);
+        let style = if app.swarm_enabled() {
+            Style::default().fg(theme::accent())
+        } else {
+            muted()
+        };
+        frame.render_widget(Paragraph::new(label).style(style), swarm);
+        app.agents.targets.push((swarm, AgentAction::Swarm));
+    }
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize))
             .style(Style::default().fg(theme::hairline())),

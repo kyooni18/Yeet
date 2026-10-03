@@ -17,6 +17,7 @@ pub mod keymap;
 mod selection;
 mod settings;
 mod sidebar;
+pub mod swarm;
 #[cfg(test)]
 mod tests;
 pub use selection::TranscriptContextMenu;
@@ -54,6 +55,7 @@ pub enum Mode {
     Files,
     Diff,
     Agents,
+    Swarm,
     Views,
 }
 
@@ -559,6 +561,12 @@ impl App {
                 self.handle_views_key(event);
                 Ok(())
             }
+            Mode::Swarm => {
+                for command in self.handle_swarm_key(event) {
+                    backend.send(command)?;
+                }
+                Ok(())
+            }
             Mode::Chat => self.handle_chat_key(event, backend),
             Mode::Models => self.handle_model_key(event, backend),
             Mode::Reasoning => self.handle_reasoning_key(event, backend),
@@ -990,6 +998,10 @@ impl App {
                     "/model" => self.open_models(backend)?,
                     "/reasoning" => self.open_reasoning(),
                     "/goal" => self.open_goal(),
+                    "/swarm" => {
+                        let command = self.open_swarm();
+                        backend.send(command)?;
+                    }
                     "/sessions" => self.open_sessions(backend)?,
                     "/files" => self.open_files(),
                     "/views" => self.open_views(),
@@ -1625,6 +1637,7 @@ impl App {
             Mode::Models => self.filtered_models().len(),
             Mode::Reasoning => reasoning_levels_for_model(&self.state.active_model).len(),
             Mode::Goal => 2,
+            Mode::Swarm => swarm::SWARM_ROWS.len(),
             Mode::Sessions => self.filtered_session_picker_items().len() + 1,
             Mode::Capabilities => self.filtered_capabilities().len(),
             Mode::Auth => self.state.auth_providers.len(),
@@ -1701,6 +1714,10 @@ const COMMANDS: &[(&str, &str)] = &[
     (
         "/goal",
         "Continue until a strict success judge accepts concrete evidence",
+    ),
+    (
+        "/swarm",
+        "Agent swarm: parallel agents, budgets, auto-deploy",
     ),
     ("/attach", "Attach an optional capability"),
     ("/detach", "Detach an optional capability"),

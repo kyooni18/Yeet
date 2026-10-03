@@ -59,6 +59,7 @@ fn draw_auxiliary(frame: &mut Frame<'_>, app: &mut App) {
         Mode::Models => draw_models(frame, app),
         Mode::Reasoning => draw_reasoning(frame, app),
         Mode::Goal => draw_goal(frame, app),
+        Mode::Swarm => dialogs::draw_swarm(frame, app),
         Mode::Sessions => draw_sessions(frame, app),
         Mode::Capabilities => draw_capabilities(frame, app),
         Mode::CapabilityDetail => draw_capability_detail(frame, app),

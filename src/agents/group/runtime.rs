@@ -42,7 +42,7 @@ pub(crate) type ChangeListener = Arc<dyn Fn(Vec<AgentTaskItem>, AgentGroupItem) 
 pub(super) struct GroupShared {
     state: Mutex<GroupRuntimeState>,
     signal: Condvar,
-    pub limits: AgentLimits,
+    limits: Mutex<AgentLimits>,
     listener: Mutex<Option<ChangeListener>>,
 }
 
@@ -51,6 +51,13 @@ impl GroupShared {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(super) fn limits(&self) -> AgentLimits {
+        self.limits
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub(super) fn wait<'a>(
@@ -99,7 +106,7 @@ impl AgentGroupRuntime {
             shared: Arc::new(GroupShared {
                 state: Mutex::new(GroupRuntimeState::new(0, None)),
                 signal: Condvar::new(),
-                limits,
+                limits: Mutex::new(limits),
                 listener: Mutex::new(None),
             }),
             spawn_lock: Arc::new(Mutex::new(())),
@@ -112,6 +119,20 @@ impl AgentGroupRuntime {
             .listener
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(listener);
+    }
+
+    /// Applies new limits to later admissions; running work is not cut short.
+    pub(crate) fn set_limits(&self, limits: AgentLimits) {
+        *self
+            .shared
+            .limits
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = limits;
+        self.shared.changed();
+    }
+
+    pub(crate) fn deploy_guidance(&self) -> Option<String> {
+        self.shared.limits().deploy_guidance()
     }
 
     pub(crate) fn bind_primary_agent(&self, id: AgentId) {
@@ -156,7 +177,7 @@ impl AgentGroupRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (generation, parent, retire) = {
             let state = self.shared.lock();
-            let retire = scheduler::admit_spawn(&self.shared.limits, &state.group, request.role)?;
+            let retire = scheduler::admit_spawn(&self.shared.limits(), &state.group, request.role)?;
             (state.group.generation, state.group.primary_agent, retire)
         };
         if let Some(idle) = retire {
@@ -240,7 +261,7 @@ impl AgentGroupRuntime {
                 .member(to)
                 .ok_or_else(|| anyhow!("unknown agent: {to}"))?
                 .clone();
-            scheduler::admit_message(&self.shared.limits, &state.group, &member)?;
+            scheduler::admit_message(&self.shared.limits(), &state.group, &member)?;
             if !state.slots.contains_key(&to) {
                 bail!("agent {to} is no longer running");
             }

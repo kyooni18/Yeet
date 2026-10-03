@@ -319,6 +319,16 @@ impl BackendService {
         self.finish_runtime_setting(result, &active_model, "Jev loop policy updated.");
     }
 
+    /// Saves swarm settings and applies them to the live agent group.
+    pub(super) fn set_swarm_settings(&self, settings: crate::model::SwarmSettings) {
+        let result = self.config.set_swarm_settings(settings).map(|settings| {
+            self.agent_groups
+                .set_limits(crate::agents::group::AgentLimits::from(&settings));
+        });
+        let active_model = self.shared.lock_or_recover().state.active_model.clone();
+        self.finish_runtime_setting(result, &active_model, "Agent swarm settings updated.");
+    }
+
     fn finish_runtime_setting(&self, result: Result<()>, active_model: &str, success: &str) {
         let refresh = result.and_then(|()| runtime_settings_state(&self.config, active_model));
         {

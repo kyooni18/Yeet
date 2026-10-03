@@ -225,7 +225,7 @@ fn record_usage(shared: &GroupShared, generation: u64, task_id: AgentTaskId, usa
     if let Some(task) = state.group.task_mut(task_id) {
         task.usage.accumulate(usage);
     }
-    if shared.limits.budget_exhausted(&state.group.window_usage) {
+    if shared.limits().budget_exhausted(&state.group.window_usage) {
         for slot in state.slots.values() {
             if let Some((_, cancel)) = &slot.running {
                 cancel.store(true, Ordering::Release);

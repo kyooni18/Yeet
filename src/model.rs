@@ -334,6 +334,7 @@ pub struct RuntimeSettingsState {
     pub theme_light_warning: Option<String>,
     pub context_length_override: Option<u64>,
     pub jev_loop_mode: String,
+    pub swarm: SwarmSettings,
 }
 
 impl Default for RuntimeSettingsState {
@@ -351,6 +352,66 @@ impl Default for RuntimeSettingsState {
             theme_light_warning: None,
             context_length_override: None,
             jev_loop_mode: "off".into(),
+            swarm: SwarmSettings::default(),
+        }
+    }
+}
+
+/// User-tunable limits and behavior for the agent swarm (Agent Group).
+/// Persisted globally; whether a session runs a swarm is its `AgentMode`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SwarmSettings {
+    /// The primary agent fans parallelizable work out to background agents
+    /// without being asked, and new sessions start with the swarm on.
+    pub auto_deploy: bool,
+    /// Agents that may work at once.
+    pub max_concurrent: u32,
+    /// Agents kept alive, idle ones included.
+    pub max_members: u32,
+    /// Delegated-agent token budget per primary turn.
+    pub max_tokens: u64,
+    /// Delegated-agent cost budget per primary turn, in US cents.
+    pub max_cost_cents: u64,
+    /// `single_writer` or `primary_only`.
+    pub write_policy: String,
+}
+
+impl SwarmSettings {
+    pub const MAX_CONCURRENT: u32 = 16;
+    pub const MAX_MEMBERS: u32 = 32;
+    pub const MIN_TOKENS: u64 = 10_000;
+    pub const MAX_TOKENS: u64 = 10_000_000;
+    pub const MIN_COST_CENTS: u64 = 10;
+    pub const MAX_COST_CENTS: u64 = 100_000;
+
+    /// Clamps every field into range; the pool never holds fewer agents than
+    /// may run at once.
+    pub fn normalized(mut self) -> Self {
+        self.max_concurrent = self.max_concurrent.clamp(1, Self::MAX_CONCURRENT);
+        self.max_members = self
+            .max_members
+            .clamp(self.max_concurrent, Self::MAX_MEMBERS);
+        self.max_tokens = self.max_tokens.clamp(Self::MIN_TOKENS, Self::MAX_TOKENS);
+        self.max_cost_cents = self
+            .max_cost_cents
+            .clamp(Self::MIN_COST_CENTS, Self::MAX_COST_CENTS);
+        if self.write_policy != "primary_only" {
+            self.write_policy = "single_writer".into();
+        }
+        self
+    }
+}
+
+impl Default for SwarmSettings {
+    fn default() -> Self {
+        Self {
+            auto_deploy: false,
+            max_concurrent: 4,
+            max_members: 8,
+            max_tokens: 200_000,
+            max_cost_cents: 200,
+            write_policy: "single_writer".into(),
         }
     }
 }

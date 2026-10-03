@@ -12,7 +12,10 @@ use crate::{
 mod navigation;
 #[path = "status.rs"]
 mod status;
+#[path = "swarm.rs"]
+mod swarm;
 pub(crate) use status::draw_status_dialog;
+pub(crate) use swarm::draw_swarm;
 
 pub(super) use navigation::{draw_goal, draw_models, draw_reasoning, draw_sessions};
 
@@ -421,6 +424,11 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
         "Jev loop policy",
         runtime.jev_loop_mode.clone(),
         "Enter cycles off → shadow → enforce",
+    );
+    row(
+        "Agent swarm",
+        app.swarm_summary(),
+        "parallel agents, budgets, auto-deploy",
     );
     let sandbox_value = app
         .state

@@ -351,6 +351,12 @@ impl ToolRegistry {
         self.permission_label = Some(label);
     }
 
+    pub(crate) fn agent_deploy_guidance(&self) -> Option<String> {
+        self.agent_group
+            .as_ref()
+            .and_then(AgentGroupHandle::deploy_guidance)
+    }
+
     pub(crate) fn agent_orchestration_enabled(&self) -> bool {
         self.agent_group.is_some()
     }

@@ -200,10 +200,17 @@ impl BackendService {
             store.clone(),
         );
         let run_manager = RunManager::default();
+        let swarm = config.swarm_settings().unwrap_or_default();
         let agent_groups =
-            AgentGroupSupervisor::new(runtime_factory.clone(), AgentLimits::default());
+            AgentGroupSupervisor::new(runtime_factory.clone(), AgentLimits::from(&swarm));
         let coordinator = Arc::new(Mutex::new(runtime_factory.build(None)?));
         let mut session = SharedSession::new(model, reasoning_level);
+        if swarm.auto_deploy {
+            session.state.agent_mode = AgentMode::Adaptive;
+            coordinator
+                .lock_or_recover()
+                .set_agent_group(Some(agent_groups.handle()));
+        }
         session.meta.working_directory = Some(workspace_root.display().to_string());
         session.meta.context_roots = vec![workspace_root.display().to_string()];
         if let Ok(catalog) = config.model_catalog_cache() {
@@ -430,6 +437,10 @@ impl BackendService {
                 self.set_jev_loop_mode(mode);
                 Ok(())
             }
+            FrontendCommand::SetSwarmSettings { settings } => {
+                self.set_swarm_settings(settings);
+                Ok(())
+            }
             FrontendCommand::SetOpenAiFlex { enabled } => {
                 self.set_openai_flex(enabled);
                 Ok(())
@@ -578,7 +589,7 @@ impl BackendService {
         Ok(())
     }
 
-    fn set_agent_mode(&mut self, mode: AgentMode) -> Result<()> {
+    pub(super) fn set_agent_mode(&mut self, mode: AgentMode) -> Result<()> {
         if self.shared.lock_or_recover().state.is_streaming {
             return Err(anyhow!(
                 "Agent mode cannot be changed while a response is running."

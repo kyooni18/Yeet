@@ -35,6 +35,11 @@ impl AgentGroupSupervisor {
         self.active.set_change_listener(listener);
     }
 
+    /// Applies swarm limits to the active group and every later one.
+    pub(crate) fn set_limits(&self, limits: AgentLimits) {
+        self.active.set_limits(limits);
+    }
+
     /// Stops every member and starts an empty group, so a new session or
     /// agent mode never inherits stale agents.
     pub(crate) fn replace_active_group(&self) {

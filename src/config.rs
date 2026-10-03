@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    model::{ModelCatalogItem, normalize_reasoning_level},
+    model::{ModelCatalogItem, SwarmSettings, normalize_reasoning_level},
     platform::{default_config_directory, replace_file, set_private_directory, set_private_file},
 };
 
@@ -31,6 +31,8 @@ struct ConfigDocument {
     context_length_overrides: std::collections::BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     jev_loop_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    swarm: Option<SwarmSettings>,
     // config.json is shared with the TypeScript runtime. Keep fields owned by
     // that side (notably `providers`) intact whenever Rust updates its own
     // settings instead of silently deleting them on the next write.
@@ -246,6 +248,19 @@ impl ConfigStore {
         document.jev_loop_mode = (mode != "off").then_some(mode.clone());
         self.write(&document)?;
         Ok(mode)
+    }
+
+    pub fn swarm_settings(&self) -> Result<SwarmSettings> {
+        Ok(self.read()?.swarm.unwrap_or_default().normalized())
+    }
+
+    pub fn set_swarm_settings(&self, settings: SwarmSettings) -> Result<SwarmSettings> {
+        let settings = settings.normalized();
+        let mut document = self.read()?;
+        document.version = 1;
+        document.swarm = (settings != SwarmSettings::default()).then(|| settings.clone());
+        self.write(&document)?;
+        Ok(settings)
     }
 
     pub fn model_catalog_cache(&self) -> Result<Vec<ModelCatalogItem>> {

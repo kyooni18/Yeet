@@ -207,6 +207,9 @@ impl App {
                         _ => "off",
                     };
                     backend.send(FrontendCommand::SetJevLoopMode { mode: mode.into() })?;
+                } else if self.popup_index == self.swarm_settings_row_index() {
+                    let command = self.open_swarm();
+                    backend.send(command)?;
                 } else if self.popup_index == self.sandbox_settings_row_index() {
                     self.open_sandbox_presets();
                 } else if self.popup_index == self.auth_settings_row_index() {
@@ -652,7 +655,7 @@ impl App {
     }
 
     pub(crate) fn settings_row_count(&self) -> usize {
-        14 + usize::from(self.openai_provider_active())
+        15 + usize::from(self.openai_provider_active())
     }
 
     pub(super) fn foundation_settings_row_index(&self) -> usize {
@@ -695,8 +698,12 @@ impl App {
         self.light_theme_settings_row_index() + 1
     }
 
-    pub(super) fn sandbox_settings_row_index(&self) -> usize {
+    pub(super) fn swarm_settings_row_index(&self) -> usize {
         self.jev_settings_row_index() + 1
+    }
+
+    pub(super) fn sandbox_settings_row_index(&self) -> usize {
+        self.swarm_settings_row_index() + 1
     }
 
     pub(super) fn auth_settings_row_index(&self) -> usize {

@@ -355,6 +355,11 @@ impl AgentCoordinator {
             turn_stable_overlays.push(Message::system(guidance).request_only());
         }
         if profile == TaskProfile::Agent
+            && let Some(guidance) = self.registry.agent_deploy_guidance()
+        {
+            turn_stable_overlays.push(Message::system(guidance).request_only());
+        }
+        if profile == TaskProfile::Agent
             && let Some(guidance) = &task_guidance
         {
             turn_stable_overlays.push(Message::system(guidance.clone()).request_only());
