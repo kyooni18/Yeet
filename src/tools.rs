@@ -44,6 +44,7 @@ mod session_capabilities;
 mod shell_jobs;
 mod shell_runtime;
 mod support;
+pub mod symbols;
 mod syntax_edit;
 mod token_efficiency;
 
