@@ -36,6 +36,9 @@ pub struct RepoMap {
     pub shown_files: usize,
 }
 
+/// A file's declarations and the identifier-like words it mentions.
+type FileSurface = (Arc<Vec<Symbol>>, Arc<HashSet<String>>);
+
 struct ParsedFile {
     stamp: (u64, Option<SystemTime>),
     symbols: Arc<Vec<Symbol>>,
@@ -53,18 +56,18 @@ pub fn build(root: &Path, token_budget: usize) -> Option<RepoMap> {
     if files.is_empty() {
         return None;
     }
-    let parsed: Vec<(String, Arc<Vec<Symbol>>, Arc<HashSet<String>>)> = files
+    let parsed: Vec<(String, FileSurface)> = files
         .into_iter()
         .filter_map(|relative| {
-            let (symbols, identifiers) = parse_cached(&root.join(&relative))?;
-            Some((relative, symbols, identifiers))
+            let surface = parse_cached(&root.join(&relative))?;
+            Some((relative, surface))
         })
         .collect();
 
     // How many files mention each identifier; a declaration's rank is how many
     // *other* files use its name, bucketed so small edits rarely reorder files.
     let mut file_mentions: HashMap<&str, usize> = HashMap::new();
-    for (_, _, identifiers) in &parsed {
+    for (_, (_, identifiers)) in &parsed {
         for identifier in identifiers.iter() {
             *file_mentions.entry(identifier.as_str()).or_default() += 1;
         }
@@ -85,7 +88,7 @@ pub fn build(root: &Path, token_budget: usize) -> Option<RepoMap> {
     };
     let mut ranked: Vec<(u32, &str, String, String)> = parsed
         .iter()
-        .filter_map(|(path, symbols, _)| {
+        .filter_map(|(path, (symbols, _))| {
             let surface = public_surface(symbols);
             let (score, block, line) = select_lines(path, &surface, &weight)?;
             let score = if is_test_path(path) { score / 4 } else { score };
@@ -229,7 +232,7 @@ fn is_test_path(path: &str) -> bool {
     })
 }
 
-fn parse_cached(path: &Path) -> Option<(Arc<Vec<Symbol>>, Arc<HashSet<String>>)> {
+fn parse_cached(path: &Path) -> Option<FileSurface> {
     let metadata = std::fs::metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
         return None;
