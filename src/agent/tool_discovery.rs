@@ -32,6 +32,21 @@ const FUZZY_DISCOVERY_BLOCKED_TOOLS: [&str; 10] = [
     "search_artifact",
 ];
 
+/// A backticked token, a path (`a::b`), snake_case, or an inner-capital
+/// CamelCase word: the request names something find_symbol can look up.
+fn names_code_identifier(input: &str) -> bool {
+    input.contains('`')
+        || input.contains("::")
+        || input
+            .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+            .any(|word| {
+                let inner_capital = word.chars().skip(1).any(|ch| ch.is_ascii_uppercase())
+                    && word.chars().any(|ch| ch.is_ascii_lowercase());
+                (word.contains('_') && word.len() > 2 && word.trim_matches('_').len() > 1)
+                    || inner_capital
+            })
+}
+
 pub(super) fn is_side_tool(name: &str) -> bool {
     FUZZY_DISCOVERY_BLOCKED_TOOLS.contains(&name)
 }
@@ -198,9 +213,10 @@ impl ToolDiscovery {
         }
 
         // Symbol navigation stays out of the default envelope. Attach it before
-        // the first attempt when the request is itself about locating code, so
-        // the tool list never changes mid-turn.
-        if [
+        // the first attempt only when the request asks to locate a named code
+        // identifier: for concept questions ("where is the hash computed") the
+        // model used text search in 3/3 runs and the schemas were dead weight.
+        let navigation = [
             "where is",
             "where's",
             "where are",
@@ -217,8 +233,8 @@ impl ToolDiscovery {
             "어디",
         ]
         .iter()
-        .any(|term| value.contains(term))
-        {
+        .any(|term| value.contains(term));
+        if navigation && names_code_identifier(input) {
             self.load(["outline", "find_symbol"]);
         }
 
@@ -433,6 +449,22 @@ mod tests {
 
     fn tool(name: &str) -> ToolDefinition {
         ToolDefinition::new(name, "test", json!({"type":"object"}))
+    }
+
+    #[test]
+    fn symbol_tools_attach_only_for_named_identifiers() {
+        let promoted = |input: &str| {
+            let mut discovery = ToolDiscovery::coding(false);
+            discovery.promote_for_input(input);
+            discovery
+                .loaded_names()
+                .iter()
+                .any(|name| name == "find_symbol")
+        };
+        assert!(promoted("where is apply_loop_policy called?"));
+        assert!(promoted("Who calls ToolDiscovery::load"));
+        assert!(!promoted("where is the tool envelope hash computed?"));
+        assert!(!promoted("rename build_widget to make_widget"));
     }
 
     #[test]
