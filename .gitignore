@@ -57,3 +57,15 @@ web/tests/*.tmp.spec.ts
 
 # Yeet general instruction
 YEET.md
+
+# Expo and Tauri frontend build outputs
+frontend/**/node_modules/
+frontend/react-native/.expo/
+frontend/react-native/dist/
+frontend/react-native/ios/
+frontend/react-native/android/
+frontend/desktop/target/
+frontend/desktop/gen/
+frontend/react-native/dist-native/
+frontend/react-native/test-results/
+frontend/react-native/playwright-report/
