@@ -26,20 +26,22 @@ impl ToolRegistry {
             .get("workingDirectory")
             .and_then(Value::as_str)
             .unwrap_or(".");
-        let effective_cwd = self.resolve_session_path(requested_working_directory)?;
+        let effective_cwd = self
+            .context
+            .resolve_session_path(requested_working_directory)?;
         if !effective_cwd.is_dir() {
             bail!(
                 "Invalid shell working directory: {}",
                 effective_cwd.display()
             );
         }
-        let context_root = self.context_root_for_path(&effective_cwd).cloned();
+        let context_root = self.context.context_root_for_path(&effective_cwd).cloned();
         let shell_root = context_root
             .clone()
-            .unwrap_or_else(|| self.workspace_root.clone());
+            .unwrap_or_else(|| self.context.workspace_root.clone());
         let effective_working_directory = effective_cwd.to_string_lossy().into_owned();
         let policy = SandboxStore::new(&shell_root)?.load()?;
-        let hard_confined = self.hard_access_root.is_some();
+        let hard_confined = self.context.hard_access_root.is_some();
         let mut unrestricted =
             !hard_confined && (policy.mode == SandboxMode::Unlimited || has_permit);
         let mut allow_write = false;
@@ -61,7 +63,7 @@ impl ToolRegistry {
                 let reason = object.get("purpose").and_then(Value::as_str).unwrap_or(
                     "The command needs to run outside the active session context roots.",
                 );
-                if !self.request_approval(
+                if !self.context.request_approval(
                     "shell",
                     &command,
                     "outside-context shell access",
@@ -79,7 +81,10 @@ impl ToolRegistry {
                 .get("purpose")
                 .and_then(Value::as_str)
                 .unwrap_or("The command needs write access inside the current project.");
-            if !self.request_approval("shell", &command, operation, reason)? {
+            if !self
+                .context
+                .request_approval("shell", &command, operation, reason)?
+            {
                 bail!("User denied shell operation '{operation}'");
             }
             allow_write = true;

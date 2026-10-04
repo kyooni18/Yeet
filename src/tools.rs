@@ -35,6 +35,7 @@ mod bridge_handle;
 mod capability_runtime;
 mod catalog;
 mod computer_use;
+mod context;
 mod definitions;
 mod edit_lock;
 mod editing;
@@ -56,6 +57,7 @@ mod token_efficiency;
 pub(crate) use agent_deploy::deploy_agent_for_workspace;
 pub(crate) use bridge_handle::BridgeHandle;
 use catalog::{ExternalRoute, ToolCatalog};
+use context::ToolExecutionContext;
 use definitions::BUILTIN_CAPABILITIES;
 pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
@@ -142,14 +144,10 @@ struct EditReadCoverage {
 
 pub struct ToolRegistry {
     bridge: BridgeHandle,
+    context: ToolExecutionContext,
     edit: Option<EditClient>,
     edit_generation: u64,
-    workspace_root: PathBuf,
-    working_directory: PathBuf,
-    context_roots: Vec<PathBuf>,
-    hard_access_root: Option<PathBuf>,
     workers: WorkerRegistry,
-    permission: PermissionBroker,
     artifacts: ArtifactStore,
     artifacts_enabled: bool,
     catalog: ToolCatalog,
@@ -159,8 +157,6 @@ pub struct ToolRegistry {
     foundation_project: Option<String>,
     skyline_handle: Option<String>,
     agent_group: Option<AgentGroupHandle>,
-    /// Identifies a delegated agent in permission prompts it raises.
-    permission_label: Option<String>,
     read_cache: HashMap<String, Vec<ReadCacheEntry>>,
     edit_snapshots: HashMap<String, String>,
     edit_read_coverage: HashMap<String, EditReadCoverage>,
@@ -179,10 +175,6 @@ pub struct ToolRegistry {
     web_reads: HashSet<String>,
     workspace_generation: u64,
     workspace_write_generation: u64,
-    protected_write_paths: Vec<PathBuf>,
-    session_store: Option<SessionStore>,
-    active_session_id: Option<String>,
-    active_task_id: Option<String>,
 }
 
 impl ToolRegistry {
@@ -210,18 +202,12 @@ impl ToolRegistry {
         // registry must stay in-process until a provider, MCP server, Skill, or
         // Computer Use operation actually needs the Node bridge.
         let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
-        let working_directory = workspace_root.clone();
-        let context_roots = vec![workspace_root.clone()];
         Ok(Self {
             bridge,
+            context: ToolExecutionContext::new(workspace_root, permission),
             edit: None,
             edit_generation: 0,
-            workspace_root,
-            working_directory,
-            context_roots,
-            hard_access_root: None,
             workers,
-            permission,
             artifacts: ArtifactStore::new()?,
             artifacts_enabled: true,
             catalog: ToolCatalog::with_builtin_tools(),
@@ -231,7 +217,6 @@ impl ToolRegistry {
             foundation_project: None,
             skyline_handle: None,
             agent_group: None,
-            permission_label: None,
             read_cache: HashMap::new(),
             edit_snapshots: HashMap::new(),
             edit_read_coverage: HashMap::new(),
@@ -250,16 +235,12 @@ impl ToolRegistry {
             web_reads: HashSet::new(),
             workspace_generation: 0,
             workspace_write_generation: 0,
-            protected_write_paths: Vec::new(),
-            session_store: None,
-            active_session_id: None,
-            active_task_id: None,
         })
     }
 
     fn edit_mut(&mut self) -> Result<&mut EditClient> {
         if self.edit.is_none() {
-            let edit = EditClient::start(&self.workspace_root)?;
+            let edit = EditClient::start(&self.context.workspace_root)?;
             self.edit_generation = edit.generation();
             self.edit = Some(edit);
         }
@@ -280,8 +261,8 @@ impl ToolRegistry {
             .as_ref()
             .map(|id| store.directory.join(id).join("artifacts"))
             .unwrap_or_else(|| self.artifacts._directory.path().to_path_buf());
-        self.session_store = Some(store);
-        self.active_session_id = active_session_id;
+        self.context.session_store = Some(store);
+        self.context.active_session_id = active_session_id;
     }
 
     pub fn set_artifacts_enabled(&mut self, enabled: bool) {
@@ -312,7 +293,7 @@ impl ToolRegistry {
     /// Lets one response's foreground agent calls run concurrently.
     pub(crate) fn prepare_tool_batch(&self, calls: &[ToolCall], model: &str) {
         if let Some(group) = &self.agent_group {
-            group.prestart(calls, model, self.active_session_id.clone());
+            group.prestart(calls, model, self.context.active_session_id.clone());
         }
     }
 
@@ -324,7 +305,7 @@ impl ToolRegistry {
     }
 
     pub(crate) fn set_permission_label(&mut self, label: String) {
-        self.permission_label = Some(label);
+        self.context.permission_label = Some(label);
     }
 
     pub(crate) fn agent_deploy_guidance(&self) -> Option<String> {
@@ -338,7 +319,7 @@ impl ToolRegistry {
     }
 
     pub fn runtime_capability_snapshot(&self, visible_tools: &[ToolDefinition]) -> Value {
-        let policy = SandboxStore::new(&self.workspace_root)
+        let policy = SandboxStore::new(&self.context.workspace_root)
             .and_then(|store| store.load())
             .ok();
         json!({
@@ -348,21 +329,22 @@ impl ToolRegistry {
                 SandboxMode::Unlimited => "unlimited",
             }),
             "autoApprove": policy.as_ref().map(|policy| policy.auto_approve),
-            "activeSessionProtected": !self.protected_write_paths.is_empty(),
-            "activeSessionId": self.active_session_id,
-            "workspaceRoot": self.workspace_root,
+            "activeSessionProtected": !self.context.protected_write_paths.is_empty(),
+            "activeSessionId": self.context.active_session_id,
+            "workspaceRoot": self.context.workspace_root,
         })
     }
 
     pub fn workspace_root(&self) -> &Path {
-        &self.workspace_root
+        &self.context.workspace_root
     }
 
     pub fn workspace_identity(&self) -> (String, Option<String>) {
         let root = self
+            .context
             .workspace_root
             .canonicalize()
-            .unwrap_or_else(|_| self.workspace_root.clone());
+            .unwrap_or_else(|_| self.context.workspace_root.clone());
         (
             root.display().to_string(),
             workspace_revision_for_path(&root),
@@ -603,7 +585,13 @@ impl ToolRegistry {
                 .agent_group
                 .as_ref()
                 .ok_or_else(|| anyhow!("adaptive agent orchestration is not enabled"))?
-                .execute(call, &object, model, self.active_session_id.clone(), cancel),
+                .execute(
+                    call,
+                    &object,
+                    model,
+                    self.context.active_session_id.clone(),
+                    cancel,
+                ),
             "read_file" => self.read_file(&object),
             // Hidden compatibility alias for restored sessions created before
             // read_file absorbed batch reads. New requests never expose this schema.
@@ -646,6 +634,7 @@ impl ToolRegistry {
             }
             "list_sessions" => {
                 let store = self
+                    .context
                     .session_store
                     .as_ref()
                     .ok_or_else(|| anyhow!("Session runtime is not attached"))?;
@@ -659,8 +648,9 @@ impl ToolRegistry {
                     .unwrap_or(false);
                 let limit = usize_arg(&object, "limit").unwrap_or(20).clamp(1, 100);
                 let mut values = Vec::new();
-                for session in store.list(&self.workspace_root)? {
-                    let is_current = self.active_session_id.as_deref() == Some(session.id.as_str());
+                for session in store.list(&self.context.workspace_root)? {
+                    let is_current =
+                        self.context.active_session_id.as_deref() == Some(session.id.as_str());
                     if is_current && !include_current {
                         continue;
                     }
@@ -683,7 +673,7 @@ impl ToolRegistry {
                 }
                 Ok(json!({
                     "sessions": values,
-                    "currentSessionId": self.active_session_id,
+                    "currentSessionId": self.context.active_session_id,
                     "currentExcludedByDefault": !include_current,
                     "predicate": if debate_only { "debates/state.json exists and topic is non-empty" } else { "workspace session" },
                 }).to_string())
@@ -698,17 +688,19 @@ impl ToolRegistry {
                         if path.is_absolute() {
                             path
                         } else {
-                            self.workspace_root.join(path)
+                            self.context.workspace_root.join(path)
                         }
                     });
                 if let Some(destination) = destination.as_ref() {
-                    self.ensure_file_scope(&destination.to_string_lossy(), true)?;
+                    self.context
+                        .ensure_file_scope(&destination.to_string_lossy(), true)?;
                 }
                 let delete_source = object
                     .get("deleteSource")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let store = self
+                    .context
                     .session_store
                     .as_ref()
                     .ok_or_else(|| anyhow!("Session runtime is not attached"))?;
@@ -716,7 +708,7 @@ impl ToolRegistry {
                     &session_id,
                     destination.as_deref(),
                     delete_source,
-                    self.active_session_id.as_deref(),
+                    self.context.active_session_id.as_deref(),
                 )?;
                 Ok(serde_json::to_string(&result)?)
             }
@@ -740,7 +732,9 @@ impl ToolRegistry {
                         "File Write is disabled for this session; mutating shell commands cannot be permitted"
                     );
                 }
-                let granted = self.request_approval("shell", &command, &operation, &reason)?;
+                let granted = self
+                    .context
+                    .request_approval("shell", &command, &operation, &reason)?;
                 if granted {
                     self.permitted_shell_commands.insert(command.clone());
                 }
@@ -763,12 +757,12 @@ impl ToolRegistry {
     }
 
     pub fn begin_task(&mut self, task_id: &str) {
-        self.active_task_id = Some(task_id.to_owned());
+        self.context.active_task_id = Some(task_id.to_owned());
     }
 
     pub fn finish_task(&mut self, task_id: &str) {
-        if self.active_task_id.as_deref() == Some(task_id) {
-            self.active_task_id = None;
+        if self.context.active_task_id.as_deref() == Some(task_id) {
+            self.context.active_task_id = None;
         }
         self.reset_model_evidence_window();
         self.edit_snapshots.clear();
@@ -959,57 +953,5 @@ impl ToolRegistry {
             }
         }
         None
-    }
-
-    fn request_approval(
-        &self,
-        kind: &str,
-        target: &str,
-        operation: &str,
-        reason: &str,
-    ) -> Result<bool> {
-        let policy = SandboxStore::new(&self.workspace_root)?.load()?;
-        if policy.mode == SandboxMode::Unlimited || policy.auto_approve {
-            return Ok(true);
-        }
-        let reason = match &self.permission_label {
-            Some(label) => format!("[{label}] {reason}"),
-            None => reason.into(),
-        };
-        Ok(self
-            .permission
-            .request(kind.into(), target.into(), operation.into(), reason))
-    }
-
-    fn ensure_file_scope(&self, path: &str, write: bool) -> Result<()> {
-        if self.path_outside_hard_access_root(path)? {
-            let operation = if write { "file write" } else { "file read" };
-            let root = self
-                .hard_access_root
-                .as_ref()
-                .expect("hard access root exists when path is outside it");
-            bail!(
-                "MCP {operation} is restricted to {} and its descendants: {path}",
-                root.display()
-            );
-        }
-        let resolved = self.resolve_session_path(path)?;
-        if self.path_in_context_roots(&resolved) {
-            return Ok(());
-        }
-        let operation = if write {
-            "outside-context file write"
-        } else {
-            "outside-context file read"
-        };
-        let reason = if write {
-            "The model requested a file change outside the active session context roots."
-        } else {
-            "The model requested file access outside the active session context roots."
-        };
-        if self.request_approval("file", path, operation, reason)? {
-            return Ok(());
-        }
-        bail!("User denied {operation}: {path}")
     }
 }

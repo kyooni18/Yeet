@@ -5,8 +5,12 @@ use super::*;
 impl ToolRegistry {
     pub fn session_environment(&self) -> (String, Vec<String>) {
         (
-            self.working_directory.to_string_lossy().into_owned(),
-            self.context_roots
+            self.context
+                .working_directory
+                .to_string_lossy()
+                .into_owned(),
+            self.context
+                .context_roots
                 .iter()
                 .map(|path| path.to_string_lossy().into_owned())
                 .collect(),
@@ -18,7 +22,7 @@ impl ToolRegistry {
         let candidate = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
-            self.working_directory.join(raw)
+            self.context.working_directory.join(raw)
         };
         let resolved = candidate
             .canonicalize()
@@ -29,10 +33,10 @@ impl ToolRegistry {
                 resolved.display()
             );
         }
-        if !self.path_in_context_roots(&resolved) {
-            self.context_roots.push(resolved.clone());
+        if !self.context.path_in_context_roots(&resolved) {
+            self.context.context_roots.push(resolved.clone());
         }
-        self.working_directory = resolved.clone();
+        self.context.working_directory = resolved.clone();
         self.invalidate_workspace_cache();
         self.shell_inspections.clear();
         Ok(resolved)
@@ -43,7 +47,7 @@ impl ToolRegistry {
         let candidate = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
-            self.working_directory.join(raw)
+            self.context.working_directory.join(raw)
         };
         let resolved = candidate
             .canonicalize()
@@ -51,9 +55,14 @@ impl ToolRegistry {
         if !resolved.is_dir() {
             bail!("context root is not a directory: {}", resolved.display());
         }
-        if !self.context_roots.iter().any(|root| root == &resolved) {
-            self.context_roots.push(resolved.clone());
-            self.context_roots.sort();
+        if !self
+            .context
+            .context_roots
+            .iter()
+            .any(|root| root == &resolved)
+        {
+            self.context.context_roots.push(resolved.clone());
+            self.context.context_roots.sort();
         }
         Ok(resolved)
     }
@@ -63,19 +72,25 @@ impl ToolRegistry {
         let candidate = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
-            self.working_directory.join(raw)
+            self.context.working_directory.join(raw)
         };
         let resolved = candidate.canonicalize().unwrap_or(candidate);
-        if resolved == self.workspace_root {
+        if resolved == self.context.workspace_root {
             bail!("the primary workspace root cannot be removed from the session context");
         }
-        let Some(index) = self.context_roots.iter().position(|root| root == &resolved) else {
+        let Some(index) = self
+            .context
+            .context_roots
+            .iter()
+            .position(|root| root == &resolved)
+        else {
             return Ok(false);
         };
-        let mut remaining = self.context_roots.clone();
+        let mut remaining = self.context.context_roots.clone();
         remaining.remove(index);
         let cwd_still_covered = remaining.iter().any(|root| {
-            self.working_directory == *root || self.working_directory.starts_with(root)
+            self.context.working_directory == *root
+                || self.context.working_directory.starts_with(root)
         });
         if !cwd_still_covered {
             bail!(
@@ -83,7 +98,7 @@ impl ToolRegistry {
                 resolved.display()
             );
         }
-        self.context_roots = remaining;
+        self.context.context_roots = remaining;
         Ok(true)
     }
 
@@ -92,18 +107,19 @@ impl ToolRegistry {
         working_directory: Option<&str>,
         context_roots: &[String],
     ) -> Result<()> {
-        self.working_directory = self.workspace_root.clone();
-        self.context_roots = vec![self.workspace_root.clone()];
+        self.context.working_directory = self.context.workspace_root.clone();
+        self.context.context_roots = vec![self.context.workspace_root.clone()];
         for root in context_roots {
             let path = PathBuf::from(root);
             if let Ok(resolved) = path.canonicalize()
                 && resolved.is_dir()
                 && !self
+                    .context
                     .context_roots
                     .iter()
                     .any(|existing| existing == &resolved)
             {
-                self.context_roots.push(resolved);
+                self.context.context_roots.push(resolved);
             }
         }
         if let Some(cwd) = working_directory {
@@ -111,46 +127,20 @@ impl ToolRegistry {
             if let Ok(resolved) = path.canonicalize()
                 && resolved.is_dir()
             {
-                if !self.path_in_context_roots(&resolved) {
-                    self.context_roots.push(resolved.clone());
+                if !self.context.path_in_context_roots(&resolved) {
+                    self.context.context_roots.push(resolved.clone());
                 }
-                self.working_directory = resolved;
+                self.context.working_directory = resolved;
             }
         }
-        self.context_roots.sort();
+        self.context.context_roots.sort();
         self.invalidate_workspace_cache();
         self.shell_inspections.clear();
         Ok(())
     }
 
-    pub(super) fn resolve_session_path(&self, path: &str) -> Result<PathBuf> {
-        if path.trim().is_empty() || path.contains('\0') {
-            bail!("invalid file path");
-        }
-        let input = Path::new(path);
-        let joined = if input.is_absolute() {
-            input.to_path_buf()
-        } else {
-            self.working_directory.join(input)
-        };
-        canonicalize_existing_ancestor(&joined)
-    }
-
-    pub(super) fn path_in_context_roots(&self, path: &Path) -> bool {
-        self.context_roots
-            .iter()
-            .any(|root| path == root || path.starts_with(root))
-    }
-
-    pub(super) fn context_root_for_path(&self, path: &Path) -> Option<&PathBuf> {
-        self.context_roots
-            .iter()
-            .filter(|root| path == root.as_path() || path.starts_with(root.as_path()))
-            .max_by_key(|root| root.components().count())
-    }
-
     pub fn set_hard_access_root(&mut self, root: Option<PathBuf>) -> Result<()> {
-        self.hard_access_root = root
+        self.context.hard_access_root = root
             .map(|path| {
                 path.canonicalize()
                     .map_err(anyhow::Error::from)
@@ -160,14 +150,7 @@ impl ToolRegistry {
         Ok(())
     }
 
-    pub(super) fn path_outside_hard_access_root(&self, path: &str) -> Result<bool> {
-        let Some(root) = self.hard_access_root.as_ref() else {
-            return Ok(false);
-        };
-        let resolved = self.resolve_session_path(path)?;
-        Ok(!(resolved == *root || resolved.starts_with(root)))
-    }
     pub fn set_protected_write_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
-        self.protected_write_paths = paths.into_iter().collect();
+        self.context.protected_write_paths = paths.into_iter().collect();
     }
 }

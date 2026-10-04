@@ -15,7 +15,10 @@ impl ToolRegistry {
     pub fn can_auto_check(&self, command: &str) -> bool {
         self.tool_enabled("run_shell")
             && restricted_operation(command).is_none()
-            && self.context_root_for_path(&self.workspace_root).is_some()
+            && self
+                .context
+                .context_root_for_path(&self.context.workspace_root)
+                .is_some()
     }
 
     /// Runs `command` from the workspace root under the session's sandbox
@@ -28,12 +31,12 @@ impl ToolRegistry {
         if !self.can_auto_check(command) {
             return Ok(None);
         }
-        let policy = SandboxStore::new(&self.workspace_root)?.load()?;
-        let hard_confined = self.hard_access_root.is_some();
-        let working_directory = self.workspace_root.to_string_lossy().into_owned();
+        let policy = SandboxStore::new(&self.context.workspace_root)?.load()?;
+        let hard_confined = self.context.hard_access_root.is_some();
+        let working_directory = self.context.workspace_root.to_string_lossy().into_owned();
         let output = run_shell_cancellable(ShellExecutionRequest {
             command,
-            workspace_root: &self.workspace_root,
+            workspace_root: &self.context.workspace_root,
             working_directory: Some(&working_directory),
             timeout_seconds: AUTO_CHECK_TIMEOUT_SECONDS,
             capture_bytes: AUTO_CHECK_CAPTURE_BYTES,

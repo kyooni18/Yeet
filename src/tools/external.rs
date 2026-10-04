@@ -63,9 +63,9 @@ impl ToolRegistry {
                 Ok(result)
             }
             ExternalRoute::Worker { worker, tool } => {
-                let result = self
-                    .workers
-                    .execute(&worker, &tool, object, &self.workspace_root)?;
+                let result =
+                    self.workers
+                        .execute(&worker, &tool, object, &self.context.workspace_root)?;
                 self.note_external_workspace_write();
                 Ok(result)
             }

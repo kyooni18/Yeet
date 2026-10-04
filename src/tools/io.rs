@@ -466,11 +466,13 @@ impl ToolRegistry {
 
         let requested_path = string_arg(object, "path")?.to_owned();
         let path = self
+            .context
             .resolve_session_path(&requested_path)?
             .to_string_lossy()
             .into_owned();
-        self.ensure_file_scope(&path, false)?;
-        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
+        self.context.ensure_file_scope(&path, false)?;
+        let cache_path =
+            super::paths::stable_workspace_path_key(&self.context.workspace_root, &path)?;
         let requested_start = usize_arg(object, "startLine").unwrap_or(1).max(1);
         let explicit_end = usize_arg(object, "endLine");
         if explicit_end.is_some_and(|end| end < requested_start) {
@@ -671,11 +673,13 @@ impl ToolRegistry {
             bail!("List path points into generated or internal workspace state.");
         }
         let path = self
+            .context
             .resolve_session_path(requested_path)?
             .to_string_lossy()
             .into_owned();
-        self.ensure_file_scope(&path, false)?;
-        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
+        self.context.ensure_file_scope(&path, false)?;
+        let cache_path =
+            super::paths::stable_workspace_path_key(&self.context.workspace_root, &path)?;
         let max_results = usize_arg(object, "maxResults").unwrap_or(50).clamp(1, 500);
         let max_depth = usize_arg(object, "maxDepth").unwrap_or(2).min(12);
         let key = format!("{cache_path}:{max_results}:{max_depth}");
@@ -683,7 +687,7 @@ impl ToolRegistry {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This directory listing was already returned. Reuse it or expand a different subtree."}).to_string());
         }
         let result = list_files_in_process(
-            &self.workspace_root,
+            &self.context.workspace_root,
             Path::new(&path),
             max_results,
             max_depth,
@@ -703,11 +707,13 @@ impl ToolRegistry {
             bail!("Search path points into generated or internal workspace state.");
         }
         let path = self
+            .context
             .resolve_session_path(requested_path)?
             .to_string_lossy()
             .into_owned();
-        self.ensure_file_scope(&path, false)?;
-        let cache_path = super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
+        self.context.ensure_file_scope(&path, false)?;
+        let cache_path =
+            super::paths::stable_workspace_path_key(&self.context.workspace_root, &path)?;
         let max_results = usize_arg(object, "maxResults").unwrap_or(20).clamp(1, 100);
         let case_sensitive = object
             .get("caseSensitive")
@@ -723,7 +729,7 @@ impl ToolRegistry {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This search was already returned. Reuse it or change query/path."}).to_string());
         }
         let result = search_workspace_in_process(
-            &self.workspace_root,
+            &self.context.workspace_root,
             Path::new(&path),
             query,
             max_results,
@@ -844,7 +850,7 @@ impl ToolRegistry {
             .web_server
             .clone()
             .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
-        if self.capability_disabled("mcp", &server) {
+        if self.catalog.capability_disabled("mcp", &server) {
             bail!("MCP server {server} is disabled for this session");
         }
         let result = self.bridge_client()?.call_mcp_tool_cancellable(
@@ -927,7 +933,7 @@ impl ToolRegistry {
             .web_server
             .clone()
             .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
-        if self.capability_disabled("mcp", &server) {
+        if self.catalog.capability_disabled("mcp", &server) {
             bail!("MCP server {server} is disabled for this session");
         }
         let result = self
@@ -1021,7 +1027,7 @@ impl ToolRegistry {
     /// Extracts a supported document and returns bounded readable content.
     pub(super) fn read_document_tool(&mut self, object: &Map<String, Value>) -> Result<String> {
         let path = string_arg(object, "path")?;
-        self.ensure_file_scope(path, false)?;
+        self.context.ensure_file_scope(path, false)?;
         let resolved = self.resolve_local_path(path)?;
         let document = general::read_document(&resolved)?;
         let artifact = if self.artifacts_enabled {
@@ -1060,7 +1066,7 @@ impl ToolRegistry {
     /// Runs a bounded data-analysis operation.
     pub(super) fn analyze_data_tool(&mut self, object: &Map<String, Value>) -> Result<String> {
         let path = string_arg(object, "path")?;
-        self.ensure_file_scope(path, false)?;
+        self.context.ensure_file_scope(path, false)?;
         let resolved = self.resolve_local_path(path)?;
         let result = general::analyze_data(&resolved, object)?;
         let mut payload = result.as_object().cloned().unwrap_or_default();
@@ -1078,7 +1084,7 @@ impl ToolRegistry {
 
     /// Resolves a user path relative to the persisted session cwd.
     fn resolve_local_path(&self, path: &str) -> Result<PathBuf> {
-        self.resolve_session_path(path)
+        self.context.resolve_session_path(path)
     }
 
     /// Executes a helper script from an activated Skill through the normal shell policy.
@@ -1109,7 +1115,7 @@ impl ToolRegistry {
         let mut command_parts = Vec::new();
         command_parts.push(format!(
             "YEET_WORKSPACE_ROOT={}",
-            shell_quote(self.workspace_root.to_string_lossy().as_ref())
+            shell_quote(self.context.workspace_root.to_string_lossy().as_ref())
         ));
         match script
             .extension()

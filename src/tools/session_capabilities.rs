@@ -23,7 +23,7 @@ impl ToolRegistry {
             Value::String(crate::skyline::CAPABILITY_ID.into()),
         );
         arguments.insert("explicitUserInvocation".into(), Value::Bool(true));
-        let activation = crate::skyline::activate(&self.workspace_root, arguments)?;
+        let activation = crate::skyline::activate(&self.context.workspace_root, arguments)?;
         let mut parsed: Value = serde_json::from_str(&activation)?;
         let handle = parsed
             .get("handle")
@@ -67,7 +67,7 @@ impl ToolRegistry {
             }
             arguments.insert("arguments".into(), value.clone());
         }
-        crate::skyline::invoke(&self.workspace_root, arguments)
+        crate::skyline::invoke(&self.context.workspace_root, arguments)
     }
 
     pub fn activate_explicit_skill(&mut self, name: &str) -> Result<String> {

@@ -28,13 +28,15 @@ impl ToolRegistry {
         // transaction's snapshot validation and commit, never the whole task.
         let _edit_guard = edit_lock::WorkspaceEditLock::acquire(
             &crate::platform::default_config_directory(),
-            &self.workspace_root,
+            &self.context.workspace_root,
         )?;
         self.sync_edit_state();
         let mut request = arguments.clone();
         normalize_legacy_edit_shapes(&mut request);
-        let unlimited =
-            SandboxStore::new(&self.workspace_root)?.load()?.mode == SandboxMode::Unlimited;
+        let unlimited = SandboxStore::new(&self.context.workspace_root)?
+            .load()?
+            .mode
+            == SandboxMode::Unlimited;
         let paths = {
             let changes = request
                 .get_mut("changes")
@@ -54,14 +56,15 @@ impl ToolRegistry {
                     .ok_or_else(|| anyhow!("change requires path"))?
                     .to_owned();
                 let path = self
+                    .context
                     .resolve_session_path(&requested_path)?
                     .to_string_lossy()
                     .into_owned();
                 let cache_path =
-                    super::paths::stable_workspace_path_key(&self.workspace_root, &path)?;
+                    super::paths::stable_workspace_path_key(&self.context.workspace_root, &path)?;
                 object.insert("path".into(), json!(path.clone()));
-                self.ensure_not_protected_write_path(&path)?;
-                self.ensure_file_scope(&path, true)?;
+                self.context.ensure_not_protected_write_path(&path)?;
+                self.context.ensure_file_scope(&path, true)?;
                 let requested_destination = object
                     .get("fileOp")
                     .and_then(Value::as_object)
@@ -70,11 +73,12 @@ impl ToolRegistry {
                     .map(str::to_owned);
                 if let Some(requested_destination) = requested_destination {
                     let destination = self
+                        .context
                         .resolve_session_path(&requested_destination)?
                         .to_string_lossy()
                         .into_owned();
-                    self.ensure_not_protected_write_path(&destination)?;
-                    self.ensure_file_scope(&destination, true)?;
+                    self.context.ensure_not_protected_write_path(&destination)?;
+                    self.context.ensure_file_scope(&destination, true)?;
                     if let Some(operation) = object.get_mut("fileOp").and_then(Value::as_object_mut)
                     {
                         operation.insert("destination".into(), json!(destination));
@@ -190,32 +194,6 @@ impl ToolRegistry {
         });
         self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
-    }
-
-    /// Rejects writes into active Yeet runtime/session state directories.
-    fn ensure_not_protected_write_path(&self, path: &str) -> Result<()> {
-        if self.protected_write_paths.is_empty() {
-            return Ok(());
-        }
-        let candidate = PathBuf::from(path);
-        let candidate = if candidate.is_absolute() {
-            candidate
-        } else {
-            self.workspace_root.join(candidate)
-        };
-        let normalized = canonicalize_existing_ancestor(&candidate)?;
-        for protected in &self.protected_write_paths {
-            let protected = protected
-                .canonicalize()
-                .unwrap_or_else(|_| protected.to_path_buf());
-            if normalized == protected || normalized.starts_with(&protected) {
-                bail!(
-                    "Refusing to mutate active Yeet runtime state at {}. Active session state is protected even in unlimited mode.",
-                    protected.display()
-                );
-            }
-        }
-        Ok(())
     }
 
     /// Renders a compact response when a requested source range is already cached.

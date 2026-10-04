@@ -12,8 +12,9 @@ const MAX_REFERENCES: usize = 40;
 impl ToolRegistry {
     pub(super) fn outline_tool(&mut self, object: &Map<String, Value>) -> Result<String> {
         let requested = string_arg(object, "path")?;
-        let path = self.resolve_session_path(requested)?;
-        self.ensure_file_scope(&path.to_string_lossy(), false)?;
+        let path = self.context.resolve_session_path(requested)?;
+        self.context
+            .ensure_file_scope(&path.to_string_lossy(), false)?;
         if !symbols::supported(&path) {
             return Ok(format!(
                 "{requested}: no symbols (outline supports Rust, TypeScript, and JavaScript); use read_file."
@@ -50,10 +51,11 @@ impl ToolRegistry {
             .and_then(Value::as_str)
             .filter(|path| !path.trim().is_empty())
             .unwrap_or(".");
-        let root = self.resolve_session_path(requested)?;
-        self.ensure_file_scope(&root.to_string_lossy(), false)?;
+        let root = self.context.resolve_session_path(requested)?;
+        self.context
+            .ensure_file_scope(&root.to_string_lossy(), false)?;
         let display = |path: &Path| {
-            path.strip_prefix(&self.working_directory)
+            path.strip_prefix(&self.context.working_directory)
                 .unwrap_or(path)
                 .to_string_lossy()
                 .replace('\\', "/")
