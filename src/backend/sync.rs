@@ -32,7 +32,7 @@ pub(crate) struct SessionCatalog {
 }
 
 impl SessionCatalog {
-    pub(crate) fn of(state: &BridgeState) -> Self {
+    pub(crate) fn of(state: &HarnessState) -> Self {
         Self {
             sessions: state.saved_sessions.clone(),
             workspaces: state.known_workspaces.clone(),
@@ -40,7 +40,7 @@ impl SessionCatalog {
         }
     }
 
-    pub(crate) fn matches(&self, state: &BridgeState) -> bool {
+    pub(crate) fn matches(&self, state: &HarnessState) -> bool {
         self.sessions == state.saved_sessions
             && self.workspaces == state.known_workspaces
             && self.groups == state.workspace_session_groups
@@ -90,7 +90,7 @@ impl EventSender {
 /// Daemon-facing view of a runtime. The daemon polls these every tick, so
 /// they only read shared state and never block on the coordinator.
 impl BackendService {
-    pub(crate) fn state_snapshot(&self) -> BridgeState {
+    pub(crate) fn state_snapshot(&self) -> HarnessState {
         self.shared.lock_or_recover().state.clone()
     }
 

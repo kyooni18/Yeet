@@ -6,7 +6,7 @@
 
 use super::*;
 
-/// Runtime-only metadata that accompanies the serializable bridge state.
+/// Runtime-only metadata that accompanies the serializable harness state.
 #[derive(Default)]
 pub(super) struct SessionMeta {
     pub(super) created_at: Option<DateTime<Utc>>,
@@ -28,18 +28,18 @@ pub(super) struct SessionMeta {
 
 /// Shared state for one live backend session.
 pub(super) struct SharedSession {
-    pub(super) state: BridgeState,
+    pub(super) state: HarnessState,
     pub(super) meta: SessionMeta,
 }
 
 impl SharedSession {
     /// Creates an empty session with the selected model and reasoning policy.
     pub(super) fn new(model: String, reasoning_level: String) -> Self {
-        let state = BridgeState {
+        let state = HarnessState {
             active_model: model,
             active_reasoning_level: reasoning_level,
             conversation: Some(Vec::new()),
-            ..BridgeState::default()
+            ..HarnessState::default()
         };
         Self {
             state,

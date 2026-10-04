@@ -31,12 +31,12 @@ use crate::{
         BridgeEvent, CallRequest, HarnessCapabilityDescriptor, ImageAttachment, Message, Usage,
     },
     model::{
-        AgentMode, AuthProviderItem, AutonomyMode, BridgeEnvelope, BridgeState,
-        CapabilityToggleItem, ConversationEntry, ConversationKind, ConversationToolCall,
-        FrontendCommand, ModelActivity, ModelCatalogItem, NativeAppPermission,
-        ProviderConfigurationItem, RuntimeSettingsState, SandboxAction, SandboxEnvironmentItem,
-        SandboxLimitsState, SandboxNetworkItem, SandboxSettingsState, SessionSummary,
-        ToolCallStatus, WorkspaceSessionGroup, WorkspaceSummary, normalize_reasoning_level,
+        AgentMode, AuthProviderItem, AutonomyMode, CapabilityToggleItem, ConversationEntry,
+        ConversationKind, ConversationToolCall, FrontendCommand, HarnessEvent, HarnessState,
+        ModelActivity, ModelCatalogItem, NativeAppPermission, ProviderConfigurationItem,
+        RuntimeSettingsState, SandboxAction, SandboxEnvironmentItem, SandboxLimitsState,
+        SandboxNetworkItem, SandboxSettingsState, SessionSummary, ToolCallStatus,
+        WorkspaceSessionGroup, WorkspaceSummary, normalize_reasoning_level,
         reasoning_levels_for_model,
     },
     permission::PermissionBroker,
@@ -145,7 +145,7 @@ fn native_app_approval_is_automatic(policy: &SandboxPolicy) -> bool {
 }
 
 pub enum BackendEvent {
-    Envelope(BridgeEnvelope),
+    Envelope(HarnessEvent),
 }
 
 pub(crate) struct BackendService {

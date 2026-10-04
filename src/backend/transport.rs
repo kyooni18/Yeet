@@ -1,4 +1,4 @@
-//! Bridge-envelope creation and concise tool-activity presentation.
+//! Harness-event creation and concise tool-activity presentation.
 //!
 //! Transport serialization and UI-facing labels are kept out of the backend
 //! dispatcher so execution logic does not depend on presentation details.
@@ -9,7 +9,7 @@ use super::BackendEvent;
 use crate::{
     core::{ToolCall, Usage},
     harness::Harness,
-    model::{BridgeEnvelope, BridgeState, FrontendCommand},
+    model::{FrontendCommand, HarnessEvent, HarnessState},
 };
 
 /// Compatibility adapter retained for existing TUI code. New hosts should use
@@ -51,9 +51,9 @@ impl Backend {
     }
 }
 
-/// Wraps a full bridge state in the standard state envelope.
-pub(super) fn state_envelope(state: &BridgeState) -> BridgeEnvelope {
-    BridgeEnvelope {
+/// Wraps a full harness state in the standard state envelope.
+pub(super) fn state_envelope(state: &HarnessState) -> HarnessEvent {
+    HarnessEvent {
         kind: "state".into(),
         state: Some(state.clone()),
         message: None,
@@ -61,8 +61,8 @@ pub(super) fn state_envelope(state: &BridgeState) -> BridgeEnvelope {
 }
 
 /// Wraps a compact state update that deliberately omits conversation history.
-pub(super) fn state_envelope_without_conversation(state: &BridgeState) -> BridgeEnvelope {
-    BridgeEnvelope {
+pub(super) fn state_envelope_without_conversation(state: &HarnessState) -> HarnessEvent {
+    HarnessEvent {
         kind: "state".into(),
         state: Some(state.without_conversation()),
         message: None,

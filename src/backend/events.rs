@@ -345,8 +345,8 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
     }
 }
 
-/// Accumulates token usage and provider-call credits into bridge state.
-pub(super) fn record_usage(state: &mut BridgeState, usage: &Usage, already_counted_calls: u64) {
+/// Accumulates token usage and provider-call credits into harness state.
+pub(super) fn record_usage(state: &mut HarnessState, usage: &Usage, already_counted_calls: u64) {
     let represented = usage.model_calls.unwrap_or(1).max(1);
     state.credit_usage = state
         .credit_usage
@@ -389,9 +389,9 @@ mod tests {
 
     #[test]
     fn auxiliary_usage_does_not_double_count_a_started_model_call() {
-        let mut state = BridgeState {
+        let mut state = HarnessState {
             credit_usage: 1,
-            ..BridgeState::default()
+            ..HarnessState::default()
         };
         let usage = Usage {
             input_tokens: Some(100),
