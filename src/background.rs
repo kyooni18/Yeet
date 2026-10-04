@@ -20,6 +20,7 @@ use crate::{
 
 mod client_writer;
 mod daemon_lifecycle;
+pub(crate) mod protocol;
 mod routing;
 mod runtime_process;
 mod wake;
@@ -31,6 +32,7 @@ use daemon_lifecycle::{
 };
 #[cfg(test)]
 use daemon_lifecycle::{cleanup_stale_artifacts_in, cleanup_stale_daemon_files};
+use protocol::DaemonHandshake;
 use routing::{
     PendingIsolation, live_session_runtime_id, publish_runtime_state, route_client_to_runtime,
     send_client_error_to, start_isolated_runtime,
@@ -117,6 +119,12 @@ const MAX_RUNTIME_EVENTS_PER_TICK: usize = 1024;
 const MAX_PENDING_ISOLATIONS: usize = 8;
 const MAX_PENDING_STARTUP_CLIENTS: usize = 64;
 
+/// A socket that completed a compatible handshake with a workspace daemon.
+struct AttachedDaemon {
+    stream: LocalStream,
+    events: mpsc::Receiver<BridgeEnvelope>,
+}
+
 pub struct BackgroundConnection {
     workspace: PathBuf,
     scope: Option<String>,
@@ -150,14 +158,14 @@ impl BackgroundConnection {
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
         let scope = scope.map(str::to_owned);
-        let (stream, events) = Self::establish(&workspace, scope.as_deref(), wake.clone())?;
+        let attached = Self::establish(&workspace, scope.as_deref(), wake.clone())?;
         Ok(Self {
             workspace,
             scope,
             resume_session_id: None,
             resume_barrier: None,
-            stream,
-            events,
+            stream: attached.stream,
+            events: attached.events,
             last_daemon_activity: Instant::now(),
             wake,
             reconnect_failures: 0,
@@ -169,13 +177,14 @@ impl BackgroundConnection {
         workspace: &Path,
         scope: Option<&str>,
         wake: Option<Wake>,
-    ) -> Result<(LocalStream, mpsc::Receiver<BridgeEnvelope>)> {
+    ) -> Result<AttachedDaemon> {
         let paths = BackgroundPaths::new(workspace, scope)?;
 
-        // Protocol reachability is the compatibility test. A daemon started by
-        // the previous Yeet binary can keep active sessions alive across an
-        // atomic local install, so never retire it merely because the executable
-        // identity (mtime/size) changed.
+        // A completed, compatible handshake (see `protocol`) is the
+        // compatibility test. A daemon started by the previous Yeet binary can
+        // keep active sessions alive across an atomic local install, so never
+        // retire it merely because the executable identity (mtime/size)
+        // changed.
         if let Ok(connection) = Self::connect_existing(&paths.socket, wake.clone()) {
             return Ok(connection);
         }
@@ -251,15 +260,16 @@ impl BackgroundConnection {
         )
     }
 
-    fn connect_existing(
-        socket: &Path,
-        wake: Option<Wake>,
-    ) -> Result<(LocalStream, mpsc::Receiver<BridgeEnvelope>)> {
+    fn connect_existing(socket: &Path, wake: Option<Wake>) -> Result<AttachedDaemon> {
         let stream = connect_local(socket)?;
         let mut reader_stream = stream.try_clone()?;
         let first_line = Self::read_handshake_line(&mut reader_stream)?;
-        let first_envelope = serde_json::from_slice::<BridgeEnvelope>(&first_line)
+        let (first_envelope, daemon) = protocol::parse_first_frame(&first_line)
             .context("invalid background service handshake")?;
+        if let Err(error) = daemon.ensure_compatible() {
+            let _ = stream.shutdown(Shutdown::Both);
+            return Err(error.context("incompatible background service"));
+        }
         let mut reader = BufReader::new(reader_stream);
         let (tx, events) = mpsc::sync_channel(CLIENT_EVENT_QUEUE_CAPACITY);
         if first_envelope.kind != "heartbeat" {
@@ -285,7 +295,7 @@ impl BackgroundConnection {
                 wake.notify();
             }
         });
-        Ok((stream, events))
+        Ok(AttachedDaemon { stream, events })
     }
 
     fn read_handshake_line(stream: &mut LocalStream) -> Result<Vec<u8>> {
@@ -451,7 +461,7 @@ impl BackgroundConnection {
         // duplicate descriptor remains open. Explicit shutdown tears down the
         // endpoint for every duplicate so the old client is actually detached.
         let _ = self.stream.shutdown(Shutdown::Both);
-        let (mut stream, events) =
+        let AttachedDaemon { mut stream, events } =
             Self::establish(&self.workspace, self.scope.as_deref(), self.wake.clone())?;
         if let Some(session_id) = self.resume_session_id.clone() {
             let mut frame = serde_json::to_vec(&FrontendCommand::LoadSession {
@@ -529,6 +539,8 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
     let mut pending_isolations: Vec<PendingIsolation> = Vec::new();
     let mut session_catalog: Option<SessionCatalog> = None;
     let mut next_client_id = 1u64;
+    // Every accepted socket first receives this heartbeat + handshake frame.
+    let ready_frame = protocol::ready_frame(&DaemonHandshake::current())?;
     let mut next_runtime_id = 1u64;
     let mut idle_since: Option<Instant> = None;
     let mut last_heartbeat = Instant::now();
@@ -882,12 +894,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     // catalog or starting the provider bridge; acknowledge the accepted
                     // socket immediately so clients do not misclassify that work as a
                     // dead background daemon.
-                    let ready = BridgeEnvelope {
-                        kind: "heartbeat".into(),
-                        state: None,
-                        message: None,
-                    };
-                    if send_envelope(&mut stream, &ready).is_err() {
+                    if send_frame(&mut stream, ready_frame.clone()).is_err() {
                         let _ = stream.shutdown(Shutdown::Both);
                         continue;
                     }
@@ -1603,7 +1610,10 @@ fn read_bounded_frame(
 }
 
 fn send_envelope(stream: &mut LocalStream, envelope: &BridgeEnvelope) -> Result<()> {
-    let mut frame = serde_json::to_vec(envelope)?;
+    send_frame(stream, serde_json::to_vec(envelope)?)
+}
+
+fn send_frame(stream: &mut LocalStream, mut frame: Vec<u8>) -> Result<()> {
     if frame.len() > MAX_BACKGROUND_FRAME_BYTES {
         bail!("background protocol frame exceeded its limit");
     }
