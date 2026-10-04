@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow, bail};
 
 use super::{
     ClientConnection, MAX_PENDING_ISOLATIONS, RuntimeIsolationEvent, SessionRuntime, Wake,
-    allocate_runtime_id, broadcast_runtime_envelope, send_client_error, spawn_runtime,
+    allocate_runtime_id, broadcast_runtime_envelope, send_client_error,
     state_with_extension_commands,
 };
 use crate::{backend::SessionCatalog, extensions::ExtensionHost, model::HarnessEvent};
@@ -80,7 +80,7 @@ pub(super) fn start_isolated_runtime(
     let scope = scope.map(str::to_owned);
     let wake = wake.clone();
     thread::spawn(move || {
-        let result = spawn_runtime(&workspace, runtime_id, scope.as_deref(), wake.clone());
+        let result = SessionRuntime::spawn(&workspace, runtime_id, scope.as_deref(), wake.clone());
         let _ = isolation_tx.send(RuntimeIsolationEvent { runtime_id, result });
         wake.notify();
     });
@@ -119,7 +119,7 @@ pub(super) fn route_client_to_runtime(
         );
         return;
     };
-    runtime.idle_since = None;
+    runtime.lifecycle.attached();
     clients[client_index].runtime_id = runtime_id;
     let envelope = HarnessEvent {
         kind: "state".into(),

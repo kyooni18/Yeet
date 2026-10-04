@@ -2,7 +2,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     net::Shutdown,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -24,6 +24,7 @@ mod daemon_lifecycle;
 pub(crate) mod protocol;
 mod routing;
 mod runtime_process;
+mod session_runtime;
 mod wake;
 use client_writer::ClientWriter;
 pub use connection::BackgroundConnection;
@@ -38,7 +39,9 @@ use routing::{
     PendingIsolation, live_session_runtime_id, publish_runtime_state, route_client_to_runtime,
     send_client_error_to, start_isolated_runtime,
 };
-use runtime_process::RuntimeProcess;
+#[cfg(test)]
+use session_runtime::RUNTIME_IDLE_RETIRE_AFTER;
+use session_runtime::SessionRuntime;
 pub(crate) use wake::Wake;
 
 enum ClientEvent {
@@ -65,15 +68,6 @@ impl ClientConnection {
     }
 }
 
-struct SessionRuntime {
-    id: u64,
-    service: RuntimeProcess,
-    idle_since: Option<Instant>,
-    interrupt_requested_at: Option<Instant>,
-    /// Session catalog this runtime last published.
-    catalog: Option<SessionCatalog>,
-}
-
 struct RuntimeStartupEvent {
     client_id: u64,
     runtime_id: u64,
@@ -88,10 +82,6 @@ struct RuntimeIsolationEvent {
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
-const INTERRUPT_RECOVERY_AFTER: Duration = Duration::from_secs(4);
-// Losing every frontend transport is not an interrupt request. Background
-// runs continue until they finish naturally or a user explicitly interrupts.
-const RUNTIME_IDLE_RETIRE_AFTER: Duration = Duration::from_secs(60);
 // Keep the lightweight socket owner around longer than its heavy session
 // runtimes. This avoids daemon start/stop churn while still reclaiming inactive
 // BackendService/bridge state promptly.
@@ -203,7 +193,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 .position(|pending| pending.runtime_id == event.runtime_id)
             else {
                 if let Ok(runtime) = event.result {
-                    retire_runtime_async(runtime);
+                    runtime.retire_async();
                 }
                 continue;
             };
@@ -232,7 +222,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 }
             };
             if waiters.is_empty() {
-                retire_runtime_async(runtime);
+                runtime.retire_async();
                 continue;
             }
             let mut target_runtime_id = event.runtime_id;
@@ -241,7 +231,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     // The session became live elsewhere while this runtime
                     // started. Never keep two runtimes on one session: their
                     // transcripts would diverge and overwrite each other.
-                    retire_runtime_async(runtime);
+                    runtime.retire_async();
                     target_runtime_id = live_runtime_id;
                 } else if let Err(error) = runtime
                     .service
@@ -251,7 +241,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     for client_id in waiters {
                         send_client_error_to(&mut clients, client_id, anyhow!(message.clone()));
                     }
-                    retire_runtime_async(runtime);
+                    runtime.retire_async();
                     continue;
                 } else {
                     runtimes.push(runtime);
@@ -392,8 +382,10 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                                     if let Some(runtime) =
                                         runtimes.iter_mut().find(|runtime| runtime.id == runtime_id)
                                     {
-                                        runtime.interrupt_requested_at =
-                                            runtime.service.is_streaming().then(Instant::now);
+                                        runtime.lifecycle.note_interrupt(
+                                            runtime.service.is_streaming(),
+                                            Instant::now(),
+                                        );
                                     }
                                 }
                                 Err(error) => {
@@ -432,7 +424,8 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 runtime.id
             } else {
                 let runtime_id = allocate_runtime_id(&mut next_runtime_id);
-                match spawn_runtime(&workspace, runtime_id, scope.as_deref(), wake.clone()) {
+                match SessionRuntime::spawn(&workspace, runtime_id, scope.as_deref(), wake.clone())
+                {
                     Ok(runtime) => runtimes.push(runtime),
                     Err(error) => {
                         eprintln!("yeet: could not start runtime for extension request: {error:#}");
@@ -442,7 +435,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 runtime_id
             };
             if let Some(runtime) = runtimes.iter_mut().find(|runtime| runtime.id == runtime_id) {
-                runtime.idle_since = None;
+                runtime.lifecycle.attached();
             }
             let (extension_id, command) = match request {
                 ExtensionRequest::Submit { extension_id, text } => (
@@ -545,7 +538,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     let startup_wake = wake.clone();
                     accept_startup_pending = true;
                     thread::spawn(move || {
-                        let result = spawn_runtime(
+                        let result = SessionRuntime::spawn(
                             &startup_workspace,
                             runtime_id,
                             startup_scope.as_deref(),
@@ -617,9 +610,9 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     &mut catalog_changed,
                 );
             }
-            if !runtime.service.is_streaming() {
-                runtime.interrupt_requested_at = None;
-            }
+            runtime
+                .lifecycle
+                .observe_streaming(runtime.service.is_streaming());
         }
         if let Some(catalog) = session_catalog.as_ref()
             && (catalog_changed
@@ -637,10 +630,9 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
         let stuck_runtime_ids = runtimes
             .iter()
             .filter(|runtime| {
-                runtime.service.is_streaming()
-                    && runtime
-                        .interrupt_requested_at
-                        .is_some_and(|requested| requested.elapsed() >= INTERRUPT_RECOVERY_AFTER)
+                runtime
+                    .lifecycle
+                    .requires_interrupt_recovery(runtime.service.is_streaming(), Instant::now())
             })
             .map(|runtime| runtime.id)
             .collect::<Vec<_>>();
@@ -650,7 +642,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                     "Run did not stop after interrupt; Yeet recycled the stuck background runtime.",
                 );
                 disconnect_runtime_clients(&mut clients, runtime_id);
-                retire_runtime_async(runtime);
+                runtime.retire_async();
             }
         }
 
@@ -663,33 +655,27 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
             for runtime_id in closed_runtime_ids {
                 disconnect_runtime_clients(&mut clients, runtime_id);
                 if let Some(runtime) = take_runtime(&mut runtimes, runtime_id) {
-                    retire_runtime_async(runtime);
+                    runtime.retire_async();
                 }
             }
         }
 
         let now = Instant::now();
         for runtime in &mut runtimes {
-            if runtime_client_count(&clients, runtime.id) > 0 || runtime.service.is_streaming() {
-                // A streaming runtime deliberately survives with zero clients:
-                // transport loss must not become semantic cancellation.
-                runtime.idle_since = None;
-            } else {
-                runtime.idle_since.get_or_insert(now);
-            }
+            runtime.lifecycle.observe_idle(
+                runtime_client_count(&clients, runtime.id) > 0,
+                runtime.service.is_streaming(),
+                now,
+            );
         }
         let expired_runtime_ids = runtimes
             .iter()
-            .filter(|runtime| {
-                runtime
-                    .idle_since
-                    .is_some_and(|since| since.elapsed() >= RUNTIME_IDLE_RETIRE_AFTER)
-            })
+            .filter(|runtime| runtime.lifecycle.idle_expired(Instant::now()))
             .map(|runtime| runtime.id)
             .collect::<Vec<_>>();
         for runtime_id in expired_runtime_ids {
             if let Some(runtime) = take_runtime(&mut runtimes, runtime_id) {
-                retire_runtime_async(runtime);
+                runtime.retire_async();
             }
         }
 
@@ -771,21 +757,6 @@ fn allocate_runtime_id(next_runtime_id: &mut u64) -> u64 {
     runtime_id
 }
 
-fn spawn_runtime(
-    workspace: &Path,
-    id: u64,
-    scope: Option<&str>,
-    wake: Wake,
-) -> Result<SessionRuntime> {
-    Ok(SessionRuntime {
-        id,
-        service: RuntimeProcess::spawn(workspace, scope, wake)?,
-        idle_since: None,
-        interrupt_requested_at: None,
-        catalog: None,
-    })
-}
-
 fn send_client_error(
     clients: &mut Vec<ClientConnection>,
     client_index: usize,
@@ -819,10 +790,6 @@ fn take_runtime(runtimes: &mut Vec<SessionRuntime>, runtime_id: u64) -> Option<S
         .iter()
         .position(|runtime| runtime.id == runtime_id)?;
     Some(runtimes.swap_remove(index))
-}
-
-fn retire_runtime_async(runtime: SessionRuntime) {
-    thread::spawn(move || drop(runtime));
 }
 
 fn runtime_client_count(clients: &[ClientConnection], runtime_id: u64) -> usize {
@@ -1042,7 +1009,7 @@ fn attach_client_to_runtime(
             return false;
         }
     };
-    runtime.idle_since = None;
+    runtime.lifecycle.attached();
     let writer = match ClientWriter::new(stream) {
         Ok(writer) => writer,
         Err(_) => return false,
