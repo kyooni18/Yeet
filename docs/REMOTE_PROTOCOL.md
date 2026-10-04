@@ -137,6 +137,8 @@ current_session_id
 active_run_id
 available_capabilities
 is_loading_capabilities
+agent_tasks
+agent_group
 auth_providers
 auth_notice
 auth_working
@@ -367,6 +369,13 @@ Supported `FrontendCommand` payloads are:
 { "type": "set_open_ai_flex", "enabled": true }
 { "type": "set_foundation_memory", "enabled": true }
 
+{ "type": "create_agent_group", "objective": "Review the parser and report one integrated result." }
+{ "type": "start_agent_group", "group_id": "group-uuid" }
+{ "type": "resume_agent_group", "group_id": "group-uuid" }
+{ "type": "cancel_agent_group", "group_id": "group-uuid" }
+{ "type": "stop_agent_group", "group_id": "group-uuid" }
+{ "type": "inspect_agent_group", "group_id": "group-uuid" }
+
 { "type": "request_sandbox" }
 { "type": "update_sandbox", "action": { "type": "apply_preset", "preset": "..." } }
 
@@ -374,6 +383,15 @@ Supported `FrontendCommand` payloads are:
 ```
 
 `shutdown` exists internally in `FrontendCommand` for local lifecycle management but is intentionally forbidden over Remote.
+
+Group lifecycle completion is reported through subsequent snapshots or
+`state_update` patches containing `agent_group`. That projection includes the
+stable `group_id`, shared objective, lifecycle status, final result, budget,
+member/task summaries, and a bounded event list. Each group event has its own
+monotonic `sequence` and identifies its `groupId` plus optional `memberId` and
+`taskId` using the existing camelCase state-model casing. Remote state replay
+remains connection-sequenced; session reload restores the durable group
+checkpoint and event journal before publishing a fresh snapshot.
 
 `update_sandbox.action` uses the existing `SandboxAction` variants:
 
