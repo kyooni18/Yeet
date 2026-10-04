@@ -19,7 +19,7 @@ use super::{
     policy::{TaskProfile, is_mutation_tool},
     progress::{
         self, classify_tool_error, content_fingerprint, is_inspection_tool,
-        tool_execution_succeeded, tool_failure_fingerprint, tool_made_progress,
+        tool_execution_succeeded, tool_failure_fingerprint, tool_made_progress, tool_signature,
     },
     runaway::{RunawayDecision, RunawayDetector, RunawayRound},
     session_controls::tool_call_indicates_implementation_intent,
@@ -29,6 +29,59 @@ use super::{
 };
 
 pub(super) type ParallelResults = Option<std::vec::IntoIter<std::result::Result<String, String>>>;
+
+/// Eligibility and model identity for a read-only MCP batch.
+pub(super) struct BatchInput<'a> {
+    pub calls: &'a [ToolCall],
+    pub local_file_lookup: bool,
+    pub callable_names: &'a HashSet<String>,
+    pub call_counts: &'a HashMap<String, usize>,
+    pub cancel: &'a AtomicBool,
+    pub model: &'a str,
+}
+
+pub(super) struct PreparedBatch {
+    pub parallel_mcp_results: ParallelResults,
+    pub parallel_mcp_active: bool,
+}
+
+impl AgentCoordinator {
+    pub(super) fn prepare_tool_batch<F>(
+        &mut self,
+        input: BatchInput<'_>,
+        emit: &mut F,
+    ) -> PreparedBatch
+    where
+        F: FnMut(AgentEvent),
+    {
+        let mut batch_signatures = HashSet::new();
+        let parallel_batch_eligible = !input.local_file_lookup
+            && input.calls.len() > 1
+            && input.calls.iter().all(|call| {
+                let signature = tool_signature(call);
+                input.callable_names.contains(&call.name)
+                    && !input.call_counts.contains_key(&signature)
+                    && batch_signatures.insert(signature)
+            })
+            && self.registry.can_parallel_read_only_mcp_batch(input.calls);
+        let parallel_mcp_results = if parallel_batch_eligible {
+            for call in input.calls {
+                emit(AgentEvent::ToolExecutionStarted(call.clone()));
+            }
+            self.registry
+                .execute_parallel_read_only_mcp_batch(input.calls, input.cancel)
+                .map(Vec::into_iter)
+        } else {
+            None
+        };
+        let parallel_mcp_active = parallel_mcp_results.is_some();
+        self.registry.prepare_tool_batch(input.calls, input.model);
+        PreparedBatch {
+            parallel_mcp_results,
+            parallel_mcp_active,
+        }
+    }
+}
 
 /// Inputs to dispatch, including the counters that bound a local file lookup.
 pub(super) struct DispatchInput<'a> {

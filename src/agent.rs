@@ -702,28 +702,20 @@ impl AgentCoordinator {
             let mut round_output_fingerprints = Vec::new();
             let semantic_fingerprint = round_semantic_fingerprint(&calls);
             let mut round_output_budget = ToolRegistry::round_output_budget(calls.len());
-            let mut batch_signatures = HashSet::new();
-            let parallel_batch_eligible = !local_file_lookup
-                && calls.len() > 1
-                && calls.iter().all(|call| {
-                    let signature = tool_signature(call);
-                    callable_names.contains(&call.name)
-                        && !call_counts.contains_key(&signature)
-                        && batch_signatures.insert(signature)
-                })
-                && self.registry.can_parallel_read_only_mcp_batch(&calls);
-            let mut parallel_mcp_results = if parallel_batch_eligible {
-                for call in &calls {
-                    emit(AgentEvent::ToolExecutionStarted(call.clone()));
-                }
-                self.registry
-                    .execute_parallel_read_only_mcp_batch(&calls, cancel)
-                    .map(Vec::into_iter)
-            } else {
-                None
-            };
-            let parallel_mcp_active = parallel_mcp_results.is_some();
-            self.registry.prepare_tool_batch(&calls, model);
+            let tool_round::PreparedBatch {
+                mut parallel_mcp_results,
+                parallel_mcp_active,
+            } = self.prepare_tool_batch(
+                tool_round::BatchInput {
+                    calls: &calls,
+                    local_file_lookup,
+                    callable_names: &callable_names,
+                    call_counts: &call_counts,
+                    cancel,
+                    model,
+                },
+                emit,
+            );
             for call in &calls {
                 check_cancel(cancel)?;
                 let current_generation = self.registry.workspace_generation();
