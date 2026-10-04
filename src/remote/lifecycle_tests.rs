@@ -38,24 +38,37 @@ fn locate_yeet_binary() -> PathBuf {
 }
 
 struct TestContext {
-    config_dir: tempfile::TempDir,
+    /// Kept for the rest of the test process: while this context is alive
+    /// `YEET_CONFIG_DIR` points here, and sidecars spawned meanwhile by
+    /// unrelated parallel tests inherit it and may outlive the context.
+    config_dir: PathBuf,
     binary: PathBuf,
+    /// Process-wide values restored when the context ends.
+    previous_env: Vec<(&'static str, Option<std::ffi::OsString>)>,
 }
 
 impl TestContext {
     fn new() -> Self {
-        let config_dir = tempfile::tempdir().expect("temp config dir");
+        let config_dir = tempfile::tempdir().expect("temp config dir").keep();
         let binary = locate_yeet_binary();
+        let previous_env = ["YEET_CONFIG_DIR", "YEET_EXE"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect();
         unsafe {
-            std::env::set_var("YEET_CONFIG_DIR", config_dir.path());
+            std::env::set_var("YEET_CONFIG_DIR", config_dir.as_path());
             std::env::set_var("YEET_EXE", &binary);
         }
-        Self { config_dir, binary }
+        Self {
+            config_dir,
+            binary,
+            previous_env,
+        }
     }
 
     fn command(&self) -> Command {
         let mut command = Command::new(&self.binary);
-        command.env("YEET_CONFIG_DIR", self.config_dir.path());
+        command.env("YEET_CONFIG_DIR", self.config_dir.as_path());
         command.env("YEET_EXE", &self.binary);
         command
     }
@@ -64,9 +77,17 @@ impl TestContext {
 impl Drop for TestContext {
     fn drop(&mut self) {
         unsafe {
-            std::env::set_var("YEET_CONFIG_DIR", self.config_dir.path());
+            std::env::set_var("YEET_CONFIG_DIR", self.config_dir.as_path());
         }
         let _ = stop_remote();
+        for (key, value) in &self.previous_env {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
     }
 }
 
