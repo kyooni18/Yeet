@@ -1,6 +1,8 @@
 mod api;
 mod cache;
 mod context;
+#[cfg(test)]
+mod continuity_tests;
 mod coordinator_support;
 mod goal;
 mod history;

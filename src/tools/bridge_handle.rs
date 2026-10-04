@@ -25,7 +25,7 @@ struct BridgeHandleState {
 }
 
 impl BridgeHandle {
-    pub(super) fn eager(bridge: BridgeClient) -> Self {
+    pub(crate) fn eager(bridge: BridgeClient) -> Self {
         Self {
             inner: Arc::new(Mutex::new(BridgeHandleState {
                 client: Some(bridge),

@@ -751,6 +751,26 @@ impl BridgeClient {
             command.current_dir(workspace);
             apply_workspace_env(&mut command, workspace)?;
         }
+        Self::spawn(command, workspace.map(Path::to_path_buf))
+    }
+
+    /// Starts a stand-in bridge script with the real protocol client, for
+    /// harness tests that must observe provider-visible requests.
+    #[cfg(test)]
+    pub(crate) fn start_script(script: &Path, envs: &[(&str, &Path)]) -> Result<Self> {
+        let mut command = Command::new(node_executable()?);
+        command
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        Self::spawn(command, None)
+    }
+
+    fn spawn(mut command: Command, workspace: Option<PathBuf>) -> Result<Self> {
         // Keep the provider bridge and every MCP subprocess it starts in one
         // owned process group. Linux additionally arms parent-death cleanup.
         configure_process_group(&mut command);
@@ -828,10 +848,7 @@ impl BridgeClient {
             }
         });
 
-        let client = Self {
-            inner,
-            workspace: workspace.map(Path::to_path_buf),
-        };
+        let client = Self { inner, workspace };
         let pong =
             match client.request_with_timeout("ping", Map::new(), BRIDGE_STARTUP_PING_TIMEOUT) {
                 Ok(pong) => pong,
