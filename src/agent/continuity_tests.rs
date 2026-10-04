@@ -29,6 +29,7 @@ struct Harness {
     workspace: PathBuf,
     log: PathBuf,
     queue: PathBuf,
+    mcp: PathBuf,
     disabled: Vec<String>,
     coordinator: AgentCoordinator,
 }
@@ -40,6 +41,7 @@ impl Harness {
         fs::create_dir_all(&workspace).unwrap();
         let log = dir.path().join("requests.jsonl");
         let queue = dir.path().join("queue.json");
+        let mcp = dir.path().join("mcp-tools.json");
         let script =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/testdata/fake_bridge.mjs");
         let bridge = match BridgeClient::start_script(
@@ -47,6 +49,7 @@ impl Harness {
             &[
                 ("YEET_FAKE_BRIDGE_LOG", log.as_path()),
                 ("YEET_FAKE_BRIDGE_QUEUE", queue.as_path()),
+                ("YEET_FAKE_BRIDGE_MCP", mcp.as_path()),
             ],
         ) {
             Ok(bridge) => bridge,
@@ -74,6 +77,7 @@ impl Harness {
             workspace,
             log,
             queue,
+            mcp,
             disabled: Vec::new(),
             coordinator,
         })
@@ -276,6 +280,52 @@ fn append_only_check_detects_a_rewritten_prefix() {
     let mut second = first.clone();
     second.messages[0] = Message::user("changed");
     assert_append_only(&[first, second]);
+}
+
+#[test]
+fn mcp_activation_and_mcp_tool_results_stay_append_only() {
+    let Some(mut harness) = Harness::start() else {
+        return;
+    };
+    harness.turn("Hello.");
+
+    // An MCP server appears between turns; the next run attaches it.
+    fs::write(
+        &harness.mcp,
+        json!([{
+            "server": "docs", "name": "search", "qualifiedName": "docs.search",
+            "description": "Search docs", "annotations": {"readOnlyHint": true},
+            "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}}
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    harness.turn("Any docs available?");
+    // MCP schemas join the registry catalog; the coordinator attaches them
+    // to a request lazily, which is itself a tool-surface change.
+    let mcp_tool = harness
+        .coordinator
+        .registry
+        .tools(false)
+        .into_iter()
+        .map(|tool| tool.name)
+        .find(|name| name.contains("search") && name.contains("docs"))
+        .expect("MCP tool registered after activation");
+
+    harness.script(json!([
+        {"toolCalls": [{"id": "find-1", "name": "search_tools", "arguments": {"query": "docs search"}}]},
+        {"toolCalls": [{"id": "mcp-1", "name": mcp_tool, "arguments": {"q": "cache"}}]},
+        {"text": "Found it."}
+    ]));
+    harness.turn("Use the docs MCP tool to look up cache.");
+
+    let requests = harness.requests();
+    assert_eq!(assert_append_only(&requests), 0);
+    let last = serde_json::to_string(&wire(requests.last().unwrap())).unwrap();
+    assert!(
+        last.contains("docs result"),
+        "MCP result must enter history: {last}"
+    );
 }
 
 #[test]
