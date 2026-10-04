@@ -24,7 +24,7 @@ pub(super) fn initial_session(
         session.state.available_models = catalog.iter().map(|item| item.id.clone()).collect();
         session.state.model_catalog = catalog;
     }
-    if let Ok((workspaces, session_groups)) = store.list_workspace_catalog(&workspace_root) {
+    if let Ok((workspaces, session_groups)) = store.list_workspace_catalog(workspace_root) {
         let current_workspace_id = workspaces
             .iter()
             .find(|workspace| workspace.is_current)
@@ -42,9 +42,9 @@ pub(super) fn initial_session(
     } else {
         // Keep startup resilient if the cross-workspace catalog cannot be built.
         // This fallback repeats the scan only on the exceptional path.
-        session.state.saved_sessions = store.list(&workspace_root).unwrap_or_default();
+        session.state.saved_sessions = store.list(workspace_root).unwrap_or_default();
     }
-    session.state.sandbox_settings = SandboxStore::new(&workspace_root)
+    session.state.sandbox_settings = SandboxStore::new(workspace_root)
         .and_then(|store| store.load())
         .ok()
         .map(|policy| sandbox_settings_state(&policy));
