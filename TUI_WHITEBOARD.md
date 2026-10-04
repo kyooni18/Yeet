@@ -841,3 +841,12 @@ frames cannot retain clickable controls from the previous frame.
 This is a bounded migration, not a complete component runtime: Home/Session
 remain singletons, other geometry still uses existing target collections, and
 focus/overlay lifecycle and narrower component inputs remain follow-up work.
+
+
+## Session startup welcome
+
+The initial Sessions view uses the shared Yeet brand welcome renderer
+(`shell::draw_welcome`). Do not add a Skynet-style/custom operator landing screen
+or screen-specific input behavior. Normal composer submission and Esc focus
+handling apply. The welcome remains separate from the workbench Overview and the
+saved-session picker.
