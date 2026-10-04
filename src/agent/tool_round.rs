@@ -15,8 +15,9 @@ use super::{
         attached_web_search_capability_result, check_cancel,
         supports_anthropic_deferred_tool_references,
     },
-    policy::TaskProfile,
-    progress::{classify_tool_error, is_inspection_tool},
+    goal,
+    policy::{TaskProfile, is_mutation_tool},
+    progress::{self, classify_tool_error, is_inspection_tool},
     runaway::{RunawayDecision, RunawayDetector, RunawayRound},
     tool_discovery::{self, ToolDiscovery},
     turn_state::TurnExecutionEvidence,
@@ -123,6 +124,81 @@ impl AgentCoordinator {
             recorded_content,
             goal_observation_item,
         })
+    }
+}
+
+/// Evidence and checkpoint inputs for a tool result already in model history.
+pub(super) struct EvidenceInput<'a> {
+    pub call: &'a ToolCall,
+    pub content: &'a str,
+    pub succeeded: bool,
+    pub workspace_write_observed: bool,
+    pub workspace_mutated: bool,
+    pub profile: TaskProfile,
+    pub implementation_requested: bool,
+    pub planning_or_documentation: bool,
+    pub goal_mode: &'a AtomicBool,
+    pub goal_input: &'a str,
+    pub goal_progress: &'a goal::GoalProgress,
+    pub goal_observation_item: usize,
+    pub execution_evidence: &'a mut TurnExecutionEvidence,
+}
+
+pub(super) struct EvidenceOutcome {
+    pub mutation_tool: bool,
+}
+
+impl AgentCoordinator {
+    pub(super) fn observe_tool_evidence(&mut self, input: EvidenceInput<'_>) -> EvidenceOutcome {
+        let mutation_tool = is_mutation_tool(&input.call.name);
+        let validation_call = progress::is_validation_tool_result(input.call, input.content);
+        input.execution_evidence.observe_tool(
+            input.call,
+            input.content,
+            input.succeeded,
+            input.workspace_write_observed,
+            validation_call,
+            mutation_tool,
+        );
+        if input.profile == TaskProfile::Agent {
+            let checkpoint_phase = input.execution_evidence.recommended_phase(
+                input.implementation_requested,
+                input.planning_or_documentation,
+            );
+            let checkpoint_workspace_state = self.registry.working_state_summary();
+            self.context_memory.set_agent_checkpoint(
+                input.goal_input,
+                checkpoint_phase.as_str(),
+                input.execution_evidence.successful_mutations(),
+                input.execution_evidence.unresolved_failed_mutation(),
+                input.execution_evidence.verification_attempted(),
+                input.execution_evidence.verification_succeeded(),
+                input.execution_evidence.last_validation_evidence(),
+                input.execution_evidence.recent_evidence(),
+                checkpoint_workspace_state.as_deref(),
+            );
+        }
+        if input.goal_mode.load(Ordering::Acquire) {
+            let window_id = self.context_memory.id().to_owned();
+            // Retain the exact index of the tool message even when a
+            // visual payload appends a synthetic user message afterward.
+            let item = input.goal_observation_item;
+            if let Some(goal) = self.context_memory.goal_mut() {
+                goal.progress = input.goal_progress.clone();
+                goal.status = goal::GoalStatus::Running;
+                goal.observe(goal::GoalObservation {
+                    window_id,
+                    item,
+                    tool_call_id: input.call.id.clone(),
+                    tool_name: input.call.name.clone(),
+                    succeeded: input.succeeded,
+                    workspace_mutated: input.workspace_mutated,
+                    validation_call,
+                    excerpt: input.content.chars().take(1_000).collect(),
+                });
+            }
+        }
+        EvidenceOutcome { mutation_tool }
     }
 }
 

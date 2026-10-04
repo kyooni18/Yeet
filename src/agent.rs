@@ -39,10 +39,9 @@ use limits::*;
 use loop_budget::LoopBudget;
 pub use policy::SYSTEM_INSTRUCTION;
 use policy::{
-    ResearchBudget, TaskProfile, is_mutation_tool, looks_like_bounded_analysis,
-    looks_like_bounded_explanation, looks_like_capability_request,
-    looks_like_coding_implementation_request, looks_like_coding_request,
-    looks_like_local_file_lookup, looks_like_planning_or_documentation,
+    ResearchBudget, TaskProfile, looks_like_bounded_analysis, looks_like_bounded_explanation,
+    looks_like_capability_request, looks_like_coding_implementation_request,
+    looks_like_coding_request, looks_like_local_file_lookup, looks_like_planning_or_documentation,
     looks_like_prior_context_request, should_preserve_web_tool_surface, task_guidance,
     task_profile_with_history,
 };
@@ -849,52 +848,22 @@ impl AgentCoordinator {
                     succeeded,
                     externally_bounded,
                 })?;
-                let mutation_tool = is_mutation_tool(&call.name);
-                let validation_call = progress::is_validation_tool_result(call, &content);
-                execution_evidence.observe_tool(
-                    call,
-                    &content,
-                    succeeded,
-                    workspace_write_observed,
-                    validation_call,
-                    mutation_tool,
-                );
-                if profile == TaskProfile::Agent {
-                    let checkpoint_phase = execution_evidence
-                        .recommended_phase(implementation_requested, planning_or_documentation);
-                    let checkpoint_workspace_state = self.registry.working_state_summary();
-                    self.context_memory.set_agent_checkpoint(
+                let tool_round::EvidenceOutcome { mutation_tool } =
+                    self.observe_tool_evidence(tool_round::EvidenceInput {
+                        call,
+                        content: &content,
+                        succeeded,
+                        workspace_write_observed,
+                        workspace_mutated,
+                        profile,
+                        implementation_requested,
+                        planning_or_documentation,
+                        goal_mode,
                         goal_input,
-                        checkpoint_phase.as_str(),
-                        execution_evidence.successful_mutations(),
-                        execution_evidence.unresolved_failed_mutation(),
-                        execution_evidence.verification_attempted(),
-                        execution_evidence.verification_succeeded(),
-                        execution_evidence.last_validation_evidence(),
-                        execution_evidence.recent_evidence(),
-                        checkpoint_workspace_state.as_deref(),
-                    );
-                }
-                if goal_mode.load(Ordering::Acquire) {
-                    let window_id = self.context_memory.id().to_owned();
-                    // Retain the exact index of the tool message even when a
-                    // visual payload appends a synthetic user message afterward.
-                    let item = goal_observation_item;
-                    if let Some(goal) = self.context_memory.goal_mut() {
-                        goal.progress = goal_progress.clone();
-                        goal.status = goal::GoalStatus::Running;
-                        goal.observe(goal::GoalObservation {
-                            window_id,
-                            item,
-                            tool_call_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            succeeded,
-                            workspace_mutated,
-                            validation_call,
-                            excerpt: content.chars().take(1_000).collect(),
-                        });
-                    }
-                }
+                        goal_progress: &goal_progress,
+                        goal_observation_item,
+                        execution_evidence: &mut execution_evidence,
+                    });
                 if workspace_write_observed {
                     if workspace_mutated && mutation_tool {
                         // Verification is normally needed only after a confirmed source write.
