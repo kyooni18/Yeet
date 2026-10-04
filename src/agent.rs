@@ -838,30 +838,20 @@ impl AgentCoordinator {
                         goal_observation_item,
                         execution_evidence: &mut execution_evidence,
                     });
-                if workspace_write_observed {
-                    if workspace_mutated && mutation_tool {
-                        // Verification is normally needed only after a confirmed source write.
-                        tool_discovery.load(["run_shell"]);
-                    }
-                    round_mutated = true;
-                    call_counts.clear();
-                    workspace_generation = self.registry.workspace_generation();
-                    if workspace_mutated
-                        && mutation_tool
-                        && planning_or_documentation
-                        && !final_consistency_used
-                        && self.registry.latest_write_validation_passed() == Some(true)
-                    {
-                        final_consistency_pending = true;
-                        final_consistency_used = true;
-                    }
-                    if !succeeded {
-                        round_failed_mutation = true;
-                    }
-                } else if !succeeded && mutation_tool {
-                    // Failed structured edits may need one focused source refresh before retrying.
-                    round_failed_mutation = true;
-                }
+                self.account_workspace_write(tool_round::WorkspaceWriteInput {
+                    workspace_write_observed,
+                    workspace_mutated,
+                    mutation_tool,
+                    succeeded,
+                    planning_or_documentation,
+                    tool_discovery: &mut tool_discovery,
+                    round_mutated: &mut round_mutated,
+                    call_counts: &mut call_counts,
+                    workspace_generation: &mut workspace_generation,
+                    final_consistency_pending: &mut final_consistency_pending,
+                    final_consistency_used: &mut final_consistency_used,
+                    round_failed_mutation: &mut round_failed_mutation,
+                });
                 if !succeeded {
                     round_failure_fingerprints.push(tool_failure_fingerprint(call, &content));
                     if !jev_attempted {

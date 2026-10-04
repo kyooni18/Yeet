@@ -1,7 +1,7 @@
 //! Dispatch tool calls and insert cache-aware results into the model history.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -47,6 +47,51 @@ pub(super) struct DispatchInput<'a> {
     pub tool_catalog: &'a [ToolDefinition],
     pub parallel_mcp_results: &'a mut ParallelResults,
     pub tool_discovery: &'a mut ToolDiscovery,
+}
+
+/// State invalidated or latched when a tool changes the workspace generation.
+pub(super) struct WorkspaceWriteInput<'a> {
+    pub workspace_write_observed: bool,
+    pub workspace_mutated: bool,
+    pub mutation_tool: bool,
+    pub succeeded: bool,
+    pub planning_or_documentation: bool,
+    pub tool_discovery: &'a mut ToolDiscovery,
+    pub round_mutated: &'a mut bool,
+    pub call_counts: &'a mut HashMap<String, usize>,
+    pub workspace_generation: &'a mut u64,
+    pub final_consistency_pending: &'a mut bool,
+    pub final_consistency_used: &'a mut bool,
+    pub round_failed_mutation: &'a mut bool,
+}
+
+impl AgentCoordinator {
+    pub(super) fn account_workspace_write(&self, input: WorkspaceWriteInput<'_>) {
+        if input.workspace_write_observed {
+            if input.workspace_mutated && input.mutation_tool {
+                // Verification is normally needed only after a confirmed source write.
+                input.tool_discovery.load(["run_shell"]);
+            }
+            *input.round_mutated = true;
+            input.call_counts.clear();
+            *input.workspace_generation = self.registry.workspace_generation();
+            if input.workspace_mutated
+                && input.mutation_tool
+                && input.planning_or_documentation
+                && !*input.final_consistency_used
+                && self.registry.latest_write_validation_passed() == Some(true)
+            {
+                *input.final_consistency_pending = true;
+                *input.final_consistency_used = true;
+            }
+            if !input.succeeded {
+                *input.round_failed_mutation = true;
+            }
+        } else if !input.succeeded && input.mutation_tool {
+            // Failed structured edits may need one focused source refresh before retrying.
+            *input.round_failed_mutation = true;
+        }
+    }
 }
 
 /// Mutable turn state affected by a dispatched result before model output insertion.
