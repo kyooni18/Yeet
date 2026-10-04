@@ -43,7 +43,12 @@ impl ToolRegistry {
         let mut unrestricted =
             !hard_confined && (policy.mode == SandboxMode::Unlimited || has_permit);
         let mut allow_write = false;
-        if restricted.is_some() && self.disabled_capabilities.contains("builtin:file-write") {
+        if restricted.is_some()
+            && self
+                .catalog
+                .disabled_capabilities
+                .contains("builtin:file-write")
+        {
             bail!("File Write is disabled for this session; shell is read-only");
         }
         if context_root.is_none() {

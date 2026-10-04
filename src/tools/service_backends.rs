@@ -37,15 +37,16 @@ impl ToolRegistry {
         // provide their implementation through the selected Web backend, but
         // must not also expose raw aliases that bypass Yeet's provenance guard.
         let raw_web_aliases = self
+            .catalog
             .mcp_tool_map
             .iter()
             .filter(|(_, (_, tool))| matches!(tool.as_str(), "web_search" | "web_read"))
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
         for name in raw_web_aliases {
-            self.mcp_tool_map.remove(&name);
-            self.active_tools.remove(&name);
-            self.read_only_mcp_tools.remove(&name);
+            self.catalog.mcp_tool_map.remove(&name);
+            self.catalog.active_tools.remove(&name);
+            self.catalog.read_only_mcp_tools.remove(&name);
         }
 
         self.web_backend = backend;
@@ -58,12 +59,13 @@ impl ToolRegistry {
             ServiceBackend::Mcp => self
                 .foundation_server
                 .as_deref()
-                .is_some_and(|server| !self.capability_disabled("mcp", server)),
+                .is_some_and(|server| !self.catalog.capability_disabled("mcp", server)),
         };
         self.foundation_enabled
             && backend_available
             && self.foundation_project.is_some()
             && self
+                .catalog
                 .foundation_tool_map
                 .contains_key(FOUNDATION_RECALL_TOOL)
     }
@@ -85,7 +87,7 @@ impl ToolRegistry {
             .as_deref()
             .ok_or_else(|| anyhow!("Project identity is unavailable"))?;
         if target.server != crate::foundation_backend::BUILTIN_FOUNDATION_SERVER
-            && self.capability_disabled("mcp", &target.server)
+            && self.catalog.capability_disabled("mcp", &target.server)
         {
             bail!("MCP server {} is disabled for this session", target.server);
         }
@@ -117,6 +119,7 @@ impl ToolRegistry {
             return Ok(None);
         }
         let target = self
+            .catalog
             .foundation_tool_map
             .get(FOUNDATION_RECALL_TOOL)
             .ok_or_else(|| anyhow!("Project memory recall is unavailable"))?;
@@ -136,7 +139,7 @@ impl ToolRegistry {
         let Some(server) = self.web_server.as_deref() else {
             return Vec::new();
         };
-        if self.capability_disabled("mcp", server) {
+        if self.catalog.capability_disabled("mcp", server) {
             return Vec::new();
         }
         let Ok(mut tools) = self

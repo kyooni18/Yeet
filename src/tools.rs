@@ -33,11 +33,13 @@ mod artifact_output;
 mod auto_check;
 mod bridge_handle;
 mod capability_runtime;
+mod catalog;
 mod computer_use;
 mod definitions;
 mod edit_lock;
 mod editing;
 mod environment;
+mod external;
 mod io;
 mod paths;
 pub mod repo_map;
@@ -53,6 +55,7 @@ mod token_efficiency;
 
 pub(crate) use agent_deploy::deploy_agent_for_workspace;
 pub(crate) use bridge_handle::BridgeHandle;
+use catalog::{ExternalRoute, ToolCatalog};
 use definitions::BUILTIN_CAPABILITIES;
 pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
@@ -149,23 +152,12 @@ pub struct ToolRegistry {
     permission: PermissionBroker,
     artifacts: ArtifactStore,
     artifacts_enabled: bool,
-    descriptors: Vec<CapabilityDescriptor>,
-    active_tools: BTreeMap<String, ToolDefinition>,
-    skill_tool_map: HashMap<String, String>,
-    skill_script_tool_map: HashMap<String, String>,
-    mcp_tool_map: HashMap<String, (String, String)>,
-    foundation_tool_map: HashMap<String, FoundationToolTarget>,
-    worker_tool_map: HashMap<String, (String, String)>,
-    active_skills: HashSet<String>,
-    active_mcp: HashSet<String>,
-    active_mcp_identity: HashMap<String, McpServerIdentity>,
+    catalog: ToolCatalog,
     foundation_enabled: bool,
     foundation_backend: ServiceBackend,
     foundation_server: Option<String>,
     foundation_project: Option<String>,
-    active_workers: HashSet<String>,
     skyline_handle: Option<String>,
-    disabled_capabilities: HashSet<String>,
     agent_group: Option<AgentGroupHandle>,
     /// Identifies a delegated agent in permission prompts it raises.
     permission_label: Option<String>,
@@ -185,7 +177,6 @@ pub struct ToolRegistry {
     web_searches: HashSet<String>,
     web_sources: HashSet<String>,
     web_reads: HashSet<String>,
-    read_only_mcp_tools: HashSet<String>,
     workspace_generation: u64,
     workspace_write_generation: u64,
     protected_write_paths: Vec<PathBuf>,
@@ -221,10 +212,6 @@ impl ToolRegistry {
         let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
         let working_directory = workspace_root.clone();
         let context_roots = vec![workspace_root.clone()];
-        let mut active_tools = BTreeMap::new();
-        for tool in base_tool_definitions() {
-            active_tools.insert(tool.name.clone(), tool);
-        }
         Ok(Self {
             bridge,
             edit: None,
@@ -237,23 +224,12 @@ impl ToolRegistry {
             permission,
             artifacts: ArtifactStore::new()?,
             artifacts_enabled: true,
-            descriptors: Vec::new(),
-            active_tools,
-            skill_tool_map: HashMap::new(),
-            skill_script_tool_map: HashMap::new(),
-            mcp_tool_map: HashMap::new(),
-            foundation_tool_map: HashMap::new(),
-            worker_tool_map: HashMap::new(),
-            active_skills: HashSet::new(),
-            active_mcp: HashSet::new(),
-            active_mcp_identity: HashMap::new(),
+            catalog: ToolCatalog::with_builtin_tools(),
             foundation_enabled: false,
             foundation_backend: ServiceBackend::Builtin,
             foundation_server: Some("foundation".into()),
             foundation_project: None,
-            active_workers: HashSet::new(),
             skyline_handle: None,
-            disabled_capabilities: HashSet::new(),
             agent_group: None,
             permission_label: None,
             read_cache: HashMap::new(),
@@ -272,7 +248,6 @@ impl ToolRegistry {
             web_searches: HashSet::new(),
             web_sources: HashSet::new(),
             web_reads: HashSet::new(),
-            read_only_mcp_tools: HashSet::new(),
             workspace_generation: 0,
             workspace_write_generation: 0,
             protected_write_paths: Vec::new(),
@@ -323,12 +298,13 @@ impl ToolRegistry {
         self.agent_group = group;
         if self.agent_group.is_some() {
             for definition in AgentGroupHandle::tool_definitions() {
-                self.active_tools
+                self.catalog
+                    .active_tools
                     .insert(definition.name.clone(), definition);
             }
         } else {
             for name in AgentGroupHandle::tool_names() {
-                self.active_tools.remove(name);
+                self.catalog.active_tools.remove(name);
             }
         }
     }
@@ -396,32 +372,9 @@ impl ToolRegistry {
     pub fn tools(&self, web_search_enabled: bool) -> Vec<ToolDefinition> {
         // Return the eligible catalog. The agent attaches schemas on demand
         // and retains loaded schemas for the rest of its turn.
-        let mut tools: Vec<_> = self
-            .active_tools
-            .values()
-            .filter(|tool| self.tool_enabled(&tool.name))
-            .cloned()
-            .collect();
-        for tool in &mut tools {
-            // Built-in descriptions already contain their execution contract.
-            // Capability summaries belong in settings, not in every model tool.
-            if self.foundation_tool_map.contains_key(&tool.name) {
-                let tool_description = tool.description.take().unwrap_or_default();
-                tool.description = Some(format!("Project memory: {tool_description}"));
-            } else if let Some((server, _)) = self.mcp_tool_map.get(&tool.name) {
-                let tool_description = tool.description.take().unwrap_or_default();
-                tool.description = Some(format!("MCP {server}: {tool_description}"));
-            } else if let Some(skill) = self.skill_tool_map.get(&tool.name) {
-                let tool_description = tool.description.take().unwrap_or_default();
-                tool.description = Some(format!("Skill {skill}: {tool_description}"));
-            } else if let Some(skill) = self.skill_script_tool_map.get(&tool.name) {
-                let tool_description = tool.description.take().unwrap_or_default();
-                tool.description = Some(format!("Skill {skill}: {tool_description}"));
-            } else if let Some((worker, _)) = self.worker_tool_map.get(&tool.name) {
-                let tool_description = tool.description.take().unwrap_or_default();
-                tool.description = Some(format!("Worker {worker}: {tool_description}"));
-            }
-        }
+        let mut tools = self
+            .catalog
+            .enabled_definitions(self.foundation_memory_active());
         if web_search_enabled {
             tools.extend(self.configured_web_tool_definitions());
         }
@@ -429,50 +382,23 @@ impl ToolRegistry {
     }
 
     pub fn set_disabled_capabilities(&mut self, disabled: impl IntoIterator<Item = String>) {
-        self.disabled_capabilities = disabled.into_iter().collect();
-        self.descriptors.clear();
+        self.catalog.disabled_capabilities = disabled.into_iter().collect();
+        self.catalog.descriptors.clear();
     }
 
     /// Research uses the normal registry, with the same execution guard as its schema filter.
     pub fn research_tools(&self) -> Vec<ToolDefinition> {
         self.tools(true)
             .into_iter()
-            .filter(|tool| self.research_tool_allowed(&tool.name))
+            .filter(|tool| self.catalog.research_tool_allowed(&tool.name))
             .collect()
-    }
-
-    fn research_tool_allowed(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "find_capabilities"
-                | "activate_capability"
-                | "read_file"
-                | "list_files"
-                | "search_workspace"
-                | "web_search"
-                | "web_read"
-                | "read_document"
-                | "analyze_data"
-                | "artifact_info"
-                | "read_artifact"
-                | "search_artifact"
-                | FOUNDATION_RECALL_TOOL
-                | "project_memory_get"
-                | "project_memory_connections"
-        ) || self.skill_tool_map.contains_key(name)
-            || self.read_only_mcp_tools.contains(name)
     }
 
     pub fn can_parallel_read_only_mcp_batch(&self, calls: &[ToolCall]) -> bool {
         (2..=4).contains(&calls.len())
-            && calls.iter().all(|call| {
-                self.read_only_mcp_tools.contains(&call.name)
-                    && call.arguments.is_object()
-                    && self
-                        .mcp_tool_map
-                        .get(&call.name)
-                        .is_some_and(|(server, _)| !self.capability_disabled("mcp", server))
-            })
+            && calls
+                .iter()
+                .all(|call| self.catalog.read_only_mcp_target(call).is_some())
     }
 
     /// Executes a batch only when every call is an MCP tool explicitly annotated read-only.
@@ -488,13 +414,7 @@ impl ToolRegistry {
         let targets = calls
             .iter()
             .map(|call| {
-                if !self.read_only_mcp_tools.contains(&call.name) {
-                    return None;
-                }
-                let (server, tool) = self.mcp_tool_map.get(&call.name)?.clone();
-                if self.capability_disabled("mcp", &server) {
-                    return None;
-                }
+                let (server, tool) = self.catalog.read_only_mcp_target(call)?;
                 let arguments = call.arguments.as_object()?.clone();
                 Some((server, tool, arguments))
             })
@@ -530,7 +450,7 @@ impl ToolRegistry {
         model: &str,
         cancel: &AtomicBool,
     ) -> Result<String> {
-        if !self.research_tool_allowed(&call.name) {
+        if !self.catalog.research_tool_allowed(&call.name) {
             bail!("{} is not a read-only research tool", call.name);
         }
         if call.name == "activate_capability"
@@ -552,6 +472,7 @@ impl ToolRegistry {
             .map(|server| server.name.clone())
             .collect::<HashSet<_>>();
         let stale = self
+            .catalog
             .active_mcp
             .iter()
             .filter(|name| !configured.contains(*name))
@@ -568,18 +489,18 @@ impl ToolRegistry {
             if self.foundation_server.as_deref() == Some(server.name.as_str()) {
                 if self.foundation_backend == ServiceBackend::Mcp
                     && self.foundation_enabled
-                    && !self.capability_disabled("mcp", &server.name)
+                    && !self.catalog.capability_disabled("mcp", &server.name)
                 {
                     let _ = self.activate(&format!("mcp:{}", server.name));
                 }
                 continue;
             }
-            if self.capability_disabled("mcp", &server.name) {
+            if self.catalog.capability_disabled("mcp", &server.name) {
                 continue;
             }
             let identity = McpServerIdentity::from(&server);
-            if self.active_mcp.contains(&server.name) {
-                if self.active_mcp_identity.get(&server.name) == Some(&identity) {
+            if self.catalog.active_mcp.contains(&server.name) {
+                if self.catalog.active_mcp_identity.get(&server.name) == Some(&identity) {
                     continue;
                 }
                 self.deactivate_mcp(&server.name);
@@ -587,7 +508,9 @@ impl ToolRegistry {
             // One unavailable optional MCP must not take the entire agent down.
             // It remains discoverable and can be retried explicitly later.
             if self.activate(&format!("mcp:{}", server.name)).is_ok() {
-                self.active_mcp_identity.insert(server.name, identity);
+                self.catalog
+                    .active_mcp_identity
+                    .insert(server.name, identity);
             }
         }
         Ok(())
@@ -601,7 +524,7 @@ impl ToolRegistry {
                     .into_iter()
                     .filter(|skill| {
                         skill.allow_implicit_invocation != Some(false)
-                            && !self.capability_disabled("skill", &skill.name)
+                            && !self.catalog.capability_disabled("skill", &skill.name)
                     })
                     .map(|skill| CapabilityDescriptor {
                         id: format!("skill:{}", skill.name),
@@ -617,7 +540,7 @@ impl ToolRegistry {
             descriptors.extend(
                 servers
                     .into_iter()
-                    .filter(|server| !self.capability_disabled("mcp", &server.name))
+                    .filter(|server| !self.catalog.capability_disabled("mcp", &server.name))
                     .map(|server| CapabilityDescriptor {
                         id: format!("mcp:{}", server.name),
                         kind: "mcp".into(),
@@ -640,7 +563,7 @@ impl ToolRegistry {
             }
         }));
         descriptors.sort_by(|left, right| left.id.cmp(&right.id));
-        self.descriptors = descriptors;
+        self.catalog.descriptors = descriptors;
     }
 
     pub fn execute(&mut self, call: &ToolCall, model: &str, cancel: &AtomicBool) -> Result<String> {
@@ -667,7 +590,7 @@ impl ToolRegistry {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                let values = capability_search_values(&self.descriptors, &query);
+                let values = capability_search_values(&self.catalog.descriptors, &query);
                 Ok(serde_json::to_string(&values)?)
             }
             "activate_capability" => {
@@ -807,7 +730,11 @@ impl ToolRegistry {
                 let operation = restricted
                     .clone()
                     .unwrap_or_else(|| "unrestricted shell access".into());
-                if restricted.is_some() && self.disabled_capabilities.contains("builtin:file-write")
+                if restricted.is_some()
+                    && self
+                        .catalog
+                        .disabled_capabilities
+                        .contains("builtin:file-write")
                 {
                     bail!(
                         "File Write is disabled for this session; mutating shell commands cannot be permitted"
@@ -824,64 +751,10 @@ impl ToolRegistry {
             "computer_use" => self.computer_use_tool(&object, cancel),
             "computer_use_reset" => self.computer_use_reset_tool(&object, cancel),
             "apply_file_edits" => self.apply_file_edits(&call.arguments),
-            other => {
-                if let Some(target) = self.foundation_tool_map.get(other).cloned() {
-                    if !self.foundation_enabled {
-                        bail!("Project memory is disabled");
-                    }
-                    let result = self.call_foundation_target(&target, &object, cancel)?;
-                    return Ok(foundation_tool_result_text(&result));
-                }
-                if let Some(skill) = self.skill_script_tool_map.get(other).cloned() {
-                    if self.capability_disabled("skill", &skill) {
-                        bail!("Skill {skill} is disabled for this session");
-                    }
-                    if self.disabled_capabilities.contains("builtin:shell") {
-                        bail!("Shell is disabled for this session; Skill scripts cannot execute");
-                    }
-                    return self.run_skill_script(&skill, &object, model, cancel);
-                }
-                if let Some(skill) = self.skill_tool_map.get(other) {
-                    if self.capability_disabled("skill", skill) {
-                        bail!("Skill {skill} is disabled for this session");
-                    }
-                    return self.bridge_client()?.read_skill_file(
-                        skill,
-                        object.get("path").and_then(Value::as_str).unwrap_or(""),
-                    );
-                }
-                if let Some((server, tool)) = self.mcp_tool_map.get(other).cloned() {
-                    if self.capability_disabled("mcp", &server) {
-                        bail!("MCP server {server} is disabled for this session");
-                    }
-                    let read_only = self.read_only_mcp_tools.contains(other);
-                    let result = self
-                        .bridge_client()?
-                        .call_mcp_tool_cancellable(&server, &tool, &object, cancel)?
-                        .to_string();
-                    if !read_only {
-                        // MCP tools without an explicit readOnlyHint may have
-                        // changed files behind the structured edit backend.
-                        // Drop cached source/search evidence before the next
-                        // tool call so a follow-up read cannot be suppressed
-                        // as a stale duplicate.
-                        self.workspace_write_generation =
-                            self.workspace_write_generation.wrapping_add(1);
-                        self.invalidate_workspace_cache();
-                    }
-                    return Ok(result);
-                }
-                if let Some((worker, tool)) = self.worker_tool_map.get(other).cloned() {
-                    let result =
-                        self.workers
-                            .execute(&worker, &tool, &object, &self.workspace_root)?;
-                    self.workspace_write_generation =
-                        self.workspace_write_generation.wrapping_add(1);
-                    self.invalidate_workspace_cache();
-                    return Ok(result);
-                }
-                bail!("Unknown direct tool: {other}")
-            }
+            other => match self.catalog.external_route(other) {
+                Some(route) => self.execute_external(route, &object, model, cancel),
+                None => bail!("Unknown direct tool: {other}"),
+            },
         }
     }
 
@@ -1053,26 +926,8 @@ impl ToolRegistry {
     }
 
     fn tool_enabled(&self, tool_name: &str) -> bool {
-        if builtin_capability_for_tool(tool_name)
-            .is_some_and(|capability| self.disabled_capabilities.contains(capability.id))
-        {
-            return false;
-        }
-        if let Some(skill) = self.skill_tool_map.get(tool_name) {
-            return !self.capability_disabled("skill", skill);
-        }
-        if let Some((server, _)) = self.mcp_tool_map.get(tool_name) {
-            return !self.capability_disabled("mcp", server);
-        }
-        if self.foundation_tool_map.contains_key(tool_name) {
-            return self.foundation_memory_active();
-        }
-        true
-    }
-
-    fn capability_disabled(&self, kind: &str, name: &str) -> bool {
-        self.disabled_capabilities
-            .contains(&format!("{kind}:{name}"))
+        self.catalog
+            .tool_enabled(tool_name, self.foundation_memory_active())
     }
 
     fn covered_shell_replay_reason(&self, command: &str) -> Option<String> {

@@ -92,15 +92,15 @@ impl ToolRegistry {
     }
 
     pub fn is_read_only_extension_tool(&self, name: &str) -> bool {
-        self.skill_tool_map.contains_key(name)
-            || self.read_only_mcp_tools.contains(name)
+        self.catalog.skill_tool_map.contains_key(name)
+            || self.catalog.read_only_mcp_tools.contains(name)
             || name == FOUNDATION_RECALL_TOOL
     }
 
     pub fn is_provider_defer_candidate(&self, name: &str) -> bool {
-        self.mcp_tool_map.contains_key(name)
-            || self.skill_tool_map.contains_key(name)
-            || self.skill_script_tool_map.contains_key(name)
-            || self.worker_tool_map.contains_key(name)
+        self.catalog.mcp_tool_map.contains_key(name)
+            || self.catalog.skill_tool_map.contains_key(name)
+            || self.catalog.skill_script_tool_map.contains_key(name)
+            || self.catalog.worker_tool_map.contains_key(name)
     }
 }
