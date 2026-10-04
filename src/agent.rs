@@ -45,10 +45,7 @@ use policy::{
     looks_like_prior_context_request, should_preserve_web_tool_surface, task_guidance,
     task_profile_with_history,
 };
-use progress::{
-    content_fingerprint, round_semantic_fingerprint, tool_failure_fingerprint, tool_made_progress,
-    tool_signature,
-};
+use progress::{round_semantic_fingerprint, tool_made_progress, tool_signature};
 use runaway::{RunawayDecision, RunawayDetector};
 use session_controls::{
     bridge_transport_error, goal_retry_delay, retryable_goal_error, wait_for_goal,
@@ -852,40 +849,24 @@ impl AgentCoordinator {
                     final_consistency_used: &mut final_consistency_used,
                     round_failed_mutation: &mut round_failed_mutation,
                 });
-                if !succeeded {
-                    round_failure_fingerprints.push(tool_failure_fingerprint(call, &content));
-                    if !jev_attempted {
-                        jev_attempted = true;
-                        let evaluation = jev::advise(
-                            &bridge,
-                            cancel,
-                            goal_input,
-                            &call.name,
-                            &content,
-                            execution_evidence.recent_evidence(),
-                        );
-                        if evaluation.attempted {
-                            loop_budget.record_sent_request(evaluation.request_chars);
-                            emit(AgentEvent::AuxiliaryUsage {
-                                usage: crate::core::Usage {
-                                    model_calls: Some(1),
-                                    ..crate::core::Usage::default()
-                                },
-                                already_counted_calls: 0,
-                            });
-                        }
-                        if let Some(advice) = evaluation.advice {
-                            retry_instruction = Some(format!(
-                                "Jev advisory: {} (confidence {:.0}%, probability {:.0}%). This is auxiliary model advice, not an execution directive.",
-                                advice.decision,
-                                advice.confidence * 100.0,
-                                advice.probability * 100.0,
-                            ));
-                        }
-                    }
-                } else if inspection_progress {
-                    round_output_fingerprints.push(content_fingerprint(&content));
-                }
+                tool_round::record_failure_or_inspection(
+                    tool_round::FailureObservationInput {
+                        call,
+                        content: &content,
+                        succeeded,
+                        inspection_progress,
+                        bridge: &bridge,
+                        cancel,
+                        goal_input,
+                        execution_evidence: &execution_evidence,
+                        jev_attempted: &mut jev_attempted,
+                        loop_budget: &mut loop_budget,
+                        retry_instruction: &mut retry_instruction,
+                        round_failure_fingerprints: &mut round_failure_fingerprints,
+                        round_output_fingerprints: &mut round_output_fingerprints,
+                    },
+                    emit,
+                );
                 round_progress |=
                     workspace_mutated || tool_made_progress(call, &content, succeeded);
                 if let Some(usage) = self.registry.consume_auxiliary_usage() {
