@@ -1,13 +1,16 @@
-//! Dispatch one tool call with the round's replay and capability guards.
+//! Dispatch tool calls and insert cache-aware results into the model history.
 
-use std::{collections::HashSet, sync::atomic::AtomicBool};
+use std::{
+    collections::HashSet,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use serde_json::json;
 
-use crate::core::{ToolCall, ToolDefinition};
+use crate::core::{BridgeClient, CallRequest, ImageAttachment, ToolCall, ToolDefinition};
 
 use super::{
-    AgentCoordinator, Result, context,
+    AgentCoordinator, Message, Result, cache, context,
     coordinator_support::{
         attached_web_search_capability_result, check_cancel,
         supports_anthropic_deferred_tool_references,
@@ -37,6 +40,87 @@ pub(super) struct DispatchInput<'a> {
     pub tool_catalog: &'a [ToolDefinition],
     pub parallel_mcp_results: &'a mut ParallelResults,
     pub tool_discovery: &'a mut ToolDiscovery,
+}
+
+/// Inputs for the cache-aware insertion of one model-visible tool result.
+pub(super) struct InsertionInput<'a> {
+    pub call: &'a ToolCall,
+    pub model_content: String,
+    pub output_images: Vec<ImageAttachment>,
+    pub model: &'a str,
+    pub request: &'a CallRequest,
+    pub bridge: &'a BridgeClient,
+    pub goal_mode: &'a AtomicBool,
+    pub succeeded: bool,
+    pub externally_bounded: bool,
+}
+
+pub(super) struct InsertedResult {
+    pub recorded_content: String,
+    pub goal_observation_item: usize,
+}
+
+impl AgentCoordinator {
+    pub(super) fn insert_tool_result(
+        &mut self,
+        input: InsertionInput<'_>,
+    ) -> Result<InsertedResult> {
+        let mut model_content = input.model_content;
+        if input.succeeded
+            && input.call.name == "read_file"
+            && !input.externally_bounded
+            && self.observation_cache.prepare_read_update(
+                &mut self.history,
+                &mut model_content,
+                input.model,
+                cache::ObservationPolicy {
+                    prefix_overhead_tokens: (serde_json::to_vec(&(
+                        &input.request.tools,
+                        &input.request.deferred_tools,
+                    ))?
+                    .len() as u64)
+                        .div_ceil(3),
+                    may_retire: !input.goal_mode.load(Ordering::Acquire),
+                },
+                || {
+                    let (provider, local_model) = input.model.split_once('/')?;
+                    input
+                        .bridge
+                        .list_model_info(provider)
+                        .ok()?
+                        .into_iter()
+                        .find(|entry| entry.id == local_model || entry.id == input.model)?
+                        .pricing
+                },
+            )
+        {
+            // A costed, deliberate prefix retirement starts a new local
+            // continuity baseline. Provider cache keys stay stable so
+            // the unchanged prefix before the retirement can still hit.
+            self.cache_continuity = Default::default();
+        }
+        let recorded_content = model_content.clone();
+        let goal_observation_item = self.history.len();
+        self.history.push(Message::tool(
+            model_content,
+            input.call.id.clone(),
+            Some(input.call.name.clone()),
+        ));
+        if !input.output_images.is_empty() {
+            self.history.push(Message::user_with_images(
+                format!("Visual output returned by tool {}.", input.call.name),
+                input.output_images,
+            ));
+        }
+        self.context_memory.sync(&self.history)?;
+        if input.goal_mode.load(Ordering::Acquire) {
+            self.context_memory.flush()?;
+        }
+        Ok(InsertedResult {
+            recorded_content,
+            goal_observation_item,
+        })
+    }
 }
 
 pub(super) struct DispatchOutcome {

@@ -816,7 +816,7 @@ impl AgentCoordinator {
                 workspace_write_generation = current_write_generation;
                 let (normalized, output_images) =
                     normalize_tool_output_for_model(&content, vision_enabled);
-                let (mut model_content, externally_bounded) =
+                let (model_content, externally_bounded) =
                     self.registry
                         .bound_round_output(call, normalized, &mut round_output_budget)?;
                 if externally_bounded && !tool_discovery::is_side_tool(&call.name) {
@@ -835,55 +835,20 @@ impl AgentCoordinator {
                 if local_file_lookup && call.name == "read_artifact" && succeeded {
                     local_lookup_recovery_calls += 1;
                 }
-                if succeeded
-                    && call.name == "read_file"
-                    && !externally_bounded
-                    && self.observation_cache.prepare_read_update(
-                        &mut self.history,
-                        &mut model_content,
-                        model,
-                        cache::ObservationPolicy {
-                            prefix_overhead_tokens: (serde_json::to_vec(&(
-                                &request.tools,
-                                &request.deferred_tools,
-                            ))?
-                            .len() as u64)
-                                .div_ceil(3),
-                            may_retire: !goal_mode.load(Ordering::Acquire),
-                        },
-                        || {
-                            let (provider, local_model) = model.split_once('/')?;
-                            bridge
-                                .list_model_info(provider)
-                                .ok()?
-                                .into_iter()
-                                .find(|entry| entry.id == local_model || entry.id == model)?
-                                .pricing
-                        },
-                    )
-                {
-                    // A costed, deliberate prefix retirement starts a new local
-                    // continuity baseline. Provider cache keys stay stable so
-                    // the unchanged prefix before the retirement can still hit.
-                    self.cache_continuity = Default::default();
-                }
-                let recorded_content = model_content.clone();
-                let goal_observation_item = self.history.len();
-                self.history.push(Message::tool(
+                let tool_round::InsertedResult {
+                    recorded_content,
+                    goal_observation_item,
+                } = self.insert_tool_result(tool_round::InsertionInput {
+                    call,
                     model_content,
-                    call.id.clone(),
-                    Some(call.name.clone()),
-                ));
-                if !output_images.is_empty() {
-                    self.history.push(Message::user_with_images(
-                        format!("Visual output returned by tool {}.", call.name),
-                        output_images,
-                    ));
-                }
-                self.context_memory.sync(&self.history)?;
-                if goal_mode.load(Ordering::Acquire) {
-                    self.context_memory.flush()?;
-                }
+                    output_images,
+                    model,
+                    request: &request,
+                    bridge: &bridge,
+                    goal_mode,
+                    succeeded,
+                    externally_bounded,
+                })?;
                 let mutation_tool = is_mutation_tool(&call.name);
                 let validation_call = progress::is_validation_tool_result(call, &content);
                 execution_evidence.observe_tool(
