@@ -1,8 +1,11 @@
 //! Run-keyed cancellation ownership.
 //!
-//! The backend currently admits one top-level run at a time, but cancellation
-//! and lifecycle ownership are keyed by run ID so additional worker runs can be
-//! introduced without returning to a single global cancellation slot.
+//! A `BackendService` executes at most one top-level run at a time (see
+//! `backend/run.rs`); this registry does not admit runs and does not make
+//! concurrent top-level execution possible. It is keyed by run ID because a
+//! run that has already settled may still be registered while it finishes
+//! post-run persistence and titling, and because interrupt must reach every
+//! registered run without a single global cancellation slot.
 
 use std::{
     collections::HashMap,
