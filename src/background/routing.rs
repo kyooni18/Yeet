@@ -9,7 +9,7 @@ use super::{
     allocate_runtime_id, broadcast_runtime_envelope, send_client_error, spawn_runtime,
     state_with_extension_commands,
 };
-use crate::{backend::SessionCatalog, extensions::ExtensionHost, model::BridgeEnvelope};
+use crate::{backend::SessionCatalog, extensions::ExtensionHost, model::HarnessEvent};
 
 /// An isolated runtime being started off the daemon thread, with every client
 /// waiting for it. Clients loading the same session join one startup instead
@@ -31,7 +31,7 @@ pub(super) fn publish_runtime_state(
     clients: &mut Vec<ClientConnection>,
     extensions: &ExtensionHost,
     runtime: &mut SessionRuntime,
-    mut envelope: BridgeEnvelope,
+    mut envelope: HarnessEvent,
     session_catalog: &mut Option<SessionCatalog>,
     catalog_changed: &mut bool,
 ) {
@@ -121,7 +121,7 @@ pub(super) fn route_client_to_runtime(
     };
     runtime.idle_since = None;
     clients[client_index].runtime_id = runtime_id;
-    let envelope = BridgeEnvelope {
+    let envelope = HarnessEvent {
         kind: "state".into(),
         state: Some(state_with_extension_commands(
             runtime.service.state_snapshot(),

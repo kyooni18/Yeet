@@ -12,7 +12,7 @@
 //! Versions are deliberately separate:
 //! - `protocol_version`: framing and the command/envelope transport itself.
 //!   A mismatch means the peers cannot exchange frames safely.
-//! - `state_schema_version`: the semantic `HarnessState` (`BridgeState`)
+//! - `state_schema_version`: the semantic `HarnessState` (`HarnessState`)
 //!   carried in envelopes. A client accepts any schema in
 //!   `MIN_STATE_SCHEMA_VERSION..=STATE_SCHEMA_VERSION`.
 //! - `features`: additive capabilities a client may gate optional behavior
@@ -24,7 +24,7 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::model::BridgeEnvelope;
+use crate::model::HarnessEvent;
 
 /// Background transport version spoken by this binary.
 pub(crate) const PROTOCOL_VERSION: u32 = 1;
@@ -117,7 +117,7 @@ impl DaemonHandshake {
 }
 
 /// Wire shape of the daemon's first frame: a heartbeat envelope plus the
-/// handshake. Kept separate from `BridgeEnvelope` so ordinary envelopes are
+/// handshake. Kept separate from `HarnessEvent` so ordinary envelopes are
 /// unchanged on the wire.
 #[derive(Serialize)]
 struct ReadyFrame<'a> {
@@ -145,8 +145,8 @@ struct HandshakeProbe {
 }
 
 /// Parses the daemon's first frame into its envelope and negotiated contract.
-pub(crate) fn parse_first_frame(frame: &[u8]) -> Result<(BridgeEnvelope, DaemonHandshake)> {
-    let envelope = serde_json::from_slice::<BridgeEnvelope>(frame)?;
+pub(crate) fn parse_first_frame(frame: &[u8]) -> Result<(HarnessEvent, DaemonHandshake)> {
+    let envelope = serde_json::from_slice::<HarnessEvent>(frame)?;
     let handshake = if envelope.kind == "heartbeat" {
         serde_json::from_slice::<HandshakeProbe>(frame)?
             .handshake
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn ready_frame_round_trips_and_stays_a_heartbeat_for_old_clients() {
         let frame = ready_frame(&DaemonHandshake::current()).unwrap();
-        let envelope = serde_json::from_slice::<BridgeEnvelope>(&frame).unwrap();
+        let envelope = serde_json::from_slice::<HarnessEvent>(&frame).unwrap();
         assert_eq!(envelope.kind, "heartbeat");
         assert!(envelope.state.is_none());
 

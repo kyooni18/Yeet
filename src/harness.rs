@@ -15,9 +15,7 @@ use crate::{
     background::BackgroundConnection,
 };
 
-pub use crate::model::{
-    BridgeEnvelope as HarnessEvent, BridgeState as HarnessState, FrontendCommand as HarnessCommand,
-};
+pub use crate::model::{FrontendCommand as HarnessCommand, HarnessEvent, HarnessState};
 
 /// Selects how a [`Harness`] is hosted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

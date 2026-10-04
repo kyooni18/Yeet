@@ -676,6 +676,17 @@ pub struct ModelActivity {
     pub run_id: Option<String>,
 }
 
+/// Semantic runtime state published to frontends (TUI, Remote, desktop) by a
+/// session runtime. Preferred name for [`BridgeState`]; the historical name
+/// predates the provider bridge and is kept for wire and API compatibility.
+/// This is unrelated to the Rust <-> Node `ProviderBridge`
+/// (`crate::core::BridgeClient`).
+pub type HarnessState = BridgeState;
+
+/// One frame of the harness state transport (state snapshots, heartbeats,
+/// errors). Preferred name for [`BridgeEnvelope`]; see [`HarnessState`].
+pub type HarnessEvent = BridgeEnvelope;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BridgeEnvelope {
     #[serde(rename = "type")]

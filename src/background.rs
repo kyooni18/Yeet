@@ -14,7 +14,7 @@ use crate::{
     backend::SessionCatalog,
     config::ConfigStore,
     extensions::{ExtensionHost, ExtensionRequest},
-    model::{BridgeEnvelope, BridgeState, FrontendCommand},
+    model::{FrontendCommand, HarnessEvent, HarnessState},
     platform::{LocalStream, bind_local, connect_local, set_private_file},
 };
 
@@ -122,7 +122,7 @@ const MAX_PENDING_STARTUP_CLIENTS: usize = 64;
 /// A socket that completed a compatible handshake with a workspace daemon.
 struct AttachedDaemon {
     stream: LocalStream,
-    events: mpsc::Receiver<BridgeEnvelope>,
+    events: mpsc::Receiver<HarnessEvent>,
 }
 
 pub struct BackgroundConnection {
@@ -131,7 +131,7 @@ pub struct BackgroundConnection {
     resume_session_id: Option<String>,
     resume_barrier: Option<String>,
     stream: LocalStream,
-    events: mpsc::Receiver<BridgeEnvelope>,
+    events: mpsc::Receiver<HarnessEvent>,
     last_daemon_activity: Instant,
     wake: Option<Wake>,
     reconnect_failures: u32,
@@ -279,7 +279,7 @@ impl BackgroundConnection {
         thread::spawn(move || {
             while let Ok(Some(frame)) = read_bounded_frame(&mut reader, MAX_BACKGROUND_FRAME_BYTES)
             {
-                let envelope = match serde_json::from_slice::<BridgeEnvelope>(&frame) {
+                let envelope = match serde_json::from_slice::<HarnessEvent>(&frame) {
                     Ok(envelope) => envelope,
                     Err(_) => break,
                 };
@@ -355,7 +355,7 @@ impl BackgroundConnection {
         }
     }
 
-    pub fn try_recv(&mut self) -> Option<BridgeEnvelope> {
+    pub fn try_recv(&mut self) -> Option<HarnessEvent> {
         loop {
             match self.events.try_recv() {
                 Ok(envelope) => {
@@ -422,7 +422,7 @@ impl BackgroundConnection {
         }
     }
 
-    fn observe_envelope(&mut self, envelope: &BridgeEnvelope) {
+    fn observe_envelope(&mut self, envelope: &HarnessEvent) {
         if envelope.kind != "state" {
             return;
         }
@@ -969,7 +969,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
 
         let mut catalog_changed = false;
         for runtime in &mut runtimes {
-            let mut pending_state: Option<BridgeEnvelope> = None;
+            let mut pending_state: Option<HarnessEvent> = None;
             for _ in 0..MAX_RUNTIME_EVENTS_PER_TICK {
                 let Some(mut envelope) = runtime.service.try_recv() else {
                     break;
@@ -1100,7 +1100,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 broadcast_runtime_envelope(
                     &mut clients,
                     runtime.id,
-                    &BridgeEnvelope {
+                    &HarnessEvent {
                         kind: "state".into(),
                         state: Some(state),
                         message: None,
@@ -1109,7 +1109,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
             }
         }
         if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-            let heartbeat = BridgeEnvelope {
+            let heartbeat = HarnessEvent {
                 kind: "heartbeat".into(),
                 state: None,
                 message: None,
@@ -1184,7 +1184,7 @@ fn send_client_error(
     client_index: usize,
     error: anyhow::Error,
 ) {
-    let envelope = BridgeEnvelope {
+    let envelope = HarnessEvent {
         kind: "error".into(),
         state: None,
         message: Some(error.to_string()),
@@ -1449,7 +1449,7 @@ fn attach_client_to_runtime(
         Ok(writer) => writer,
         Err(_) => return false,
     };
-    let initial = BridgeEnvelope {
+    let initial = HarnessEvent {
         kind: "state".into(),
         state: Some(state_with_extension_commands(
             runtime.service.state_snapshot(),
@@ -1479,7 +1479,7 @@ fn attach_client_to_runtime(
 }
 
 fn send_unattached_client_error(mut stream: LocalStream, error: anyhow::Error) {
-    let envelope = BridgeEnvelope {
+    let envelope = HarnessEvent {
         kind: "error".into(),
         state: None,
         message: Some(error.to_string()),
@@ -1489,9 +1489,9 @@ fn send_unattached_client_error(mut stream: LocalStream, error: anyhow::Error) {
 }
 
 fn state_with_extension_commands(
-    mut state: BridgeState,
+    mut state: HarnessState,
     extensions: &ExtensionHost,
-) -> BridgeState {
+) -> HarnessState {
     state.extension_commands = extensions.command_items();
     state
 }
@@ -1501,7 +1501,7 @@ fn broadcast_runtime_error(
     runtime_id: u64,
     error: anyhow::Error,
 ) {
-    let envelope = BridgeEnvelope {
+    let envelope = HarnessEvent {
         kind: "error".into(),
         state: None,
         message: Some(error.to_string()),
@@ -1512,7 +1512,7 @@ fn broadcast_runtime_error(
 fn broadcast_runtime_envelope(
     clients: &mut Vec<ClientConnection>,
     runtime_id: u64,
-    envelope: &BridgeEnvelope,
+    envelope: &HarnessEvent,
 ) {
     let frame = match ClientWriter::encode(envelope) {
         Ok(frame) => frame,
@@ -1609,7 +1609,7 @@ fn read_bounded_frame(
     }
 }
 
-fn send_envelope(stream: &mut LocalStream, envelope: &BridgeEnvelope) -> Result<()> {
+fn send_envelope(stream: &mut LocalStream, envelope: &HarnessEvent) -> Result<()> {
     send_frame(stream, serde_json::to_vec(envelope)?)
 }
 

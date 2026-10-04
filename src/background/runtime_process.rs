@@ -15,7 +15,7 @@ use anyhow::{Result, anyhow};
 use super::Wake;
 use crate::{
     backend::{BackendEvent, BackendService, SessionCatalog},
-    model::{BridgeEnvelope, BridgeState, FrontendCommand},
+    model::{FrontendCommand, HarnessEvent, HarnessState},
 };
 
 const RUNTIME_IDLE_WAIT: Duration = Duration::from_millis(50);
@@ -40,10 +40,10 @@ enum RuntimeCommand {
 pub(super) struct RuntimeProcess {
     command_tx: Sender<RuntimeCommand>,
     command_wake: Wake,
-    events: Receiver<BridgeEnvelope>,
+    events: Receiver<HarnessEvent>,
     failed: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
-    last_state: BridgeState,
+    last_state: HarnessState,
 }
 
 impl RuntimeProcess {
@@ -52,8 +52,8 @@ impl RuntimeProcess {
         let runtime_wake = Wake::new();
         let command_wake = runtime_wake.clone();
         let (command_tx, command_rx) = mpsc::channel::<RuntimeCommand>();
-        let (event_tx, events) = mpsc::channel::<BridgeEnvelope>();
-        let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<BridgeState, String>>(1);
+        let (event_tx, events) = mpsc::channel::<HarnessEvent>();
+        let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<HarnessState, String>>(1);
         let failed = Arc::new(AtomicBool::new(false));
         let closed = Arc::new(AtomicBool::new(false));
         let worker_failed = failed.clone();
@@ -141,7 +141,7 @@ impl RuntimeProcess {
         self.enqueue(RuntimeCommand::Frontend(command))
     }
 
-    pub(super) fn try_recv(&mut self) -> Option<BridgeEnvelope> {
+    pub(super) fn try_recv(&mut self) -> Option<HarnessEvent> {
         match self.events.try_recv() {
             Ok(envelope) => {
                 if let Some(state) = envelope.state.as_ref() {
@@ -197,10 +197,10 @@ impl RuntimeProcess {
         Some((state.current_session_id.clone()?, status))
     }
 
-    pub(super) fn activity_snapshot(&self) -> BridgeState {
+    pub(super) fn activity_snapshot(&self) -> HarnessState {
         self.last_state.without_conversation()
     }
-    pub(super) fn state_snapshot(&self) -> BridgeState {
+    pub(super) fn state_snapshot(&self) -> HarnessState {
         self.last_state.clone()
     }
 
@@ -250,7 +250,7 @@ impl Drop for RuntimeProcess {
 fn handle_runtime_command(
     service: &mut BackendService,
     command: RuntimeCommand,
-    event_tx: &Sender<BridgeEnvelope>,
+    event_tx: &Sender<HarnessEvent>,
     daemon_wake: &Wake,
 ) -> bool {
     let result = match command {
@@ -277,7 +277,7 @@ fn handle_runtime_command(
 
 fn drain_backend_events(
     service: &mut BackendService,
-    event_tx: &Sender<BridgeEnvelope>,
+    event_tx: &Sender<HarnessEvent>,
     daemon_wake: &Wake,
 ) {
     while let Some(event) = service.try_recv() {
@@ -289,8 +289,8 @@ fn drain_backend_events(
     }
 }
 
-fn send_runtime_error(event_tx: &Sender<BridgeEnvelope>, daemon_wake: &Wake, error: anyhow::Error) {
-    let _ = event_tx.send(BridgeEnvelope {
+fn send_runtime_error(event_tx: &Sender<HarnessEvent>, daemon_wake: &Wake, error: anyhow::Error) {
+    let _ = event_tx.send(HarnessEvent {
         kind: "error".into(),
         state: None,
         message: Some(error.to_string()),
@@ -312,7 +312,7 @@ mod activity_tests {
             events,
             failed: Arc::new(AtomicBool::new(false)),
             closed: Arc::new(AtomicBool::new(false)),
-            last_state: BridgeState {
+            last_state: HarnessState {
                 current_session_id: Some("detached".into()),
                 is_streaming: true,
                 ..Default::default()
@@ -322,9 +322,9 @@ mod activity_tests {
         assert!(runtime.set_session_activity(&activity));
         assert!(!runtime.set_session_activity(&activity));
         event_tx
-            .send(BridgeEnvelope {
+            .send(HarnessEvent {
                 kind: "state".into(),
-                state: Some(BridgeState {
+                state: Some(HarnessState {
                     current_session_id: Some("detached".into()),
                     ..Default::default()
                 }),

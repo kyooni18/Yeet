@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use super::{BridgeEnvelope, CLIENT_WRITE_TIMEOUT, LocalStream, write_client_frame};
+use super::{CLIENT_WRITE_TIMEOUT, HarnessEvent, LocalStream, write_client_frame};
 use anyhow::{Result, bail};
 
 const MAX_PENDING_FRAMES: usize = 64;
@@ -73,13 +73,13 @@ impl ClientWriter {
         })
     }
 
-    pub(super) fn encode(envelope: &BridgeEnvelope) -> Result<Arc<[u8]>> {
+    pub(super) fn encode(envelope: &HarnessEvent) -> Result<Arc<[u8]>> {
         let mut bytes = serde_json::to_vec(envelope)?;
         bytes.push(b'\n');
         Ok(bytes.into())
     }
 
-    pub(super) fn send(&self, envelope: &BridgeEnvelope) -> Result<()> {
+    pub(super) fn send(&self, envelope: &HarnessEvent) -> Result<()> {
         self.send_frame(Self::encode(envelope)?)
     }
 
@@ -124,8 +124,8 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read};
 
-    fn envelope(message: &str) -> BridgeEnvelope {
-        BridgeEnvelope {
+    fn envelope(message: &str) -> HarnessEvent {
+        HarnessEvent {
             kind: "error".into(),
             state: None,
             message: Some(message.into()),
@@ -144,7 +144,7 @@ mod tests {
         for expected in ["first", "second"] {
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            let received: BridgeEnvelope = serde_json::from_str(&line).unwrap();
+            let received: HarnessEvent = serde_json::from_str(&line).unwrap();
             assert_eq!(received.message.as_deref(), Some(expected));
         }
         drop(writer);
