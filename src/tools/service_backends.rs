@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// Runtime routing choices for the Foundation and web semantic services.
+pub(super) struct ToolServiceConfiguration {
+    pub(super) foundation_enabled: bool,
+    pub(super) foundation_backend: ServiceBackend,
+    pub(super) foundation_server: Option<String>,
+    pub(super) foundation_project: Option<String>,
+    pub(super) web_backend: ServiceBackend,
+    pub(super) web_server: Option<String>,
+}
+
+impl Default for ToolServiceConfiguration {
+    fn default() -> Self {
+        Self {
+            foundation_enabled: false,
+            foundation_backend: ServiceBackend::Builtin,
+            foundation_server: Some("foundation".into()),
+            foundation_project: None,
+            web_backend: ServiceBackend::Builtin,
+            web_server: Some("web".into()),
+        }
+    }
+}
+
 impl ToolRegistry {
     pub fn configure_foundation_memory(
         &mut self,
@@ -12,22 +35,24 @@ impl ToolRegistry {
     ) {
         let server = server.into();
         let project = project.into();
-        let changed = self.foundation_backend != backend
-            || self.foundation_server.as_deref() != Some(server.as_str())
-            || self.foundation_project.as_deref() != Some(project.as_str())
-            || self.foundation_enabled != enabled;
+        let changed = self.services.foundation_backend != backend
+            || self.services.foundation_server.as_deref() != Some(server.as_str())
+            || self.services.foundation_project.as_deref() != Some(project.as_str())
+            || self.services.foundation_enabled != enabled;
         if changed {
             self.deactivate_foundation();
         }
-        self.foundation_enabled = enabled;
-        self.foundation_backend = backend;
-        self.foundation_server = Some(server);
-        self.foundation_project = Some(project);
+        self.services.foundation_enabled = enabled;
+        self.services.foundation_backend = backend;
+        self.services.foundation_server = Some(server);
+        self.services.foundation_project = Some(project);
     }
 
     pub fn configure_web_backend(&mut self, backend: ServiceBackend, server: impl Into<String>) {
         let server = server.into();
-        if self.web_backend != backend || self.web_server.as_deref() != Some(server.as_str()) {
+        if self.services.web_backend != backend
+            || self.services.web_server.as_deref() != Some(server.as_str())
+        {
             self.evidence.web_searches.clear();
             self.evidence.web_sources.clear();
             self.evidence.web_reads.clear();
@@ -49,21 +74,22 @@ impl ToolRegistry {
             self.catalog.read_only_mcp_tools.remove(&name);
         }
 
-        self.web_backend = backend;
-        self.web_server = Some(server);
+        self.services.web_backend = backend;
+        self.services.web_server = Some(server);
     }
 
     pub(super) fn foundation_memory_active(&self) -> bool {
-        let backend_available = match self.foundation_backend {
+        let backend_available = match self.services.foundation_backend {
             ServiceBackend::Builtin => true,
             ServiceBackend::Mcp => self
+                .services
                 .foundation_server
                 .as_deref()
                 .is_some_and(|server| !self.catalog.capability_disabled("mcp", server)),
         };
-        self.foundation_enabled
+        self.services.foundation_enabled
             && backend_available
-            && self.foundation_project.is_some()
+            && self.services.foundation_project.is_some()
             && self
                 .catalog
                 .foundation_tool_map
@@ -83,6 +109,7 @@ impl ToolRegistry {
         cancel: &AtomicBool,
     ) -> Result<Value> {
         let project = self
+            .services
             .foundation_project
             .as_deref()
             .ok_or_else(|| anyhow!("Project identity is unavailable"))?;
@@ -133,10 +160,10 @@ impl ToolRegistry {
     }
 
     pub(super) fn configured_web_tool_definitions(&self) -> Vec<ToolDefinition> {
-        if self.web_backend == ServiceBackend::Builtin {
+        if self.services.web_backend == ServiceBackend::Builtin {
             return vec![web_search_tool_definition(), web_read_tool_definition()];
         }
-        let Some(server) = self.web_server.as_deref() else {
+        let Some(server) = self.services.web_server.as_deref() else {
             return Vec::new();
         };
         if self.catalog.capability_disabled("mcp", server) {
@@ -166,5 +193,110 @@ impl ToolRegistry {
                 input_schema: tool.input_schema,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lazy_registry() -> (tempfile::TempDir, ToolRegistry) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let registry = ToolRegistry::new_with_bridge_handle(
+            BridgeHandle::lazy_for_workspace(root.clone()),
+            root,
+            WorkerRegistry::new(Vec::new()).unwrap(),
+            PermissionBroker::default(),
+        )
+        .unwrap();
+        (directory, registry)
+    }
+
+    #[test]
+    fn service_configuration_changes_reset_only_relevant_evidence_and_survive_task_finish() {
+        let (_directory, mut registry) = lazy_registry();
+
+        registry
+            .evidence
+            .read_cache
+            .insert("source.rs".into(), Vec::new());
+        registry.evidence.searches.insert("workspace query".into());
+        registry.evidence.web_searches.insert("web query".into());
+        registry
+            .evidence
+            .web_sources
+            .insert("https://example.com".into());
+        registry
+            .evidence
+            .web_reads
+            .insert("https://example.com".into());
+
+        // Reapplying the current web route preserves its evidence.
+        registry.configure_web_backend(ServiceBackend::Builtin, "web");
+        assert!(registry.evidence.read_cache.contains_key("source.rs"));
+        assert!(registry.evidence.searches.contains("workspace query"));
+        assert!(
+            registry
+                .evidence
+                .web_sources
+                .contains("https://example.com")
+        );
+
+        assert!(registry.evidence.web_searches.contains("web query"));
+        assert!(registry.evidence.web_reads.contains("https://example.com"));
+
+        // Switching the web route clears web evidence while preserving workspace evidence.
+        registry.configure_web_backend(ServiceBackend::Mcp, "search-service");
+        assert!(registry.evidence.read_cache.contains_key("source.rs"));
+        assert!(registry.evidence.searches.contains("workspace query"));
+        assert!(registry.evidence.web_searches.is_empty());
+        assert!(registry.evidence.web_sources.is_empty());
+        assert!(registry.evidence.web_reads.is_empty());
+
+        // Seed an active Foundation alias; changing its route removes it first.
+        let alias = "project_old_recall".to_owned();
+        registry.catalog.foundation_tool_map.insert(
+            alias.clone(),
+            FoundationToolTarget {
+                server: "foundation-old".into(),
+                tool: "recall".into(),
+            },
+        );
+        registry.catalog.active_tools.insert(
+            alias.clone(),
+            ToolDefinition {
+                name: alias.clone(),
+                description: None,
+                input_schema: Map::from_iter([("type".into(), json!("object"))]),
+            },
+        );
+        registry.configure_foundation_memory(
+            true,
+            ServiceBackend::Mcp,
+            "foundation-new",
+            "project-new",
+        );
+        assert!(!registry.catalog.foundation_tool_map.contains_key(&alias));
+        assert!(!registry.catalog.active_tools.contains_key(&alias));
+
+        registry.begin_task("task");
+        registry.finish_task("task");
+        assert!(registry.services.foundation_enabled);
+        assert_eq!(registry.services.foundation_backend, ServiceBackend::Mcp);
+        assert_eq!(
+            registry.services.foundation_server.as_deref(),
+            Some("foundation-new")
+        );
+        assert_eq!(
+            registry.services.foundation_project.as_deref(),
+            Some("project-new")
+        );
+        assert_eq!(registry.services.web_backend, ServiceBackend::Mcp);
+        assert_eq!(
+            registry.services.web_server.as_deref(),
+            Some("search-service")
+        );
+        assert!(!registry.bridge.is_started());
     }
 }

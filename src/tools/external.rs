@@ -19,7 +19,7 @@ impl ToolRegistry {
     ) -> Result<String> {
         match route {
             ExternalRoute::Foundation(target) => {
-                if !self.foundation_enabled {
+                if !self.services.foundation_enabled {
                     bail!("Project memory is disabled");
                 }
                 let result = self.call_foundation_target(&target, object, cancel)?;

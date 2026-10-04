@@ -14,10 +14,10 @@ impl ToolRegistry {
             return self.activate_skill(name, false);
         }
         if let Some(server) = id.strip_prefix("mcp:") {
-            if self.foundation_backend == ServiceBackend::Mcp
-                && self.foundation_server.as_deref() == Some(server)
+            if self.services.foundation_backend == ServiceBackend::Mcp
+                && self.services.foundation_server.as_deref() == Some(server)
             {
-                if !self.foundation_enabled {
+                if !self.services.foundation_enabled {
                     bail!("Foundation memory is disabled in this project's settings");
                 }
                 let tools = self.bridge_client()?.list_mcp_tools(Some(server))?;
@@ -121,7 +121,7 @@ impl ToolRegistry {
     }
 
     pub(super) fn activate_foundation(&mut self) -> Result<()> {
-        let (server, mut tools) = match self.foundation_backend {
+        let (server, mut tools) = match self.services.foundation_backend {
             ServiceBackend::Builtin => {
                 let bridge = self.bridge_client()?;
                 (
@@ -131,6 +131,7 @@ impl ToolRegistry {
             }
             ServiceBackend::Mcp => {
                 let server = self
+                    .services
                     .foundation_server
                     .clone()
                     .ok_or_else(|| anyhow!("Foundation MCP server is not configured"))?;

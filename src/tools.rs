@@ -67,6 +67,7 @@ pub use definitions::{is_coding_builtin_tool, is_general_builtin_tool};
 use evidence::{EditReadCoverage, MutationValidation, ToolEvidence};
 use paths::canonicalize_existing_ancestor;
 pub(crate) use paths::workspace_revision_for_path;
+use service_backends::ToolServiceConfiguration;
 use shell_runtime::shell_mentions_path;
 pub(crate) use support::canonical_web_source_key;
 use support::{
@@ -136,18 +137,13 @@ pub struct ToolRegistry {
     artifacts: ArtifactStore,
     artifacts_enabled: bool,
     catalog: ToolCatalog,
-    foundation_enabled: bool,
-    foundation_backend: ServiceBackend,
-    foundation_server: Option<String>,
-    foundation_project: Option<String>,
+    services: ToolServiceConfiguration,
     skyline_handle: Option<String>,
     agent_group: Option<AgentGroupHandle>,
     evidence: ToolEvidence,
     shell_jobs: shell_jobs::ShellJobs,
     permitted_shell_commands: HashSet<String>,
     web_search: WebSearchClient,
-    web_backend: ServiceBackend,
-    web_server: Option<String>,
 }
 
 impl ToolRegistry {
@@ -184,18 +180,13 @@ impl ToolRegistry {
             artifacts: ArtifactStore::new()?,
             artifacts_enabled: true,
             catalog: ToolCatalog::with_builtin_tools(),
-            foundation_enabled: false,
-            foundation_backend: ServiceBackend::Builtin,
-            foundation_server: Some("foundation".into()),
-            foundation_project: None,
+            services: ToolServiceConfiguration::default(),
             skyline_handle: None,
             agent_group: None,
             evidence: ToolEvidence::default(),
             shell_jobs: shell_jobs::ShellJobs::default(),
             permitted_shell_commands: HashSet::new(),
             web_search: WebSearchClient::default(),
-            web_backend: ServiceBackend::Builtin,
-            web_server: Some("web".into()),
         })
     }
 
@@ -429,9 +420,9 @@ impl ToolRegistry {
             // project_memory_* surface. In MCP mode retry activation here so a
             // server that was unavailable at session startup can recover later;
             // in builtin mode keep it hidden to avoid duplicate memory surfaces.
-            if self.foundation_server.as_deref() == Some(server.name.as_str()) {
-                if self.foundation_backend == ServiceBackend::Mcp
-                    && self.foundation_enabled
+            if self.services.foundation_server.as_deref() == Some(server.name.as_str()) {
+                if self.services.foundation_backend == ServiceBackend::Mcp
+                    && self.services.foundation_enabled
                     && !self.catalog.capability_disabled("mcp", &server.name)
                 {
                     let _ = self.activate(&format!("mcp:{}", server.name));

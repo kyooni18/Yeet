@@ -748,7 +748,7 @@ impl ToolRegistry {
         object: &Map<String, Value>,
         cancel: &AtomicBool,
     ) -> Result<String> {
-        if self.web_backend == ServiceBackend::Mcp {
+        if self.services.web_backend == ServiceBackend::Mcp {
             return self.web_search_mcp(object, cancel);
         }
         let queries = web_search_queries(object)?;
@@ -850,6 +850,7 @@ impl ToolRegistry {
         cancel: &AtomicBool,
     ) -> Result<String> {
         let server = self
+            .services
             .web_server
             .clone()
             .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
@@ -883,7 +884,7 @@ impl ToolRegistry {
         object: &Map<String, Value>,
         cancel: &AtomicBool,
     ) -> Result<String> {
-        if self.web_backend == ServiceBackend::Mcp {
+        if self.services.web_backend == ServiceBackend::Mcp {
             return self.web_read_mcp(object, cancel);
         }
         let url = string_arg(object, "url")?.trim();
@@ -933,6 +934,7 @@ impl ToolRegistry {
             return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the evidence already returned instead of reopening it."}).to_string());
         }
         let server = self
+            .services
             .web_server
             .clone()
             .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
