@@ -225,6 +225,7 @@ impl AgentCoordinator {
         }
         promote_agent_orchestration_tool(
             &mut tool_discovery,
+            self.registry.agent_group_tool_names(),
             profile == TaskProfile::Agent && self.registry.agent_orchestration_enabled(),
         );
         if !local_file_lookup && profile == TaskProfile::Agent {
@@ -355,7 +356,7 @@ impl AgentCoordinator {
             turn_stable_overlays.push(Message::system(guidance).request_only());
         }
         if profile == TaskProfile::Agent
-            && let Some(guidance) = self.registry.agent_deploy_guidance()
+            && let Some(guidance) = self.registry.agent_group_guidance()
         {
             turn_stable_overlays.push(Message::system(guidance).request_only());
         }
@@ -431,9 +432,13 @@ impl AgentCoordinator {
 
 /// Attaches every agent tool together so the provider-visible tool envelope
 /// does not change when the model first launches or messages an agent.
-fn promote_agent_orchestration_tool(discovery: &mut tool_discovery::ToolDiscovery, enabled: bool) {
-    if enabled {
-        discovery.load(crate::agents::AgentGroupHandle::tool_names());
+fn promote_agent_orchestration_tool(
+    discovery: &mut tool_discovery::ToolDiscovery,
+    names: &[&'static str],
+    enabled: bool,
+) {
+    if enabled && !names.is_empty() {
+        discovery.load(names);
     }
 }
 
@@ -477,10 +482,10 @@ mod tests {
             "read",
             json!({"type":"object"}),
         )];
-        catalog.extend(crate::agents::AgentGroupHandle::tool_definitions());
+        catalog.extend(crate::agents::group::control_commands::tool_definitions());
 
         let mut disabled = tool_discovery::ToolDiscovery::goal();
-        promote_agent_orchestration_tool(&mut disabled, false);
+        promote_agent_orchestration_tool(&mut disabled, &[], false);
         assert!(
             disabled
                 .attached(&catalog)
@@ -489,9 +494,13 @@ mod tests {
         );
 
         let mut enabled = tool_discovery::ToolDiscovery::goal();
-        promote_agent_orchestration_tool(&mut enabled, true);
+        promote_agent_orchestration_tool(
+            &mut enabled,
+            &crate::agents::group::control_commands::TOOL_NAMES,
+            true,
+        );
         let attached = enabled.attached(&catalog);
-        for name in crate::agents::AgentGroupHandle::tool_names() {
+        for name in crate::agents::group::control_commands::TOOL_NAMES {
             assert!(attached.iter().any(|tool| tool.name == name));
         }
     }

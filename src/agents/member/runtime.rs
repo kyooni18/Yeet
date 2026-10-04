@@ -2,7 +2,7 @@
 //!
 //! `MemberLauncher` creates a member and its `MemberRunner`; the group runtime
 //! owns the runner on a dedicated thread and feeds it one input per run, so
-//! the member's model history persists across messages. The traits let group
+//! the member's model history stays in memory across tasks. The traits let group
 //! lifecycle tests substitute scripted runners for real coordinators.
 
 use std::sync::{
@@ -48,12 +48,14 @@ impl RunOutcome {
 
 /// What a runner reports while it works.
 pub(crate) enum MemberProgress<'a> {
-    Usage(&'a Usage),
-    /// A tool started; `detail` is its short argument summary.
-    Tool {
-        name: &'a str,
-        detail: String,
+    Usage {
+        usage: &'a Usage,
+        event_key: &'a str,
     },
+    /// Bounded, attribution-ready summary of a harness event.
+    Event { kind: &'a str, detail: String },
+    /// A tool started; `detail` is its short argument summary.
+    Tool { name: &'a str, detail: String },
 }
 
 pub(crate) struct RunReport {
@@ -70,15 +72,26 @@ pub(crate) trait MemberRunner: Send {
         cancel: Arc<AtomicBool>,
         on_progress: &mut dyn FnMut(MemberProgress<'_>),
     ) -> Result<RunReport>;
+
+    fn set_output_cap(&mut self, _cap: Arc<std::sync::atomic::AtomicU64>) {}
 }
 
 pub(crate) trait MemberLauncher: Send + Sync {
     /// Registers the member identity and prepares its runner. Called on the
     /// requesting thread so the caller receives the member id immediately.
     fn launch(&self, spec: &MemberSpec) -> Result<(AgentId, Box<dyn MemberRunner>)>;
+
+    fn context_window_tokens(&self, _model: &str) -> Option<u64> {
+        None
+    }
+
+    fn model_for_budget(&self, model: &str, _role: AgentRole, _cost_budget_usd: f64) -> String {
+        model.to_owned()
+    }
 }
 
-/// Production launcher: each member owns an independent `AgentCoordinator`.
+/// Production launcher: each member owns a scoped coordinator and volatile
+/// history, while the group remains the lifecycle and persistence owner.
 pub(crate) struct CoordinatorLauncher {
     factory: AgentRuntimeFactory,
 }
@@ -91,7 +104,9 @@ impl CoordinatorLauncher {
 
 impl MemberLauncher for CoordinatorLauncher {
     fn launch(&self, spec: &MemberSpec) -> Result<(AgentId, Box<dyn MemberRunner>)> {
-        let mut coordinator = self.factory.build(spec.active_session_id.clone())?;
+        let mut coordinator = self
+            .factory
+            .build_group_scoped(spec.active_session_id.clone())?;
         let id =
             coordinator.register_runtime_agent(spec.role.as_str(), &spec.model, spec.spawned_by)?;
         if let Some(originator) = spec.spawned_by {
@@ -109,8 +124,18 @@ impl MemberLauncher for CoordinatorLauncher {
                 role: spec.role,
                 model: spec.model.clone(),
                 started: false,
+                usage_sequence: 0,
+                output_cap: None,
             }),
         ))
+    }
+
+    fn context_window_tokens(&self, model: &str) -> Option<u64> {
+        self.factory.context_window_tokens(model)
+    }
+
+    fn model_for_budget(&self, model: &str, role: AgentRole, cost_budget_usd: f64) -> String {
+        self.factory.model_for_budget(model, role, cost_budget_usd)
     }
 }
 
@@ -119,9 +144,15 @@ struct CoordinatorRunner {
     role: AgentRole,
     model: String,
     started: bool,
+    usage_sequence: u64,
+    output_cap: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl MemberRunner for CoordinatorRunner {
+    fn set_output_cap(&mut self, cap: Arc<std::sync::atomic::AtomicU64>) {
+        self.output_cap = Some(cap);
+    }
+
     fn run(
         &mut self,
         input: &str,
@@ -134,6 +165,7 @@ impl MemberRunner for CoordinatorRunner {
             worker_prompt(self.role, input)
         };
         self.started = true;
+        let mut usage_sequence = self.usage_sequence;
         let outcome = self.coordinator.run(
             AgentRunRequest {
                 input: &prompt,
@@ -145,19 +177,77 @@ impl MemberRunner for CoordinatorRunner {
                 goal_mode: Arc::new(AtomicBool::new(true)),
                 cancel: cancel.clone(),
                 continuation: false,
+                max_output_tokens: self.output_cap.clone(),
             },
-            |event| match event {
-                AgentEvent::ModelAttemptFinished(_, Some(usage))
-                | AgentEvent::AuxiliaryUsage { usage, .. } => {
-                    on_progress(MemberProgress::Usage(&usage))
+            {
+                move |event| match event {
+                    AgentEvent::ModelAttemptFinished(_, Some(usage)) => {
+                        usage_sequence = usage_sequence.saturating_add(1);
+                        let event_key = format!("usage:{usage_sequence}");
+                        on_progress(MemberProgress::Usage {
+                            usage: &usage,
+                            event_key: &event_key,
+                        });
+                    }
+                    AgentEvent::AuxiliaryUsage {
+                        usage,
+                        already_counted_calls: 0,
+                    } => {
+                        usage_sequence = usage_sequence.saturating_add(1);
+                        let event_key = format!("aux:{usage_sequence}");
+                        on_progress(MemberProgress::Usage {
+                            usage: &usage,
+                            event_key: &event_key,
+                        });
+                    }
+                    AgentEvent::ToolExecutionStarted(call) => {
+                        let detail = crate::backend::tool_detail(&call).unwrap_or_default();
+                        on_progress(MemberProgress::Event {
+                            kind: "tool_started",
+                            detail: format!("{} {detail}", call.name),
+                        });
+                        on_progress(MemberProgress::Tool {
+                            name: &call.name,
+                            detail,
+                        });
+                    }
+                    AgentEvent::ReasoningStart => on_progress(MemberProgress::Event {
+                        kind: "reasoning_started",
+                        detail: String::new(),
+                    }),
+                    AgentEvent::ProviderActivity { title, detail } => {
+                        let detail =
+                            detail.map_or(title.clone(), |detail| format!("{title}: {detail}"));
+                        on_progress(MemberProgress::Event {
+                            kind: "provider_activity",
+                            detail,
+                        });
+                    }
+                    AgentEvent::ToolExecutionFinished {
+                        call,
+                        succeeded,
+                        result,
+                    } => {
+                        on_progress(MemberProgress::Event {
+                            kind: if succeeded {
+                                "tool_finished"
+                            } else {
+                                "tool_failed"
+                            },
+                            detail: format!("{}: {result}", call.name),
+                        });
+                    }
+                    AgentEvent::ToolExecutionSuppressed { call, reason } => {
+                        on_progress(MemberProgress::Event {
+                            kind: "tool_suppressed",
+                            detail: format!("{}: {reason}", call.name),
+                        });
+                    }
+                    _ => {}
                 }
-                AgentEvent::ToolExecutionStarted(call) => on_progress(MemberProgress::Tool {
-                    name: &call.name,
-                    detail: crate::backend::tool_detail(&call).unwrap_or_default(),
-                }),
-                _ => {}
             },
         )?;
+        self.usage_sequence = usage_sequence;
         if cancel.load(Ordering::Acquire) {
             anyhow::bail!("cancelled");
         }

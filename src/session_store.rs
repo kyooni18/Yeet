@@ -748,6 +748,84 @@ mod tests {
     }
 
     #[test]
+    fn group_checkpoint_round_trips() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+        let checkpoint = serde_json::json!({
+            "tasks": [{ "id": "task-1", "status": "running" }],
+            "revision": 3,
+        });
+
+        store
+            .save_group_checkpoint("session-checkpoint", &checkpoint)
+            .unwrap();
+        let loaded: Option<serde_json::Value> =
+            store.load_group_checkpoint("session-checkpoint").unwrap();
+
+        assert_eq!(loaded, Some(checkpoint));
+    }
+
+    #[test]
+    fn old_session_without_group_checkpoint_loads_as_none() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+
+        let loaded: Option<serde_json::Value> = store
+            .load_group_checkpoint("session-without-checkpoint")
+            .unwrap();
+
+        assert_eq!(loaded, None);
+    }
+
+    #[test]
+    fn group_events_replay_with_member_attribution_and_group_sequence() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+        store
+            .append_event(
+                "session-group-events",
+                None,
+                &serde_json::json!({
+                    "type":"agent_group_event",
+                    "groupId":"group-1",
+                    "groupSequence":1,
+                    "memberId":"member-1",
+                    "taskId":"task-1",
+                    "kind":"reasoning_started"
+                }),
+            )
+            .unwrap();
+        store
+            .append_event(
+                "session-group-events",
+                None,
+                &serde_json::json!({
+                    "type":"agent_group_event",
+                    "groupId":"group-1",
+                    "groupSequence":2,
+                    "memberId":"member-2",
+                    "taskId":"task-2",
+                    "kind":"task_completed"
+                }),
+            )
+            .unwrap();
+
+        let events = store.read_events("session-group-events").unwrap();
+        let events = events
+            .iter()
+            .filter(|event| event["type"] == "agent_group_event")
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["payload"]["groupSequence"], 1);
+        assert_eq!(events[0]["payload"]["memberId"], "member-1");
+        assert_eq!(events[1]["payload"]["groupSequence"], 2);
+        assert_eq!(events[1]["payload"]["taskId"], "task-2");
+    }
+
+    #[test]
     fn manifest_is_the_commit_point_for_semantic_saves() {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::new(temp.path());

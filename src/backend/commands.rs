@@ -3,6 +3,42 @@
 use super::*;
 
 impl BackendService {
+    pub(super) fn start_group_background(&mut self, group_id: String, resume: bool) -> Result<()> {
+        let (model, session) = {
+            let shared = self.shared.lock_or_recover();
+            if shared.state.agent_group.group_id != group_id {
+                return Err(anyhow!("unknown Agent Group: {group_id}"));
+            }
+            (
+                shared.state.active_model.clone(),
+                shared.state.current_session_id.clone(),
+            )
+        };
+        let handle = self.agent_groups.handle();
+        let shared = self.shared.clone();
+        let tx = self.tx.clone();
+        thread::Builder::new()
+            .name(format!("agent-group-{group_id}"))
+            .spawn(move || {
+                crate::core::run_detached(|| {
+                    let cancel = AtomicBool::new(false);
+                    if let Err(error) =
+                        handle.run_group_lifecycle(&group_id, &model, session, &cancel, resume)
+                    {
+                        let mut state = shared.lock_or_recover();
+                        if state.state.agent_group.group_id == group_id {
+                            state.state.error_message =
+                                Some(format!("Agent Group failed: {error}"));
+                            let _ = tx.send(BackendEvent::Envelope(
+                                state_envelope_without_conversation(&state.state),
+                            ));
+                        }
+                    }
+                });
+            })?;
+        Ok(())
+    }
+
     pub(super) fn run_command(&mut self, input: &str) -> Result<()> {
         let mut parts = input.split_whitespace();
         let command = parts.next().unwrap_or_default();

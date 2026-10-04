@@ -63,6 +63,9 @@ impl AgentCoordinator {
             skill_instruction_history: Default::default(),
             warm_tool_names: Vec::new(),
             warm_tool_search_enabled: false,
+            output_token_cap: None,
+            output_checkpoint_threshold: None,
+            output_checkpoint_prompted: false,
         }
     }
     pub fn set_session_runtime(
@@ -88,6 +91,13 @@ impl AgentCoordinator {
                 .map(|id| store.directory.join(id).join("context")),
         );
         self.registry.set_session_runtime(store, active_session_id);
+    }
+
+    /// Nested Group Agent coordinators keep provider history in memory; the
+    /// group checkpoint is their durable recovery boundary. ToolRegistry keeps
+    /// its session binding so workspace/session tools still target the owner.
+    pub(crate) fn use_volatile_group_context(&mut self) {
+        self.context_memory.bind(None);
     }
 }
 

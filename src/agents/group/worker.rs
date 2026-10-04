@@ -1,5 +1,5 @@
 //! The member thread: owns one runner, executes inbox messages one at a
-//! time, records results, and queues notifications for background work.
+//! time, and promotes results into shared group state.
 //!
 //! The thread idles between messages so the member keeps its context, and
 //! exits when the member is stopped or its group generation is replaced.
@@ -25,7 +25,7 @@ use crate::{
     model::AgentActivityKind,
 };
 
-use super::{runtime::GroupShared, snapshot::notification, state::GroupRuntimeState};
+use super::{runtime::GroupShared, state::GroupRuntimeState};
 
 const IDLE_RECHECK: Duration = Duration::from_secs(1);
 
@@ -38,7 +38,8 @@ pub(super) struct MemberThread {
 
 impl MemberThread {
     pub(super) fn run(mut self) {
-        while let Some((task_id, input, cancel)) = self.next_message() {
+        while let Some((task_id, input, cancel, output_cap)) = self.next_message() {
+            self.runner.set_output_cap(output_cap);
             self.shared.changed();
             let shared = self.shared.clone();
             let generation = self.generation;
@@ -46,8 +47,11 @@ impl MemberThread {
             let (result, panicked) = match catch_unwind(AssertUnwindSafe(|| {
                 self.runner
                     .run(&input, cancel.clone(), &mut |progress| match progress {
-                        MemberProgress::Usage(usage) => {
-                            record_usage(&shared, generation, task_id, usage)
+                        MemberProgress::Usage { usage, event_key } => {
+                            record_usage(&shared, generation, member, task_id, event_key, usage)
+                        }
+                        MemberProgress::Event { kind, detail } => {
+                            record_member_event(&shared, generation, member, task_id, kind, &detail)
                         }
                         MemberProgress::Tool { name, detail } => {
                             record_tool(&shared, generation, member, name, &detail)
@@ -70,27 +74,51 @@ impl MemberThread {
 
     /// Blocks until a message is queued. Returns `None` when this thread
     /// should exit.
-    fn next_message(&self) -> Option<(AgentTaskId, String, Arc<AtomicBool>)> {
+    fn next_message(
+        &self,
+    ) -> Option<(
+        AgentTaskId,
+        String,
+        Arc<AtomicBool>,
+        Arc<std::sync::atomic::AtomicU64>,
+    )> {
         let mut state = self.shared.lock();
         loop {
             if !self.owns(&state) {
                 return None;
             }
-            let slot = state.slots.get_mut(&self.member)?;
-            if slot.stop {
-                return None;
-            }
-            if let Some((task_id, input)) = slot.inbox.pop_front() {
+            let message = {
+                let slot = state.slots.get_mut(&self.member)?;
+                if slot.stop {
+                    return None;
+                }
+                slot.inbox.pop_front()
+            };
+            if let Some((task_id, input)) = message {
                 let cancel = Arc::new(AtomicBool::new(false));
-                slot.running = Some((task_id, cancel.clone()));
+                let output_cap = state
+                    .task_caps
+                    .get(&task_id)
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU64::new(0)));
+                if let Some(slot) = state.slots.get_mut(&self.member) {
+                    slot.running = Some((task_id, cancel.clone()));
+                }
                 if let Some(task) = state.group.task_mut(task_id) {
                     task.status = AgentTaskStatus::Running;
                 }
                 if let Some(member) = state.group.member_mut(self.member) {
                     member.status = MemberStatus::Running;
+                    member.activity_state = "reasoning".into();
                     member.current_task = Some(task_id);
                 }
-                return Some((task_id, input, cancel));
+                state.group.record_event(
+                    Some(self.member),
+                    Some(task_id),
+                    "task_started",
+                    "Member began its assigned task",
+                );
+                return Some((task_id, input, cancel, output_cap));
             }
             state = self.shared.wait(state, IDLE_RECHECK);
         }
@@ -156,6 +184,16 @@ impl MemberThread {
             }
         }
         let task = task.clone();
+        if let Some(member) = state.group.member_mut(self.member) {
+            member.activity_state = match task.status {
+                AgentTaskStatus::Failed => "failed",
+                AgentTaskStatus::Cancelled => "cancelled",
+                _ if task.outcome.as_deref() == Some("paused") => "waiting_for_input",
+                _ if queued == Some(true) => "queued",
+                _ => "completed",
+            }
+            .into();
+        }
         let kind = if matches!(
             task.status,
             AgentTaskStatus::Failed | AgentTaskStatus::Cancelled
@@ -171,12 +209,25 @@ impl MemberThread {
             None,
             task.summary.as_deref().unwrap_or(task.status.as_str()),
         );
-        if task.background
-            && let Some(member) = state.group.member(self.member)
+        if matches!(
+            task.status,
+            AgentTaskStatus::Reported | AgentTaskStatus::Verified | AgentTaskStatus::Done
+        ) && let Some(summary) = task.summary.as_deref()
         {
-            let notice = notification(member, &task);
-            state.notifications.push(notice);
+            state.group.promote_finding(self.member, task_id, summary);
         }
+        state.group.record_event(
+            Some(self.member),
+            Some(task_id),
+            match task.status {
+                AgentTaskStatus::Failed => "task_failed",
+                AgentTaskStatus::Cancelled => "task_cancelled",
+                _ => "task_completed",
+            },
+            task.summary.as_deref().unwrap_or(task.status.as_str()),
+        );
+        state.budget.complete_task(&task_id.to_string());
+        state.sync_budget_projection();
         true
     }
 
@@ -209,27 +260,81 @@ fn record_tool(shared: &GroupShared, generation: u64, member: AgentId, name: &st
             Some(name.to_owned()),
             text,
         );
+        let task = state
+            .group
+            .member(member)
+            .and_then(|entry| entry.current_task);
+        state
+            .group
+            .record_event(Some(member), task, "tool_started", text);
     }
     shared.changed();
 }
 
-/// Accrues usage and cancels every running member once the window budget
-/// is spent.
-fn record_usage(shared: &GroupShared, generation: u64, task_id: AgentTaskId, usage: &Usage) {
+/// Accrues the provider's canonical usage report exactly once.
+fn record_usage(
+    shared: &GroupShared,
+    generation: u64,
+    member: AgentId,
+    task_id: AgentTaskId,
+    event_key: &str,
+    usage: &Usage,
+) {
     let mut state = shared.lock();
     if state.group.generation != generation {
         return;
     }
+    let ledger_key = format!("{member}:{task_id}:{event_key}");
+    if !state
+        .budget
+        .account(&task_id.to_string(), &ledger_key, usage)
+    {
+        return;
+    }
     state.group.usage.accumulate(usage);
-    state.group.window_usage.accumulate(usage);
     if let Some(task) = state.group.task_mut(task_id) {
         task.usage.accumulate(usage);
     }
-    if shared.limits().budget_exhausted(&state.group.window_usage) {
-        for slot in state.slots.values() {
-            if let Some((_, cancel)) = &slot.running {
-                cancel.store(true, Ordering::Release);
-            }
-        }
+    state.sync_budget_projection();
+    state.group.record_event(
+        Some(member),
+        Some(task_id),
+        "usage",
+        &format!(
+            "{event_key}: {} output tokens",
+            usage.output_tokens.unwrap_or(0)
+        ),
+    );
+    drop(state);
+    shared.changed();
+}
+
+fn record_member_event(
+    shared: &GroupShared,
+    generation: u64,
+    member: AgentId,
+    task_id: AgentTaskId,
+    kind: &str,
+    detail: &str,
+) {
+    let mut state = shared.lock();
+    if state.group.generation != generation {
+        return;
     }
+    if let Some(member_state) = state.group.member_mut(member) {
+        member_state.activity_state = match kind {
+            "reasoning_started" | "tool_finished" | "tool_failed" | "tool_suppressed" => {
+                "reasoning"
+            }
+            "tool_started" => "tool_call",
+            "provider_activity" => "provider_activity",
+            _ => kind,
+        }
+        .into();
+    }
+    state
+        .group
+        .record_event(Some(member), Some(task_id), kind, detail);
+    drop(state);
+    shared.changed();
 }

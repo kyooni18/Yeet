@@ -7,6 +7,7 @@
 mod budget;
 mod budget_ledger;
 pub(crate) mod commands;
+pub(crate) mod control_commands;
 mod runtime;
 mod scheduler;
 mod snapshot;
@@ -19,6 +20,6 @@ mod tests;
 
 pub(crate) use budget::AgentLimits;
 pub(crate) use runtime::{AgentGroupRuntime, ChangeListener};
-pub(crate) use snapshot::AgentNotification;
 pub(crate) use snapshot::task_result;
+pub(crate) use state::AgentGroupCheckpoint;
 pub(crate) use workspace::WritePolicy;

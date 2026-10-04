@@ -143,6 +143,42 @@ per-request output limits, and observed token/cost usage are tracked as
 separate quantities. Allocations can be rebalanced as work changes, while a
 reserved share remains available for coordination and synthesis.
 
+The Rust harness exposes `CreateAgentGroup`, `StartAgentGroup`,
+`ResumeAgentGroup`, `CancelAgentGroup`, `StopAgentGroup`, and
+`InspectAgentGroup` commands. The Main Agent has the corresponding lifecycle
+tools. `AgentGroupSupervisor` owns one active runtime and shares its coordinator
+slot with both entry points. Member delegation is available only on that
+Group Agent coordinator's tool registry. The older `SpawnAgent` frontend
+command now creates and starts a group objective; it no longer launches a
+standalone member. Skyline no longer opens detached child Yeet sessions for
+delegation.
+
+`BudgetLedger` uses the group's output and estimated-cost ceilings across that
+group's lifecycle. Ten percent of each is initially reserved for coordination
+and another ten percent for synthesis; unused task capacity rolls into final
+integration after member work settles. Active task allocations are weighted by
+role and requested effort, rebalanced on new assignments, usage reports, and
+completion. Context-window capacity is model metadata for input fit; it does
+not consume output-token allocation. Each provider output cap is refreshed from
+the task's remaining allocation. Near the cap, members receive a checkpoint
+instruction and retain a small completion allowance so findings can be
+returned instead of abruptly cancelling the member. Provider usage reports
+are deduplicated before group, task, and cost totals are updated. Missing cost
+telemetry remains unknown and stops further cost-based delegation.
+
+Group changes publish the `AgentGroupItem` in `HarnessState`. Each event has a
+monotonic group sequence plus `group_id`, optional `member_id`, and optional
+`task_id`; member phase (`reasoning`, `tool_call`, `waiting_for_input`,
+`completed`, and failure/cancellation states) is separate from member lifecycle
+status. The backend appends these events to the session event log and saves a
+versioned `group-checkpoint.json` sidecar under the session lock. Loading a
+session restores its group identity, findings, usage, budget ledger, bounded
+event history, and task summaries. Work that had a live thread at shutdown is
+marked interrupted and the group resumes from saved findings/checkpoints with
+a fresh coordinator; in-process provider/member histories are not persisted.
+Remote reconnect in a live process uses the current `HarnessState` projection,
+while session reload uses the durable checkpoint and event journal.
+
 Workspace-write admission remains deterministic: at most one busy
 implementer may mutate the shared workspace at a time unless the group uses
 isolated workspaces. A member owns only its bounded task. When members

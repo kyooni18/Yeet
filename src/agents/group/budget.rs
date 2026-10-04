@@ -1,11 +1,8 @@
-//! Group-wide limits on live members, concurrent work, tokens, and cost.
-//!
-//! Token and cost limits apply to a budget window that restarts with each
-//! primary turn; members and their contexts outlive the window.
+//! Group-wide limits on live members, concurrent work, output, and cost.
 
-use crate::{core::Usage, model::AgentGroupSettings};
+use crate::model::AgentGroupSettings;
 
-use super::WritePolicy;
+use super::{WritePolicy, budget_ledger::BudgetLimits};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AgentLimits {
@@ -16,7 +13,7 @@ pub(crate) struct AgentLimits {
     pub max_tokens: u64,
     pub max_cost_usd: f64,
     pub write_policy: WritePolicy,
-    /// The primary is told to fan out parallelizable work on its own.
+    /// The Main Agent is advised when group delegation fits the budget.
     pub auto_deploy: bool,
 }
 
@@ -45,9 +42,26 @@ impl From<&AgentGroupSettings> for AgentLimits {
 }
 
 impl AgentLimits {
-    /// Primary-agent guidance for auto-deploy, or `None` when it is off.
+    pub(crate) fn budget_limits(&self) -> BudgetLimits {
+        // Keep both coordinator and final synthesis capacity reserved while
+        // delegated tasks share and rebalance the remainder.
+        let coordination_output_reserve = self.max_tokens / 10;
+        let synthesis_output_reserve = self.max_tokens / 10;
+        let coordination_cost_reserve_usd = self.max_cost_usd * 0.1;
+        let synthesis_cost_reserve_usd = self.max_cost_usd * 0.1;
+        BudgetLimits {
+            output_tokens: self.max_tokens,
+            estimated_cost_usd: self.max_cost_usd,
+            coordination_output_reserve,
+            synthesis_output_reserve,
+            coordination_cost_reserve_usd,
+            synthesis_cost_reserve_usd,
+        }
+    }
+
+    /// Main-Agent group guidance, or `None` when delegation is off.
     /// Depends only on the limits so it stays byte-stable across turns.
-    pub(crate) fn deploy_guidance(&self) -> Option<String> {
+    pub(crate) fn group_guidance(&self) -> Option<String> {
         if !self.auto_deploy {
             return None;
         }
@@ -64,19 +78,4 @@ impl AgentLimits {
             self.max_concurrent
         ))
     }
-
-    /// True once usage in the current window reaches the token or cost ceiling.
-    pub(crate) fn budget_exhausted(&self, usage: &Usage) -> bool {
-        usage_tokens(usage) >= self.max_tokens
-            || usage.estimated_cost_usd.unwrap_or(0.0) >= self.max_cost_usd
-    }
-}
-
-fn usage_tokens(usage: &Usage) -> u64 {
-    usage.total_tokens.unwrap_or_else(|| {
-        usage
-            .input_tokens
-            .unwrap_or(0)
-            .saturating_add(usage.output_tokens.unwrap_or(0))
-    })
 }

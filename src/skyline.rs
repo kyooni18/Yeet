@@ -4,7 +4,6 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::AtomicBool,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -43,19 +42,18 @@ const WORKER_OPERATIONS: &[&str] = &[
     "test_run_start",
     "test_run_finish",
     "test_run_show",
-    "deploy_agent",
     "status",
 ];
 
 pub(crate) fn tui_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "skyline",
-        "Use Skyline as the unified coordination and native agent-deployment capability for this session. Choose work autonomously from actual project state. Call next once to orient, sync after material changes or before collision-sensitive work, coordinate with send/react, publish evidence-backed outcomes, and serialize scarce live-test resources. Use deploy_agent{task} only when the user requests delegation; it starts a separate native session with normal permissions. Jobs and scopes are advisory; do not poll or stay active merely to satisfy a time target.",
+        "Use Skyline as the unified project-coordination capability for this session. Choose work autonomously from actual project state. Call next once to orient, sync after material changes or before collision-sensitive work, coordinate with send/react, publish evidence-backed outcomes, and serialize scarce live-test resources. Use the Group Agent lifecycle for delegated work so member tasks share one objective, budget, and integrated result. Jobs and scopes are advisory; do not poll or stay active merely to satisfy a time target.",
         json!({
             "type":"object",
             "properties":{
                 "operation":{"type":"string","enum":WORKER_OPERATIONS},
-                "arguments":{"type":"object","description":"Required keys by operation: name{name}; send{to[],subject,body}; react{message}; outcome{summary}; test_run_start{resource,purpose}; test_run_finish{id,outcome}; deploy_agent{task}. next/sync/inbox/test_run_show/status accept optional filters/state fields.","additionalProperties":true}
+                "arguments":{"type":"object","description":"Required keys by operation: name{name}; send{to[],subject,body}; react{message}; outcome{summary}; test_run_start{resource,purpose}; test_run_finish{id,outcome}. next/sync/inbox/test_run_show/status accept optional filters/state fields.","additionalProperties":true}
             },
             "required":["operation"],
             "additionalProperties":false
@@ -1067,13 +1065,9 @@ fn run_operation(
     arguments: &Map<String, Value>,
 ) -> Result<Value> {
     if operation == "deploy_agent" {
-        ensure_known_keys(arguments, &["task"], operation)?;
-        let task = required_string(arguments, "task")?;
-        let source_root = project_source_root(project_root)?;
-        let result =
-            crate::tools::deploy_agent_for_workspace(&source_root, task, &AtomicBool::new(false))?;
-        return serde_json::from_str(&result)
-            .with_context(|| "decode native agent deployment result".to_owned());
+        bail!(
+            "detached child sessions are not a Group Agent lifecycle operation; use create_agent_group and start_agent_group for coordinated work"
+        );
     }
     let root = project_root.display().to_string();
     let mut argv = match operation {

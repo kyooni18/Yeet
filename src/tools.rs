@@ -9,10 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    agents::{
-        AgentGroupHandle, AgentNotification,
-        group::commands::{AGENT_TOOL, LEGACY_PROPOSE_TOOL, SEND_TOOL, STOP_TOOL},
-    },
+    agents::{AgentGroupHandle, group::commands::LEGACY_PROPOSE_TOOL},
     core::{BridgeClient, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
@@ -28,7 +25,6 @@ use crate::{
     workers::WorkerRegistry,
 };
 
-mod agent_deploy;
 mod artifact_output;
 mod auto_check;
 mod bridge_handle;
@@ -56,7 +52,6 @@ pub mod symbols;
 mod syntax_edit;
 mod token_efficiency;
 
-pub(crate) use agent_deploy::deploy_agent_for_workspace;
 pub(crate) use bridge_handle::BridgeHandle;
 use catalog::{ExternalRoute, ToolCatalog};
 use context::ToolExecutionContext;
@@ -228,18 +223,25 @@ impl ToolRegistry {
     }
 
     pub(crate) fn set_agent_group(&mut self, group: Option<AgentGroupHandle>) {
+        if let Some(previous) = &self.agent_group {
+            for name in previous.tool_names() {
+                self.catalog.active_tools.remove(*name);
+            }
+        }
         self.agent_group = group;
-        if self.agent_group.is_some() {
-            for definition in AgentGroupHandle::tool_definitions() {
+        if let Some(group) = &self.agent_group {
+            for definition in group.tool_definitions() {
                 self.catalog
                     .active_tools
                     .insert(definition.name.clone(), definition);
             }
-        } else {
-            for name in AgentGroupHandle::tool_names() {
-                self.catalog.active_tools.remove(name);
-            }
         }
+    }
+
+    pub(crate) fn agent_group_tool_names(&self) -> &'static [&'static str] {
+        self.agent_group
+            .as_ref()
+            .map_or(&[], AgentGroupHandle::tool_names)
     }
 
     /// Lets one response's foreground agent calls run concurrently.
@@ -249,21 +251,14 @@ impl ToolRegistry {
         }
     }
 
-    pub(crate) fn take_agent_notifications(&self) -> Vec<AgentNotification> {
-        self.agent_group
-            .as_ref()
-            .map(AgentGroupHandle::take_notifications)
-            .unwrap_or_default()
-    }
-
     pub(crate) fn set_permission_label(&mut self, label: String) {
         self.context.permission_label = Some(label);
     }
 
-    pub(crate) fn agent_deploy_guidance(&self) -> Option<String> {
+    pub(crate) fn agent_group_guidance(&self) -> Option<String> {
         self.agent_group
             .as_ref()
-            .and_then(AgentGroupHandle::deploy_guidance)
+            .and_then(AgentGroupHandle::group_guidance)
     }
 
     pub(crate) fn agent_orchestration_enabled(&self) -> bool {
@@ -532,18 +527,18 @@ impl ToolRegistry {
                 self.activate(id)
             }
             "skyline" => self.execute_skyline(&object),
-            "deploy_agent" => self.deploy_agent(&object, cancel),
-            AGENT_TOOL | SEND_TOOL | STOP_TOOL | LEGACY_PROPOSE_TOOL => self
-                .agent_group
-                .as_ref()
-                .ok_or_else(|| anyhow!("adaptive agent orchestration is not enabled"))?
-                .execute(
+            _ if self.agent_group.as_ref().is_some_and(|group| {
+                group.tool_names().contains(&call.name.as_str()) || call.name == LEGACY_PROPOSE_TOOL
+            }) =>
+            {
+                self.agent_group.as_ref().unwrap().execute(
                     call,
                     &object,
                     model,
                     self.context.active_session_id.clone(),
                     cancel,
-                ),
+                )
+            }
             "read_file" => self.read_file(&object),
             // Hidden compatibility alias for restored sessions created before
             // read_file absorbed batch reads. New requests never expose this schema.

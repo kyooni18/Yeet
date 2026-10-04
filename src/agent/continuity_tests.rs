@@ -120,6 +120,7 @@ impl Harness {
                     goal_mode: Arc::new(AtomicBool::new(goal)),
                     cancel: Arc::new(AtomicBool::new(false)),
                     continuation,
+                    max_output_tokens: None,
                 },
                 |_| {},
             )
@@ -230,10 +231,12 @@ fn ordinary_turns_tool_results_and_tool_surface_changes_stay_append_only() {
             .map(|tool| tool.name.clone())
             .collect()
     };
+    let initial_surface = surface(&requests[0]);
+    let enabled_surface = surface(requests.last().unwrap());
     assert!(
-        !surface(&requests[0]).contains(&"agent".to_owned())
-            && surface(requests.last().unwrap()).contains(&"agent".to_owned()),
-        "the agent tool surface must actually change mid-session"
+        !initial_surface.contains(&"create_agent_group".to_owned())
+            && enabled_surface.contains(&"create_agent_group".to_owned()),
+        "the Group Agent lifecycle surface must actually change mid-session"
     );
     let last = wire(requests.last().unwrap());
     assert!(

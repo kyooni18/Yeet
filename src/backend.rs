@@ -50,7 +50,6 @@ use crate::{
     workers::WorkerRegistry,
 };
 
-mod agent_notifications;
 mod autonomy;
 mod bootstrap;
 mod capabilities;
@@ -58,6 +57,7 @@ mod commands;
 mod debate_context;
 mod debate_runtime;
 mod events;
+mod group_events;
 mod input_context;
 mod lifecycle;
 mod persistence;
@@ -311,6 +311,42 @@ impl BackendService {
             FrontendCommand::SetGoal { enabled } => self.set_goal_enabled(enabled),
             FrontendCommand::SetAgentMode { mode } => self.set_agent_mode(mode),
             FrontendCommand::SetAutonomyMode { mode } => self.set_autonomy_mode(mode),
+            FrontendCommand::CreateAgentGroup { objective } => {
+                let session = self
+                    .shared
+                    .lock_or_recover()
+                    .state
+                    .current_session_id
+                    .clone();
+                self.agent_groups
+                    .handle()
+                    .create_group(objective, session)?;
+                self.publish_state();
+                Ok(())
+            }
+            FrontendCommand::StartAgentGroup { group_id } => {
+                self.start_group_background(group_id, false)
+            }
+            FrontendCommand::ResumeAgentGroup { group_id } => {
+                self.start_group_background(group_id, true)
+            }
+            FrontendCommand::CancelAgentGroup { group_id } => {
+                self.agent_groups.handle().cancel_group(&group_id)?;
+                self.publish_state();
+                Ok(())
+            }
+            FrontendCommand::StopAgentGroup { group_id } => {
+                self.agent_groups.handle().stop_group(&group_id)?;
+                self.publish_state();
+                Ok(())
+            }
+            FrontendCommand::InspectAgentGroup { group_id } => {
+                if self.agent_groups.group_item().group_id != group_id {
+                    return Err(anyhow!("unknown Agent Group: {group_id}"));
+                }
+                self.publish_state();
+                Ok(())
+            }
             FrontendCommand::MessageAgent { agent_id, message } => {
                 self.agent_groups.message(&agent_id, message)
             }
@@ -323,15 +359,18 @@ impl BackendService {
                 description,
                 prompt,
             } => {
-                let (model, session) = {
-                    let shared = self.shared.lock_or_recover();
-                    (
-                        shared.state.active_model.clone(),
-                        shared.state.current_session_id.clone(),
-                    )
-                };
-                self.agent_groups
-                    .spawn_for_user(&role, description, prompt, &model, session)
+                let session = self
+                    .shared
+                    .lock_or_recover()
+                    .state
+                    .current_session_id
+                    .clone();
+                let objective = format!(
+                    "Complete this shared objective. The caller requested an initial {role} focus ({description}). The Group Agent coordinator decides whether and how to delegate members.\n\n{prompt}"
+                );
+                let handle = self.agent_groups.handle();
+                let group_id = handle.create_group(objective, session)?;
+                self.start_group_background(group_id, false)
             }
             FrontendCommand::RequestSessions => {
                 self.request_sessions();
@@ -436,7 +475,6 @@ impl BackendService {
     }
 
     pub(crate) fn try_recv(&mut self) -> Option<BackendEvent> {
-        self.deliver_agent_notifications();
         if let Some(event) = self.bridge.try_recv_event() {
             self.handle_bridge_event(event);
         }

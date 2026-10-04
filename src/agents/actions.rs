@@ -71,12 +71,32 @@ pub enum FrontendCommand {
     SetAutonomyMode {
         mode: AutonomyMode,
     },
-    /// Queues a user message for a group member; it runs in the background.
+    /// Creates one durable Group Agent for a shared objective.
+    CreateAgentGroup {
+        objective: String,
+    },
+    /// Starts the stored Group Agent coordinator asynchronously.
+    StartAgentGroup {
+        group_id: String,
+    },
+    ResumeAgentGroup {
+        group_id: String,
+    },
+    CancelAgentGroup {
+        group_id: String,
+    },
+    StopAgentGroup {
+        group_id: String,
+    },
+    InspectAgentGroup {
+        group_id: String,
+    },
+    /// Advanced member control scoped to the active Group Agent.
     MessageAgent {
         agent_id: String,
         message: String,
     },
-    /// Launches a background group member on the active model.
+    /// Compatibility shortcut: turns the supplied task into a Group Agent objective.
     SpawnAgent {
         role: String,
         description: String,
@@ -136,7 +156,6 @@ pub enum FrontendCommand {
     SetJevLoopMode {
         mode: String,
     },
-    #[serde(alias = "set_\u{73}\u{77}\u{61}\u{72}\u{6d}_settings")]
     SetAgentGroupSettings {
         settings: AgentGroupSettings,
     },
@@ -187,20 +206,6 @@ mod tests {
         assert!(matches!(
             decoded,
             Action::Navigate(NavigationAction::File(2))
-        ));
-    }
-
-    #[test]
-    fn legacy_group_settings_command_remains_readable() {
-        let legacy_type = "set_\u{73}\u{77}\u{61}\u{72}\u{6d}_settings";
-        let command: FrontendCommand = serde_json::from_value(serde_json::json!({
-            "type": legacy_type,
-            "settings": crate::model::AgentGroupSettings::default()
-        }))
-        .unwrap();
-        assert!(matches!(
-            command,
-            FrontendCommand::SetAgentGroupSettings { .. }
         ));
     }
 }

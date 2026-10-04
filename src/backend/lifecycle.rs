@@ -9,8 +9,11 @@ impl BackendService {
     /// Restores a persisted session and rebinds coordinator runtime state.
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
-        self.agent_groups.replace_active_group();
         let stored = self.store.load(id)?;
+        let group_checkpoint = self
+            .store
+            .load_group_checkpoint::<crate::agents::group::AgentGroupCheckpoint>(id)?;
+        self.agent_groups.replace_active_group();
         let rebase = |path: &String| {
             crate::session_store::resolve_workspace_path(
                 &self.workspace_root,
@@ -100,6 +103,9 @@ impl BackendService {
         let protected = self.store.directory.join(&stored.id);
         let retained_knowledge = shared.meta.retained_debate_knowledge.clone();
         drop(shared);
+        if let Some(checkpoint) = group_checkpoint {
+            self.agent_groups.restore_checkpoint(checkpoint)?;
+        }
         self.goal_mode.store(persisted_goal, Ordering::Release);
         let (working_directory, context_roots) = {
             let mut coordinator = self
@@ -265,9 +271,9 @@ impl BackendService {
     /// Requests cancellation for the active run and pending permission prompt.
     pub(super) fn interrupt(&self) {
         self.run_manager.cancel_all();
-        // Background agents are not interrupted: their bridge requests are
-        // detached and they are stopped only by stop_agent or group replacement.
-        self.agent_groups.cancel_foreground();
+        if self.agent_groups.group_item().status == "running" {
+            self.agent_groups.cancel_group();
+        }
         self.bridge.interrupt_active_requests();
         if self.permission.pending_shell().is_some()
             || self.permission.pending_native_app().is_some()

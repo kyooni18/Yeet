@@ -1,5 +1,4 @@
-//! Projections of group state for frontends, tool results, and the primary
-//! agent's completion notifications.
+//! Projections of group state for frontends, persistence, and tool results.
 
 use serde_json::{Value, json};
 
@@ -11,19 +10,6 @@ use crate::{
 
 use super::state::AgentGroupState;
 
-/// Summaries longer than this are truncated in notifications; the agent can
-/// be messaged for the rest.
-const NOTIFICATION_SUMMARY_CHARS: usize = 16_000;
-
-/// A finished background task, rendered for the primary agent.
-#[derive(Debug, Clone)]
-pub(crate) struct AgentNotification {
-    /// One line for the transcript.
-    pub headline: String,
-    /// The model-facing message.
-    pub message: String,
-}
-
 impl AgentGroupState {
     /// The flat task list the bridge currently exposes to frontends.
     pub(crate) fn task_items(&self) -> Vec<AgentTaskItem> {
@@ -33,6 +19,11 @@ impl AgentGroupState {
     /// Members, recent activity, and usage for the frontend Agent view.
     pub(crate) fn group_item(&self) -> AgentGroupItem {
         AgentGroupItem {
+            group_id: self.id.to_string(),
+            objective: self.objective.clone(),
+            status: self.status.clone(),
+            final_result: self.final_result.clone(),
+            checkpoint_summary: self.checkpoint_summary.clone(),
             members: self
                 .members
                 .iter()
@@ -42,6 +33,10 @@ impl AgentGroupState {
             started_at: self.members.first().map(|member| member.started_at.clone()),
             input_tokens: self.usage.input_tokens.unwrap_or_default(),
             output_tokens: self.usage.output_tokens.unwrap_or_default(),
+            estimated_cost_usd: self.usage.estimated_cost_usd,
+            budget: self.budget.clone(),
+            events: self.events.iter().cloned().collect(),
+            shared_findings: self.shared_findings.iter().cloned().collect(),
         }
     }
 
@@ -58,6 +53,7 @@ impl AgentGroupState {
             role: member.role.as_str().into(),
             model: member.model.clone(),
             status: member.status.as_str().into(),
+            activity_state: member.activity_state.clone(),
             task_status: latest
                 .map(|task| task.status.as_str().to_owned())
                 .unwrap_or_default(),
@@ -90,30 +86,4 @@ pub(crate) fn task_result(task: &AgentTask) -> Value {
         "summary": task.summary,
         "usage": task.usage,
     })
-}
-
-pub(super) fn notification(member: &AgentMember, task: &AgentTask) -> AgentNotification {
-    let summary = task.summary.as_deref().unwrap_or_default();
-    let summary = match summary.char_indices().nth(NOTIFICATION_SUMMARY_CHARS) {
-        Some((cut, _)) => format!(
-            "{}\n[truncated; message the agent for the rest]",
-            &summary[..cut]
-        ),
-        None => summary.to_owned(),
-    };
-    AgentNotification {
-        headline: format!(
-            "Background agent \"{}\" finished: {}",
-            member.description,
-            task.status.as_str()
-        ),
-        message: format!(
-            "<agent-notification>\n<agent-id>{}</agent-id>\n<task-id>{}</task-id>\n<description>{}</description>\n<status>{}</status>\n<summary>\n{}\n</summary>\n</agent-notification>\nThis is an automated notice, not a user message. Continue the agent with send_agent_message using its agent-id if needed.",
-            member.id,
-            task.id,
-            member.description,
-            task.status.as_str(),
-            summary
-        ),
-    }
 }

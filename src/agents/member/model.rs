@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentId, task::AgentTaskId};
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MemberStatus {
     /// Has a run in progress or queued messages.
@@ -30,7 +30,7 @@ impl MemberStatus {
 }
 
 /// A group member. Its `id` is the process-wide registry identity.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentMember {
     pub id: AgentId,
@@ -41,6 +41,8 @@ pub(crate) struct AgentMember {
     #[serde(rename = "parent")]
     pub spawned_by: Option<AgentId>,
     pub status: MemberStatus,
+    #[serde(default)]
+    pub activity_state: String,
     pub current_task: Option<AgentTaskId>,
     /// RFC 3339 launch time.
     pub started_at: String,

@@ -162,7 +162,6 @@ impl BackendService {
         let autonomy_mode = self.shared.lock_or_recover().state.autonomy_mode;
         let goal_enabled = autonomy_mode != AutonomyMode::Manual;
         self.goal_mode.store(goal_enabled, Ordering::Release);
-        self.agent_groups.begin_turn();
         let history_start = self
             .coordinator
             .lock_or_recover()
@@ -339,6 +338,7 @@ impl RunWorker {
                     cancel: run.cancel.clone(),
                     goal_mode: self.goal_mode.clone(),
                     continuation: cycle_continuation,
+                    max_output_tokens: None,
                 },
                 |event| self.project_event(&run.id, event),
             )?;

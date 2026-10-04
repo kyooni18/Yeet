@@ -820,6 +820,24 @@ mod goal_persistence_tests {
     }
 
     #[test]
+    fn nested_group_history_stays_volatile_and_isolated() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let owner_context = directory.path().join("context");
+        let mut memory = ContextMemory::default();
+        memory.bind(Some(owner_context.clone()));
+        // Group-scoped coordinators retain session tools but do not share the
+        // Main Agent's durable provider-history file.
+        memory.bind(None);
+        let mut history = vec![Message::system("group"), Message::user("bounded task")];
+        memory.load(&mut history)?;
+        memory.sync(&history)?;
+        memory.flush()?;
+        assert!(!owner_context.exists());
+        assert_eq!(history[1].content.as_deref(), Some("bounded task"));
+        Ok(())
+    }
+
+    #[test]
     fn agent_checkpoint_survives_session_restart() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("context");

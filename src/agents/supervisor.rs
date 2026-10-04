@@ -1,8 +1,8 @@
 //! Backend-facing owner of Agent Group runtimes.
 //!
-//! The backend opens a budget window per turn, replaces the group when the
+//! The backend replaces the group when the
 //! session or agent mode changes, hands tools an `AgentGroupHandle`, and
-//! reads frontend projections and pending notifications. It never sees
+//! reads frontend projections. It never sees
 //! scheduler state or member coordinators.
 
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use anyhow::{Result, anyhow};
 use crate::model::{AgentGroupItem, AgentTaskItem};
 
 use super::{
-    group::{AgentGroupRuntime, AgentLimits, AgentNotification, ChangeListener},
+    group::{AgentGroupCheckpoint, AgentGroupRuntime, AgentLimits, ChangeListener},
     handle::AgentGroupHandle,
     member::CoordinatorLauncher,
     runtime::AgentRuntimeFactory,
@@ -21,12 +21,16 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct AgentGroupSupervisor {
     active: AgentGroupRuntime,
+    handle: AgentGroupHandle,
 }
 
 impl AgentGroupSupervisor {
     pub(crate) fn new(factory: AgentRuntimeFactory, limits: AgentLimits) -> Self {
+        let active =
+            AgentGroupRuntime::new(Arc::new(CoordinatorLauncher::new(factory.clone())), limits);
         Self {
-            active: AgentGroupRuntime::new(Arc::new(CoordinatorLauncher::new(factory)), limits),
+            handle: AgentGroupHandle::new(active.clone(), factory),
+            active,
         }
     }
 
@@ -44,29 +48,20 @@ impl AgentGroupSupervisor {
     /// agent mode never inherits stale agents.
     pub(crate) fn replace_active_group(&self) {
         self.active.replace_group();
+        self.handle.reset_group_context();
     }
 
-    /// Opens a budget window for a new primary turn. Background agents keep
-    /// running; foreground agents from an earlier turn are cancelled.
-    pub(crate) fn begin_turn(&self) {
-        self.active.begin_turn();
+    pub(crate) fn restore_checkpoint(&self, checkpoint: AgentGroupCheckpoint) -> Result<()> {
+        self.handle.reset_group_context();
+        self.active.restore_checkpoint(checkpoint)
     }
 
-    /// Cancels agents the primary is blocked on; background agents survive.
-    pub(crate) fn cancel_foreground(&self) {
-        self.active.cancel_foreground();
-    }
-
-    pub(crate) fn has_notifications(&self) -> bool {
-        self.active.has_notifications()
-    }
-
-    pub(crate) fn take_notifications(&self) -> Vec<AgentNotification> {
-        self.active.take_notifications()
+    pub(crate) fn cancel_group(&self) {
+        self.active.cancel_group();
     }
 
     pub(crate) fn handle(&self) -> AgentGroupHandle {
-        AgentGroupHandle::new(self.active.clone())
+        self.handle.clone()
     }
 
     pub(crate) fn task_items(&self) -> Vec<AgentTaskItem> {
@@ -80,26 +75,6 @@ impl AgentGroupSupervisor {
     /// Queues a message the user typed to one member.
     pub(crate) fn message(&self, agent_id: &str, message: String) -> Result<()> {
         self.active.steer(parse_id(agent_id)?, message).map(|_| ())
-    }
-
-    /// Launches a background member the user asked for from a frontend.
-    pub(crate) fn spawn_for_user(
-        &self,
-        role: &str,
-        description: String,
-        prompt: String,
-        model: &str,
-        session: Option<String>,
-    ) -> Result<()> {
-        let request = super::task::SpawnRequest {
-            role: super::member::AgentRole::parse(role)?,
-            description,
-            prompt,
-            background: true,
-        };
-        self.active
-            .spawn_for_user(request, model, session)
-            .map(|_| ())
     }
 
     /// Removes one member (stopping it first), or every stopped member when

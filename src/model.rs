@@ -89,9 +89,16 @@ pub struct AgentTaskItem {
 
 /// Frontend projection of the active Agent Group: who is in it and what
 /// they have been doing. Complements the flat `agent_tasks` list.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AgentGroupItem {
+    /// Stable group identity, preserved across reconnects.
+    pub group_id: String,
+    pub objective: Option<String>,
+    /// `idle`, `running`, `completed`, `cancelled`, or `failed`.
+    pub status: String,
+    pub final_result: Option<String>,
+    pub checkpoint_summary: Option<String>,
     pub members: Vec<AgentMemberItem>,
     /// Oldest first; capped by the backend.
     pub activity: Vec<AgentActivityItem>,
@@ -99,6 +106,58 @@ pub struct AgentGroupItem {
     pub started_at: Option<String>,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub estimated_cost_usd: Option<f64>,
+    pub budget: AgentGroupBudgetItem,
+    /// Oldest first; each event carries stable group/member/task identity.
+    pub events: Vec<AgentGroupEventItem>,
+    pub shared_findings: Vec<AgentGroupFindingItem>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentGroupBudgetItem {
+    pub output_limit_tokens: u64,
+    pub output_used_tokens: u64,
+    pub cost_limit_usd: f64,
+    pub estimated_cost_used_usd: Option<f64>,
+    pub coordination_reserve_tokens: u64,
+    pub synthesis_reserve_tokens: u64,
+    pub coordination_reserve_cost_usd: f64,
+    pub synthesis_reserve_cost_usd: f64,
+    pub tasks: Vec<AgentTaskBudgetItem>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentTaskBudgetItem {
+    pub task_id: String,
+    pub allocated_output_tokens: u64,
+    pub used_output_tokens: u64,
+    pub remaining_output_tokens: u64,
+    pub allocated_cost_usd: f64,
+    pub estimated_cost_used_usd: Option<f64>,
+    pub context_window_tokens: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentGroupEventItem {
+    pub group_id: String,
+    pub sequence: u64,
+    pub member_id: Option<String>,
+    pub task_id: Option<String>,
+    pub at: String,
+    pub kind: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgentGroupFindingItem {
+    pub member_id: String,
+    pub task_id: String,
+    pub at: String,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,6 +169,8 @@ pub struct AgentMemberItem {
     pub model: String,
     /// `running`, `idle`, or `stopped`.
     pub status: String,
+    /// Current execution phase, such as `reasoning`, `tool_call`, or `waiting_for_input`.
+    pub activity_state: String,
     /// Wire status of the member's most recent task.
     pub task_status: String,
     pub summary: Option<String>,
@@ -370,9 +431,9 @@ pub struct AgentGroupSettings {
     pub max_concurrent: u32,
     /// Agents kept alive, idle ones included.
     pub max_members: u32,
-    /// Delegated-agent token budget per primary turn.
+    /// Group-wide output-token ceiling for one Group Agent lifecycle.
     pub max_tokens: u64,
-    /// Delegated-agent cost budget per primary turn, in US cents.
+    /// Group-wide estimated-cost ceiling for one Group Agent lifecycle, in US cents.
     pub max_cost_cents: u64,
     /// `single_writer` or `primary_only`.
     pub write_policy: String,

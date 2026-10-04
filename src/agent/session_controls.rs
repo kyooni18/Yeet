@@ -167,17 +167,6 @@ impl AgentCoordinator {
         self.registry.set_protected_write_paths(paths);
     }
 
-    /// Hands finished background-agent results to the model as user-role
-    /// notices before its next request.
-    pub(super) fn deliver_agent_notifications(&mut self, emit: &mut impl FnMut(AgentEvent)) {
-        for notice in self.registry.take_agent_notifications() {
-            emit(AgentEvent::AgentNotification {
-                headline: notice.headline,
-            });
-            self.history.push(Message::user(notice.message));
-        }
-    }
-
     pub(crate) fn set_permission_label(&mut self, label: String) {
         self.registry.set_permission_label(label);
     }

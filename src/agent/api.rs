@@ -78,10 +78,6 @@ pub enum AgentEvent {
         reason: String,
         usage: Option<Usage>,
     },
-    /// A background agent's result was handed to the primary agent.
-    AgentNotification {
-        headline: String,
-    },
 }
 
 pub struct AgentRunRequest<'a> {
@@ -94,6 +90,9 @@ pub struct AgentRunRequest<'a> {
     pub goal_mode: Arc<AtomicBool>,
     pub cancel: Arc<AtomicBool>,
     pub continuation: bool,
+    /// Remaining group allocation; reread before each provider request so
+    /// active members follow dynamic rebalance decisions.
+    pub max_output_tokens: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 pub(super) struct AgentTurnRequest<'a> {

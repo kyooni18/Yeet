@@ -6,6 +6,16 @@
 
 use super::*;
 
+const GROUP_CHECKPOINT_FILE: &str = "group-checkpoint.json";
+const GROUP_CHECKPOINT_SCHEMA_VERSION: u64 = 1;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupCheckpointEnvelope<T> {
+    schema_version: u64,
+    checkpoint: T,
+}
+
 pub(super) fn event_is_debate(event: &serde_json::Value) -> bool {
     event
         .get("type")
@@ -14,6 +24,44 @@ pub(super) fn event_is_debate(event: &serde_json::Value) -> bool {
 }
 
 impl SessionStore {
+    /// Persist a versioned Group Agent checkpoint in the session directory.
+    pub fn save_group_checkpoint<T: Serialize>(&self, id: &str, checkpoint: &T) -> Result<()> {
+        self.serialized_session(id, true, || {
+            validate_id(id)?;
+            let root = self.directory.join(id);
+            create_private_dir(&root)?;
+            let data = serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": GROUP_CHECKPOINT_SCHEMA_VERSION,
+                "checkpoint": checkpoint,
+            }))?;
+            write_private_replace(&root.join(GROUP_CHECKPOINT_FILE), &data)
+        })
+    }
+
+    /// Load a checkpoint, returning `None` for sessions created before this
+    /// sidecar existed.
+    pub fn load_group_checkpoint<T: serde::de::DeserializeOwned>(
+        &self,
+        id: &str,
+    ) -> Result<Option<T>> {
+        self.serialized_session(id, false, || {
+            validate_id(id)?;
+            let path = self.directory.join(id).join(GROUP_CHECKPOINT_FILE);
+            let data = match fs::read(path) {
+                Ok(data) => data,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            let envelope: GroupCheckpointEnvelope<T> = serde_json::from_slice(&data)?;
+            ensure!(
+                envelope.schema_version == GROUP_CHECKPOINT_SCHEMA_VERSION,
+                "unsupported Group Agent checkpoint schema version {}",
+                envelope.schema_version
+            );
+            Ok(Some(envelope.checkpoint))
+        })
+    }
+
     /// Read the session's task and debate journal records in sequence order.
     /// Invalid lines are ignored so a partial final append cannot hide prior
     /// durable events.

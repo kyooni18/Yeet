@@ -1,72 +1,41 @@
 //! The model-facing agent tools: schemas and argument parsing.
 //!
-//! The surface follows the subagent model of Claude Code: one call launches
-//! one agent (foreground by default, or in the background with a completion
-//! notification), agents are continued by message, and stopped explicitly.
+//! The Group Agent coordinator's member delegation tools.
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    agents::{AgentId, member::AgentRole, task::SpawnRequest},
+    agents::{member::AgentRole, task::SpawnRequest},
     core::ToolDefinition,
 };
 
-pub(crate) const AGENT_TOOL: &str = "agent";
-pub(crate) const SEND_TOOL: &str = "send_agent_message";
-pub(crate) const STOP_TOOL: &str = "stop_agent";
+pub(crate) const AGENT_TOOL: &str = "delegate_task";
 /// Hidden compatibility alias for restored sessions created before the
 /// agent tool; never exposed as a schema.
 pub(crate) const LEGACY_PROPOSE_TOOL: &str = "propose_agent_tasks";
 
-pub(crate) const TOOL_NAMES: [&str; 3] = [AGENT_TOOL, SEND_TOOL, STOP_TOOL];
+pub(crate) const TOOL_NAMES: [&str; 1] = [AGENT_TOOL];
 
 const MAX_LEGACY_TASKS: usize = 4;
 const LEGACY_DESCRIPTION_CHARS: usize = 60;
 
 pub(crate) fn tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition::new(
-            AGENT_TOOL,
-            "Launch a worker agent with its own isolated context for a bounded task. Roles: researcher (read-only inspection and research), implementer (a bounded code change; only one works at a time), verifier (tests and independent validation; no file writes). By default the call blocks and returns the agent's final report; several agent calls in one response run concurrently. Set run_in_background=true to return immediately: you will be notified with the result when it finishes, so do not poll or wait for it. The agent cannot see this conversation, so write a self-contained prompt. Workers cannot launch agents. The result includes an agentId for send_agent_message.",
-            json!({
-                "type":"object",
-                "properties":{
-                    "description":{"type":"string","minLength":1,"maxLength":120,"description":"A short (3-8 word) label for the task."},
-                    "prompt":{"type":"string","minLength":1,"maxLength":12000,"description":"The complete, self-contained task for the agent."},
-                    "role":{"type":"string","enum":["researcher","implementer","verifier"]},
-                    "run_in_background":{"type":"boolean","description":"Return immediately and deliver the result as a notification."}
-                },
-                "required":["description","prompt","role"],
-                "additionalProperties":false
-            }),
-        ),
-        ToolDefinition::new(
-            SEND_TOOL,
-            "Send a follow-up message to an agent launched earlier, continuing it with its context intact. The message runs in the background and you will be notified when it finishes; if the agent is busy the message is queued.",
-            json!({
-                "type":"object",
-                "properties":{
-                    "to":{"type":"string","description":"The agentId returned by agent."},
-                    "message":{"type":"string","minLength":1,"maxLength":12000}
-                },
-                "required":["to","message"],
-                "additionalProperties":false
-            }),
-        ),
-        ToolDefinition::new(
-            STOP_TOOL,
-            "Stop an agent. Its current and queued work is cancelled and it cannot be messaged again.",
-            json!({
-                "type":"object",
-                "properties":{
-                    "agent_id":{"type":"string"}
-                },
-                "required":["agent_id"],
-                "additionalProperties":false
-            }),
-        ),
-    ]
+    vec![ToolDefinition::new(
+        AGENT_TOOL,
+        "Delegate one bounded, role-specific task to a member of this Group Agent. Include only the context that member needs; the group supplies its shared objective and relevant promoted findings. The call returns a member checkpoint to the coordinator. Multiple delegations in one response run concurrently and are all integrated into group state.",
+        json!({
+            "type":"object",
+            "properties":{
+                "description":{"type":"string","minLength":1,"maxLength":120,"description":"A short (3-8 word) label for the task."},
+                "prompt":{"type":"string","minLength":1,"maxLength":12000,"description":"The complete, self-contained task for the agent."},
+                "role":{"type":"string","enum":["researcher","implementer","verifier"]},
+                "effort":{"type":"number","minimum":0.1,"maximum":10,"description":"Relative output and cost need for this assignment. Defaults to 1."}
+            },
+            "required":["description","prompt","role"],
+            "additionalProperties":false
+        }),
+    )]
 }
 
 pub(crate) fn parse_spawn(arguments: &Map<String, Value>) -> Result<SpawnRequest> {
@@ -74,22 +43,9 @@ pub(crate) fn parse_spawn(arguments: &Map<String, Value>) -> Result<SpawnRequest
         role: AgentRole::parse(required_str(arguments, "role")?)?,
         description: required_str(arguments, "description")?.to_owned(),
         prompt: required_str(arguments, "prompt")?.to_owned(),
-        background: arguments
-            .get("run_in_background")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        background: false,
+        weight: task_weight(arguments)?,
     })
-}
-
-pub(crate) fn parse_send(arguments: &Map<String, Value>) -> Result<(AgentId, String)> {
-    Ok((
-        parse_agent_id(required_str(arguments, "to")?)?,
-        required_str(arguments, "message")?.to_owned(),
-    ))
-}
-
-pub(crate) fn parse_stop(arguments: &Map<String, Value>) -> Result<AgentId> {
-    parse_agent_id(required_str(arguments, "agent_id")?)
 }
 
 /// Parses the legacy `propose_agent_tasks` batch as foreground spawns.
@@ -113,9 +69,23 @@ pub(crate) fn parse_legacy_proposals(arguments: &Map<String, Value>) -> Result<V
                 description: prompt.chars().take(LEGACY_DESCRIPTION_CHARS).collect(),
                 prompt: prompt.to_owned(),
                 background: false,
+                weight: 1.0,
             })
         })
         .collect()
+}
+
+fn task_weight(arguments: &Map<String, Value>) -> Result<f64> {
+    let Some(value) = arguments.get("effort") else {
+        return Ok(1.0);
+    };
+    let weight = value
+        .as_f64()
+        .ok_or_else(|| anyhow!("effort must be a number between 0.1 and 10"))?;
+    if !weight.is_finite() || !(0.1..=10.0).contains(&weight) {
+        bail!("effort must be a number between 0.1 and 10");
+    }
+    Ok(weight)
 }
 
 fn required_str<'a>(arguments: &'a Map<String, Value>, key: &str) -> Result<&'a str> {
@@ -130,18 +100,12 @@ fn required_str<'a>(arguments: &'a Map<String, Value>, key: &str) -> Result<&'a 
     Ok(value)
 }
 
-fn parse_agent_id(value: &str) -> Result<AgentId> {
-    value
-        .parse()
-        .map_err(|_| anyhow!("invalid agent id: {value}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_background_spawn() {
+    fn member_tasks_are_awaited_by_the_group() {
         let arguments = json!({
             "description":"inspect parser",
             "prompt":"  read src/parser.rs  ",
@@ -151,7 +115,7 @@ mod tests {
         let request = parse_spawn(arguments.as_object().unwrap()).unwrap();
         assert_eq!(request.role, AgentRole::Researcher);
         assert_eq!(request.prompt, "read src/parser.rs");
-        assert!(request.background);
+        assert!(!request.background);
     }
 
     #[test]

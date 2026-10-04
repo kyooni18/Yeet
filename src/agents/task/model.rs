@@ -56,10 +56,12 @@ pub(crate) struct SpawnRequest {
     /// Background work is announced through a notification instead of
     /// being awaited by the caller.
     pub background: bool,
+    /// Relative budget need, normalized against the group's other tasks.
+    pub weight: f64,
 }
 
 /// Admitted work owned by an Agent Group.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AgentTask {
     pub id: AgentTaskId,
