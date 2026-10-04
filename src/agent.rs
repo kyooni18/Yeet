@@ -10,6 +10,7 @@ mod jev;
 mod job;
 mod limits;
 mod loop_budget;
+mod model_stream;
 mod nested_instructions;
 mod phase;
 mod policy;
@@ -56,8 +57,8 @@ use session_controls::{
     tool_call_indicates_implementation_intent, wait_for_goal,
 };
 use tool_protocol::{
-    PartialToolCall, collect_tool_calls, looks_like_malformed_tool_call,
-    normalize_tool_output_for_model, recover_text_tool_calls,
+    collect_tool_calls, looks_like_malformed_tool_call, normalize_tool_output_for_model,
+    recover_text_tool_calls,
 };
 
 use std::{
@@ -67,7 +68,7 @@ use std::{
 };
 
 use crate::{
-    core::{CallRequest, Message, MessageRole, StreamEvent, StreamPoll, ToolCall, ToolDefinition},
+    core::{CallRequest, Message, MessageRole, ToolCall, ToolDefinition},
     tools::{BridgeHandle, ToolRegistry},
 };
 use anyhow::{Result, anyhow, bail};
@@ -406,98 +407,15 @@ impl AgentCoordinator {
             });
 
             self.observation_cache.mark_submitted();
-            let mut stream = bridge.stream(&request)?;
-            let mut text = String::new();
-            let mut emitted_text = String::new();
-            let mut tool_call_seen = false;
-            let mut decoded: HashMap<usize, ToolCall> = HashMap::new();
-            let mut partial: HashMap<usize, PartialToolCall> = HashMap::new();
-            let mut finish_reason = "stop".to_owned();
-            let mut finish_usage = None;
-            let mut finish_provider_state = None;
-
-            loop {
-                if cancel.load(Ordering::Acquire) {
-                    stream.cancel();
-                    bail!("cancelled");
-                }
-                let event = match stream.poll(Duration::from_millis(50))? {
-                    StreamPoll::Event(event) => event,
-                    StreamPoll::Timeout => continue,
-                    StreamPoll::Done => break,
-                };
-                match event {
-                    StreamEvent::Start => emit(AgentEvent::Start),
-                    StreamEvent::ReasoningStart => emit(AgentEvent::ReasoningStart),
-                    StreamEvent::Activity { title, detail } => {
-                        emit(AgentEvent::ProviderActivity { title, detail })
-                    }
-                    StreamEvent::ReasoningDelta(delta) => emit(AgentEvent::ReasoningDelta(delta)),
-                    StreamEvent::ReasoningSummaryDelta(delta) => {
-                        emit(AgentEvent::ReasoningSummaryDelta(delta))
-                    }
-                    StreamEvent::TextDelta(delta) => {
-                        if !tool_call_seen {
-                            text.push_str(&delta);
-                            emitted_text.push_str(&delta);
-                            emit(AgentEvent::TextDelta(delta));
-                        }
-                    }
-                    StreamEvent::ToolCallDelta {
-                        index,
-                        id,
-                        name,
-                        arguments_delta,
-                    } => {
-                        if !tool_call_seen {
-                            tool_call_seen = true;
-                            if !emitted_text.is_empty() {
-                                emit(AgentEvent::DiscardAssistantText(std::mem::take(
-                                    &mut emitted_text,
-                                )));
-                                text.clear();
-                            }
-                        }
-                        partial
-                            .entry(index)
-                            .or_insert_with(|| {
-                                PartialToolCall::new(index, id.clone(), name.clone())
-                            })
-                            .apply(id.clone(), name.clone(), arguments_delta.clone());
-                        emit(AgentEvent::ToolCallDelta {
-                            index,
-                            id,
-                            name,
-                            arguments_delta,
-                        });
-                    }
-                    StreamEvent::ToolCall { index, tool_call } => {
-                        if !tool_call_seen {
-                            tool_call_seen = true;
-                            if !emitted_text.is_empty() {
-                                emit(AgentEvent::DiscardAssistantText(std::mem::take(
-                                    &mut emitted_text,
-                                )));
-                                text.clear();
-                            }
-                        }
-                        decoded.insert(index, tool_call.clone());
-                        emit(AgentEvent::ToolCall {
-                            index,
-                            call: tool_call,
-                        });
-                    }
-                    StreamEvent::Finish {
-                        finish_reason: reason,
-                        usage,
-                        provider_state,
-                    } => {
-                        finish_reason = reason;
-                        finish_usage = usage;
-                        finish_provider_state = provider_state;
-                    }
-                }
-            }
+            let model_stream::StreamedAttempt {
+                mut text,
+                mut emitted_text,
+                decoded,
+                partial,
+                finish_reason,
+                finish_usage,
+                finish_provider_state,
+            } = model_stream::consume(&bridge, &request, cancel, emit)?;
             check_cancel(cancel)?;
             emit(AgentEvent::ModelAttemptFinished(
                 turn_state::usage_diagnostics(&attempt_cache_diagnostics, finish_usage.as_ref()),
