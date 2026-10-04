@@ -16,6 +16,7 @@ mod phase;
 mod policy;
 mod progress;
 mod repo_context;
+mod request_assembly;
 mod runaway;
 mod session;
 mod session_controls;
@@ -44,7 +45,7 @@ use policy::{
     looks_like_bounded_explanation, looks_like_capability_request,
     looks_like_coding_implementation_request, looks_like_coding_request,
     looks_like_local_file_lookup, looks_like_planning_or_documentation,
-    looks_like_prior_context_request, request_history_for_profile_at, select_tools_for_profile,
+    looks_like_prior_context_request, request_history_for_profile_at,
     should_preserve_web_tool_surface, task_guidance, task_profile_with_history,
 };
 use progress::{
@@ -191,23 +192,22 @@ impl AgentCoordinator {
             );
             self.deliver_agent_notifications(emit);
             model_attempts += 1;
-            let mut tool_catalog = match profile {
-                TaskProfile::Research => self.registry.research_tools(),
-                TaskProfile::Agent => {
-                    select_tools_for_profile(self.registry.tools(web_search_enabled), profile)
-                }
-            };
-            tool_catalog.extend(context::tools());
-            let selected_tools = tool_discovery.attached(&tool_catalog);
-            let working_budget = self.context_memory.working_budget();
-            let jev_loop = jev::apply_loop_policy(
-                &bridge,
-                cancel,
-                selected_tools,
-                &tool_catalog,
-                native_deferred_tools_supported && capability_discovery_requested,
-                |name| self.registry.is_provider_defer_candidate(name),
-                |name| self.registry.is_read_only_extension_tool(name),
+            let request_assembly::ToolSelection {
+                policy: jev_loop,
+                catalog: tool_catalog,
+                working_budget,
+            } = request_assembly::select_tools(
+                request_assembly::ToolSelectionInput {
+                    bridge: &bridge,
+                    registry: &self.registry,
+                    context_memory: &self.context_memory,
+                    discovery: &tool_discovery,
+                    profile,
+                    web_search_enabled,
+                    cancel,
+                    deferred_discovery: native_deferred_tools_supported
+                        && capability_discovery_requested,
+                },
                 jev::LoopInput {
                     goal: goal_input,
                     profile: match profile {
