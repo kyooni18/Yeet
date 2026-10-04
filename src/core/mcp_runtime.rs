@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-use super::{BridgeClient, McpServerConfiguration, McpTool, field};
+use super::{BridgeClient, McpServerConfiguration, McpTool, provider_bridge::field};
 
 impl BridgeClient {
     pub fn remove_runtime_mcp_server(&self, server: &str) -> Result<bool> {
