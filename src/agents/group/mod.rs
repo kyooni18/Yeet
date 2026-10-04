@@ -5,6 +5,7 @@
 //! tools reach it only through `agents::AgentGroupHandle`.
 
 mod budget;
+mod budget_ledger;
 pub(crate) mod commands;
 mod runtime;
 mod scheduler;
