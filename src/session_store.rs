@@ -38,6 +38,21 @@ const WORKSPACE_REGISTRY_FILE: &str = "workspaces.json";
 const WORKSPACE_MARKER_DIR: &str = ".yeet";
 const WORKSPACE_MARKER_FILE: &str = "workspace.json";
 
+mod events;
+mod export;
+mod locking;
+mod migration;
+mod objects;
+mod workspace;
+
+use locking::*;
+use migration::*;
+use objects::*;
+use workspace::*;
+pub use workspace::{
+    ensure_workspace_id, read_workspace_id, resolve_workspace_path, workspace_relative_path,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredSession {
@@ -322,96 +337,6 @@ impl SessionStore {
         Ok(())
     }
 
-    pub fn append_event(
-        &self,
-        id: &str,
-        run_id: Option<&str>,
-        event: &serde_json::Value,
-    ) -> Result<()> {
-        self.serialized_session(id, true, || self.append_event_unlocked(id, run_id, event))
-    }
-
-    fn append_event_unlocked(
-        &self,
-        id: &str,
-        run_id: Option<&str>,
-        event: &serde_json::Value,
-    ) -> Result<()> {
-        use std::io::Write;
-        validate_id(id)?;
-        let root = self.directory.join(id);
-        create_private_dir(&root)?;
-        let is_debate = event_is_debate(event);
-        let category = if is_debate { DEBATES_DIR } else { TASKS_DIR };
-        let event_directory = root.join(category);
-        create_private_dir(&event_directory)?;
-        let mut options = fs::OpenOptions::new();
-        options.append(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let path = event_directory.join("events.jsonl");
-        let seq = self.next_event_sequence(&root)?;
-        let mut file = options.open(&path)?;
-        let event_type = event
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown")
-            .to_owned();
-        let mut payload = event.clone();
-        if let Some(object) = payload.as_object_mut() {
-            object.remove("type");
-        }
-        let record = serde_json::json!({
-            "schemaVersion": 1,
-            "seq": seq,
-            "eventId": Uuid::new_v4().to_string(),
-            "timestamp": Utc::now(),
-            "sessionId": id,
-            "runId": run_id,
-            "stream": if is_debate { "debate" } else { "agent" },
-            "type": event_type,
-            "payload": payload,
-        });
-        writeln!(file, "{}", serde_json::to_string(&record)?)?;
-        file.flush()?;
-        Ok(())
-    }
-
-    fn next_event_sequence(&self, root: &Path) -> Result<u64> {
-        use std::io::{BufRead, BufReader};
-        let counter_path = root.join(EVENT_SEQUENCE_FILE);
-        let current = match fs::read_to_string(&counter_path) {
-            Ok(value) => value.trim().parse::<u64>().unwrap_or(0),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let mut parsed_max = 0u64;
-                let mut total_lines = 0u64;
-                for stream in [TASKS_DIR, DEBATES_DIR] {
-                    let path = root.join(stream).join("events.jsonl");
-                    let Some(reader) = fs::File::open(path).ok().map(BufReader::new) else {
-                        continue;
-                    };
-                    for line in reader.lines().map_while(Result::ok) {
-                        total_lines = total_lines.saturating_add(1);
-                        parsed_max = parsed_max.max(
-                            serde_json::from_str::<serde_json::Value>(&line)
-                                .ok()
-                                .and_then(|value| value.get("seq")?.as_u64())
-                                .unwrap_or(0),
-                        );
-                    }
-                }
-                parsed_max.max(total_lines)
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let next = current.saturating_add(1);
-        write_private_replace(&counter_path, next.to_string().as_bytes())?;
-        Ok(next)
-    }
-
     pub fn load(&self, id: &str) -> Result<StoredSession> {
         self.serialized_session(id, false, || self.load_unlocked(id))
     }
@@ -617,153 +542,6 @@ impl SessionStore {
             .is_some_and(|debate| !debate.topic.trim().is_empty())
     }
 
-    pub fn export_session(
-        &self,
-        id: &str,
-        destination: Option<&Path>,
-        delete_source: bool,
-        active_session_id: Option<&str>,
-    ) -> Result<SessionExportResult> {
-        self.serialized_session(id, true, || {
-            self.export_session_unlocked(id, destination, delete_source, active_session_id)
-        })
-    }
-
-    fn export_session_unlocked(
-        &self,
-        id: &str,
-        destination: Option<&Path>,
-        delete_source: bool,
-        active_session_id: Option<&str>,
-    ) -> Result<SessionExportResult> {
-        validate_id(id)?;
-        let root = self.directory.join(id);
-        ensure!(root.is_dir(), "Session directory does not exist: {id}");
-        if let Ok(bytes) = fs::read(root.join(MANIFEST_FILE))
-            && let Ok(manifest) = serde_json::from_slice::<SemanticManifest>(&bytes)
-        {
-            materialize_manifest(&root, &manifest)?;
-        }
-        if delete_source && active_session_id == Some(id) {
-            bail!("Refusing to delete the active session {id}");
-        }
-
-        let config_root = self
-            .directory
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.directory.clone());
-        let exports = config_root.join("exports");
-        create_private_dir(&exports)?;
-        let destination = destination
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| exports.join(format!("{id}.tar")));
-        let destination = if destination.is_absolute() {
-            destination
-        } else {
-            std::env::current_dir()?.join(destination)
-        };
-        let destination = normalize_lexical(&destination);
-        let root_normalized = root
-            .canonicalize()
-            .unwrap_or_else(|_| normalize_lexical(&root));
-        ensure!(
-            !destination.starts_with(&root_normalized),
-            "Session exports must be written outside the source session directory"
-        );
-        ensure!(
-            !destination.exists(),
-            "Export destination already exists: {}",
-            destination.display()
-        );
-        let parent = destination
-            .parent()
-            .context("export destination has no parent")?;
-        create_private_dir(parent)?;
-        let temp = parent.join(format!(".{}.{}.tmp", id, Uuid::new_v4()));
-
-        if let Err(error) = create_session_archive(&root, id, &temp) {
-            let _ = fs::remove_file(&temp);
-            return Err(error).context(format!("create session archive for {id}"));
-        }
-        let listing = match session_archive_listing(&temp) {
-            Ok(listing) => listing,
-            Err(error) => {
-                let _ = fs::remove_file(&temp);
-                return Err(error).context(format!("verify session archive for {id}"));
-            }
-        };
-        let required_metadata = format!("{id}/metadata.json");
-        let required_conversation = format!("{id}/conversation.json");
-        ensure!(
-            listing.iter().any(|line| line == &required_metadata)
-                && listing.iter().any(|line| line == &required_conversation),
-            "Session archive verification failed: required session files are missing"
-        );
-        ensure!(
-            !listing.iter().any(|line| {
-                let name = Path::new(line)
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or_default();
-                name == ".DS_Store"
-                    || name.starts_with("._")
-                    || name.ends_with(".tar")
-                    || name.ends_with(".tar.gz")
-            }),
-            "Session archive verification failed: ignored recursive/archive metadata leaked into export"
-        );
-
-        let mut file = fs::File::open(&temp)?;
-        file.sync_all()?;
-        let mut digest = Sha256::new();
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            let read = file.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            digest.update(&buffer[..read]);
-        }
-        let bytes = file.metadata()?.len();
-        let sha256 = format!("{:x}", digest.finalize());
-        drop(file);
-        fs::rename(&temp, &destination)?;
-
-        let mut source_deleted = false;
-        if delete_source {
-            ensure!(
-                active_session_id != Some(id),
-                "Session became active again before deletion; export kept and source preserved"
-            );
-            let trash_root = config_root.join("trash");
-            create_private_dir(&trash_root)?;
-            let trash = trash_root.join(format!("{id}-{}", Uuid::new_v4()));
-            fs::rename(&root, &trash)?;
-            // Deletion happens only after archive creation, reopen/list
-            // verification, fsync, checksum, and an inactive-session recheck.
-            // If cleanup fails, the source remains recoverable under trash/.
-            match fs::remove_dir_all(&trash) {
-                Ok(()) => source_deleted = true,
-                Err(error) => {
-                    return Err(error).context(format!(
-                        "Export succeeded at {}, but cleanup of quarantined source {} failed",
-                        destination.display(),
-                        trash.display()
-                    ));
-                }
-            }
-        }
-
-        Ok(SessionExportResult {
-            session_id: id.to_owned(),
-            path: destination.display().to_string(),
-            sha256,
-            bytes,
-            source_deleted,
-        })
-    }
-
     pub fn set_goal_mode(&self, id: &str, enabled: bool) -> Result<()> {
         self.serialized_session(id, true, || {
             let root = self.directory.join(id);
@@ -836,380 +614,11 @@ impl SessionStore {
         self.load_semantic_layout_legacy(root)
     }
 
-    fn load_semantic_layout_legacy(&self, root: &Path) -> Result<StoredSession> {
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&fs::read(root.join("metadata.json"))?)?;
-        value["conversation"] = serde_json::from_slice(&fs::read(root.join("conversation.json"))?)?;
-        value["modelHistory"] =
-            serde_json::from_slice(&fs::read(root.join("model-history.json"))?)?;
-        let runs = root.join(RUNS_DIR).join("index.json");
-        if runs.exists() {
-            value["runs"] = serde_json::from_slice(&fs::read(runs)?)?;
-        }
-        let knowledge = root.join(DEBATES_DIR).join("knowledge.json");
-        if knowledge.exists() {
-            value["retainedDebateKnowledge"] = serde_json::from_slice(&fs::read(knowledge)?)?;
-        }
-        let debate_path = root.join(DEBATES_DIR).join("state.json");
-        if debate_path.exists() {
-            value["debate"] = serde_json::from_slice(&fs::read(debate_path)?)?;
-        }
-        Ok(serde_json::from_value(value)?)
-    }
-
-    fn load_revision_layout(&self, root: &Path) -> Result<StoredSession> {
-        let revision = fs::read_to_string(root.join("current"))?;
-        validate_id(&revision)?;
-        let snapshot = root.join(revision);
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&fs::read(snapshot.join("metadata.json"))?)?;
-        value["conversation"] =
-            serde_json::from_slice(&fs::read(snapshot.join("conversation.json"))?)?;
-        value["modelHistory"] =
-            serde_json::from_slice(&fs::read(snapshot.join("model-history.json"))?)?;
-        Ok(serde_json::from_value(value)?)
-    }
-
-    fn migrate_legacy_layouts(&self) {
-        let Ok(entries) = fs::read_dir(&self.directory) else {
-            return;
-        };
-        let entries = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .collect::<Vec<_>>();
-
-        // Revision-directory sessions first.
-        for root in entries.iter().filter(|path| path.is_dir()) {
-            if root.join("metadata.json").exists() {
-                if root.join(MANIFEST_FILE).is_file() {
-                    if let Ok(bytes) = fs::read(root.join(MANIFEST_FILE))
-                        && let Ok(manifest) = serde_json::from_slice::<SemanticManifest>(&bytes)
-                    {
-                        let _ = materialize_manifest(root, &manifest);
-                        let _ = gc_semantic_objects(root, &manifest);
-                    }
-                } else if let Ok(session) = self.load_semantic_layout_legacy(root) {
-                    let _ = self.save_unlocked(&session);
-                }
-                let _ = self.migrate_legacy_runtime_log(root);
-                let _ = cleanup_legacy_layout(root);
-                continue;
-            }
-            if !root.join("current").exists() {
-                continue;
-            }
-            let Ok(session) = self.load_revision_layout(root) else {
-                continue;
-            };
-            if self.save_unlocked(&session).is_err() {
-                continue;
-            }
-        }
-
-        // Old single-file sessions become folders too.
-        for path in entries.iter().filter(|path| {
-            path.is_file() && path.extension().and_then(|value| value.to_str()) == Some("json")
-        }) {
-            let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if validate_id(id).is_err() {
-                continue;
-            }
-            let Ok(data) = fs::read(path) else {
-                continue;
-            };
-            let Ok(session) = serde_json::from_slice::<StoredSession>(&data) else {
-                continue;
-            };
-            if session.id != id {
-                continue;
-            }
-            let root = self.directory.join(id);
-            if !root.join("metadata.json").exists() && self.save_unlocked(&session).is_err() {
-                continue;
-            }
-            let _ = fs::remove_file(path);
-        }
-    }
-
-    /// Stamps pre-identity sessions with their workspace's identity while the
-    /// recorded folder still exists, so they follow later moves.
-    fn backfill_workspace_ids(&self) {
-        let Ok(records) = self.scan_records() else {
-            return;
-        };
-        for record in records
-            .iter()
-            .filter(|record| record.workspace_id.is_none())
-        {
-            let Ok(root) = Path::new(&record.workspace_root).canonicalize() else {
-                continue;
-            };
-            if !root.is_dir() {
-                continue;
-            }
-            let Ok(workspace_id) = ensure_workspace_id(&root) else {
-                continue;
-            };
-            let Ok(mut session) = self.load_unlocked(&record.id) else {
-                continue;
-            };
-            session.workspace_id = Some(workspace_id);
-            session.working_directory = session
-                .working_directory
-                .map(|path| workspace_relative_path(&root, &path));
-            for path in &mut session.context_roots {
-                *path = workspace_relative_path(&root, path);
-            }
-            let _ = self.save_unlocked(&session);
-        }
-    }
-
-    fn migrate_legacy_runtime_log(&self, root: &Path) -> Result<()> {
-        use std::io::Write;
-
-        let legacy = root.join("runtime.jsonl");
-        if !legacy.exists() {
-            return Ok(());
-        }
-        let target_directory = root.join(TASKS_DIR);
-        create_private_dir(&target_directory)?;
-        let target = target_directory.join("events.jsonl");
-        if target.exists() {
-            let data = fs::read(&legacy)?;
-            let mut options = fs::OpenOptions::new();
-            options.append(true);
-            let mut file = options.open(&target)?;
-            file.write_all(&data)?;
-            file.flush()?;
-        } else {
-            fs::rename(&legacy, &target)?;
-        }
-        remove_file_if_exists(&legacy)?;
-        Ok(())
-    }
-
     fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.directory)?;
         set_private_directory(&self.directory)?;
         Ok(())
     }
-}
-
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut output = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                output.pop();
-            }
-            other => output.push(other.as_os_str()),
-        }
-    }
-    output
-}
-
-fn create_session_archive(source: &Path, id: &str, destination: &Path) -> Result<()> {
-    let file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)?;
-    let mut builder = tar::Builder::new(file);
-    let archive_root = Path::new(id);
-    builder.append_dir(archive_root, source)?;
-    append_session_archive_tree(&mut builder, source, archive_root)?;
-    builder.finish()?;
-    builder.into_inner()?.sync_all()?;
-    Ok(())
-}
-
-fn append_session_archive_tree(
-    builder: &mut tar::Builder<fs::File>,
-    source: &Path,
-    archive_root: &Path,
-) -> Result<()> {
-    let mut entries = fs::read_dir(source)?.collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let name = entry.file_name();
-        if ignored_archive_name(&name.to_string_lossy()) {
-            continue;
-        }
-        let path = entry.path();
-        let archive_path = archive_root.join(&name);
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            builder.append_dir(&archive_path, &path)?;
-            append_session_archive_tree(builder, &path, &archive_path)?;
-        } else if file_type.is_file() {
-            builder.append_path_with_name(&path, &archive_path)?;
-        } else {
-            bail!(
-                "Refusing to export non-regular session entry {}",
-                path.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-fn ignored_archive_name(name: &str) -> bool {
-    name == ".DS_Store"
-        || name.starts_with("._")
-        || name == "exports"
-        || name.ends_with(".tar")
-        || name.ends_with(".tar.gz")
-}
-
-fn session_archive_listing(path: &Path) -> Result<Vec<String>> {
-    let file = fs::File::open(path)?;
-    let mut archive = tar::Archive::new(file);
-    let mut listing = Vec::new();
-    for entry in archive.entries()? {
-        let entry = entry?;
-        listing.push(entry.path()?.to_string_lossy().replace('\\', "/"));
-    }
-    Ok(listing)
-}
-
-fn lock_is_contended(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::WouldBlock
-        || error.raw_os_error() == lock_contended_error().raw_os_error()
-}
-
-struct StoreFileLock {
-    file: fs::File,
-}
-
-impl StoreFileLock {
-    fn acquire(path: &Path, exclusive: bool) -> Result<Self> {
-        let mut options = fs::OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let file = options.open(path)?;
-        if exclusive {
-            file.lock_exclusive().context("lock session store")?;
-        } else {
-            file.lock_shared().context("lock session store")?;
-        }
-        Ok(Self { file })
-    }
-
-    fn try_acquire_exclusive(path: &Path) -> Result<Option<Self>> {
-        let mut options = fs::OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let file = options.open(path)?;
-        match file.try_lock_exclusive() {
-            Ok(()) => Ok(Some(Self { file })),
-            Err(error) if lock_is_contended(&error) => Ok(None),
-            Err(error) => Err(error).context("lock session store"),
-        }
-    }
-}
-
-impl Drop for StoreFileLock {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
-    }
-}
-
-fn event_is_debate(event: &serde_json::Value) -> bool {
-    event
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|kind| kind.starts_with("debate"))
-}
-
-fn cleanup_legacy_layout(root: &Path) -> Result<()> {
-    remove_file_if_exists(&root.join("current"))?;
-    remove_file_if_exists(&root.join("tasks.json"))?;
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        if matches!(name, TASKS_DIR | DEBATES_DIR | RUNS_DIR) {
-            continue;
-        }
-        let looks_like_revision = path.join("metadata.json").is_file()
-            && path.join("conversation.json").is_file()
-            && path.join("model-history.json").is_file();
-        if looks_like_revision {
-            fs::remove_dir_all(path)?;
-        }
-    }
-    Ok(())
-}
-
-fn cleanup_stale_materialization_links_in_store(directory: &Path) -> Result<()> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            cleanup_stale_materialization_links(&entry.path())?;
-        }
-    }
-    Ok(())
-}
-
-fn cleanup_stale_materialization_links(root: &Path) -> Result<()> {
-    for directory in [
-        root.to_path_buf(),
-        root.join(RUNS_DIR),
-        root.join(DEBATES_DIR),
-    ] {
-        let Ok(entries) = fs::read_dir(directory) else {
-            continue;
-        };
-        for entry in entries {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
-                continue;
-            }
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            if is_stale_materialization_link(name) {
-                remove_file_if_exists(&entry.path())?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn is_stale_materialization_link(name: &str) -> bool {
-    let Some(stem) = name.strip_suffix(".link") else {
-        return false;
-    };
-    let Some((base, id)) = stem.rsplit_once('.') else {
-        return false;
-    };
-    matches!(
-        base,
-        ".metadata.json"
-            | ".conversation.json"
-            | ".model-history.json"
-            | ".index.json"
-            | ".knowledge.json"
-            | ".state.json"
-    ) && Uuid::parse_str(id).is_ok()
 }
 
 fn create_private_dir(path: &Path) -> Result<()> {
@@ -1237,280 +646,6 @@ fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-fn sha256_bytes(data: &[u8]) -> String {
-    let mut digest = Sha256::new();
-    digest.update(data);
-    format!("{:x}", digest.finalize())
-}
-
-fn read_manifest_component(
-    root: &Path,
-    manifest: &SemanticManifest,
-    component: &str,
-) -> Result<Option<Vec<u8>>> {
-    let Some(hash) = manifest.components.get(component).cloned().flatten() else {
-        return Ok(None);
-    };
-    ensure!(
-        hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "invalid session object hash for {component}"
-    );
-    let path = root.join(OBJECTS_DIR).join(&hash);
-    let bytes = fs::read(&path)
-        .with_context(|| format!("read session object {} for {component}", path.display()))?;
-    ensure!(
-        sha256_bytes(&bytes) == hash,
-        "session object checksum mismatch for {component}"
-    );
-    Ok(Some(bytes))
-}
-
-fn materialize_component(object: &Path, target: &Path) -> Result<()> {
-    if let Some(parent) = target.parent() {
-        create_private_dir(parent)?;
-    }
-    let file_name = target
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("component");
-    let tmp = target.with_file_name(format!(".{file_name}.{}.link", Uuid::new_v4()));
-    fs::hard_link(object, &tmp)?;
-    if let Err(error) = replace_file(&tmp, target) {
-        let _ = fs::remove_file(&tmp);
-        return Err(error.into());
-    }
-    Ok(())
-}
-
-fn gc_semantic_objects(root: &Path, manifest: &SemanticManifest) -> Result<()> {
-    let referenced = manifest
-        .components
-        .values()
-        .filter_map(|value| value.as_ref())
-        .cloned()
-        .collect::<HashSet<_>>();
-    let objects = root.join(OBJECTS_DIR);
-    let Ok(entries) = fs::read_dir(&objects) else {
-        return Ok(());
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !referenced.contains(&name) {
-            remove_file_if_exists(&path)?;
-        }
-    }
-    Ok(())
-}
-
-fn materialize_manifest(root: &Path, manifest: &SemanticManifest) -> Result<()> {
-    for component in [
-        "metadata.json",
-        "conversation.json",
-        "model-history.json",
-        "runs/index.json",
-        "debates/knowledge.json",
-        "debates/state.json",
-    ] {
-        match manifest.components.get(component).cloned().flatten() {
-            Some(hash) => {
-                let object = root.join(OBJECTS_DIR).join(hash);
-                ensure!(object.is_file(), "missing session object for {component}");
-                materialize_component(&object, &root.join(component))?;
-            }
-            None => remove_file_if_exists(&root.join(component))?,
-        }
-    }
-    Ok(())
-}
-
-fn write_private_replace(path: &Path, data: &[u8]) -> Result<()> {
-    use std::io::Write;
-    if let Some(parent) = path.parent() {
-        create_private_dir(parent)?;
-    }
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("session");
-    let tmp = path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&tmp)?;
-
-    set_private_file(&tmp)?;
-    file.write_all(data)?;
-    file.sync_all()?;
-    drop(file);
-    if let Err(error) = replace_file(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(error.into());
-    }
-
-    set_private_file(path)?;
-    if let Some(parent) = path.parent() {
-        sync_directory(parent)?;
-    }
-    Ok(())
-}
-
-fn workspace_display_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkspaceRegistry {
-    #[serde(default)]
-    workspaces: BTreeMap<String, RegisteredWorkspace>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RegisteredWorkspace {
-    path: String,
-    last_seen: DateTime<Utc>,
-}
-
-/// Maps workspace identities to their current location for one listing pass.
-/// A workspace is found at its registered path or the session's last known
-/// path, but only if the marker there still carries the same identity.
-/// Entries whose folder vanished are pruned; the sessions themselves are kept
-/// and reappear once the workspace is opened from its new location.
-struct WorkspaceResolver {
-    registry_path: PathBuf,
-    registry: WorkspaceRegistry,
-    dirty: bool,
-    current_id: String,
-    current_path: PathBuf,
-    located: BTreeMap<String, Option<PathBuf>>,
-    legacy: BTreeMap<PathBuf, Option<String>>,
-}
-
-impl WorkspaceResolver {
-    fn new(store: &SessionStore, current: &Path) -> Result<Self> {
-        let current_path = current
-            .canonicalize()
-            .unwrap_or_else(|_| current.to_path_buf());
-        let current_id = ensure_workspace_id(&current_path)?;
-        let registry_path = store.registry_path();
-        let mut registry = fs::read(&registry_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<WorkspaceRegistry>(&bytes).ok())
-            .unwrap_or_default();
-        let current_string = current_path.to_string_lossy().into_owned();
-        // Whatever used to live at this path has been replaced by the current
-        // workspace, so no other identity may keep claiming it.
-        registry
-            .workspaces
-            .retain(|id, entry| *id == current_id || entry.path != current_string);
-        registry.workspaces.insert(
-            current_id.clone(),
-            RegisteredWorkspace {
-                path: current_string,
-                last_seen: Utc::now(),
-            },
-        );
-        let mut located = BTreeMap::new();
-        located.insert(current_id.clone(), Some(current_path.clone()));
-        Ok(Self {
-            registry_path,
-            registry,
-            dirty: true,
-            current_id,
-            current_path,
-            located,
-            legacy: BTreeMap::new(),
-        })
-    }
-
-    fn resolve(&mut self, record: &SessionListRecord) -> Option<(String, PathBuf)> {
-        let hint = PathBuf::from(&record.workspace_root);
-        let id = match &record.workspace_id {
-            Some(id) => id.clone(),
-            None => self.legacy_id(&hint)?,
-        };
-        let path = self.locate(&id, &hint)?;
-        Some((id, path))
-    }
-
-    fn legacy_id(&mut self, root: &Path) -> Option<String> {
-        let root = root.canonicalize().ok()?;
-        if let Some(cached) = self.legacy.get(&root) {
-            return cached.clone();
-        }
-        let id = root
-            .is_dir()
-            .then(|| ensure_workspace_id(&root).ok())
-            .flatten();
-        self.legacy.insert(root, id.clone());
-        id
-    }
-
-    fn locate(&mut self, id: &str, hint: &Path) -> Option<PathBuf> {
-        if let Some(cached) = self.located.get(id) {
-            return cached.clone();
-        }
-        let registered = self
-            .registry
-            .workspaces
-            .get(id)
-            .map(|entry| PathBuf::from(&entry.path));
-        let found = registered
-            .iter()
-            .map(PathBuf::as_path)
-            .chain([hint])
-            .filter_map(|candidate| candidate.canonicalize().ok())
-            .find(|candidate| read_workspace_id(candidate).as_deref() == Some(id));
-        match &found {
-            Some(path) if registered.as_ref() != Some(path) => {
-                let last_seen = self
-                    .registry
-                    .workspaces
-                    .get(id)
-                    .map_or_else(Utc::now, |entry| entry.last_seen);
-                self.registry.workspaces.insert(
-                    id.to_owned(),
-                    RegisteredWorkspace {
-                        path: path.to_string_lossy().into_owned(),
-                        last_seen,
-                    },
-                );
-                self.dirty = true;
-            }
-            None if registered.is_some() => {
-                self.registry.workspaces.remove(id);
-                self.dirty = true;
-            }
-            _ => {}
-        }
-        self.located.insert(id.to_owned(), found.clone());
-        found
-    }
-
-    fn finish(self) -> Result<()> {
-        if self.dirty {
-            write_private_replace(
-                &self.registry_path,
-                &serde_json::to_vec_pretty(&self.registry)?,
-            )?;
-        }
-        Ok(())
-    }
-}
-
 fn session_summaries(
     records: &[SessionListRecord],
     resolver: &mut WorkspaceResolver,
@@ -1533,78 +668,6 @@ fn session_summaries(
         .collect::<Vec<_>>();
     result.sort_by(|lhs, rhs| rhs.updated_at.cmp(&lhs.updated_at));
     result
-}
-
-fn workspace_marker_path(root: &Path) -> PathBuf {
-    root.join(WORKSPACE_MARKER_DIR).join(WORKSPACE_MARKER_FILE)
-}
-
-/// Reads the stable identity stored inside a workspace, if it has one.
-pub fn read_workspace_id(root: &Path) -> Option<String> {
-    let bytes = fs::read(workspace_marker_path(root)).ok()?;
-    let value = serde_json::from_slice::<serde_json::Value>(&bytes).ok()?;
-    let id = value.get("id")?.as_str()?;
-    Uuid::parse_str(id).ok()?;
-    Some(id.to_owned())
-}
-
-/// Returns the workspace's identity, creating `.yeet/workspace.json` on first use.
-pub fn ensure_workspace_id(root: &Path) -> Result<String> {
-    use std::io::Write;
-    if let Some(id) = read_workspace_id(root) {
-        return Ok(id);
-    }
-    let marker = workspace_marker_path(root);
-    let directory = marker.parent().context("workspace marker has no parent")?;
-    ensure!(
-        !directory.is_symlink(),
-        "Refusing to use symlinked workspace directory {}",
-        directory.display()
-    );
-    create_private_dir(directory)?;
-    let id = Uuid::new_v4().to_string();
-    let data = serde_json::to_vec_pretty(&serde_json::json!({ "id": id }))?;
-    // create_new so concurrent first opens agree on one identity.
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    match options.open(&marker) {
-        Ok(mut file) => {
-            file.write_all(&data)?;
-            file.sync_all()?;
-            Ok(id)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            read_workspace_id(root).context("workspace marker exists but is unreadable")
-        }
-        Err(error) => Err(error).context("create workspace marker"),
-    }
-}
-
-/// Stores `path` relative to `root` when it lives inside the workspace, so the
-/// session stays valid after the workspace moves.
-pub fn workspace_relative_path(root: &Path, path: &str) -> String {
-    match Path::new(path).strip_prefix(root) {
-        Ok(relative) if relative.as_os_str().is_empty() => ".".into(),
-        Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
-        Err(_) => path.to_owned(),
-    }
-}
-
-/// Resolves a stored session path against the workspace's current root.
-/// Legacy absolute paths under the session's old root are rebased as well.
-pub fn resolve_workspace_path(root: &Path, stored_root: &str, path: &str) -> String {
-    let stored = Path::new(path);
-    let resolved = if stored.is_relative() {
-        root.join(stored)
-    } else if let Some(relative) = (!stored_root.is_empty())
-        .then(|| stored.strip_prefix(stored_root).ok())
-        .flatten()
-    {
-        root.join(relative)
-    } else {
-        stored.to_path_buf()
-    };
-    normalize_lexical(&resolved).to_string_lossy().into_owned()
 }
 
 #[cfg(test)]
@@ -1635,6 +698,58 @@ mod tests {
             attached_harness_capabilities: None,
             disabled_capabilities: Vec::new(),
         }
+    }
+
+    #[test]
+    fn manifest_is_the_commit_point_for_semantic_saves() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let mut saved = session("session-a", &workspace, None);
+        saved.model_history = vec![Message::user("committed")];
+        saved.runs = vec![StoredRun {
+            id: "run-1".into(),
+            kind: "agent".into(),
+            status: RunStatus::Interrupted,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            model: "test".into(),
+            history_start: Some(0),
+            conversation_start: Some(0),
+            user_entry_id: None,
+            error: Some("cancelled".into()),
+        }];
+        store.save(&saved).unwrap();
+
+        // A save that crashed after writing objects and materialized views but
+        // before the manifest switch must be invisible to readers.
+        let root = store.directory.join("session-a");
+        let uncommitted = serde_json::to_vec_pretty(&vec![Message::user("uncommitted")]).unwrap();
+        fs::write(
+            root.join(OBJECTS_DIR).join(sha256_bytes(&uncommitted)),
+            &uncommitted,
+        )
+        .unwrap();
+        let materialized = root.join("model-history.json");
+        fs::remove_file(&materialized).unwrap();
+        fs::write(&materialized, &uncommitted).unwrap();
+
+        let loaded = store.load("session-a").unwrap();
+        assert_eq!(loaded.model_history, saved.model_history);
+        assert_eq!(loaded.runs.len(), 1);
+        assert_eq!(loaded.runs[0].status, RunStatus::Interrupted);
+
+        // Objects are content-addressed and verified on read.
+        let manifest: SemanticManifest =
+            serde_json::from_slice(&fs::read(root.join(MANIFEST_FILE)).unwrap()).unwrap();
+        let hash = manifest.components["model-history.json"].clone().unwrap();
+        let object = root.join(OBJECTS_DIR).join(&hash);
+        #[cfg(unix)]
+        fs::set_permissions(&object, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&object, b"tampered").unwrap();
+        assert!(store.load("session-a").is_err());
     }
 
     #[test]

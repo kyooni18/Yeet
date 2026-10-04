@@ -1,0 +1,106 @@
+//! Append-only session event log.
+//!
+//! Events are evidence, not state: each append takes the next per-session
+//! sequence number and is written under the session lock; existing lines are
+//! never rewritten.
+
+use super::*;
+
+pub(super) fn event_is_debate(event: &serde_json::Value) -> bool {
+    event
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind.starts_with("debate"))
+}
+
+impl SessionStore {
+    pub fn append_event(
+        &self,
+        id: &str,
+        run_id: Option<&str>,
+        event: &serde_json::Value,
+    ) -> Result<()> {
+        self.serialized_session(id, true, || self.append_event_unlocked(id, run_id, event))
+    }
+
+    pub(super) fn append_event_unlocked(
+        &self,
+        id: &str,
+        run_id: Option<&str>,
+        event: &serde_json::Value,
+    ) -> Result<()> {
+        use std::io::Write;
+        validate_id(id)?;
+        let root = self.directory.join(id);
+        create_private_dir(&root)?;
+        let is_debate = event_is_debate(event);
+        let category = if is_debate { DEBATES_DIR } else { TASKS_DIR };
+        let event_directory = root.join(category);
+        create_private_dir(&event_directory)?;
+        let mut options = fs::OpenOptions::new();
+        options.append(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let path = event_directory.join("events.jsonl");
+        let seq = self.next_event_sequence(&root)?;
+        let mut file = options.open(&path)?;
+        let event_type = event
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        let mut payload = event.clone();
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("type");
+        }
+        let record = serde_json::json!({
+            "schemaVersion": 1,
+            "seq": seq,
+            "eventId": Uuid::new_v4().to_string(),
+            "timestamp": Utc::now(),
+            "sessionId": id,
+            "runId": run_id,
+            "stream": if is_debate { "debate" } else { "agent" },
+            "type": event_type,
+            "payload": payload,
+        });
+        writeln!(file, "{}", serde_json::to_string(&record)?)?;
+        file.flush()?;
+        Ok(())
+    }
+
+    pub(super) fn next_event_sequence(&self, root: &Path) -> Result<u64> {
+        use std::io::{BufRead, BufReader};
+        let counter_path = root.join(EVENT_SEQUENCE_FILE);
+        let current = match fs::read_to_string(&counter_path) {
+            Ok(value) => value.trim().parse::<u64>().unwrap_or(0),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let mut parsed_max = 0u64;
+                let mut total_lines = 0u64;
+                for stream in [TASKS_DIR, DEBATES_DIR] {
+                    let path = root.join(stream).join("events.jsonl");
+                    let Some(reader) = fs::File::open(path).ok().map(BufReader::new) else {
+                        continue;
+                    };
+                    for line in reader.lines().map_while(Result::ok) {
+                        total_lines = total_lines.saturating_add(1);
+                        parsed_max = parsed_max.max(
+                            serde_json::from_str::<serde_json::Value>(&line)
+                                .ok()
+                                .and_then(|value| value.get("seq")?.as_u64())
+                                .unwrap_or(0),
+                        );
+                    }
+                }
+                parsed_max.max(total_lines)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let next = current.saturating_add(1);
+        write_private_replace(&counter_path, next.to_string().as_bytes())?;
+        Ok(next)
+    }
+}
