@@ -28,7 +28,7 @@ impl AgentCoordinator {
         &mut self,
         name: impl Into<String>,
         model: impl Into<String>,
-        parent_agent: Option<crate::agents::AgentId>,
+        spawned_by: Option<crate::agents::AgentId>,
     ) -> anyhow::Result<crate::agents::AgentId> {
         if self.runtime_agent_id.is_some() {
             anyhow::bail!("runtime agent identity is already registered");
@@ -37,7 +37,7 @@ impl AgentCoordinator {
             name,
             model,
             self.registry.workspace_root().to_path_buf(),
-            parent_agent,
+            spawned_by,
         )?;
         self.runtime_agent_id = Some(id);
         Ok(id)

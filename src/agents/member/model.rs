@@ -37,7 +37,9 @@ pub(crate) struct AgentMember {
     pub description: String,
     pub role: AgentRole,
     pub model: String,
-    pub parent: Option<AgentId>,
+    /// Execution lineage (the primary agent that spawned this member).
+    #[serde(rename = "parent")]
+    pub spawned_by: Option<AgentId>,
     pub status: MemberStatus,
     pub current_task: Option<AgentTaskId>,
     /// RFC 3339 launch time.

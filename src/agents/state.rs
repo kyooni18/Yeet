@@ -25,6 +25,9 @@ pub struct AgentState {
     pub workspace: PathBuf,
     pub decisions: Vec<AgentDecision>,
     pub coworkers: Vec<AgentId>,
-    pub parent_agent: Option<AgentId>,
+    /// Execution lineage: the agent whose run spawned this one. Lineage
+    /// grants no authority over it.
+    #[serde(rename = "parent_agent")]
+    pub spawned_by: Option<AgentId>,
     pub status: AgentStatus,
 }

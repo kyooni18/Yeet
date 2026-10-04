@@ -24,16 +24,16 @@ impl AgentRegistry {
         name: impl Into<String>,
         model: impl Into<String>,
         workspace: impl Into<PathBuf>,
-        parent_agent: Option<AgentId>,
+        spawned_by: Option<AgentId>,
     ) -> Result<AgentId> {
         let mut states = self
             .states
             .write()
             .map_err(|_| anyhow!("agent registry lock poisoned"))?;
-        if let Some(parent) = parent_agent
-            && !states.contains_key(&parent)
+        if let Some(originator) = spawned_by
+            && !states.contains_key(&originator)
         {
-            bail!("unknown parent agent: {parent}");
+            bail!("unknown spawning agent: {originator}");
         }
         let id = AgentId::new_v4();
         states.insert(
@@ -45,7 +45,7 @@ impl AgentRegistry {
                 workspace: workspace.into(),
                 decisions: Vec::new(),
                 coworkers: Vec::new(),
-                parent_agent,
+                spawned_by,
                 status: AgentStatus::Idle,
             },
         );
@@ -147,8 +147,8 @@ impl AgentRegistry {
         states.remove(&id);
         for state in states.values_mut() {
             state.coworkers.retain(|coworker| *coworker != id);
-            if state.parent_agent == Some(id) {
-                state.parent_agent = None;
+            if state.spawned_by == Some(id) {
+                state.spawned_by = None;
             }
         }
         Ok(())

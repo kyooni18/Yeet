@@ -175,7 +175,7 @@ impl AgentGroupRuntime {
             .spawn_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (generation, parent, retire) = {
+        let (generation, spawned_by, retire) = {
             let state = self.shared.lock();
             let retire = scheduler::admit_spawn(&self.shared.limits(), &state.group, request.role)?;
             (state.group.generation, state.group.primary_agent, retire)
@@ -187,7 +187,7 @@ impl AgentGroupRuntime {
             role: request.role,
             description: request.description.clone(),
             model: model.to_owned(),
-            parent,
+            spawned_by,
             active_session_id,
         })?;
 
@@ -208,7 +208,7 @@ impl AgentGroupRuntime {
                 description: request.description,
                 role: request.role,
                 model: model.to_owned(),
-                parent,
+                spawned_by,
                 status: MemberStatus::Running,
                 current_task: None,
                 started_at: chrono::Utc::now().to_rfc3339(),

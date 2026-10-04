@@ -25,7 +25,7 @@ pub(crate) struct MemberSpec {
     pub role: AgentRole,
     pub description: String,
     pub model: String,
-    pub parent: Option<AgentId>,
+    pub spawned_by: Option<AgentId>,
     pub active_session_id: Option<String>,
 }
 
@@ -93,9 +93,9 @@ impl MemberLauncher for CoordinatorLauncher {
     fn launch(&self, spec: &MemberSpec) -> Result<(AgentId, Box<dyn MemberRunner>)> {
         let mut coordinator = self.factory.build(spec.active_session_id.clone())?;
         let id =
-            coordinator.register_runtime_agent(spec.role.as_str(), &spec.model, spec.parent)?;
-        if let Some(parent) = spec.parent {
-            crate::agents::global().connect(parent, id)?;
+            coordinator.register_runtime_agent(spec.role.as_str(), &spec.model, spec.spawned_by)?;
+        if let Some(originator) = spec.spawned_by {
+            crate::agents::global().connect(originator, id)?;
         }
         coordinator.set_permission_label(format!(
             "{} agent · {}",

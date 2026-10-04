@@ -90,7 +90,7 @@ mod tests {
             description: "work".into(),
             role,
             model: "m".into(),
-            parent: None,
+            spawned_by: None,
             status,
             current_task: None,
             started_at: String::new(),
