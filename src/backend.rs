@@ -60,6 +60,7 @@ mod events;
 mod input_context;
 mod lifecycle;
 mod persistence;
+mod replay;
 mod run;
 mod service_methods;
 mod settings;
@@ -560,125 +561,6 @@ impl BackendService {
         }
         self.publish_state();
         Ok(())
-    }
-
-    fn regenerate_last(&mut self) -> Result<()> {
-        self.replay_last_visible_turn(None)
-    }
-
-    fn edit_last(&mut self, text: String) -> Result<()> {
-        self.replay_last_visible_turn(Some(text.trim().to_owned()))
-    }
-
-    fn replay_last_visible_turn(&mut self, replacement_text: Option<String>) -> Result<()> {
-        if self.shared.lock_or_recover().state.is_streaming {
-            return Err(anyhow!("cannot replay while a response is streaming"));
-        }
-
-        let (history_start, conversation_start, run_index, expected_visible_content) = {
-            let shared = self.shared.lock_or_recover();
-            let Some((index, run)) = shared.meta.runs.iter().enumerate().rev().find(|(_, run)| {
-                run.kind == "agent"
-                    && run.user_entry_id.is_some()
-                    && run.history_start.is_some()
-                    && run.conversation_start.is_some()
-            }) else {
-                return Err(anyhow!("the latest visible turn has no replay checkpoint"));
-            };
-            if shared.meta.runs[index + 1..]
-                .iter()
-                .any(|later| later.kind != "goal-resume")
-            {
-                return Err(anyhow!(
-                    "the latest visible turn is followed by another top-level run and cannot be replayed"
-                ));
-            }
-            let conversation_start = run.conversation_start.expect("checked");
-            let conversation = shared
-                .state
-                .conversation
-                .as_ref()
-                .ok_or_else(|| anyhow!("replay checkpoint has no transcript"))?;
-            let entry = conversation
-                .get(conversation_start)
-                .ok_or_else(|| anyhow!("replay checkpoint no longer matches transcript"))?;
-            if entry.id != run.user_entry_id.as_deref().expect("checked") {
-                return Err(anyhow!(
-                    "replay checkpoint user identity no longer matches transcript"
-                ));
-            }
-            let ConversationKind::User { content } = &entry.kind else {
-                return Err(anyhow!(
-                    "replay checkpoint does not point to a visible user entry"
-                ));
-            };
-            (
-                run.history_start.expect("checked"),
-                conversation_start,
-                index,
-                content.clone(),
-            )
-        };
-
-        let original = {
-            let mut coordinator = self.coordinator.lock_or_recover();
-            let history = coordinator.model_history();
-            let Some(message) = history.get(history_start).cloned() else {
-                return Err(anyhow!("replay checkpoint no longer matches model history"));
-            };
-            if message.role != crate::core::MessageRole::User || message.request_only == Some(true)
-            {
-                return Err(anyhow!(
-                    "replay checkpoint does not point to a user request"
-                ));
-            }
-            let images = message.images.as_deref().unwrap_or_default();
-            if visible_user_content(message.content.as_deref().unwrap_or_default(), images)
-                != expected_visible_content
-            {
-                return Err(anyhow!(
-                    "replay checkpoint content no longer matches the visible user turn"
-                ));
-            }
-            coordinator.rewind_model_history(history_start)?;
-            message
-        };
-
-        let images = original.images.unwrap_or_default();
-        let original_content = original.content.unwrap_or_default();
-        let (_, remote_file_payload) = split_remote_file_context(&original_content);
-        let remote_file_payload = remote_file_payload.map(str::to_owned);
-        let mut text = replacement_text.unwrap_or(original_content);
-        if let Some(payload) = remote_file_payload
-            && split_remote_file_context(&text).1.is_none()
-        {
-            text.push_str(REMOTE_FILE_CONTEXT_OPEN);
-            text.push_str(&payload);
-            text.push_str(REMOTE_FILE_CONTEXT_CLOSE);
-        }
-        if text.is_empty() && images.is_empty() {
-            return Err(anyhow!("edited message cannot be empty"));
-        }
-
-        {
-            let mut shared = self.shared.lock_or_recover();
-            if conversation_start > shared.conversation_mut().len() {
-                return Err(anyhow!("replay checkpoint no longer matches transcript"));
-            }
-            shared.conversation_mut().truncate(conversation_start);
-            shared.meta.runs.truncate(run_index);
-            shared.state.conversation_revision = shared.state.conversation_revision.wrapping_add(1);
-            shared.state.active_assistant_entry_id = None;
-            shared.state.active_assistant_text.clear();
-            shared.state.active_reasoning_entry_id = None;
-            shared.state.active_reasoning_text.clear();
-            shared.state.active_reasoning_summary.clear();
-            shared.state.active_activity_entry_id = None;
-            shared.state.error_message = None;
-        }
-        self.publish_state();
-
-        self.submit_agent_with_images(text, images, true, "agent", false)
     }
 
     fn submit(&mut self, text: String, images: Vec<ImageAttachment>) -> Result<()> {
