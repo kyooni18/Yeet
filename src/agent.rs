@@ -47,10 +47,10 @@ use policy::{
     task_profile_with_history,
 };
 use progress::{
-    content_fingerprint, is_inspection_tool, round_semantic_fingerprint, tool_execution_succeeded,
+    content_fingerprint, round_semantic_fingerprint, tool_execution_succeeded,
     tool_failure_fingerprint, tool_made_progress, tool_signature,
 };
-use runaway::{RunawayDecision, RunawayDetector, RunawayRound};
+use runaway::{RunawayDecision, RunawayDetector};
 use session_controls::{
     bridge_transport_error, goal_retry_delay, retryable_goal_error,
     tool_call_indicates_implementation_intent, wait_for_goal,
@@ -967,56 +967,34 @@ impl AgentCoordinator {
                     result: recorded_content,
                 });
             }
-            self.context_memory.flush()?;
-            if profile == TaskProfile::Agent && !local_file_lookup {
-                self.warm_tool_names = tool_discovery.loaded_names().to_vec();
-                self.warm_tool_search_enabled = tool_discovery.search_enabled();
-            }
-            if round_progress {
-                consecutive_no_progress = 0;
-            } else {
-                consecutive_no_progress += 1;
-            }
-            if round_progress
-                && calls.iter().all(|call| {
-                    is_inspection_tool(&call.name)
-                        || self.registry.is_read_only_extension_tool(&call.name)
-                })
-            {
-                progressful_inspection_rounds += 1;
-            }
-            let inspection_only = calls.iter().all(|call| {
-                is_inspection_tool(&call.name)
-                    || self.registry.is_read_only_extension_tool(&call.name)
-            });
-            let runaway_decision = runaway_detector.observe(
-                RunawayRound {
+            let runaway_decision = self.finish_tool_round(
+                tool_round::RoundBookkeepingInput {
+                    calls: &calls,
+                    profile,
+                    local_file_lookup,
+                    tool_discovery: &tool_discovery,
+                    consecutive_no_progress: &mut consecutive_no_progress,
+                    progressful_inspection_rounds: &mut progressful_inspection_rounds,
+                    runaway_detector: &mut runaway_detector,
+                    verification: &mut verification,
+                    execution_evidence: &mut execution_evidence,
+                    cancel,
+                    request_context_chars,
+                    rollover_budget,
+                },
+                tool_round::RoundEvidence {
                     progressed: round_progress,
                     mutated: round_mutated,
+                    failed_mutation: round_failed_mutation,
                     duplicate_inspection,
-                    inspection_only,
                     semantic_fingerprint,
                     failure_fingerprints: round_failure_fingerprints,
                     output_fingerprints: round_output_fingerprints,
-                    request_context_chars,
                     fresh_calls: round_fresh_calls,
                     repeated_calls: round_repeated_calls,
                 },
-                rollover_budget.saturating_mul(3) as usize,
-            );
-            let round = verify::RoundFacts {
-                calls: &calls,
-                mutated: round_mutated,
-                failed_mutation: round_failed_mutation,
-                rollover: matches!(runaway_decision, RunawayDecision::Rollover(_)),
-            };
-            self.append_round_feedback(
-                &mut verification,
-                &mut execution_evidence,
-                round,
-                cancel,
                 emit,
-            );
+            )?;
             let analysis_threshold = turn_state::analysis_inspection_threshold(bounded_explanation);
             if let RunawayDecision::Rollover(message) = &runaway_decision {
                 self.context_memory.rollover_requested = true;

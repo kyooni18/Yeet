@@ -10,14 +10,17 @@ use serde_json::json;
 use crate::core::{BridgeClient, CallRequest, ImageAttachment, ToolCall, ToolDefinition};
 
 use super::{
-    AgentCoordinator, Message, Result, cache, context,
+    AgentCoordinator, AgentEvent, Message, Result, cache, context,
     coordinator_support::{
         attached_web_search_capability_result, check_cancel,
         supports_anthropic_deferred_tool_references,
     },
     policy::TaskProfile,
     progress::{classify_tool_error, is_inspection_tool},
+    runaway::{RunawayDecision, RunawayDetector, RunawayRound},
     tool_discovery::{self, ToolDiscovery},
+    turn_state::TurnExecutionEvidence,
+    verify::{self, VerificationMonitor},
 };
 
 pub(super) type ParallelResults = Option<std::vec::IntoIter<std::result::Result<String, String>>>;
@@ -120,6 +123,98 @@ impl AgentCoordinator {
             recorded_content,
             goal_observation_item,
         })
+    }
+}
+
+/// Facts accumulated while dispatching and recording every call in a round.
+pub(super) struct RoundEvidence {
+    pub progressed: bool,
+    pub mutated: bool,
+    pub failed_mutation: bool,
+    pub duplicate_inspection: bool,
+    pub semantic_fingerprint: String,
+    pub failure_fingerprints: Vec<String>,
+    pub output_fingerprints: Vec<u64>,
+    pub fresh_calls: usize,
+    pub repeated_calls: usize,
+}
+
+/// Turn state advanced after a complete tool round, before retry policy runs.
+pub(super) struct RoundBookkeepingInput<'a> {
+    pub calls: &'a [ToolCall],
+    pub profile: TaskProfile,
+    pub local_file_lookup: bool,
+    pub tool_discovery: &'a ToolDiscovery,
+    pub consecutive_no_progress: &'a mut usize,
+    pub progressful_inspection_rounds: &'a mut usize,
+    pub runaway_detector: &'a mut RunawayDetector,
+    pub verification: &'a mut VerificationMonitor,
+    pub execution_evidence: &'a mut TurnExecutionEvidence,
+    pub cancel: &'a AtomicBool,
+    pub request_context_chars: usize,
+    pub rollover_budget: u64,
+}
+
+impl AgentCoordinator {
+    pub(super) fn finish_tool_round<F>(
+        &mut self,
+        input: RoundBookkeepingInput<'_>,
+        evidence: RoundEvidence,
+        emit: &mut F,
+    ) -> Result<RunawayDecision>
+    where
+        F: FnMut(AgentEvent),
+    {
+        self.context_memory.flush()?;
+        if input.profile == TaskProfile::Agent && !input.local_file_lookup {
+            self.warm_tool_names = input.tool_discovery.loaded_names().to_vec();
+            self.warm_tool_search_enabled = input.tool_discovery.search_enabled();
+        }
+        if evidence.progressed {
+            *input.consecutive_no_progress = 0;
+        } else {
+            *input.consecutive_no_progress += 1;
+        }
+        if evidence.progressed
+            && input.calls.iter().all(|call| {
+                is_inspection_tool(&call.name)
+                    || self.registry.is_read_only_extension_tool(&call.name)
+            })
+        {
+            *input.progressful_inspection_rounds += 1;
+        }
+        let inspection_only = input.calls.iter().all(|call| {
+            is_inspection_tool(&call.name) || self.registry.is_read_only_extension_tool(&call.name)
+        });
+        let runaway_decision = input.runaway_detector.observe(
+            RunawayRound {
+                progressed: evidence.progressed,
+                mutated: evidence.mutated,
+                duplicate_inspection: evidence.duplicate_inspection,
+                inspection_only,
+                semantic_fingerprint: evidence.semantic_fingerprint,
+                failure_fingerprints: evidence.failure_fingerprints,
+                output_fingerprints: evidence.output_fingerprints,
+                request_context_chars: input.request_context_chars,
+                fresh_calls: evidence.fresh_calls,
+                repeated_calls: evidence.repeated_calls,
+            },
+            input.rollover_budget.saturating_mul(3) as usize,
+        );
+        let round = verify::RoundFacts {
+            calls: input.calls,
+            mutated: evidence.mutated,
+            failed_mutation: evidence.failed_mutation,
+            rollover: matches!(runaway_decision, RunawayDecision::Rollover(_)),
+        };
+        self.append_round_feedback(
+            input.verification,
+            input.execution_evidence,
+            round,
+            input.cancel,
+            emit,
+        );
+        Ok(runaway_decision)
     }
 }
 
