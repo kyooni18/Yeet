@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    model::{ModelCatalogItem, SwarmSettings, normalize_reasoning_level},
+    model::{AgentGroupSettings, ModelCatalogItem, normalize_reasoning_level},
     platform::{default_config_directory, replace_file, set_private_directory, set_private_file},
 };
 
@@ -31,8 +31,12 @@ struct ConfigDocument {
     context_length_overrides: std::collections::BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     jev_loop_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    swarm: Option<SwarmSettings>,
+    #[serde(
+        default,
+        alias = "\u{73}\u{77}\u{61}\u{72}\u{6d}",
+        skip_serializing_if = "Option::is_none"
+    )]
+    agent_group: Option<AgentGroupSettings>,
     // config.json is shared with the TypeScript runtime. Keep fields owned by
     // that side (notably `providers`) intact whenever Rust updates its own
     // settings instead of silently deleting them on the next write.
@@ -250,15 +254,19 @@ impl ConfigStore {
         Ok(mode)
     }
 
-    pub fn swarm_settings(&self) -> Result<SwarmSettings> {
-        Ok(self.read()?.swarm.unwrap_or_default().normalized())
+    pub fn agent_group_settings(&self) -> Result<AgentGroupSettings> {
+        Ok(self.read()?.agent_group.unwrap_or_default().normalized())
     }
 
-    pub fn set_swarm_settings(&self, settings: SwarmSettings) -> Result<SwarmSettings> {
+    pub fn set_agent_group_settings(
+        &self,
+        settings: AgentGroupSettings,
+    ) -> Result<AgentGroupSettings> {
         let settings = settings.normalized();
         let mut document = self.read()?;
         document.version = 1;
-        document.swarm = (settings != SwarmSettings::default()).then(|| settings.clone());
+        document.agent_group =
+            (settings != AgentGroupSettings::default()).then(|| settings.clone());
         self.write(&document)?;
         Ok(settings)
     }
@@ -388,4 +396,27 @@ pub fn parse_context_length(value: &str) -> Result<u64> {
         bail!("Context length must be greater than zero");
     }
     Ok(length)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_group_settings_are_loaded_and_written_with_the_new_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(directory.path());
+        let legacy_key = "\u{73}\u{77}\u{61}\u{72}\u{6d}";
+        let mut document = serde_json::Map::new();
+        document.insert(legacy_key.into(), serde_json::json!({"autoDeploy":true}));
+        fs::write(store.config_path(), serde_json::to_vec(&document).unwrap()).unwrap();
+
+        let settings = store.agent_group_settings().unwrap();
+        assert!(settings.auto_deploy);
+        store.set_agent_group_settings(settings).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.config_path()).unwrap()).unwrap();
+        assert!(written.get("agentGroup").is_some());
+        assert!(written.get(legacy_key).is_none());
+    }
 }

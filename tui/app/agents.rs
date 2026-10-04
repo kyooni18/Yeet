@@ -15,8 +15,8 @@ pub enum AgentAction {
     Add,
     /// Remove the selected member, or clear stopped members from the group row.
     Remove,
-    /// Open the swarm settings panel.
-    Swarm,
+    /// Open the Agent Group settings panel.
+    AgentGroup,
 }
 
 /// Roles a user can pick for a new member, in Tab order.
@@ -31,8 +31,8 @@ pub struct AgentsState {
     /// Index into `AGENT_ROLES` while the composer drafts a new member.
     pub adding: Option<usize>,
     pub(crate) targets: Vec<(Rect, AgentAction)>,
-    /// Where the swarm panel returns on Esc.
-    pub swarm_origin: Option<Mode>,
+    /// Where the Agent Group panel returns on Esc.
+    pub agent_group_origin: Option<Mode>,
 }
 
 impl App {
@@ -162,7 +162,7 @@ impl App {
                 None
             }
             AgentAction::Remove => self.remove_agent_command(),
-            AgentAction::Swarm => Some(self.open_swarm()),
+            AgentAction::AgentGroup => Some(self.open_agent_group()),
         }
     }
 
@@ -219,7 +219,7 @@ impl App {
             KeyCode::Char('x') => return self.stop_agent_command(),
             KeyCode::Char('a' | '+') => self.start_adding_agent(),
             KeyCode::Char('d') | KeyCode::Delete => return self.remove_agent_command(),
-            KeyCode::Char('w') => return Some(self.open_swarm()),
+            KeyCode::Char('w') => return Some(self.open_agent_group()),
             KeyCode::Char('q') => self.close_agents(),
             _ => {}
         }

@@ -192,7 +192,7 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             !group_selected && app.agents.selected.as_deref() == Some(member.id.as_str()),
         ));
     }
-    // Rows sit between the Add button and the swarm/action rows.
+    // Rows sit between the Add button and the Agent Group/action rows.
     let last = area
         .bottom()
         .saturating_sub(if area.height >= 10 { 5 } else { 4 });
@@ -230,24 +230,26 @@ fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     };
     let y = area.bottom().saturating_sub(2);
     if area.height >= 10 {
-        let swarm = Rect::new(area.x + 2, y - 2, area.width.saturating_sub(4), 1);
-        let settings = &app.state.runtime_settings.swarm;
-        let label = match (app.swarm_enabled(), settings.auto_deploy) {
-            (false, _) => "⚙ Swarm off".to_owned(),
+        let agent_group = Rect::new(area.x + 2, y - 2, area.width.saturating_sub(4), 1);
+        let settings = &app.state.runtime_settings.agent_group;
+        let label = match (app.agent_group_enabled(), settings.auto_deploy) {
+            (false, _) => "⚙ Group Agent off".to_owned(),
             (true, auto) => format!(
-                "⚙ Swarm {}×{}",
+                "⚙ Group Agent {}×{}",
                 settings.max_concurrent,
                 if auto { " auto" } else { "" }
             ),
         };
-        let label = fit(&label, swarm.width as usize);
-        let style = if app.swarm_enabled() {
+        let label = fit(&label, agent_group.width as usize);
+        let style = if app.agent_group_enabled() {
             Style::default().fg(theme::accent())
         } else {
             muted()
         };
-        frame.render_widget(Paragraph::new(label).style(style), swarm);
-        app.agents.targets.push((swarm, AgentAction::Swarm));
+        frame.render_widget(Paragraph::new(label).style(style), agent_group);
+        app.agents
+            .targets
+            .push((agent_group, AgentAction::AgentGroup));
     }
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize))

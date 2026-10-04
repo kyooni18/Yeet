@@ -1,16 +1,16 @@
-//! Agent swarm panel: session switch, auto-deploy, and group limits.
+//! Agent Group settings panel: session availability, delegation, and budgets.
 
-use crate::tui::app::swarm::{SWARM_ROWS, SwarmRow};
+use crate::tui::app::agent_group::{AGENT_GROUP_ROWS, AgentGroupRow};
 
 use super::*;
 
-pub(crate) fn draw_swarm(frame: &mut Frame<'_>, app: &App) {
+pub(crate) fn draw_agent_group(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(72, 60, frame.area());
     theme::modal_backdrop(frame, area);
     let title = if app.state.settings_working {
-        " Agent swarm · saving… · Esc close "
+        " Agent Group · saving… · Esc close "
     } else {
-        " Agent swarm · ↑/↓ select · ←/→ adjust · Enter toggle · Esc close "
+        " Agent Group · ↑/↓ select · ←/→ adjust · Enter toggle · Esc close "
     };
     let block = theme::modal_block(title);
     let inner = block.inner(area);
@@ -24,7 +24,7 @@ pub(crate) fn draw_swarm(frame: &mut Frame<'_>, app: &App) {
 
     let members = &app.state.agent_group.members;
     let running = members.iter().filter(|m| m.status == "running").count();
-    let (status, status_style) = if app.swarm_enabled() {
+    let (status, status_style) = if app.agent_group_enabled() {
         ("ON", Style::default().fg(theme::accent()).bold())
     } else {
         ("OFF", Style::default().fg(theme::muted()).bold())
@@ -32,7 +32,7 @@ pub(crate) fn draw_swarm(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(
         Paragraph::new(Text::from(vec![
             Line::from(vec![
-                Span::styled(" Swarm  ", Style::default().fg(theme::text()).bold()),
+                Span::styled(" Group Agent  ", Style::default().fg(theme::text()).bold()),
                 Span::styled(status, status_style),
                 Span::styled(
                     format!("  ·  {running} running · {} live agents", members.len()),
@@ -40,7 +40,7 @@ pub(crate) fn draw_swarm(frame: &mut Frame<'_>, app: &App) {
                 ),
             ]),
             Line::from(Span::styled(
-                " The primary agent runs researcher, implementer, and verifier agents in parallel.",
+                " A Group Agent coordinates researcher, implementer, and verifier members.",
                 Style::default().fg(theme::muted()),
             )),
         ]))
@@ -48,53 +48,53 @@ pub(crate) fn draw_swarm(frame: &mut Frame<'_>, app: &App) {
         chunks[0],
     );
 
-    let swarm = &app.state.runtime_settings.swarm;
+    let agent_group = &app.state.runtime_settings.agent_group;
     let on_off = |value: bool| if value { "on" } else { "off" }.to_owned();
-    let rows = SWARM_ROWS.iter().map(|row| {
+    let rows = AGENT_GROUP_ROWS.iter().map(|row| {
         let (label, value, detail) = match row {
-            SwarmRow::Enabled => (
-                "Swarm (this session)",
-                on_off(app.swarm_enabled()),
-                "agent tools for the primary agent",
+            AgentGroupRow::Enabled => (
+                "Group Agent (this session)",
+                on_off(app.agent_group_enabled()),
+                "group lifecycle tools for the Main Agent",
             ),
-            SwarmRow::AutoDeploy => (
+            AgentGroupRow::AutoDeploy => (
                 "Auto-deploy",
-                on_off(swarm.auto_deploy),
-                "fan out unprompted; new sessions start swarmed",
+                on_off(agent_group.auto_deploy),
+                "allow automatic group delegation for new sessions",
             ),
-            SwarmRow::Parallel => (
-                "Parallel agents",
-                format!("‹ {} ›", swarm.max_concurrent),
-                "agents working at once",
+            AgentGroupRow::Parallel => (
+                "Parallel members",
+                format!("‹ {} ›", agent_group.max_concurrent),
+                "members working at once",
             ),
-            SwarmRow::Pool => (
-                "Agent pool",
-                format!("‹ {} ›", swarm.max_members),
-                "live agents kept for follow-ups",
+            AgentGroupRow::Pool => (
+                "Member capacity",
+                format!("‹ {} ›", agent_group.max_members),
+                "members kept for follow-ups",
             ),
-            SwarmRow::Tokens => (
-                "Token budget",
-                format!("‹ {} ›", compact_number(swarm.max_tokens)),
-                "delegated tokens per turn",
+            AgentGroupRow::Tokens => (
+                "Output token budget",
+                format!("‹ {} ›", compact_number(agent_group.max_tokens)),
+                "shared group output tokens",
             ),
-            SwarmRow::Cost => (
+            AgentGroupRow::Cost => (
                 "Cost budget",
-                format!("‹ ${:.2} ›", swarm.max_cost_cents as f64 / 100.0),
-                "delegated spend per turn",
+                format!("‹ ${:.2} ›", agent_group.max_cost_cents as f64 / 100.0),
+                "shared group cost ceiling",
             ),
-            SwarmRow::Writers => (
+            AgentGroupRow::Writers => (
                 "Writers",
-                if swarm.write_policy == "primary_only" {
+                if agent_group.write_policy == "primary_only" {
                     "primary only".into()
                 } else {
                     "one agent".into()
                 },
                 "who may edit the workspace",
             ),
-            SwarmRow::OpenAgents => (
+            AgentGroupRow::OpenAgents => (
                 "Agents view",
                 "open".into(),
-                "watch, steer, and stop agents",
+                "inspect the group and its members",
             ),
         };
         ListItem::new(Line::from(vec![
@@ -110,7 +110,7 @@ pub(crate) fn draw_swarm(frame: &mut Frame<'_>, app: &App) {
         .highlight_style(theme::selected())
         .highlight_symbol("▸ ");
     let mut state =
-        ListState::default().with_selected(Some(app.popup_index.min(SWARM_ROWS.len() - 1)));
+        ListState::default().with_selected(Some(app.popup_index.min(AGENT_GROUP_ROWS.len() - 1)));
     frame.render_stateful_widget(list, chunks[1], &mut state);
 
     let notice = app

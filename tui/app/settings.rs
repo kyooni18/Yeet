@@ -207,8 +207,8 @@ impl App {
                         _ => "off",
                     };
                     backend.send(FrontendCommand::SetJevLoopMode { mode: mode.into() })?;
-                } else if self.popup_index == self.swarm_settings_row_index() {
-                    let command = self.open_swarm();
+                } else if self.popup_index == self.agent_group_settings_row_index() {
+                    let command = self.open_agent_group();
                     backend.send(command)?;
                 } else if self.popup_index == self.sandbox_settings_row_index() {
                     self.open_sandbox_presets();
@@ -698,12 +698,12 @@ impl App {
         self.light_theme_settings_row_index() + 1
     }
 
-    pub(super) fn swarm_settings_row_index(&self) -> usize {
+    pub(super) fn agent_group_settings_row_index(&self) -> usize {
         self.jev_settings_row_index() + 1
     }
 
     pub(super) fn sandbox_settings_row_index(&self) -> usize {
-        self.swarm_settings_row_index() + 1
+        self.agent_group_settings_row_index() + 1
     }
 
     pub(super) fn auth_settings_row_index(&self) -> usize {

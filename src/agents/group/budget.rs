@@ -3,7 +3,7 @@
 //! Token and cost limits apply to a budget window that restarts with each
 //! primary turn; members and their contexts outlive the window.
 
-use crate::{core::Usage, model::SwarmSettings};
+use crate::{core::Usage, model::AgentGroupSettings};
 
 use super::WritePolicy;
 
@@ -22,12 +22,12 @@ pub(crate) struct AgentLimits {
 
 impl Default for AgentLimits {
     fn default() -> Self {
-        Self::from(&SwarmSettings::default())
+        Self::from(&AgentGroupSettings::default())
     }
 }
 
-impl From<&SwarmSettings> for AgentLimits {
-    fn from(settings: &SwarmSettings) -> Self {
+impl From<&AgentGroupSettings> for AgentLimits {
+    fn from(settings: &AgentGroupSettings) -> Self {
         let settings = settings.clone().normalized();
         Self {
             max_concurrent: settings.max_concurrent as usize,
@@ -60,7 +60,7 @@ impl AgentLimits {
             }
         };
         Some(format!(
-            "Agent swarm auto-deploy is on. When a task splits into independent parts (separate files, modules, questions, or checks), launch agents for them with the agent tool instead of doing them one by one: up to {} at once, several agent calls in one response, run_in_background=true when you can keep working meanwhile. Use researcher agents for parallel investigation and verifier agents for independent checks. {writers} Do the work yourself when it is small, sequential, or needs this conversation's context. Each agent prompt must be self-contained.",
+            "Automatic Group Agent delegation is enabled. When a task has independent parts, create one group for the shared objective and let its coordinator assign bounded researcher, implementer, and verifier tasks. The group may run up to {} members concurrently. {writers} Handle small or sequential work directly. Give the group the objective and relevant context; its coordinator will scope each member assignment.",
             self.max_concurrent
         ))
     }

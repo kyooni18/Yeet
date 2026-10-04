@@ -35,7 +35,7 @@ impl AgentGroupSupervisor {
         self.active.set_change_listener(listener);
     }
 
-    /// Applies swarm limits to the active group and every later one.
+    /// Applies group limits to the active group and every later one.
     pub(crate) fn set_limits(&self, limits: AgentLimits) {
         self.active.set_limits(limits);
     }

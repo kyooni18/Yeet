@@ -192,8 +192,8 @@ impl BackendService {
         }
         let auto_deploy = self
             .config
-            .swarm_settings()
-            .is_ok_and(|swarm| swarm.auto_deploy);
+            .agent_group_settings()
+            .is_ok_and(|agent_group| agent_group.auto_deploy);
         if !(auto_deploy && self.set_agent_mode(AgentMode::Adaptive).is_ok()) {
             self.publish_state();
         }

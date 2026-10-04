@@ -203,9 +203,9 @@ impl BackendService {
             store.clone(),
         );
         let run_manager = RunManager::default();
-        let swarm = config.swarm_settings().unwrap_or_default();
+        let agent_group = config.agent_group_settings().unwrap_or_default();
         let agent_groups =
-            AgentGroupSupervisor::new(runtime_factory.clone(), AgentLimits::from(&swarm));
+            AgentGroupSupervisor::new(runtime_factory.clone(), AgentLimits::from(&agent_group));
         let coordinator = Arc::new(Mutex::new(runtime_factory.build(None)?));
         let mut session = bootstrap::initial_session(
             model,
@@ -215,7 +215,7 @@ impl BackendService {
             &store,
             project,
         );
-        if swarm.auto_deploy {
+        if agent_group.auto_deploy {
             session.state.agent_mode = AgentMode::Adaptive;
             coordinator
                 .lock_or_recover()
@@ -399,8 +399,8 @@ impl BackendService {
                 self.set_jev_loop_mode(mode);
                 Ok(())
             }
-            FrontendCommand::SetSwarmSettings { settings } => {
-                self.set_swarm_settings(settings);
+            FrontendCommand::SetAgentGroupSettings { settings } => {
+                self.set_agent_group_settings(settings);
                 Ok(())
             }
             FrontendCommand::SetOpenAiFlex { enabled } => {

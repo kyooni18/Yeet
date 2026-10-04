@@ -13,11 +13,11 @@ pub mod diff;
 mod input;
 mod navigation;
 pub use navigation::WorkbenchTab;
+pub mod agent_group;
 pub mod keymap;
 mod selection;
 mod settings;
 mod sidebar;
-pub mod swarm;
 #[cfg(test)]
 mod tests;
 pub use selection::TranscriptContextMenu;
@@ -55,7 +55,7 @@ pub enum Mode {
     Files,
     Diff,
     Agents,
-    Swarm,
+    AgentGroup,
     Views,
 }
 
@@ -561,8 +561,8 @@ impl App {
                 self.handle_views_key(event);
                 Ok(())
             }
-            Mode::Swarm => {
-                for command in self.handle_swarm_key(event) {
+            Mode::AgentGroup => {
+                for command in self.handle_agent_group_key(event) {
                     backend.send(command)?;
                 }
                 Ok(())
@@ -998,8 +998,8 @@ impl App {
                     "/model" => self.open_models(backend)?,
                     "/reasoning" => self.open_reasoning(),
                     "/goal" => self.open_goal(),
-                    "/swarm" => {
-                        let command = self.open_swarm();
+                    "/agent-group" => {
+                        let command = self.open_agent_group();
                         backend.send(command)?;
                     }
                     "/sessions" => self.open_sessions(backend)?,
@@ -1637,7 +1637,7 @@ impl App {
             Mode::Models => self.filtered_models().len(),
             Mode::Reasoning => reasoning_levels_for_model(&self.state.active_model).len(),
             Mode::Goal => 2,
-            Mode::Swarm => swarm::SWARM_ROWS.len(),
+            Mode::AgentGroup => agent_group::AGENT_GROUP_ROWS.len(),
             Mode::Sessions => self.filtered_session_picker_items().len() + 1,
             Mode::Capabilities => self.filtered_capabilities().len(),
             Mode::Auth => self.state.auth_providers.len(),
@@ -1716,8 +1716,8 @@ const COMMANDS: &[(&str, &str)] = &[
         "Continue until a strict success judge accepts concrete evidence",
     ),
     (
-        "/swarm",
-        "Agent swarm: parallel agents, budgets, auto-deploy",
+        "/agent-group",
+        "Agent Group: member coordination and shared budgets",
     ),
     ("/attach", "Attach an optional capability"),
     ("/detach", "Detach an optional capability"),

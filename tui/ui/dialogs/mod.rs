@@ -8,14 +8,14 @@ use crate::{
     app::{App, SettingsEditKind, SettingsSection},
     model::{CapabilityToggleItem, reasoning_levels_for_model},
 };
+#[path = "agent_group.rs"]
+mod agent_group;
 #[path = "navigation.rs"]
 mod navigation;
 #[path = "status.rs"]
 mod status;
-#[path = "swarm.rs"]
-mod swarm;
+pub(crate) use agent_group::draw_agent_group;
 pub(crate) use status::draw_status_dialog;
-pub(crate) use swarm::draw_swarm;
 
 pub(super) use navigation::{draw_goal, draw_models, draw_reasoning, draw_sessions};
 
@@ -426,9 +426,9 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
         "Enter cycles off → shadow → enforce",
     );
     row(
-        "Agent swarm",
-        app.swarm_summary(),
-        "parallel agents, budgets, auto-deploy",
+        "Agent Group",
+        app.agent_group_summary(),
+        "member coordination, shared budgets, delegation",
     );
     let sandbox_value = app
         .state

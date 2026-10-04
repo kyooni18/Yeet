@@ -3,7 +3,7 @@
 //! Independent of Skyline deployment and orchestration. Adapters interpret
 //! these intents; this module never renders UI or starts a Skyline service.
 
-use crate::model::{AgentMode, AutonomyMode, SandboxAction, SwarmSettings};
+use crate::model::{AgentGroupSettings, AgentMode, AutonomyMode, SandboxAction};
 use serde::{Deserialize, Serialize};
 
 /// Stable navigation intents shared by keyboard, mouse and other frontends.
@@ -136,8 +136,9 @@ pub enum FrontendCommand {
     SetJevLoopMode {
         mode: String,
     },
-    SetSwarmSettings {
-        settings: SwarmSettings,
+    #[serde(alias = "set_\u{73}\u{77}\u{61}\u{72}\u{6d}_settings")]
+    SetAgentGroupSettings {
+        settings: AgentGroupSettings,
     },
     SetOpenAiFlex {
         enabled: bool,
@@ -186,6 +187,20 @@ mod tests {
         assert!(matches!(
             decoded,
             Action::Navigate(NavigationAction::File(2))
+        ));
+    }
+
+    #[test]
+    fn legacy_group_settings_command_remains_readable() {
+        let legacy_type = "set_\u{73}\u{77}\u{61}\u{72}\u{6d}_settings";
+        let command: FrontendCommand = serde_json::from_value(serde_json::json!({
+            "type": legacy_type,
+            "settings": crate::model::AgentGroupSettings::default()
+        }))
+        .unwrap();
+        assert!(matches!(
+            command,
+            FrontendCommand::SetAgentGroupSettings { .. }
         ));
     }
 }

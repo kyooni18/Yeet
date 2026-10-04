@@ -160,7 +160,7 @@ pub(super) fn runtime_settings_state(
             config.context_length_override(active_model)?
         },
         jev_loop_mode: config.jev_loop_mode()?,
-        swarm: config.swarm_settings()?,
+        agent_group: config.agent_group_settings()?,
     })
 }
 

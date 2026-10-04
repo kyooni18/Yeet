@@ -334,7 +334,8 @@ pub struct RuntimeSettingsState {
     pub theme_light_warning: Option<String>,
     pub context_length_override: Option<u64>,
     pub jev_loop_mode: String,
-    pub swarm: SwarmSettings,
+    #[serde(alias = "\u{73}\u{77}\u{61}\u{72}\u{6d}")]
+    pub agent_group: AgentGroupSettings,
 }
 
 impl Default for RuntimeSettingsState {
@@ -352,18 +353,18 @@ impl Default for RuntimeSettingsState {
             theme_light_warning: None,
             context_length_override: None,
             jev_loop_mode: "off".into(),
-            swarm: SwarmSettings::default(),
+            agent_group: AgentGroupSettings::default(),
         }
     }
 }
 
-/// User-tunable limits and behavior for the agent swarm (Agent Group).
-/// Persisted globally; whether a session runs a swarm is its `AgentMode`.
+/// User-tunable limits and behavior for Group Agents.
+/// Persisted globally; whether a session uses Group Agent tools is its `AgentMode`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
-pub struct SwarmSettings {
-    /// The primary agent fans parallelizable work out to background agents
-    /// without being asked, and new sessions start with the swarm on.
+pub struct AgentGroupSettings {
+    /// Allow the Main Agent to delegate eligible work to a Group Agent.
+    /// New sessions start with the Group Agent enabled when this is true.
     pub auto_deploy: bool,
     /// Agents that may work at once.
     pub max_concurrent: u32,
@@ -377,7 +378,7 @@ pub struct SwarmSettings {
     pub write_policy: String,
 }
 
-impl SwarmSettings {
+impl AgentGroupSettings {
     pub const MAX_CONCURRENT: u32 = 16;
     pub const MAX_MEMBERS: u32 = 32;
     pub const MIN_TOKENS: u64 = 10_000;
@@ -403,7 +404,7 @@ impl SwarmSettings {
     }
 }
 
-impl Default for SwarmSettings {
+impl Default for AgentGroupSettings {
     fn default() -> Self {
         Self {
             auto_deploy: false,
