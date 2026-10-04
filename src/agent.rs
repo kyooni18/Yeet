@@ -46,13 +46,12 @@ use policy::{
     task_profile_with_history,
 };
 use progress::{
-    content_fingerprint, round_semantic_fingerprint, tool_execution_succeeded,
-    tool_failure_fingerprint, tool_made_progress, tool_signature,
+    content_fingerprint, round_semantic_fingerprint, tool_failure_fingerprint, tool_made_progress,
+    tool_signature,
 };
 use runaway::{RunawayDecision, RunawayDetector};
 use session_controls::{
-    bridge_transport_error, goal_retry_delay, retryable_goal_error,
-    tool_call_indicates_implementation_intent, wait_for_goal,
+    bridge_transport_error, goal_retry_delay, retryable_goal_error, wait_for_goal,
 };
 use tool_protocol::{
     collect_tool_calls, looks_like_malformed_tool_call, normalize_tool_output_for_model,
@@ -772,47 +771,22 @@ impl AgentCoordinator {
                     tool_discovery: &mut tool_discovery,
                 })?;
                 duplicate_inspection |= blocked_duplicate;
-                let succeeded = tool_execution_succeeded(call, &content, transport_succeeded);
-                if tool_call_indicates_implementation_intent(call, &content, succeeded) {
-                    implementation_requested = true;
-                }
-                if succeeded && call.name == "activate_capability" {
-                    let activated = serde_json::from_str::<Value>(&content)
-                        .ok()
-                        .and_then(|value| value.get("tools").and_then(Value::as_array).cloned())
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|value| value.as_str().map(str::to_owned))
-                        .collect::<Vec<_>>();
-                    if !activated.is_empty() {
-                        tool_discovery.load(activated.iter().map(String::as_str));
-                    }
-                }
-                if call.name == "run_shell"
-                    && succeeded
-                    && call.arguments.get("background").and_then(Value::as_bool) == Some(true)
-                {
-                    // Detached execution is the only reason a local lookup
-                    // needs the shell-job control surface.
-                    tool_discovery.load(["shell_job"]);
-                }
-                let inspection_progress =
-                    inspection_call && tool_made_progress(call, &content, succeeded);
-                if implementation_requested
-                    && inspection_progress
-                    && matches!(call.name.as_str(), "read_file" | "search_workspace")
-                {
-                    tool_discovery.load(["apply_file_edits"]);
-                }
-                if tool_made_progress(call, &content, succeeded) {
-                    goal_progress.record_progress();
-                }
-                research_budget.observe_tool(call, &content, inspection_progress);
-                let current_write_generation = self.registry.workspace_write_generation();
-                let workspace_write_observed =
-                    current_write_generation != workspace_write_generation;
-                let workspace_mutated = succeeded && workspace_write_observed;
-                workspace_write_generation = current_write_generation;
+                let tool_round::ObservedDispatch {
+                    succeeded,
+                    inspection_progress,
+                    workspace_write_observed,
+                    workspace_mutated,
+                } = self.observe_dispatch_result(tool_round::DispatchObservationInput {
+                    call,
+                    content: &content,
+                    transport_succeeded,
+                    inspection_call,
+                    implementation_requested: &mut implementation_requested,
+                    tool_discovery: &mut tool_discovery,
+                    goal_progress: &mut goal_progress,
+                    research_budget: &mut research_budget,
+                    workspace_write_generation: &mut workspace_write_generation,
+                });
                 let (normalized, output_images) =
                     normalize_tool_output_for_model(&content, vision_enabled);
                 let (model_content, externally_bounded) =

@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::core::{BridgeClient, CallRequest, ImageAttachment, ToolCall, ToolDefinition};
 
@@ -17,8 +17,11 @@ use super::{
     },
     goal,
     policy::{TaskProfile, is_mutation_tool},
-    progress::{self, classify_tool_error, is_inspection_tool},
+    progress::{
+        self, classify_tool_error, is_inspection_tool, tool_execution_succeeded, tool_made_progress,
+    },
     runaway::{RunawayDecision, RunawayDetector, RunawayRound},
+    session_controls::tool_call_indicates_implementation_intent,
     tool_discovery::{self, ToolDiscovery},
     turn_state::TurnExecutionEvidence,
     verify::{self, VerificationMonitor},
@@ -44,6 +47,87 @@ pub(super) struct DispatchInput<'a> {
     pub tool_catalog: &'a [ToolDefinition],
     pub parallel_mcp_results: &'a mut ParallelResults,
     pub tool_discovery: &'a mut ToolDiscovery,
+}
+
+/// Mutable turn state affected by a dispatched result before model output insertion.
+pub(super) struct DispatchObservationInput<'a> {
+    pub call: &'a ToolCall,
+    pub content: &'a str,
+    pub transport_succeeded: bool,
+    pub inspection_call: bool,
+    pub implementation_requested: &'a mut bool,
+    pub tool_discovery: &'a mut ToolDiscovery,
+    pub goal_progress: &'a mut goal::GoalProgress,
+    pub research_budget: &'a mut super::ResearchBudget,
+    pub workspace_write_generation: &'a mut u64,
+}
+
+pub(super) struct ObservedDispatch {
+    pub succeeded: bool,
+    pub inspection_progress: bool,
+    pub workspace_write_observed: bool,
+    pub workspace_mutated: bool,
+}
+
+impl AgentCoordinator {
+    pub(super) fn observe_dispatch_result(
+        &self,
+        input: DispatchObservationInput<'_>,
+    ) -> ObservedDispatch {
+        let call = input.call;
+        let content = input.content;
+        let succeeded = tool_execution_succeeded(call, content, input.transport_succeeded);
+        if tool_call_indicates_implementation_intent(call, content, succeeded) {
+            *input.implementation_requested = true;
+        }
+        if succeeded && call.name == "activate_capability" {
+            let activated = serde_json::from_str::<Value>(content)
+                .ok()
+                .and_then(|value| value.get("tools").and_then(Value::as_array).cloned())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect::<Vec<_>>();
+            if !activated.is_empty() {
+                input
+                    .tool_discovery
+                    .load(activated.iter().map(String::as_str));
+            }
+        }
+        if call.name == "run_shell"
+            && succeeded
+            && call.arguments.get("background").and_then(Value::as_bool) == Some(true)
+        {
+            // Detached execution is the only reason a local lookup
+            // needs the shell-job control surface.
+            input.tool_discovery.load(["shell_job"]);
+        }
+        let inspection_progress =
+            input.inspection_call && tool_made_progress(call, content, succeeded);
+        if *input.implementation_requested
+            && inspection_progress
+            && matches!(call.name.as_str(), "read_file" | "search_workspace")
+        {
+            input.tool_discovery.load(["apply_file_edits"]);
+        }
+        if tool_made_progress(call, content, succeeded) {
+            input.goal_progress.record_progress();
+        }
+        input
+            .research_budget
+            .observe_tool(call, content, inspection_progress);
+        let current_write_generation = self.registry.workspace_write_generation();
+        let workspace_write_observed =
+            current_write_generation != *input.workspace_write_generation;
+        let workspace_mutated = succeeded && workspace_write_observed;
+        *input.workspace_write_generation = current_write_generation;
+        ObservedDispatch {
+            succeeded,
+            inspection_progress,
+            workspace_write_observed,
+            workspace_mutated,
+        }
+    }
 }
 
 /// Inputs for the cache-aware insertion of one model-visible tool result.
