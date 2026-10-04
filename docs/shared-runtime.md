@@ -20,10 +20,11 @@ Local input editing and widget-specific actions remain in the terminal layer.
 
 Runtime identity lives across runs on one coordinator, not across process restarts.
 `agents::global().snapshots()` returns owned snapshots; no caller holds registry locks
-while invoking tools. `RunGuard` restores idle on every exit path. Explicit child
-creation can call `AgentCoordinator::register_runtime_agent(name, model, Some(parent))`
-before running, then `AgentRegistry::connect` to declare coworkers. Parent references
-are validated; unregistering removes stale relationships. Decisions are explicit
+while invoking tools. `RunGuard` restores idle on every exit path. A spawned agent can
+call `AgentCoordinator::register_runtime_agent(name, model, Some(spawned_by))` before
+running, then `AgentRegistry::connect` to declare coworkers. `spawned_by` records
+execution lineage only and grants no authority; it is validated, and unregistering
+removes stale relationships. Decisions are explicit
 public summaries, never private model reasoning.
 
 The global registry is process-local. Detached Skyline children currently travel
@@ -31,5 +32,5 @@ through the background-session protocol; cross-process lineage and registry snap
 are not automatically propagated by that protocol. This module does not replace
 session persistence, authorization, or transport routing.
 
-Adaptive in-process workers automatically register their role as their name, bind
-lineage to the primary coordinator, and connect to it as coworkers before running.
+Adaptive in-process workers automatically register their role as their name, record
+the primary coordinator as `spawned_by`, and connect to it as coworkers before running.

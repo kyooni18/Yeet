@@ -94,8 +94,15 @@ contract when adding edit dialects or operations.
 Run the complete suite with:
 
 ```sh
-./Scripts/check.sh
+./Scripts/check.sh --install
 ```
 
+`--install` runs `npm ci` where JavaScript dependencies are missing or stale;
+without it, missing dependencies are reported as `ENV` rather than as code
+failures. `--only rust,runtime,web,integration` narrows the stages.
+
 For a Rust-only change, `cargo test` is the fast path. For bridge/edit/provider
-changes, rebuild and run the Node suite as well.
+changes, rebuild and run the Node suite as well. Coordinator behavior that
+depends on provider-visible requests (prompt-cache continuity, tool rounds,
+rollover) is tested against the scripted bridge in
+`src/agent/testdata/fake_bridge.mjs`; see `src/agent/continuity_tests.rs`.
