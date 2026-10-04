@@ -27,16 +27,14 @@ mod turn_state;
 mod verify;
 use api::AgentTurnRequest;
 pub use api::{AgentEvent, AgentRunOutcome, AgentRunRequest};
-use cache::advance_turn_cache_breakpoints;
 pub(crate) use coordinator_support::is_internal_coordinator_system_message;
 use coordinator_support::{
     append_dynamic_turn_checkpoints, attached_harness_flags, attached_web_search_capability_result,
-    capability_guidance, check_cancel, configure_tool_access, explicit_skill_name,
-    render_matching_debate_memory, settle_interrupted_context_batch,
-    should_inherit_implementation_turn, supports_anthropic_deferred_tool_references,
-    supports_native_deferred_tools,
+    check_cancel, configure_tool_access, explicit_skill_name, render_matching_debate_memory,
+    settle_interrupted_context_batch, should_inherit_implementation_turn,
+    supports_anthropic_deferred_tool_references, supports_native_deferred_tools,
 };
-use history::{TURN_CONTEXT_BOUNDARY, append_context_updates, append_skill_instruction};
+use history::{TURN_CONTEXT_BOUNDARY, append_skill_instruction};
 use limits::*;
 use loop_budget::LoopBudget;
 pub use policy::SYSTEM_INSTRUCTION;
@@ -45,8 +43,8 @@ use policy::{
     looks_like_bounded_explanation, looks_like_capability_request,
     looks_like_coding_implementation_request, looks_like_coding_request,
     looks_like_local_file_lookup, looks_like_planning_or_documentation,
-    looks_like_prior_context_request, request_history_for_profile_at,
-    should_preserve_web_tool_surface, task_guidance, task_profile_with_history,
+    looks_like_prior_context_request, should_preserve_web_tool_surface, task_guidance,
+    task_profile_with_history,
 };
 use progress::{
     classify_tool_error, content_fingerprint, is_inspection_tool, round_semantic_fingerprint,
@@ -260,43 +258,21 @@ impl AgentCoordinator {
                 &mut last_jev_instruction,
             );
 
-            let capability_snapshot = self.registry.runtime_capability_snapshot(&selected_tools);
-            self.observation_cache.bind_window(self.context_memory.id());
-            let mut stable_request_overlays = turn_stable_overlays.clone();
-            stable_request_overlays
-                .push(Message::system(turn_context_orientation.clone()).request_only());
-            stable_request_overlays.push(
-                Message::system(capability_guidance(
-                    capability_snapshot,
-                    tool_discovery.search_enabled(),
-                ))
-                .request_only(),
-            );
-            append_context_updates(
-                &mut self.history,
-                &mut last_context_updates,
-                &stable_request_overlays,
-            );
-            let mut request_messages =
-                request_history_for_profile_at(&self.history, profile, self.history.len());
-            advance_turn_cache_breakpoints(&mut request_messages, &request_input);
-            let request_context_chars = serde_json::to_string(&request_messages)
-                .map(|serialized| serialized.len())
-                .unwrap_or_else(|_| {
-                    request_messages
-                        .iter()
-                        .filter_map(|message| message.content.as_deref())
-                        .map(str::len)
-                        .sum::<usize>()
-                });
-            self.context_memory.estimated_tokens = context::estimate_messages(&request_messages)?
-                + (serde_json::to_vec(&selected_tools)?.len() as u64).div_ceil(3);
-            let rollover_budget = self.context_memory.rollover_budget();
-            let has_rolloverable_trace = self
-                .history
-                .iter()
-                .any(|message| matches!(message.role, MessageRole::Assistant | MessageRole::Tool));
-            loop_budget.observe_request(request_context_chars);
+            let request_assembly::PreparedHistory {
+                request_messages,
+                request_context_chars,
+                rollover_budget,
+                has_rolloverable_trace,
+            } = self.prepare_request_history(request_assembly::HistoryInput {
+                selected_tools: &selected_tools,
+                turn_stable_overlays: &turn_stable_overlays,
+                turn_context_orientation: &turn_context_orientation,
+                tool_discovery: &tool_discovery,
+                last_context_updates: &mut last_context_updates,
+                request_input: &request_input,
+                profile,
+                loop_budget: &mut loop_budget,
+            })?;
             if has_rolloverable_trace
                 && let Some(message) = loop_budget.proactive_rollover_reason(
                     request_context_chars,
