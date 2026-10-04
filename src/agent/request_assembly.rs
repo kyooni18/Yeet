@@ -2,15 +2,23 @@
 
 use std::sync::atomic::AtomicBool;
 
-use crate::core::{BridgeClient, ToolDefinition};
+use crate::core::{BridgeClient, CallRequest, ToolDefinition};
 use crate::tools::ToolRegistry;
 
 use super::{
     AgentCoordinator, LoopBudget, Message, MessageRole, Result, cache, context,
-    coordinator_support::capability_guidance, history::append_context_updates, jev,
-    policy::TaskProfile, policy::request_history_for_profile_at, policy::select_tools_for_profile,
+    coordinator_support::{capability_guidance, configure_tool_access},
+    history::append_context_updates,
+    jev,
+    limits::MODEL_ATTEMPT_TIMEOUT_MS,
+    policy::TaskProfile,
+    policy::request_history_for_profile_at,
+    policy::select_tools_for_profile,
+    session,
     tool_discovery::ToolDiscovery,
+    turn_state,
 };
+use serde_json::{Value, json};
 
 /// Read-only inputs for selecting the provider-visible tool surface of one attempt.
 pub(super) struct ToolSelectionInput<'a> {
@@ -130,6 +138,110 @@ impl AgentCoordinator {
             request_context_chars,
             rollover_budget,
             has_rolloverable_trace,
+        })
+    }
+}
+
+/// Values that determine one provider request after the loop has ruled out rollover.
+pub(super) struct FinalizationInput<'a> {
+    pub model: &'a str,
+    pub request_messages: Vec<Message>,
+    pub profile: TaskProfile,
+    pub selected_tools: Vec<ToolDefinition>,
+    pub deferred_tools: Vec<ToolDefinition>,
+    pub jev_loop_advice: Option<&'a jev::LoopAdvice>,
+    pub execution_evidence: &'a turn_state::TurnExecutionEvidence,
+    pub implementation_requested: bool,
+    pub planning_or_documentation: bool,
+    pub model_attempts: usize,
+    pub tool_rounds: usize,
+    pub loop_budget: &'a LoopBudget,
+    pub working_budget: u64,
+    pub native_deferred_tools_supported: bool,
+    pub tool_discovery: &'a ToolDiscovery,
+    pub turn_start_pruned_request_only_messages: usize,
+    pub turn_start_pruned_request_only_chars: usize,
+    pub jev_attempted_this_round: bool,
+    pub jev_request_chars: usize,
+    pub workspace_revision: Option<&'a str>,
+    pub reasoning_level: &'a str,
+    pub attached_capabilities: Option<&'a [String]>,
+}
+
+pub(super) struct PreparedRequest {
+    pub request: CallRequest,
+    pub diagnostics: Value,
+}
+
+impl AgentCoordinator {
+    pub(super) fn finalize_request(
+        &mut self,
+        input: FinalizationInput<'_>,
+    ) -> Result<PreparedRequest> {
+        let mut request = CallRequest::simple(input.model, input.request_messages);
+        request.context_key = Some(match input.profile {
+            TaskProfile::Agent => self.context_key.clone(),
+            TaskProfile::Research => format!("{}:research", self.context_key),
+        });
+        request.prompt_cache = Some(true);
+        request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
+        request.deferred_tools = (!input.deferred_tools.is_empty()).then_some(input.deferred_tools);
+        configure_tool_access(&mut request, input.selected_tools, false);
+        if jev::forces_tool_free(input.jev_loop_advice) {
+            request.tool_choice = Some(json!("none"));
+        }
+        let execution_phase = input.execution_evidence.recommended_phase(
+            input.implementation_requested,
+            input.planning_or_documentation,
+        );
+        let mut request_metadata = turn_state::request_metadata(turn_state::RequestMetadataInput {
+            profile: input.profile,
+            context_key: request.context_key.as_deref(),
+            context_memory: &self.context_memory,
+            model_attempts: input.model_attempts,
+            tool_rounds: input.tool_rounds,
+            loop_budget: input.loop_budget,
+            working_budget: input.working_budget,
+            deferred_tool_count: request.deferred_tools.as_ref().map(Vec::len).unwrap_or(0),
+            native_deferred_tools_supported: input.native_deferred_tools_supported,
+            search_loaded_tool_count: input.tool_discovery.loaded_count(),
+            execution_phase: execution_phase.as_str(),
+            successful_mutations: input.execution_evidence.successful_mutations(),
+            unresolved_failed_mutation: input.execution_evidence.unresolved_failed_mutation(),
+            verification_attempted: input.execution_evidence.verification_attempted(),
+            verification_succeeded: input.execution_evidence.verification_succeeded(),
+            turn_start_pruned_request_only_messages: input.turn_start_pruned_request_only_messages,
+            turn_start_pruned_request_only_chars: input.turn_start_pruned_request_only_chars,
+        });
+        jev::write_loop_metadata(
+            &mut request_metadata,
+            input.jev_loop_advice,
+            input.jev_attempted_this_round,
+            input.jev_request_chars,
+        );
+        if let Some(revision) = input.workspace_revision {
+            request_metadata.insert("workspaceRevision".into(), revision.to_owned());
+        }
+        if input.reasoning_level != "auto" {
+            request_metadata.insert("reasoningLevel".into(), input.reasoning_level.to_owned());
+        }
+        request.metadata = Some(request_metadata);
+        request.attached_capabilities = input
+            .attached_capabilities
+            .map(session::runtime_attached_capabilities);
+        let mut attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
+        let update_plans = self.observation_cache.take_plans();
+        if !update_plans.is_empty() {
+            attempt_cache_diagnostics["contextCacheUpdates"] = json!(update_plans);
+        }
+        if attempt_cache_diagnostics["wireHistoryPrefixRewriteDetected"] == json!(true) {
+            anyhow::bail!(
+                "Previously submitted context changed within this window; start an explicit context rollover instead of rewriting history."
+            );
+        }
+        Ok(PreparedRequest {
+            request,
+            diagnostics: attempt_cache_diagnostics,
         })
     }
 }

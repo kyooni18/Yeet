@@ -30,7 +30,7 @@ pub use api::{AgentEvent, AgentRunOutcome, AgentRunRequest};
 pub(crate) use coordinator_support::is_internal_coordinator_system_message;
 use coordinator_support::{
     append_dynamic_turn_checkpoints, attached_harness_flags, attached_web_search_capability_result,
-    check_cancel, configure_tool_access, explicit_skill_name, render_matching_debate_memory,
+    check_cancel, explicit_skill_name, render_matching_debate_memory,
     settle_interrupted_context_batch, should_inherit_implementation_turn,
     supports_anthropic_deferred_tool_references, supports_native_deferred_tools,
 };
@@ -314,66 +314,33 @@ impl AgentCoordinator {
                     "The task input and tool schemas exceed the fresh working-context budget; reduce the input or attached capabilities."
                 );
             }
-            let mut request = CallRequest::simple(model, request_messages);
-            request.context_key = Some(match profile {
-                TaskProfile::Agent => self.context_key.clone(),
-                TaskProfile::Research => format!("{}:research", self.context_key),
-            });
-            request.prompt_cache = Some(true);
-            request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
-            request.deferred_tools = (!deferred_tools.is_empty()).then_some(deferred_tools);
-            configure_tool_access(&mut request, selected_tools, false);
-            if jev::forces_tool_free(jev_loop_advice.as_ref()) {
-                request.tool_choice = Some(json!("none"));
-            }
-            let execution_phase = execution_evidence
-                .recommended_phase(implementation_requested, planning_or_documentation);
-            let mut request_metadata =
-                turn_state::request_metadata(turn_state::RequestMetadataInput {
-                    profile,
-                    context_key: request.context_key.as_deref(),
-                    context_memory: &self.context_memory,
-                    model_attempts,
-                    tool_rounds,
-                    loop_budget: &loop_budget,
-                    working_budget,
-                    deferred_tool_count: request.deferred_tools.as_ref().map(Vec::len).unwrap_or(0),
-                    native_deferred_tools_supported,
-                    search_loaded_tool_count: tool_discovery.loaded_count(),
-                    execution_phase: execution_phase.as_str(),
-                    successful_mutations: execution_evidence.successful_mutations(),
-                    unresolved_failed_mutation: execution_evidence.unresolved_failed_mutation(),
-                    verification_attempted: execution_evidence.verification_attempted(),
-                    verification_succeeded: execution_evidence.verification_succeeded(),
-                    turn_start_pruned_request_only_messages,
-                    turn_start_pruned_request_only_chars,
-                });
-            jev::write_loop_metadata(
-                &mut request_metadata,
-                jev_loop_advice.as_ref(),
+            let request_assembly::PreparedRequest {
+                request,
+                diagnostics: attempt_cache_diagnostics,
+            } = self.finalize_request(request_assembly::FinalizationInput {
+                model,
+                request_messages,
+                profile,
+                selected_tools,
+                deferred_tools,
+                jev_loop_advice: jev_loop_advice.as_ref(),
+                execution_evidence: &execution_evidence,
+                implementation_requested,
+                planning_or_documentation,
+                model_attempts,
+                tool_rounds,
+                loop_budget: &loop_budget,
+                working_budget,
+                native_deferred_tools_supported,
+                tool_discovery: &tool_discovery,
+                turn_start_pruned_request_only_messages,
+                turn_start_pruned_request_only_chars,
                 jev_attempted_this_round,
                 jev_request_chars,
-            );
-            if let Some(revision) = workspace_revision.as_deref() {
-                request_metadata.insert("workspaceRevision".into(), revision.to_owned());
-            }
-            if reasoning_level != "auto" {
-                request_metadata.insert("reasoningLevel".into(), reasoning_level.to_owned());
-            }
-            request.metadata = Some(request_metadata);
-            request.attached_capabilities = attached_capabilities
-                .as_deref()
-                .map(session::runtime_attached_capabilities);
-            let mut attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
-            let update_plans = self.observation_cache.take_plans();
-            if !update_plans.is_empty() {
-                attempt_cache_diagnostics["contextCacheUpdates"] = json!(update_plans);
-            }
-            if attempt_cache_diagnostics["wireHistoryPrefixRewriteDetected"] == json!(true) {
-                bail!(
-                    "Previously submitted context changed within this window; start an explicit context rollover instead of rewriting history."
-                );
-            }
+                workspace_revision: workspace_revision.as_deref(),
+                reasoning_level,
+                attached_capabilities: attached_capabilities.as_deref(),
+            })?;
             let sent_request_chars = serde_json::to_vec(&request)
                 .map(|serialized| serialized.len())
                 .unwrap_or(request_context_chars);
