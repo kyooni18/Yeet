@@ -723,21 +723,28 @@ fn peers(app: &App, member: &AgentMemberItem) -> (Vec<String>, Vec<String>) {
 
 /// Rail glyph and state word for a member.
 fn member_state(member: &AgentMemberItem) -> (&'static str, &'static str) {
-    match (member.status.as_str(), member.task_status.as_str()) {
-        ("running", _) => (spinner(), "running"),
-        ("stopped", _) => ("·", "stopped"),
-        (_, "needs_verification") => ("?", "waiting"),
-        (_, "failed") => ("!", "failed"),
-        (_, "cancelled") => ("·", "cancelled"),
-        (_, "verified" | "reported" | "done") => ("·", "done"),
+    match (member.status.as_str(), member.activity_state.as_str(), member.task_status.as_str()) {
+        (_, _, "failed") => ("!", "failed"),
+        (_, _, "cancelled") => ("·", "cancelled"),
+        ("stopped", _, _) => ("·", "stopped"),
+        (_, "reasoning", _) => (spinner(), "reasoning"),
+        (_, "tool_call", _) => (spinner(), "tool call"),
+        (_, "provider_activity", _) => (spinner(), "working"),
+        (_, "waiting_for_input", _) => ("?", "input"),
+        (_, "queued", _) => (spinner(), "queued"),
+        (_, _, "needs_verification") => ("?", "review"),
+        (_, _, "verified" | "reported" | "done") => ("·", "done"),
+        ("running", _, _) => (spinner(), "running"),
         _ => ("·", "idle"),
     }
 }
 
 fn verb(member: &AgentMemberItem) -> &'static str {
     match member_state(member).1 {
-        "running" => "is working on:",
-        "waiting" => "is waiting for review of:",
+        "running" | "reasoning" | "working" | "queued" => "is working on:",
+        "tool call" => "is calling a tool for:",
+        "input" => "is waiting for input on:",
+        "review" => "is waiting for review of:",
         "failed" => "failed:",
         "stopped" | "cancelled" => "stopped working on:",
         _ => "finished:",
@@ -747,8 +754,8 @@ fn verb(member: &AgentMemberItem) -> &'static str {
 fn counts(members: &[AgentMemberItem]) -> (usize, usize) {
     members.iter().fold((0, 0), |(running, waiting), member| {
         match member_state(member).1 {
-            "running" => (running + 1, waiting),
-            "waiting" => (running, waiting + 1),
+            "running" | "reasoning" | "tool call" | "working" | "queued" => (running + 1, waiting),
+            "input" | "review" => (running, waiting + 1),
             _ => (running, waiting),
         }
     })
@@ -756,8 +763,8 @@ fn counts(members: &[AgentMemberItem]) -> (usize, usize) {
 
 fn glyph_style(member: &AgentMemberItem) -> Style {
     match member_state(member).1 {
-        "running" => glyph_running(),
-        "waiting" => Style::default().fg(theme::warning()),
+        "running" | "reasoning" | "tool call" | "working" | "queued" => glyph_running(),
+        "input" | "review" => Style::default().fg(theme::warning()),
         "failed" => Style::default().fg(theme::error()),
         _ => muted(),
     }
@@ -867,6 +874,7 @@ mod tests {
             started_at: Some(now.clone()),
             input_tokens: 1_200_000,
             output_tokens: 148_000,
+            ..Default::default()
         };
         app.open_agents();
         let mut terminal = Terminal::new(TestBackend::new(144, 40)).unwrap();
