@@ -422,3 +422,38 @@ pub(super) fn shell_mentions_path(command: &str, path: &str) -> bool {
         || command.contains(&format!("'{path}'"))
         || command.contains(&format!("\"{path}\""))
 }
+
+impl ToolRegistry {
+    /// Requests a one-time, exact-command shell permit from the user.
+    pub(super) fn request_shell_permission_tool(
+        &mut self,
+        object: &Map<String, Value>,
+    ) -> Result<String> {
+        let command = string_arg(object, "command")?.trim().to_owned();
+        let reason = string_arg(object, "reason")?.trim().to_owned();
+        if command.is_empty() || reason.is_empty() {
+            bail!("request_shell_permission requires command and reason");
+        }
+        let restricted = restricted_operation(&command);
+        let operation = restricted
+            .clone()
+            .unwrap_or_else(|| "unrestricted shell access".into());
+        if restricted.is_some()
+            && self
+                .catalog
+                .disabled_capabilities
+                .contains("builtin:file-write")
+        {
+            bail!(
+                "File Write is disabled for this session; mutating shell commands cannot be permitted"
+            );
+        }
+        let granted = self
+            .context
+            .request_approval("shell", &command, &operation, &reason)?;
+        if granted {
+            self.permitted_shell_commands.insert(command.clone());
+        }
+        Ok(json!({"granted": granted, "permissionRequired": true, "command": command, "operation": operation, "oneTime": true}).to_string())
+    }
+}
