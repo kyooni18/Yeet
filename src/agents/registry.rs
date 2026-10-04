@@ -30,10 +30,10 @@ impl AgentRegistry {
             .states
             .write()
             .map_err(|_| anyhow!("agent registry lock poisoned"))?;
-        if let Some(parent) = parent_agent {
-            if !states.contains_key(&parent) {
-                bail!("unknown parent agent: {parent}");
-            }
+        if let Some(parent) = parent_agent
+            && !states.contains_key(&parent)
+        {
+            bail!("unknown parent agent: {parent}");
         }
         let id = AgentId::new_v4();
         states.insert(
@@ -163,10 +163,10 @@ pub struct RunGuard {
 
 impl Drop for RunGuard {
     fn drop(&mut self) {
-        if let Ok(mut states) = self.registry.states.write() {
-            if let Some(state) = states.get_mut(&self.id) {
-                state.status = AgentStatus::Idle;
-            }
+        if let Ok(mut states) = self.registry.states.write()
+            && let Some(state) = states.get_mut(&self.id)
+        {
+            state.status = AgentStatus::Idle;
         }
     }
 }

@@ -22,77 +22,6 @@ pub(in crate::agent) struct ObservationPolicy {
     pub may_retire: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn corrections_preserve_prefix_or_retire_only_obsolete_body_with_original_in_ledger() {
-        let pricing =
-            json!({"currency":"USD", "unit":"per1MTokens", "input":10.0, "cacheRead":1.0});
-        for (hit, expected_retirement) in [(None, false), (Some(1.0), false), (Some(0.0), true)] {
-            let mut cache = ObservationCache::default();
-            let mut history = vec![Message::system("base")];
-            let mut first = json!({"path":"a.txt", "snapshot":"old", "startLine":1, "endLine":1, "lines":"x".repeat(6000)}).to_string();
-            assert!(!cache.prepare_read_update(
-                &mut history,
-                &mut first,
-                "test/model",
-                ObservationPolicy {
-                    prefix_overhead_tokens: 0,
-                    may_retire: true
-                },
-                || None
-            ));
-            history.push(Message::tool(
-                first.clone(),
-                "call-a",
-                Some("read_file".into()),
-            ));
-            history.push(Message::assistant(
-                "unrelated subsequent evidence".repeat(20000),
-                None,
-            ));
-            let before = history.clone();
-            cache.cache_hit_fraction = hit;
-            let mut fresh = json!({"path":"a.txt", "snapshot":"new", "startLine":1, "endLine":1, "lines":"new source"}).to_string();
-            assert_eq!(
-                cache.prepare_read_update(
-                    &mut history,
-                    &mut fresh,
-                    "test/model",
-                    ObservationPolicy {
-                        prefix_overhead_tokens: 0,
-                        may_retire: true
-                    },
-                    || Some(pricing.clone())
-                ),
-                expected_retirement
-            );
-            assert_eq!(history[0], before[0]);
-            assert_eq!(history[2], before[2]);
-            assert_eq!(history[1].tool_call_id, before[1].tool_call_id);
-            if expected_retirement {
-                assert!(
-                    history[1]
-                        .content
-                        .as_deref()
-                        .unwrap()
-                        .contains("replacementMessageIndex")
-                );
-            } else {
-                assert_eq!(history, before);
-            }
-            assert_eq!(cache.journal.records()[0].original_content, first);
-            let correction: Value = serde_json::from_str(&fresh).unwrap();
-            assert_eq!(correction["supersedesSnapshot"], "old");
-            assert!(correction["observationAgeSeconds"].as_f64().is_some());
-            history.push(Message::tool(fresh, "call-b", Some("read_file".into())));
-            assert_eq!(cache.take_plans().len(), 1);
-        }
-    }
-}
-
 /// Ledger entries never change. Current history is a derived view; retiring an
 /// obsolete body leaves the original observation in this ledger and tool events.
 pub(in crate::agent) struct ObservationCache {
@@ -299,5 +228,76 @@ impl ObservationCache {
             observed_at: Instant::now(),
         });
         retired
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrections_preserve_prefix_or_retire_only_obsolete_body_with_original_in_ledger() {
+        let pricing =
+            json!({"currency":"USD", "unit":"per1MTokens", "input":10.0, "cacheRead":1.0});
+        for (hit, expected_retirement) in [(None, false), (Some(1.0), false), (Some(0.0), true)] {
+            let mut cache = ObservationCache::default();
+            let mut history = vec![Message::system("base")];
+            let mut first = json!({"path":"a.txt", "snapshot":"old", "startLine":1, "endLine":1, "lines":"x".repeat(6000)}).to_string();
+            assert!(!cache.prepare_read_update(
+                &mut history,
+                &mut first,
+                "test/model",
+                ObservationPolicy {
+                    prefix_overhead_tokens: 0,
+                    may_retire: true
+                },
+                || None
+            ));
+            history.push(Message::tool(
+                first.clone(),
+                "call-a",
+                Some("read_file".into()),
+            ));
+            history.push(Message::assistant(
+                "unrelated subsequent evidence".repeat(20000),
+                None,
+            ));
+            let before = history.clone();
+            cache.cache_hit_fraction = hit;
+            let mut fresh = json!({"path":"a.txt", "snapshot":"new", "startLine":1, "endLine":1, "lines":"new source"}).to_string();
+            assert_eq!(
+                cache.prepare_read_update(
+                    &mut history,
+                    &mut fresh,
+                    "test/model",
+                    ObservationPolicy {
+                        prefix_overhead_tokens: 0,
+                        may_retire: true
+                    },
+                    || Some(pricing.clone())
+                ),
+                expected_retirement
+            );
+            assert_eq!(history[0], before[0]);
+            assert_eq!(history[2], before[2]);
+            assert_eq!(history[1].tool_call_id, before[1].tool_call_id);
+            if expected_retirement {
+                assert!(
+                    history[1]
+                        .content
+                        .as_deref()
+                        .unwrap()
+                        .contains("replacementMessageIndex")
+                );
+            } else {
+                assert_eq!(history, before);
+            }
+            assert_eq!(cache.journal.records()[0].original_content, first);
+            let correction: Value = serde_json::from_str(&fresh).unwrap();
+            assert_eq!(correction["supersedesSnapshot"], "old");
+            assert!(correction["observationAgeSeconds"].as_f64().is_some());
+            history.push(Message::tool(fresh, "call-b", Some("read_file".into())));
+            assert_eq!(cache.take_plans().len(), 1);
+        }
     }
 }

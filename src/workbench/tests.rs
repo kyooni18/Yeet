@@ -114,23 +114,25 @@ fn git_resources_cover_index_worktree_renames_binary_and_unborn_repositories() {
 
 #[test]
 fn shared_content_preserves_real_activity_history_and_selection_across_updates() {
-    let mut state = BridgeState::default();
-    state.saved_sessions = vec![
-        SessionSummary {
-            id: "old".into(),
-            title: "Old session".into(),
-            updated_at: "2026-09-29T00:00:00Z".into(),
-            model: "test/model".into(),
-            message_count: 3,
-        },
-        SessionSummary {
-            id: "new".into(),
-            title: " Real\n session ".into(),
-            updated_at: "2026-09-30T00:00:00Z".into(),
-            model: "test/model".into(),
-            message_count: 8,
-        },
-    ];
+    let mut state = BridgeState {
+        saved_sessions: vec![
+            SessionSummary {
+                id: "old".into(),
+                title: "Old session".into(),
+                updated_at: "2026-09-29T00:00:00Z".into(),
+                model: "test/model".into(),
+                message_count: 3,
+            },
+            SessionSummary {
+                id: "new".into(),
+                title: " Real\n session ".into(),
+                updated_at: "2026-09-30T00:00:00Z".into(),
+                model: "test/model".into(),
+                message_count: 8,
+            },
+        ],
+        ..BridgeState::default()
+    };
     state
         .session_activity
         .insert("old".into(), SessionActivity::Running);

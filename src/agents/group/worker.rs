@@ -171,11 +171,11 @@ impl MemberThread {
             None,
             task.summary.as_deref().unwrap_or(task.status.as_str()),
         );
-        if task.background {
-            if let Some(member) = state.group.member(self.member) {
-                let notice = notification(member, &task);
-                state.notifications.push(notice);
-            }
+        if task.background
+            && let Some(member) = state.group.member(self.member)
+        {
+            let notice = notification(member, &task);
+            state.notifications.push(notice);
         }
         true
     }
