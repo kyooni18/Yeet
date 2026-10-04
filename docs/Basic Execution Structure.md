@@ -8,7 +8,7 @@ background runtime per workspace:
 ```text
 Frontend / host (Ratatui TUI, Remote web client, desktop host, CLI)
   -> Harness                         src/harness.rs (Shared or Embedded mode)
-      -> BackgroundConnection        src/background.rs (client side)
+      -> BackgroundConnection        src/background/connection.rs
           -> workspace daemon        src/background.rs (one per workspace + scope)
               -> RuntimeProcess      src/background/runtime_process.rs
                                      (one dedicated thread per session runtime)
@@ -26,8 +26,9 @@ Two transports are deliberately named differently:
 
 - **Harness state transport**: `HarnessCommand` in, `HarnessEvent` /
   `HarnessState` out (historically `FrontendCommand`, `BridgeEnvelope`,
-  `BridgeState`; the old names remain as aliases and on the wire). This is
-  what frontends, Remote and the daemon exchange.
+  `BridgeState`; compatibility names refer to the same types and keep the
+  same serialized representation). Frontends, Remote and the daemon exchange
+  this transport.
 - **ProviderBridge**: the Rust <-> Node line protocol (`BRIDGE_PROTOCOL_VERSION`)
   to the provider/auth/Skill/MCP sidecar. It is a protocol service, never an
   application-state owner.
@@ -51,6 +52,10 @@ Two transports are deliberately named differently:
 - **Reconnect.** A client that loses its socket re-establishes it and replays
   `LoadSession` for its session, then ignores frames until that session's
   state arrives. Losing every client is not an interrupt: runs continue.
+- **Lifecycle ownership.** `background/session_runtime.rs` owns idle and
+  interrupt deadlines. Runtime teardown runs on a separate thread so backend
+  work cannot block the daemon loop. Connection lifetime and reconnect policy
+  live separately in `background/connection.rs`.
 - **Recovery.** An interrupted run whose worker does not settle is abandoned
   (`BackendService::abandon_stuck_run`) and the runtime replaced; idle
   runtimes retire after a minute and an idle daemon exits after ten minutes.
@@ -92,6 +97,17 @@ hides document/data built-ins from coding turns and coding-only mutation/shell
 built-ins from general turns. Skills, MCP servers and Workers add schemas only
 after activation; only MCP tools annotated read-only may run as a parallel
 batch or inside research.
+
+`ToolEvidence` owns observation state with three lifetimes. Visibility reset
+(context rollover or a direct MCP call boundary) forgets duplicate coverage,
+while keeping task edit snapshots/read coverage and web source grants. Task
+completion clears that provenance and mutation/auxiliary usage but preserves
+workspace generations. Workspace mutations invalidate affected source evidence
+(or all source evidence when scope is unknown) and advance its generation;
+web provenance remains valid. Shell grants, artifacts and workers keep their
+separate owners. `ToolServiceConfiguration` groups Foundation/web routing
+choices independently of task evidence; web route changes clear only web
+coverage and grants, and Foundation route changes deactivate prior aliases.
 
 Workspace reads go through the transactional edit daemon and return a
 snapshot plus `line:hash|text` anchors; writes require the snapshot from a
