@@ -40,6 +40,7 @@ mod definitions;
 mod edit_lock;
 mod editing;
 mod environment;
+mod evidence;
 mod external;
 mod io;
 mod paths;
@@ -63,6 +64,7 @@ use definitions::BUILTIN_CAPABILITIES;
 pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
 pub use definitions::{is_coding_builtin_tool, is_general_builtin_tool};
+use evidence::{EditReadCoverage, MutationValidation, ToolEvidence};
 use paths::canonicalize_existing_ancestor;
 pub(crate) use paths::workspace_revision_for_path;
 use shell_runtime::shell_mentions_path;
@@ -121,28 +123,10 @@ fn capability_search_values(descriptors: &[CapabilityDescriptor], query: &str) -
 }
 
 #[derive(Debug, Clone)]
-struct MutationValidation {
-    error_count: usize,
-    changed_paths: Vec<String>,
-}
-
-impl MutationValidation {
-    pub fn write_validation_passed(&self) -> bool {
-        self.error_count == 0
-    }
-}
-
-#[derive(Debug, Clone)]
 struct FoundationToolTarget {
     server: String,
     tool: String,
 }
-#[derive(Debug, Clone)]
-struct EditReadCoverage {
-    snapshot: String,
-    ranges: Vec<(usize, usize)>,
-}
-
 pub struct ToolRegistry {
     bridge: BridgeHandle,
     context: ToolExecutionContext,
@@ -158,24 +142,12 @@ pub struct ToolRegistry {
     foundation_project: Option<String>,
     skyline_handle: Option<String>,
     agent_group: Option<AgentGroupHandle>,
-    read_cache: HashMap<String, Vec<ReadCacheEntry>>,
-    edit_snapshots: HashMap<String, String>,
-    edit_read_coverage: HashMap<String, EditReadCoverage>,
-    searches: HashSet<String>,
-    listings: HashSet<String>,
+    evidence: ToolEvidence,
     shell_jobs: shell_jobs::ShellJobs,
-    shell_inspections: HashSet<String>,
     permitted_shell_commands: HashSet<String>,
-    auxiliary_usage: Option<Usage>,
-    latest_mutation: Option<MutationValidation>,
     web_search: WebSearchClient,
     web_backend: ServiceBackend,
     web_server: Option<String>,
-    web_searches: HashSet<String>,
-    web_sources: HashSet<String>,
-    web_reads: HashSet<String>,
-    workspace_generation: u64,
-    workspace_write_generation: u64,
 }
 
 impl ToolRegistry {
@@ -218,24 +190,12 @@ impl ToolRegistry {
             foundation_project: None,
             skyline_handle: None,
             agent_group: None,
-            read_cache: HashMap::new(),
-            edit_snapshots: HashMap::new(),
-            edit_read_coverage: HashMap::new(),
-            searches: HashSet::new(),
-            listings: HashSet::new(),
+            evidence: ToolEvidence::default(),
             shell_jobs: shell_jobs::ShellJobs::default(),
-            shell_inspections: HashSet::new(),
             permitted_shell_commands: HashSet::new(),
-            auxiliary_usage: None,
-            latest_mutation: None,
             web_search: WebSearchClient::default(),
             web_backend: ServiceBackend::Builtin,
             web_server: Some("web".into()),
-            web_searches: HashSet::new(),
-            web_sources: HashSet::new(),
-            web_reads: HashSet::new(),
-            workspace_generation: 0,
-            workspace_write_generation: 0,
         })
     }
 
@@ -553,9 +513,9 @@ impl ToolRegistry {
         self.sync_edit_state();
         if self.shell_jobs.has_jobs() {
             // Refresh evidence without treating every poll/read as agent progress.
-            let generation = self.workspace_generation;
+            let generation = self.evidence.workspace_generation;
             self.invalidate_workspace_cache();
-            self.workspace_generation = generation;
+            self.evidence.workspace_generation = generation;
         }
         if !self.tool_enabled(&call.name) {
             bail!("Tool {} is disabled for this session", call.name);
@@ -638,13 +598,8 @@ impl ToolRegistry {
         if self.context.active_task_id.as_deref() == Some(task_id) {
             self.context.active_task_id = None;
         }
-        self.reset_model_evidence_window();
-        self.edit_snapshots.clear();
-        self.edit_read_coverage.clear();
-        self.web_sources.clear();
+        self.evidence.finish_task();
         self.permitted_shell_commands.clear();
-        self.auxiliary_usage = None;
-        self.latest_mutation = None;
         self.workers.finish_task(task_id);
     }
 
@@ -653,42 +608,33 @@ impl ToolRegistry {
     /// Context rollover removes prior tool results from the request, so duplicate
     /// suppression must forget which inspection bytes were previously shown.
     pub(super) fn reset_model_evidence_window(&mut self) {
-        self.read_cache.clear();
-        self.searches.clear();
-        self.listings.clear();
-        self.shell_inspections.clear();
-        self.web_searches.clear();
-        self.web_reads.clear();
+        self.evidence.reset_model_visible_window();
     }
 
     /// Direct MCP calls do not reveal client-context lifetime. Clear only
     /// duplicate-suppression state between calls while preserving state required
     /// by a subsequent dependent call (fresh edit snapshots and web source grants).
     pub(super) fn reset_direct_mcp_visibility(&mut self) {
-        self.read_cache.clear();
-        self.searches.clear();
-        self.listings.clear();
-        self.shell_inspections.clear();
-        self.web_searches.clear();
-        self.web_reads.clear();
+        self.evidence.reset_model_visible_window();
     }
 
     pub fn consume_auxiliary_usage(&mut self) -> Option<Usage> {
-        self.auxiliary_usage.take()
+        self.evidence.auxiliary_usage.take()
     }
 
     pub fn latest_write_validation_passed(&self) -> Option<bool> {
-        self.latest_mutation
+        self.evidence
+            .latest_mutation
             .as_ref()
             .map(MutationValidation::write_validation_passed)
     }
 
     pub fn workspace_generation(&self) -> u64 {
-        self.workspace_generation
+        self.evidence.workspace_generation
     }
 
     pub fn workspace_write_generation(&self) -> u64 {
-        self.workspace_write_generation
+        self.evidence.workspace_write_generation
     }
 
     pub fn has_shell_jobs(&self) -> bool {
@@ -696,26 +642,26 @@ impl ToolRegistry {
     }
 
     pub fn working_state_summary(&self) -> Option<String> {
-        if self.read_cache.is_empty()
-            && self.listings.is_empty()
-            && self.searches.is_empty()
-            && self.shell_inspections.is_empty()
-            && self.web_searches.is_empty()
-            && self.web_reads.is_empty()
-            && self.latest_mutation.is_none()
+        if self.evidence.read_cache.is_empty()
+            && self.evidence.listings.is_empty()
+            && self.evidence.searches.is_empty()
+            && self.evidence.shell_inspections.is_empty()
+            && self.evidence.web_searches.is_empty()
+            && self.evidence.web_reads.is_empty()
+            && self.evidence.latest_mutation.is_none()
         {
             return None;
         }
         const MAX_SOURCE_PATHS: usize = 24;
         const MAX_STATE_KEYS: usize = 12;
         let mut lines = Vec::new();
-        if !self.read_cache.is_empty() {
+        if !self.evidence.read_cache.is_empty() {
             lines.push("Source coverage:".to_owned());
-            let mut paths: Vec<_> = self.read_cache.keys().cloned().collect();
+            let mut paths: Vec<_> = self.evidence.read_cache.keys().cloned().collect();
             paths.sort();
             let omitted = paths.len().saturating_sub(MAX_SOURCE_PATHS);
             for path in paths.into_iter().take(MAX_SOURCE_PATHS) {
-                let entries = &self.read_cache[&path];
+                let entries = &self.evidence.read_cache[&path];
                 if let Some(first) = entries.first() {
                     let ranges = merged_ranges(
                         entries
@@ -746,29 +692,34 @@ impl ToolRegistry {
         append_bounded_state_set(
             &mut lines,
             "Directory listings",
-            &self.listings,
+            &self.evidence.listings,
             MAX_STATE_KEYS,
         );
-        append_bounded_state_set(&mut lines, "Searches", &self.searches, MAX_STATE_KEYS);
+        append_bounded_state_set(
+            &mut lines,
+            "Searches",
+            &self.evidence.searches,
+            MAX_STATE_KEYS,
+        );
         append_bounded_state_set(
             &mut lines,
             "Shell inspections",
-            &self.shell_inspections,
+            &self.evidence.shell_inspections,
             MAX_STATE_KEYS,
         );
         append_bounded_state_set(
             &mut lines,
             "Web searches",
-            &self.web_searches,
+            &self.evidence.web_searches,
             MAX_STATE_KEYS,
         );
         append_bounded_state_set(
             &mut lines,
             "Web source reads",
-            &self.web_reads,
+            &self.evidence.web_reads,
             MAX_STATE_KEYS,
         );
-        if let Some(mutation) = &self.latest_mutation {
+        if let Some(mutation) = &self.evidence.latest_mutation {
             lines.push(format!(
                 "Latest workspace mutation: writeValidation={} files={}",
                 if mutation.write_validation_passed() {
@@ -804,7 +755,7 @@ impl ToolRegistry {
             .iter()
             .any(|needle| lower.contains(needle));
         if source_inspection {
-            for path in self.read_cache.keys() {
+            for path in self.evidence.read_cache.keys() {
                 if shell_mentions_path(command, path) {
                     return Some(format!(
                         "Source for {path} is already covered by structured reads. Reuse the prior read result or request only an uncovered range with read_file."
@@ -817,7 +768,7 @@ impl ToolRegistry {
             || lower.contains("find ")
             || lower.contains("tree ");
         if directory_inspection {
-            for listing in &self.listings {
+            for listing in &self.evidence.listings {
                 let path = listing.split(':').next().unwrap_or(".");
                 if path == "." || shell_mentions_path(command, path) {
                     return Some(format!(

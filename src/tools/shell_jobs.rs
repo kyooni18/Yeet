@@ -286,9 +286,9 @@ impl ToolRegistry {
         };
 
         // A detached process can change workspace contents while the model is asleep.
-        let generation = self.workspace_generation;
+        let generation = self.evidence.workspace_generation;
         self.invalidate_workspace_cache();
-        self.workspace_generation = generation;
+        self.evidence.workspace_generation = generation;
         let stdout = value["stdout"].as_str().unwrap_or_default();
         let stderr = value["stderr"].as_str().unwrap_or_default();
         if stdout.len() + stderr.len() > 6 * 1024 {

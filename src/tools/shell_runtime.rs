@@ -92,7 +92,7 @@ impl ToolRegistry {
         let cache_safe_inspection = restricted.is_none() && shell_is_inspection(&command);
         if !background && !allow_write && cache_safe_inspection {
             let signature = normalize_shell_inspection(&command);
-            if !self.shell_inspections.insert(signature) {
+            if !self.evidence.shell_inspections.insert(signature) {
                 return Ok(json!({
                     "duplicate": true,
                     "contentAlreadyReturned": true,
@@ -137,7 +137,8 @@ impl ToolRegistry {
                 unrestricted,
                 hard_confined,
             )?;
-            self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
+            self.evidence.workspace_write_generation =
+                self.evidence.workspace_write_generation.wrapping_add(1);
             self.invalidate_workspace_cache();
             let hint = if self.artifacts_enabled {
                 "Use shell_job action=wait to suspend until completion without model polling. Set reportEverySeconds only when periodic monitoring is useful; use check only for an immediate snapshot."
@@ -161,7 +162,8 @@ impl ToolRegistry {
         })?;
         if allow_write || (unrestricted && !cache_safe_inspection) {
             if allow_write || restricted.is_some() {
-                self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
+                self.evidence.workspace_write_generation =
+                    self.evidence.workspace_write_generation.wrapping_add(1);
             }
             self.invalidate_workspace_cache();
         }

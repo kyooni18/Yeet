@@ -28,9 +28,9 @@ impl ToolRegistry {
     pub fn configure_web_backend(&mut self, backend: ServiceBackend, server: impl Into<String>) {
         let server = server.into();
         if self.web_backend != backend || self.web_server.as_deref() != Some(server.as_str()) {
-            self.web_searches.clear();
-            self.web_sources.clear();
-            self.web_reads.clear();
+            self.evidence.web_searches.clear();
+            self.evidence.web_sources.clear();
+            self.evidence.web_reads.clear();
         }
 
         // web_search/web_read are reserved semantic tools. MCP servers can

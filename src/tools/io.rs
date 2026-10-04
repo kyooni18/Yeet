@@ -498,6 +498,7 @@ impl ToolRegistry {
         // Verify its content before suppressing an apparently duplicate read.
         if !refresh
             && let Some(cached) = self
+                .evidence
                 .read_cache
                 .get(&cache_path)
                 .and_then(|entries| entries.first())
@@ -506,6 +507,7 @@ impl ToolRegistry {
             self.invalidate_workspace_cache_for_paths(&HashSet::from([cache_path.clone()]));
         }
         let cached_before = self
+            .evidence
             .read_cache
             .get(&cache_path)
             .cloned()
@@ -527,7 +529,7 @@ impl ToolRegistry {
                 requested_start,
                 actual_end,
             );
-            let entry = cache_read_result(&mut self.read_cache, read.clone());
+            let entry = cache_read_result(&mut self.evidence.read_cache, read.clone());
             let payload = self.read_payload(&entry, true)?;
             if unchanged_and_covered {
                 let avoided_bytes = payload.to_string().len();
@@ -543,7 +545,7 @@ impl ToolRegistry {
             }
             let result = self.externalize_if_large(payload, threshold, Some(&read))?;
             if result.contains("\"externalized\":true") {
-                trim_cache_to_preview(&mut self.read_cache, &cache_path, &result);
+                trim_cache_to_preview(&mut self.evidence.read_cache, &cache_path, &result);
             }
             self.record_edit_read_coverage(&cache_path, &read.snapshot);
             return Ok(result);
@@ -568,7 +570,7 @@ impl ToolRegistry {
             let mut read = read_file_in_process(Path::new(&path), Some(start), Some(end))?;
             read.path = cache_path.clone();
             total = Some(read.total_lines);
-            new_entries.push(cache_read_result(&mut self.read_cache, read));
+            new_entries.push(cache_read_result(&mut self.evidence.read_cache, read));
         }
         if new_entries.is_empty() {
             return Ok(self
@@ -594,13 +596,14 @@ impl ToolRegistry {
             }
             let result = self.externalize_if_large(payload, threshold, None)?;
             if result.contains("\"externalized\":true") {
-                trim_cache_to_preview(&mut self.read_cache, &cache_path, &result);
+                trim_cache_to_preview(&mut self.evidence.read_cache, &cache_path, &result);
             }
             self.record_edit_read_coverage(&cache_path, &entry.snapshot);
             return Ok(result);
         }
 
         let entries = self
+            .evidence
             .read_cache
             .get(&cache_path)
             .map(Vec::as_slice)
@@ -626,7 +629,7 @@ impl ToolRegistry {
         });
         let result = self.externalize_if_large(payload, threshold, None)?;
         if result.contains("\"externalized\":true") {
-            trim_cache_to_preview(&mut self.read_cache, &cache_path, &result);
+            trim_cache_to_preview(&mut self.evidence.read_cache, &cache_path, &result);
         }
         if let Some(snapshot) = new_entries.last().map(|entry| entry.snapshot.clone()) {
             self.record_edit_read_coverage(&cache_path, &snapshot);
@@ -683,7 +686,7 @@ impl ToolRegistry {
         let max_results = usize_arg(object, "maxResults").unwrap_or(50).clamp(1, 500);
         let max_depth = usize_arg(object, "maxDepth").unwrap_or(2).min(12);
         let key = format!("{cache_path}:{max_results}:{max_depth}");
-        if !self.listings.insert(key) {
+        if !self.evidence.listings.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This directory listing was already returned. Reuse it or expand a different subtree."}).to_string());
         }
         let result = list_files_in_process(
@@ -725,7 +728,7 @@ impl ToolRegistry {
             .unwrap_or(false);
         let key =
             workspace_search_cache_key(&cache_path, max_results, case_sensitive, regex, query);
-        if !self.searches.insert(key) {
+        if !self.evidence.searches.insert(key) {
             return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This search was already returned. Reuse it or change query/path."}).to_string());
         }
         let result = search_workspace_in_process(
@@ -773,7 +776,7 @@ impl ToolRegistry {
                 safe_search.unwrap_or(0),
                 page.unwrap_or(1)
             );
-            if self.web_searches.contains(&key) {
+            if self.evidence.web_searches.contains(&key) {
                 slots[index] = Some(
                     json!({"query":query,"duplicate":true,"contentAlreadyReturned":true,"hint":"This web search was already returned. Reuse it or materially change the query/filters."}),
                 );
@@ -816,7 +819,7 @@ impl ToolRegistry {
             for ((index, query, key), outcome) in pending.into_iter().zip(completed) {
                 match outcome {
                     Ok(value) => {
-                        self.web_searches.insert(key);
+                        self.evidence.web_searches.insert(key);
                         slots[index] = Some(value);
                     }
                     Err(error) => {
@@ -837,7 +840,7 @@ impl ToolRegistry {
         } else {
             json!({"searches":results})
         };
-        collect_web_source_urls(&result, &mut self.web_sources);
+        collect_web_source_urls(&result, &mut self.evidence.web_sources);
         self.externalize_if_large(result, 16 * 1024, None)
     }
 
@@ -865,10 +868,10 @@ impl ToolRegistry {
                 foundation_tool_result_text(&result)
             );
         }
-        collect_web_source_urls(&result, &mut self.web_sources);
+        collect_web_source_urls(&result, &mut self.evidence.web_sources);
         let text = foundation_tool_result_text(&result);
         if let Ok(payload) = serde_json::from_str::<Value>(&text) {
-            collect_web_source_urls(&payload, &mut self.web_sources);
+            collect_web_source_urls(&payload, &mut self.evidence.web_sources);
             return self.externalize_if_large(payload, 16 * 1024, None);
         }
         Ok(text)
@@ -888,7 +891,7 @@ impl ToolRegistry {
             bail!("web_read requires a non-empty URL");
         }
         let source_key = canonical_web_source_key(url);
-        if !self.web_sources.contains(&source_key) {
+        if !self.evidence.web_sources.contains(&source_key) {
             let message = if self.artifacts_enabled {
                 "web_read may only open URLs returned by web_search in the current research task; search for this source first"
             } else {
@@ -896,7 +899,7 @@ impl ToolRegistry {
             };
             bail!("{message}");
         }
-        if self.web_reads.contains(&source_key) {
+        if self.evidence.web_reads.contains(&source_key) {
             return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the evidence already returned instead of reopening it."}).to_string());
         }
         let max_chars = usize_arg(object, "maxChars")
@@ -907,7 +910,7 @@ impl ToolRegistry {
         // artifact; direct MCP runtimes disable artifact storage.
         let result = self.web_search.read_url(url, 48_000, cancel)?;
         let rendered = self.bound_web_read_evidence(url, result, max_chars)?;
-        self.web_reads.insert(source_key);
+        self.evidence.web_reads.insert(source_key);
         Ok(rendered)
     }
 
@@ -918,7 +921,7 @@ impl ToolRegistry {
         }
         crate::web_search::validate_public_http_url(url)?;
         let source_key = canonical_web_source_key(url);
-        if !self.web_sources.contains(&source_key) {
+        if !self.evidence.web_sources.contains(&source_key) {
             let message = if self.artifacts_enabled {
                 "web_read may only open URLs returned by web_search in the current research task; search for this source first"
             } else {
@@ -926,7 +929,7 @@ impl ToolRegistry {
             };
             bail!("{message}");
         }
-        if self.web_reads.contains(&source_key) {
+        if self.evidence.web_reads.contains(&source_key) {
             return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the evidence already returned instead of reopening it."}).to_string());
         }
         let server = self
@@ -981,7 +984,7 @@ impl ToolRegistry {
                 }
             }
         };
-        self.web_reads.insert(source_key);
+        self.evidence.web_reads.insert(source_key);
         Ok(rendered)
     }
 

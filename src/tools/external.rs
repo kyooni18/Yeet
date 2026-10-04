@@ -73,7 +73,8 @@ impl ToolRegistry {
     }
 
     fn note_external_workspace_write(&mut self) {
-        self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
+        self.evidence.workspace_write_generation =
+            self.evidence.workspace_write_generation.wrapping_add(1);
         self.invalidate_workspace_cache();
     }
 }

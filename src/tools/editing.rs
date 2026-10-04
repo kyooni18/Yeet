@@ -188,17 +188,23 @@ impl ToolRegistry {
         let mut changed_paths = changed_path_set.iter().cloned().collect::<Vec<_>>();
         changed_paths.sort();
         self.invalidate_workspace_cache_for_paths(&changed_path_set);
-        self.latest_mutation = Some(MutationValidation {
+        self.evidence.latest_mutation = Some(MutationValidation {
             error_count,
             changed_paths,
         });
-        self.workspace_write_generation = self.workspace_write_generation.wrapping_add(1);
+        self.evidence.workspace_write_generation =
+            self.evidence.workspace_write_generation.wrapping_add(1);
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
     /// Renders a compact response when a requested source range is already cached.
     pub(super) fn duplicate_read_payload(&self, path: &str, start: usize, end: usize) -> Value {
-        let entries = self.read_cache.get(path).map(Vec::as_slice).unwrap_or(&[]);
+        let entries = self
+            .evidence
+            .read_cache
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let total = entries.first().map(|entry| entry.total).unwrap_or(end);
         json!({
             "path": path,
@@ -217,6 +223,7 @@ impl ToolRegistry {
     /// Converts one cached source range into the standard read-file payload.
     pub(super) fn read_payload(&self, entry: &ReadCacheEntry, replay: bool) -> Result<Value> {
         let entries = self
+            .evidence
             .read_cache
             .get(&entry.path)
             .map(Vec::as_slice)
@@ -265,6 +272,7 @@ impl ToolRegistry {
 
     pub(super) fn record_edit_read_coverage(&mut self, path: &str, snapshot: &str) {
         let ranges = self
+            .evidence
             .read_cache
             .get(path)
             .into_iter()
@@ -276,6 +284,7 @@ impl ToolRegistry {
             return;
         }
         let evidence = self
+            .evidence
             .edit_read_coverage
             .entry(path.to_owned())
             .or_insert_with(|| EditReadCoverage {
@@ -288,7 +297,8 @@ impl ToolRegistry {
         }
         evidence.ranges.extend(ranges);
         evidence.ranges = merged_ranges(std::mem::take(&mut evidence.ranges));
-        self.edit_snapshots
+        self.evidence
+            .edit_snapshots
             .insert(path.to_owned(), snapshot.to_owned());
     }
 
@@ -313,8 +323,7 @@ impl ToolRegistry {
                 "File {path} changed after it was read. Call read_file again before applying edits."
             );
         }
-        let evidence = self
-            .edit_read_coverage
+        let evidence = self.evidence.edit_read_coverage
             .get(cache_path)
             .cloned()
             .ok_or_else(|| {
@@ -338,7 +347,8 @@ impl ToolRegistry {
             }
         }
         let daemon_snapshot = daemon_snapshot.expect("read coverage is non-empty");
-        self.edit_snapshots
+        self.evidence
+            .edit_snapshots
             .insert(cache_path.to_owned(), daemon_snapshot.clone());
         Ok(daemon_snapshot)
     }
@@ -346,32 +356,17 @@ impl ToolRegistry {
     /// Returns the newest snapshot identifier established by read_file.
     /// This cache is task/edit safety state, not model-visible duplicate coverage.
     fn cached_snapshot(&self, path: &str) -> Option<String> {
-        self.edit_snapshots.get(path).cloned()
+        self.evidence.edit_snapshots.get(path).cloned()
     }
 
     /// Invalidates source/search/list caches affected by known changed paths.
     pub(super) fn invalidate_workspace_cache_for_paths(&mut self, changed_paths: &HashSet<String>) {
-        self.read_cache
-            .retain(|path, _| !changed_paths.contains(path));
-        self.edit_snapshots
-            .retain(|path, _| !changed_paths.contains(path));
-        self.edit_read_coverage
-            .retain(|path, _| !changed_paths.contains(path));
-        self.searches.clear();
-        self.listings.clear();
-        self.shell_inspections.clear();
-        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.evidence.invalidate_paths(changed_paths);
     }
 
     /// Invalidates all workspace evidence after a shell mutation with unknown scope.
     pub(super) fn invalidate_workspace_cache(&mut self) {
-        self.read_cache.clear();
-        self.edit_snapshots.clear();
-        self.edit_read_coverage.clear();
-        self.searches.clear();
-        self.listings.clear();
-        self.shell_inspections.clear();
-        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.evidence.invalidate_workspace();
     }
 }
 

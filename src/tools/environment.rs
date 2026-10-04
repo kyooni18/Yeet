@@ -38,7 +38,7 @@ impl ToolRegistry {
         }
         self.context.working_directory = resolved.clone();
         self.invalidate_workspace_cache();
-        self.shell_inspections.clear();
+        self.evidence.shell_inspections.clear();
         Ok(resolved)
     }
 
@@ -135,7 +135,7 @@ impl ToolRegistry {
         }
         self.context.context_roots.sort();
         self.invalidate_workspace_cache();
-        self.shell_inspections.clear();
+        self.evidence.shell_inspections.clear();
         Ok(())
     }
 
