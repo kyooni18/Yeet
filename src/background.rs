@@ -1721,6 +1721,59 @@ mod client_frame_tests {
         }
     }
 
+    #[cfg(unix)]
+    /// Serves `frame` as the first line of one accepted connection.
+    fn serve_first_frame(endpoint: &Path, frame: Vec<u8>) -> thread::JoinHandle<()> {
+        let listener = bind_local(endpoint).unwrap();
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.write_all(&frame);
+                let _ = stream.flush();
+                thread::sleep(Duration::from_millis(300));
+            }
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_attaches_only_to_compatible_daemons() {
+        // Unix socket paths are short; keep the endpoint directly in a
+        // short-named temp directory.
+        let dir = tempfile::Builder::new()
+            .prefix("yh")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let cases: [(&str, Vec<u8>, bool); 3] = [
+            (
+                "current",
+                protocol::ready_frame(&DaemonHandshake::current()).unwrap(),
+                true,
+            ),
+            (
+                "legacy",
+                br#"{"type":"heartbeat","state":null,"message":null}"#.to_vec(),
+                true,
+            ),
+            (
+                "future",
+                serde_json::to_vec(&serde_json::json!({
+                    "type": "heartbeat", "state": null, "message": null,
+                    "handshake": {"protocolVersion": 2, "stateSchemaVersion": 1}
+                }))
+                .unwrap(),
+                false,
+            ),
+        ];
+        for (name, mut frame, compatible) in cases {
+            frame.push(b'\n');
+            let endpoint = dir.path().join(format!("{name}.sock"));
+            let server = serve_first_frame(&endpoint, frame);
+            let attached = BackgroundConnection::connect_existing(&endpoint, None);
+            assert_eq!(attached.is_ok(), compatible, "{name}: {:?}", attached.err());
+            server.join().unwrap();
+        }
+    }
+
     #[test]
     fn inbound_frame_contract() {
         let mut oversized = BufReader::new(Cursor::new(b"12345".to_vec()));
