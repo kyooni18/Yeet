@@ -115,27 +115,39 @@ preceding read. `run_shell` executes under the platform sandbox; commands
 classified as mutating need a one-time exact-command permit. Active session
 state is write-protected even in unlimited mode.
 
-## Agent groups and the peer invariant
+## Agent Group ownership
 
-Yeet agents are peers. Agent identity grants no permanent authority over
-another agent, and no model is a built-in lead, manager, supervisor, or root
-decision-maker. Coordination authority belongs to deterministic runtime
-state: task claims, budgets, dependencies, validation records, and conflict
-checks. Execution lineage is recorded as `spawned_by` and grants nothing.
+The Main Agent owns the user conversation. A Group Agent is the top-level
+delegated execution unit for one objective, and its member agents are
+subordinate participants:
 
-Roles such as researcher, implementer, reviewer, verifier, or synthesizer are
-scoped to one task and may move between agents. Owning a task means owning its
-bounded work scope, not owning other agents. Final synthesis is a task stage,
-not a privileged agent class. When peers disagree, resolution comes from
-stronger evidence, successful validation, explicit user direction, or an
-isolated review task.
+```text
+Main Agent
+  └── Group Agent (objective, lifecycle, shared state, budget, final result)
+        ├── Member Agent (bounded role-specific task)
+        └── Member Agent (bounded role-specific task)
+```
 
-Each delegated member has its own coordinator and history. The group runtime
-enforces the group budget, admits at most one busy implementer at a time
-(single-writer workspace mutation), and stops or retires members only on
-explicit request, group replacement or shutdown. Background members persist
-across primary turns and report through notifications; interrupting the
-primary cancels only foreground members.
+The Group Agent owns task decomposition, the member registry, coordination,
+shared findings and artifacts, progress aggregation, cancellation, and final
+synthesis. Members receive only the objective, their assignment, relevant
+shared findings, and the permissions needed for their role. Important member
+results are promoted into group state before the coordinator or Main Agent
+consumes them. Member completions do not start unrelated Main Agent runs.
+
+Member execution remains concurrent and independently attributable. Every
+member event is associated with a stable group, member, and task identity;
+group progress is derived from those events. The group-level budget covers
+coordination, member work, and final synthesis. Input context capacity,
+per-request output limits, and observed token/cost usage are tracked as
+separate quantities. Allocations can be rebalanced as work changes, while a
+reserved share remains available for coordination and synthesis.
+
+Workspace-write admission remains deterministic: at most one busy
+implementer may mutate the shared workspace at a time unless the group uses
+isolated workspaces. A member owns only its bounded task. When members
+disagree, the group coordinator resolves the result using evidence, validation,
+and explicit user direction.
 
 ## Storage
 
