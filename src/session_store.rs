@@ -701,6 +701,53 @@ mod tests {
     }
 
     #[test]
+    fn read_events_merges_streams_in_sequence_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+        let root = store.directory.join("session-events");
+        fs::create_dir_all(root.join(TASKS_DIR)).unwrap();
+        fs::create_dir_all(root.join(DEBATES_DIR)).unwrap();
+        fs::write(
+            root.join(TASKS_DIR).join("events.jsonl"),
+            r#"{"seq":1,"type":"task"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(DEBATES_DIR).join("events.jsonl"),
+            r#"{"seq":2,"type":"debate"}"#,
+        )
+        .unwrap();
+
+        let events = store.read_events("session-events").unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event["seq"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn read_events_skips_truncated_trailing_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+        let root = store.directory.join("session-events");
+        fs::create_dir_all(root.join(TASKS_DIR)).unwrap();
+        fs::write(
+            root.join(TASKS_DIR).join("events.jsonl"),
+            "{\"seq\":1,\"type\":\"task\"}\n{\"seq\":2,\"type\":",
+        )
+        .unwrap();
+
+        let events = store.read_events("session-events").unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["seq"], 1);
+    }
+
+    #[test]
     fn manifest_is_the_commit_point_for_semantic_saves() {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::new(temp.path());

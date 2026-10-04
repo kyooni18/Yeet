@@ -14,6 +14,47 @@ pub(super) fn event_is_debate(event: &serde_json::Value) -> bool {
 }
 
 impl SessionStore {
+    /// Read the session's task and debate journal records in sequence order.
+    /// Invalid lines are ignored so a partial final append cannot hide prior
+    /// durable events.
+    pub fn read_events(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        self.serialized_session(id, false, || self.read_events_unlocked(id))
+    }
+
+    fn read_events_unlocked(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        use std::io::{BufRead, BufReader};
+
+        let root = self.directory.join(id);
+        let mut events = Vec::new();
+        for stream in [TASKS_DIR, DEBATES_DIR] {
+            let path = root.join(stream).join("events.jsonl");
+            let file = match fs::File::open(path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            for line in BufReader::new(file).lines() {
+                let line = line?;
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if event
+                        .get("seq")
+                        .and_then(serde_json::Value::as_u64)
+                        .is_some()
+                    {
+                        events.push(event);
+                    }
+                }
+            }
+        }
+        events.sort_by_key(|event| {
+            event
+                .get("seq")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap()
+        });
+        Ok(events)
+    }
+
     pub fn append_event(
         &self,
         id: &str,
