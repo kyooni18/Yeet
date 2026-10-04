@@ -22,6 +22,7 @@ mod session;
 mod session_controls;
 mod tool_discovery;
 mod tool_protocol;
+mod tool_round;
 mod turn_setup;
 mod turn_state;
 mod verify;
@@ -29,10 +30,9 @@ use api::AgentTurnRequest;
 pub use api::{AgentEvent, AgentRunOutcome, AgentRunRequest};
 pub(crate) use coordinator_support::is_internal_coordinator_system_message;
 use coordinator_support::{
-    append_dynamic_turn_checkpoints, attached_harness_flags, attached_web_search_capability_result,
-    check_cancel, explicit_skill_name, render_matching_debate_memory,
-    settle_interrupted_context_batch, should_inherit_implementation_turn,
-    supports_anthropic_deferred_tool_references, supports_native_deferred_tools,
+    append_dynamic_turn_checkpoints, attached_harness_flags, check_cancel, explicit_skill_name,
+    render_matching_debate_memory, settle_interrupted_context_batch,
+    should_inherit_implementation_turn, supports_native_deferred_tools,
 };
 use history::{TURN_CONTEXT_BOUNDARY, append_skill_instruction};
 use limits::*;
@@ -47,8 +47,8 @@ use policy::{
     task_profile_with_history,
 };
 use progress::{
-    classify_tool_error, content_fingerprint, is_inspection_tool, round_semantic_fingerprint,
-    tool_execution_succeeded, tool_failure_fingerprint, tool_made_progress, tool_signature,
+    content_fingerprint, is_inspection_tool, round_semantic_fingerprint, tool_execution_succeeded,
+    tool_failure_fingerprint, tool_made_progress, tool_signature,
 };
 use runaway::{RunawayDecision, RunawayDetector, RunawayRound};
 use session_controls::{
@@ -749,100 +749,30 @@ impl AgentCoordinator {
                 if !parallel_mcp_active {
                     emit(AgentEvent::ToolExecutionStarted(call.clone()));
                 }
-                let inspection_call = is_inspection_tool(&call.name)
-                    || self.registry.is_read_only_extension_tool(&call.name);
-                let local_lookup_complete = local_file_lookup
-                    && local_lookup_read_calls >= 3
-                    && (!local_lookup_read_externalized
-                        || local_lookup_read_calls >= 4
-                        || local_lookup_recovery_calls >= 1);
-                let local_lookup_selection_complete = local_file_lookup
-                    && local_lookup_read_calls == 0
-                    && local_lookup_shell_calls >= 1;
-                let (content, transport_succeeded) = if !callable_names.contains(&call.name) {
-                    (json!({"error":"Tool schema is not attached. Call search_tools to load it, then call it on the next request."}).to_string(), false)
-                } else if call.name == tool_discovery::SEARCH_TOOL {
-                    let content = if supports_anthropic_deferred_tool_references(model) {
-                        tool_discovery.search_with_deferred(
-                            &call.arguments,
-                            &tool_catalog,
-                            &deferred_names,
-                        )
-                    } else {
-                        tool_discovery.search(&call.arguments, &tool_catalog)
-                    };
-                    (content, true)
-                } else if local_lookup_complete && (inspection_call || call.name == "run_shell") {
-                    (json!({
-                        "duplicate": true,
-                        "contentAlreadyReturned": true,
-                        "blockedReplay": true,
-                        "localLookupComplete": true,
-                        "tool": call.name,
-                        "hint": "The bounded local lookup already read the selected file. Answer from that evidence now; request only one narrower read_file range if a specific section is genuinely missing."
-                    }).to_string(), true)
-                } else if local_lookup_selection_complete && call.name == "run_shell" {
-                    (json!({
-                        "duplicate": true,
-                        "blockedReplay": true,
-                        "localLookupSelectionComplete": true,
-                        "tool": call.name,
-                        "hint": "The focused native metadata command already ran. Use its selected path with read_file now; do not run another discovery command."
-                    }).to_string(), true)
-                } else if repeated_call && inspection_call {
-                    duplicate_inspection = true;
-                    (json!({
-                        "duplicate": true,
-                        "contentAlreadyReturned": true,
-                        "blockedReplay": true,
-                        "tool": call.name,
-                        "hint": "This exact inspection call already ran in the current workspace generation. Reuse its result or choose a materially different action."
-                    }).to_string(), true)
-                } else if let Some(execution) = parallel_mcp_results
-                    .as_mut()
-                    .and_then(|results| results.next())
-                {
-                    check_cancel(cancel)?;
-                    match execution {
-                        Ok(content) => (content, true),
-                        Err(message) => (
-                            json!({
-                                "error": message,
-                                "reason": classify_tool_error(&message),
-                            })
-                            .to_string(),
-                            false,
-                        ),
-                    }
-                } else if let Some(content) =
-                    attached_web_search_capability_result(call, web_search_enabled)
-                {
-                    (content, true)
-                } else {
-                    let execution = if context::is_context_tool(&call.name) {
-                        self.context_memory.sync(&self.history)?;
-                        self.context_memory.execute(call)
-                    } else if profile == TaskProfile::Research {
-                        self.registry.execute_research(call, model, cancel)
-                    } else {
-                        self.registry.execute(call, model, cancel)
-                    };
-                    check_cancel(cancel)?;
-                    match execution {
-                        Ok(content) => (content, true),
-                        Err(error) => {
-                            let message = error.to_string();
-                            (
-                                json!({
-                                    "error": message,
-                                    "reason": classify_tool_error(&message),
-                                })
-                                .to_string(),
-                                false,
-                            )
-                        }
-                    }
-                };
+                let tool_round::DispatchOutcome {
+                    content,
+                    transport_succeeded,
+                    inspection_call,
+                    duplicate_inspection: blocked_duplicate,
+                } = self.dispatch_tool_call(tool_round::DispatchInput {
+                    call,
+                    model,
+                    cancel,
+                    profile,
+                    web_search_enabled,
+                    local_file_lookup,
+                    local_lookup_read_calls,
+                    local_lookup_read_externalized,
+                    local_lookup_recovery_calls,
+                    local_lookup_shell_calls,
+                    repeated_call,
+                    callable_names: &callable_names,
+                    deferred_names: &deferred_names,
+                    tool_catalog: &tool_catalog,
+                    parallel_mcp_results: &mut parallel_mcp_results,
+                    tool_discovery: &mut tool_discovery,
+                })?;
+                duplicate_inspection |= blocked_duplicate;
                 let succeeded = tool_execution_succeeded(call, &content, transport_succeeded);
                 if tool_call_indicates_implementation_intent(call, &content, succeeded) {
                     implementation_requested = true;
