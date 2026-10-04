@@ -51,6 +51,7 @@ use crate::{
 };
 
 mod agent_notifications;
+mod autonomy;
 mod capabilities;
 mod commands;
 mod debate_context;
@@ -93,10 +94,7 @@ use transport::{
 };
 
 use crate::background::Wake;
-const GOAL_RESUME_PROMPT: &str = "Continue the current goal from the existing working state. Do not restart completed work. Make useful forward progress toward satisfying every requirement and do not stop until the strict goal judge can accept concrete evidence.";
-
-const AUTONOMOUS_NEXT_OBJECTIVE_PROMPT: &str = "Autonomous cycle: inspect the current conversation, workspace, working state, and completed work. Choose and complete exactly one concrete, useful, safe next objective that advances the user's established intent. Prefer unfinished work, verification, integration, or cleanup that materially improves the result. Do not invent busywork or repeat completed work. If there is no meaningful safe work left, respond with exactly AUTONOMOUS_IDLE and do not call tools.";
-const AUTONOMOUS_IDLE_MARKER: &str = "AUTONOMOUS_IDLE";
+use autonomy::{AUTONOMOUS_IDLE_MARKER, AUTONOMOUS_NEXT_OBJECTIVE_PROMPT, GOAL_RESUME_PROMPT};
 const SKYLINE_CAPABILITY_ID: &str = crate::skyline::CAPABILITY_ID;
 const CAPABILITY_STREAMING_LOCK_ERROR: &str =
     "Capabilities cannot be changed while a response is running.";
@@ -528,66 +526,6 @@ impl BackendService {
                 let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
             }
         });
-    }
-
-    pub(super) fn set_goal_enabled(&mut self, enabled: bool) -> Result<()> {
-        self.set_autonomy_mode(if enabled {
-            AutonomyMode::Goal
-        } else {
-            AutonomyMode::Manual
-        })
-    }
-
-    fn set_autonomy_mode(&mut self, mode: AutonomyMode) -> Result<()> {
-        let is_streaming = self.shared.lock_or_recover().state.is_streaming;
-        if is_streaming && mode != AutonomyMode::Manual {
-            return Err(anyhow!(
-                "Autonomy mode cannot be enabled while a response is running."
-            ));
-        }
-
-        let goal_enabled = mode != AutonomyMode::Manual;
-        self.goal_mode.store(goal_enabled, Ordering::Release);
-        let (session_id, resume) = {
-            let mut shared = self.shared.lock_or_recover();
-            shared.state.goal_mode = goal_enabled;
-            shared.state.autonomy_mode = mode;
-            let resume = goal_enabled
-                && !shared.state.is_streaming
-                && shared
-                    .state
-                    .conversation
-                    .iter()
-                    .flatten()
-                    .any(|entry| matches!(entry.kind, ConversationKind::User { .. }));
-            (shared.state.current_session_id.clone(), resume)
-        };
-
-        if let Some(session_id) = session_id.as_deref() {
-            self.store.set_goal_mode(session_id, goal_enabled)?;
-            if !is_streaming {
-                let history = self.coordinator.lock_or_recover().model_history();
-                let mut shared = self.shared.lock_or_recover();
-                persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
-            }
-        }
-
-        self.publish_state();
-        if resume {
-            match mode {
-                AutonomyMode::Manual => {}
-                AutonomyMode::Goal => {
-                    self.submit_agent(GOAL_RESUME_PROMPT.to_owned(), false, "goal-resume", true)?
-                }
-                AutonomyMode::Autonomous => self.submit_agent(
-                    AUTONOMOUS_NEXT_OBJECTIVE_PROMPT.to_owned(),
-                    false,
-                    "autonomous-resume",
-                    false,
-                )?,
-            }
-        }
-        Ok(())
     }
 
     pub(super) fn set_agent_mode(&mut self, mode: AgentMode) -> Result<()> {

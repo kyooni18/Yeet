@@ -386,23 +386,19 @@ impl RunWorker {
                 |event| self.project_event(&run.id, event),
             )?;
 
-            let current_mode = self.shared.lock_or_recover().state.autonomy_mode;
-            if current_mode != AutonomyMode::Autonomous
-                || !matches!(&outcome, AgentRunOutcome::Completed)
-                || run.cancel.load(Ordering::Acquire)
-            {
-                return Ok(outcome);
-            }
-
-            if self_directed_cycle {
-                let idle = self
-                    .shared
-                    .lock_or_recover()
-                    .state
-                    .active_assistant_text
-                    .trim()
-                    == AUTONOMOUS_IDLE_MARKER;
-                if idle {
+            let decision = {
+                let state = self.shared.lock_or_recover();
+                autonomy::next_cycle(
+                    state.state.autonomy_mode,
+                    &outcome,
+                    run.cancel.load(Ordering::Acquire),
+                    self_directed_cycle,
+                    &state.state.active_assistant_text,
+                )
+            };
+            match decision {
+                autonomy::CycleDecision::Finish => return Ok(outcome),
+                autonomy::CycleDecision::Idle => {
                     self.shared
                         .lock_or_recover()
                         .discard_assistant_text(AUTONOMOUS_IDLE_MARKER);
@@ -410,6 +406,7 @@ impl RunWorker {
                         reason: "No meaningful safe next objective is available.".into(),
                     });
                 }
+                autonomy::CycleDecision::Continue => {}
             }
             self.goal_mode.store(true, Ordering::Release);
             {
