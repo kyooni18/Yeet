@@ -753,6 +753,36 @@ mod tests {
     }
 
     #[test]
+    fn pre_manifest_semantic_layout_remains_readable() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let mut saved = session("legacy-a", &workspace, None);
+        saved.model_history = vec![Message::user("old turn")];
+        store.save(&saved).unwrap();
+
+        // The layout before manifests: plain component files, no
+        // `.current.json` and no content-addressed objects.
+        let root = store.directory.join("legacy-a");
+        fs::remove_file(root.join(MANIFEST_FILE)).unwrap();
+        fs::remove_dir_all(root.join(OBJECTS_DIR)).unwrap();
+
+        let loaded = store.load("legacy-a").unwrap();
+        assert_eq!(loaded.model_history, saved.model_history);
+        assert_eq!(loaded.id, "legacy-a");
+
+        // The next save converts it to the manifest layout in place.
+        store.save(&loaded).unwrap();
+        assert!(root.join(MANIFEST_FILE).is_file());
+        assert_eq!(
+            store.load("legacy-a").unwrap().model_history,
+            saved.model_history
+        );
+    }
+
+    #[test]
     fn missing_agent_mode_defaults_to_single() {
         let temp = tempfile::tempdir().unwrap();
         let mut value = serde_json::to_value(session("legacy", temp.path(), None)).unwrap();
