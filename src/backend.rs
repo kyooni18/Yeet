@@ -59,6 +59,7 @@ mod debate_runtime;
 mod events;
 mod input_context;
 mod lifecycle;
+mod persistence;
 mod run;
 mod service_methods;
 mod settings;
@@ -69,13 +70,14 @@ mod titles;
 mod transport;
 
 use debate_context::{debate_project_brief, discover_debate_subject};
-use events::{
-    PreparedSessionWrite, agent_event_log_value, apply_agent_event, commit_session_write,
-    persist_locked, prepare_session_write_locked, record_usage,
-};
+use events::{agent_event_log_value, apply_agent_event, record_usage};
 use input_context::{
     REMOTE_FILE_CONTEXT_CLOSE, REMOTE_FILE_CONTEXT_OPEN, split_remote_file_context,
     visible_user_content,
+};
+use persistence::{
+    PreparedSessionWrite, SessionWriter, commit_session_write, persist_locked,
+    prepare_session_write_locked,
 };
 use settings_support::{
     apply_sandbox_action, auth_login_options, finish_auth_action, finish_provider_action,

@@ -15,8 +15,8 @@
 //! coexist; it is not concurrent top-level execution.
 //!
 //! The lifecycle is independent of storage: settlement only mutates live state
-//! and yields a prepared snapshot, and `SessionWriter` commits it afterwards
-//! without holding the live-state mutex.
+//! and yields a prepared snapshot, and `persistence::SessionWriter` commits it
+//! afterwards without holding the live-state mutex.
 
 use super::*;
 
@@ -29,49 +29,6 @@ pub(super) struct TopLevelRun {
     pub(super) continuation: bool,
     pub(super) model: String,
     pub(super) reasoning_level: String,
-}
-
-/// Commits prepared session snapshots and refreshes the workspace catalog.
-///
-/// Session-store writes take cross-process file locks and may block on
-/// filesystem I/O, so callers prepare a snapshot under the live-state mutex and
-/// hand it here only after releasing that mutex: Remote reconnects and the
-/// background daemon need the mutex to observe semantic state.
-#[derive(Clone)]
-pub(super) struct SessionWriter {
-    pub(super) store: SessionStore,
-    pub(super) workspace: PathBuf,
-    pub(super) shared: Arc<Mutex<SharedSession>>,
-    pub(super) tx: EventSender,
-}
-
-impl SessionWriter {
-    /// Commits a prepared snapshot; a failure is surfaced as a session error
-    /// instead of failing the run that produced it.
-    pub(super) fn commit_or_report(&self, prepared: PreparedSessionWrite) {
-        if let Err(error) = commit_session_write(&self.store, prepared) {
-            let mut state = self.shared.lock_or_recover();
-            state.state.error_message = Some(format!("Save failed: {error}"));
-            self.publish_compact(&state);
-        }
-    }
-
-    /// Re-reads the workspace session catalog and publishes it.
-    pub(super) fn refresh_catalog(&self) {
-        if let Ok(catalog) = SessionCatalog::read_from_store(&self.store, &self.workspace) {
-            let mut state = self.shared.lock_or_recover();
-            apply_session_catalog_locked(&mut state, &catalog);
-            self.publish_compact(&state);
-        }
-    }
-
-    fn publish_compact(&self, state: &SharedSession) {
-        let _ = self
-            .tx
-            .send(BackendEvent::Envelope(state_envelope_without_conversation(
-                &state.state,
-            )));
-    }
 }
 
 /// Maps a finished coordinator result onto live session state.

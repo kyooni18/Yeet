@@ -1,7 +1,8 @@
-//! Agent-event projection and durable session persistence.
+//! Agent-event projection.
 //!
-//! This module translates streaming agent events into UI/session state and
-//! owns the canonical conversion from a live session into persisted storage.
+//! Translates streaming agent events into live UI/session state and into the
+//! bounded records appended to the session event log. Converting a live
+//! session into stored form lives in `persistence`.
 
 use super::*;
 
@@ -351,121 +352,6 @@ pub(super) fn record_usage(state: &mut BridgeState, usage: &Usage, already_count
         .credit_usage
         .saturating_add(represented.saturating_sub(already_counted_calls));
     state.token_usage.accumulate(usage);
-}
-
-/// Immutable persistence payload prepared while holding the live-state lock.
-///
-/// Constructing this snapshot may clone conversation/model history, but it performs
-/// no filesystem or cross-process lock operations. Latency-sensitive callers can
-/// therefore release SharedSession before committing it to disk.
-pub(super) struct PreparedSessionWrite {
-    session: StoredSession,
-    goal_mode: bool,
-}
-
-pub(super) fn prepare_session_write_locked(
-    state: &mut SharedSession,
-    workspace: &Path,
-    workspace_id: String,
-    history: Vec<Message>,
-) -> Option<PreparedSessionWrite> {
-    let conversation = state.state.conversation.clone().unwrap_or_default();
-    if !conversation
-        .iter()
-        .any(|entry| matches!(entry.kind, ConversationKind::User { .. }))
-        && state.state.current_session_id.is_none()
-    {
-        return None;
-    }
-
-    let id = state
-        .state
-        .current_session_id
-        .clone()
-        .unwrap_or_else(SessionStore::new_id);
-    let created_at = state.meta.created_at.unwrap_or_else(Utc::now);
-    let title = state
-        .meta
-        .title
-        .clone()
-        .unwrap_or_else(|| fallback_title(&conversation));
-
-    state.state.current_session_id = Some(id.clone());
-    state.meta.created_at = Some(created_at);
-    state.meta.title = Some(title.clone());
-
-    Some(PreparedSessionWrite {
-        session: StoredSession {
-            version: 4,
-            debate: state.state.debate.clone(),
-            id,
-            title,
-            created_at,
-            updated_at: Utc::now(),
-            workspace_root: workspace.display().to_string(),
-            workspace_id: Some(workspace_id),
-            working_directory: state
-                .meta
-                .working_directory
-                .as_deref()
-                .map(|path| crate::session_store::workspace_relative_path(workspace, path)),
-            context_roots: state
-                .meta
-                .context_roots
-                .iter()
-                .map(|path| crate::session_store::workspace_relative_path(workspace, path))
-                .collect(),
-            model: state.state.active_model.clone(),
-            agent_mode: state.state.agent_mode,
-            autonomy_mode: state.state.autonomy_mode,
-            token_usage: state.state.token_usage.clone(),
-            credit_usage: state.state.credit_usage,
-            conversation,
-            model_history: storage_model_history(history),
-            runs: state.meta.runs.clone(),
-            retained_debate_knowledge: state.meta.retained_debate_knowledge.clone(),
-            attached_harness_capabilities: state.meta.attached_capabilities.clone(),
-            disabled_capabilities: state.meta.disabled_capabilities.clone(),
-        },
-        goal_mode: state.state.goal_mode,
-    })
-}
-
-pub(super) fn commit_session_write(
-    store: &SessionStore,
-    prepared: PreparedSessionWrite,
-) -> Result<()> {
-    let id = prepared.session.id.clone();
-    store.save(&prepared.session)?;
-    store.set_goal_mode(&id, prepared.goal_mode)
-}
-
-/// Compatibility wrapper for call sites that still require synchronous
-/// persistence. New latency-sensitive paths should prepare, release the live-state
-/// mutex, and then commit the prepared write.
-pub(super) fn persist_locked(
-    state: &mut SharedSession,
-    store: &SessionStore,
-    workspace: &Path,
-    history: Vec<Message>,
-) -> Result<()> {
-    let workspace_id = crate::session_store::ensure_workspace_id(workspace)?;
-    let Some(prepared) = prepare_session_write_locked(state, workspace, workspace_id, history)
-    else {
-        return Ok(());
-    };
-    commit_session_write(store, prepared)
-}
-
-/// Removes the coordinator's internal coding prompt before session persistence.
-pub(super) fn storage_model_history(mut history: Vec<Message>) -> Vec<Message> {
-    if history
-        .first()
-        .is_some_and(is_internal_coordinator_system_message)
-    {
-        history.remove(0);
-    }
-    history
 }
 
 #[cfg(test)]
