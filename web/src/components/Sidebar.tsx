@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronsUpDown, Folder, Plus, Settings, X } from '@/components/Icons'
+import { Bot, Check, ChevronsUpDown, Folder, Plus, Settings, X } from '@/components/Icons'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 
 export function Sidebar({
@@ -7,17 +7,24 @@ export function Sidebar({
   desktopDocked,
   onClose,
   onSettings,
+  onAgents,
 }: {
   open: boolean
   desktopDocked: boolean
   onClose: () => void
   onSettings: () => void
+  onAgents: () => void
 }) {
   const remote = useRemote()
   const [workspaceMenu, setWorkspaceMenu] = useState(false)
   const panelRef = useRef<HTMLElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
+  const group = remote.state.agent_group
+  const members = group?.members ?? []
+  const activeMembers = members.filter((member) =>
+    member.status === 'running' || ['reasoning', 'tool_call', 'provider_activity', 'queued'].includes(member.activityState),
+  ).length
 
   useEffect(() => {
     if (open && !wasOpen.current) {
@@ -110,6 +117,19 @@ export function Sidebar({
             </div>
           )}
         </div>
+
+        <button
+          className="sidebar-agents-link"
+          onClick={() => {
+            onAgents()
+            if (!desktopDocked) onClose()
+          }}
+          aria-label={`Open Agents${activeMembers ? `, ${activeMembers} active members` : ''}`}
+        >
+          <Bot size={16} />
+          <span><strong>Agents</strong><small>{group?.objective || 'No active group objective'}</small></span>
+          {activeMembers > 0 && <b>{activeMembers}</b>}
+        </button>
 
         <div className="sidebar-section-heading">
           <span>Sessions</span>

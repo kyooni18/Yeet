@@ -9,17 +9,14 @@ use super::super::{
 };
 use crate::{
     model::{AgentActivityItem, AgentActivityKind, AgentMemberItem},
-    tui::app::{
-        App,
-        agents::{AGENT_ROLES, AgentAction},
-    },
+    tui::app::{agents::AgentAction, App},
 };
 use chrono::{DateTime, Utc};
 use ratatui::{
-    Frame,
     layout::{Constraint, Layout, Rect},
     prelude::{Line, Modifier, Span, Style},
     widgets::{Block, Paragraph, Wrap},
+    Frame,
 };
 
 const BOLD: Modifier = Modifier::BOLD;
@@ -30,6 +27,12 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     app.transcript_area = (0, 0, 0, 0);
     let bounds = frame.area();
     if bounds.height < 6 || bounds.width < 20 {
+        frame.render_widget(
+            Paragraph::new("Resize the terminal to inspect the Agent Group.")
+                .style(muted())
+                .centered(),
+            bounds,
+        );
         return;
     }
     frame.render_widget(
@@ -114,15 +117,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     composer::draw(frame, app, composer_area, main_x + inset + 3);
     if app.input.is_empty() {
         let hint = match app.selected_agent() {
-            _ if let Some(role) = app.agents.adding => format!(
-                "Describe the new {}'s task · Tab role · Esc cancel",
-                AGENT_ROLES[role]
-            ),
+            _ if app.agents.creating_group => "Describe the shared objective · Esc cancel".into(),
             Some(member) if member.status == "stopped" => {
                 format!("{} is stopped", member.description)
             }
             Some(member) => format!("Steer {}...", member.description),
-            None => "Ask Yeet about this group...".into(),
+            None if app.state.agent_group.objective.is_none() => {
+                "Create a new shared objective...".into()
+            }
+            None => "Ask the Main Agent about this group...".into(),
         };
         let (x, y, width, height) = app.composer_area;
         frame.render_widget(
@@ -139,19 +142,26 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         return;
     }
     let add = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1);
-    let (add_label, add_style) = match app.agents.adding {
-        Some(role) => (
-            format!("+  New {}", AGENT_ROLES[role]),
+    let (add_label, add_style) = if app.agents.creating_group {
+        (
+            "Creating group objective".to_owned(),
             theme::surface().fg(theme::accent()).add_modifier(BOLD),
-        ),
-        None => ("+  Add agent".to_owned(), theme::surface()),
+        )
+    } else if app.state.agent_group.status == "running" {
+        ("Group is running".to_owned(), muted())
+    } else if app.state.agent_group.status == "paused" {
+        ("Group is paused".to_owned(), muted())
+    } else {
+        ("+  New group".to_owned(), theme::surface())
     };
     frame.render_widget(Paragraph::new(add_label).style(add_style).centered(), add);
-    app.agents.targets.push((add, AgentAction::Add));
+    if !matches!(app.state.agent_group.status.as_str(), "running" | "paused") {
+        app.agents.targets.push((add, AgentAction::CreateGroup));
+    }
     draw_rail_actions(frame, app, area);
     let members = app.agent_members();
-    let running = members.iter().filter(|m| m.status == "running").count();
-    let title = conversation_title(app).to_owned();
+    let running = counts(members).0;
+    let title = group_title(app).to_owned();
     let count = format!("{running}/{}", members.len());
     let width = area.width as usize;
     let mut rows: Vec<(Option<String>, Line<'static>, bool)> = Vec::new();
@@ -174,7 +184,7 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         let state_width = state.len();
         let name = fit(&member.description, width.saturating_sub(state_width + 7));
         let gap = width.saturating_sub(5 + Span::raw(&name).width() + state_width + 1);
-        let name_style = if member.status == "stopped" {
+        let name_style = if matches!(member_state(member).1, "stopped" | "cancelled" | "failed") {
             muted()
         } else {
             Style::default().fg(theme::text_dim())
@@ -192,15 +202,33 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             !group_selected && app.agents.selected.as_deref() == Some(member.id.as_str()),
         ));
     }
-    // Rows sit between the Add button and the Agent Group/action rows.
+    // Rows sit between the new group action and the Group Agent/action rows.
     let last = area
         .bottom()
         .saturating_sub(if area.height >= 10 { 5 } else { 4 });
-    for (index, (id, line, selected)) in rows.into_iter().enumerate() {
-        let y = area.y + 3 + index as u16;
-        if y >= last {
-            break;
+    let first_row = area.y + 3;
+    let visible = last.saturating_sub(first_row) as usize;
+    let selected_index = rows
+        .iter()
+        .position(|(id, _, _)| id == &app.agents.selected)
+        .unwrap_or(0);
+    if visible > 0 {
+        if selected_index < app.agents.scroll {
+            app.agents.scroll = selected_index;
+        } else if selected_index >= app.agents.scroll + visible {
+            app.agents.scroll = selected_index + 1 - visible;
         }
+        app.agents.scroll = app.agents.scroll.min(rows.len().saturating_sub(visible));
+    } else {
+        app.agents.scroll = 0;
+    }
+    for (offset, (id, line, selected)) in rows
+        .into_iter()
+        .skip(app.agents.scroll)
+        .take(visible)
+        .enumerate()
+    {
+        let y = first_row + offset as u16;
         let row = Rect::new(area.x, y, area.width, 1);
         if selected {
             frame.render_widget(
@@ -218,15 +246,15 @@ fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.height < 8 {
         return;
     }
-    let members = app.agent_members();
-    let (stop, remove, stoppable, removable) = match app.selected_agent() {
-        Some(member) => ("■ Stop", "× Remove", member.status != "stopped", true),
-        None => (
-            "■ Stop all",
-            "× Clear",
-            members.iter().any(|member| member.status != "stopped"),
-            members.iter().any(|member| member.status == "stopped"),
-        ),
+    let selected = app.selected_agent().cloned();
+    let status = app.state.agent_group.status.as_str();
+    let group_action = match status {
+        "running" => Some(("■ Cancel group", AgentAction::CancelGroup)),
+        "paused" => Some(("▶ Resume group", AgentAction::RunGroup)),
+        "created" | "completed" | "failed" if app.state.agent_group.objective.is_some() => {
+            Some(("▶ Start group", AgentAction::RunGroup))
+        }
+        _ => None,
     };
     let y = area.bottom().saturating_sub(2);
     if area.height >= 10 {
@@ -256,35 +284,52 @@ fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .style(Style::default().fg(theme::hairline())),
         Rect::new(area.x, y - 1, area.width, 1),
     );
-    let style = |enabled: bool| {
-        if enabled {
-            Style::default().fg(theme::text_dim())
-        } else {
-            muted()
-        }
-    };
-    let stop_area = Rect::new(
-        area.x + 2,
-        y,
-        (stop.chars().count() as u16).min(area.width),
-        1,
-    );
-    let remove_width = remove.chars().count() as u16;
-    let remove_area = Rect::new(
-        area.right().saturating_sub(remove_width + 2),
-        y,
-        remove_width,
-        1,
-    );
-    frame.render_widget(Paragraph::new(stop).style(style(stoppable)), stop_area);
-    if remove_area.x > stop_area.right() {
-        frame.render_widget(Paragraph::new(remove).style(style(removable)), remove_area);
-        if removable {
+    if let Some(member) = selected {
+        let (_, state) = member_state(&member);
+        let stoppable = matches!(
+            state,
+            "running" | "reasoning" | "tool call" | "working" | "queued" | "input" | "review"
+        );
+        let stop = "■ Stop";
+        let remove = "× Remove";
+        let stop_area = Rect::new(area.x + 2, y, stop.chars().count() as u16, 1);
+        let remove_width = remove.chars().count() as u16;
+        let remove_area = Rect::new(
+            area.right().saturating_sub(remove_width + 2),
+            y,
+            remove_width,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(stop).style(if stoppable {
+                Style::default().fg(theme::text_dim())
+            } else {
+                muted()
+            }),
+            stop_area,
+        );
+        if remove_area.x > stop_area.right() {
+            frame.render_widget(
+                Paragraph::new(remove).style(Style::default().fg(theme::text_dim())),
+                remove_area,
+            );
             app.agents.targets.push((remove_area, AgentAction::Remove));
         }
-    }
-    if stoppable {
-        app.agents.targets.push((stop_area, AgentAction::Stop));
+        if stoppable {
+            app.agents.targets.push((stop_area, AgentAction::Stop));
+        }
+    } else if let Some((label, action)) = group_action {
+        let action_area = Rect::new(
+            area.x + 2,
+            y,
+            (label.chars().count() as u16).min(area.width.saturating_sub(4)),
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(label).style(Style::default().fg(theme::text_dim())),
+            action_area,
+        );
+        app.agents.targets.push((action_area, action));
     }
 }
 
@@ -299,13 +344,15 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             let task = task_of(app, member).unwrap_or(member.description.as_str());
             format!("{} {} {}", member.description, verb(member), task)
         }
-        None if members.is_empty() => "No agents yet.".to_owned(),
+        None if app.state.agent_group.objective.is_none() => {
+            "No Agent Group objective yet.".to_owned()
+        }
         None => {
             let (running, waiting) = counts(members);
             format!(
-                "{} has {running} running and {waiting} waiting of {} agents.",
-                conversation_title(app),
-                members.len()
+                "Group is {} · {running} active · {waiting} waiting · {} members",
+                app.state.agent_group.status,
+                members.len(),
             )
         }
     };
@@ -318,12 +365,15 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Rect::new(area.x, area.y + 1, area.width, headline_height),
     );
     if members.is_empty() {
+        let message = if app.state.agent_group.objective.is_some() {
+            "This shared objective is ready. Start the group from the rail to let the coordinator plan and delegate member tasks."
+        } else {
+            "Create a Group Agent objective with + New group. The coordinator will plan and delegate member tasks around it."
+        };
         frame.render_widget(
-            Paragraph::new(
-                "Agents appear here when Yeet delegates work, or add one yourself with + Add agent (a). Each member's messages, tool use, and results show up as they happen.",
-            )
-            .style(muted())
-            .wrap(Wrap { trim: true }),
+            Paragraph::new(message)
+                .style(muted())
+                .wrap(Wrap { trim: true }),
             Rect::new(area.x, area.y + 3, area.width, 3),
         );
         return;
@@ -342,13 +392,16 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let stop_label = if selected.is_some() {
         "Stop"
     } else {
-        "Stop all"
+        "Stop group"
     };
     let stoppable = match &selected {
-        Some(member) => member.status != "stopped",
-        None => members.iter().any(|member| member.status != "stopped"),
+        Some(member) => matches!(
+            member_state(member).1,
+            "running" | "reasoning" | "tool call" | "working" | "queued" | "input" | "review"
+        ),
+        None => matches!(app.state.agent_group.status.as_str(), "running" | "paused"),
     };
-    let stop_width = stop_label.len() as u16 + 2;
+    let stop_width = stop_label.chars().count() as u16 + 2;
     let stop = Rect::new(
         area.right().saturating_sub(stop_width),
         controls_y,
@@ -364,7 +417,14 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         stop,
     );
     if stoppable {
-        app.agents.targets.push((stop, AgentAction::Stop));
+        app.agents.targets.push((
+            stop,
+            if selected.is_some() {
+                AgentAction::Stop
+            } else {
+                AgentAction::StopGroup
+            },
+        ));
     }
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize))
@@ -381,9 +441,7 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Rect::new(area.x, top, area.width, pill_y.saturating_sub(top + 1)),
     );
     let pill = match &selected {
-        _ if let Some(role) = app.agents.adding => {
-            format!(" New {} · Tab to change role ", AGENT_ROLES[role])
-        }
+        _ if app.agents.creating_group => " New group objective · Enter to create ".to_owned(),
         Some(member) => format!(
             " {} · {} ",
             member.description,
@@ -445,7 +503,7 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &App, selected: Option<&AgentMember
     let activity = &app.state.agent_group.activity;
     let current: Vec<&AgentActivityItem> = members
         .iter()
-        .filter(|member| member.status == "running")
+        .filter(|member| member.activity_state == "tool_call")
         .filter_map(|member| {
             activity
                 .iter()
@@ -583,18 +641,28 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &App, area: Rect) {
             }
         }
         None => {
-            lines.push(title_line(conversation_title(app)));
+            lines.push(title_line(group_title(app)));
             lines.push(Line::default());
             lines.push(section("STATE"));
             let (running, waiting) = counts(members);
+            lines.extend(field("Group", group.status.clone()));
             lines.extend(field(
-                "State",
-                if members.is_empty() {
-                    "no agents".into()
-                } else {
-                    format!("{running} running · {waiting} waiting")
-                },
+                "Members",
+                format!(
+                    "{running} active · {waiting} waiting · {} total",
+                    members.len()
+                ),
             ));
+            if let Some(objective) = group.objective.as_deref() {
+                lines.push(Line::default());
+                lines.push(section("OBJECTIVE"));
+                lines.extend(objective.lines().map(|line| {
+                    Line::from(Span::styled(
+                        line.to_owned(),
+                        Style::default().fg(theme::text_dim()),
+                    ))
+                }));
+            }
             let mut models: Vec<&str> = members.iter().map(|m| m.model.as_str()).collect();
             models.sort_unstable();
             models.dedup();
@@ -610,6 +678,69 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ));
             if let Some(elapsed) = group.started_at.as_deref().and_then(elapsed) {
                 lines.extend(field("Elapsed", elapsed));
+            }
+            if let Some(cost) = group.estimated_cost_usd {
+                lines.extend(field("Est. cost", format!("${cost:.2}")));
+            }
+            if group.budget.output_limit_tokens > 0 {
+                lines.push(Line::default());
+                lines.push(section("SHARED BUDGET"));
+                lines.extend(field(
+                    "Output",
+                    format!(
+                        "{} / {} tokens",
+                        compact_number(group.budget.output_used_tokens),
+                        compact_number(group.budget.output_limit_tokens),
+                    ),
+                ));
+                lines.extend(field(
+                    "Reserved",
+                    format!(
+                        "{} coordination · {} synthesis",
+                        compact_number(group.budget.coordination_reserve_tokens),
+                        compact_number(group.budget.synthesis_reserve_tokens),
+                    ),
+                ));
+            }
+            if group.budget.cost_limit_usd > 0.0 {
+                lines.extend(field(
+                    "Cost limit",
+                    format!("${:.2}", group.budget.cost_limit_usd),
+                ));
+                if let Some(used) = group.budget.estimated_cost_used_usd {
+                    lines.extend(field("Cost used", format!("${used:.2}")));
+                }
+            }
+            if let Some(result) = group
+                .final_result
+                .as_deref()
+                .or(group.checkpoint_summary.as_deref())
+                .filter(|result| !result.trim().is_empty())
+            {
+                lines.push(Line::default());
+                lines.push(section(if group.final_result.is_some() {
+                    "GROUP RESULT"
+                } else {
+                    "LATEST CHECKPOINT"
+                }));
+                lines.extend(result.lines().map(|line| {
+                    Line::from(Span::styled(
+                        line.to_owned(),
+                        Style::default().fg(theme::text_dim()),
+                    ))
+                }));
+            }
+            if !group.shared_findings.is_empty() {
+                lines.push(Line::default());
+                lines.push(section("SHARED FINDINGS"));
+                for finding in group.shared_findings.iter().rev().take(4).rev() {
+                    let member = members
+                        .iter()
+                        .find(|member| member.id == finding.member_id)
+                        .map_or("member", |member| member.description.as_str());
+                    lines.extend(field("From", member.to_owned()));
+                    lines.extend(field("Finding", finding.summary.clone()));
+                }
             }
             let review: Vec<&AgentMemberItem> = members
                 .iter()
@@ -683,6 +814,14 @@ fn title_line(title: &str) -> Line<'static> {
     ))
 }
 
+fn group_title(app: &App) -> &str {
+    app.state
+        .agent_group
+        .objective
+        .as_deref()
+        .unwrap_or_else(|| conversation_title(app))
+}
+
 /// The first message the primary agent sent a member: its assignment.
 fn task_of<'a>(app: &'a App, member: &AgentMemberItem) -> Option<&'a str> {
     app.state
@@ -723,7 +862,11 @@ fn peers(app: &App, member: &AgentMemberItem) -> (Vec<String>, Vec<String>) {
 
 /// Rail glyph and state word for a member.
 fn member_state(member: &AgentMemberItem) -> (&'static str, &'static str) {
-    match (member.status.as_str(), member.activity_state.as_str(), member.task_status.as_str()) {
+    match (
+        member.status.as_str(),
+        member.activity_state.as_str(),
+        member.task_status.as_str(),
+    ) {
         (_, _, "failed") => ("!", "failed"),
         (_, _, "cancelled") => ("·", "cancelled"),
         ("stopped", _, _) => ("·", "stopped"),
@@ -783,7 +926,11 @@ fn icons_enabled() -> bool {
 }
 
 fn message_icon() -> &'static str {
-    if icons_enabled() { "\u{f075}" } else { "›" }
+    if icons_enabled() {
+        "\u{f075}"
+    } else {
+        "›"
+    }
 }
 
 fn since(at: &str) -> Option<chrono::Duration> {
@@ -820,7 +967,7 @@ fn elapsed(at: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::model::AgentGroupItem;
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
     fn group_and_member_views_render_rail_timeline_and_inspector() {
@@ -833,6 +980,11 @@ mod tests {
             model: "opus-5.5".into(),
             status: status.into(),
             task_status: task_status.into(),
+            activity_state: if id == "Planner" {
+                "reasoning".into()
+            } else {
+                String::new()
+            },
             started_at: now.clone(),
             input_tokens: 312_000,
             output_tokens: 41_000,
@@ -847,8 +999,11 @@ mod tests {
             text: text.into(),
         };
         app.state.agent_group = AgentGroupItem {
+            group_id: "group-1".into(),
+            objective: Some("Inspect feasibility across the candidate radii".into()),
+            status: "running".into(),
             members: vec![
-                member("Planner", "running", "running"),
+                member("Planner", "idle", "running"),
                 member("Verification", "idle", "needs_verification"),
             ],
             activity: vec![
@@ -874,6 +1029,22 @@ mod tests {
             started_at: Some(now.clone()),
             input_tokens: 1_200_000,
             output_tokens: 148_000,
+            budget: crate::model::AgentGroupBudgetItem {
+                output_limit_tokens: 500_000,
+                output_used_tokens: 148_000,
+                cost_limit_usd: 15.0,
+                estimated_cost_used_usd: Some(4.25),
+                coordination_reserve_tokens: 30_000,
+                synthesis_reserve_tokens: 45_000,
+                ..Default::default()
+            },
+            final_result: Some("Candidate radius 1.8 remains feasible.".into()),
+            shared_findings: vec![crate::model::AgentGroupFindingItem {
+                member_id: "Planner".into(),
+                task_id: "task-1".into(),
+                at: now.clone(),
+                summary: "1.8 is the best candidate radius".into(),
+            }],
             ..Default::default()
         };
         app.open_agents();
@@ -896,13 +1067,16 @@ mod tests {
         let group = screen(&mut terminal, &mut app);
         for expected in [
             "1/2",
-            "+  Add agent",
-            "× Clear",
+            "Group is running",
             "waiting",
-            "Stop all",
+            "Cancel group",
             "Yeet → Planner",
             "NTRS TAEM energy notes",
             "1.2M in · 148k out",
+            "Inspect feasibility",
+            "GROUP RESULT",
+            "SHARED BUDGET",
+            "SHARED FINDINGS",
             "NEEDS REVIEW",
             "1 waiting · 1 running",
         ] {

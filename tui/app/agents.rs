@@ -11,16 +11,19 @@ pub enum AgentAction {
     Select(Option<String>),
     Steer,
     Stop,
-    /// Start composing a new member's task.
-    Add,
+    /// Compose and create a new group-level objective.
+    CreateGroup,
+    /// Start a created group, or resume a paused group.
+    RunGroup,
+    /// Cancel the active group as a whole.
+    CancelGroup,
+    /// Stop the active group as a whole.
+    StopGroup,
     /// Remove the selected member, or clear stopped members from the group row.
     Remove,
     /// Open the Agent Group settings panel.
     AgentGroup,
 }
-
-/// Roles a user can pick for a new member, in Tab order.
-pub const AGENT_ROLES: [&str; 3] = ["researcher", "implementer", "verifier"];
 
 #[derive(Debug, Default)]
 pub struct AgentsState {
@@ -28,8 +31,10 @@ pub struct AgentsState {
     pub open: bool,
     /// Selected member id; `None` shows the whole group.
     pub selected: Option<String>,
-    /// Index into `AGENT_ROLES` while the composer drafts a new member.
-    pub adding: Option<usize>,
+    /// The composer is drafting a new group objective.
+    pub creating_group: bool,
+    /// First visible row in the rail, including the group row.
+    pub scroll: usize,
     pub(crate) targets: Vec<(Rect, AgentAction)>,
     /// Where the Agent Group panel returns on Esc.
     pub agent_group_origin: Option<Mode>,
@@ -74,18 +79,19 @@ impl App {
         self.agents.selected = rows[next].clone();
     }
 
-    /// Stops the selected member, or the whole group on the group row.
+    /// Stops a selected member, or cancels the whole group on its row.
     fn stop_agent_command(&self) -> Option<FrontendCommand> {
         match self.selected_agent() {
             Some(member) if member.status != "stopped" => Some(FrontendCommand::StopAgent {
                 agent_id: Some(member.id.clone()),
             }),
             Some(_) => None,
-            None => self
-                .agent_members()
-                .iter()
-                .any(|member| member.status != "stopped")
-                .then_some(FrontendCommand::StopAgent { agent_id: None }),
+            None => {
+                let group = &self.state.agent_group;
+                (group.status == "running").then(|| FrontendCommand::CancelAgentGroup {
+                    group_id: group.group_id.clone(),
+                })
+            }
         }
     }
 
@@ -105,24 +111,29 @@ impl App {
         }
     }
 
-    fn start_adding_agent(&mut self) {
-        self.agents.adding = Some(self.agents.adding.unwrap_or(0));
+    fn start_creating_group(&mut self) {
+        if matches!(self.state.agent_group.status.as_str(), "running" | "paused") {
+            return;
+        }
+        self.agents.creating_group = true;
+        self.agents.selected = None;
         self.input_focused = true;
     }
 
-    /// Sends the draft to the selected member, or to the primary agent from
-    /// the group row, or launches a new member while adding. The draft stays
-    /// put when it cannot be delivered.
+    /// Creates a group from a drafted objective, or sends a message to the
+    /// selected member / Main Agent. The draft stays put when it cannot be delivered.
     fn submit_agent_draft(&mut self) -> Option<FrontendCommand> {
         let text = self.input.trim().to_owned();
         if text.is_empty() {
             return None;
         }
-        let command = if let Some(role) = self.agents.adding.take() {
-            FrontendCommand::SpawnAgent {
-                role: AGENT_ROLES[role].into(),
-                description: short_description(&text),
-                prompt: text.clone(),
+        let command = if self.agents.creating_group {
+            if matches!(self.state.agent_group.status.as_str(), "running" | "paused") {
+                return None;
+            }
+            self.agents.creating_group = false;
+            FrontendCommand::CreateAgentGroup {
+                objective: text.clone(),
             }
         } else {
             match self.selected_agent() {
@@ -157,9 +168,39 @@ impl App {
                 None
             }
             AgentAction::Stop => self.stop_agent_command(),
-            AgentAction::Add => {
-                self.start_adding_agent();
+            AgentAction::CreateGroup => {
+                self.start_creating_group();
                 None
+            }
+            AgentAction::RunGroup => {
+                let group = &self.state.agent_group;
+                if group.status == "paused" {
+                    Some(FrontendCommand::ResumeAgentGroup {
+                        group_id: group.group_id.clone(),
+                    })
+                } else if group.objective.is_some()
+                    && matches!(group.status.as_str(), "created" | "completed" | "failed")
+                {
+                    Some(FrontendCommand::StartAgentGroup {
+                        group_id: group.group_id.clone(),
+                    })
+                } else {
+                    None
+                }
+            }
+            AgentAction::CancelGroup => {
+                let group = &self.state.agent_group;
+                (group.status == "running").then(|| FrontendCommand::CancelAgentGroup {
+                    group_id: group.group_id.clone(),
+                })
+            }
+            AgentAction::StopGroup => {
+                let group = &self.state.agent_group;
+                matches!(group.status.as_str(), "running" | "paused").then(|| {
+                    FrontendCommand::StopAgentGroup {
+                        group_id: group.group_id.clone(),
+                    }
+                })
             }
             AgentAction::Remove => self.remove_agent_command(),
             AgentAction::AgentGroup => Some(self.open_agent_group()),
@@ -176,15 +217,8 @@ impl App {
                 return None;
             }
             match event.code {
-                KeyCode::Esc if self.agents.adding.is_some() => self.agents.adding = None,
+                KeyCode::Esc if self.agents.creating_group => self.agents.creating_group = false,
                 KeyCode::Esc => self.input_focused = false,
-                KeyCode::Tab | KeyCode::BackTab if self.agents.adding.is_some() => {
-                    let step = if event.code == KeyCode::Tab { 1 } else { 2 };
-                    self.agents.adding = self
-                        .agents
-                        .adding
-                        .map(|role| (role + step) % AGENT_ROLES.len());
-                }
                 KeyCode::Enter if event.modifiers.contains(KeyModifiers::SHIFT) => {
                     self.insert_char('\n')
                 }
@@ -217,7 +251,10 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => self.select_agent_row(isize::MAX / 2),
             KeyCode::Char('i' | 's') | KeyCode::Enter | KeyCode::Tab => self.input_focused = true,
             KeyCode::Char('x') => return self.stop_agent_command(),
-            KeyCode::Char('a' | '+') => self.start_adding_agent(),
+            KeyCode::Char('n' | 'a' | '+') => self.start_creating_group(),
+            KeyCode::Char('r') => {
+                return self.apply_agent_action(AgentAction::RunGroup);
+            }
             KeyCode::Char('d') | KeyCode::Delete => return self.remove_agent_command(),
             KeyCode::Char('w') => return Some(self.open_agent_group()),
             KeyCode::Char('q') => self.close_agents(),
@@ -235,16 +272,6 @@ impl App {
     }
 }
 
-/// A rail label from the task: its first few words.
-fn short_description(task: &str) -> String {
-    let words: Vec<&str> = task.split_whitespace().take(4).collect();
-    let mut label = words.join(" ");
-    if label.chars().count() > 28 {
-        label = label.chars().take(27).collect::<String>() + "…";
-    }
-    label
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,9 +287,12 @@ mod tests {
     }
 
     #[test]
-    fn steering_targets_the_selected_member_and_stop_skips_stopped_members() {
+    fn group_objectives_use_group_lifecycle_and_member_controls_remain_scoped() {
         let mut app = App::default();
         app.state.agent_group = AgentGroupItem {
+            group_id: "group-1".into(),
+            status: "running".into(),
+            objective: Some("Original objective".into()),
             members: vec![member("planner", "running"), member("docs", "stopped")],
             ..Default::default()
         };
@@ -296,20 +326,36 @@ mod tests {
         app.handle_agents_key(key(KeyCode::Char('g')));
         assert!(matches!(
             app.handle_agents_key(key(KeyCode::Char('x'))),
-            Some(FrontendCommand::StopAgent { agent_id: None })
+            Some(FrontendCommand::CancelAgentGroup { .. })
         ));
 
-        // Adding drafts a task, Tab picks the role, Enter launches it.
+        app.state.agent_group.status = "created".into();
+        app.state.agent_group.objective = Some("Original objective".into());
+        assert!(matches!(
+            app.apply_agent_action(AgentAction::RunGroup),
+            Some(FrontendCommand::StartAgentGroup { .. })
+        ));
+        app.state.agent_group.status = "running".into();
+        assert!(matches!(
+            app.apply_agent_action(AgentAction::StopGroup),
+            Some(FrontendCommand::StopAgentGroup { .. })
+        ));
+        app.state.agent_group.status = "paused".into();
+        app.apply_agent_action(AgentAction::CreateGroup);
+        assert!(!app.agents.creating_group);
+
+        // Creating an objective uses the Group Agent lifecycle command; it
+        // cannot accidentally replace the group with a standalone member run.
+        app.state.agent_group.status = "completed".into();
         app.handle_agents_key(key(KeyCode::Char('a')));
-        app.handle_agents_key(key(KeyCode::Tab));
-        for character in "Check guidance code for radius limits".chars() {
+        for character in "Compare the candidate models".chars() {
             app.handle_agents_key(key(KeyCode::Char(character)));
         }
         assert!(matches!(
             app.handle_agents_key(key(KeyCode::Enter)),
-            Some(FrontendCommand::SpawnAgent { ref role, ref description, .. })
-                if role == "implementer" && description == "Check guidance code for"
+            Some(FrontendCommand::CreateAgentGroup { ref objective })
+                if objective == "Compare the candidate models"
         ));
-        assert_eq!(app.agents.adding, None);
+        assert!(!app.agents.creating_group);
     }
 }

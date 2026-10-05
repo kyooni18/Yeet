@@ -261,6 +261,89 @@ export interface AgentTaskItem {
   summary?: string | null
 }
 
+export interface AgentGroupBudgetItem {
+  outputLimitTokens: number
+  outputUsedTokens: number
+  costLimitUsd: number
+  estimatedCostUsedUsd?: number | null
+  coordinationReserveTokens: number
+  synthesisReserveTokens: number
+  coordinationReserveCostUsd: number
+  synthesisReserveCostUsd: number
+  tasks: AgentTaskBudgetItem[]
+}
+
+export interface AgentTaskBudgetItem {
+  taskId: string
+  allocatedOutputTokens: number
+  usedOutputTokens: number
+  remainingOutputTokens: number
+  allocatedCostUsd: number
+  estimatedCostUsedUsd?: number | null
+  contextWindowTokens: number
+}
+
+export interface AgentGroupEventItem {
+  groupId: string
+  sequence: number
+  memberId?: string | null
+  taskId?: string | null
+  at: string
+  kind: string
+  detail: string
+}
+
+export interface AgentGroupFindingItem {
+  memberId: string
+  taskId: string
+  at: string
+  summary: string
+}
+
+export interface AgentMemberItem {
+  id: string
+  description: string
+  role: string
+  model: string
+  status: string
+  activityState: string
+  taskStatus: string
+  summary?: string | null
+  startedAt: string
+  inputTokens: number
+  outputTokens: number
+}
+
+export type AgentActivityKind = 'message' | 'steer' | 'tool' | 'finished' | 'failed' | 'stopped'
+
+export interface AgentActivityItem {
+  at: string
+  from?: string | null
+  to?: string | null
+  kind: AgentActivityKind
+  tool?: string | null
+  text: string
+}
+
+/** Snapshot of the parent execution unit and all subordinate member activity. */
+export interface AgentGroupItem {
+  groupId: string
+  objective?: string | null
+  status: string
+  finalResult?: string | null
+  checkpointSummary?: string | null
+  members: AgentMemberItem[]
+  /** Legacy activity feed, oldest first. Prefer sequence-numbered events. */
+  activity: AgentActivityItem[]
+  startedAt?: string | null
+  inputTokens: number
+  outputTokens: number
+  estimatedCostUsd?: number | null
+  budget: AgentGroupBudgetItem
+  events: AgentGroupEventItem[]
+  sharedFindings: AgentGroupFindingItem[]
+}
+
 
 export interface BridgeState {
   workspace_root?: string | null
@@ -277,6 +360,7 @@ export interface BridgeState {
   agent_mode: AgentMode
   autonomy_mode: AutonomyMode
   agent_tasks: AgentTaskItem[]
+  agent_group: AgentGroupItem
   error_message?: string | null
   active_model: string
   active_reasoning_level: string
@@ -329,6 +413,26 @@ export const emptyBridgeState = (): BridgeState => ({
   agent_mode: 'single',
   autonomy_mode: 'manual',
   agent_tasks: [],
+  agent_group: {
+    groupId: '',
+    status: 'idle',
+    members: [],
+    activity: [],
+    inputTokens: 0,
+    outputTokens: 0,
+    budget: {
+      outputLimitTokens: 0,
+      outputUsedTokens: 0,
+      costLimitUsd: 0,
+      coordinationReserveTokens: 0,
+      synthesisReserveTokens: 0,
+      coordinationReserveCostUsd: 0,
+      synthesisReserveCostUsd: 0,
+      tasks: [],
+    },
+    events: [],
+    sharedFindings: [],
+  },
   active_model: '',
   active_reasoning_level: 'auto',
   token_usage: {},
@@ -388,6 +492,12 @@ export type FrontendCommand =
   | { type: 'set_goal'; enabled: boolean }
   | { type: 'set_agent_mode'; mode: AgentMode }
   | { type: 'set_autonomy_mode'; mode: AutonomyMode }
+  | { type: 'create_agent_group'; objective: string }
+  | { type: 'start_agent_group'; group_id: string }
+  | { type: 'resume_agent_group'; group_id: string }
+  | { type: 'cancel_agent_group'; group_id: string }
+  | { type: 'stop_agent_group'; group_id: string }
+  | { type: 'inspect_agent_group'; group_id: string }
   | { type: 'request_sessions' }
   | { type: 'load_session'; session_id: string }
   | { type: 'new_session' }

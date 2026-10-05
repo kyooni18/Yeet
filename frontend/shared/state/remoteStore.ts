@@ -449,6 +449,30 @@ export class RemoteStore {
     return this.send({ type: 'set_goal', enabled })
   }
 
+  createAgentGroup(objective: string): boolean {
+    return this.send({ type: 'create_agent_group', objective })
+  }
+
+  startAgentGroup(groupId: string): boolean {
+    return this.send({ type: 'start_agent_group', group_id: groupId })
+  }
+
+  resumeAgentGroup(groupId: string): boolean {
+    return this.send({ type: 'resume_agent_group', group_id: groupId })
+  }
+
+  cancelAgentGroup(groupId: string): boolean {
+    return this.send({ type: 'cancel_agent_group', group_id: groupId })
+  }
+
+  stopAgentGroup(groupId: string): boolean {
+    return this.send({ type: 'stop_agent_group', group_id: groupId })
+  }
+
+  inspectAgentGroup(groupId: string): boolean {
+    return this.send({ type: 'inspect_agent_group', group_id: groupId })
+  }
+
   loadSession(sessionId: string): boolean {
     return this.send({ type: 'load_session', session_id: sessionId })
   }
@@ -518,4 +542,3 @@ export class RemoteStore {
     return this.state.auth_providers.find((item) => item.provider.toLowerCase() === provider.toLowerCase()) ?? null
   }
 }
-

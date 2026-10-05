@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Composer } from '@/components/Composer'
 import { Conversation } from '@/components/Conversation'
+import { AgentsSheet } from '@/components/AgentsSheet'
 import { ModelSheet } from '@/components/ModelSheet'
 import { QuickPanel } from '@/components/QuickPanel'
 import { SettingsSheet } from '@/components/SettingsSheet'
@@ -12,13 +13,14 @@ export function RemoteShell() {
   const [controls, setControls] = useState(false)
   const [modelSheet, setModelSheet] = useState(false)
   const [settings, setSettings] = useState(false)
+  const [agents, setAgents] = useState(false)
   const [desktopLayout, setDesktopLayout] = useState(false)
   const modelReturnFocus = useRef<HTMLElement | null>(null)
   const settingsReturnFocus = useRef<HTMLElement | null>(null)
 
   const [editRequest, setEditRequest] = useState<{ key: number; content: string } | null>(null)
-  const sidebarVisible = sidebar && (desktopLayout || (!modelSheet && !settings))
-  const controlsVisible = controls && (desktopLayout || (!modelSheet && !settings))
+  const sidebarVisible = sidebar && (desktopLayout || (!modelSheet && !settings && !agents))
+  const controlsVisible = controls && (desktopLayout || (!modelSheet && !settings && !agents))
 
   const rememberFocus = (target: React.MutableRefObject<HTMLElement | null>) => {
     const active = document.activeElement
@@ -78,12 +80,18 @@ export function RemoteShell() {
       if (event.key !== 'Escape') return
       if (modelSheet) closeModel()
       else if (settings) closeSettings()
+      else if (agents) setAgents(false)
       else if (controls) setControls(false)
       else if (sidebar) setSidebar(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [controls, modelSheet, settings, sidebar])
+  }, [agents, controls, modelSheet, settings, sidebar])
+
+  const openAgents = () => {
+    setControls(false)
+    setAgents(true)
+  }
 
   return (
     <div
@@ -113,6 +121,7 @@ export function RemoteShell() {
         desktopDocked={desktopLayout}
         onClose={() => setSidebar(false)}
         onSettings={openSettings}
+        onAgents={openAgents}
       />
       <section className={`main-viewport app-workspace${sidebarVisible ? ' sidebar-open' : ''}`} aria-label="Current session">
         <TopBar
@@ -154,6 +163,7 @@ export function RemoteShell() {
       />
       <ModelSheet open={modelSheet} onClose={closeModel} />
       <SettingsSheet open={settings} onClose={closeSettings} />
+      <AgentsSheet open={agents} onClose={() => setAgents(false)} />
     </div>
   )
 }
