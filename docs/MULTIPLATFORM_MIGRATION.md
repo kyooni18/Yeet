@@ -244,3 +244,8 @@ submodules: manifest/object commits, append-only events, locking, legacy readers
 export and workspace identity. Root `session_store` remains a compatibility
 reexport. No storage format, filesystem behavior or locking policy changed.
 Twelve existing persistence tests and all-target compilation passed.
+
+The Harness adds `ResolvePermission { request_id, granted }` for shared UI
+responses. PermissionBroker matches the pending request ID atomically; delayed
+input cannot resolve a replacement request. Legacy permission commands remain
+compatible. Shared composer responses will use this identity-bearing command.

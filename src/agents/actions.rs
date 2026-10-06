@@ -28,6 +28,11 @@ pub enum FrontendCommand {
     EditLast {
         text: String,
     },
+    /// Resolves only the permission request presented to the caller.
+    ResolvePermission {
+        request_id: String,
+        granted: bool,
+    },
     AllowShell,
     DenyShell,
     AllowNativeApp,

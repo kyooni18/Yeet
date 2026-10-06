@@ -282,6 +282,11 @@ impl HarnessService {
             }
             FrontendCommand::RegenerateLast => self.regenerate_last(),
             FrontendCommand::EditLast { text } => self.edit_last(text),
+            FrontendCommand::ResolvePermission { request_id, granted } => {
+                self.permission.resolve_request(&request_id, granted);
+                self.publish_state();
+                Ok(())
+            }
             FrontendCommand::AllowShell => {
                 self.permission.resolve_shell(true);
                 self.publish_state();

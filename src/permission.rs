@@ -78,6 +78,15 @@ impl PermissionBroker {
         self.resolve_matching(granted, |_| true)
     }
 
+    /// Match the displayed request atomically so delayed UI input cannot approve
+    /// a replacement request. Legacy unscoped callers retain their existing API.
+    pub fn resolve_request(&self, request_id: &str, granted: bool) -> bool {
+        self.resolve_matching(granted, |request| match request {
+            PermissionRequest::Shell(permission) => permission.id == request_id,
+            PermissionRequest::NativeApp(permission) => permission.id == request_id,
+        })
+    }
+
     pub fn resolve_shell(&self, granted: bool) -> bool {
         self.resolve_matching(granted, |request| {
             matches!(request, PermissionRequest::Shell(_))
@@ -150,5 +159,49 @@ impl PermissionBroker {
         drop(state);
         self.notify();
         decision
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delayed_decision_cannot_resolve_a_replacement_permission() {
+        let broker = PermissionBroker::default();
+        let requests = [
+            PermissionRequest::Shell(ShellPermission {
+                id: "current-shell".into(),
+                kind: "shell".into(),
+                command: "echo test".into(),
+                operation: "execute".into(),
+                reason: String::new(),
+            }),
+            PermissionRequest::NativeApp(NativeAppPermission {
+                id: "current-native".into(),
+                server: "native".into(),
+                tool: "inspect".into(),
+                bundle_id: None,
+                app_name: None,
+                operation: "inspect".into(),
+                reason: String::new(),
+            }),
+        ];
+        for request in requests {
+            let id = match &request {
+                PermissionRequest::Shell(value) => value.id.clone(),
+                PermissionRequest::NativeApp(value) => value.id.clone(),
+            };
+            {
+                let mut state = broker.inner.0.lock().unwrap();
+                state.pending = Some(request);
+                state.decision = None;
+            }
+            assert!(!broker.resolve_request("previous-request", true));
+            assert_eq!(broker.inner.0.lock().unwrap().decision, None);
+            assert!(broker.resolve_request(&id, false));
+            assert_eq!(broker.inner.0.lock().unwrap().decision, Some(false));
+            assert!(!broker.resolve_request(&id, true));
+        }
     }
 }
