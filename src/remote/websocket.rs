@@ -265,6 +265,11 @@ enum RuntimeControl {
         request_id: Option<String>,
         completion: oneshot::Sender<Result<(), String>>,
     },
+    SettingsAction {
+        action: crate::shared_ui::settings::SettingsAction,
+        request_id: Option<String>,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -337,7 +342,7 @@ impl RemoteClientRuntime {
         })
     }
 
-    fn ui_messages(&self) -> Result<[ServerMessage; 4]> {
+    fn ui_messages(&self) -> Result<[ServerMessage; 5]> {
         let ui = self
             .ui
             .lock()
@@ -428,6 +433,30 @@ impl RemoteClientRuntime {
         let (completion, result) = oneshot::channel();
         self.commands
             .send(RuntimeControl::ComposerAction {
+                action,
+                request_id,
+                completion,
+            })
+            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))?;
+        self.wake.notify();
+        match tokio::time::timeout(BACKEND_COMMAND_DELIVERY_TIMEOUT, result).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(anyhow!(error)),
+            Ok(Err(_)) => Err(anyhow!(
+                "semantic Remote runtime stopped before confirming UI action delivery"
+            )),
+            Err(_) => Err(anyhow!("timed out delivering Remote UI action")),
+        }
+    }
+    async fn apply_settings(
+        &self,
+        action: crate::shared_ui::settings::SettingsAction,
+        request_id: Option<String>,
+    ) -> Result<()> {
+        self.touch();
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .send(RuntimeControl::SettingsAction {
                 action,
                 request_id,
                 completion,
@@ -595,7 +624,7 @@ fn application_messages(
     projection: crate::shared_ui::application_session::ApplicationProjection,
     request_id: Option<String>,
     effect: Option<crate::shared_ui::agents::AgentUiEffect>,
-) -> [ServerMessage; 4] {
+) -> [ServerMessage; 5] {
     [
         ServerMessage::UiState {
             version: REMOTE_PROTOCOL_VERSION,
@@ -606,7 +635,8 @@ fn application_messages(
         },
         agents_message(projection.agents, request_id.clone(), effect),
         conversation_message(projection.conversation, request_id.clone(), None),
-        composer_message(projection.composer, request_id, None),
+        composer_message(projection.composer, request_id.clone(), None),
+        settings_message(projection.settings, request_id, None),
     ]
 }
 
@@ -646,6 +676,20 @@ fn composer_message(
     ServerMessage::UiComposer {
         version: REMOTE_PROTOCOL_VERSION,
         composer_revision: projection.composer_revision,
+        request_id,
+        view: projection.view,
+        effect,
+    }
+}
+
+fn settings_message(
+    projection: crate::shared_ui::settings_session::SettingsProjection,
+    request_id: Option<String>,
+    effect: Option<crate::shared_ui::settings::SettingsUiEffect>,
+) -> ServerMessage {
+    ServerMessage::UiSettings {
+        version: REMOTE_PROTOCOL_VERSION,
+        settings_revision: projection.settings_revision,
         request_id,
         view: projection.view,
         effect,
@@ -813,6 +857,35 @@ fn runtime_loop(
                         }
                         let _ = events.send(composer_message(
                             projection.composer,
+                            request_id,
+                            Some(effect.ui),
+                        ));
+                        Ok(())
+                    })();
+                    let _ = completion.send(result);
+                }
+                RuntimeControl::SettingsAction {
+                    action,
+                    request_id,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), String> {
+                        let state = shared
+                            .lock()
+                            .map_err(|_| "remote runtime state lock poisoned")?;
+                        let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
+                        let prepared = ui.prepare_settings(action, &state.state);
+                        if let Some(command) = prepared.effect.command.clone() {
+                            service
+                                .send(command)
+                                .map_err(|error| format!("{error:#}"))?;
+                        }
+                        let (projection, effect) = ui.commit_settings(prepared, &state.state);
+                        let _ = events.send(settings_message(
+                            projection.settings,
                             request_id,
                             Some(effect.ui),
                         ));
@@ -1565,6 +1638,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                             }
                             ClientMessage::UiComposerAction { action, request_id, .. } => {
                                 if let Err(error) = runtime.apply_composer(action, request_id.clone()).await {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_action_failed", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
+                            ClientMessage::UiSettingsAction { action, request_id, .. } => {
+                                if let Err(error) = runtime.apply_settings(action, request_id.clone()).await {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
                                         "ui_action_failed", error.to_string(), false, request_id,
                                     )).await;

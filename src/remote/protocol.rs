@@ -62,6 +62,12 @@ pub enum ClientMessage {
         request_id: Option<String>,
         action: crate::shared_ui::composer::ComposerAction,
     },
+    UiSettingsAction {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        action: crate::shared_ui::settings::SettingsAction,
+    },
     Ping {
         version: u16,
         #[serde(default)]
@@ -78,6 +84,7 @@ impl ClientMessage {
             | Self::UiAgentAction { version, .. }
             | Self::UiConversationAction { version, .. }
             | Self::UiComposerAction { version, .. }
+            | Self::UiSettingsAction { version, .. }
             | Self::Ping { version, .. } => Some(*version),
         }
     }
@@ -117,6 +124,13 @@ pub enum ServerMessage {
         request_id: Option<String>,
         view: crate::shared_ui::composer::ComposerView,
         effect: Option<crate::shared_ui::composer::ComposerUiEffect>,
+    },
+    UiSettings {
+        version: u16,
+        settings_revision: u64,
+        request_id: Option<String>,
+        view: crate::shared_ui::settings::SettingsView,
+        effect: Option<crate::shared_ui::settings::SettingsUiEffect>,
     },
     Welcome {
         version: u16,
@@ -235,6 +249,7 @@ impl ServerMessage {
             | Self::UiAgents { .. }
             | Self::UiConversation { .. }
             | Self::UiComposer { .. }
+            | Self::UiSettings { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }
@@ -256,6 +271,7 @@ impl ServerMessage {
             | Self::UiAgents { .. }
             | Self::UiConversation { .. }
             | Self::UiComposer { .. }
+            | Self::UiSettings { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }

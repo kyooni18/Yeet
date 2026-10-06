@@ -1,3 +1,4 @@
+import { projectSettings } from './uiSettingsHarness'
 import type { Page } from '@playwright/test'
 import { projectAgents } from './uiAgentsHarness'
 import { projectComposer } from './uiComposerHarness'
@@ -11,6 +12,7 @@ export async function installMockRemote(page: Page): Promise<void> {
   await page.exposeFunction('__yeetProjectAgents', projectAgents)
   await page.exposeFunction('__yeetProjectConversation', projectConversation)
   await page.exposeFunction('__yeetProjectComposer', projectComposer)
+  await page.exposeFunction('__yeetProjectSettings', projectSettings)
   await page.route('**/api/auth/status', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -205,6 +207,21 @@ export async function installMockRemote(page: Page): Promise<void> {
       })
     }
 
+    let settingsUiState: Record<string, unknown> | undefined
+    let settingsRevision = 0
+    let settingsQueue = Promise.resolve()
+    const projectSettingsUi = (socket: MockSocket, action?: unknown) => {
+      settingsQueue = settingsQueue.then(async () => {
+        const host = window as unknown as {
+          __yeetProjectSettings(input: unknown): Promise<{ ui_state: Record<string, unknown>; view: unknown; effect: unknown; command?: unknown }>
+        }
+        const result = await host.__yeetProjectSettings({ state: harnessState, ui_state: settingsUiState, action, environment: {} })
+        settingsUiState = result.ui_state
+        if (result.command) sent.push({ type: 'command', version: 1, command: result.command })
+        socket.emit({ type: 'ui_settings', version: 1, settings_revision: ++settingsRevision, view: result.view, effect: result.effect })
+      })
+    }
+
     class MockSocket extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -263,7 +280,10 @@ export async function installMockRemote(page: Page): Promise<void> {
             project(this)
             projectConversation(this)
             projectComposerUi(this)
+            projectSettingsUi(this)
           })
+        } else if (message.type === 'ui_settings_action') {
+          projectSettingsUi(this, message.action)
         } else if (message.type === 'ui_composer_action') {
           projectComposerUi(this, message.action)
         } else if (message.type === 'ui_conversation_action') {
@@ -315,7 +335,7 @@ export async function installMockRemote(page: Page): Promise<void> {
           harnessState[`active_${prefix}_entry_id`] = message.entry_id
           harnessState.is_streaming = true
         }
-        if (message.type === 'state_update' || message.type === 'snapshot') projectComposerUi(this)
+        if (message.type === 'state_update' || message.type === 'snapshot') { projectComposerUi(this); projectSettingsUi(this) }
         if (['state_update', 'snapshot', 'conversation_reset', 'conversation_entry', 'tool_update', 'activity_update', 'reasoning_delta', 'assistant_delta'].includes(String(message.type))) projectConversation(this)
         this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }))
       }

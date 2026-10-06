@@ -27,6 +27,7 @@ use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     app.sync_composer();
+    app.sync_settings();
     app.toasts.expire(std::time::Instant::now());
     draw_content(frame, app);
     // Global runtime attention is workbench chrome and never selects a view.

@@ -1,6 +1,6 @@
 //! Agent Group settings panel for session availability and shared limits.
 use super::{App, Mode};
-use crate::model::{AgentGroupSettings, AgentMode, FrontendCommand};
+use crate::model::{AgentMode, FrontendCommand};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +60,12 @@ impl App {
             Some(Mode::Agents) => self.open_agents(),
             Some(Mode::Settings) => {
                 self.mode = Mode::Settings;
-                self.popup_index = self.agent_group_settings_row_index();
+                let prepared = self.application.prepare_settings(
+                    crate::shared_ui::settings::SettingsAction::Select(Some("agents".into())),
+                    &self.state,
+                );
+                self.application.commit_settings(prepared, &self.state);
+                self.sync_settings();
             }
             _ => self.close_popup(),
         }
@@ -164,24 +169,6 @@ impl App {
         self.state.runtime_settings.agent_group = settings.clone();
         commands.insert(0, FrontendCommand::SetAgentGroupSettings { settings });
         commands
-    }
-
-    /// One-line summary for the Agents rail and Settings: "on · 4× · auto".
-    pub(crate) fn agent_group_summary(&self) -> String {
-        let agent_group: &AgentGroupSettings = &self.state.runtime_settings.agent_group;
-        let mut summary = format!(
-            "{} · {}×",
-            if self.agent_group_enabled() {
-                "on"
-            } else {
-                "off"
-            },
-            agent_group.max_concurrent
-        );
-        if agent_group.auto_deploy {
-            summary.push_str(" · auto");
-        }
-        summary
     }
 }
 

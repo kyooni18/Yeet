@@ -12,6 +12,8 @@ use yeet::shared_ui::composer::{ComposerAction, ComposerUiEffect};
 use yeet::shared_ui::composer_session::ComposerProjection;
 use yeet::shared_ui::conversation::{ConversationAction, ConversationUiEffect};
 use yeet::shared_ui::conversation_session::ConversationProjection;
+use yeet::shared_ui::settings::{SettingsAction, SettingsUiEffect};
+use yeet::shared_ui::settings_session::SettingsProjection;
 use yeet::shared_ui::shell::ShellAction;
 
 #[derive(serde::Serialize)]
@@ -30,6 +32,7 @@ enum Control {
     AgentAction(AgentAction, mpsc::Sender<Result<(), String>>),
     ConversationAction(ConversationAction, mpsc::Sender<Result<(), String>>),
     ComposerAction(ComposerAction, mpsc::Sender<Result<(), String>>),
+    SettingsAction(SettingsAction, mpsc::Sender<Result<(), String>>),
     Disconnect(mpsc::Sender<()>),
     Stop,
 }
@@ -182,6 +185,48 @@ async fn send_ui_composer_action(
         .map_err(|error| error.to_string())?
 }
 
+#[derive(Clone, serde::Serialize)]
+struct SettingsMessage {
+    version: u16,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: Option<String>,
+    effect: Option<SettingsUiEffect>,
+    #[serde(flatten)]
+    projection: SettingsProjection,
+}
+fn publish_settings(
+    app: &tauri::AppHandle,
+    projection: SettingsProjection,
+    effect: Option<SettingsUiEffect>,
+) -> Result<(), String> {
+    app.emit(
+        "yeet://ui-settings-event",
+        SettingsMessage {
+            version: 1,
+            kind: "ui_settings",
+            request_id: None,
+            projection,
+            effect,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+#[tauri::command]
+async fn send_ui_settings_action(
+    action: SettingsAction,
+    host: tauri::State<'_, CoreHost>,
+) -> Result<(), String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::SettingsAction(action, reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
 fn publish_application(
     app: &tauri::AppHandle,
     projection: ApplicationProjection,
@@ -203,7 +248,8 @@ fn publish_application(
     .map_err(|error| error.to_string())?;
     publish_agents(app, projection.agents, effect)?;
     publish_conversation(app, projection.conversation, None)?;
-    publish_composer(app, projection.composer, None)
+    publish_composer(app, projection.composer, None)?;
+    publish_settings(app, projection.settings, None)
 }
 
 fn publish_agents(
@@ -409,6 +455,25 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                 })();
                 let _ = reply.send(result);
             }
+            Ok(Control::SettingsAction(action, reply)) => {
+                let result = (|| -> Result<(), String> {
+                    let core = harness.as_mut().ok_or("Connect a local workspace first")?;
+                    let mut state = core
+                        .latest_state()
+                        .cloned()
+                        .ok_or("Local workspace state unavailable")?;
+                    if state.conversation.is_none() {
+                        state.conversation = conversation.clone();
+                    }
+                    let prepared = ui.prepare_settings(action, &state);
+                    if let Some(command) = prepared.effect.command.clone() {
+                        core.send(command).map_err(|error| error.to_string())?;
+                    }
+                    let (projection, effect) = ui.commit_settings(prepared, &state);
+                    publish_settings(&app, projection.settings, Some(effect.ui))
+                })();
+                let _ = reply.send(result);
+            }
             Ok(Control::Disconnect(reply)) => {
                 harness = None;
                 conversation = None;
@@ -524,7 +589,8 @@ fn main() {
             agents_projection,
             send_ui_agent_action,
             send_ui_conversation_action,
-            send_ui_composer_action
+            send_ui_composer_action,
+            send_ui_settings_action
         ])
         .build(tauri::generate_context!())
         .expect("initialize Yeet desktop");

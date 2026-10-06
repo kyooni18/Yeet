@@ -646,7 +646,25 @@ export interface ComposerView { context: ComposerContext; editor: EditorSnapshot
 export interface ComposerSuggestion { command: string; description: string; destination: ComposerDestination | null; arguments?: string | null }
 export interface ComposerUiEffect { accepted_editor: EditorSnapshot | null; cancel_edit: EditorSnapshot | null; destination: ComposerDestination | null; replace_editor: { editor: EditorSnapshot; text: string } | null }
 
+export type SettingsIcon = 'appearance' | 'settings' | 'memory' | 'web' | 'model' | 'reasoning' | 'context' | 'theme' | 'policy' | 'agents' | 'permissions' | 'provider' | 'capabilities'
+export type SettingsDestination = 'models' | 'reasoning' | 'agents' | 'permissions' | 'auth' | 'providers' | 'capabilities'
+export type SettingsEditorKind = 'context_length' | 'dark_theme' | 'light_theme'
+export type SettingsAction =
+  | { type: 'select'; value: string | null }
+  | { type: 'move_selection'; value: number }
+  | { type: 'activate' | 'submit_editor'; value: string }
+  | { type: 'set_choice'; value: { id: string; value: string } }
+  | { type: 'set_toggle'; value: { id: string; enabled: boolean } }
+  | { type: 'cancel_editor' | 'refresh' }
+export interface SettingsOption { value: string; label: string; selected: boolean; action: SettingsAction }
+export interface SettingsControl { id: string; label: string; detail: string; icon: SettingsIcon; kind: 'toggle' | 'choice' | 'navigation' | 'editor'; value: string; checked: boolean | null; enabled: boolean; options: SettingsOption[]; action: SettingsAction; provider: string | null; action_label: string }
+export interface SettingsSection { id: string; label: string; icon: SettingsIcon; controls: SettingsControl[] }
+export interface SettingsEditorView { kind: SettingsEditorKind; label: string; value: string; hint: string }
+export interface SettingsView { title: string; subtitle: string; sections: SettingsSection[]; selected: string | null; editor: SettingsEditorView | null; notice: string | null; working: boolean }
+export interface SettingsUiEffect { destination: SettingsDestination | null; accepted_editor: SettingsEditorView | null }
+
 export type RemoteServerMessage =
+  | { version: number; type: 'ui_settings'; settings_revision: number; request_id?: string | null; view: SettingsView; effect?: SettingsUiEffect | null }
   | { version: number; type: 'ui_composer'; composer_revision: number; request_id?: string | null; view: ComposerView; effect?: ComposerUiEffect | null }
   | { version: number; type: 'ui_conversation'; conversation_revision: number; request_id?: string | null; view: ConversationView; effect?: ConversationUiEffect | null }
   | { version: number; type: 'ui_agents'; agents_revision: number; request_id?: string | null; view: AgentsView; effect?: AgentUiEffect | null }

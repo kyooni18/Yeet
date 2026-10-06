@@ -7,6 +7,7 @@ import {
   type AgentAction,
   type ConversationAction,
   type ComposerAction,
+  type SettingsAction,
   type ShellAction,
   type RemoteProtocolInfo,
   type RemoteResumeState,
@@ -156,6 +157,13 @@ export class RemoteTransport {
       this.resume.sessionId = command.session_id
       writeResumeState(this.adapter, this.resume)
     }
+    return true
+  }
+
+  sendSettingsUi(action: SettingsAction): boolean {
+    if (!this.socket || this.socket.readyState !== 1 || !this.welcomed) return false
+    this.socket.send(JSON.stringify({ type: 'ui_settings_action', version: 1,
+      request_id: this.adapter.requestId(), action }))
     return true
   }
 
@@ -345,5 +353,5 @@ export class RemoteTransport {
 /** Semantic transport contract also implemented by the local desktop bridge. */
 export type RemoteClientTransport = Pick<RemoteTransport,
   'connect' | 'send' | 'close' | 'markApplied' | 'switchWorkspace' | 'reconnectAfterAuth'
-> & Partial<Pick<RemoteTransport, 'sendUi' | 'sendAgentUi' | 'sendConversationUi' | 'sendComposerUi'>>
+> & Partial<Pick<RemoteTransport, 'sendUi' | 'sendAgentUi' | 'sendConversationUi' | 'sendComposerUi' | 'sendSettingsUi'>>
 // Legacy test/host transports can opt into the additive UI channel.

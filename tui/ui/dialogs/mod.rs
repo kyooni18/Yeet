@@ -289,182 +289,40 @@ pub(super) fn draw_provider_edit(frame: &mut Frame<'_>, app: &App) {
 }
 
 pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
+    let view = app.application.settings_projection().view;
     let area = centered_rect(84, 72, frame.area());
     theme::modal_backdrop(frame, area);
-    let title = if app.state.settings_working {
-        " Settings · saving… · Esc close "
-    } else {
-        " Settings · ↑/↓ navigate · Enter/Space change/open · r refresh · Esc close "
-    };
-    let block = theme::modal_block(title);
+    let title = format!(" {} · {} · ↑/↓ navigate · Enter/Space change/open · r refresh · Esc close ", view.title, if view.working { "saving…" } else { &view.subtitle });
+    let block = theme::modal_block(&title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
-
-    let runtime = &app.state.runtime_settings;
-    let mut rows: Vec<ListItem<'static>> = Vec::new();
-    let mut row = |label: &str, value: String, detail: &str| {
-        rows.push(ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("{label:<22}"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(value, Style::default().fg(theme::accent())),
-            Span::styled(format!(" · {detail}"), Style::default().fg(theme::muted())),
-        ])));
-    };
-
-    if app.openai_provider_active() {
-        let flex_available = app.openai_flex_available();
-        row(
-            "OpenAI Flex",
-            if !flex_available {
-                "unavailable".into()
-            } else if app.state.openai_flex {
-                "on".into()
-            } else {
-                "off".into()
-            },
-            if flex_available {
-                "API billing service tier"
-            } else {
-                "browser login path does not support Flex"
-            },
-        );
+    let mut rows = Vec::new();
+    let mut selected = None;
+    for section in &view.sections {
+        rows.push(ListItem::new(Line::styled(section.label.clone(), Style::default().fg(theme::muted()).add_modifier(Modifier::BOLD))));
+        for control in &section.controls {
+            if view.selected.as_deref() == Some(control.id.as_str()) { selected = Some(rows.len()); }
+            rows.push(ListItem::new(Line::from(vec![
+                Span::styled(format!("{} {:<22}", settings_icon(control.icon), control.label), Style::default().fg(if control.enabled {theme::text()} else {theme::muted()}).add_modifier(Modifier::BOLD)),
+                Span::styled(control.value.clone(), Style::default().fg(if control.enabled {theme::accent()} else {theme::muted()})),
+                Span::styled(format!(" · {}", control.detail), Style::default().fg(theme::muted())),
+            ])));
+        }
     }
-    row(
-        "Project Memory",
-        if app.state.foundation_memory_enabled {
-            "on".into()
-        } else {
-            "off".into()
-        },
-        if app.state.foundation_memory_connected {
-            "selected backend ready"
-        } else {
-            "selected backend unavailable"
-        },
-    );
-    row(
-        "Memory Backend",
-        app.state.foundation_memory_backend.clone(),
-        if app.state.foundation_memory_backend == "mcp" {
-            app.state.foundation_memory_server.as_str()
-        } else {
-            "Yeet internal provider"
-        },
-    );
-    row(
-        "Web Backend",
-        app.state.web_backend.clone(),
-        if app.state.web_backend == "mcp" {
-            app.state.web_server.as_str()
-        } else {
-            "Yeet internal provider"
-        },
-    );
-    row(
-        "Model",
-        if app.state.active_model.is_empty() {
-            "not selected".into()
-        } else {
-            app.state.active_model.clone()
-        },
-        "choose the default model",
-    );
-    row(
-        "Reasoning",
-        if app.state.active_reasoning_level.is_empty() {
-            "auto".into()
-        } else {
-            app.state.active_reasoning_level.clone()
-        },
-        "persistent reasoning level",
-    );
-    let context_value = runtime
-        .context_length_override
-        .map(|value| format!("{} override", compact_number(value)))
-        .unwrap_or_else(|| {
-            app.state
-                .active_model_context_length
-                .map(|value| format!("auto · {}", compact_number(value)))
-                .unwrap_or_else(|| "auto".into())
-        });
-    row("Context window", context_value, "current-model override");
-    row(
-        "Appearance",
-        runtime.appearance.clone(),
-        "Enter cycles auto → dark → light",
-    );
-    row(
-        "Dark theme",
-        if runtime.theme_dark_warning.is_some() {
-            format!(
-                "{} · invalid → {}",
-                runtime.theme_dark, runtime.theme_dark_resolved
-            )
-        } else {
-            runtime.theme_dark.clone()
-        },
-        "built-in name or JSON/Lua theme path",
-    );
-    row(
-        "Light theme",
-        if runtime.theme_light_warning.is_some() {
-            format!(
-                "{} · invalid → {}",
-                runtime.theme_light, runtime.theme_light_resolved
-            )
-        } else {
-            runtime.theme_light.clone()
-        },
-        "built-in name or JSON/Lua theme path",
-    );
-    row(
-        "Jev loop policy",
-        runtime.jev_loop_mode.clone(),
-        "Enter cycles off → shadow → enforce",
-    );
-    row(
-        "Agent Group",
-        app.agent_group_summary(),
-        "member coordination, shared budgets, delegation",
-    );
-    let sandbox_value = app
-        .state
-        .sandbox_settings
-        .as_ref()
-        .map(|settings| format!("{} · {}", settings.preset, settings.permission_mode()))
-        .unwrap_or_else(|| "unavailable".into());
-    row(
-        "Sandbox & permissions",
-        sandbox_value,
-        "presets and advanced policy",
-    );
-    row(
-        "Authentication",
-        "open".into(),
-        "provider login and API keys",
-    );
-    row("Providers", "open".into(), "custom API endpoints");
-    row("Capabilities", "open".into(), "enable or disable tools");
-
-    let list = List::new(rows)
-        .highlight_style(theme::selected())
-        .highlight_symbol("▸ ");
-    let mut state = ListState::default().with_selected(Some(app.popup_index));
+    let list = List::new(rows).highlight_style(theme::selected()).highlight_symbol("▸ ");
+    let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(list, chunks[0], &mut state);
-
-    let status = app
-        .state
-        .settings_notice
-        .as_deref()
-        .map(|notice| truncate_end(notice, chunks[1].width as usize))
-        .unwrap_or_else(|| {
-            "Persistent settings are editable here; install/server/diagnostic CLI actions stay in the CLI."
-                .into()
-        });
-    frame.render_widget(Paragraph::new(status).fg(theme::muted()), chunks[1]);
+    let status = view.notice.as_deref().unwrap_or(&view.subtitle);
+    frame.render_widget(Paragraph::new(truncate_end(status, chunks[1].width as usize)).fg(theme::muted()), chunks[1]);
+}
+fn settings_icon(icon: crate::shared_ui::settings::SettingsIcon) -> &'static str {
+    use crate::shared_ui::settings::SettingsIcon::*;
+    match icon {
+        Appearance | Theme => "◐", Settings | Policy => "⚙", Memory => "\u{f1c0}", Web => "\u{f0ac}",
+        Model | Reasoning => "\u{f0eb}", Context => "\u{f15c}", Agents => "\u{f0c0}", Permissions => "\u{f023}",
+        Provider => "\u{f084}", Capabilities => "\u{f0e7}",
+    }
 }
 
 pub(super) fn draw_sandbox_presets(frame: &mut Frame<'_>, app: &App) {
@@ -798,12 +656,10 @@ pub(super) fn draw_sandbox_policy(frame: &mut Frame<'_>, app: &App) {
 pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(70, 40, frame.area());
     theme::modal_backdrop(frame, area);
-    let (title, labels): (&str, Vec<&str>) = match app.settings_edit_kind.as_ref() {
-        Some(SettingsEditKind::ContextLength) => ("Context window", vec!["Tokens or auto"]),
-        Some(SettingsEditKind::ThemeDark) => ("Dark theme", vec!["Built-in name or JSON/Lua path"]),
-        Some(SettingsEditKind::ThemeLight) => {
-            ("Light theme", vec!["Built-in name or JSON/Lua path"])
-        }
+    let view = app.application.settings_projection().view;
+    let (title, labels): (&str, Vec<&str>) = if let Some(editor) = &view.editor {
+        (&editor.label, vec![&editor.hint])
+    } else { match app.settings_edit_kind.as_ref() {
         Some(SettingsEditKind::WorkspacePath) => ("Add workspace path", vec!["Relative path"]),
         Some(SettingsEditKind::Network) => ("Add network grant", vec!["Host", "Port (* = any)"]),
         Some(SettingsEditKind::Environment { .. }) => {
@@ -811,8 +667,8 @@ pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
         }
         Some(SettingsEditKind::Secret) => ("Add secret ID", vec!["Secret ID"]),
         Some(SettingsEditKind::Limit { name }) => (name.as_str(), vec!["Value"]),
-        None => ("Edit setting", vec!["Value"]),
-    };
+        _ => ("Edit setting", vec!["Value"]),
+    }};
     let block = theme::modal_block(format!(" {title} · Tab fields · Enter save · Esc cancel "));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -827,6 +683,11 @@ pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
         })
         .collect::<Vec<_>>();
     draw_form_rows(frame, inner, &rows, app.editor_index, true);
+    if view.editor.is_some() {
+        if let Some(notice) = &view.notice {
+            frame.render_widget(Paragraph::new(notice.as_str()).fg(theme::error()).wrap(Wrap { trim: false }), Rect::new(inner.x, inner.bottom().saturating_sub(2), inner.width, 2.min(inner.height)));
+        }
+    }
 }
 
 fn draw_form_rows(

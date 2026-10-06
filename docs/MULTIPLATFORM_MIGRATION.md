@@ -337,3 +337,17 @@ The exact staged shared Settings model passed three behavioral tests and
 all-target compilation in an isolated checkout. Native/Web root adapters and
 transport are still being verified before their own checkpoint. Advanced
 settings forms and graphical content parity remain incomplete.
+
+Shared Settings root adapters now consume the same ordered controls/actions in
+TUI and Web. Native root index arithmetic and duplicate policy have been removed;
+stable control IDs survive dynamic capability insertion. Advanced forms remain
+native pending later extraction. Remote/Tauri publish separate Settings revisions
+and safe effects, with Harness delivery before committing editor intent.
+Browser tests invoke the production Rust reducer rather than duplicate policy.
+
+The exact staged adapter snapshot passed 351 library tests with explicit runtime
+assets, excluding the same two previously identified assertions. Eight native
+settings checks and the Agent Group return-navigation regression passed. Eight
+desktop/mobile browser checks cover commands, Flex eligibility, busy/offline
+behavior and dismissal. Web/RN typechecks and desktop host compilation passed.
+Unrelated worktree changes remain preserved.

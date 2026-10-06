@@ -1,10 +1,11 @@
-import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, UiProjection, AgentAction, ConversationAction, ComposerAction } from '../../../../shared/remote/protocol'
+import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, UiProjection, AgentAction, ConversationAction, ComposerAction, SettingsAction } from '../../../../shared/remote/protocol'
 import type { RemoteTransportEvents } from '../../../../shared/remote/transport'
 
+type SettingsEvent = Extract<RemoteServerMessage, { type: 'ui_settings' }>
 type ComposerEvent = Extract<RemoteServerMessage, { type: 'ui_composer' }>
 type ConversationEvent = Extract<RemoteServerMessage, { type: 'ui_conversation' }>
 type AgentsEvent = Extract<RemoteServerMessage, { type: 'ui_agents' }>
-type ApplicationProjection = UiProjection & { composer: Omit<ComposerEvent, 'version' | 'type' | 'request_id' | 'effect'>; conversation: Omit<ConversationEvent, 'version' | 'type' | 'request_id' | 'effect'>; agents: Omit<AgentsEvent, 'version' | 'type' | 'request_id' | 'effect'> }
+type ApplicationProjection = UiProjection & { settings: Omit<SettingsEvent, 'version' | 'type' | 'request_id' | 'effect'>; composer: Omit<ComposerEvent, 'version' | 'type' | 'request_id' | 'effect'>; conversation: Omit<ConversationEvent, 'version' | 'type' | 'request_id' | 'effect'>; agents: Omit<AgentsEvent, 'version' | 'type' | 'request_id' | 'effect'> }
 type UiEvent = Extract<RemoteServerMessage, { type: 'ui_state' }>
 type CoreEvent = { workspace?: string; type: string; state: BridgeState | null; message: string | null }
 type TauriBridge = {
@@ -21,6 +22,7 @@ export class DesktopTransport {
   private generation = 0
   private sequence = 0
   private uiRevision = -1
+  private settingsRevision = -1
   private composerRevision = -1
   private conversationRevision = -1
   private agentsRevision = -1
@@ -58,6 +60,11 @@ export class DesktopTransport {
       const applyComposer = (event: ComposerEvent) => {
         if (event.composer_revision < this.composerRevision) return
         this.composerRevision = event.composer_revision
+        this.events.onMessage(event)
+      }
+      const applySettings = (event: SettingsEvent) => {
+        if (event.settings_revision < this.settingsRevision) return
+        this.settingsRevision = event.settings_revision
         this.events.onMessage(event)
       }
       const applyEvent = (event: CoreEvent) => {
@@ -100,6 +107,13 @@ export class DesktopTransport {
       })
       if (generation !== this.generation) { unsubscribeComposer(); unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe(); return }
       this.unsubscribe = () => { unsubscribeComposer(); unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe() }
+      const unsubscribeSettings = await api.event.listen<SettingsEvent>('yeet://ui-settings-event', event => {
+        if (generation !== this.generation) return
+        if (initializing) buffered.push(() => applySettings(event.payload))
+        else applySettings(event.payload)
+      })
+      if (generation !== this.generation) { unsubscribeSettings(); unsubscribeComposer(); unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe(); return }
+      this.unsubscribe = () => { unsubscribeSettings(); unsubscribeComposer(); unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe() }
       const result = await api.core.invoke<{ workspace: string; state: BridgeState | null }>('connect_core', { workspace: this.workspace })
       if (generation !== this.generation) return
       const projection = await api.core.invoke<ApplicationProjection>('application_projection')
@@ -113,6 +127,7 @@ export class DesktopTransport {
       applyAgents({ version: 1, type: 'ui_agents', ...projection.agents })
       applyConversation({ version: 1, type: 'ui_conversation', ...projection.conversation })
       applyComposer({ version: 1, type: 'ui_composer', ...projection.composer })
+      applySettings({ version: 1, type: 'ui_settings', ...projection.settings })
       initializing = false
       for (const apply of buffered) apply()
       this.events.onOpen()
@@ -136,6 +151,11 @@ export class DesktopTransport {
   sendUi(action: ShellAction): boolean {
     if (!this.connected) return false
     void bridge()!.core.invoke('send_ui_action', { action }).catch(error => this.events.onError(String(error)))
+    return true
+  }
+  sendSettingsUi(action: SettingsAction): boolean {
+    if (!this.connected) return false
+    void bridge()!.core.invoke('send_ui_settings_action', { action }).catch(error => this.events.onError(String(error)))
     return true
   }
   sendComposerUi(action: ComposerAction): boolean {

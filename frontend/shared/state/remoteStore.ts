@@ -7,6 +7,9 @@ import {
   type AgentAction,
   type ConversationAction,
   type ComposerAction,
+  type SettingsAction,
+  type SettingsView,
+  type SettingsUiEffect,
   type ComposerView,
   type ComposerUiEffect,
   type ConversationView,
@@ -24,6 +27,8 @@ import {
 } from '../remote/protocol'
 
 export interface RemoteSnapshot {
+  settings: SettingsView | null
+  settingsEffect: { revision: number; value: SettingsUiEffect } | null
   composer: ComposerView | null
   composerEffect: { revision: number; value: ComposerUiEffect } | null
   conversation: ConversationView | null
@@ -119,6 +124,9 @@ export class RemoteStore {
   constructor(private readonly options: RemoteStoreOptions) {}
   private ui: UiProjection | null = null
   private uiRevision = -1
+  private settingsRevision = -1
+  private settings: SettingsView | null = null
+  private settingsEffect: { revision: number; value: SettingsUiEffect } | null = null
   private composerRevision = -1
   private composer: ComposerView | null = null
   private composerEffect: { revision: number; value: ComposerUiEffect } | null = null
@@ -165,6 +173,8 @@ export class RemoteStore {
       ? Math.min(100, Math.max(0, Math.round((used / total) * 100)))
       : null
     return {
+      settings: this.settings,
+      settingsEffect: this.settingsEffect,
       composer: this.composer,
       composerEffect: this.composerEffect,
       conversation: this.conversation,
@@ -257,6 +267,14 @@ export class RemoteStore {
 
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
+      case 'ui_settings':
+        if (message.settings_revision < this.settingsRevision) return
+        this.settingsRevision = message.settings_revision
+        this.settings = message.view
+        if (message.effect?.accepted_editor != null || message.effect?.destination != null) {
+          this.settingsEffect = { revision: message.settings_revision, value: message.effect }
+        }
+        return
       case 'ui_composer':
         if (message.composer_revision < this.composerRevision) return
         this.composerRevision = message.composer_revision
@@ -293,6 +311,8 @@ export class RemoteStore {
         this.uiRevision = -1
         this.agentsRevision = -1
         this.agentEffect = null
+        this.settingsRevision = -1
+        this.settingsEffect = null
         this.composerRevision = -1
         this.composerEffect = null
         this.conversationRevision = -1
@@ -468,6 +488,17 @@ export class RemoteStore {
         entry.uiStreaming = true
       }
     }
+  }
+
+  consumeSettingsEffect(revision: number): SettingsUiEffect | null {
+    if (this.settingsEffect?.revision !== revision) return null
+    const effect = this.settingsEffect.value
+    this.settingsEffect = null
+    return effect
+  }
+
+  sendSettingsUi(action: SettingsAction): boolean {
+    return this.transport?.sendSettingsUi?.(action) ?? false
   }
 
   consumeComposerEffect(revision: number): ComposerUiEffect | null {

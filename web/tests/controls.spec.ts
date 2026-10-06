@@ -135,6 +135,7 @@ test('QuickPanel presents compact model, reasoning, goal, workspace, and sandbox
 })
 
 test('Settings sheet sends Remote-backed settings mutations', async ({ page }) => {
+  await emit(page, { type: 'state_update', version: 1, sequence: 2, revision: 2, patch: { active_model: 'openai/gpt-5.6-sol', auth_providers: [{ provider: 'openai', authenticated: true, method: 'api-key', expires_at: null, error: null }] } })
   await page.getByRole('button', { name: 'Quick settings' }).click()
   const panel = page.locator('.quick-panel')
   await panel.getByRole('button', { name: 'Settings', exact: true }).click()
