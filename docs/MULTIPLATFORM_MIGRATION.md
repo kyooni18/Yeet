@@ -384,3 +384,33 @@ The native terminal adapter now lives under `Platforms/tui`. Its canonical Rust 
 is `crate::platforms::tui`; `crate::tui` remains a compatibility alias, with root `app` and `ui` compatibility exports. The physical
 move preserves pending native worktree changes separately from committed source,
 and production/file size guards now traverse `Platforms` alongside Harness.
+
+## Additional verified follow-ups
+
+The TUI transcript context menu now binds the shared message controls from
+`UI/conversation/` to Copy, Edit and Regenerate actions. It maps terminal rows
+back to stable message IDs through the transcript geometry cache and sends
+commands through Harness before committing shared UI effects. Copy and Edit also
+remain available through the legacy mouse adapter used by existing callers.
+Focused TUI selection and message-source geometry checks passed, as did
+`cargo check --all-targets`.
+
+Sandbox policy, validation and persistence are now canonical in
+`Harness/sandbox.rs`. `src/sandbox.rs` remains a compatibility re-export for
+existing clients, and `src/sandbox_cli.rs` remains the terminal command adapter.
+The policy schema and persistence behavior did not change. All-target checking
+and the three focused sandbox tests passed.
+
+The Tauri host implementation now lives in `Platforms/desktop.rs`; its crate
+entry retains the Windows subsystem attribute and includes that adapter. The
+Cargo package root, runtime staging location, configuration and embedded WebUI
+paths are unchanged. The desktop package check and host tests passed after this
+move.
+
+The current WebUI redesign and the user's in-progress Web edits remain in
+`web/` and were not altered by these architecture checkpoints. Continue treating
+that implementation as the visual source of truth while extracting shared
+semantics. Primary-content projection is still incomplete: Home, Files and Diff
+are not yet shared end-to-end through Remote, Tauri and Web, and many Harness
+runtime modules still remain under `src/`. The Expo visual app remains blank
+until the user supplies its OpenPencil design.
