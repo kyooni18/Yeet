@@ -6,12 +6,7 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
-pub(crate) enum HomeAction {
-    Select(ResourceTarget),
-    Open(ResourceTarget),
-    NewSession,
-}
+pub(crate) use crate::shared_ui::home::HomeAction;
 
 #[cfg(test)]
 mod tests {
@@ -81,6 +76,32 @@ mod tests {
         );
         assert_eq!(app.input, "Keep this draft");
         assert_eq!(app.cursor, 3);
+    }
+
+    #[test]
+    fn new_session_waits_for_delivery_before_shared_home_commit() {
+        let mut app = App::default();
+        let before = app.application.projection().ui_revision;
+        app.apply_home_action(HomeAction::NewSession);
+        assert!(matches!(
+            app.take_workbench_command(),
+            Some(FrontendCommand::NewSession)
+        ));
+        assert_eq!(app.application.projection().ui_revision, before);
+        assert!(
+            app.finish_home_delivery(Err(anyhow::anyhow!("delivery failed")))
+                .is_err()
+        );
+        assert_eq!(app.application.projection().ui_revision, before);
+
+        app.apply_home_action(HomeAction::NewSession);
+        assert!(matches!(
+            app.take_workbench_command(),
+            Some(FrontendCommand::NewSession)
+        ));
+        app.finish_home_delivery(Ok(())).unwrap();
+        assert!(app.application.projection().ui_revision > before);
+        assert!(!app.home_visible());
     }
 }
 
@@ -161,26 +182,45 @@ impl App {
 
     pub(crate) fn refresh_home(&mut self, force: bool) {
         self.home.refresh_git(&self.workspace_path(), force);
-        self.home.replace_content(WorkspaceContent::collect(
-            &self.state,
-            &self.recent_views,
-            &self.home.git,
-        ));
+        let content = WorkspaceContent::collect(&self.state, &self.recent_views, &self.home.git);
+        self.application.update_home_content(content.clone());
+        self.home.replace_content(content);
+        self.home.selected = self.application.projection().home.selected;
     }
 
     pub(crate) fn apply_home_action(&mut self, action: HomeAction) {
-        match action {
-            HomeAction::Select(target) => {
-                self.home.selected = Some(target);
-                self.input_focused = false;
-            }
-            HomeAction::Open(target) => self.open_resource(target),
-            HomeAction::NewSession => {
+        let selecting = matches!(action, HomeAction::Select(_));
+        let prepared = self.application.prepare_home(action, &self.state);
+        if let Some(command) = prepared.effect.command.clone() {
+            self.workbench_command = Some(command);
+            self.pending_home = Some(prepared);
+            return;
+        }
+        if let Some(open) = prepared.effect.open.clone() {
+            self.open_resource(open);
+        }
+        let (projection, _) = self.application.commit_home(prepared, &self.state);
+        self.home.selected = projection.home.selected;
+        if selecting {
+            self.input_focused = false;
+        }
+    }
+
+    pub(crate) fn finish_home_delivery(
+        &mut self,
+        delivered: anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        if delivered.is_ok() {
+            if let Some(prepared) = self.pending_home.take() {
+                let (projection, _) = self.application.commit_home(prepared, &self.state);
+                self.home.selected = projection.home.selected;
                 self.activate_workbench_tab(WorkbenchTab::Session);
                 self.input_focused = true;
-                self.workbench_command = Some(FrontendCommand::NewSession);
             }
+        } else {
+            self.pending_home = None;
         }
+        delivered
     }
 
     /// Route stable shared resource targets through the existing workbench.
@@ -251,6 +291,7 @@ impl App {
             }
             return false;
         }
+        let previous_selection = self.home.selected.clone();
         match event.code {
             KeyCode::Char('i') | KeyCode::Esc | KeyCode::Tab => self.input_focused = true,
             KeyCode::Down | KeyCode::Char('j') => self.home.select_next(1),
@@ -261,12 +302,17 @@ impl App {
             KeyCode::End => self.home.select_next(isize::MAX),
             KeyCode::Enter | KeyCode::Right => {
                 if let Some(target) = self.home.selected.clone() {
-                    self.open_resource(target);
+                    self.apply_home_action(HomeAction::Open(target));
                 }
             }
             KeyCode::Char('r') => self.refresh_home(true),
             KeyCode::Char('n' | '+') => self.apply_home_action(HomeAction::NewSession),
             _ => return false,
+        }
+        if self.home.selected != previous_selection
+            && let Some(target) = self.home.selected.clone()
+        {
+            self.apply_home_action(HomeAction::Select(target));
         }
         true
     }

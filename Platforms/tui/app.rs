@@ -79,6 +79,7 @@ pub struct App {
     pub(crate) observed_resource: Option<crate::workbench::ResourceTarget>,
     pub(crate) home_targets: Vec<(ratatui::layout::Rect, home::HomeAction)>,
     pub(crate) workbench_command: Option<FrontendCommand>,
+    pub(crate) pending_home: Option<crate::shared_ui::application_session::PreparedHomeAction>,
     pub diff_tabs: crate::tui::kit::Tabs<diff::DiffState>,
     pub(crate) diff_frame: diff::DiffFrame,
     pub keymap: keymap::Keymap,
@@ -172,6 +173,7 @@ impl Default for App {
             observed_resource: None,
             home_targets: Vec::new(),
             workbench_command: None,
+            pending_home: None,
             diff_tabs: Default::default(),
             diff_frame: Default::default(),
             keymap: keymap::Keymap::default(),
@@ -489,7 +491,7 @@ impl App {
         }
         if self.handle_home_key(&event) {
             if let Some(command) = self.take_workbench_command() {
-                backend.send(command)?;
+                self.send_ui_command(backend, command)?;
             }
             return Ok(());
         }

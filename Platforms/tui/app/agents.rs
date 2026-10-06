@@ -106,6 +106,9 @@ impl App {
         backend: &mut crate::backend::Backend,
         command: FrontendCommand,
     ) -> anyhow::Result<()> {
+        if self.pending_home.is_some() && matches!(command, FrontendCommand::NewSession) {
+            return self.finish_home_delivery(backend.send(command));
+        }
         self.finish_agent_delivery(backend.send(command))
     }
 
