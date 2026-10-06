@@ -60,6 +60,7 @@ pub struct ApplicationProjection {
     pub toolbar: ToolbarView,
     pub ui_revision: u64,
     pub home_revision: u64,
+    pub diff_revision: u64,
     pub navigation: NavigationState,
     pub state: ShellState,
     pub view: ShellView,
@@ -84,6 +85,8 @@ pub struct ApplicationSession {
     revision: u64,
     home_revision: u64,
     home_serialized: HomeView,
+    diff_revision: u64,
+    diff_serialized: Vec<DiffView>,
     serialized: serde_json::Value,
 }
 impl Default for ApplicationSession {
@@ -108,6 +111,8 @@ impl ApplicationSession {
             revision: 0,
             home_revision: 0,
             home_serialized: HomeState::default().project(true),
+            diff_revision: 0,
+            diff_serialized: Vec::new(),
             serialized: serde_json::Value::Null,
         };
         session.serialized = session.fingerprint();
@@ -329,6 +334,7 @@ impl ApplicationSession {
             toolbar: self.toolbar_view(),
             ui_revision: self.revision,
             home_revision: self.home_revision,
+            diff_revision: self.diff_revision,
             navigation: self.navigation.clone(),
             state: self.shell.clone(),
             view: self.shell.view(),
@@ -791,6 +797,10 @@ impl ApplicationSession {
             self.home_revision = self.home_revision.saturating_add(1);
             self.home_serialized = home;
         }
+        if self.diff_views != self.diff_serialized {
+            self.diff_revision = self.diff_revision.saturating_add(1);
+            self.diff_serialized = self.diff_views.clone();
+        }
         self.revision = self.revision.saturating_add(1);
         self.serialized = self.fingerprint();
     }
@@ -989,6 +999,7 @@ mod tests {
             .unwrap();
         let (projection, changed) = session.commit_diff_action(ok);
         assert!(changed && projection.ui_revision > revision);
+        assert!(projection.diff_revision >= 3);
         assert_eq!(session.diff_view(first).unwrap().selected, Some(a));
         assert_eq!(session.diff_view(second).unwrap().selected, Some(b));
         assert!(session.remove_diff_view(second).is_some());

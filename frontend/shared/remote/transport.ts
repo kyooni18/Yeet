@@ -1,4 +1,4 @@
-import type { HomeAction, ToolbarAction } from './protocol'
+import type { DiffAction, HomeAction, ToolbarAction } from './protocol'
 import {
   decodeServerMessage,
   encodeCommand,
@@ -164,6 +164,12 @@ export class RemoteTransport {
   sendToolbarUi(action: ToolbarAction): boolean {
     if (!this.socket || this.socket.readyState !== 1 || !this.welcomed) return false
     this.socket.send(JSON.stringify({type:'ui_toolbar_action',version:1,request_id:this.adapter.requestId(),action}))
+    return true
+  }
+  sendDiffUi(action: DiffAction): boolean {
+    if (!this.socket || this.socket.readyState !== 1 || !this.welcomed) return false
+    this.socket.send(JSON.stringify({ type: 'ui_diff_action', version: 1,
+      request_id: this.adapter.requestId(), action }))
     return true
   }
   sendHomeUi(action: HomeAction): boolean {
@@ -365,5 +371,5 @@ export class RemoteTransport {
 /** Semantic transport contract also implemented by the local desktop bridge. */
 export type RemoteClientTransport = Pick<RemoteTransport,
   'connect' | 'send' | 'close' | 'markApplied' | 'switchWorkspace' | 'reconnectAfterAuth'
-> & Partial<Pick<RemoteTransport, 'sendUi' | 'sendAgentUi' | 'sendConversationUi' | 'sendComposerUi' | 'sendSettingsUi' | 'sendToolbarUi' | 'sendHomeUi'>>
+> & Partial<Pick<RemoteTransport, 'sendUi' | 'sendAgentUi' | 'sendConversationUi' | 'sendComposerUi' | 'sendSettingsUi' | 'sendToolbarUi' | 'sendHomeUi' | 'sendDiffUi'>>
 // Legacy test/host transports can opt into the additive UI channel.

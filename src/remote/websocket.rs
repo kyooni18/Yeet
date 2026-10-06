@@ -286,6 +286,11 @@ pub(super) enum RuntimeControl {
         request_id: Option<String>,
         completion: oneshot::Sender<Result<(), String>>,
     },
+    DiffAction {
+        action: crate::shared_ui::diff::DiffAction,
+        request_id: Option<String>,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -371,7 +376,7 @@ impl RemoteClientRuntime {
         })
     }
 
-    fn ui_messages(&self) -> Result<[ServerMessage; 6]> {
+    fn ui_messages(&self) -> Result<[ServerMessage; 7]> {
         let ui = self
             .ui
             .lock()
@@ -511,6 +516,31 @@ impl RemoteClientRuntime {
         let (completion, result) = oneshot::channel();
         self.commands
             .send(RuntimeControl::HomeAction {
+                action,
+                request_id,
+                completion,
+            })
+            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))?;
+        self.wake.notify();
+        match tokio::time::timeout(BACKEND_COMMAND_DELIVERY_TIMEOUT, result).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(anyhow!(error)),
+            Ok(Err(_)) => Err(anyhow!(
+                "semantic Remote runtime stopped before confirming UI action delivery"
+            )),
+            Err(_) => Err(anyhow!("timed out delivering Remote UI action")),
+        }
+    }
+
+    async fn apply_diff(
+        &self,
+        action: crate::shared_ui::diff::DiffAction,
+        request_id: Option<String>,
+    ) -> Result<()> {
+        self.touch();
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .send(RuntimeControl::DiffAction {
                 action,
                 request_id,
                 completion,
@@ -925,6 +955,27 @@ fn runtime_loop(
                         ) {
                             projection = updated;
                         }
+                        for message in application_messages(projection, request_id, None) {
+                            let _ = events.send(message);
+                        }
+                        Ok(())
+                    })();
+                    let _ = completion.send(result);
+                }
+                RuntimeControl::DiffAction {
+                    action,
+                    request_id,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), String> {
+                        let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
+                        let prepared = ui
+                            .prepare_diff_action(action)
+                            .ok_or("stale or unknown Diff action")?;
+                        let (projection, _) = ui.commit_diff_action(prepared);
                         for message in application_messages(projection, request_id, None) {
                             let _ = events.send(message);
                         }
@@ -1718,6 +1769,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     )).await;
                                 }
                             }
+                            ClientMessage::UiDiffAction { action, request_id, .. } => {
+                                if let Err(error) = runtime.apply_diff(action, request_id.clone()).await {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_action_failed", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
                             ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
@@ -1985,7 +2043,7 @@ mod tests {
             application_session::ApplicationSession,
             home::{ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent},
         };
-        let mut ui = ApplicationSession::default();
+        let mut ui = crate::shared_ui::application_session::ApplicationSession::default();
         let mut content = WorkspaceContent::default();
         content.sessions.push(ResourceItem::new(
             ResourceTarget::Session("session-1".into()),
@@ -2073,5 +2131,35 @@ mod tests {
 
         assert_eq!(hub.resolve_workspace(None).unwrap(), home);
         assert_eq!(hub.resolve_workspace(Some(".")).unwrap(), home);
+    }
+
+    #[test]
+    fn diff_projection_and_scoped_action_have_stable_remote_wire_shape() {
+        let mut ui = crate::shared_ui::application_session::ApplicationSession::default();
+        let mut tabs = crate::shared_ui::surfaces::Tabs::default();
+        let id = tabs.open("Diff", ());
+        let file = std::path::PathBuf::from("/w/a.rs");
+        let projection = ui
+            .update_diff_content(crate::shared_ui::diff::DiffContent {
+                id,
+                root: "/w".into(),
+                files: vec![file.clone()],
+                selected: None,
+            })
+            .unwrap();
+        let message = super::application_messages(projection, None, None)
+            .into_iter()
+            .find(|m| matches!(m, super::ServerMessage::UiDiff { .. }))
+            .unwrap();
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["type"], "ui_diff");
+        assert_eq!(wire["diff_revision"], 1);
+        assert_eq!(wire["views"][0]["selected"], "/w/a.rs");
+        let action = serde_json::json!({"type":"ui_diff_action","version":1,
+            "action":{"type":"set_full","value":{"view":wire["views"][0]["id"],"full":true}}});
+        assert!(matches!(
+            serde_json::from_value::<super::ClientMessage>(action).unwrap(),
+            super::ClientMessage::UiDiffAction { .. }
+        ));
     }
 }

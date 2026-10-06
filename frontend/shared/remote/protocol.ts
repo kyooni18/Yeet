@@ -641,6 +641,17 @@ export type HomeAction =
   | { type: 'select' | 'open'; value: ResourceTarget }
   | { type: 'move_selection'; value: number }
   | { type: 'new_session' }
+export type SurfaceId = number
+export interface DiffView {
+  id: SurfaceId
+  root: string
+  files: string[]
+  selected: string | null
+  full: boolean
+}
+export type DiffAction =
+  | { type: 'select_file'; value: { view: SurfaceId; target: string } }
+  | { type: 'set_full'; value: { view: SurfaceId; full: boolean } }
 export interface HomeUiEffect { open: ResourceTarget | null }
 
 // Rust UI/agents.rs owns these application views and effects.
@@ -737,6 +748,7 @@ export interface SettingsUiEffect { destination: SettingsDestination | null; acc
 export type RemoteServerMessage =
   | { version: number; type: 'workspace_switch_requested'; id: string; path: string; source_workspace: string }
   | { version: number; type: 'ui_home'; home_revision: number; request_id?: string | null; view: HomeView }
+  | { version: number; type: 'ui_diff'; diff_revision: number; request_id?: string | null; views: DiffView[] }
   | { version: number; type: 'ui_home_effect'; request_id?: string | null; open: ResourceTarget | null }
   | { version: number; type: 'ui_settings'; settings_revision: number; request_id?: string | null; view: SettingsView; effect?: SettingsUiEffect | null }
   | { version: number; type: 'ui_composer'; composer_revision: number; request_id?: string | null; view: ComposerView; effect?: ComposerUiEffect | null }

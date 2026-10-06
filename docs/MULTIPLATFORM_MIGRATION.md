@@ -478,3 +478,13 @@ Diff file selection and context-width changes now use serializable actions in
 row indexes, and the adapter rejects a path that disappeared after rendering.
 The action contract is shared; ApplicationSession ownership and Remote/Tauri
 dispatch for Files/Diff remain incomplete.
+
+## Diff transport
+
+`ApplicationProjection` now carries `diff_views` with a Diff-only `diff_revision`.
+Remote publishes `ui_diff` and accepts view-scoped `ui_diff_action`; Tauri emits
+`yeet://ui-diff-event` and exposes `send_ui_diff_action`; the shared TypeScript
+store keeps the latest revisioned `DiffView[]`. Actions are validated by
+`ApplicationSession` prepare/commit and stale targets are rejected. Remaining gap:
+Remote/Tauri hosts do not yet collect Git content or create Diff views (only the
+TUI installs `DiffContent` today), and no Web/Expo renderer consumes `diffViews`.

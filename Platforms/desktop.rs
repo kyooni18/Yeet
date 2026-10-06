@@ -10,6 +10,7 @@ use yeet::shared_ui::composer::{ComposerAction, ComposerUiEffect};
 use yeet::shared_ui::composer_session::ComposerProjection;
 use yeet::shared_ui::conversation::{ConversationAction, ConversationUiEffect};
 use yeet::shared_ui::conversation_session::ConversationProjection;
+use yeet::shared_ui::diff::{DiffAction, DiffView};
 use yeet::shared_ui::home::{HomeAction, HomeView, RecentViews, ResourceTarget, WorkspaceContent};
 use yeet::shared_ui::settings::{SettingsAction, SettingsUiEffect};
 use yeet::shared_ui::settings_session::SettingsProjection;
@@ -29,6 +30,7 @@ enum Control {
     UiProjection(mpsc::Sender<Result<UiProjection, String>>),
     ShellAction(ShellAction, mpsc::Sender<Result<(), String>>),
     HomeAction(HomeAction, mpsc::Sender<Result<(), String>>),
+    DiffAction(DiffAction, mpsc::Sender<Result<(), String>>),
     AgentsProjection(mpsc::Sender<Result<AgentProjection, String>>),
     AgentAction(AgentAction, mpsc::Sender<Result<(), String>>),
     ConversationAction(ConversationAction, mpsc::Sender<Result<(), String>>),
@@ -144,6 +146,21 @@ async fn send_ui_home_action(
     let (reply, response) = mpsc::channel();
     host.0
         .send(Control::HomeAction(action, reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn send_ui_diff_action(
+    action: DiffAction,
+    host: tauri::State<'_, CoreHost>,
+) -> Result<(), String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::DiffAction(action, reply))
         .map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn_blocking(move || response.recv())
         .await
@@ -278,6 +295,28 @@ fn publish_home(app: &tauri::AppHandle, projection: &ApplicationProjection) -> R
     )
     .map_err(|error| error.to_string())
 }
+#[derive(Clone, serde::Serialize)]
+struct DiffMessage {
+    version: u16,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: Option<String>,
+    diff_revision: u64,
+    views: Vec<DiffView>,
+}
+fn publish_diff(app: &tauri::AppHandle, projection: &ApplicationProjection) -> Result<(), String> {
+    app.emit(
+        "yeet://ui-diff-event",
+        DiffMessage {
+            version: 1,
+            kind: "ui_diff",
+            request_id: None,
+            diff_revision: projection.diff_revision,
+            views: projection.diff_views.clone(),
+        },
+    )
+    .map_err(|error| error.to_string())
+}
 fn publish_settings(
     app: &tauri::AppHandle,
     projection: SettingsProjection,
@@ -330,6 +369,7 @@ fn publish_application(
     effect: Option<AgentUiEffect>,
 ) -> Result<(), String> {
     publish_home(app, &projection)?;
+    publish_diff(app, &projection)?;
     app.emit(
         "yeet://ui-event",
         UiMessage {
@@ -548,6 +588,16 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     if matches!(effect.command, Some(HarnessCommand::NewSession)) {
                         publish_composer(&app, projection.composer.clone(), None)?;
                     }
+                    publish_application(&app, projection, None)
+                })();
+                let _ = reply.send(result);
+            }
+            Ok(Control::DiffAction(action, reply)) => {
+                let result = (|| -> Result<(), String> {
+                    let prepared = ui
+                        .prepare_diff_action(action)
+                        .ok_or("stale or unknown Diff action")?;
+                    let (projection, _) = ui.commit_diff_action(prepared);
                     publish_application(&app, projection, None)
                 })();
                 let _ = reply.send(result);
@@ -793,6 +843,7 @@ fn main() {
             ui_projection,
             send_ui_action,
             send_ui_home_action,
+            send_ui_diff_action,
             agents_projection,
             send_ui_agent_action,
             send_ui_conversation_action,

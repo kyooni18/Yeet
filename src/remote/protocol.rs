@@ -80,6 +80,12 @@ pub enum ClientMessage {
         request_id: Option<String>,
         action: crate::shared_ui::home::HomeAction,
     },
+    UiDiffAction {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        action: crate::shared_ui::diff::DiffAction,
+    },
     Ping {
         version: u16,
         #[serde(default)]
@@ -99,6 +105,7 @@ impl ClientMessage {
             | Self::UiToolbarAction { version, .. }
             | Self::UiSettingsAction { version, .. }
             | Self::UiHomeAction { version, .. }
+            | Self::UiDiffAction { version, .. }
             | Self::Ping { version, .. } => Some(*version),
         }
     }
@@ -159,6 +166,12 @@ pub enum ServerMessage {
         home_revision: u64,
         request_id: Option<String>,
         view: crate::shared_ui::home::HomeView,
+    },
+    UiDiff {
+        version: u16,
+        diff_revision: u64,
+        request_id: Option<String>,
+        views: Vec<crate::shared_ui::diff::DiffView>,
     },
     UiHomeEffect {
         version: u16,
@@ -286,6 +299,7 @@ impl ServerMessage {
             | Self::UiSettings { .. }
             | Self::UiHome { .. }
             | Self::UiHomeEffect { .. }
+            | Self::UiDiff { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }
@@ -311,6 +325,7 @@ impl ServerMessage {
             | Self::UiSettings { .. }
             | Self::UiHome { .. }
             | Self::UiHomeEffect { .. }
+            | Self::UiDiff { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }

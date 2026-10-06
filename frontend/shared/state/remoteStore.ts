@@ -25,6 +25,8 @@ import {
   type SandboxAction,
   type SessionSummary,
   type WorkspaceSummary,
+  type DiffAction,
+  type DiffView,
   type HomeAction,
   type HomeView,
   type ResourceTarget,
@@ -32,6 +34,7 @@ import {
 
 export interface RemoteSnapshot {
   home: HomeView | null
+  diffViews: DiffView[]
   homeEffect: { id: number; open: ResourceTarget } | null
   settings: SettingsView | null
   settingsEffect: { revision: number; value: SettingsUiEffect } | null
@@ -131,6 +134,8 @@ export class RemoteStore {
   private ui: UiProjection | null = null
   private uiRevision = -1
   private homeRevision = -1
+  private diffRevision = -1
+  private diffViews: DiffView[] = []
   private home: HomeView | null = null
   private homeEffect: { id: number; open: ResourceTarget } | null = null
   private homeEffectId = 0
@@ -184,6 +189,7 @@ export class RemoteStore {
       : null
     return {
       home: this.home,
+      diffViews: this.diffViews,
       homeEffect: this.homeEffect,
       settings: this.settings,
       settingsEffect: this.settingsEffect,
@@ -284,6 +290,11 @@ export class RemoteStore {
         this.homeRevision = message.home_revision
         this.home = message.view
         return
+      case 'ui_diff':
+        if (message.diff_revision < this.diffRevision) return
+        this.diffRevision = message.diff_revision
+        this.diffViews = message.views
+        return
       case 'ui_home_effect':
         if (message.open) this.homeEffect = { id: ++this.homeEffectId, open: message.open }
         return
@@ -336,6 +347,8 @@ export class RemoteStore {
       case 'welcome':
         this.uiRevision = -1
         this.homeRevision = -1
+        this.diffRevision = -1
+        this.diffViews = []
         this.home = null
         this.homeEffect = null
         this.agentsRevision = -1
@@ -527,6 +540,7 @@ export class RemoteStore {
   }
 
   sendToolbarUi(action: ToolbarAction): boolean { return this.transport?.sendToolbarUi?.(action) ?? false }
+  sendDiffUi(action: DiffAction): boolean { return this.transport?.sendDiffUi?.(action) ?? false }
   sendHomeUi(action: HomeAction): boolean { return this.transport?.sendHomeUi?.(action) ?? false }
   consumeHomeEffect(id: number): ResourceTarget | null {
     if (this.homeEffect?.id !== id) return null

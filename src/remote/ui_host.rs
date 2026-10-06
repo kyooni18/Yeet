@@ -21,7 +21,7 @@ pub(super) fn application_messages(
     projection: ApplicationProjection,
     request_id: Option<String>,
     effect: Option<AgentUiEffect>,
-) -> [ServerMessage; 6] {
+) -> [ServerMessage; 7] {
     [
         ServerMessage::UiState {
             toolbar: projection.toolbar,
@@ -39,8 +39,14 @@ pub(super) fn application_messages(
         ServerMessage::UiHome {
             version: REMOTE_PROTOCOL_VERSION,
             home_revision: projection.home_revision,
-            request_id,
+            request_id: request_id.clone(),
             view: projection.home,
+        },
+        ServerMessage::UiDiff {
+            version: REMOTE_PROTOCOL_VERSION,
+            diff_revision: projection.diff_revision,
+            request_id,
+            views: projection.diff_views,
         },
     ]
 }
