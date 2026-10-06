@@ -73,7 +73,7 @@ pub fn run_remote(options: RemoteOptions) -> Result<()> {
                     }
                 }
                 RemoteInput::Mouse(mouse) => {
-                    app.handle_mouse(mouse);
+                    app.handle_mouse_with_backend(mouse, &mut backend)?;
                     if let Some(command) = app.take_workbench_command() {
                         app.send_ui_command(&mut backend, command)?;
                     }
@@ -182,7 +182,7 @@ fn event_loop(
                     match event {
                         Event::Key(key) => app.handle_key(key, backend)?,
                         Event::Mouse(mouse) => {
-                            app.handle_mouse(mouse);
+                            app.handle_mouse_with_backend(mouse, backend)?;
                             if let Some(command) = app.take_workbench_command() {
                                 app.send_ui_command(backend, command)?;
                             }

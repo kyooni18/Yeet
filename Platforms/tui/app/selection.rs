@@ -4,10 +4,11 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use super::{App, Mode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptContextMenu {
     pub x: u16,
     pub y: u16,
+    pub entry_id: Option<String>,
 }
 
 impl App {
@@ -38,7 +39,6 @@ impl App {
     }
 
     /// Message control adapter: commit shared intent after successful Harness delivery.
-    #[allow(dead_code)] // Message controls are available in the shared view; native bindings follow.
     pub(crate) fn send_conversation_action(
         &mut self,
         backend: &mut crate::backend::Backend,
@@ -137,10 +137,26 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, event: MouseEvent) {
+        let _ = self.handle_mouse_inner(event, None);
+    }
+
+    pub fn handle_mouse_with_backend(
+        &mut self,
+        event: MouseEvent,
+        backend: &mut crate::backend::Backend,
+    ) -> anyhow::Result<()> {
+        self.handle_mouse_inner(event, Some(backend))
+    }
+
+    fn handle_mouse_inner(
+        &mut self,
+        event: MouseEvent,
+        mut backend: Option<&mut crate::backend::Backend>,
+    ) -> anyhow::Result<()> {
         if matches!(event.kind, MouseEventKind::Up(MouseButton::Left))
             && std::mem::take(&mut self.context_menu_click)
         {
-            return;
+            return Ok(());
         }
         // An overlay owns its clicks before the composer, sidebar, and tabs.
         if self.transcript_context_menu.is_some()
@@ -148,17 +164,17 @@ impl App {
         {
             self.context_menu_click = true;
             if self.point_in_transcript_context_menu(event.column, event.row) {
-                self.activate_transcript_context_menu(event.row);
+                self.activate_transcript_context_menu(event.row, backend.as_deref_mut())?;
             } else {
                 self.transcript_context_menu = None;
                 self.transcript_context_menu_area = (0, 0, 0, 0);
             }
-            return;
+            return Ok(());
         }
         if self.transcript_context_menu.is_some()
             && matches!(event.kind, MouseEventKind::Up(MouseButton::Left))
         {
-            return;
+            return Ok(());
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             let targets = if self.mode == Mode::Views {
@@ -169,7 +185,7 @@ impl App {
             ) {
                 &self.tab_targets
             } else {
-                return;
+                return Ok(());
             };
             if let Some(tab) = targets
                 .iter()
@@ -177,12 +193,12 @@ impl App {
                 .map(|(_, tab)| *tab)
             {
                 self.activate_workbench_tab(tab);
-                return;
+                return Ok(());
             }
         }
         if self.mode == Mode::Diff {
             self.handle_diff_mouse(event);
-            return;
+            return Ok(());
         }
         if self.mode == Mode::Agents {
             if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
@@ -194,10 +210,10 @@ impl App {
             {
                 self.input_focused = true;
             }
-            return;
+            return Ok(());
         }
         if self.mode != Mode::Chat {
-            return;
+            return Ok(());
         }
         if self.home_visible() && !self.home_targets.is_empty() {
             if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
@@ -208,7 +224,7 @@ impl App {
                     .map(|(_, action)| action.clone())
             {
                 self.apply_home_action(action);
-                return;
+                return Ok(());
             }
             if matches!(
                 event.kind,
@@ -221,7 +237,7 @@ impl App {
                         3
                     });
                 self.input_focused = false;
-                return;
+                return Ok(());
             }
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
@@ -237,7 +253,7 @@ impl App {
             let column = event.column.saturating_sub(x) as usize;
             self.cursor =
                 crate::text_layout::cursor_for_point(&self.input, self.composer_width, row, column);
-            return;
+            return Ok(());
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
             && let Some(session_id) = self.sidebar_session_at(event.column, event.row)
@@ -245,13 +261,13 @@ impl App {
             self.clear_transcript_selection();
             self.sidebar_load_request = Some(session_id);
             self.follow_tail = true;
-            return;
+            return Ok(());
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
             && self.point_in_transcript_context_menu(event.column, event.row)
         {
-            self.activate_transcript_context_menu(event.row);
-            return;
+            self.activate_transcript_context_menu(event.row, backend.as_deref_mut())?;
+            return Ok(());
         }
         let inside = self.point_in_transcript(event.column, event.row);
         match event.kind {
@@ -301,6 +317,18 @@ impl App {
                 self.transcript_context_menu = Some(TranscriptContextMenu {
                     x: event.column,
                     y: event.row,
+                    entry_id: self
+                        .transcript_cache
+                        .as_ref()
+                        .and_then(|cache| {
+                            let (_, transcript_y, _, _) = self.transcript_area;
+                            let row = self
+                                .scroll_y
+                                .saturating_add(event.row.saturating_sub(transcript_y))
+                                as usize;
+                            cache.entry_at_row(row)
+                        })
+                        .map(str::to_owned),
                 });
             }
             MouseEventKind::ScrollUp if inside => {
@@ -314,6 +342,7 @@ impl App {
             }
             _ => {}
         }
+        Ok(())
     }
 
     pub(crate) fn set_sidebar_session_targets(
@@ -470,10 +499,14 @@ impl App {
             && row < y.saturating_add(height)
     }
 
-    fn activate_transcript_context_menu(&mut self, row: u16) {
+    fn activate_transcript_context_menu(
+        &mut self,
+        row: u16,
+        backend: Option<&mut crate::backend::Backend>,
+    ) -> anyhow::Result<()> {
         let (_, y, _, height) = self.transcript_context_menu_area;
         if height < 5 {
-            return;
+            return Ok(());
         }
         match row.saturating_sub(y) {
             1 => {
@@ -484,8 +517,41 @@ impl App {
                 self.clear_transcript_selection();
             }
             3 => self.clear_transcript_selection(),
+            control_row @ 4.. => {
+                let Some(entry_id) = self
+                    .transcript_context_menu
+                    .as_ref()
+                    .and_then(|menu| menu.entry_id.as_deref())
+                else {
+                    return Ok(());
+                };
+                let view = self.application.conversation_projection().view;
+                let action = view.items.into_iter().find_map(|item| match item {
+                    crate::shared_ui::conversation::DisplayItem::Entry {
+                        entry, controls, ..
+                    } if entry.id == entry_id => controls
+                        .into_iter()
+                        .nth((control_row - 4) as usize)
+                        .filter(|control| control.enabled)
+                        .map(|control| control.action),
+                    _ => None,
+                });
+                if let Some(action) = action {
+                    if let Some(backend) = backend {
+                        self.send_conversation_action(backend, action)?;
+                    } else if matches!(
+                        &action,
+                        crate::shared_ui::conversation::ConversationAction::Copy(_)
+                            | crate::shared_ui::conversation::ConversationAction::Edit(_)
+                    ) {
+                        self.apply_conversation_action(action);
+                    }
+                    self.transcript_context_menu = None;
+                }
+            }
             _ => {}
         }
+        Ok(())
     }
 }
 

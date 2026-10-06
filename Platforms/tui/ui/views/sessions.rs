@@ -104,6 +104,7 @@ pub(crate) struct TranscriptCache {
     starts: Vec<usize>,
     rows: usize,
     work_lines: Vec<usize>,
+    entry_ranges: Vec<(std::ops::Range<usize>, String)>,
 }
 
 impl TranscriptCache {
@@ -146,7 +147,19 @@ impl TranscriptCache {
             starts,
             rows,
             work_lines: Vec::new(),
+            entry_ranges: Vec::new(),
         }
+    }
+
+    pub(crate) fn entry_at_row(&self, row: usize) -> Option<&str> {
+        let line = self
+            .starts
+            .partition_point(|start| *start <= row)
+            .saturating_sub(1);
+        self.entry_ranges
+            .iter()
+            .find(|(range, _)| range.contains(&line))
+            .map(|(_, id)| id.as_str())
     }
 }
 
@@ -227,10 +240,12 @@ fn draw_desktop(
         app.application
             .refresh_conversation_entries(&app.conversation, &app.state);
         let view = app.application.conversation_projection().view;
-        let (text, work_lines, work_ids) = shared::content(app, &view, area.width);
+        let (text, work_lines, work_ids, entry_ranges) =
+            shared::content_with_entries(app, &view, area.width);
         app.work_ids = work_ids;
         let mut cache = TranscriptCache::new(TranscriptKey::for_app(app, area.width), text);
         cache.work_lines = work_lines;
+        cache.entry_ranges = entry_ranges;
         app.transcript_cache = Some(cache);
     }
     let cache = app
@@ -376,7 +391,7 @@ fn capture_transcript_cells(app: &mut App, area: Rect, text: &Text<'static>, off
 }
 
 pub(in crate::platforms::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
-    let Some(menu) = app.transcript_context_menu else {
+    let Some(menu) = app.transcript_context_menu.clone() else {
         app.transcript_context_menu_area = (0, 0, 0, 0);
         return;
     };
@@ -385,8 +400,31 @@ pub(in crate::platforms::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, ap
         app.transcript_context_menu_area = (0, 0, 0, 0);
         return;
     }
-    let width = 22u16.min(screen.width);
-    let height = 5u16.min(screen.height);
+    let controls = app
+        .application
+        .conversation_projection()
+        .view
+        .items
+        .into_iter()
+        .find_map(|item| match item {
+            crate::shared_ui::conversation::DisplayItem::Entry {
+                entry, controls, ..
+            } if menu.entry_id.as_deref() == Some(entry.id.as_str()) => Some(controls),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let control_count = controls.len().min(2);
+    let width = 22u16
+        .max(
+            controls
+                .iter()
+                .take(2)
+                .map(|control| control.label.chars().count() as u16 + 2)
+                .max()
+                .unwrap_or(0),
+        )
+        .min(screen.width);
+    let height = (5 + control_count as u16).min(screen.height);
     let x = menu
         .x
         .min(screen.right().saturating_sub(width))
@@ -403,11 +441,22 @@ pub(in crate::platforms::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, ap
     } else {
         theme::surface().fg(theme::muted())
     };
-    let items = vec![
+    let mut items = vec![
         ListItem::new(Line::styled(" Copy      ⌘C", copy_style)),
         ListItem::new(Line::styled(" Paste     ⌘V", theme::surface())),
         ListItem::new(Line::styled(" Clear selection", theme::surface())),
     ];
+    items.extend(
+        controls
+            .into_iter()
+            .take(height.saturating_sub(5) as usize)
+            .map(|control| {
+                ListItem::new(Line::styled(
+                    format!(" {}", control.label),
+                    theme::surface(),
+                ))
+            }),
+    );
     frame.render_widget(Clear, area);
     frame.render_widget(Block::default().style(theme::surface()), area);
     frame.render_widget(

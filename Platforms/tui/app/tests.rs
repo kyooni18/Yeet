@@ -918,7 +918,11 @@ fn direct_transcript_jumps_clear_screen_relative_selection() {
         scroll_y: 30,
         selection_start: Some((4, 2)),
         selection_end: Some((8, 3)),
-        transcript_context_menu: Some(crate::tui::app::TranscriptContextMenu { x: 8, y: 3 }),
+        transcript_context_menu: Some(crate::tui::app::TranscriptContextMenu {
+            x: 8,
+            y: 3,
+            entry_id: None,
+        }),
         transcript_context_menu_area: (8, 3, 22, 4),
         ..App::default()
     };
@@ -933,7 +937,11 @@ fn direct_transcript_jumps_clear_screen_relative_selection() {
 
     app.selection_start = Some((5, 4));
     app.selection_end = Some((9, 4));
-    app.transcript_context_menu = Some(crate::tui::app::TranscriptContextMenu { x: 9, y: 4 });
+    app.transcript_context_menu = Some(crate::tui::app::TranscriptContextMenu {
+        x: 9,
+        y: 4,
+        entry_id: None,
+    });
     app.transcript_context_menu_area = (9, 4, 22, 4);
 
     app.jump_to_transcript_end();
