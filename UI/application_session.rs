@@ -12,6 +12,7 @@ use super::{
     conversation_session::{
         ConversationProjection, ConversationSession, PreparedConversationAction,
     },
+    home::{HomeAction, HomeState, HomeView, ResourceTarget, WorkspaceContent},
     navigation::{NavigationState, WorkbenchResources},
     settings::{SettingsAction, SettingsEffect, SettingsEnvironment, SettingsState},
     settings_session::{PreparedSettingsAction, SettingsProjection, SettingsSession},
@@ -22,6 +23,18 @@ use crate::harness::HarnessState;
 pub struct PreparedToolbarAction {
     pub effect: ToolbarEffect,
     route: ToolbarRoute,
+}
+/// Effects that a platform host performs after preparing a Home interaction.
+/// Resource opening stays outside shared UI; session creation uses Harness.
+#[derive(Debug, Clone, Default)]
+pub struct HomeEffect {
+    pub command: Option<crate::harness::HarnessCommand>,
+    pub open: Option<ResourceTarget>,
+}
+pub struct PreparedHomeAction {
+    state: HomeState,
+    composer: Option<PreparedComposerAction>,
+    pub effect: HomeEffect,
 }
 enum ToolbarRoute {
     None,
@@ -46,6 +59,7 @@ pub struct ApplicationProjection {
     pub state: ShellState,
     pub view: ShellView,
     pub application: ApplicationView,
+    pub home: HomeView,
     pub agents: AgentProjection,
     pub conversation: ConversationProjection,
     pub composer: ComposerProjection,
@@ -59,6 +73,7 @@ pub struct ApplicationSession {
     conversation: ConversationSession,
     composer: ComposerSession,
     settings: SettingsSession,
+    home: HomeState,
     revision: u64,
     serialized: serde_json::Value,
 }
@@ -79,6 +94,7 @@ impl ApplicationSession {
             conversation: ConversationSession::new(harness),
             composer: ComposerSession::new(harness),
             settings: SettingsSession::new(harness),
+            home: HomeState::default(),
             revision: 0,
             serialized: serde_json::Value::Null,
         };
@@ -304,6 +320,7 @@ impl ApplicationSession {
             state: self.shell.clone(),
             view: self.shell.view(),
             application: self.application_view(),
+            home: self.home.project(true),
             agents: self.agents.projection(),
             conversation: self.conversation.projection(),
             composer: self.composer.projection(),
@@ -335,6 +352,66 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> PreparedSettingsAction {
         self.settings.prepare(action, harness)
+    }
+    /// Prepare a validated Home action. Hosts deliver `effect.command` or
+    /// perform `effect.open` before calling `commit_home`.
+    pub fn prepare_home(&self, action: HomeAction, harness: &HarnessState) -> PreparedHomeAction {
+        let mut state = self.home.clone();
+        let mut composer = None;
+        let mut effect = HomeEffect::default();
+        if let Some(action) = self.home.validate_action(action) {
+            match action {
+                HomeAction::Select(target) => state.selected = Some(target),
+                HomeAction::Open(target) => effect.open = Some(target),
+                HomeAction::NewSession => {
+                    let prepared = self.prepare_composer(ComposerAction::NewSession, harness);
+                    effect.command = prepared.effect.command.clone();
+                    composer = Some(prepared);
+                }
+            }
+        }
+        PreparedHomeAction {
+            state,
+            composer,
+            effect,
+        }
+    }
+    /// Commit only after a host has performed any returned effect. A failed
+    /// Harness delivery or resource open leaves the prepared state unapplied.
+    pub fn commit_home(
+        &mut self,
+        prepared: PreparedHomeAction,
+        harness: &HarnessState,
+    ) -> (ApplicationProjection, HomeEffect) {
+        let home_changed = self.home.project(true) != prepared.state.project(true);
+        let new_session = matches!(
+            prepared.effect.command,
+            Some(crate::harness::HarnessCommand::NewSession)
+        );
+        if let Some(composer) = prepared.composer {
+            self.commit_composer(composer, harness);
+        }
+        self.home = prepared.state;
+        if new_session {
+            self.observe_composer_new_session(harness);
+        } else if home_changed {
+            self.advance();
+        }
+        (self.projection(), prepared.effect)
+    }
+    /// Replace Home's Harness-derived inventory without moving filesystem or
+    /// Git collection into UI. Returns a new projection only when it changed.
+    pub fn update_home_content(
+        &mut self,
+        content: WorkspaceContent,
+    ) -> Option<ApplicationProjection> {
+        self.home.replace_content(content);
+        if self.fingerprint() != self.serialized {
+            self.advance();
+            Some(self.projection())
+        } else {
+            None
+        }
     }
     pub fn commit_settings(
         &mut self,
@@ -609,6 +686,7 @@ impl ApplicationSession {
             self.conversation.projection().view,
             self.composer.projection().view,
             self.settings.projection().view,
+            self.home.project(true),
         ))
         .expect("serialize application UI")
     }
@@ -617,7 +695,100 @@ impl ApplicationSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared_ui::{application::Content, surfaces::Tabs};
+    use crate::shared_ui::{
+        application::Content,
+        home::{ResourceItem, ResourceKind},
+        surfaces::Tabs,
+    };
+    #[test]
+    fn home_content_projects_and_advances_only_when_the_view_changes() {
+        let mut session = ApplicationSession::default();
+        let mut content = WorkspaceContent {
+            workspace: "/workspace/yeet".into(),
+            branch: "main".into(),
+            ..Default::default()
+        };
+        content.sessions.push(ResourceItem::new(
+            ResourceTarget::Session("session-1".into()),
+            ResourceKind::Session,
+            "First session",
+        ));
+
+        let projection = session.update_home_content(content.clone()).unwrap();
+        assert_eq!(projection.ui_revision, 1);
+        assert_eq!(
+            projection.home.summary,
+            "yeet  ·  main  ·  working tree clean"
+        );
+        assert_eq!(projection.home.recent.len(), 1);
+        assert_eq!(projection.home.recent[0].title, "First session");
+        assert_eq!(
+            projection.home.selected,
+            projection
+                .home
+                .recent
+                .first()
+                .map(|item| item.target.clone())
+        );
+        assert!(session.update_home_content(content).is_none());
+    }
+
+    #[test]
+    fn home_actions_reject_stale_targets_and_return_valid_open_intent() {
+        let mut session = ApplicationSession::default();
+        let harness = HarnessState::default();
+        let stale = ResourceTarget::Session("removed-session".into());
+        let stale_action = session.prepare_home(HomeAction::Open(stale), &harness);
+        assert!(stale_action.effect.open.is_none());
+        let (projection, effect) = session.commit_home(stale_action, &harness);
+        assert!(effect.open.is_none());
+        assert_eq!(projection.ui_revision, 0);
+
+        let target = ResourceTarget::File("/workspace/yeet/src/lib.rs".into());
+        let mut content = WorkspaceContent::default();
+        content.recent_views.push(ResourceItem::new(
+            target.clone(),
+            ResourceKind::File,
+            "src/lib.rs",
+        ));
+        let projection = session.update_home_content(content).unwrap();
+        assert_eq!(projection.ui_revision, 1);
+        let selected = session.prepare_home(HomeAction::Select(target.clone()), &harness);
+        let (projection, effect) = session.commit_home(selected, &harness);
+        assert!(effect.open.is_none());
+        assert_eq!(projection.home.selected, Some(target.clone()));
+        assert_eq!(projection.ui_revision, 1);
+
+        let opening = session.prepare_home(HomeAction::Open(target.clone()), &harness);
+        assert_eq!(opening.effect.open, Some(target.clone()));
+        let (projection, effect) = session.commit_home(opening, &harness);
+        assert_eq!(effect.open, Some(target));
+        assert_eq!(projection.ui_revision, 1);
+    }
+
+    #[test]
+    fn home_new_session_exposes_composer_command_before_commit() {
+        let mut session = ApplicationSession::default();
+        let harness = HarnessState::default();
+        let before = session.projection().ui_revision;
+
+        let pending = session.prepare_home(HomeAction::NewSession, &harness);
+        assert!(matches!(
+            pending.effect.command,
+            Some(crate::harness::HarnessCommand::NewSession)
+        ));
+        assert_eq!(session.projection().ui_revision, before);
+        drop(pending); // A failed host delivery never commits the prepared UI.
+        assert_eq!(session.projection().ui_revision, before);
+
+        let prepared = session.prepare_home(HomeAction::NewSession, &harness);
+        let (projection, effect) = session.commit_home(prepared, &harness);
+        assert!(matches!(
+            effect.command,
+            Some(crate::harness::HarnessCommand::NewSession)
+        ));
+        assert!(projection.ui_revision > before);
+    }
     #[test]
     fn shell_dismiss_and_runtime_refresh_share_agent_intent_without_navigating() {
         let mut harness = HarnessState::default();
@@ -665,11 +836,9 @@ mod tests {
             active_diff: Some(second),
             ..Default::default()
         };
-        assert!(
-            session
-                .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
-                .is_none()
-        );
+        assert!(session
+            .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
+            .is_none());
         let projection = session
             .accepted_navigation(WorkbenchTab::Diff(second), &resources, &harness)
             .unwrap();
