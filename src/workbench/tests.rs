@@ -113,7 +113,7 @@ fn git_resources_cover_index_worktree_renames_binary_and_unborn_repositories() {
 }
 
 #[test]
-fn shared_content_preserves_real_activity_history_and_selection_across_updates() {
+fn shared_content_preserves_real_activity_history_across_updates() {
     let mut state = BridgeState {
         saved_sessions: vec![
             SessionSummary {
@@ -175,13 +175,4 @@ fn shared_content_preserves_real_activity_history_and_selection_across_updates()
     assert_eq!(content.tasks[0].context, "Reviewer · running");
     assert!(!content.providers[0].available);
     assert!(content.providers[0].windows.is_empty());
-    let mut home = HomeState::default();
-    home.replace_content(content.clone());
-    home.selected = Some(target.clone());
-    home.replace_content(content);
-    assert_eq!(home.selected, Some(target));
-    home.select_next(isize::MAX);
-    assert_eq!(home.selected, Some(ResourceTarget::Task("agent".into())));
-    home.replace_content(WorkspaceContent::default());
-    assert!(home.selected.is_none());
 }

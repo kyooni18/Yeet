@@ -6,7 +6,10 @@ mod types;
 use crate::harness::resources::{ChangeStats, GitSnapshot};
 pub use content::{ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent};
 pub use recent::{RecentView, RecentViews};
-pub use types::{HomeAction, HomeRow, HomeView, ResourceChanges, ResourceView};
+pub use types::{
+    HomeAction, HomeProviderUsage, HomeProviderUsageWindow, HomeRow, HomeView, ResourceChanges,
+    ResourceView,
+};
 
 #[derive(Debug, Clone)]
 pub enum ActivityRow<'a> {
@@ -19,7 +22,6 @@ pub enum ActivityRow<'a> {
 pub struct HomeState {
     pub content: WorkspaceContent,
     pub selected: Option<ResourceTarget>,
-    pub scroll: usize,
 }
 #[derive(Debug)]
 pub struct HomeProjection<'a> {
@@ -64,19 +66,6 @@ impl HomeState {
                     .min(targets.len().saturating_sub(1)),
             )
             .cloned();
-    }
-    pub fn reveal_selection(&mut self, include_sessions: bool, capacity: usize) {
-        let projection = self.view(include_sessions);
-        let len = projection.activity.len();
-        let selected = projection.activity.iter().position(|row| matches!(row, ActivityRow::Item(item) if Some(&item.target) == self.selected.as_ref()));
-        self.scroll = self.scroll.min(len.saturating_sub(capacity));
-        if let Some(selected) = selected {
-            if selected < self.scroll {
-                self.scroll = selected;
-            } else if selected >= self.scroll.saturating_add(capacity) {
-                self.scroll = selected.saturating_sub(capacity.saturating_sub(1));
-            }
-        }
     }
     pub fn view(&self, include_sessions: bool) -> HomeProjection<'_> {
         let c = &self.content;
@@ -164,8 +153,27 @@ impl HomeState {
     pub fn project(&self, include_sessions: bool) -> HomeView {
         let projection = self.view(include_sessions);
         HomeView {
+            workspace: self.content.workspace.display().to_string(),
             overview_label: projection.overview_label.into(),
             summary: projection.summary,
+            providers: self
+                .content
+                .providers
+                .iter()
+                .map(|provider| HomeProviderUsage {
+                    provider: provider.provider.clone(),
+                    available: provider.available,
+                    windows: provider
+                        .windows
+                        .iter()
+                        .map(|window| HomeProviderUsageWindow {
+                            label: window.label.clone(),
+                            used_percent: window.used_percent,
+                        })
+                        .collect(),
+                    message: provider.message.clone(),
+                })
+                .collect(),
             recent: projection
                 .recent
                 .into_iter()
@@ -187,6 +195,7 @@ impl HomeState {
             new_session_label: projection.new_session_label.into(),
             recent_empty: projection.recent_empty.into(),
             inspector_empty: projection.inspector_empty.into(),
+            usage_empty_label: "Provider usage not reported".into(),
             usage_label: projection.usage_label.into(),
         }
     }
@@ -197,6 +206,7 @@ impl HomeState {
     pub fn validate_action(&self, action: HomeAction) -> Option<HomeAction> {
         match &action {
             HomeAction::NewSession => Some(action),
+            HomeAction::MoveSelection(_) => Some(action),
             HomeAction::Open(ResourceTarget::Status) => Some(action),
             HomeAction::Select(ResourceTarget::Status) => None,
             HomeAction::Select(target) | HomeAction::Open(target)
@@ -213,7 +223,7 @@ impl HomeState {
 mod tests {
     use super::*;
     #[test]
-    fn home_composition_deduplicates_recent_targets_and_keeps_selection_visible_on_resize() {
+    fn home_composition_deduplicates_recent_targets_and_preserves_selection() {
         let session = ResourceItem::new(
             ResourceTarget::Session("one".into()),
             ResourceKind::Session,
@@ -240,12 +250,8 @@ mod tests {
             ActivityRow::Heading("Sessions")
         ));
         state.selected = Some(file.target.clone());
-        state.reveal_selection(true, 1);
-        assert!(
-            matches!(&state.view(true).activity[state.scroll], ActivityRow::Item(item) if item.target == file.target)
-        );
-        state.reveal_selection(false, 30);
-        assert_eq!(state.scroll, 0);
+        state.select_next(isize::MAX);
+        assert_eq!(state.selected, Some(file.target.clone()));
         assert_eq!(state.view(false).open_label, "Open file →");
         state.replace_content(WorkspaceContent::default());
         assert!(state.selected.is_none());
@@ -265,8 +271,24 @@ mod tests {
         let target = file.target.clone();
         let mut state = HomeState::default();
         state.replace_content(WorkspaceContent {
+            workspace: "/workspace".into(),
             recent_views: vec![file.clone()],
             diffs: vec![file],
+            providers: vec![crate::model::ProviderUsageStatus {
+                provider: "test-provider".into(),
+                available: true,
+                source: "test".into(),
+                fetched_at: String::new(),
+                plan: None,
+                windows: vec![crate::model::ProviderUsageWindow {
+                    id: "primary".into(),
+                    label: "5h".into(),
+                    used_percent: 73,
+                    remaining_percent: 27,
+                    resets_at: None,
+                }],
+                message: None,
+            }],
             ..Default::default()
         });
         state.selected = Some(target.clone());
@@ -275,6 +297,9 @@ mod tests {
         let wire = serde_json::to_value(&view).unwrap();
         let decoded: HomeView = serde_json::from_value(wire).unwrap();
         assert_eq!(decoded, view);
+        assert_eq!(decoded.workspace, "/workspace");
+        assert_eq!(decoded.providers[0].provider, "test-provider");
+        assert_eq!(decoded.providers[0].windows[0].used_percent, 73);
         assert_eq!(decoded.selected, Some(target.clone()));
         assert!(decoded.recent.iter().all(|item| item.target == target));
         assert!(matches!(decoded.activity[1], HomeRow::Item(_)));
@@ -286,6 +311,10 @@ mod tests {
         assert_eq!(
             state.validate_action(HomeAction::Select(target.clone())),
             Some(HomeAction::Select(target))
+        );
+        assert_eq!(
+            state.validate_action(HomeAction::MoveSelection(1)),
+            Some(HomeAction::MoveSelection(1))
         );
         assert!(
             state

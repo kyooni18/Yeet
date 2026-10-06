@@ -230,15 +230,13 @@ impl App {
                 event.kind,
                 MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
             ) {
-                self.home
-                    .select_next(if event.kind == MouseEventKind::ScrollUp {
+                self.apply_home_action(crate::shared_ui::home::HomeAction::MoveSelection(
+                    if event.kind == MouseEventKind::ScrollUp {
                         -3
                     } else {
                         3
-                    });
-                if let Some(target) = self.home.selected.clone() {
-                    self.apply_home_action(crate::shared_ui::home::HomeAction::Select(target));
-                }
+                    },
+                ));
                 self.input_focused = false;
                 return Ok(());
             }

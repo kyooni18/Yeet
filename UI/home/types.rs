@@ -37,6 +37,20 @@ pub struct ResourceChanges {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomeProviderUsageWindow {
+    pub label: String,
+    pub used_percent: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomeProviderUsage {
+    pub provider: String,
+    pub available: bool,
+    pub windows: Vec<HomeProviderUsageWindow>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum HomeRow {
     Heading(String),
@@ -49,8 +63,10 @@ pub enum HomeRow {
 /// It preserves Home's existing content and labels without specifying layout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HomeView {
+    pub workspace: String,
     pub overview_label: String,
     pub summary: String,
+    pub providers: Vec<HomeProviderUsage>,
     pub recent: Vec<ResourceView>,
     pub activity: Vec<HomeRow>,
     pub selected: Option<ResourceTarget>,
@@ -59,6 +75,7 @@ pub struct HomeView {
     pub new_session_label: String,
     pub recent_empty: String,
     pub inspector_empty: String,
+    pub usage_empty_label: String,
     pub usage_label: String,
 }
 
@@ -67,5 +84,6 @@ pub struct HomeView {
 pub enum HomeAction {
     Select(ResourceTarget),
     Open(ResourceTarget),
+    MoveSelection(i32),
     NewSession,
 }

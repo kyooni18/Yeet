@@ -84,8 +84,10 @@ test('agent acceptance survives a batched refresh without replaying across recon
 test('Home projections use their own revision and reset on welcome', async () => {
   const { RemoteStore } = await import('../../frontend/shared/state/remoteStore')
   const view: import('../src/remote/protocol').HomeView = {
+    workspace: '/workspace',
     overview_label: 'Overview',
     summary: 'Workspace  ·  local  ·  working tree clean',
+    providers: [],
     recent: [],
     activity: [{ type: 'heading', value: 'Recent views' }],
     selected: null,
@@ -94,6 +96,7 @@ test('Home projections use their own revision and reset on welcome', async () =>
     new_session_label: '+  New session',
     recent_empty: 'No recent objects',
     inspector_empty: 'Select a session, recent view, task or changed file.',
+    usage_empty_label: 'Provider usage not reported',
     usage_label: 'Usage details →',
   }
   const action: import('../src/remote/protocol').HomeAction = {
@@ -185,6 +188,8 @@ test('Home browser store consumes production Rust projection and one-shot open i
   const selected = await projectHome({ sessions, action: { type: 'select', value: { type: 'session', value: 'session-b' } } })
   const view = selected.view as import('../src/remote/protocol').HomeView
   expect(view.selected).toEqual({ type: 'session', value: 'session-b' })
+  expect((await projectHome({ sessions, action: { type: 'move_selection', value: 1 } })).view)
+    .toHaveProperty('selected', { type: 'session', value: 'session-b' })
   expect((await projectHome({ sessions, action: { type: 'select', value: { type: 'session', value: 'session-b' } }, deliver: false })).view)
     .toHaveProperty('selected', { type: 'session', value: 'session-a' })
   const opened = await projectHome({ sessions, action: { type: 'open', value: { type: 'session', value: 'session-b' } } })

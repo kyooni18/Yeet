@@ -927,6 +927,7 @@ mod tests {
             version: 1,
             kind: "ui_state",
             request_id: None,
+            application: first.application_view(),
             projection: first.shell_projection(),
         };
         assert_eq!(message.projection.ui_revision, 1);
@@ -943,6 +944,7 @@ mod tests {
         assert_eq!(wire["type"], "ui_state");
         assert_eq!(wire["version"], 1);
         assert_eq!(wire["ui_revision"], 1);
+        assert_eq!(wire["application"]["content"], "home");
         assert!(wire["state"]["models"].as_bool().unwrap());
         assert!(wire["view"]["views"].is_array());
         assert!(wire.get("projection").is_none());

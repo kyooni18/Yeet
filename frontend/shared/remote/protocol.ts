@@ -615,8 +615,10 @@ export type HomeRow =
   | { type: 'item'; value: HomeResourceView }
   | { type: 'gap' }
 export interface HomeView {
+  workspace: string
   overview_label: string
   summary: string
+  providers: HomeProviderUsage[]
   recent: HomeResourceView[]
   activity: HomeRow[]
   selected: ResourceTarget | null
@@ -625,10 +627,19 @@ export interface HomeView {
   new_session_label: string
   recent_empty: string
   inspector_empty: string
+  usage_empty_label: string
   usage_label: string
+}
+export interface HomeProviderUsageWindow { label: string; used_percent: number }
+export interface HomeProviderUsage {
+  provider: string
+  available: boolean
+  windows: HomeProviderUsageWindow[]
+  message: string | null
 }
 export type HomeAction =
   | { type: 'select' | 'open'; value: ResourceTarget }
+  | { type: 'move_selection'; value: number }
   | { type: 'new_session' }
 export interface HomeUiEffect { open: ResourceTarget | null }
 

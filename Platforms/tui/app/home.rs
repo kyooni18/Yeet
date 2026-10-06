@@ -1,5 +1,6 @@
 use super::{App, Mode, WorkbenchTab, files::FilesState};
 use crate::{
+    harness::resources::{GitRefresh, GitSnapshot},
     model::FrontendCommand,
     workbench::{ResourceTarget, WorkspaceContent},
 };
@@ -7,6 +8,24 @@ use crossterm::event::{KeyCode, KeyEvent};
 use std::path::PathBuf;
 
 pub(crate) use crate::shared_ui::home::HomeAction;
+
+#[derive(Debug, Default)]
+pub struct HomeRefresh {
+    pub git: GitSnapshot,
+    refresh: GitRefresh,
+}
+
+impl HomeRefresh {
+    pub fn set_git_snapshot(&mut self, snapshot: GitSnapshot) {
+        self.git = snapshot.clone();
+        self.refresh.set_snapshot(snapshot);
+    }
+
+    fn refresh_git(&mut self, workspace: &std::path::Path, force: bool) {
+        self.refresh.refresh_git(workspace, force);
+        self.git = self.refresh.snapshot.clone();
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -122,7 +141,6 @@ mod tests {
                 "Second session",
             ),
         ]);
-        app.home.replace_content(content.clone());
         app.application.update_home_content(content);
         app.activate_workbench_tab(WorkbenchTab::Home);
         app.home_targets.push((
@@ -144,6 +162,8 @@ mod tests {
             projection.home.inspector.map(|item| item.target),
             Some(second)
         );
+        app.reveal_home_selection(true, 1);
+        assert_eq!(app.home_scroll, 2);
     }
 }
 
@@ -225,13 +245,11 @@ impl App {
     pub(crate) fn refresh_home(&mut self, force: bool) {
         self.home.refresh_git(&self.workspace_path(), force);
         let content = WorkspaceContent::collect(&self.state, &self.recent_views, &self.home.git);
-        self.application.update_home_content(content.clone());
-        self.home.replace_content(content);
-        self.home.selected = self.application.projection().home.selected;
+        self.application.update_home_content(content);
     }
 
     pub(crate) fn apply_home_action(&mut self, action: HomeAction) {
-        let selecting = matches!(action, HomeAction::Select(_));
+        let selecting = matches!(action, HomeAction::Select(_) | HomeAction::MoveSelection(_));
         let prepared = self.application.prepare_home(action, &self.state);
         if let Some(command) = prepared.effect.command.clone() {
             self.workbench_command = Some(command);
@@ -241,8 +259,7 @@ impl App {
         if let Some(open) = prepared.effect.open.clone() {
             self.open_resource(open);
         }
-        let (projection, _) = self.application.commit_home(prepared, &self.state);
-        self.home.selected = projection.home.selected;
+        self.application.commit_home(prepared, &self.state);
         if selecting {
             self.input_focused = false;
         }
@@ -254,8 +271,7 @@ impl App {
     ) -> anyhow::Result<()> {
         if delivered.is_ok() {
             if let Some(prepared) = self.pending_home.take() {
-                let (projection, _) = self.application.commit_home(prepared, &self.state);
-                self.home.selected = projection.home.selected;
+                self.application.commit_home(prepared, &self.state);
                 self.activate_workbench_tab(WorkbenchTab::Session);
                 self.input_focused = true;
             }
@@ -263,6 +279,31 @@ impl App {
             self.pending_home = None;
         }
         delivered
+    }
+
+    pub(crate) fn reveal_home_selection(&mut self, include_sessions: bool, capacity: usize) {
+        let home = self.application.projection().home;
+        let start = if include_sessions {
+            0
+        } else {
+            home.activity
+                .iter()
+                .position(|row| matches!(row, crate::shared_ui::home::HomeRow::Gap))
+                .map_or(0, |index| index + 1)
+        };
+        let rows = &home.activity[start..];
+        self.home_scroll = self.home_scroll.min(rows.len().saturating_sub(capacity));
+        let selected = rows.iter().position(|row| {
+            matches!(row, crate::shared_ui::home::HomeRow::Item(item)
+                if Some(&item.target) == home.selected.as_ref())
+        });
+        if let Some(selected) = selected {
+            if selected < self.home_scroll {
+                self.home_scroll = selected;
+            } else if selected >= self.home_scroll.saturating_add(capacity) {
+                self.home_scroll = selected.saturating_sub(capacity.saturating_sub(1));
+            }
+        }
     }
 
     /// Route stable shared resource targets through the existing workbench.
@@ -333,28 +374,26 @@ impl App {
             }
             return false;
         }
-        let previous_selection = self.home.selected.clone();
         match event.code {
             KeyCode::Char('i') | KeyCode::Esc | KeyCode::Tab => self.input_focused = true,
-            KeyCode::Down | KeyCode::Char('j') => self.home.select_next(1),
-            KeyCode::Up | KeyCode::Char('k') => self.home.select_next(-1),
-            KeyCode::PageDown => self.home.select_next(8),
-            KeyCode::PageUp => self.home.select_next(-8),
-            KeyCode::Home => self.home.select_next(isize::MIN),
-            KeyCode::End => self.home.select_next(isize::MAX),
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.apply_home_action(HomeAction::MoveSelection(1))
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.apply_home_action(HomeAction::MoveSelection(-1))
+            }
+            KeyCode::PageDown => self.apply_home_action(HomeAction::MoveSelection(8)),
+            KeyCode::PageUp => self.apply_home_action(HomeAction::MoveSelection(-8)),
+            KeyCode::Home => self.apply_home_action(HomeAction::MoveSelection(i32::MIN)),
+            KeyCode::End => self.apply_home_action(HomeAction::MoveSelection(i32::MAX)),
             KeyCode::Enter | KeyCode::Right => {
-                if let Some(target) = self.home.selected.clone() {
+                if let Some(target) = self.application.projection().home.selected {
                     self.apply_home_action(HomeAction::Open(target));
                 }
             }
             KeyCode::Char('r') => self.refresh_home(true),
             KeyCode::Char('n' | '+') => self.apply_home_action(HomeAction::NewSession),
             _ => return false,
-        }
-        if self.home.selected != previous_selection
-            && let Some(target) = self.home.selected.clone()
-        {
-            self.apply_home_action(HomeAction::Select(target));
         }
         true
     }

@@ -71,7 +71,7 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let items = &projection.recent;
     let selected = items
         .iter()
-        .position(|item| Some(&item.target) == app.home.selected.as_ref())
+        .position(|item| Some(&item.target) == projection.selected.as_ref())
         .unwrap_or(0);
     let offset = crate::tui::kit::visible_start(selected, count);
     if items.is_empty() {
@@ -84,7 +84,7 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
     for (index, item) in items.iter().skip(offset).take(count).enumerate() {
         let row = Rect::new(area.x, area.y + 3 + index as u16, area.width, 1);
-        let selected = Some(&item.target) == app.home.selected.as_ref();
+        let selected = Some(&item.target) == projection.selected.as_ref();
         let style = if selected {
             Style::default()
                 .fg(theme::text())
@@ -140,7 +140,7 @@ fn draw_activity(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let compact = frame.area().width < 110;
     let usage_height = if area.height >= 16 { 4 } else { 0 };
     let capacity = area.height.saturating_sub(usage_height + 3) as usize;
-    app.home.reveal_selection(compact, capacity);
+    app.reveal_home_selection(compact, capacity);
     let projection = app.application.projection().home;
     let start = if compact {
         0
@@ -152,7 +152,7 @@ fn draw_activity(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .map_or(0, |index| index + 1)
     };
     let rows = &projection.activity[start..];
-    for (index, row) in rows.iter().skip(app.home.scroll).take(capacity).enumerate() {
+    for (index, row) in rows.iter().skip(app.home_scroll).take(capacity).enumerate() {
         let rect = Rect::new(
             area.x + 2,
             area.y + 2 + index as u16,
@@ -175,7 +175,7 @@ fn draw_activity(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     frame,
                     item,
                     rect,
-                    Some(&item.target) == app.home.selected.as_ref(),
+                    Some(&item.target) == projection.selected.as_ref(),
                 );
                 app.home_targets
                     .push((rect, HomeAction::Select(item.target.clone())));
@@ -183,7 +183,7 @@ fn draw_activity(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             HomeRow::Gap => {}
         }
     }
-    if app.home.scroll + capacity < rows.len() {
+    if app.home_scroll + capacity < rows.len() {
         frame.render_widget(
             Paragraph::new("↓ more  ·  Esc then j/k").style(Style::default().fg(theme::muted())),
             Rect::new(
@@ -279,13 +279,14 @@ fn draw_resource(frame: &mut Frame<'_>, item: &ResourceView, area: Rect, selecte
 
 fn draw_provider_usage(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let muted = Style::default().fg(theme::muted());
-    if app.home.content.providers.is_empty() {
+    let projection = app.application.projection().home;
+    if projection.providers.is_empty() {
         frame.render_widget(
-            Paragraph::new("Provider usage not reported").style(muted),
+            Paragraph::new(projection.usage_empty_label.clone()).style(muted),
             Rect::new(area.x, area.y + 1, area.width, 1),
         );
     }
-    for (index, provider) in app.home.content.providers.iter().take(2).enumerate() {
+    for (index, provider) in projection.providers.iter().take(2).enumerate() {
         let y = area.y + index as u16;
         let mut spans = vec![Span::styled(format!("{}  ", provider.provider), muted)];
         if !provider.available || provider.windows.is_empty() {
@@ -323,7 +324,7 @@ fn draw_provider_usage(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         );
     }
     let button = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-    frame.render_widget(Paragraph::new(app.application.projection().home.usage_label).style(muted), button);
+    frame.render_widget(Paragraph::new(projection.usage_label).style(muted), button);
     app.home_targets
         .push((button, HomeAction::Open(ResourceTarget::Status)));
 }
@@ -334,7 +335,7 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
     let projection = app.application.projection().home;
     let Some(item) = projection.inspector else {
-        frame.render_widget(Paragraph::new(format!("{}\n\n{}\n\nEsc  Browse Home\ni    Write a prompt", app.home.content.workspace.display(), projection.inspector_empty)).style(Style::default().fg(theme::text_dim())).wrap(Wrap { trim: true }), Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
+        frame.render_widget(Paragraph::new(format!("{}\n\n{}\n\nEsc  Browse Home\ni    Write a prompt", projection.workspace, projection.inspector_empty)).style(Style::default().fg(theme::text_dim())).wrap(Wrap { trim: true }), Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
         return;
     };
     let title = Paragraph::new(item.title.clone())

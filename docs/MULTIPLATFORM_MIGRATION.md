@@ -440,17 +440,27 @@ in ApplicationSession and routes pointer/keyboard Select, Open and New Session
 through shared HomeAction validation. It keeps native hit geometry and resource
 opening, and commits New Session only after backend delivery. Terminal recent,
 activity and inspector drawing now consume ApplicationSession's owned
-HomeView. Its local HomeState still owns viewport scroll and Git refresh bridging;
-provider usage drawing still reads host-supplied usage data directly.
+HomeView. The TUI now retains only terminal Home scroll in its App and a
+Platforms-owned refresh adapter around Harness's GitRefresh. Selected target,
+content, workspace path and provider usage presentation data come from
+ApplicationSession; `HomeView` carries the provider fields used by the existing
+terminal renderer. The duplicate `src/workbench::HomeState` adapter was removed
+after its TUI consumer migrated. `HomeAction::MoveSelection` puts relative
+keyboard and wheel selection in the shared controller, while terminal scroll
+geometry remains in Platforms.
 
 The Home input audit confirms pointer New Session actions in both terminal
 runtimes use the same `take_workbench_command` → `send_ui_command` path as
 keyboard actions. `send_ui_command` calls `finish_home_delivery`, so the shared
 commit occurs after successful backend delivery and a failed send clears the
 pending action without advancing the projection. The audit also found that
-mouse-wheel selection changed only the TUI's duplicate Home state; it now sends
-the resulting stable target through shared `HomeAction::Select`, keeping the
-Home inspector projection in sync. A focused regression check passed.
+mouse-wheel selection changed only the TUI's duplicate Home state; it now routes
+the movement through shared `HomeAction::MoveSelection`, keeping the Home
+inspector projection in sync. A focused regression check passed.
+The shared Home projection/action changes passed focused Rust composition,
+serialization and TUI selection checks, `cargo check --all-targets`, Web
+typechecking, three production-Rust-fixture browser checks, the Remote Home
+revision test, the TUI Home render test and both Tauri Home wire tests.
 
 Remote and Tauri `ui_state` events now include the shared ApplicationView
 content/surface projection alongside their compatibility shell view, so clients

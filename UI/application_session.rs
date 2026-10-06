@@ -369,6 +369,7 @@ impl ApplicationSession {
             match action {
                 HomeAction::Select(target) => state.selected = Some(target),
                 HomeAction::Open(target) => effect.open = Some(target),
+                HomeAction::MoveSelection(delta) => state.select_next(delta as isize),
                 HomeAction::NewSession => {
                     let prepared = self.prepare_composer(ComposerAction::NewSession, harness);
                     effect.command = prepared.effect.command.clone();

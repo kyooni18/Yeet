@@ -9,6 +9,7 @@ pub mod agents;
 pub mod files;
 mod home;
 pub(crate) use home::HomeAction;
+pub use home::HomeRefresh;
 pub mod diff;
 mod input;
 mod composer;
@@ -74,7 +75,8 @@ enum PermissionPromptAction {
 pub struct App {
     pub files: Option<files::FilesState>,
     pub agents: agents::AgentsState,
-    pub home: crate::workbench::HomeState,
+    pub home: HomeRefresh,
+    pub(crate) home_scroll: usize,
     pub recent_views: crate::workbench::RecentViews,
     pub(crate) observed_resource: Option<crate::workbench::ResourceTarget>,
     pub(crate) home_targets: Vec<(ratatui::layout::Rect, home::HomeAction)>,
@@ -169,6 +171,7 @@ impl Default for App {
             files: None,
             agents: Default::default(),
             home: Default::default(),
+            home_scroll: 0,
             recent_views: Default::default(),
             observed_resource: None,
             home_targets: Vec::new(),
