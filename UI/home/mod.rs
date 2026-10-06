@@ -2,9 +2,11 @@
 //! adapters retain viewport geometry, drawing and platform input translation.
 mod content;
 mod recent;
+mod types;
 use crate::harness::resources::{ChangeStats, GitSnapshot};
 pub use content::{ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent};
 pub use recent::{RecentView, RecentViews};
+pub use types::{HomeAction, HomeRow, HomeView, ResourceChanges, ResourceView};
 
 #[derive(Debug, Clone)]
 pub enum ActivityRow<'a> {
@@ -157,6 +159,54 @@ impl HomeState {
             usage_label: "Usage details →",
         }
     }
+
+    /// Project the current Home composition into an owned transport-safe view.
+    pub fn project(&self, include_sessions: bool) -> HomeView {
+        let projection = self.view(include_sessions);
+        HomeView {
+            overview_label: projection.overview_label.into(),
+            summary: projection.summary,
+            recent: projection
+                .recent
+                .into_iter()
+                .map(ResourceView::from)
+                .collect(),
+            activity: projection
+                .activity
+                .into_iter()
+                .map(|row| match row {
+                    ActivityRow::Heading(label) => HomeRow::Heading(label.into()),
+                    ActivityRow::Item(item) => HomeRow::Item(ResourceView::from(item)),
+                    ActivityRow::Message(message) => HomeRow::Message(message.into()),
+                    ActivityRow::Gap => HomeRow::Gap,
+                })
+                .collect(),
+            selected: self.selected.clone(),
+            inspector: projection.inspector.map(ResourceView::from),
+            open_label: projection.open_label.into(),
+            new_session_label: projection.new_session_label.into(),
+            recent_empty: projection.recent_empty.into(),
+            inspector_empty: projection.inspector_empty.into(),
+            usage_label: projection.usage_label.into(),
+        }
+    }
+
+    /// Reject stale resource identities before a platform applies the action.
+    /// Status is a stable command target for the existing usage affordance and
+    /// can be opened, but it is not a selectable content item.
+    pub fn validate_action(&self, action: HomeAction) -> Option<HomeAction> {
+        match &action {
+            HomeAction::NewSession => Some(action),
+            HomeAction::Open(ResourceTarget::Status) => Some(action),
+            HomeAction::Select(ResourceTarget::Status) => None,
+            HomeAction::Select(target) | HomeAction::Open(target)
+                if self.content.find(target).is_some() =>
+            {
+                Some(action)
+            }
+            HomeAction::Select(_) | HomeAction::Open(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -164,21 +214,93 @@ mod tests {
     use super::*;
     #[test]
     fn home_composition_deduplicates_recent_targets_and_keeps_selection_visible_on_resize() {
-        let session = ResourceItem::new(ResourceTarget::Session("one".into()), ResourceKind::Session, "One");
-        let file = ResourceItem::new(ResourceTarget::File("/workspace/file.rs".into()), ResourceKind::File, "file.rs");
+        let session = ResourceItem::new(
+            ResourceTarget::Session("one".into()),
+            ResourceKind::Session,
+            "One",
+        );
+        let file = ResourceItem::new(
+            ResourceTarget::File("/workspace/file.rs".into()),
+            ResourceKind::File,
+            "file.rs",
+        );
         let mut state = HomeState::default();
-        state.replace_content(WorkspaceContent { sessions: vec![session.clone()], recent_views: vec![file.clone(), session], ..Default::default() });
+        state.replace_content(WorkspaceContent {
+            sessions: vec![session.clone()],
+            recent_views: vec![file.clone(), session],
+            ..Default::default()
+        });
         assert_eq!(state.view(false).recent.len(), 2);
-        assert!(matches!(state.view(false).activity[0], ActivityRow::Heading("Recent views")));
-        assert!(matches!(state.view(true).activity[0], ActivityRow::Heading("Sessions")));
+        assert!(matches!(
+            state.view(false).activity[0],
+            ActivityRow::Heading("Recent views")
+        ));
+        assert!(matches!(
+            state.view(true).activity[0],
+            ActivityRow::Heading("Sessions")
+        ));
         state.selected = Some(file.target.clone());
         state.reveal_selection(true, 1);
-        assert!(matches!(&state.view(true).activity[state.scroll], ActivityRow::Item(item) if item.target == file.target));
+        assert!(
+            matches!(&state.view(true).activity[state.scroll], ActivityRow::Item(item) if item.target == file.target)
+        );
         state.reveal_selection(false, 30);
         assert_eq!(state.scroll, 0);
         assert_eq!(state.view(false).open_label, "Open file →");
         state.replace_content(WorkspaceContent::default());
         assert!(state.selected.is_none());
-        assert_eq!(state.view(false).summary, "Workspace  ·  local  ·  working tree clean");
+        assert_eq!(
+            state.view(false).summary,
+            "Workspace  ·  local  ·  working tree clean"
+        );
+    }
+
+    #[test]
+    fn owned_home_projection_roundtrips_stable_targets_and_rejects_stale_actions() {
+        let file = ResourceItem::new(
+            ResourceTarget::File("/workspace/file.rs".into()),
+            ResourceKind::File,
+            "file.rs",
+        );
+        let target = file.target.clone();
+        let mut state = HomeState::default();
+        state.replace_content(WorkspaceContent {
+            recent_views: vec![file.clone()],
+            diffs: vec![file],
+            ..Default::default()
+        });
+        state.selected = Some(target.clone());
+
+        let view = state.project(false);
+        let wire = serde_json::to_value(&view).unwrap();
+        let decoded: HomeView = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded, view);
+        assert_eq!(decoded.selected, Some(target.clone()));
+        assert!(decoded.recent.iter().all(|item| item.target == target));
+        assert!(matches!(decoded.activity[1], HomeRow::Item(_)));
+
+        assert_eq!(
+            state.validate_action(HomeAction::Open(target.clone())),
+            Some(HomeAction::Open(target.clone()))
+        );
+        assert_eq!(
+            state.validate_action(HomeAction::Select(target.clone())),
+            Some(HomeAction::Select(target))
+        );
+        assert!(
+            state
+                .validate_action(HomeAction::Open(ResourceTarget::Status))
+                .is_some()
+        );
+        assert!(
+            state
+                .validate_action(HomeAction::Select(ResourceTarget::Status))
+                .is_none()
+        );
+        assert!(
+            state
+                .validate_action(HomeAction::Open(ResourceTarget::Session("stale".into())))
+                .is_none()
+        );
     }
 }

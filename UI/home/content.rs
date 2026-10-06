@@ -1,9 +1,11 @@
 use super::{ChangeStats, GitSnapshot, RecentViews};
 use crate::model::{BridgeState, ProviderUsageStatus};
+use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::PathBuf};
 
 /// Stable identities survive tab closing/reordering and live content updates.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ResourceTarget {
     CurrentSession,
     Session(String),
@@ -14,7 +16,8 @@ pub enum ResourceTarget {
     Status,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResourceKind {
     Session,
     View,
