@@ -173,7 +173,20 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let chunks = Layout::vertical([Constraint::Length(4), Constraint::Min(2)]).split(inner);
-    let status = if app.state.goal_mode { "ON" } else { "OFF" };
+    let control = app.toolbar_control("goal");
+    let options = control
+        .as_ref()
+        .map(|control| control.options.as_slice())
+        .unwrap_or_default();
+    let value = control
+        .as_ref()
+        .map(|control| control.value.as_str())
+        .unwrap_or_default();
+    let status = options
+        .iter()
+        .find(|option| option.value == value)
+        .map(|option| option.label.as_str())
+        .unwrap_or_default();
     frame.render_widget(
         Paragraph::new(Text::from(vec![
             Line::from(vec![
@@ -189,26 +202,20 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
         ])),
         chunks[0],
     );
-    let items = [
-        (true, "ON", "Strict success judged execution"),
-        (false, "OFF", "Normal completion behavior"),
-    ]
-    .into_iter()
-    .map(|(enabled, label, description)| {
-        let marker = if app.state.goal_mode == enabled {
-            "●"
-        } else {
-            " "
-        };
+    let items = options.iter().map(|option| {
+        let label = &option.label;
+        let description = &option.description;
+        let marker = if option.value == value { "●" } else { " " };
         ListItem::new(Line::from(vec![
             Span::raw(format!("{marker} {label:<3}  ")),
-            Span::styled(description, Style::default().fg(theme::text())),
+            Span::styled(description.clone(), Style::default().fg(theme::text())),
         ]))
     });
     let list = List::new(items)
         .highlight_style(theme::selected())
         .highlight_symbol("▸ ");
-    let mut state = ListState::default().with_selected(Some(app.popup_index.min(1)));
+    let mut state = ListState::default()
+        .with_selected(Some(app.popup_index.min(options.len().saturating_sub(1))));
     frame.render_stateful_widget(list, chunks[1], &mut state);
 }
 
@@ -373,25 +380,22 @@ pub(crate) fn draw_reasoning(frame: &mut Frame<'_>, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let levels = reasoning_levels_for_model(&app.state.active_model);
-    let items = levels.iter().map(|level| {
-        let description = match *level {
-            "auto" => "Yeet automatic reasoning policy for the selected model",
-            "low" => "Faster, lighter reasoning",
-            "medium" => "Balanced reasoning depth",
-            "high" => "High reasoning depth",
-            "xhigh" => "Extra-high reasoning where the selected model supports it",
-            "max" => "Maximum provider-supported reasoning effort",
-            _ => "Provider reasoning effort",
-        };
-        let marker = if *level == app.state.active_reasoning_level {
-            "●"
-        } else {
-            " "
-        };
+    let control = app.toolbar_control("reasoning");
+    let options = control
+        .as_ref()
+        .map(|control| control.options.as_slice())
+        .unwrap_or_default();
+    let value = control
+        .as_ref()
+        .map(|control| control.value.as_str())
+        .unwrap_or_default();
+    let items = options.iter().map(|option| {
+        let level = &option.label;
+        let description = &option.description;
+        let marker = if option.value == value { "●" } else { " " };
         ListItem::new(Line::from(vec![
             Span::raw(format!("{marker} {level:<7}")),
-            Span::styled(description, Style::default().fg(theme::muted())),
+            Span::styled(description.clone(), Style::default().fg(theme::muted())),
         ]))
     });
     let list = List::new(items)

@@ -71,6 +71,31 @@ impl Tab {
     }
 }
 
+/// Ordered header controls. Hosts provide resource display names and observed
+/// file presentation; action identity and close/launcher policy remain shared.
+pub fn header(
+    resources: &super::navigation::WorkbenchResources,
+    mut resource_label: impl FnMut(WorkbenchTab) -> String,
+    changed_file: Option<SurfaceId>,
+    active: WorkbenchTab,
+) -> Vec<Tab> {
+    let mut controls: Vec<_> = resources
+        .tabs()
+        .into_iter()
+        .map(|action| {
+            let mut tab = Tab::new(action, resource_label(action));
+            if action == active
+                && matches!(action, WorkbenchTab::File(id) if Some(id) == changed_file)
+            {
+                tab.icon = Icon::Changes;
+            }
+            tab
+        })
+        .collect();
+    controls.push(Tab::new(WorkbenchTab::Launcher, String::new()));
+    controls
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct LauncherItem {
     pub action: WorkbenchTab,
@@ -122,7 +147,16 @@ mod tests {
         let mut tabs = Tabs::default();
         let first = tabs.open("same", ());
         let second = tabs.open("same", ());
-        let control = Tab::new(WorkbenchTab::Diff(second), "same");
+        let resources = super::super::navigation::WorkbenchResources {
+            diffs: vec![first, second],
+            ..Default::default()
+        };
+        let controls = header(&resources, |_| "same".into(), None, WorkbenchTab::Session);
+        assert_eq!(controls.last().unwrap().action, WorkbenchTab::Launcher);
+        let control = controls
+            .into_iter()
+            .find(|tab| tab.action == WorkbenchTab::Diff(second))
+            .unwrap();
         let wire = serde_json::to_string(&control).unwrap();
         tabs.close(first);
         let decoded: Tab = serde_json::from_str(&wire).unwrap();

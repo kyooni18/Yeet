@@ -28,7 +28,10 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     };
     let area = floating.area(bounds);
     theme::modal_backdrop(frame, area);
-    let block = theme::modal_block("Open a view");
+    let launcher = crate::shared_ui::workbench::Tab::new(
+        crate::shared_ui::workbench::WorkbenchTab::Launcher, String::new(),
+    );
+    let block = theme::modal_block(&launcher.label);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

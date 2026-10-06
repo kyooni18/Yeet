@@ -6,7 +6,7 @@ use super::support::{
 };
 use crate::{
     app::{App, SettingsEditKind, SettingsSection},
-    model::{CapabilityToggleItem, reasoning_levels_for_model},
+    model::CapabilityToggleItem,
 };
 #[path = "agent_group.rs"]
 mod agent_group;

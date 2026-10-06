@@ -5,6 +5,56 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use crate::shared_ui::workbench::WorkbenchTab;
 
 impl App {
+    pub(crate) fn activate_toolbar_control(
+        &mut self,
+        backend: &mut crate::backend::Backend,
+        id: &str,
+    ) -> anyhow::Result<bool> {
+        self.send_toolbar_action(
+            backend,
+            crate::shared_ui::toolbar::ToolbarAction::Activate(id.into()),
+        )
+    }
+
+    pub(crate) fn send_toolbar_action(
+        &mut self,
+        backend: &mut crate::backend::Backend,
+        action: crate::shared_ui::toolbar::ToolbarAction,
+    ) -> anyhow::Result<bool> {
+        self.sync_composer();
+        let prepared = self.application.prepare_toolbar(action, &self.state);
+        let accepted = prepared.effect.command.is_some() || prepared.effect.destination.is_some();
+        if let Some(command) = prepared.effect.command.clone() {
+            backend.send(command)?;
+        }
+        if let Some(destination) = prepared.effect.destination {
+            use crate::shared_ui::composer::ComposerDestination;
+            match destination {
+                ComposerDestination::Models => self.open_models(backend)?,
+                ComposerDestination::Sessions => self.open_sessions(backend)?,
+                ComposerDestination::Files => self.open_files(),
+                ComposerDestination::Reasoning => self.open_reasoning(),
+                ComposerDestination::Capabilities => self.open_capabilities(backend)?,
+                ComposerDestination::Settings => self.open_settings(backend)?,
+                _ => return Ok(false),
+            }
+        }
+        self.application.commit_toolbar(prepared, &self.state);
+        Ok(accepted)
+    }
+
+    pub(crate) fn toolbar_control(
+        &self,
+        id: &str,
+    ) -> Option<crate::shared_ui::toolbar::ToolbarControl> {
+        self.application
+            .toolbar_view_for(&self.state)
+            .groups
+            .into_iter()
+            .flat_map(|group| group.controls)
+            .find(|control| control.id == id)
+    }
+
     pub(crate) fn workbench_resources(&self) -> crate::shared_ui::navigation::WorkbenchResources {
         crate::shared_ui::navigation::WorkbenchResources {
             agents: self.application.agent_state().open || !self.agent_members().is_empty(),
@@ -174,6 +224,24 @@ mod tests {
     use super::*;
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn native_choice_selection_tracks_shared_runtime_options() {
+        let mut app = App::default();
+        app.state.active_model = "gpt-5.4".into();
+        app.state.active_reasoning_level = "high".into();
+        app.open_reasoning();
+        let reasoning = app.toolbar_control("reasoning").unwrap();
+        assert_eq!(reasoning.options[app.popup_index].value, "high");
+        app.state.goal_mode = true;
+        app.open_goal();
+        let goal = app.toolbar_control("goal").unwrap();
+        assert_eq!(goal.options[app.popup_index].value, "true");
+        app.state.goal_mode = false;
+        app.open_goal();
+        let goal = app.toolbar_control("goal").unwrap();
+        assert_eq!(goal.options[app.popup_index].value, "false");
+    }
 
     #[test]
     fn stable_diff_actions_and_frame_geometry_do_not_follow_shifted_indices() {

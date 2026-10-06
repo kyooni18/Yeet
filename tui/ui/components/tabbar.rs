@@ -19,6 +19,7 @@ const NARROW: u16 = 70;
 struct Tab {
     area: Rect,
     target: Active,
+    close: Option<Active>,
     text: String,
 }
 
@@ -26,10 +27,9 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
     if area.width < 4 || area.height == 0 || (area.width < NARROW && active == Active::Session) {
         return Vec::new();
     }
-    let mut entries: Vec<(Active, String, u16)> = app
-        .workbench_tabs()
-        .into_iter()
-        .map(|target| {
+    let controls = crate::shared_ui::workbench::header(
+        &app.workbench_resources(),
+        |target| {
             let resource_label = match target {
                 Active::Session => conversation_title(app).to_owned(),
                 Active::Diff(id) => {
@@ -53,45 +53,47 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
                     .unwrap_or_default(),
                 _ => String::new(),
             };
-            let mut tab = crate::shared_ui::workbench::Tab::new(target, resource_label);
-            if matches!(target, Active::File(_))
-                && target == active
-                && app.files.as_ref().is_some_and(|files| files.diff)
-            {
-                tab.icon = crate::shared_ui::workbench::Icon::Changes;
-            }
+            resource_label
+        },
+        app.files
+            .as_ref()
+            .filter(|files| files.diff)
+            .and_then(|files| files.active_tab()),
+        active,
+    );
+    let launcher = controls.last().expect("shared header launcher").clone();
+    let mut entries: Vec<(Active, Option<Active>, String, u16)> = controls
+        .into_iter()
+        .filter(|tab| tab.action != launcher.action)
+        .map(|tab| {
+            let target = tab.action;
             let icon = icons::semantic(tab.icon, &tab.label);
             let label = tab.label;
             let label = fit(&label, 26);
             let text = format!(" {icon} {label} ");
-            let width = (Span::raw(&text).width() as u16
-                + if matches!(target, Active::File(_) | Active::Diff(_)) {
-                    2
+            let width = (Span::raw(&text).width() as u16 + if tab.close.is_some() { 2 } else { 0 })
+                .max(if target == Active::Home {
+                    (area.width as u32 * 160 / 1440) as u16
                 } else {
                     0
-                })
-            .max(if target == Active::Home {
-                (area.width as u32 * 160 / 1440) as u16
-            } else {
-                0
-            });
-            (target, text, width)
+                });
+            (target, tab.close, text, width)
         })
         .collect();
     if area.width < NARROW {
-        entries.retain(|(target, _, _)| *target == active || *target == Active::Home);
+        entries.retain(|(target, _, _, _)| *target == active || *target == Active::Home);
     }
     let available = area.width.saturating_sub(4);
     while entries
         .iter()
-        .map(|(_, _, width)| *width as u32)
+        .map(|(_, _, _, width)| *width as u32)
         .sum::<u32>()
         > available as u32
         && entries.len() > 1
     {
         let Some(index) = entries
             .iter()
-            .rposition(|(target, _, _)| *target != active && *target != Active::Home)
+            .rposition(|(target, _, _, _)| *target != active && *target != Active::Home)
         else {
             break;
         };
@@ -99,7 +101,7 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
     }
     let mut x = area.x;
     let mut tabs = Vec::new();
-    for (target, text, requested) in entries {
+    for (target, close, text, requested) in entries {
         let remaining = area.x + available - x;
         let width = requested.min(remaining);
         if width == 0 {
@@ -108,6 +110,7 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
         tabs.push(Tab {
             area: Rect::new(x, area.y, width, area.height),
             target,
+            close,
             text,
         });
         x += width;
@@ -119,8 +122,9 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
             4.min(area.right().saturating_sub(x)),
             area.height,
         ),
-        target: Active::Launcher,
-        text: " + ".into(),
+        target: launcher.action,
+        close: launcher.close,
+        text: format!(" {} ", icons::semantic(launcher.icon, &launcher.label)),
     });
     tabs
 }
@@ -130,7 +134,7 @@ pub(crate) fn targets(app: &App, area: Rect, active: Active) -> Vec<(Rect, Activ
         .into_iter()
         .flat_map(|tab| {
             let mut targets = vec![(tab.area, tab.target)];
-            if let Active::File(index) | Active::Diff(index) = tab.target {
+            if let Some(close) = tab.close {
                 targets.insert(
                     0,
                     (
@@ -140,11 +144,7 @@ pub(crate) fn targets(app: &App, area: Rect, active: Active) -> Vec<(Rect, Activ
                             2,
                             tab.area.height,
                         ),
-                        if matches!(tab.target, Active::Diff(_)) {
-                            Active::CloseDiff(index)
-                        } else {
-                            Active::CloseFile(index)
-                        },
+                        close,
                     ),
                 );
             }
@@ -181,17 +181,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
         let text_area = Rect::new(
             tab.area.x,
             tab.area.y,
-            tab.area.width.saturating_sub(
-                if matches!(tab.target, Active::File(_) | Active::Diff(_)) {
-                    2
-                } else {
-                    0
-                },
-            ),
+            tab.area
+                .width
+                .saturating_sub(if tab.close.is_some() { 2 } else { 0 }),
             1,
         );
         frame.render_widget(Paragraph::new(tab.text).style(style), text_area);
-        if matches!(tab.target, Active::File(_) | Active::Diff(_)) {
+        if tab.close.is_some() {
             frame.render_widget(
                 Paragraph::new("×").style(style.fg(theme::muted())),
                 Rect::new(tab.area.right().saturating_sub(2), tab.area.y, 1, 1),

@@ -29,7 +29,7 @@ use crate::{
     backend::Backend,
     model::{
         BridgeState, CapabilityToggleItem, ConversationEntry, FrontendCommand, ModelCatalogItem,
-        ProviderConfigurationItem, SandboxAction, SessionSummary, reasoning_levels_for_model,
+        ProviderConfigurationItem, SandboxAction, SessionSummary,
     },
 };
 
@@ -866,23 +866,25 @@ impl App {
             KeyCode::F(2) | KeyCode::Char('m')
                 if event.code == KeyCode::F(2) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
-                self.open_models(backend)?;
+                self.activate_toolbar_control(backend, "models")?;
             }
             KeyCode::F(3) | KeyCode::Char('s')
                 if event.code == KeyCode::F(3) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
-                self.open_sessions(backend)?;
+                self.activate_toolbar_control(backend, "sessions")?;
             }
-            KeyCode::Char('f') if event.modifiers.contains(KeyModifiers::ALT) => self.open_files(),
+            KeyCode::Char('f') if event.modifiers.contains(KeyModifiers::ALT) => {
+                self.activate_toolbar_control(backend, "files")?;
+            }
             KeyCode::F(4) | KeyCode::Char('r')
                 if event.code == KeyCode::F(4) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
-                self.open_reasoning();
+                self.activate_toolbar_control(backend, "reasoning")?;
             }
             KeyCode::F(5) | KeyCode::Char('k')
                 if event.code == KeyCode::F(5) || event.modifiers.contains(KeyModifiers::ALT) =>
             {
-                self.open_capabilities(backend)?;
+                self.activate_toolbar_control(backend, "capabilities")?;
             }
             KeyCode::PageUp => self.scroll_up(10),
             KeyCode::PageDown => self.scroll_down(10),
@@ -1122,19 +1124,24 @@ impl App {
         event: KeyEvent,
         backend: &mut Backend,
     ) -> anyhow::Result<()> {
-        let levels = reasoning_levels_for_model(&self.state.active_model);
+        let options = self.toolbar_control("reasoning")
+            .map(|control| control.options).unwrap_or_default();
         match event.code {
             KeyCode::Esc | KeyCode::F(4) => self.close_popup(),
             KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down | KeyCode::Right => {
-                self.popup_index = cmp::min(self.popup_index + 1, levels.len().saturating_sub(1));
+                self.popup_index = cmp::min(self.popup_index + 1, options.len().saturating_sub(1));
             }
             KeyCode::Enter => {
-                if let Some(level) = levels.get(self.popup_index) {
-                    backend.send(FrontendCommand::SelectReasoning {
-                        level: (*level).to_owned(),
-                    })?;
-                    self.close_popup();
+                if let Some(option) = options.get(self.popup_index) {
+                    if self.send_toolbar_action(
+                        backend,
+                        crate::shared_ui::toolbar::ToolbarAction::Choose {
+                            id: "reasoning".into(), value: option.value.clone(),
+                        },
+                    )? {
+                        self.close_popup();
+                    }
                 }
             }
             _ => {}
@@ -1143,17 +1150,24 @@ impl App {
     }
 
     fn handle_goal_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        let options = self.toolbar_control("goal")
+            .map(|control| control.options).unwrap_or_default();
         match event.code {
             KeyCode::Esc => self.close_popup(),
             KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?;
             }
             KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down | KeyCode::Right => self.popup_index = cmp::min(self.popup_index + 1, 1),
+            KeyCode::Down | KeyCode::Right => self.popup_index = cmp::min(self.popup_index + 1, options.len().saturating_sub(1)),
             KeyCode::Enter | KeyCode::Char(' ') => {
-                backend.send(FrontendCommand::SetGoal {
-                    enabled: self.popup_index == 0,
-                })?;
+                if let Some(option) = options.get(self.popup_index) {
+                    self.send_toolbar_action(
+                        backend,
+                        crate::shared_ui::toolbar::ToolbarAction::Choose {
+                            id: "goal".into(), value: option.value.clone(),
+                        },
+                    )?;
+                }
             }
             _ => {}
         }
@@ -1503,8 +1517,8 @@ impl App {
     fn clamp_popup_selection(&mut self) {
         let count = match self.mode {
             Mode::Models => self.filtered_models().len(),
-            Mode::Reasoning => reasoning_levels_for_model(&self.state.active_model).len(),
-            Mode::Goal => 2,
+            Mode::Reasoning => self.toolbar_control("reasoning").map(|control| control.options.len()).unwrap_or(0),
+            Mode::Goal => self.toolbar_control("goal").map(|control| control.options.len()).unwrap_or(0),
             Mode::AgentGroup => agent_group::AGENT_GROUP_ROWS.len(),
             Mode::Sessions => self.filtered_session_picker_items().len() + 1,
             Mode::Capabilities => self.filtered_capabilities().len(),

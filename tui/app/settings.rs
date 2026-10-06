@@ -419,10 +419,11 @@ impl App {
     }
 
     pub(super) fn open_models(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
+        backend.send(FrontendCommand::RequestModels)?;
         self.mode = Mode::Models;
         self.popup_filter.clear();
         self.popup_index = self.active_model_picker_index();
-        backend.send(FrontendCommand::RequestModels)
+        Ok(())
     }
 
     pub(super) fn active_model_picker_index(&self) -> usize {
@@ -435,10 +436,20 @@ impl App {
     pub(super) fn open_goal(&mut self) {
         self.mode = Mode::Goal;
         self.popup_filter.clear();
-        self.popup_index = if self.state.goal_mode { 0 } else { 1 };
+        self.popup_index = self
+            .toolbar_control("goal")
+            .map(|control| {
+                control
+                    .options
+                    .iter()
+                    .position(|option| option.value == control.value)
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
     }
 
     pub(super) fn open_sessions(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
+        backend.send(FrontendCommand::RequestSessions)?;
         self.mode = Mode::Sessions;
         self.popup_filter.clear();
         self.popup_index = self
@@ -448,24 +459,31 @@ impl App {
                 Some(item.session.id.as_str()) == self.state.current_session_id.as_deref()
             })
             .unwrap_or(0);
-        backend.send(FrontendCommand::RequestSessions)
+        Ok(())
     }
 
     pub(super) fn open_reasoning(&mut self) {
         self.mode = Mode::Reasoning;
         self.popup_filter.clear();
-        self.popup_index = reasoning_levels_for_model(&self.state.active_model)
-            .iter()
-            .position(|level| *level == self.state.active_reasoning_level)
+        self.popup_index = self
+            .toolbar_control("reasoning")
+            .map(|control| {
+                control
+                    .options
+                    .iter()
+                    .position(|option| option.value == control.value)
+                    .unwrap_or(0)
+            })
             .unwrap_or(0);
     }
 
     pub(super) fn open_capabilities(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
+        backend.send(FrontendCommand::RequestCapabilities)?;
         self.mode = Mode::Capabilities;
         self.popup_filter.clear();
         self.popup_index = 0;
         self.capability_detail_id = None;
-        backend.send(FrontendCommand::RequestCapabilities)
+        Ok(())
     }
 
     pub(super) fn open_auth(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
