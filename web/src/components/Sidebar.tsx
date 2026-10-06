@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Check, ChevronsUpDown, Folder, Lock, Plus, Search, Settings, SessionList, X } from '@/components/Icons'
+import { Bot, Check, ChevronsUpDown, DiffIcon, Folder, Lock, Plus, Search, Settings, SessionList, X } from '@/components/Icons'
+import type { Destination } from '@/components/RemoteShell'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 import type { ResourceTarget } from '@/remote/protocol'
 
@@ -20,17 +21,15 @@ export function Sidebar({
   desktopDocked,
   onClose,
   onSettings,
-  onAgents,
-  agentsOpen,
-  onCloseAgents,
+  page,
+  onSelect,
 }: {
   open: boolean
   desktopDocked: boolean
   onClose: () => void
   onSettings: () => void
-  onAgents: () => void
-  agentsOpen: boolean
-  onCloseAgents: () => void
+  page: Destination
+  onSelect: (destination: Destination) => void
 }) {
   const remote = useRemote()
   const toolbar = remote.ui?.toolbar
@@ -133,16 +132,20 @@ export function Sidebar({
         </div>
 
         <nav className="sidebar-nav" aria-label="Navigation">
-          <button className={`sidebar-nav__row${agentsOpen ? '' : ' is-current'}`} aria-current={agentsOpen ? undefined : 'page'}
-            onClick={() => { if (agentsOpen) onCloseAgents(); if (!desktopDocked) onClose() }}>
-            <SessionList size={15} strokeWidth={1.6} /><span>Sessions</span>
-          </button>
-          <button className={`sidebar-nav__row${agentsOpen ? ' is-current' : ''}`} aria-current={agentsOpen ? 'page' : undefined}
-            aria-label={`Agents${activeMembers ? `, ${activeMembers} running` : ''}`}
-            onClick={() => { onAgents(); if (!desktopDocked) onClose() }}>
-            <Bot size={15} strokeWidth={1.6} /><span>Agents</span>
-            {activeMembers > 0 && <span className="sidebar-nav__count">{activeMembers}</span>}
-          </button>
+          {([
+            ['session', 'Sessions', <SessionList key="s" size={15} strokeWidth={1.6} />],
+            ['files', 'Files', <Folder key="f" size={15} strokeWidth={1.6} />],
+            ['diff', 'Diff', <DiffIcon key="d" size={15} strokeWidth={1.6} />],
+            ['agents', 'Agents', <Bot key="a" size={15} strokeWidth={1.6} />],
+          ] as const).map(([destination, label, icon]) => (
+            <button key={destination} className={`sidebar-nav__row${page === destination ? ' is-current' : ''}`}
+              aria-current={page === destination ? 'page' : undefined}
+              aria-label={destination === 'agents' && activeMembers ? `Agents, ${activeMembers} running` : label}
+              onClick={() => { onSelect(destination); if (!desktopDocked) onClose() }}>
+              {icon}<span>{label}</span>
+              {destination === 'agents' && activeMembers > 0 && <span className="sidebar-nav__count">{activeMembers}</span>}
+            </button>
+          ))}
         </nav>
 
         <div className="workspace-picker">
@@ -207,6 +210,7 @@ export function Sidebar({
                 aria-current={current ? 'page' : undefined}
                 disabled={!current && remote.connection !== 'connected'}
                 onClick={() => {
+                  onSelect('session')
                   if (!current) {
                     if (session.target) remoteStore.sendHomeUi({ type: 'open', value: session.target })
                     else remoteStore.loadSession(session.id)
@@ -234,6 +238,7 @@ export function Sidebar({
           <button
             className="sidebar-new-session"
             onClick={() => {
+              onSelect('session')
               if (remote.home) remoteStore.sendHomeUi({ type: 'new_session' })
               else remoteStore.newSession()
               if (!desktopDocked) onClose()

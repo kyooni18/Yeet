@@ -652,6 +652,24 @@ export interface DiffView {
 export type DiffAction =
   | { type: 'select_file'; value: { view: SurfaceId; target: string } }
   | { type: 'set_full'; value: { view: SurfaceId; full: boolean } }
+export interface WorkspaceFileRow {
+  name: string; path: string; directory: boolean; size: number
+  items: number | null; modified: number | null; status: string | null
+}
+export interface WorkspaceFileInfo {
+  path: string; name: string; size: number; modified: number | null; created: number | null
+  permissions: string | null; lines: number | null; status: string | null
+  added: number | null; removed: number | null
+}
+export interface WorkspaceFilesView {
+  root: string; path: string; parent: string | null; branch: string
+  entries: WorkspaceFileRow[]; selected: string | null; info: WorkspaceFileInfo | null
+}
+export interface WorkspaceChangeRow { path: string; status: string; added: number | null; removed: number | null }
+export interface WorkspaceChangesView {
+  root: string; branch: string; files: WorkspaceChangeRow[]
+  selected: string | null; full: boolean; patch: string[]; message: string | null
+}
 export interface HomeUiEffect { open: ResourceTarget | null }
 
 // Rust UI/agents.rs owns these application views and effects.
@@ -749,6 +767,8 @@ export type RemoteServerMessage =
   | { version: number; type: 'workspace_switch_requested'; id: string; path: string; source_workspace: string }
   | { version: number; type: 'ui_home'; home_revision: number; request_id?: string | null; view: HomeView }
   | { version: number; type: 'ui_diff'; diff_revision: number; request_id?: string | null; views: DiffView[] }
+  | { version: number; type: 'workspace_files'; request_id?: string | null; view: WorkspaceFilesView }
+  | { version: number; type: 'workspace_changes'; request_id?: string | null; view: WorkspaceChangesView }
   | { version: number; type: 'ui_home_effect'; request_id?: string | null; open: ResourceTarget | null }
   | { version: number; type: 'ui_settings'; settings_revision: number; request_id?: string | null; view: SettingsView; effect?: SettingsUiEffect | null }
   | { version: number; type: 'ui_composer'; composer_revision: number; request_id?: string | null; view: ComposerView; effect?: ComposerUiEffect | null }

@@ -141,3 +141,4 @@ export const Pause = (p: IconProps) => <Icon {...p}><path d="M9 6v12M15 6v12" />
 export const SignalBars = (p: IconProps) => <Icon {...p}><path d="M6 19v-3M12 19v-7M18 19V6" /></Icon>
 export const SessionList = (p: IconProps) => <Icon {...p}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 12.5h8M8 16h5" /></Icon>
 export const Bolt = (p: IconProps) => <Icon {...p}><path d="M13 3L5 13.5h6L10 21l8-10.5h-6L13 3z" /></Icon>
+export const DiffIcon = (p: IconProps) => <Icon {...p}><rect x="3" y="3" width="18" height="18" rx="4" /><path d="M7.5 9h5M10 6.5v5M13.5 16h4" /></Icon>

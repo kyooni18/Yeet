@@ -3,6 +3,8 @@ import { Composer } from '@/components/Composer'
 import { Conversation } from '@/components/Conversation'
 import { AgentsPage } from '@/components/AgentsPage'
 import { AgentsSheet } from '@/components/AgentsSheet'
+import { DiffPage } from '@/components/DiffPage'
+import { FilesPage } from '@/components/FilesPage'
 import { ModelSheet } from '@/components/ModelSheet'
 import { QuickPanel } from '@/components/QuickPanel'
 import { SettingsSheet } from '@/components/SettingsSheet'
@@ -10,6 +12,8 @@ import { Sidebar } from '@/components/Sidebar'
 import { TopBar } from '@/components/TopBar'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 import type { ShellAction, ShellState, ToolbarAction } from '@/remote/protocol'
+
+export type Destination = 'session' | 'files' | 'diff' | 'agents'
 
 /** Browser visuals and focus for the Rust-authored application shell. */
 export function RemoteShell() {
@@ -19,6 +23,8 @@ export function RemoteShell() {
   const navigationReturnFocus = useRef<HTMLElement | null>(null)
   const priorState = useRef<ShellState | null>(null)
   const [editRequest, setEditRequest] = useState<{ key: number; content: string } | null>(null)
+  const [page, setPage] = useState<'session' | 'files' | 'diff'>('session')
+  const [diffFile, setDiffFile] = useState<string | null>(null)
   const view = ui?.view
   const visible = (kind: string) => view?.views.some(item => item.kind === kind && item.placement !== 'hidden') ?? false
   const sidebarVisible = visible('navigation')
@@ -27,6 +33,13 @@ export function RemoteShell() {
   const settings = visible('settings')
   const desktopLayout = view?.layout === 'expanded'
   const agentsPage = desktopLayout && visible('agents')
+  const destination: Destination = visible('agents') ? 'agents' : page
+  const select = (next: Destination) => {
+    if (next === 'agents') { setPage('session'); send({ type: 'open_agents' }); return }
+    if (visible('agents')) send({ type: 'close_agents' })
+    if (next === 'diff') setDiffFile(null)
+    setPage(next)
+  }
 
   const rememberFocus = (target: React.MutableRefObject<HTMLElement | null>) => {
     const active = document.activeElement
@@ -102,15 +115,17 @@ export function RemoteShell() {
         switch (item.kind) {
           case 'navigation': return <Sidebar key={item.kind} open={open} desktopDocked={desktopLayout}
             onClose={() => send({ type: 'close_navigation' })} onSettings={openSettings}
-            onAgents={() => send({ type: 'open_agents' })}
-            agentsOpen={visible('agents')} onCloseAgents={() => send({ type: 'close_agents' })} />
+            page={destination} onSelect={select} />
           case 'workspace': return (
             <section key={item.kind} className={`main-viewport app-workspace${sidebarVisible ? ' sidebar-open' : ''}`} aria-label="Current session">
-              {agentsPage ? <>
-                <TopBar sidebarOpen={sidebarVisible} controlsOpen={controlsVisible} page="Agents"
+              {agentsPage || page !== 'session' ? <>
+                <TopBar sidebarOpen={sidebarVisible} controlsOpen={controlsVisible}
+                  page={agentsPage ? 'Agents' : page === 'files' ? 'Files' : 'Diff'}
                   onToggleSidebar={openNavigation}
                   onToggleControls={(action) => action ? remoteStore.sendToolbarUi(action) : send({ type: 'toggle_inspector' })} />
-                <AgentsPage />
+                {agentsPage ? <AgentsPage />
+                  : page === 'files' ? <FilesPage onShowChanges={(path) => { setDiffFile(path); setPage('diff') }} />
+                  : <DiffPage initialFile={diffFile} />}
               </> : item.children.map(child => {
                 switch (child) {
                   case 'session_header': return <TopBar key={child} sidebarOpen={sidebarVisible} controlsOpen={controlsVisible}

@@ -27,6 +27,8 @@ import {
   type WorkspaceSummary,
   type DiffAction,
   type DiffView,
+  type WorkspaceChangesView,
+  type WorkspaceFilesView,
   type HomeAction,
   type HomeView,
   type ResourceTarget,
@@ -35,6 +37,8 @@ import {
 export interface RemoteSnapshot {
   home: HomeView | null
   diffViews: DiffView[]
+  workspaceFiles: WorkspaceFilesView | null
+  workspaceChanges: WorkspaceChangesView | null
   homeEffect: { id: number; open: ResourceTarget } | null
   settings: SettingsView | null
   settingsEffect: { revision: number; value: SettingsUiEffect } | null
@@ -136,6 +140,10 @@ export class RemoteStore {
   private homeRevision = -1
   private diffRevision = -1
   private diffViews: DiffView[] = []
+  private workspaceFiles: WorkspaceFilesView | null = null
+  private workspaceChanges: WorkspaceChangesView | null = null
+  private filesRequest: string | null = null
+  private changesRequest: string | null = null
   private home: HomeView | null = null
   private homeEffect: { id: number; open: ResourceTarget } | null = null
   private homeEffectId = 0
@@ -190,6 +198,8 @@ export class RemoteStore {
     return {
       home: this.home,
       diffViews: this.diffViews,
+      workspaceFiles: this.workspaceFiles,
+      workspaceChanges: this.workspaceChanges,
       homeEffect: this.homeEffect,
       settings: this.settings,
       settingsEffect: this.settingsEffect,
@@ -295,6 +305,12 @@ export class RemoteStore {
         this.diffRevision = message.diff_revision
         this.diffViews = message.views
         return
+      case 'workspace_files':
+        if (message.request_id === this.filesRequest) this.workspaceFiles = message.view
+        return
+      case 'workspace_changes':
+        if (message.request_id === this.changesRequest) this.workspaceChanges = message.view
+        return
       case 'ui_home_effect':
         if (message.open) this.homeEffect = { id: ++this.homeEffectId, open: message.open }
         return
@@ -349,6 +365,10 @@ export class RemoteStore {
         this.homeRevision = -1
         this.diffRevision = -1
         this.diffViews = []
+        this.workspaceFiles = null
+        this.workspaceChanges = null
+        this.filesRequest = null
+        this.changesRequest = null
         this.home = null
         this.homeEffect = null
         this.agentsRevision = -1
@@ -540,6 +560,14 @@ export class RemoteStore {
   }
 
   sendToolbarUi(action: ToolbarAction): boolean { return this.transport?.sendToolbarUi?.(action) ?? false }
+  requestFiles(path: string, selected: string | null = null): boolean {
+    this.filesRequest = this.transport?.requestWorkspaceFiles?.(path, selected) ?? null
+    return this.filesRequest !== null
+  }
+  requestChanges(file: string | null = null, full = false): boolean {
+    this.changesRequest = this.transport?.requestWorkspaceChanges?.(file, full) ?? null
+    return this.changesRequest !== null
+  }
   sendDiffUi(action: DiffAction): boolean { return this.transport?.sendDiffUi?.(action) ?? false }
   sendHomeUi(action: HomeAction): boolean { return this.transport?.sendHomeUi?.(action) ?? false }
   consumeHomeEffect(id: number): ResourceTarget | null {

@@ -53,3 +53,51 @@ export function reasoningLevelsForModel(model: string): string[] {
     || /^claude-(?:(?:fable|mythos|opus|sonnet)-5|opus-4[.-][78])/.test(name)
   return extended ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] : ['auto', 'low', 'medium', 'high']
 }
+
+export function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return ''
+  if (value < 1024) return `${value} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let size = value / 1024
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++ }
+  return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`
+}
+
+/** Unix seconds as "14:02" today, otherwise "Oct 3" (with the year when it is not this one). */
+export function formatModified(seconds: number | null | undefined): string {
+  if (seconds == null) return ''
+  const date = new Date(seconds * 1000)
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) {
+    return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date)
+  }
+  return new Intl.DateTimeFormat(undefined, date.getFullYear() === now.getFullYear()
+    ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }).format(date)
+}
+
+export interface PatchLine { kind: 'hunk' | 'add' | 'del' | 'context' | 'note'; text: string; oldNumber: number | null; newNumber: number | null }
+
+/** Turn unified diff lines into display rows; file headers are dropped, the page shows the path itself. */
+export function parsePatch(lines: string[]): PatchLine[] {
+  const rows: PatchLine[] = []
+  let oldNumber = 0
+  let newNumber = 0
+  let inHunk = false
+  for (const line of lines) {
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/.exec(line)
+    if (hunk) {
+      oldNumber = Number(hunk[1]); newNumber = Number(hunk[2]); inHunk = true
+      rows.push({ kind: 'hunk', text: hunk[3], oldNumber: null, newNumber: null })
+      continue
+    }
+    if (!inHunk) continue
+    if (line.startsWith('\\')) { rows.push({ kind: 'note', text: line.slice(2), oldNumber: null, newNumber: null }); continue }
+    const marker = line[0]
+    const text = line.slice(1)
+    if (marker === '+') rows.push({ kind: 'add', text, oldNumber: null, newNumber: newNumber++ })
+    else if (marker === '-') rows.push({ kind: 'del', text, oldNumber: oldNumber++, newNumber: null })
+    else rows.push({ kind: 'context', text, oldNumber: oldNumber++, newNumber: newNumber++ })
+  }
+  return rows
+}

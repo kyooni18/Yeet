@@ -172,6 +172,19 @@ export class RemoteTransport {
       request_id: this.adapter.requestId(), action }))
     return true
   }
+  /** Returns the request id so callers can discard superseded replies. */
+  requestWorkspaceFiles(path: string, selected: string | null): string | null {
+    if (!this.socket || this.socket.readyState !== 1 || !this.welcomed) return null
+    const requestId = this.adapter.requestId()
+    this.socket.send(JSON.stringify({ type: 'workspace_files_request', version: 1, request_id: requestId, path, selected }))
+    return requestId
+  }
+  requestWorkspaceChanges(file: string | null, full: boolean): string | null {
+    if (!this.socket || this.socket.readyState !== 1 || !this.welcomed) return null
+    const requestId = this.adapter.requestId()
+    this.socket.send(JSON.stringify({ type: 'workspace_changes_request', version: 1, request_id: requestId, file, full }))
+    return requestId
+  }
   sendHomeUi(action: HomeAction): boolean {
     if (!this.socket || this.socket.readyState !== 1 || !this.welcomed) return false
     this.socket.send(JSON.stringify({ type: 'ui_home_action', version: 1,
@@ -371,5 +384,5 @@ export class RemoteTransport {
 /** Semantic transport contract also implemented by the local desktop bridge. */
 export type RemoteClientTransport = Pick<RemoteTransport,
   'connect' | 'send' | 'close' | 'markApplied' | 'switchWorkspace' | 'reconnectAfterAuth'
-> & Partial<Pick<RemoteTransport, 'sendUi' | 'sendAgentUi' | 'sendConversationUi' | 'sendComposerUi' | 'sendSettingsUi' | 'sendToolbarUi' | 'sendHomeUi' | 'sendDiffUi'>>
+> & Partial<Pick<RemoteTransport, 'sendUi' | 'sendAgentUi' | 'sendConversationUi' | 'sendComposerUi' | 'sendSettingsUi' | 'sendToolbarUi' | 'sendHomeUi' | 'sendDiffUi' | 'requestWorkspaceFiles' | 'requestWorkspaceChanges'>>
 // Legacy test/host transports can opt into the additive UI channel.

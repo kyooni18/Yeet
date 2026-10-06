@@ -236,6 +236,45 @@ export async function installMockRemote(page: Page): Promise<void> {
       })
     }
 
+        const mockEntries: Record<string, Array<Record<string, unknown>>> = {
+      '': [
+        { name: 'docs', path: 'docs', directory: true, size: 160, items: 2, modified: 1790000000, status: null },
+        { name: 'src', path: 'src', directory: true, size: 192, items: 2, modified: 1791300000, status: ' M' },
+        { name: 'README.md', path: 'README.md', directory: false, size: 2150, items: null, modified: 1790000000, status: null },
+      ],
+      src: [
+        { name: 'limiter.ts', path: 'src/limiter.ts', directory: false, size: 2148, items: null, modified: 1791300000, status: ' M' },
+        { name: 'index.ts', path: 'src/index.ts', directory: false, size: 640, items: null, modified: 1790000000, status: null },
+      ],
+      docs: [],
+    }
+    function mockFiles(path: string, selected: string | null) {
+      const entries = mockEntries[path] ?? []
+      const file = entries.find(entry => entry.path === selected)
+      return {
+        root: 'Yeet', path, parent: path ? '' : null, branch: 'main', entries,
+        selected: file ? selected : null,
+        info: file ? { path: selected, name: file.name, size: file.size, modified: file.modified, created: file.modified,
+          permissions: 'rw-r--r--', lines: 71, status: file.status, added: file.status ? 11 : null, removed: file.status ? 4 : null } : null,
+      }
+    }
+    const mockPatch = [
+      'diff --git a/src/limiter.ts b/src/limiter.ts', 'index 1..2 100644', '--- a/src/limiter.ts', '+++ b/src/limiter.ts',
+      '@@ -10,5 +10,6 @@ class TokenBucket {', '   refill(now: number) {', '-    const seconds = Math.floor(now / 1000)',
+      '+    const seconds = now / 1000', '+    this.tokens = Math.min(this.cap, this.tokens + seconds * this.rate)', '   }',
+    ]
+    function mockChanges(file: string | null, full: boolean) {
+      return {
+        root: 'Yeet', branch: 'main',
+        files: [
+          { path: 'src/limiter.ts', status: ' M', added: 2, removed: 1 },
+          { path: 'docs/notes.md', status: '??', added: 3, removed: 0 },
+        ],
+        selected: file ?? 'src/limiter.ts', full, patch: mockPatch, message: null,
+      }
+    }
+
+
     class MockSocket extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -296,6 +335,12 @@ export async function installMockRemote(page: Page): Promise<void> {
             projectComposerUi(this)
             projectSettingsUi(this)
           })
+        } else if (message.type === 'workspace_files_request') {
+          const view = mockFiles(String(message.path ?? ''), (message.selected as string | null) ?? null)
+          queueMicrotask(() => this.emit({ type: 'workspace_files', version: 1, request_id: message.request_id, view }))
+        } else if (message.type === 'workspace_changes_request') {
+          const view = mockChanges((message.file as string | null) ?? null, Boolean(message.full))
+          queueMicrotask(() => this.emit({ type: 'workspace_changes', version: 1, request_id: message.request_id, view }))
         } else if (message.type === 'ui_toolbar_action') {
           projectToolbarUi(this,message.action)
         } else if (message.type === 'ui_settings_action') {
