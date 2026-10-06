@@ -1,7 +1,8 @@
+//! Harness runtime state, event and capability schema. Root model remains a compatibility export.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use crate::core::{ProviderUsageStatus, ProviderUsageWindow, Usage};
+pub use super::core::{ProviderUsageStatus, ProviderUsageWindow, Usage};
 
 pub const REASONING_LEVELS: &[&str] = &["auto", "low", "medium", "high", "xhigh", "max"];
 
@@ -388,9 +389,9 @@ pub struct RuntimeSettingsState {
     pub theme_light: String,
     pub theme_dark_resolved: String,
     pub theme_light_resolved: String,
-    pub theme_dark_palette: crate::harness::theme_resources::PaletteState,
-    pub theme_light_palette: crate::harness::theme_resources::PaletteState,
-    pub theme_catalog: Vec<crate::harness::theme_resources::ThemeCatalogItem>,
+    pub theme_dark_palette: super::theme_resources::PaletteState,
+    pub theme_light_palette: super::theme_resources::PaletteState,
+    pub theme_catalog: Vec<super::theme_resources::ThemeCatalogItem>,
     pub theme_dark_warning: Option<String>,
     pub theme_light_warning: Option<String>,
     pub context_length_override: Option<u64>,
@@ -742,7 +743,7 @@ pub struct ModelActivity {
 /// session runtime. Preferred name for [`BridgeState`]; the historical name
 /// predates the provider bridge and is kept for wire and API compatibility.
 /// This is unrelated to the Rust <-> Node `ProviderBridge`
-/// (`crate::core::BridgeClient`).
+/// (`super::core::BridgeClient`).
 pub type HarnessState = BridgeState;
 
 /// One frame of the harness state transport (state snapshots, heartbeats,
@@ -757,7 +758,7 @@ pub struct BridgeEnvelope {
     pub message: Option<String>,
 }
 
-pub use crate::agents::actions::FrontendCommand;
+pub use super::agents::actions::FrontendCommand;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]

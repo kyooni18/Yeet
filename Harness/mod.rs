@@ -14,6 +14,7 @@ pub mod agent;
 pub mod agents;
 pub mod core;
 pub mod context_cache;
+pub mod model;
 pub mod permission;
 pub mod resources;
 pub mod theme_resources;
@@ -27,7 +28,7 @@ pub(crate) use service::{HarnessService, SessionCatalog, tool_detail};
 
 use crate::background::BackgroundConnection;
 
-pub use crate::model::{FrontendCommand as HarnessCommand, HarnessEvent, HarnessState};
+pub use model::{FrontendCommand as HarnessCommand, HarnessEvent, HarnessState};
 
 /// Selects how a [`Harness`] is hosted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

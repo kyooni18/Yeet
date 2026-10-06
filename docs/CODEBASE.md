@@ -15,3 +15,7 @@ The tool registry is likewise a coordinator rather than an implementation bucket
 Maintainability comments follow the same rule as the module split: every new module gets a `//!` responsibility note, and non-obvious structs and methods get a short `///` contract explaining what they own or guarantee. Comments should explain responsibility or invariants rather than restating syntax.
 
 Before merging structural work, run `Scripts/check.sh` (add `--install` on a fresh checkout to `npm ci` the JavaScript dependencies). It runs `cargo fmt --check`, `cargo check`, `cargo test --all-targets`, `cargo clippy --all-targets -- -D warnings`, the RuntimeSource build and Node tests, the web typecheck and a CLI smoke test, and reports each as PASS, FAIL (code), ENV (missing tool or dependency) or SKIP; exit status 1 means code failures and 2 means only environment gaps. The source-layout test is intentionally part of the Rust test suite so architectural regressions fail ordinary CI instead of relying on a separate manual checklist.
+
+`Harness/model.rs` owns the runtime state/event and capability schema, including
+neutral resource DTOs and the runtime command reexport. `crate::model` remains a
+compatibility import. UI projections and interaction state remain under `UI/`.

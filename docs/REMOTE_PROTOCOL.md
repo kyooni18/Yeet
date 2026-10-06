@@ -156,7 +156,7 @@ sandbox_notice
 sandbox_working
 ```
 
-The Rust definitions in `src/model.rs` remain authoritative for nested state types.
+The Rust definitions in `Harness/model.rs` remain authoritative for nested state types.
 
 ### Compact state update
 
