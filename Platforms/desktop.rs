@@ -10,6 +10,7 @@ use yeet::shared_ui::composer::{ComposerAction, ComposerUiEffect};
 use yeet::shared_ui::composer_session::ComposerProjection;
 use yeet::shared_ui::conversation::{ConversationAction, ConversationUiEffect};
 use yeet::shared_ui::conversation_session::ConversationProjection;
+use yeet::shared_ui::home::{HomeAction, HomeView, RecentViews, ResourceTarget, WorkspaceContent};
 use yeet::shared_ui::settings::{SettingsAction, SettingsUiEffect};
 use yeet::shared_ui::settings_session::SettingsProjection;
 use yeet::shared_ui::shell::ShellAction;
@@ -24,8 +25,10 @@ enum Control {
     Connect(String, mpsc::Sender<Result<CoreConnection, String>>),
     Command(HarnessCommand, mpsc::Sender<Result<(), String>>),
     ApplicationProjection(mpsc::Sender<Result<ApplicationProjection, String>>),
+    HomeProjection(mpsc::Sender<Result<HomeProjection, String>>),
     UiProjection(mpsc::Sender<Result<UiProjection, String>>),
     ShellAction(ShellAction, mpsc::Sender<Result<(), String>>),
+    HomeAction(HomeAction, mpsc::Sender<Result<(), String>>),
     AgentsProjection(mpsc::Sender<Result<AgentProjection, String>>),
     AgentAction(AgentAction, mpsc::Sender<Result<(), String>>),
     ConversationAction(ConversationAction, mpsc::Sender<Result<(), String>>),
@@ -49,6 +52,65 @@ struct UiMessage {
     request_id: Option<String>,
     #[serde(flatten)]
     projection: UiProjection,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct HomeProjection {
+    home_revision: u64,
+    view: HomeView,
+}
+
+#[derive(Default)]
+struct HomeRevision {
+    revision: u64,
+    view: Option<HomeView>,
+}
+
+impl HomeRevision {
+    fn projection(&mut self, view: &HomeView) -> HomeProjection {
+        if self.view.as_ref() != Some(view) {
+            self.revision = self.revision.saturating_add(1);
+            self.view = Some(view.clone());
+        }
+        HomeProjection {
+            home_revision: self.revision,
+            view: view.clone(),
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct HomeEffectMessage {
+    version: u16,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: Option<String>,
+    open: Option<ResourceTarget>,
+}
+
+fn publish_home_effect(app: &tauri::AppHandle, open: Option<ResourceTarget>) -> Result<(), String> {
+    app.emit(
+        "yeet://ui-home-effect",
+        HomeEffectMessage {
+            version: 1,
+            kind: "ui_home_effect",
+            request_id: None,
+            open,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn home_projection(host: tauri::State<'_, CoreHost>) -> Result<HomeProjection, String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::HomeProjection(reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -85,6 +147,21 @@ async fn send_ui_action(
     let (reply, response) = mpsc::channel();
     host.0
         .send(Control::ShellAction(action, reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn send_ui_home_action(
+    action: HomeAction,
+    host: tauri::State<'_, CoreHost>,
+) -> Result<(), String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::HomeAction(action, reply))
         .map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn_blocking(move || response.recv())
         .await
@@ -197,6 +274,33 @@ struct SettingsMessage {
     #[serde(flatten)]
     projection: SettingsProjection,
 }
+#[derive(Clone, serde::Serialize)]
+struct HomeMessage {
+    version: u16,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: Option<String>,
+    home_revision: u64,
+    view: HomeView,
+}
+fn publish_home(
+    app: &tauri::AppHandle,
+    projection: &ApplicationProjection,
+    revision: &mut HomeRevision,
+) -> Result<(), String> {
+    let home = revision.projection(&projection.home);
+    app.emit(
+        "yeet://ui-home-event",
+        HomeMessage {
+            version: 1,
+            kind: "ui_home",
+            request_id: None,
+            home_revision: home.home_revision,
+            view: home.view,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
 fn publish_settings(
     app: &tauri::AppHandle,
     projection: SettingsProjection,
@@ -247,7 +351,9 @@ fn publish_application(
     app: &tauri::AppHandle,
     projection: ApplicationProjection,
     effect: Option<AgentUiEffect>,
+    home_revision: &mut HomeRevision,
 ) -> Result<(), String> {
+    publish_home(app, &projection, home_revision)?;
     app.emit(
         "yeet://ui-event",
         UiMessage {
@@ -345,6 +451,9 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
     let mut conversation = None;
     let mut theme_cache = yeet::theme::ThemeProjectionCache::default();
     let mut ui = ApplicationSession::default();
+    let mut home_revision = HomeRevision::default();
+    let mut git = yeet::harness::resources::GitRefresh::default();
+    let recent = RecentViews::default();
     loop {
         match controls.recv_timeout(Duration::from_millis(16)) {
             Ok(Control::Connect(workspace, reply)) => {
@@ -364,13 +473,24 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                             .and_then(|state| state.conversation.clone());
                         // Preserve the current connection when constructing a new one fails.
                         if let Some(state) = connection.state.as_ref() {
+                            git.refresh_git(next.workspace(), false);
                             ui.refresh(state);
                             configure_composer_host(
                                 &mut ui,
                                 state,
                                 Some(connection.workspace.clone()),
                             );
-                            let _ = publish_application(&app, ui.projection(), None);
+                            ui.update_home_content(WorkspaceContent::collect(
+                                state,
+                                &recent,
+                                &git.snapshot,
+                            ));
+                            let _ = publish_application(
+                                &app,
+                                ui.projection(),
+                                None,
+                                &mut home_revision,
+                            );
                         }
                         harness = Some(next);
                         connection
@@ -401,6 +521,10 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
             Ok(Control::ApplicationProjection(reply)) => {
                 let _ = reply.send(Ok(ui.projection()));
             }
+            Ok(Control::HomeProjection(reply)) => {
+                let projection = home_revision.projection(&ui.projection().home);
+                let _ = reply.send(Ok(projection));
+            }
             Ok(Control::UiProjection(reply)) => {
                 let _ = reply.send(Ok(ui.shell_projection()));
             }
@@ -411,7 +535,36 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     .cloned()
                     .unwrap_or_default();
                 let projection = ui.apply_shell(action, &state);
-                let _ = reply.send(publish_application(&app, projection, None));
+                let _ = reply.send(publish_application(
+                    &app,
+                    projection,
+                    None,
+                    &mut home_revision,
+                ));
+            }
+            Ok(Control::HomeAction(action, reply)) => {
+                let result = (|| -> Result<(), String> {
+                    let core = harness.as_mut().ok_or("Connect a local workspace first")?;
+                    let state = core
+                        .latest_state()
+                        .cloned()
+                        .ok_or("Local workspace state unavailable")?;
+                    let prepared = ui.prepare_home(action, &state);
+                    if let Some(command) = prepared.effect.command.clone() {
+                        let theme_command = command.clone();
+                        core.send(command).map_err(|error| error.to_string())?;
+                        theme_cache.invalidate_for_command(&theme_command);
+                    }
+                    if let Some(open) = prepared.effect.open.clone() {
+                        publish_home_effect(&app, Some(open))?;
+                    }
+                    let (projection, effect) = ui.commit_home(prepared, &state);
+                    if matches!(effect.command, Some(HarnessCommand::NewSession)) {
+                        publish_composer(&app, projection.composer.clone(), None)?;
+                    }
+                    publish_application(&app, projection, None, &mut home_revision)
+                })();
+                let _ = reply.send(result);
             }
             Ok(Control::AgentsProjection(reply)) => {
                 let result = if harness.is_some() {
@@ -435,7 +588,12 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (projection, effect) = ui.commit_agent(prepared, &state);
-                    publish_application(&app, projection, Some((&effect).into()))
+                    publish_application(
+                        &app,
+                        projection,
+                        Some((&effect).into()),
+                        &mut home_revision,
+                    )
                 })();
                 let _ = reply.send(result);
             }
@@ -504,7 +662,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (projection, _effect) = ui.commit_toolbar(prepared, &state);
-                    publish_application(&app, projection, None)
+                    publish_application(&app, projection, None, &mut home_revision)
                 })();
                 let _ = reply.send(result);
             }
@@ -532,6 +690,8 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
             Ok(Control::Disconnect(reply)) => {
                 harness = None;
                 conversation = None;
+                git = yeet::harness::resources::GitRefresh::default();
+                ui = ApplicationSession::default();
                 let _ = reply.send(());
             }
             Ok(Control::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -564,7 +724,14 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     let _ = app.emit("yeet://core-event", payload);
                 }
                 if let Some(projection) = projection {
-                    let _ = publish_application(&app, projection, None);
+                    let _ = publish_application(&app, projection, None, &mut home_revision);
+                }
+            }
+            git.refresh_git(core.workspace(), false);
+            if let Some(state) = core.latest_state() {
+                let content = WorkspaceContent::collect(state, &recent, &git.snapshot);
+                if let Some(projection) = ui.update_home_content(content) {
+                    let _ = publish_application(&app, projection, None, &mut home_revision);
                 }
             }
         }
@@ -640,8 +807,10 @@ fn main() {
             send_core_command,
             disconnect_core,
             application_projection,
+            home_projection,
             ui_projection,
             send_ui_action,
+            send_ui_home_action,
             agents_projection,
             send_ui_agent_action,
             send_ui_conversation_action,
@@ -662,6 +831,60 @@ fn main() {
 mod tests {
     use super::*;
     use yeet::shared_ui::shell::{Placement, Surface, ViewKind};
+
+    #[test]
+    fn desktop_home_event_carries_shared_inventory_and_revision() {
+        use yeet::shared_ui::home::{ResourceItem, ResourceKind, ResourceTarget};
+        let mut session = ApplicationSession::default();
+        let mut revision = HomeRevision::default();
+        let mut content = WorkspaceContent::default();
+        content.sessions.push(ResourceItem::new(
+            ResourceTarget::Session("session-1".into()),
+            ResourceKind::Session,
+            "Recent work",
+        ));
+        let projection = session.update_home_content(content).expect("home changed");
+        let home = revision.projection(&projection.home);
+        let wire = serde_json::to_value(HomeMessage {
+            version: 1,
+            kind: "ui_home",
+            request_id: None,
+            home_revision: home.home_revision,
+            view: home.view,
+        })
+        .unwrap();
+        assert_eq!(wire["type"], "ui_home");
+        assert_eq!(wire["home_revision"], 1);
+        assert_eq!(wire["view"]["activity"][1]["value"]["title"], "Recent work");
+        assert!(wire.get("sequence").is_none());
+    }
+
+    #[test]
+    fn desktop_home_revision_tracks_home_changes_only_and_open_effect_is_typed() {
+        use yeet::shared_ui::home::ResourceTarget;
+
+        let mut session = ApplicationSession::default();
+        let mut revision = HomeRevision::default();
+        let initial = revision.projection(&session.projection().home);
+        session.apply_shell(ShellAction::OpenModels, &HarnessState::default());
+        let after_shell_change = revision.projection(&session.projection().home);
+        assert_eq!(after_shell_change.home_revision, initial.home_revision);
+
+        let prepared = session.prepare_home(
+            HomeAction::Open(ResourceTarget::Status),
+            &HarnessState::default(),
+        );
+        assert_eq!(prepared.effect.open, Some(ResourceTarget::Status));
+        let wire = serde_json::to_value(HomeEffectMessage {
+            version: 1,
+            kind: "ui_home_effect",
+            request_id: None,
+            open: prepared.effect.open,
+        })
+        .unwrap();
+        assert_eq!(wire["type"], "ui_home_effect");
+        assert_eq!(wire["open"]["type"], "status");
+    }
 
     #[test]
     fn desktop_conversation_delivers_safe_edit_effect_and_shared_controls() {

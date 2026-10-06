@@ -21,7 +21,7 @@ pub(super) fn application_messages(
     projection: ApplicationProjection,
     request_id: Option<String>,
     effect: Option<AgentUiEffect>,
-) -> [ServerMessage; 5] {
+) -> [ServerMessage; 6] {
     [
         ServerMessage::UiState {
             toolbar: projection.toolbar,
@@ -34,7 +34,13 @@ pub(super) fn application_messages(
         agents_message(projection.agents, request_id.clone(), effect),
         conversation_message(projection.conversation, request_id.clone(), None),
         composer_message(projection.composer, request_id.clone(), None),
-        settings_message(projection.settings, request_id, None),
+        settings_message(projection.settings, request_id.clone(), None),
+        ServerMessage::UiHome {
+            version: REMOTE_PROTOCOL_VERSION,
+            home_revision: projection.ui_revision,
+            request_id,
+            view: projection.home,
+        },
     ]
 }
 

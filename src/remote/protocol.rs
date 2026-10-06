@@ -146,6 +146,12 @@ pub enum ServerMessage {
         view: crate::shared_ui::settings::SettingsView,
         effect: Option<crate::shared_ui::settings::SettingsUiEffect>,
     },
+    UiHome {
+        version: u16,
+        home_revision: u64,
+        request_id: Option<String>,
+        view: crate::shared_ui::home::HomeView,
+    },
     Welcome {
         version: u16,
         client_id: String,
@@ -265,6 +271,7 @@ impl ServerMessage {
             | Self::UiConversation { .. }
             | Self::UiComposer { .. }
             | Self::UiSettings { .. }
+            | Self::UiHome { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }
@@ -288,6 +295,7 @@ impl ServerMessage {
             | Self::UiConversation { .. }
             | Self::UiComposer { .. }
             | Self::UiSettings { .. }
+            | Self::UiHome { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }

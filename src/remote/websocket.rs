@@ -319,6 +319,13 @@ impl RemoteClientRuntime {
             &initial_state,
             Some(workspace.to_string_lossy().into_owned()),
         );
+        let mut git = crate::harness::resources::GitRefresh::default();
+        git.refresh_git(workspace, false);
+        application.update_home_content(crate::shared_ui::home::WorkspaceContent::collect(
+            &initial_state,
+            &crate::shared_ui::home::RecentViews::default(),
+            &git.snapshot,
+        ));
         let ui = Arc::new(Mutex::new(application));
         let thread_ui = Arc::clone(&ui);
         let shared = Arc::new(Mutex::new(RuntimeShared {
@@ -333,6 +340,7 @@ impl RemoteClientRuntime {
         let thread_shared = Arc::clone(&shared);
         let thread_events = events.clone();
         let thread_wake = wake.clone();
+        let thread_workspace = workspace.to_path_buf();
         let thread = thread::Builder::new()
             .name("yeet-remote-semantic-client".into())
             .spawn(move || {
@@ -343,6 +351,8 @@ impl RemoteClientRuntime {
                     thread_events,
                     thread_wake,
                     thread_ui,
+                    thread_workspace,
+                    git,
                 );
             })
             .context("start semantic Remote client runtime")?;
@@ -356,7 +366,7 @@ impl RemoteClientRuntime {
         })
     }
 
-    fn ui_messages(&self) -> Result<[ServerMessage; 5]> {
+    fn ui_messages(&self) -> Result<[ServerMessage; 6]> {
         let ui = self
             .ui
             .lock()
@@ -641,8 +651,11 @@ fn runtime_loop(
     events: broadcast::Sender<ServerMessage>,
     wake: Wake,
     ui: Arc<Mutex<crate::shared_ui::application_session::ApplicationSession>>,
+    workspace: std::path::PathBuf,
+    mut git: crate::harness::resources::GitRefresh,
 ) {
     let mut shutdown = false;
+    let recent = crate::shared_ui::home::RecentViews::default();
     while !shutdown {
         while let Ok(control) = commands.try_recv() {
             match control {
@@ -858,6 +871,19 @@ fn runtime_loop(
                 })
             });
             if let Some(projection) = projection {
+                for message in application_messages(projection, None, None) {
+                    let _ = events.send(message);
+                }
+            }
+        }
+        git.refresh_git(&workspace, false);
+        if let (Ok(state), Ok(mut ui)) = (shared.lock(), ui.lock()) {
+            let content = crate::shared_ui::home::WorkspaceContent::collect(
+                &state.state,
+                &recent,
+                &git.snapshot,
+            );
+            if let Some(projection) = ui.update_home_content(content) {
                 for message in application_messages(projection, None, None) {
                     let _ = events.send(message);
                 }
@@ -1864,6 +1890,32 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn home_inventory_uses_a_revisioned_ui_message_without_harness_cursors() {
+        use crate::shared_ui::{
+            application_session::ApplicationSession,
+            home::{ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent},
+        };
+        let mut ui = ApplicationSession::default();
+        let mut content = WorkspaceContent::default();
+        content.sessions.push(ResourceItem::new(
+            ResourceTarget::Session("session-1".into()),
+            ResourceKind::Session,
+            "Recent work",
+        ));
+        let projection = ui.update_home_content(content).expect("home changed");
+        let message = super::application_messages(projection, None, None)
+            .into_iter()
+            .find(|message| matches!(message, super::ServerMessage::UiHome { .. }))
+            .expect("home message");
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["type"], "ui_home");
+        assert_eq!(wire["view"]["activity"][1]["value"]["title"], "Recent work");
+        assert_eq!(wire["home_revision"], 1);
+        assert_eq!(message.sequence(), None);
+        assert_eq!(message.revision(), None);
     }
 
     #[test]
