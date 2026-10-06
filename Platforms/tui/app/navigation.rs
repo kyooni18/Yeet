@@ -162,6 +162,7 @@ impl App {
             }
             WorkbenchTab::CloseDiff(id) => {
                 if self.diff_tabs.close(id).is_some() {
+                    self.application.remove_diff_view(id);
                     self.application
                         .navigation_mut()
                         .diff_closed(self.diff_tabs.len());
@@ -223,7 +224,7 @@ impl App {
 mod tests {
     use super::*;
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
     fn native_choice_selection_tracks_shared_runtime_options() {
@@ -268,9 +269,13 @@ mod tests {
         assert_eq!(app.diff_tabs.active().unwrap().state.scroll, 12);
         app.diff_frame.begin(Rect::new(0, 0, 80, 24));
         app.diff_frame.view = Some(second);
-        app.diff_frame
-            .hits
-            .register(Rect::new(0, 0, 10, 1), DiffAction::SetFull(true));
+        app.diff_frame.hits.register(
+            Rect::new(0, 0, 10, 1),
+            DiffAction::SetFull {
+                view: second,
+                full: true,
+            },
+        );
         app.activate_workbench_tab(WorkbenchTab::CloseDiff(first));
         app.activate_workbench_tab(WorkbenchTab::CloseDiff(first));
         assert_eq!(app.diff_tabs.len(), 1);
@@ -371,9 +376,7 @@ mod tests {
                 .any(|(_, tab)| *tab == WorkbenchTab::File(second_id)),
             "active tab must survive overflow"
         );
-        assert!(
-            app.handle_workbench_key(&KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))
-        );
+        assert!(app.handle_workbench_key(&KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)));
         assert_eq!(app.files.as_ref().unwrap().tabs.views()[0].id, first_id);
         assert_eq!(app.files.as_ref().unwrap().selected_path(), Some(first));
     }

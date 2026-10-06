@@ -12,6 +12,7 @@ use super::{
     conversation_session::{
         ConversationProjection, ConversationSession, PreparedConversationAction,
     },
+    diff::{DiffAction, DiffContent, DiffView},
     home::{HomeAction, HomeState, HomeView, ResourceTarget, WorkspaceContent},
     navigation::{NavigationState, WorkbenchResources},
     settings::{SettingsAction, SettingsEffect, SettingsEnvironment, SettingsState},
@@ -35,6 +36,9 @@ pub struct PreparedHomeAction {
     state: HomeState,
     composer: Option<PreparedComposerAction>,
     pub effect: HomeEffect,
+}
+pub struct PreparedDiffAction {
+    action: DiffAction,
 }
 enum ToolbarRoute {
     None,
@@ -61,6 +65,7 @@ pub struct ApplicationProjection {
     pub view: ShellView,
     pub application: ApplicationView,
     pub home: HomeView,
+    pub diff_views: Vec<DiffView>,
     pub agents: AgentProjection,
     pub conversation: ConversationProjection,
     pub composer: ComposerProjection,
@@ -75,6 +80,7 @@ pub struct ApplicationSession {
     composer: ComposerSession,
     settings: SettingsSession,
     home: HomeState,
+    diff_views: Vec<DiffView>,
     revision: u64,
     home_revision: u64,
     home_serialized: HomeView,
@@ -98,6 +104,7 @@ impl ApplicationSession {
             composer: ComposerSession::new(harness),
             settings: SettingsSession::new(harness),
             home: HomeState::default(),
+            diff_views: Vec::new(),
             revision: 0,
             home_revision: 0,
             home_serialized: HomeState::default().project(true),
@@ -327,6 +334,7 @@ impl ApplicationSession {
             view: self.shell.view(),
             application: self.application_view(),
             home: self.home.project(true),
+            diff_views: self.diff_views.clone(),
             agents: self.agents.projection(),
             conversation: self.conversation.projection(),
             composer: self.composer.projection(),
@@ -426,6 +434,96 @@ impl ApplicationSession {
         } else {
             None
         }
+    }
+    /// Install host-collected Git review targets into shared Diff state.
+    /// Selection and display mode survive refreshes while their target remains
+    /// present; a removed target falls back to the host's initial choice or the
+    /// first available file.
+    pub fn update_diff_content(&mut self, content: DiffContent) -> Option<ApplicationProjection> {
+        let existing = self.diff_views.iter().find(|view| view.id == content.id);
+        let selected = existing
+            .and_then(|view| view.selected.clone())
+            .filter(|target| content.files.contains(target))
+            .or_else(|| {
+                content
+                    .selected
+                    .clone()
+                    .filter(|target| content.files.contains(target))
+            })
+            .or_else(|| content.files.first().cloned());
+        let full = existing.is_some_and(|view| view.full);
+        let view = DiffView {
+            id: content.id,
+            root: content.root,
+            files: content.files,
+            selected,
+            full,
+        };
+        if let Some(existing) = self.diff_views.iter_mut().find(|item| item.id == view.id) {
+            *existing = view;
+        } else {
+            self.diff_views.push(view);
+        }
+        if self.fingerprint() != self.serialized {
+            self.advance();
+            Some(self.projection())
+        } else {
+            None
+        }
+    }
+    pub fn diff_view(&self, id: crate::shared_ui::surfaces::SurfaceId) -> Option<&DiffView> {
+        self.diff_views.iter().find(|view| view.id == id)
+    }
+    pub fn prepare_diff_action(&self, action: DiffAction) -> Option<PreparedDiffAction> {
+        self.apply_diff_action_to(self.diff_view(action.view())?, &action)?;
+        Some(PreparedDiffAction { action })
+    }
+    pub fn commit_diff_action(
+        &mut self,
+        prepared: PreparedDiffAction,
+    ) -> (ApplicationProjection, bool) {
+        let Some(index) = self
+            .diff_views
+            .iter()
+            .position(|view| view.id == prepared.action.view())
+        else {
+            return (self.projection(), false);
+        };
+        let Some(updated) = self.apply_diff_action_to(&self.diff_views[index], &prepared.action)
+        else {
+            return (self.projection(), false);
+        };
+        let changed = self.diff_views[index] != updated;
+        if changed {
+            self.diff_views[index] = updated;
+            self.advance();
+        }
+        (self.projection(), changed)
+    }
+    fn apply_diff_action_to(&self, current: &DiffView, action: &DiffAction) -> Option<DiffView> {
+        if current.id != action.view() {
+            return None;
+        }
+        let mut updated = current.clone();
+        match action {
+            DiffAction::SelectFile { target, .. } => {
+                if !updated.files.contains(target) {
+                    return None;
+                }
+                updated.selected = Some(target.clone());
+            }
+            DiffAction::SetFull { full, .. } => updated.full = *full,
+        }
+        Some(updated)
+    }
+    pub fn remove_diff_view(
+        &mut self,
+        id: crate::shared_ui::surfaces::SurfaceId,
+    ) -> Option<ApplicationProjection> {
+        let index = self.diff_views.iter().position(|view| view.id == id)?;
+        self.diff_views.remove(index);
+        self.advance();
+        Some(self.projection())
     }
     pub fn commit_settings(
         &mut self,
@@ -706,6 +804,7 @@ impl ApplicationSession {
             self.composer.projection().view,
             self.settings.projection().view,
             self.home.project(true),
+            &self.diff_views,
         ))
         .expect("serialize application UI")
     }
@@ -848,6 +947,54 @@ mod tests {
         assert!(!closed.state.agents && !closed.agents.view.state.open);
     }
     #[test]
+    fn diff_views_are_scoped_revisioned_and_reject_stale_targets() {
+        let harness = HarnessState::default();
+        let mut session = ApplicationSession::new(&harness);
+        let mut tabs = Tabs::default();
+        let (first, second) = (tabs.open("Diff", ()), tabs.open("Diff", ()));
+        use std::path::PathBuf;
+        let root = PathBuf::from("/workspace");
+        let (a, b) = (root.join("a.rs"), root.join("b.rs"));
+        let content = |id| DiffContent {
+            id,
+            root: root.clone(),
+            files: vec![a.clone(), b.clone()],
+            selected: Some(a.clone()),
+        };
+        let installed = session.update_diff_content(content(first)).unwrap();
+        session.update_diff_content(content(second)).unwrap();
+        assert!(session.update_diff_content(content(first)).is_none());
+        let revision = session.projection().ui_revision;
+        assert!(revision > installed.ui_revision);
+
+        let stale = session
+            .prepare_diff_action(DiffAction::SelectFile {
+                view: first,
+                target: b.clone(),
+            })
+            .unwrap();
+        let mut shrunk = content(first);
+        shrunk.files = vec![a.clone()];
+        session.update_diff_content(shrunk).unwrap();
+        let (projection, changed) = session.commit_diff_action(stale);
+        assert!(!changed);
+        assert_eq!(session.diff_view(first).unwrap().selected, Some(a.clone()));
+        assert_eq!(projection.diff_views.len(), 2);
+
+        let ok = session
+            .prepare_diff_action(DiffAction::SelectFile {
+                view: second,
+                target: b.clone(),
+            })
+            .unwrap();
+        let (projection, changed) = session.commit_diff_action(ok);
+        assert!(changed && projection.ui_revision > revision);
+        assert_eq!(session.diff_view(first).unwrap().selected, Some(a));
+        assert_eq!(session.diff_view(second).unwrap().selected, Some(b));
+        assert!(session.remove_diff_view(second).is_some());
+        assert!(session.diff_view(second).is_none());
+    }
+    #[test]
     fn resource_identity_and_legacy_edits_are_reconciled_by_one_controller() {
         let harness = HarnessState::default();
         let mut session = ApplicationSession::new(&harness);
@@ -859,11 +1006,9 @@ mod tests {
             active_diff: Some(second),
             ..Default::default()
         };
-        assert!(
-            session
-                .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
-                .is_none()
-        );
+        assert!(session
+            .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
+            .is_none());
         let projection = session
             .accepted_navigation(WorkbenchTab::Diff(second), &resources, &harness)
             .unwrap();

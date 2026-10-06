@@ -3,7 +3,7 @@ use super::App;
 #[cfg(test)]
 use super::Mode;
 use crate::harness::resources;
-pub use crate::shared_ui::diff::DiffAction;
+pub use crate::shared_ui::diff::{DiffAction, DiffContent, DiffView};
 use crossterm::event::{KeyCode, KeyEvent};
 use std::path::{Path, PathBuf};
 
@@ -58,20 +58,44 @@ impl DiffState {
     pub fn selected_path(&self) -> Option<PathBuf> {
         self.paths.get(self.selected).map(|p| self.root.join(p))
     }
+    pub fn shared_content(&self, id: crate::tui::kit::SurfaceId) -> DiffContent {
+        DiffContent {
+            id,
+            root: self.root.clone(),
+            files: self.paths.iter().map(|path| self.root.join(path)).collect(),
+            selected: self.selected_path(),
+        }
+    }
+    pub fn sync_shared_view(&mut self, view: &DiffView) {
+        self.selected = view
+            .selected
+            .as_ref()
+            .and_then(|target| {
+                self.paths
+                    .iter()
+                    .position(|path| self.root.join(path) == *target)
+            })
+            .unwrap_or(0);
+        self.full = view.full;
+        self.scroll = 0;
+        self.patch();
+    }
     pub fn select_path(&mut self, p: &Path) {
         let canonical = resources::canonical_resource_path(p);
         let p = canonical.as_path();
         if let Some(i) = self.paths.iter().position(|f| self.root.join(f) == p) {
-            self.apply_action(DiffAction::SelectFile(self.root.join(&self.paths[i])));
+            self.selected = i;
+            self.scroll = 0;
+            self.patch();
         } else if p.starts_with(&self.root) && resources::path_is_file(p) {
             // An explicitly requested clean file must not silently select a different change.
             self.paths
                 .push(p.strip_prefix(&self.root).unwrap().to_path_buf());
             self.statuses.push("  ".into());
             self.original_paths.push(None);
-            self.apply_action(DiffAction::SelectFile(self.root.join(
-                self.paths.last().expect("the selected path was just inserted"),
-            )));
+            self.selected = self.paths.len() - 1;
+            self.scroll = 0;
+            self.patch();
         }
     }
     pub fn reload(&mut self) {
@@ -108,8 +132,12 @@ impl DiffState {
         match resources::review_patch(
             &self.root,
             p,
-            self.original_paths.get(self.selected).and_then(|path| path.as_deref()),
-            self.statuses.get(self.selected).is_some_and(|status| status == "??"),
+            self.original_paths
+                .get(self.selected)
+                .and_then(|path| path.as_deref()),
+            self.statuses
+                .get(self.selected)
+                .is_some_and(|status| status == "??"),
             !self.base.is_empty(),
             self.full,
         ) {
@@ -118,43 +146,59 @@ impl DiffState {
         }
         self.scroll = self.scroll.min(self.lines.len().saturating_sub(1));
     }
-    pub fn apply_action(&mut self, action: DiffAction) -> bool {
-        match action {
-            DiffAction::SelectFile(target) => {
-                let Some(index) = self
-                    .paths
-                    .iter()
-                    .position(|path| self.root.join(path) == target)
-                else {
-                    return false;
-                };
-                self.selected = index;
-                self.scroll = 0;
-                self.patch();
-                true
-            }
-            DiffAction::SetFull(full) => {
-                self.full = full;
-                self.scroll = 0;
-                self.patch();
-                true
-            }
-        }
-    }
-    pub fn move_file(&mut self, delta: isize) {
+    pub fn target_at_offset(&self, delta: isize) -> Option<PathBuf> {
         let selected = self
             .selected
             .saturating_add_signed(delta)
             .min(self.paths.len().saturating_sub(1));
-        if let Some(path) = self.paths.get(selected) {
-            self.apply_action(DiffAction::SelectFile(self.root.join(path)));
-        } else {
-            self.scroll = 0;
-            self.patch();
-        }
+        self.paths.get(selected).map(|path| self.root.join(path))
     }
 }
 impl App {
+    pub(crate) fn refresh_diff_view(&mut self, id: crate::tui::kit::SurfaceId) {
+        let Some(content) = self
+            .diff_tabs
+            .get(id)
+            .map(|view| view.state.shared_content(id))
+        else {
+            return;
+        };
+        self.application.update_diff_content(content);
+        let shared = self.application.diff_view(id).cloned();
+        if let (Some(local), Some(shared)) = (self.diff_tabs.get_mut(id), shared) {
+            local.state.sync_shared_view(&shared);
+        }
+    }
+    pub(crate) fn apply_diff_action(&mut self, action: DiffAction) -> bool {
+        let id = action.view();
+        if self.diff_tabs.get(id).is_none() {
+            return false;
+        }
+        let Some(prepared) = self.application.prepare_diff_action(action) else {
+            return false;
+        };
+        let (projection, _) = self.application.commit_diff_action(prepared);
+        let Some(shared) = projection.diff_views.iter().find(|view| view.id == id) else {
+            return false;
+        };
+        let Some(local) = self.diff_tabs.get_mut(id) else {
+            return false;
+        };
+        local.state.sync_shared_view(shared);
+        true
+    }
+    pub(crate) fn move_diff_selection(&mut self, id: crate::tui::kit::SurfaceId, delta: isize) {
+        let target = self
+            .diff_tabs
+            .get(id)
+            .and_then(|view| view.state.target_at_offset(delta));
+        if let Some(target) = target {
+            self.apply_diff_action(DiffAction::SelectFile { view: id, target });
+        } else if let Some(local) = self.diff_tabs.get_mut(id) {
+            local.state.scroll = 0;
+            local.state.patch();
+        }
+    }
     pub(crate) fn open_diff(&mut self, path: Option<PathBuf>) {
         let dir = path
             .as_ref()
@@ -167,22 +211,8 @@ impl App {
             .or_else(|| self.files.as_ref().map(|f| f.dir.clone()))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let state = DiffState::open(&dir, path.as_deref());
-        if let Some(id) = self
-            .diff_tabs
-            .views()
-            .iter()
-            .find(|view| view.state.root == state.root)
-            .map(|view| view.id)
-        {
-            self.diff_tabs.activate(id);
-            let existing = &mut self.diff_tabs.active_mut().unwrap().state;
-            existing.reload();
-            if let Some(p) = path {
-                existing.select_path(&p);
-            }
-        } else {
-            self.diff_tabs.open("Diff", state);
-        }
+        let id = self.diff_tabs.open("Diff", state);
+        self.refresh_diff_view(id);
         self.diff_frame.begin(ratatui::layout::Rect::default());
         self.report_navigation(super::WorkbenchTab::NewDiff);
     }
@@ -208,43 +238,82 @@ impl App {
             }
             return;
         }
-        let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) else {
+        let Some(id) = self.diff_tabs.active_id() else {
             return;
         };
         match e.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                s.scroll = (s.scroll + 1).min(s.lines.len().saturating_sub(1))
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = (s.scroll + 1).min(s.lines.len().saturating_sub(1));
+                }
             }
-            KeyCode::Up | KeyCode::Char('k') => s.scroll = s.scroll.saturating_sub(1),
-            KeyCode::PageDown => s.scroll = (s.scroll + 15).min(s.lines.len().saturating_sub(1)),
-            KeyCode::PageUp => s.scroll = s.scroll.saturating_sub(15),
-            KeyCode::Home => s.scroll = 0,
-            KeyCode::End => s.scroll = s.lines.len().saturating_sub(1),
-            KeyCode::Right | KeyCode::Char(']') => s.move_file(1),
-            KeyCode::Left | KeyCode::Char('[') => s.move_file(-1),
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = s.scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = (s.scroll + 15).min(s.lines.len().saturating_sub(1));
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = s.scroll.saturating_sub(15);
+                }
+            }
+            KeyCode::Home => {
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = s.lines.len().saturating_sub(1);
+                }
+            }
+            KeyCode::Right | KeyCode::Char(']') => self.move_diff_selection(id, 1),
+            KeyCode::Left | KeyCode::Char('[') => self.move_diff_selection(id, -1),
             KeyCode::Char('f') => {
-                s.apply_action(DiffAction::SetFull(!s.full));
+                let full = self
+                    .application
+                    .diff_view(id)
+                    .map(|view| view.full)
+                    .unwrap_or(false);
+                self.apply_diff_action(DiffAction::SetFull {
+                    view: id,
+                    full: !full,
+                });
             }
-            KeyCode::Char('r') => s.reload(),
+            KeyCode::Char('r') => {
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.reload();
+                }
+                self.refresh_diff_view(id);
+            }
             KeyCode::Char('n') => {
-                if let Some((i, _)) = s
-                    .lines
-                    .iter()
-                    .enumerate()
-                    .find(|(i, l)| *i > s.scroll && l.starts_with("@@"))
-                {
-                    s.scroll = i;
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    if let Some((i, _)) = s
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .find(|(i, l)| *i > s.scroll && l.starts_with("@@"))
+                    {
+                        s.scroll = i;
+                    }
                 }
             }
             KeyCode::Char('p') => {
-                if let Some((i, _)) = s
-                    .lines
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(i, l)| *i < s.scroll && l.starts_with("@@"))
-                {
-                    s.scroll = i;
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    if let Some((i, _)) = s
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(i, l)| *i < s.scroll && l.starts_with("@@"))
+                    {
+                        s.scroll = i;
+                    }
                 }
             }
             _ => {}
@@ -258,21 +327,22 @@ impl App {
         if self.diff_frame.view != self.diff_tabs.active_id() {
             return;
         }
-        let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) else {
-            return;
-        };
         let point = (e.column, e.row).into();
         match e.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(action) = self.diff_frame.hits.at(point).cloned() {
-                    s.apply_action(action);
+                    self.apply_diff_action(action);
                 }
             }
             MouseEventKind::ScrollDown if self.diff_frame.body.contains(point) => {
-                s.scroll = (s.scroll + 3).min(s.lines.len().saturating_sub(1))
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = (s.scroll + 3).min(s.lines.len().saturating_sub(1));
+                }
             }
             MouseEventKind::ScrollUp if self.diff_frame.body.contains(point) => {
-                s.scroll = s.scroll.saturating_sub(3)
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
+                    s.scroll = s.scroll.saturating_sub(3);
+                }
             }
             _ => {}
         }
@@ -283,32 +353,7 @@ impl App {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
-    use ratatui::{Terminal, backend::TestBackend};
-
-    #[test]
-    fn shared_diff_actions_select_stable_paths_and_reject_stale_targets() {
-        let root = PathBuf::from("/workspace");
-        let mut state = DiffState {
-            root: root.clone(),
-            paths: vec![
-                PathBuf::from("src/current.rs"),
-                PathBuf::from("src/other.rs"),
-            ],
-            selected: 0,
-            ..DiffState::default()
-        };
-        let other = root.join("src/other.rs");
-        assert!(state.apply_action(DiffAction::SelectFile(other.clone())));
-        assert_eq!(state.selected_path(), Some(other.clone()));
-
-        assert!(!state.apply_action(DiffAction::SelectFile(
-            root.join("src/removed.rs")
-        )));
-        assert_eq!(state.selected_path(), Some(other));
-        state.scroll = 7;
-        assert!(state.apply_action(DiffAction::SetFull(false)));
-        assert_eq!(state.scroll, 0);
-    }
+    use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
     fn git_review_is_wired_to_launcher_files_tabs_and_mouse() {
@@ -349,24 +394,22 @@ mod tests {
             .unwrap()
             .state
             .select_path(&root.join("alpha.rs"));
-        assert!(
-            app.diff_tabs
-                .active_mut()
-                .unwrap()
-                .state
-                .lines
-                .iter()
-                .any(|l| l == "+unstaged")
-        );
-        assert!(
-            app.diff_tabs
-                .active_mut()
-                .unwrap()
-                .state
-                .lines
-                .iter()
-                .any(|l| l == "-old")
-        );
+        assert!(app
+            .diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .lines
+            .iter()
+            .any(|l| l == "+unstaged"));
+        assert!(app
+            .diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .lines
+            .iter()
+            .any(|l| l == "-old"));
         let mut terminal = Terminal::new(TestBackend::new(144, 44)).unwrap();
         terminal
             .draw(|f| crate::tui::ui::draw(f, &mut app))
@@ -375,7 +418,7 @@ mod tests {
             .diff_frame
             .hits
             .targets()
-            .find(|(_, a)| *a == DiffAction::SetFull(true))
+            .find(|(_, a)| matches!(a, DiffAction::SetFull { full: true, .. }))
             .unwrap()
             .0;
         app.handle_mouse(crossterm::event::MouseEvent {
@@ -405,36 +448,35 @@ mod tests {
         );
         app.handle_files_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Diff);
-        assert_eq!(app.diff_tabs.len(), 1);
+        // Each open creates a distinct Diff instance, even for the same root.
+        assert_eq!(app.diff_tabs.len(), 2);
         assert_eq!(app.input, "keep draft");
         app.diff_tabs
             .active_mut()
             .unwrap()
             .state
             .select_path(&root.join("space name.txt"));
-        assert!(
-            app.diff_tabs
-                .active_mut()
-                .unwrap()
-                .state
-                .lines
-                .iter()
-                .any(|l| l == "+untracked")
-        );
+        assert!(app
+            .diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .lines
+            .iter()
+            .any(|l| l == "+untracked"));
         app.diff_tabs
             .active_mut()
             .unwrap()
             .state
             .select_path(&root.join("gone.txt"));
-        assert!(
-            app.diff_tabs
-                .active_mut()
-                .unwrap()
-                .state
-                .lines
-                .iter()
-                .any(|l| l == "-removed")
-        );
+        assert!(app
+            .diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .lines
+            .iter()
+            .any(|l| l == "-removed"));
         std::fs::write(root.join("binary.bin"), [0, 1, 2, 3]).unwrap();
         app.diff_tabs.active_mut().unwrap().state.reload();
         app.diff_tabs
@@ -442,15 +484,14 @@ mod tests {
             .unwrap()
             .state
             .select_path(&root.join("binary.bin"));
-        assert!(
-            app.diff_tabs
-                .active_mut()
-                .unwrap()
-                .state
-                .lines
-                .iter()
-                .any(|l| l.contains("Binary files"))
-        );
+        assert!(app
+            .diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .lines
+            .iter()
+            .any(|l| l.contains("Binary files")));
         run(&["mv", "alpha.rs", "renamed.rs"]);
         app.diff_tabs.active_mut().unwrap().state.reload();
         app.diff_tabs
@@ -458,15 +499,14 @@ mod tests {
             .unwrap()
             .state
             .select_path(&root.join("renamed.rs"));
-        assert!(
-            app.diff_tabs
-                .active_mut()
-                .unwrap()
-                .state
-                .lines
-                .iter()
-                .any(|l| l == "+unstaged")
-        );
+        assert!(app
+            .diff_tabs
+            .active_mut()
+            .unwrap()
+            .state
+            .lines
+            .iter()
+            .any(|l| l == "+unstaged"));
         std::fs::write(root.join("clean.txt"), "unchanged\n").unwrap();
         run(&["add", "clean.txt"]);
         run(&[
@@ -493,9 +533,9 @@ mod tests {
             let mut t = Terminal::new(TestBackend::new(width, height)).unwrap();
             t.draw(|f| crate::tui::ui::draw(f, &mut app)).unwrap();
         }
-        app.activate_workbench_tab(super::super::WorkbenchTab::CloseDiff(
-            app.diff_tabs.active_id().unwrap(),
-        ));
+        while let Some(id) = app.diff_tabs.active_id() {
+            app.activate_workbench_tab(super::super::WorkbenchTab::CloseDiff(id));
+        }
         assert!(app.diff_tabs.is_empty());
         assert_eq!(app.mode, Mode::Chat);
     }
@@ -514,6 +554,25 @@ mod tests {
         assert!(state.error.is_none(), "{:?}", state.error);
         assert!(state.lines.iter().any(|l| l == "+new"));
     }
+}
+
+#[test]
+fn opening_same_diff_root_creates_distinct_view_instances() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-q"]).unwrap();
+    let mut app = App::default();
+
+    app.open_diff(None);
+    let first = app.diff_tabs.active_id().unwrap();
+    app.open_diff(None);
+    let second = app.diff_tabs.active_id().unwrap();
+
+    assert_ne!(first, second);
+    assert_eq!(app.diff_tabs.len(), 2);
+    app.activate_workbench_tab(super::WorkbenchTab::Diff(first));
+    assert_eq!(app.diff_tabs.active_id(), Some(first));
+    app.activate_workbench_tab(super::WorkbenchTab::Diff(second));
+    assert_eq!(app.diff_tabs.active_id(), Some(second));
 }
 
 #[cfg(test)]

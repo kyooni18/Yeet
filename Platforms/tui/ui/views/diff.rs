@@ -4,14 +4,14 @@ use super::super::{
     support::{icons, theme},
 };
 use crate::tui::app::{
-    App,
     diff::{DiffAction, DiffState},
+    App,
 };
 use ratatui::{
-    Frame,
     layout::{Constraint, Layout, Rect},
     prelude::{Color, Line, Modifier, Span, Style},
     widgets::{Block, Paragraph},
+    Frame,
 };
 use std::path::PathBuf;
 
@@ -49,7 +49,7 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) 
     ])
     .split(rows[1]);
     let (rail, main, inspector) = (cols[0], cols[1], cols[2]);
-    draw_rail(frame, s, geometry, rail);
+    draw_rail(frame, s, geometry, view.id, rail);
     let inset = if main.width >= 50 { 4 } else { 1 };
     let heading = Rect::new(
         main.x + inset,
@@ -93,13 +93,19 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) 
             Rect::new(r.x, r.y, 11, 1),
             " full file ",
             full_style,
-            DiffAction::SetFull(true),
+            DiffAction::SetFull {
+                view: view.id,
+                full: true,
+            },
         );
         ui.button(
             Rect::new(r.x + 13, r.y, 14, 1),
             " changes only ",
             changes_style,
-            DiffAction::SetFull(false),
+            DiffAction::SetFull {
+                view: view.id,
+                full: false,
+            },
         );
     }
     let patch = Rect::new(
@@ -194,6 +200,7 @@ fn draw_rail(
     frame: &mut Frame<'_>,
     s: &DiffState,
     geometry: &mut crate::tui::app::diff::DiffFrame,
+    view: crate::tui::kit::SurfaceId,
     rail: Rect,
 ) {
     if rail.width == 0 {
@@ -256,9 +263,13 @@ fn draw_rail(
         };
         text(frame, r, &label, style);
         if let Some(target) = target {
-            geometry
-                .hits
-                .register(r, DiffAction::SelectFile(s.root.join(target)));
+            geometry.hits.register(
+                r,
+                DiffAction::SelectFile {
+                    view,
+                    target: s.root.join(target),
+                },
+            );
         }
         last = r.y + 2;
     }
@@ -495,7 +506,7 @@ fn text(frame: &mut Frame<'_>, area: Rect, value: &str, style: Style) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
     fn review_rows_hide_headers_keep_numbers_and_fill_change_bands() {
@@ -550,7 +561,7 @@ mod tests {
             .diff_frame
             .hits
             .targets()
-            .find(|(_, a)| matches!(a, DiffAction::SelectFile(_)))
+            .find(|(_, a)| matches!(a, DiffAction::SelectFile { .. }))
             .unwrap()
             .0;
         assert!(contents.contains("guidance"));
