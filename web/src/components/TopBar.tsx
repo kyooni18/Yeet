@@ -17,7 +17,7 @@ export function TopBar({
   const remote = useRemote()
   const groups = remote.ui?.toolbar?.groups ?? []
   const icons = { menu: Menu, new_session: SquarePen, controls: SlidersHorizontal, interrupt: Pause }
-  const renderControls = (group: string) => groups.find(item => item.id === group)?.controls.map(control => {
+  const renderControls = (group: string) => groups.find(item => item.id === group)?.controls.filter(control => control.id !== 'interrupt').map(control => {
     const Icon = icons[control.icon as keyof typeof icons]
     return <button key={control.id} className={`${group === 'session_actions' ? 'session-meta__button' : 'topbar-icon'}${control.pressed ? ' is-active' : ''}`}
       aria-label={control.label} title={control.label} aria-pressed={control.pressed ?? undefined}
@@ -36,31 +36,6 @@ export function TopBar({
   const usage = remote.state.token_usage
   const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
 
-  const connectionLabel = remote.state.is_streaming
-    ? 'Running'
-    : remote.connection === 'connected'
-      ? 'Ready'
-      : remote.connection === 'offline'
-        ? 'Offline'
-        : remote.connection === 'failed'
-          ? 'Connection failed'
-          : remote.connection === 'auth-required'
-            ? 'Sign in required'
-            : remote.connection === 'reconnecting'
-              ? 'Reconnecting'
-              : 'Connecting'
-  const statusText = remote.connection === 'failed' && remote.connectionError
-    ? remote.connectionError
-    : connectionLabel
-
-  const connectionTone = remote.state.is_streaming
-    ? 'busy'
-    : remote.connection === 'connected'
-      ? 'ok'
-      : remote.connection === 'failed' || remote.connection === 'offline' || remote.connection === 'auth-required'
-        ? 'warning'
-        : 'busy'
-
   return (
     <header className="remote-topbar">
       <div className="topbar-leading">
@@ -70,17 +45,6 @@ export function TopBar({
           <strong className="topbar-title">{title}</strong>
           <span className="topbar-workspace">{workspace}</span>
         </div>
-      </div>
-
-      <div
-        className={`topbar-status is-${connectionTone}`}
-        role={remote.connection === 'failed' ? 'alert' : 'status'}
-        aria-live={remote.connection === 'failed' ? 'assertive' : 'polite'}
-        aria-label={remote.connection === 'failed' ? 'Connection failed' : undefined}
-        title={statusText}
-      >
-        <span className="topbar-status__dot" aria-hidden="true" />
-        <span>{statusText}</span>
       </div>
 
       <div className="topbar-actions">

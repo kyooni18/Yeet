@@ -902,7 +902,7 @@ export function Composer({
           />
         </div>
 
-        <button className="composer-settings" onClick={onSettings} aria-label="Composer settings" title="Settings">
+        <button className="composer-settings" onClick={() => onSettings()} aria-label="Composer settings" title="Settings">
           <SlidersHorizontal size={14} strokeWidth={1.7} />
         </button>
 

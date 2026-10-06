@@ -728,7 +728,8 @@ body { font-size: 13px; }
   .trace-detail__content.is-error { color: var(--y-red); }
 
   /* Composer: one surface with message field above its toolbar */
-  .workspace-composer { padding: 14px 24px 16px; border-top: 1px solid var(--y-line); }
+  .workspace-composer { padding: 14px 24px 16px; border-top: 1px solid var(--y-line); overflow: visible; }
+  .attachment-menu { bottom: 32px; }
   .composer-shell {
     display: flex;
     width: min(100%, 760px);
@@ -737,7 +738,7 @@ body { font-size: 13px; }
     justify-content: flex-start;
     align-items: center;
     gap: 4px;
-    padding: 10px 10px 8px 14px;
+    padding: 10px;
     border: 1px solid var(--y-line);
     border-radius: 8px;
     background: var(--y-surface);
@@ -755,9 +756,9 @@ body { font-size: 13px; }
   .composer-shell > .composer-input,
   .composer-input { order: 0; flex: 1 0 100%; width: 100%; padding: 0; border: 0; background: transparent; }
   .workspace-composer .composer-input { border: 0; background: transparent; }
-  .composer-input textarea { min-height: 44px; padding: 0 0 6px; color: var(--y-t1); font-size: 13px; line-height: 1.5; }
+  .composer-input textarea { min-height: 44px; padding: 2px 4px 6px; color: var(--y-t1); font-size: 13px; line-height: 1.5; }
   .composer-input textarea::placeholder { color: var(--y-t6); }
-  .attachment-add-wrap { order: 1; margin-left: -4px; }
+  .attachment-add-wrap { order: 1; width: 24px; min-width: 24px; height: 24px; flex: 0 0 24px; margin: 0; padding: 0; }
   .composer-toolbar__controls > * { order: 2; }
   .composer-toolbar__controls > .goal-chip,
   .composer-toolbar__controls > .usage-control,
@@ -983,3 +984,18 @@ body { font-size: 13px; }
   font: 400 10.5px/1 var(--y-mono);
 }
 @media (hover: none), (pointer: coarse) { .sidebar-new-session kbd { display: none; } }
+
+/* Reasoning detail is plain text on the timeline, not a boxed well. */
+.reasoning-trace .trace-disclosure__details {
+  margin: 0 0 4px 21px;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.reasoning-trace .trace-detail__title { display: none; }
+.reasoning-trace .trace-detail + .trace-detail { margin-top: 6px; }
+.reasoning-trace .trace-detail__content {
+  color: var(--y-reason);
+  font: 400 12px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  white-space: pre-wrap;
+}

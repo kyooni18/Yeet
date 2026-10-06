@@ -123,7 +123,7 @@ export function Sidebar({
         <div className="sidebar-header">
           <strong>Yeet</strong>
           <div className="sidebar-header-actions">
-            <button className="panel-icon" onClick={onSettings} aria-label="Settings"><Settings size={15} /></button>
+            <button className="panel-icon" onClick={() => onSettings()} aria-label="Settings"><Settings size={15} /></button>
             <button className="panel-icon" onClick={onClose} aria-label="Close sidebar"><X size={15} /></button>
           </div>
         </div>
