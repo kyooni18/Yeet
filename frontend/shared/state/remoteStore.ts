@@ -241,7 +241,11 @@ export class RemoteStore {
         if (message.agents_revision < this.agentsRevision) return
         this.agentsRevision = message.agents_revision
         this.agents = message.view
-        this.agentEffect = message.effect ? { revision: message.agents_revision, value: message.effect } : null
+        // A runtime refresh may share a frame with an accepted action. Preserve
+        // its editor effect until another meaningful effect or connection epoch.
+        if (message.effect?.submitted_text != null || message.effect?.open_group_settings) {
+          this.agentEffect = { revision: message.agents_revision, value: message.effect }
+        }
         return
       case 'ui_state':
         if (this.layout && message.ui_revision === 0 && message.view.layout !== this.layout) return
@@ -252,6 +256,7 @@ export class RemoteStore {
       case 'welcome':
         this.uiRevision = -1
         this.agentsRevision = -1
+        this.agentEffect = null
         this.state.workspace_root = message.workspace
         if (message.session_id !== undefined) this.state.current_session_id = message.session_id
         return
