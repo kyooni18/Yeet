@@ -1776,6 +1776,46 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     )).await;
                                 }
                             }
+                            ClientMessage::WorkspaceFilesRequest { request_id, path, selected, .. } => {
+                                let root = workspace.clone();
+                                let result = tokio::task::spawn_blocking(move || {
+                                    super::workspace_views::files_view(&root, &path, selected.as_deref())
+                                }).await;
+                                let reply = match result {
+                                    Ok(Ok(view)) => ServerMessage::WorkspaceFiles {
+                                        version: REMOTE_PROTOCOL_VERSION, request_id, view,
+                                    },
+                                    Ok(Err(error)) => ServerMessage::error(
+                                        "workspace_view_failed", error.to_string(), false, request_id,
+                                    ),
+                                    Err(error) => ServerMessage::error(
+                                        "workspace_view_failed", error.to_string(), false, request_id,
+                                    ),
+                                };
+                                if send_json(&mut socket, &reply).await.is_err() {
+                                    break;
+                                }
+                            }
+                            ClientMessage::WorkspaceChangesRequest { request_id, file, full, .. } => {
+                                let root = workspace.clone();
+                                let result = tokio::task::spawn_blocking(move || {
+                                    super::workspace_views::changes_view(&root, file.as_deref(), full)
+                                }).await;
+                                let reply = match result {
+                                    Ok(Ok(view)) => ServerMessage::WorkspaceChanges {
+                                        version: REMOTE_PROTOCOL_VERSION, request_id, view,
+                                    },
+                                    Ok(Err(error)) => ServerMessage::error(
+                                        "workspace_view_failed", error.to_string(), false, request_id,
+                                    ),
+                                    Err(error) => ServerMessage::error(
+                                        "workspace_view_failed", error.to_string(), false, request_id,
+                                    ),
+                                };
+                                if send_json(&mut socket, &reply).await.is_err() {
+                                    break;
+                                }
+                            }
                             ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(

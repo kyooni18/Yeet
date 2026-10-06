@@ -13,6 +13,7 @@ pub const REMOTE_PROTOCOL_FEATURES: &[&str] = &[
     "files-v1",
     "turn-replay-v1",
     "shared-ui-v1",
+    "workspace-views-v1",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,26 @@ pub enum ClientMessage {
         request_id: Option<String>,
         action: crate::shared_ui::diff::DiffAction,
     },
+    /// Read-only directory listing, relative to the connection workspace.
+    WorkspaceFilesRequest {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        selected: Option<String>,
+    },
+    /// Uncommitted changes with the patch of one selected file.
+    WorkspaceChangesRequest {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        #[serde(default)]
+        file: Option<String>,
+        #[serde(default)]
+        full: bool,
+    },
     Ping {
         version: u16,
         #[serde(default)]
@@ -106,6 +127,8 @@ impl ClientMessage {
             | Self::UiSettingsAction { version, .. }
             | Self::UiHomeAction { version, .. }
             | Self::UiDiffAction { version, .. }
+            | Self::WorkspaceFilesRequest { version, .. }
+            | Self::WorkspaceChangesRequest { version, .. }
             | Self::Ping { version, .. } => Some(*version),
         }
     }
@@ -172,6 +195,16 @@ pub enum ServerMessage {
         diff_revision: u64,
         request_id: Option<String>,
         views: Vec<crate::shared_ui::diff::DiffView>,
+    },
+    WorkspaceFiles {
+        version: u16,
+        request_id: Option<String>,
+        view: super::workspace_views::FilesView,
+    },
+    WorkspaceChanges {
+        version: u16,
+        request_id: Option<String>,
+        view: super::workspace_views::ChangesView,
     },
     UiHomeEffect {
         version: u16,
@@ -300,6 +333,8 @@ impl ServerMessage {
             | Self::UiHome { .. }
             | Self::UiHomeEffect { .. }
             | Self::UiDiff { .. }
+            | Self::WorkspaceFiles { .. }
+            | Self::WorkspaceChanges { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }
@@ -326,6 +361,8 @@ impl ServerMessage {
             | Self::UiHome { .. }
             | Self::UiHomeEffect { .. }
             | Self::UiDiff { .. }
+            | Self::WorkspaceFiles { .. }
+            | Self::WorkspaceChanges { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }

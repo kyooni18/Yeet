@@ -310,6 +310,22 @@ Treat `entry` as the canonical conversation representation and `activity` as a c
 
 This is uncommon. Replace the conversation array when its identity/order can no longer be represented as entry additions/updates. A session change normally produces a full `snapshot` instead.
 
+## Workspace views (`workspace-views-v1`)
+
+Read-only request/response pairs for the Files and Changes pages. Replies go only to the requesting socket, carry the request's `request_id`, and do not advance sequence or revision cursors. Every path is workspace-relative; absolute paths, `..` and symlinks leaving the workspace are rejected with `workspace_view_failed`.
+
+```json
+{ "type": "workspace_files_request", "version": 1, "request_id": "f1", "path": "src", "selected": "src/lib.rs" }
+```
+
+`workspace_files` returns `view`: `root`, `path`, `parent` (null at the root), `branch`, `entries[]` (`name`, `path`, `directory`, `size`, `items`, `modified` unix seconds, `status` git porcelain XY) and, when `selected` names a file in that directory, `selected` plus `info` (`size`, `modified`, `created`, `permissions`, `lines`, `status`, `added`, `removed`).
+
+```json
+{ "type": "workspace_changes_request", "version": 1, "request_id": "c1", "file": "src/lib.rs", "full": false }
+```
+
+`workspace_changes` returns `view`: `root`, `branch`, `files[]` (`path`, `status`, `added`, `removed`; null counts mean binary), `selected` (the requested file, else the first), `full`, `patch[]` (unified diff lines, whole file when `full`) and an optional `message`.
+
 ## Client commands
 
 Commands wrap the existing `FrontendCommand` directly. This is the key compatibility rule: Remote does not invent a second command vocabulary.

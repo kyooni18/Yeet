@@ -4,6 +4,7 @@ mod render;
 mod server;
 mod websocket;
 mod ui_host;
+mod workspace_views;
 use render::render_buffer;
 
 use std::{
