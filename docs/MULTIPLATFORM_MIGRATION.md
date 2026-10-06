@@ -313,3 +313,14 @@ visibility paths and the scripted test fixture location needed adjustment.
 Group orchestration under `src/agents` remains a separate pending runtime move.
 All-target compilation and all 81 existing agent tests passed, including four
 scripted continuity checks. Six source-layout checks passed in the worktree.
+
+Runtime approval arbitration now lives in `Harness/permission.rs`; root
+`permission` is a compatibility reexport. Request waiting, notifier callbacks,
+closure and atomic request-ID matching are unchanged. The existing stale-request
+regression and all-target compilation passed. Shared UI owns presentation and
+control eligibility; Harness owns waiting and resolving the actual request.
+
+An outstanding dependency audit finding: Harness settings projection still uses
+root theme palette resolution/catalog and exposes resolved colors in runtime
+settings. Theme configuration storage and platform-neutral UI palette projection
+need a later separation without introducing a Harness-to-UI dependency.

@@ -21,7 +21,8 @@ pub mod install;
 pub mod mcp_server;
 pub mod memory;
 pub mod model;
-pub mod permission;
+// Compatibility import; runtime approval arbitration lives in Harness.
+pub use harness::permission;
 mod platform;
 pub mod project_settings;
 pub mod remote;
