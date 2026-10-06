@@ -43,7 +43,7 @@ impl Harness {
         let queue = dir.path().join("queue.json");
         let mcp = dir.path().join("mcp-tools.json");
         let script =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/testdata/fake_bridge.mjs");
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("Harness/agent/testdata/fake_bridge.mjs");
         let bridge = match BridgeClient::start_script(
             &script,
             &[

@@ -105,4 +105,4 @@ For a Rust-only change, `cargo test` is the fast path. For bridge/edit/provider
 changes, rebuild and run the Node suite as well. Coordinator behavior that
 depends on provider-visible requests (prompt-cache continuity, tool rounds,
 rollover) is tested against the scripted bridge in
-`src/agent/testdata/fake_bridge.mjs`; see `src/agent/continuity_tests.rs`.
+`Harness/agent/testdata/fake_bridge.mjs`; see `Harness/agent/continuity_tests.rs`.

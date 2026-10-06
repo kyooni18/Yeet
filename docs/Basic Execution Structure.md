@@ -13,7 +13,7 @@ Frontend / host (Ratatui TUI, Remote web client, desktop host, CLI)
               -> RuntimeProcess      src/background/runtime_process.rs
                                      (one dedicated thread per session runtime)
                   -> HarnessService  Harness/service.rs (command routing)
-                      -> AgentCoordinator  src/agent.rs (turn loop)
+                      -> AgentCoordinator  Harness/agent.rs (turn loop)
                           -> ToolRegistry  src/tools.rs
                           -> ProviderBridge (BridgeClient, Harness/core/provider_bridge.rs)
                               -> Node sidecar RuntimeSource/dist/bridge.js
@@ -85,7 +85,7 @@ Prompt-cache continuity is a protocol invariant: within one context window,
 provider-visible history is append-only. A request that would rewrite an
 already-submitted prefix is rejected before dispatch; rollover, rewind
 (regenerate/edit-last) and history replacement open a new window instead.
-`src/agent/continuity_tests.rs` checks this end to end against a scripted
+`Harness/agent/continuity_tests.rs` checks this end to end against a scripted
 bridge.
 
 ## Tools

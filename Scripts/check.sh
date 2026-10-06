@@ -143,7 +143,7 @@ if wanted rust; then
     run "rust: fmt" cargo fmt --all -- --check
     if run "rust: check" cargo check --all-targets; then
       # The source-layout guard and the bridge-backed harness tests (fake
-      # provider bridge under src/agent/testdata) run as part of the suite.
+      # provider bridge under Harness/agent/testdata) run as part of the suite.
       run "rust: tests" cargo test --all-targets --no-fail-fast
       if [ "$CLIPPY" = 1 ]; then
         run "rust: clippy" cargo clippy --all-targets -- -D warnings

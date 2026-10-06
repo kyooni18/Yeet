@@ -305,3 +305,11 @@ Remaining composer work includes shared edit-entry annotation conversion, native
 message control bindings and toolbar/menu ownership. Shared settings, graphical
 Home/Files/Diff parity, actual thin Platforms ownership and residual Harness
 runtime moves remain required for the full architecture goal.
+
+Agent execution now lives under `Harness/agent.rs` and its 35-file subtree.
+The root `agent` module is a compatibility reexport. Turn coordination, cache
+continuity, progress/retry policy and tool protocol are unchanged; only restricted
+visibility paths and the scripted test fixture location needed adjustment.
+Group orchestration under `src/agents` remains a separate pending runtime move.
+All-target compilation and all 81 existing agent tests passed, including four
+scripted continuity checks. Six source-layout checks passed in the worktree.

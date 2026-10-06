@@ -60,7 +60,7 @@ fn rust_source_files_do_not_return_to_monolithic_sizes() {
 fn extracted_responsibility_modules_stay_within_target() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let focused_roots = [
-        root.join("agent"),
+        root.parent().unwrap().join("Harness/agent"),
         root.join("agents"),
         root.parent().unwrap().join("Harness/service"),
         root.join("tools"),
@@ -86,7 +86,7 @@ fn extracted_responsibility_modules_stay_within_target() {
 fn central_coordinators_do_not_absorb_extracted_responsibilities_again() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let coordinators = [
-        root.join("agent.rs"),
+        root.parent().unwrap().join("Harness/agent.rs"),
         root.parent().unwrap().join("Harness/service.rs"),
         root.join("tools.rs"),
     ];
@@ -127,11 +127,11 @@ fn runtime_source_modules_stay_bounded() {
 fn extracted_modules_explain_their_responsibility() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let modules = [
-        "agent/cache.rs",
-        "agent/policy.rs",
-        "agent/progress.rs",
-        "agent/runaway.rs",
-        "agent/tool_protocol.rs",
+        "../Harness/agent/cache.rs",
+        "../Harness/agent/policy.rs",
+        "../Harness/agent/progress.rs",
+        "../Harness/agent/runaway.rs",
+        "../Harness/agent/tool_protocol.rs",
         "agents/group/budget.rs",
         "agents/group/commands.rs",
         "agents/group/runtime.rs",

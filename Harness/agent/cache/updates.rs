@@ -17,14 +17,14 @@ struct Observation {
     observed_at: Instant,
 }
 
-pub(in crate::agent) struct ObservationPolicy {
+pub(in crate::harness::agent) struct ObservationPolicy {
     pub prefix_overhead_tokens: u64,
     pub may_retire: bool,
 }
 
 /// Ledger entries never change. Current history is a derived view; retiring an
 /// obsolete body leaves the original observation in this ledger and tool events.
-pub(in crate::agent) struct ObservationCache {
+pub(in crate::harness::agent) struct ObservationCache {
     journal: RevisionJournal<Observation>,
     pricing: HashMap<String, Option<Value>>,
     cache_hit_fraction: Option<f64>,
@@ -92,7 +92,7 @@ fn rates(pricing: &Value, input_tokens: u64) -> Option<InputRates> {
 }
 
 impl ObservationCache {
-    pub(in crate::agent) fn bind_window(&mut self, window: &str) {
+    pub(in crate::harness::agent) fn bind_window(&mut self, window: &str) {
         if self.window.as_deref() != Some(window) {
             self.journal = RevisionJournal::default();
             self.plans.clear();
@@ -101,26 +101,26 @@ impl ObservationCache {
         }
     }
 
-    pub(in crate::agent) fn start_turn(&mut self) {
+    pub(in crate::harness::agent) fn start_turn(&mut self) {
         self.pricing.clear();
         self.cache_hit_fraction = None;
     }
 
-    pub(in crate::agent) fn observe_usage(&mut self, usage: Option<&Usage>) {
+    pub(in crate::harness::agent) fn observe_usage(&mut self, usage: Option<&Usage>) {
         self.cache_hit_fraction = usage.and_then(|usage| usage.cache_measurement().hit_rate);
     }
 
-    pub(in crate::agent) fn mark_submitted(&mut self) {
+    pub(in crate::harness::agent) fn mark_submitted(&mut self) {
         self.last_submission = Instant::now();
     }
 
-    pub(in crate::agent) fn take_plans(&mut self) -> Vec<Value> {
+    pub(in crate::harness::agent) fn take_plans(&mut self) -> Vec<Value> {
         std::mem::take(&mut self.plans)
     }
 
     /// Append the correction. If economics justify it, shorten only an obsolete
     /// read body; keep message roles, IDs, tool-call pairs and chronological facts.
-    pub(in crate::agent) fn prepare_read_update<F: FnOnce() -> Option<Value>>(
+    pub(in crate::harness::agent) fn prepare_read_update<F: FnOnce() -> Option<Value>>(
         &mut self,
         history: &mut [Message],
         incoming: &mut String,

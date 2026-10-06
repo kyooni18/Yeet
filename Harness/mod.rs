@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+pub mod agent;
 pub mod core;
 pub mod resources;
 pub mod session_store;
