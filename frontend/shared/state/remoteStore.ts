@@ -5,6 +5,9 @@ import {
   type BridgeState,
   type ShellAction,
   type AgentAction,
+  type ConversationAction,
+  type ConversationView,
+  type ConversationUiEffect,
   type AgentsView,
   type AgentUiEffect,
   type UiProjection,
@@ -18,6 +21,8 @@ import {
 } from '../remote/protocol'
 
 export interface RemoteSnapshot {
+  conversation: ConversationView | null
+  conversationEffect: { revision: number; value: ConversationUiEffect } | null
   agents: AgentsView | null
   agentEffect: { revision: number; value: AgentUiEffect } | null
   ui: UiProjection | null
@@ -109,6 +114,9 @@ export class RemoteStore {
   constructor(private readonly options: RemoteStoreOptions) {}
   private ui: UiProjection | null = null
   private uiRevision = -1
+  private conversationRevision = -1
+  private conversation: ConversationView | null = null
+  private conversationEffect: { revision: number; value: ConversationUiEffect } | null = null
   private agentsRevision = -1
   private agents: AgentsView | null = null
   private agentEffect: { revision: number; value: AgentUiEffect } | null = null
@@ -149,6 +157,8 @@ export class RemoteStore {
       ? Math.min(100, Math.max(0, Math.round((used / total) * 100)))
       : null
     return {
+      conversation: this.conversation,
+      conversationEffect: this.conversationEffect,
       agents: this.agents,
       agentEffect: this.agentEffect,
       ui: this.ui,
@@ -237,6 +247,14 @@ export class RemoteStore {
 
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
+      case 'ui_conversation':
+        if (message.conversation_revision < this.conversationRevision) return
+        this.conversationRevision = message.conversation_revision
+        this.conversation = message.view
+        if (message.effect?.copy != null || message.effect?.edit_draft != null) {
+          this.conversationEffect = { revision: message.conversation_revision, value: message.effect }
+        }
+        return
       case 'ui_agents':
         if (message.agents_revision < this.agentsRevision) return
         this.agentsRevision = message.agents_revision
@@ -257,6 +275,8 @@ export class RemoteStore {
         this.uiRevision = -1
         this.agentsRevision = -1
         this.agentEffect = null
+        this.conversationRevision = -1
+        this.conversationEffect = null
         this.state.workspace_root = message.workspace
         if (message.session_id !== undefined) this.state.current_session_id = message.session_id
         return
@@ -428,6 +448,17 @@ export class RemoteStore {
         entry.uiStreaming = true
       }
     }
+  }
+
+  consumeConversationEffect(revision: number): ConversationUiEffect | null {
+    if (this.conversationEffect?.revision !== revision) return null
+    const effect = this.conversationEffect.value
+    this.conversationEffect = null
+    return effect
+  }
+
+  sendConversationUi(action: ConversationAction): boolean {
+    return this.transport?.sendConversationUi?.(action) ?? false
   }
 
   sendAgentUi(action: AgentAction): boolean {

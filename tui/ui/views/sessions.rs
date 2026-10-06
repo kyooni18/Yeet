@@ -1,4 +1,5 @@
 //! Active session/conversation view. `Mode::Sessions` remains the session picker.
+mod shared;
 pub(in crate::tui::ui) mod tools;
 
 use super::super::{
@@ -11,9 +12,11 @@ use super::super::{
     },
     task,
 };
+#[cfg(test)]
+use crate::model::ToolCallStatus;
 use crate::{
     app::App,
-    model::{ConversationEntry, ConversationKind, ToolCallStatus},
+    model::{ConversationEntry, ConversationKind},
 };
 use ratatui::{
     Frame,
@@ -24,7 +27,6 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
-use tools::{WorkItem, work_group_lines, work_groups};
 
 #[derive(Debug, PartialEq, Eq)]
 struct TranscriptKey {
@@ -35,7 +37,7 @@ struct TranscriptKey {
     width: u16,
     expanded: bool,
     selected_work: Option<usize>,
-    expanded_work: std::collections::BTreeSet<usize>,
+    shared_state: crate::shared_ui::conversation::ConversationState,
     palette: crate::theme::Palette,
     streaming: bool,
     assistant_id: Option<String>,
@@ -53,12 +55,12 @@ impl TranscriptKey {
             && self.conversation_ptr == app.conversation.as_ptr() as usize
             && self.entries == app.conversation.len()
             && self.width == width
-            && self.expanded == app.tools_expanded
+            && self.expanded == app.application.conversation_state().expand_all
             && self.selected_work
                 == app
                     .selected_work
                     .filter(|_| !app.input_focused && !app.sidebar_focus)
-            && self.expanded_work == app.expanded_work
+            && &self.shared_state == app.application.conversation_state()
             && self.palette == theme::active_palette()
             && self.streaming == app.state.is_streaming
             && self.assistant_id == app.state.active_assistant_entry_id
@@ -76,11 +78,11 @@ impl TranscriptKey {
             conversation_ptr: app.conversation.as_ptr() as usize,
             entries: app.conversation.len(),
             width,
-            expanded: app.tools_expanded,
+            expanded: app.application.conversation_state().expand_all,
             selected_work: app
                 .selected_work
                 .filter(|_| !app.input_focused && !app.sidebar_focus),
-            expanded_work: app.expanded_work.clone(),
+            shared_state: app.application.conversation_state().clone(),
             palette: theme::active_palette(),
             streaming: app.state.is_streaming,
             assistant_id: app.state.active_assistant_entry_id.clone(),
@@ -222,7 +224,11 @@ fn draw_desktop(
         .as_ref()
         .is_none_or(|cache| !cache.key.matches(app, area.width))
     {
-        let (text, work_lines) = transcript_content(app, area.width);
+        app.application
+            .refresh_conversation_entries(&app.conversation, &app.state);
+        let view = app.application.conversation_projection().view;
+        let (text, work_lines, work_ids) = shared::content(app, &view, area.width);
+        app.work_ids = work_ids;
         let mut cache = TranscriptCache::new(TranscriptKey::for_app(app, area.width), text);
         cache.work_lines = work_lines;
         app.transcript_cache = Some(cache);
@@ -236,12 +242,9 @@ fn draw_desktop(
         .iter()
         .map(|line| cache.starts[*line].min(u16::MAX as usize) as u16)
         .collect();
-    if app
-        .selected_work
-        .is_some_and(|index| index >= app.work_rows.len())
-    {
-        app.selected_work = None;
-    }
+    // Native index is a geometry cache; semantic selection remains a stable UI ID.
+    app.selected_work = app.application.conversation_state().selected.as_ref()
+        .and_then(|selected| app.work_ids.iter().position(|id| id == selected));
     app.max_scroll = cache.rows.min(u16::MAX as usize) as u16;
     app.max_scroll = app.max_scroll.saturating_sub(area.height);
     if app.follow_tail {
@@ -421,172 +424,21 @@ pub(in crate::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App
 
 #[cfg(test)]
 fn transcript_text(app: &App, width: u16) -> Text<'static> {
-    transcript_content(app, width).0
+    let view = app
+        .application
+        .conversation_state()
+        .view(&app.conversation, &app.state);
+    shared::content(app, &view, width).0
 }
 
+#[cfg(test)]
 fn transcript_content(app: &App, width: u16) -> (Text<'static>, Vec<usize>) {
-    let mut work_lines = Vec::new();
-    let mut lines = Vec::new();
-    let mut rendered_any = false;
-    let mut previous_compact = false;
-    let mut index = 0;
-    while index < app.conversation.len() {
-        let entry = &app.conversation[index];
-        if matches!(
-            &entry.kind,
-            ConversationKind::Activity { activity } if !visible_terminal_activity(activity)
-        ) {
-            index += 1;
-            continue;
-        }
-
-        if matches!(
-            &entry.kind,
-            ConversationKind::ToolCall { .. } | ConversationKind::Reasoning { .. }
-        ) {
-            let mut end = index;
-            let mut items = Vec::new();
-            while end < app.conversation.len() {
-                let current = &app.conversation[end];
-                match &current.kind {
-                    ConversationKind::ToolCall { tool_call } => {
-                        items.push(WorkItem::Tool(tool_call))
-                    }
-                    ConversationKind::Reasoning { .. } => {
-                        if let Some(summary) = summary_reasoning(app, current) {
-                            let live = app.state.is_streaming
-                                && app.state.active_reasoning_entry_id.as_deref()
-                                    == Some(current.id.as_str());
-                            items.push(WorkItem::Summary {
-                                text: summary,
-                                live,
-                            });
-                        } else if let Some((text, _)) = reasoning_parts(app, current)
-                            && !text.trim().is_empty()
-                        {
-                            let live = app.state.is_streaming
-                                && app.state.active_reasoning_entry_id.as_deref()
-                                    == Some(current.id.as_str());
-                            items.push(WorkItem::Reasoning { text, live });
-                        }
-                    }
-                    ConversationKind::Activity { activity } if !terminal_activity(activity) => {}
-                    _ => break,
-                }
-                end += 1;
-            }
-            index = end;
-            let (work, headers) = tools::work_group_lines_selected(
-                &work_groups(&items),
-                width,
-                app.tools_expanded,
-                app.selected_work
-                    .filter(|_| !app.input_focused && !app.sidebar_focus),
-                &app.expanded_work,
-                work_lines.len(),
-            );
-            if !work.is_empty() {
-                if rendered_any && !previous_compact {
-                    lines.push(Line::default());
-                }
-                work_lines.extend(headers.into_iter().map(|line| lines.len() + line));
-                lines.extend(work);
-                rendered_any = true;
-                previous_compact = true;
-            }
-            continue;
-        }
-
-        let compact = compact_transcript_entry(&entry.kind);
-        let entry_content = entry_lines(app, entry, width);
-        if entry_content.is_empty() {
-            index += 1;
-            continue;
-        }
-        if rendered_any && (!compact || !previous_compact) {
-            if previous_compact && matches!(entry.kind, ConversationKind::Assistant { .. }) {
-                lines.push(Line::styled(
-                    "─".repeat(width as usize),
-                    Style::default().fg(theme::hairline()),
-                ));
-            } else {
-                lines.push(Line::default());
-            }
-        }
-        lines.extend(entry_content);
-        rendered_any = true;
-        previous_compact = compact
-            || matches!(&entry.kind, ConversationKind::Assistant { tool_calls, .. } if !tool_calls.is_empty());
-        index += 1;
-    }
-
-    (Text::from(lines), work_lines)
-}
-
-fn reasoning_parts<'a>(
-    app: &'a App,
-    entry: &'a ConversationEntry,
-) -> Option<(&'a str, Option<&'a str>)> {
-    let ConversationKind::Reasoning { content, summary } = &entry.kind else {
-        return None;
-    };
-    if app.state.active_reasoning_entry_id.as_deref() != Some(entry.id.as_str()) {
-        return Some((content, summary.as_deref()));
-    }
-    Some((
-        if app.state.active_reasoning_text.is_empty() {
-            content
-        } else {
-            &app.state.active_reasoning_text
-        },
-        if app.state.active_reasoning_summary.is_empty() {
-            summary.as_deref()
-        } else {
-            Some(&app.state.active_reasoning_summary)
-        },
-    ))
-}
-
-fn summary_reasoning<'a>(app: &'a App, entry: &'a ConversationEntry) -> Option<&'a str> {
-    let (_, summary) = reasoning_parts(app, entry)?;
-    summary.map(str::trim).filter(|summary| !summary.is_empty())
-}
-
-fn compact_transcript_entry(kind: &ConversationKind) -> bool {
-    matches!(
-        kind,
-        ConversationKind::Activity { .. }
-            | ConversationKind::Reasoning { .. }
-            | ConversationKind::ToolCall { .. }
-    )
-}
-
-fn terminal_activity(activity: &crate::model::ModelActivity) -> bool {
-    matches!(
-        activity.phase.as_str(),
-        Some("done" | "failed" | "interrupted")
-    )
-}
-
-fn visible_terminal_activity(activity: &crate::model::ModelActivity) -> bool {
-    if !terminal_activity(activity) {
-        return false;
-    }
-    if activity.phase.as_str() != Some("done") {
-        return true;
-    }
-
-    let title = activity.title.trim();
-    let generic_title = title.eq_ignore_ascii_case("done")
-        || title.eq_ignore_ascii_case("completed")
-        || title.eq_ignore_ascii_case("complete");
-    let detail_empty = activity
-        .detail
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or_default()
-        .is_empty();
-    !(generic_title && detail_empty)
+    let view = app
+        .application
+        .conversation_state()
+        .view(&app.conversation, &app.state);
+    let (text, rows, _) = shared::content(app, &view, width);
+    (text, rows)
 }
 
 fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'static>> {
@@ -594,7 +446,7 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
         ConversationKind::User { content } => user_message_lines(content, width),
         ConversationKind::Assistant {
             content,
-            tool_calls,
+            tool_calls: _,
         } => {
             let content = if app.state.active_assistant_entry_id.as_deref()
                 == Some(entry.id.as_str())
@@ -608,12 +460,6 @@ fn entry_lines(app: &App, entry: &ConversationEntry, width: u16) -> Vec<Line<'st
             for line in session_markdown_lines(content, usize::from(width)) {
                 lines.extend(prefixed_wrapped_line(Span::raw(""), line, width));
             }
-            let items = tool_calls.iter().map(WorkItem::Tool).collect::<Vec<_>>();
-            lines.extend(work_group_lines(
-                &work_groups(&items),
-                width,
-                app.tools_expanded,
-            ));
             lines
         }
         ConversationKind::Reasoning { .. } | ConversationKind::ToolCall { .. } => Vec::new(),

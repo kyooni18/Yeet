@@ -81,7 +81,7 @@ test('long completed runs remain compact by default', async ({ page }) => {
   await expect(group.locator('.activity-group__events')).toHaveCount(0)
 })
 
-test('reasoning and tools preserve transcript order and strip markdown from summaries', async ({ page }) => {
+test('shared reasoning rows preserve transcript order and strip markdown from summaries', async ({ page }) => {
   await resetConversation(page, [
     {
       id: 'reasoning-1',
@@ -95,23 +95,23 @@ test('reasoning and tools preserve transcript order and strip markdown from summ
     toolEntry('tool-21', 'completed', 'run_shell'),
   ])
 
-  const group = page.locator('.activity-group')
-  const header = group.locator('.activity-group__header')
-  await expect(header).toContainText('Cross-checking claims')
-  await expect(header).not.toContainText('**')
-
-  await header.click()
-  const rows = group.locator('.activity-group__event')
-  await expect(rows).toHaveCount(4)
-  await expect(rows.nth(0)).toContainText('Checking sources')
-  await expect(rows.nth(1)).toContainText('Read file')
-  await expect(rows.nth(2)).toContainText('Cross-checking claims')
-  await expect(rows.nth(3)).toContainText(/Command|Run shell/)
-  await expect(group).not.toContainText('**')
+  const items = page.locator('.conversation-content > .trace-disclosure, .conversation-content > .activity-group')
+  const reasoning = page.locator('.conversation-content > .trace-disclosure')
+  const groups = page.locator('.activity-group')
+  await expect(items).toHaveCount(4)
+  await expect(reasoning).toHaveCount(2)
+  await expect(groups).toHaveCount(2)
+  await expect(items.nth(0)).toContainText('Checking sources')
+  await expect(items.nth(2)).toContainText('Cross-checking claims')
+  await expect(page.locator('.conversation-content')).not.toContainText('**')
+  await groups.nth(0).locator('.activity-group__header').click()
+  await expect(items.nth(1)).toContainText('Read file')
+  await groups.nth(1).locator('.activity-group__header').click()
+  await expect(items.nth(3)).toContainText(/Command|Run shell/)
 })
 
 
-test('current tools replace stale reasoning while full model summaries remain expandable', async ({ page }) => {
+test('current tool activity remains separate from shared reasoning details', async ({ page }) => {
   await resetConversation(page, [
     { id: 'old-reasoning', kind: { type: 'reasoning', content: '', summary: '**Inspecting inputs****Checking constraints**' } },
     toolEntry('current-read', 'running'),
@@ -120,9 +120,8 @@ test('current tools replace stale reasoning while full model summaries remain ex
   const header = group.locator('.activity-group__header')
   await expect(header).toContainText(/Reading file|Read file/)
   await expect(header).toContainText('src/file-current-read.rs')
-  await header.click()
-  const reasoning = group.locator('.trace-disclosure').filter({ hasText: 'Reasoning' })
+  const reasoning = page.locator('.conversation-content > .trace-disclosure').filter({ hasText: 'Reasoning' })
   await expect(reasoning.locator('.trace-disclosure__row')).toContainText('Checking constraints')
-  await reasoning.locator('.trace-disclosure__row').click()
+  await expect(reasoning.locator('.trace-disclosure__row')).toHaveAttribute('aria-expanded', 'true')
   await expect(reasoning.locator('.trace-detail__content')).toContainText('Inspecting inputs')
 })

@@ -11,6 +11,60 @@ pub struct TranscriptContextMenu {
 }
 
 impl App {
+    pub(crate) fn apply_conversation_action(
+        &mut self,
+        action: crate::shared_ui::conversation::ConversationAction,
+    ) {
+        let prepared =
+            self.application
+                .prepare_conversation_entries(action, &self.conversation, &self.state);
+        assert!(
+            prepared.effect.command.is_none(),
+            "Harness transcript actions require send_conversation_action"
+        );
+        let (_, effect) =
+            self.application
+                .commit_conversation_entries(prepared, &self.conversation, &self.state);
+        if let Some(copy) = effect.copy {
+            self.clipboard_request = Some(copy.text);
+        }
+        if let Some(draft) = effect.edit_draft {
+            self.cursor = draft.chars().count();
+            self.input = draft;
+            self.history_index = None;
+            self.history_draft.clear();
+            self.input_focused = true;
+        }
+    }
+
+    /// Message control adapter: commit shared intent after successful Harness delivery.
+    #[allow(dead_code)] // Message controls are available in the shared view; native bindings follow.
+    pub(crate) fn send_conversation_action(
+        &mut self,
+        backend: &mut crate::backend::Backend,
+        action: crate::shared_ui::conversation::ConversationAction,
+    ) -> anyhow::Result<()> {
+        let prepared =
+            self.application
+                .prepare_conversation_entries(action, &self.conversation, &self.state);
+        if let Some(command) = prepared.effect.command.clone() {
+            backend.send(command)?;
+        }
+        let (_, effect) =
+            self.application
+                .commit_conversation_entries(prepared, &self.conversation, &self.state);
+        if let Some(copy) = effect.copy {
+            self.clipboard_request = Some(copy.text);
+        }
+        if let Some(draft) = effect.edit_draft {
+            self.cursor = draft.chars().count();
+            self.input = draft;
+            self.history_index = None;
+            self.history_draft.clear();
+            self.input_focused = true;
+        }
+        Ok(())
+    }
     /// Navigate rendered work headers, not the composer or hidden/suppressed entries.
     pub(crate) fn handle_work_selection_key(&mut self, event: &crossterm::event::KeyEvent) -> bool {
         use crossterm::event::KeyCode;
@@ -28,8 +82,10 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.select_work(1),
             KeyCode::Enter | KeyCode::Char(' ' | 'e') if self.selected_work.is_some() => {
                 let index = self.selected_work.unwrap();
-                if !self.expanded_work.remove(&index) {
-                    self.expanded_work.insert(index);
+                if let Some(id) = self.work_ids.get(index).cloned() {
+                    self.apply_conversation_action(
+                        crate::shared_ui::conversation::ConversationAction::Toggle(id),
+                    );
                 }
                 self.clear_transcript_selection();
             }
@@ -64,6 +120,11 @@ impl App {
                 .unwrap_or(0)
         };
         self.selected_work = Some(index);
+        if let Some(id) = self.work_ids.get(index).cloned() {
+            self.apply_conversation_action(
+                crate::shared_ui::conversation::ConversationAction::Select(Some(id)),
+            );
+        }
         self.follow_tail = false;
         let row = self.work_rows[index];
         let height = self.transcript_area.3.max(1);
@@ -216,6 +277,13 @@ impl App {
                                 self.work_rows.iter().position(|target| *target == row)
                             {
                                 self.selected_work = Some(index);
+                                if let Some(id) = self.work_ids.get(index).cloned() {
+                                    self.apply_conversation_action(
+                                        crate::shared_ui::conversation::ConversationAction::Select(
+                                            Some(id),
+                                        ),
+                                    );
+                                }
                                 self.follow_tail = false;
                             }
                         }

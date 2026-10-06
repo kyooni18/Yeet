@@ -204,3 +204,37 @@ all targets and three existing core tests. Two stale Agent Group preview literal
 now use defaults for newer runtime fields. Five source-layout checks passed; the
 sixth found unchanged committed RuntimeSource auth.ts at 1205 lines against a
 1200-line ceiling. The unrelated auth worktree edits are preserved.
+
+Conversation structure and interaction now live in `UI/conversation/` and
+`UI/conversation_session.rs`, owned by the aggregate ApplicationSession. Shared
+projections define message controls, activity grouping, attention and disclosure,
+reasoning traces, detail sections, stable selection identities and semantic icons.
+TUI and Web render those projections; native hit geometry, scroll, clipboard and
+editor focus remain adapters. The old terminal grouping implementation, including
+its test-only duplicate, has been removed. An explicit inspect-work preference
+preserves terminal attention behavior and browser collapsed defaults through the
+same shared reducer.
+
+Remote and Tauri prepare conversation actions, deliver any Harness command, then
+commit shared intent. Only safe copy/edit effects cross the UI wire. Conversation
+revisions remain separate from Harness replay cursors. Hosts project accumulated
+history after sparse updates and streaming deltas; a sparse absent transcript
+does not erase visible history. Consumed editor/clipboard effects cannot replay
+on remount. Browser fixtures invoke the production Rust projection and reducer.
+
+Verification: 343 library tests passed, excluding the same two previously
+attributed worktree assertions. Shared model, terminal renderer, Remote sparse
+streaming and desktop wire checks passed. Thirty-two existing desktop/mobile
+conversation cases, two new edit/regenerate cases, and eight focused clipboard
+and control cases passed across targeted runs. Web and RN typechecks passed.
+An isolated staged Rust snapshot passed 342 library tests with the runtime asset
+directory configured explicitly; five focused browser checks also passed against
+the staged renderer and shared TypeScript sources. Foundation is available again
+and architecture findings have been recovered and
+persisted. Unrelated provider, layout, stylesheet and test edits are preserved.
+
+TUI selection/disclosure consumes shared state; shared message controls still need
+native input bindings. Composer semantics, settings, graphical Home/Files/Diff
+rendering parity, thin adapter ownership under Platforms and remaining runtime
+moves are still required.
+The blank native OpenPencil design constraint remains in force.

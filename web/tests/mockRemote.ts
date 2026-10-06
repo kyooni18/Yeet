@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { projectAgents } from './uiAgentsHarness'
+import { projectConversation } from './uiConversationHarness'
 import { readFileSync } from 'node:fs'
 const shellFixtures = JSON.parse(readFileSync(new URL('./fixtures/ui-shell.json', import.meta.url), 'utf8')) as Array<{
   state: Record<string, unknown>; view: Record<string, unknown>; transitions: Record<string, number>
@@ -7,6 +8,7 @@ const shellFixtures = JSON.parse(readFileSync(new URL('./fixtures/ui-shell.json'
 
 export async function installMockRemote(page: Page): Promise<void> {
   await page.exposeFunction('__yeetProjectAgents', projectAgents)
+  await page.exposeFunction('__yeetProjectConversation', projectConversation)
   await page.route('**/api/auth/status', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -164,6 +166,21 @@ export async function installMockRemote(page: Page): Promise<void> {
       })
     }
 
+    let conversationUiState: Record<string, unknown> | undefined
+    let conversationRevision = 0
+    let conversationQueue = Promise.resolve()
+    const projectConversation = (socket: MockSocket, action?: unknown) => {
+      conversationQueue = conversationQueue.then(async () => {
+        const host = window as unknown as {
+          __yeetProjectConversation(input: unknown): Promise<{ ui_state: Record<string, unknown>; view: unknown; effect: { command?: unknown } }>
+        }
+        const result = await host.__yeetProjectConversation({ state: harnessState, ui_state: conversationUiState, action })
+        conversationUiState = result.ui_state
+        if (result.effect.command) sent.push({ type: 'command', version: 1, command: result.effect.command })
+        socket.emit({ type: 'ui_conversation', version: 1, conversation_revision: ++conversationRevision, view: result.view, effect: result.effect })
+      })
+    }
+
     class MockSocket extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -219,7 +236,10 @@ export async function installMockRemote(page: Page): Promise<void> {
             }
             this.emitUi()
             project(this)
+            projectConversation(this)
           })
+        } else if (message.type === 'ui_conversation_action') {
+          projectConversation(this, message.action)
         } else if (message.type === 'ui_agent_action') {
           project(this, message.action)
         } else if (message.type === 'ui_action') {
@@ -252,6 +272,22 @@ export async function installMockRemote(page: Page): Promise<void> {
           harnessState = { ...harnessState, ...(message.patch as Record<string, unknown>) }
           project(this)
         }
+        if (message.type === 'conversation_reset') harnessState.conversation = message.conversation
+        if (message.type === 'conversation_entry' || message.type === 'tool_update' || message.type === 'activity_update') {
+          const entries = (harnessState.conversation ?? []) as Array<{ id: string }>
+          const entry = message.entry as { id: string }
+          const index = entries.findIndex(item => item.id === entry.id)
+          harnessState.conversation = index < 0 ? [...entries, entry] : entries.map((item, i) => i === index ? entry : item)
+        }
+        if (message.type === 'reasoning_delta' || message.type === 'assistant_delta') {
+          const prefix = message.type === 'reasoning_delta' ? 'reasoning' : 'assistant'
+          const field = prefix === 'reasoning' && message.summary ? 'summary' : 'text'
+          const key = `active_${prefix}_${field}`
+          harnessState[key] = message.reset ? message.content : String(harnessState[key] ?? '') + String(message.delta ?? '')
+          harnessState[`active_${prefix}_entry_id`] = message.entry_id
+          harnessState.is_streaming = true
+        }
+        if (['state_update', 'snapshot', 'conversation_reset', 'conversation_entry', 'tool_update', 'activity_update', 'reasoning_delta', 'assistant_delta'].includes(String(message.type))) projectConversation(this)
         this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }))
       }
     }

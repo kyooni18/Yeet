@@ -608,7 +608,27 @@ export interface AgentsView {
   sections: Array<{ kind: 'objective' | 'result' | 'members' | 'activity' | 'budget' | 'findings'; label: string; visible: boolean; layout: 'full_width' | 'column' }>
 }
 
+export type ConversationAction =
+  | { type: 'toggle' | 'copy' | 'edit' | 'regenerate'; value: string }
+  | { type: 'select'; value: string | null }
+  | { type: 'move_selection'; value: number }
+  | { type: 'set_expand_all' | 'set_inspect_work'; value: boolean }
+  | { type: 'reset' }
+export type ConversationIcon = 'terminal' | 'edit' | 'file' | 'search' | 'folder' | 'screen' | 'web' | 'mcp' | 'skill' | 'tool' | 'reasoning' | 'info' | 'error' | 'copy' | 'refresh' | 'activity'
+export interface ConversationDetail { title: string; content: string; monospaced: boolean; is_error: boolean; has_background: boolean }
+export interface ConversationTrace { id: string; title: string; summary: string | null; status_label: string | null; metadata: string | null; icon: ConversationIcon; active: boolean; expanded: boolean; details: ConversationDetail[] }
+export interface ConversationActivityEvent { type: 'activity' | 'tool' | 'skill' | 'mcp'; key: string; trace: ConversationTrace }
+export interface ConversationActivityGroup { id: string; events: ConversationActivityEvent[]; summary: string; active: boolean; failed: boolean; awaits_permission: boolean; expanded: boolean }
+export interface ConversationControl { label: string; icon: ConversationIcon; action: ConversationAction; enabled: boolean }
+export type ConversationDisplayItem =
+  | { type: 'entry'; id: string; entry: ConversationEntry; controls: ConversationControl[] }
+  | { type: 'activity'; id: string; group: ConversationActivityGroup }
+  | { type: 'reasoning'; id: string; content: string; summary: string | null; is_active: boolean; trace: ConversationTrace }
+export interface ConversationView { items: ConversationDisplayItem[]; last_user_id: string | null; last_assistant_id: string | null; streaming_text: string; streaming: boolean; preparing: boolean; preparing_label: string; error: string | null; selected: string | null }
+export interface ConversationUiEffect { copy: { entry_id: string; text: string } | null; edit_draft: string | null }
+
 export type RemoteServerMessage =
+  | { version: number; type: 'ui_conversation'; conversation_revision: number; request_id?: string | null; view: ConversationView; effect?: ConversationUiEffect | null }
   | { version: number; type: 'ui_agents'; agents_revision: number; request_id?: string | null; view: AgentsView; effect?: AgentUiEffect | null }
   | ({ version: number; type: 'ui_state'; request_id?: string | null } & UiProjection)
   | { version: number; type: 'welcome'; client_id: string; workspace: string; session_id?: string | null; sequence: number; revision: number; resumed: boolean }

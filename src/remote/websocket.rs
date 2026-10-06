@@ -255,6 +255,11 @@ enum RuntimeControl {
         request_id: Option<String>,
         completion: oneshot::Sender<Result<(), String>>,
     },
+    ConversationAction {
+        action: crate::shared_ui::conversation::ConversationAction,
+        request_id: Option<String>,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -322,7 +327,7 @@ impl RemoteClientRuntime {
         })
     }
 
-    fn ui_messages(&self) -> Result<[ServerMessage; 2]> {
+    fn ui_messages(&self) -> Result<[ServerMessage; 3]> {
         let ui = self
             .ui
             .lock()
@@ -364,6 +369,31 @@ impl RemoteClientRuntime {
         let (completion, result) = oneshot::channel();
         self.commands
             .send(RuntimeControl::AgentAction {
+                action,
+                request_id,
+                completion,
+            })
+            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))?;
+        self.wake.notify();
+        match tokio::time::timeout(BACKEND_COMMAND_DELIVERY_TIMEOUT, result).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(anyhow!(error)),
+            Ok(Err(_)) => Err(anyhow!(
+                "semantic Remote runtime stopped before confirming UI action delivery"
+            )),
+            Err(_) => Err(anyhow!("timed out delivering Remote UI action")),
+        }
+    }
+
+    async fn apply_conversation(
+        &self,
+        action: crate::shared_ui::conversation::ConversationAction,
+        request_id: Option<String>,
+    ) -> Result<()> {
+        self.touch();
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .send(RuntimeControl::ConversationAction {
                 action,
                 request_id,
                 completion,
@@ -531,7 +561,7 @@ fn application_messages(
     projection: crate::shared_ui::application_session::ApplicationProjection,
     request_id: Option<String>,
     effect: Option<crate::shared_ui::agents::AgentUiEffect>,
-) -> [ServerMessage; 2] {
+) -> [ServerMessage; 3] {
     [
         ServerMessage::UiState {
             version: REMOTE_PROTOCOL_VERSION,
@@ -540,7 +570,8 @@ fn application_messages(
             state: projection.state,
             view: projection.view,
         },
-        agents_message(projection.agents, request_id, effect),
+        agents_message(projection.agents, request_id.clone(), effect),
+        conversation_message(projection.conversation, request_id, None),
     ]
 }
 
@@ -552,6 +583,20 @@ fn agents_message(
     ServerMessage::UiAgents {
         version: REMOTE_PROTOCOL_VERSION,
         agents_revision: projection.agents_revision,
+        request_id,
+        view: projection.view,
+        effect,
+    }
+}
+
+fn conversation_message(
+    projection: crate::shared_ui::conversation_session::ConversationProjection,
+    request_id: Option<String>,
+    effect: Option<crate::shared_ui::conversation::ConversationUiEffect>,
+) -> ServerMessage {
+    ServerMessage::UiConversation {
+        version: REMOTE_PROTOCOL_VERSION,
+        conversation_revision: projection.conversation_revision,
         request_id,
         view: projection.view,
         effect,
@@ -630,6 +675,35 @@ fn runtime_loop(
                     })();
                     let _ = completion.send(result);
                 }
+                RuntimeControl::ConversationAction {
+                    action,
+                    request_id,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), String> {
+                        let state = shared
+                            .lock()
+                            .map_err(|_| "remote runtime state lock poisoned")?;
+                        let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
+                        let prepared = ui.prepare_conversation(action, &state.state);
+                        if let Some(command) = prepared.effect.command.clone() {
+                            service
+                                .send(command)
+                                .map_err(|error| format!("{error:#}"))?;
+                        }
+                        let (projection, effect) = ui.commit_conversation(prepared, &state.state);
+                        let _ = events.send(conversation_message(
+                            projection.conversation,
+                            request_id,
+                            Some((&effect).into()),
+                        ));
+                        Ok(())
+                    })();
+                    let _ = completion.send(result);
+                }
                 RuntimeControl::Shutdown => {
                     shutdown = true;
                     break;
@@ -638,11 +712,13 @@ fn runtime_loop(
         }
         while let Some(event) = service.try_recv() {
             let ServiceEvent::Envelope(envelope) = event;
-            let projection = envelope
-                .state
-                .as_ref()
-                .and_then(|state| ui.lock().ok().and_then(|mut ui| ui.refresh(state)));
             process_envelope(&shared, &events, envelope);
+            // Harness snapshots may omit unchanged history. Project the accumulated
+            // transport state after applying the envelope, preserving its transcript.
+            let projection = shared
+                .lock()
+                .ok()
+                .and_then(|state| ui.lock().ok().and_then(|mut ui| ui.refresh(&state.state)));
             if let Some(projection) = projection {
                 for message in application_messages(projection, None, None) {
                     let _ = events.send(message);
@@ -1361,6 +1437,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     )).await;
                                 }
                             }
+                            ClientMessage::UiConversationAction { action, request_id, .. } => {
+                                if let Err(error) = runtime.apply_conversation(action, request_id.clone()).await {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_action_failed", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
                             ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
@@ -1450,6 +1533,60 @@ mod tests {
     use super::RemoteHub;
 
     #[test]
+    fn shared_transcript_projects_accumulated_sparse_updates_and_stream_deltas() {
+        use super::*;
+        use crate::shared_ui::application_session::ApplicationSession;
+        let mut initial = BridgeState::default();
+        initial.conversation = Some(
+            serde_json::from_value(serde_json::json!([
+                {"id":"user", "kind":{"type":"user","content":"keep history"}},
+                {"id":"reasoning", "kind":{"type":"reasoning","content":"","summary":""}}
+            ]))
+            .unwrap(),
+        );
+        let shared = Arc::new(Mutex::new(RuntimeShared {
+            state: initial.clone(),
+            sequence: 0,
+            history: VecDeque::new(),
+            last_touched: Instant::now(),
+        }));
+        let (events, mut receiver) = broadcast::channel(32);
+        let mut ui = ApplicationSession::new(&initial);
+        let mut sparse = initial.without_conversation();
+        sparse.is_streaming = true;
+        sparse.active_reasoning_entry_id = Some("reasoning".into());
+        sparse.active_reasoning_text = "Inspecting latest changes".into();
+        sparse.conversation_revision = 1;
+        process_envelope(
+            &shared,
+            &events,
+            BridgeEnvelope {
+                kind: "state".into(),
+                state: Some(sparse),
+                message: None,
+            },
+        );
+        let state = shared.lock().unwrap();
+        let projection = ui.refresh(&state.state).expect("stream changes shared UI");
+        let wire = serde_json::to_value(conversation_message(projection.conversation, None, None))
+            .unwrap();
+        assert_eq!(
+            wire["view"]["items"][0]["entry"]["kind"]["content"],
+            "keep history"
+        );
+        assert_eq!(
+            wire["view"]["items"][1]["content"],
+            "Inspecting latest changes"
+        );
+        assert!(wire.get("sequence").is_none());
+        assert!(
+            std::iter::from_fn(|| receiver.try_recv().ok())
+                .any(|message| matches!(message, ServerMessage::ReasoningDelta { .. }))
+        );
+        assert_eq!(state.state.conversation.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
     fn ui_actions_are_client_local_and_do_not_advance_harness_cursors() {
         use super::ServerMessage;
         use crate::shared_ui::application_session::ApplicationSession;
@@ -1460,7 +1597,7 @@ mod tests {
             ShellAction::OpenModels,
             &crate::harness::HarnessState::default(),
         );
-        let [message, _] =
+        let [message, _, _] =
             super::application_messages(projection, Some("open-models".into()), None);
         assert_eq!(message.sequence(), None);
         assert_eq!(message.revision(), None);
@@ -1485,7 +1622,7 @@ mod tests {
             ShellAction::OpenAgents,
             &crate::harness::HarnessState::default(),
         );
-        let [shell, agents] = super::application_messages(opened, None, None);
+        let [shell, agents, _] = super::application_messages(opened, None, None);
         let shell = serde_json::to_value(shell).unwrap();
         let agents = serde_json::to_value(agents).unwrap();
         assert_eq!(shell["state"]["agents"], true);
@@ -1498,7 +1635,7 @@ mod tests {
             ShellAction::Dismiss,
             &crate::harness::HarnessState::default(),
         );
-        let [shell, agents] = super::application_messages(dismissed, None, None);
+        let [shell, agents, _] = super::application_messages(dismissed, None, None);
         assert_eq!(
             serde_json::to_value(shell).unwrap()["state"]["agents"],
             false

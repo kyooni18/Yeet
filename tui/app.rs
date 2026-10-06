@@ -119,9 +119,8 @@ pub struct App {
     pub transcript_cells: Vec<Vec<String>>,
     pub(crate) transcript_cache: Option<crate::tui::ui::TranscriptCache>,
     pub(crate) transcript_revision: u64,
-    pub tools_expanded: bool,
+    pub(crate) work_ids: Vec<String>,
     pub(crate) selected_work: Option<usize>,
-    pub(crate) expanded_work: std::collections::BTreeSet<usize>,
     pub(crate) work_rows: Vec<u16>,
     pub selection_start: Option<(u16, u16)>,
     pub selection_end: Option<(u16, u16)>,
@@ -183,7 +182,13 @@ impl Default for App {
             input: String::new(),
             input_focused: true,
             cursor: 0,
-            application: Default::default(),
+            application: {
+                let harness = BridgeState::default();
+                let mut application = crate::shared_ui::application_session::ApplicationSession::new(&harness);
+                let prepared = application.prepare_conversation(crate::shared_ui::conversation::ConversationAction::SetInspectWork(true), &harness);
+                application.commit_conversation(prepared, &harness);
+                application
+            },
             tab_targets: Vec::new(),
             view_targets: Vec::new(),
             popup_filter: String::new(),
@@ -212,9 +217,8 @@ impl Default for App {
             transcript_cells: Vec::new(),
             transcript_cache: None,
             transcript_revision: 0,
-            tools_expanded: false,
+            work_ids: Vec::new(),
             selected_work: None,
-            expanded_work: Default::default(),
             work_rows: Vec::new(),
             selection_start: None,
             selection_end: None,
@@ -282,12 +286,13 @@ impl App {
             self.clear_transcript_selection();
         }
         if self.state.current_session_id != next.current_session_id {
+            self.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Reset);
+            self.work_ids.clear();
             self.selected_work = None;
-            self.expanded_work.clear();
             self.work_rows.clear();
         }
         self.state = next;
-        self.application.refresh(&self.state);
+        self.application.refresh_with_conversation_entries(&self.conversation, &self.state);
         if provider_configurations_changed {
             self.pending_provider_delete_id = None;
         }
@@ -924,7 +929,10 @@ impl App {
             KeyCode::Char('j') if !self.input_focused => self.scroll_down(3),
             KeyCode::Up if !self.input_focused => self.scroll_up(3),
             KeyCode::Down if !self.input_focused => self.scroll_down(3),
-            KeyCode::Char('e') if !self.input_focused => self.tools_expanded = !self.tools_expanded,
+            KeyCode::Char('e') if !self.input_focused => {
+                let expanded = !self.application.conversation_state().expand_all;
+                self.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::SetExpandAll(expanded));
+            },
             KeyCode::Char('g') if !self.input_focused => self.jump_to_transcript_start(),
             KeyCode::Char('G') if !self.input_focused => self.jump_to_transcript_end(),
             KeyCode::End if event.modifiers.contains(KeyModifiers::CONTROL) => {

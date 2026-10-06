@@ -88,21 +88,22 @@ fn reasoning_work_headers_select_and_expand_independently() {
             },
         })
         .collect();
-    let (collapsed, headers) = transcript_content(&app, 60);
+    let (expanded, headers) = transcript_content(&app, 60);
     assert_eq!(headers.len(), 2);
     app.selected_work = Some(1);
-    app.expanded_work.insert(1);
-    let (expanded, headers) = transcript_content(&app, 60);
+    app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Select(Some("reasoning:1".into())));
+    app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Toggle("reasoning:1".into()));
+    let (collapsed, headers) = transcript_content(&app, 60);
     assert!(expanded.lines.len() > collapsed.lines.len());
     assert!(
-        expanded.lines[headers[1]]
+        collapsed.lines[headers[1]]
             .style
             .add_modifier
             .contains(Modifier::REVERSED)
     );
-    let text = expanded.to_string();
-    assert!(text.contains("Detail 1"));
-    assert!(!text.contains("Detail 0"));
+    let text = collapsed.to_string();
+    assert!(!text.contains("Detail 1"));
+    assert!(text.contains("Detail 0"));
     app.input_focused = true;
     let (focused, headers) = transcript_content(&app, 60);
     assert!(
@@ -155,10 +156,12 @@ fn summary_dropdown_keyboard_toggles_its_tool_list() {
         },
     ];
     let (collapsed, headers) = transcript_content(&app, 90);
-    assert_eq!(headers.len(), 1, "the summary owns its following tools");
+    assert_eq!(headers.len(), 2, "shared reasoning and tool rows are separate");
     assert!(!collapsed.to_string().contains("src/example.rs"));
     app.work_rows = headers.iter().map(|row| *row as u16).collect();
-    assert!(app.handle_work_selection_key(&KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
+    let view = app.application.conversation_state().view(&app.conversation, &app.state);
+    app.work_ids = view.items.iter().filter(|item| !matches!(item, crate::shared_ui::conversation::DisplayItem::Entry { .. })).map(|item| item.id().to_owned()).collect();
+    app.selected_work = Some(1);
     for key in [KeyCode::Char(' '), KeyCode::Enter] {
         assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
         let expanded = transcript_content(&app, 90).0.to_string();

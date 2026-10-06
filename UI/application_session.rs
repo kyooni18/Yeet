@@ -5,6 +5,10 @@ use super::{
     agents::{AgentAction, AgentEffect, AgentState},
     agents_session::{AgentProjection, AgentSession, PreparedAgentAction},
     application::ApplicationView,
+    conversation::{ConversationAction, ConversationEffect, ConversationState},
+    conversation_session::{
+        ConversationProjection, ConversationSession, PreparedConversationAction,
+    },
     navigation::{NavigationState, WorkbenchResources},
     shell::{ShellAction, ShellState, ShellView, Surface},
     workbench::WorkbenchTab,
@@ -27,11 +31,13 @@ pub struct ApplicationProjection {
     pub view: ShellView,
     pub application: ApplicationView,
     pub agents: AgentProjection,
+    pub conversation: ConversationProjection,
 }
 pub struct ApplicationSession {
     navigation: NavigationState,
     shell: ShellState,
     agents: AgentSession,
+    conversation: ConversationSession,
     revision: u64,
     serialized: serde_json::Value,
 }
@@ -46,6 +52,7 @@ impl ApplicationSession {
             navigation: NavigationState::default(),
             shell: ShellState::default(),
             agents: AgentSession::new(harness),
+            conversation: ConversationSession::new(harness),
             revision: 0,
             serialized: serde_json::Value::Null,
         };
@@ -89,7 +96,58 @@ impl ApplicationSession {
             view: self.shell.view(),
             application: self.application_view(),
             agents: self.agents.projection(),
+            conversation: self.conversation.projection(),
         }
+    }
+    pub fn conversation_state(&self) -> &ConversationState {
+        self.conversation.state()
+    }
+    pub fn conversation_projection(&self) -> ConversationProjection {
+        self.conversation.projection()
+    }
+    pub fn prepare_conversation(
+        &self,
+        action: ConversationAction,
+        harness: &HarnessState,
+    ) -> PreparedConversationAction {
+        self.conversation.prepare(action, harness)
+    }
+    pub fn commit_conversation(
+        &mut self,
+        prepared: PreparedConversationAction,
+        harness: &HarnessState,
+    ) -> (ApplicationProjection, ConversationEffect) {
+        let (_, effect) = self.conversation.commit(prepared, harness);
+        self.advance();
+        (self.projection(), effect)
+    }
+    /// Slice variants support hosts that keep the runtime transcript separately.
+    pub fn prepare_conversation_entries(
+        &self,
+        action: ConversationAction,
+        entries: &[crate::model::ConversationEntry],
+        harness: &HarnessState,
+    ) -> PreparedConversationAction {
+        self.conversation.prepare_entries(action, entries, harness)
+    }
+    pub fn commit_conversation_entries(
+        &mut self,
+        prepared: PreparedConversationAction,
+        entries: &[crate::model::ConversationEntry],
+        harness: &HarnessState,
+    ) -> (ApplicationProjection, ConversationEffect) {
+        let (_, effect) = self.conversation.commit_entries(prepared, entries, harness);
+        self.advance();
+        (self.projection(), effect)
+    }
+    pub fn refresh_conversation_entries(
+        &mut self,
+        entries: &[crate::model::ConversationEntry],
+        harness: &HarnessState,
+    ) -> Option<ApplicationProjection> {
+        self.conversation.refresh_entries(entries, harness)?;
+        self.advance();
+        Some(self.projection())
     }
     pub fn prepare_agent(
         &self,
@@ -203,7 +261,26 @@ impl ApplicationSession {
     }
     /// Reconcile runtime updates without choosing a new navigation target.
     pub fn refresh(&mut self, harness: &HarnessState) -> Option<ApplicationProjection> {
+        if let Some(entries) = harness.conversation.as_deref() {
+            return self.refresh_with_conversation_entries(entries, harness);
+        }
+        // Sparse transport states carry no replacement transcript. Hosts that
+        // keep entries separately use the explicit slice variant below.
         self.agents.refresh(harness);
+        if self.fingerprint() != self.serialized {
+            self.advance();
+            Some(self.projection())
+        } else {
+            None
+        }
+    }
+    pub fn refresh_with_conversation_entries(
+        &mut self,
+        entries: &[crate::model::ConversationEntry],
+        harness: &HarnessState,
+    ) -> Option<ApplicationProjection> {
+        self.agents.refresh(harness);
+        self.conversation.refresh_entries(entries, harness);
         if self.fingerprint() != self.serialized {
             self.advance();
             Some(self.projection())
@@ -221,8 +298,13 @@ impl ApplicationSession {
         self.serialized = self.fingerprint();
     }
     fn fingerprint(&self) -> serde_json::Value {
-        serde_json::to_value((&self.navigation, &self.shell, self.agents.projection().view))
-            .expect("serialize application UI")
+        serde_json::to_value((
+            &self.navigation,
+            &self.shell,
+            self.agents.projection().view,
+            self.conversation.projection().view,
+        ))
+        .expect("serialize application UI")
     }
 }
 

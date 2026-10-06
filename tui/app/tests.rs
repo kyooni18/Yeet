@@ -1133,6 +1133,8 @@ fn unfocused_work_navigation_and_expansion_preserve_draft() {
     app.cursor = 4;
     app.input_focused = false;
     app.work_rows = vec![2, 20, 40];
+    app.conversation = (0..3).map(|index| crate::model::ConversationEntry { id: index.to_string(), kind: crate::model::ConversationKind::Reasoning { content: format!("Step {index}"), summary: None } }).collect();
+    app.work_ids = vec!["reasoning:0".into(), "reasoning:1".into(), "reasoning:2".into()];
     app.transcript_area = (0, 0, 80, 10);
     app.max_scroll = 50;
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
@@ -1142,9 +1144,9 @@ fn unfocused_work_navigation_and_expansion_preserve_draft() {
     assert_eq!(app.selected_work, Some(1));
     assert_eq!(app.scroll_y, 11);
     app.handle_work_selection_key(&key(KeyCode::Enter));
-    assert!(app.expanded_work.contains(&1));
+    assert_eq!(app.application.conversation_state().expanded.get("reasoning:1"), Some(&false));
     app.handle_work_selection_key(&key(KeyCode::Char(' ')));
-    assert!(!app.expanded_work.contains(&1));
+    assert_eq!(app.application.conversation_state().expanded.get("reasoning:1"), Some(&true));
     assert_eq!(app.input, "keep this draft");
     assert_eq!(app.cursor, 4);
     app.input_focused = true;

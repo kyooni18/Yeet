@@ -50,6 +50,12 @@ pub enum ClientMessage {
         request_id: Option<String>,
         action: crate::shared_ui::agents::AgentAction,
     },
+    UiConversationAction {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        action: crate::shared_ui::conversation::ConversationAction,
+    },
     Ping {
         version: u16,
         #[serde(default)]
@@ -64,6 +70,7 @@ impl ClientMessage {
             Self::Command { version, .. }
             | Self::UiAction { version, .. }
             | Self::UiAgentAction { version, .. }
+            | Self::UiConversationAction { version, .. }
             | Self::Ping { version, .. } => Some(*version),
         }
     }
@@ -89,6 +96,13 @@ pub enum ServerMessage {
         request_id: Option<String>,
         view: crate::shared_ui::agents::AgentsView,
         effect: Option<crate::shared_ui::agents::AgentUiEffect>,
+    },
+    UiConversation {
+        version: u16,
+        conversation_revision: u64,
+        request_id: Option<String>,
+        view: crate::shared_ui::conversation::ConversationView,
+        effect: Option<crate::shared_ui::conversation::ConversationUiEffect>,
     },
     Welcome {
         version: u16,
@@ -205,6 +219,7 @@ impl ServerMessage {
             | Self::ActivityUpdate { sequence, .. } => Some(*sequence),
             Self::UiState { .. }
             | Self::UiAgents { .. }
+            | Self::UiConversation { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }
@@ -224,6 +239,7 @@ impl ServerMessage {
             | Self::ActivityUpdate { revision, .. } => Some(*revision),
             Self::UiState { .. }
             | Self::UiAgents { .. }
+            | Self::UiConversation { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }
