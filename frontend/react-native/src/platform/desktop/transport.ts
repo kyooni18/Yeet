@@ -1,6 +1,7 @@
-import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, UiProjection } from '../../../../shared/remote/protocol'
+import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, UiProjection, AgentAction } from '../../../../shared/remote/protocol'
 import type { RemoteTransportEvents } from '../../../../shared/remote/transport'
 
+type AgentsEvent = Extract<RemoteServerMessage, { type: 'ui_agents' }>
 type UiEvent = Extract<RemoteServerMessage, { type: 'ui_state' }>
 type CoreEvent = { workspace?: string; type: string; state: BridgeState | null; message: string | null }
 type TauriBridge = {
@@ -17,6 +18,7 @@ export class DesktopTransport {
   private generation = 0
   private sequence = 0
   private uiRevision = -1
+  private agentsRevision = -1
   private conversation: BridgeState["conversation"] = []
   private connected = false
   private workspace = ''
@@ -38,6 +40,11 @@ export class DesktopTransport {
         this.uiRevision = event.ui_revision
         this.events.onMessage(event)
       }
+      const applyAgents = (event: AgentsEvent) => {
+        if (event.agents_revision < this.agentsRevision) return
+        this.agentsRevision = event.agents_revision
+        this.events.onMessage(event)
+      }
       const applyEvent = (event: CoreEvent) => {
         if (event.workspace && event.workspace !== this.workspace) return
         if (event.state) this.snapshot(event.state)
@@ -57,9 +64,18 @@ export class DesktopTransport {
       })
       if (generation !== this.generation) { unsubscribeUi(); unsubscribe(); return }
       this.unsubscribe = () => { unsubscribeUi(); unsubscribe() }
+      const unsubscribeAgents = await api.event.listen<AgentsEvent>('yeet://ui-agents-event', event => {
+        if (generation !== this.generation) return
+        if (initializing) buffered.push(() => applyAgents(event.payload))
+        else applyAgents(event.payload)
+      })
+      if (generation !== this.generation) { unsubscribeAgents(); unsubscribeUi(); unsubscribe(); return }
+      this.unsubscribe = () => { unsubscribeAgents(); unsubscribeUi(); unsubscribe() }
       const result = await api.core.invoke<{ workspace: string; state: BridgeState | null }>('connect_core', { workspace: this.workspace })
       if (generation !== this.generation) return
       const projection = await api.core.invoke<UiProjection>('ui_projection')
+      if (generation !== this.generation) return
+      const agents = await api.core.invoke<Omit<AgentsEvent, 'version' | 'type' | 'request_id'>>('agents_projection')
       if (generation !== this.generation) return
       this.workspace = result.workspace
       this.conversation = []
@@ -67,6 +83,7 @@ export class DesktopTransport {
       this.events.onMessage({ version: 1, type: 'welcome', client_id: 'desktop', workspace: result.workspace, sequence: 0, revision: 0, resumed: false })
       if (result.state) this.snapshot(result.state)
       applyUi({ version: 1, type: 'ui_state', ...projection })
+      applyAgents({ version: 1, type: 'ui_agents', ...agents })
       initializing = false
       for (const apply of buffered) apply()
       this.events.onOpen()
@@ -90,6 +107,11 @@ export class DesktopTransport {
   sendUi(action: ShellAction): boolean {
     if (!this.connected) return false
     void bridge()!.core.invoke('send_ui_action', { action }).catch(error => this.events.onError(String(error)))
+    return true
+  }
+  sendAgentUi(action: AgentAction): boolean {
+    if (!this.connected) return false
+    void bridge()!.core.invoke('send_ui_agent_action', { action }).catch(error => this.events.onError(String(error)))
     return true
   }
   close(): void {

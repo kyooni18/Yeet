@@ -152,3 +152,20 @@ UI, then render the same controls in both. Also merge shell and navigation into
 one application session so graphical clients can consume Home/Files/Diff as well
 as Session. The blank native design is a remaining parity constraint; native
 transport support alone does not prove native rendering completion.
+
+The Agent Group checkpoint moves lifecycle/selection/draft actions, availability,
+status precedence, attributed event filtering, findings, budgets and ordered
+section layout into `UI/agents/`. TUI and Web render this projection. Native
+editor buffers, focus traps, glyphs, scrolling and hit geometry remain adapters.
+Remote and Tauri use `AgentSession` to prepare effects, deliver Harness commands,
+then commit UI intent; failed delivery does not acknowledge or clear a draft.
+Only safe editor/settings effects cross the UI wire. `ui_agents` uses its own
+revision and does not advance Harness replay cursors. Browser tests invoke the
+production Rust reducer through `examples/ui_agents_fixture.rs`.
+
+Verification: 31 Rust agent checks, six desktop/mobile Agent Group browser checks,
+two desktop host wire checks, Web typecheck and RN typecheck/lint passed. The
+browser checks caught and corrected a changing accessible dialog name and hidden
+empty state in the shared projection. Group settings forms remain native to the
+TUI, and shell/navigation/agent session ownership still needs consolidation.
+This is another incremental seam, not complete platform parity.

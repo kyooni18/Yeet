@@ -571,7 +571,45 @@ export interface UiProjection {
   view: ShellView
 }
 
+// Rust UI/agents.rs owns these application views and effects.
+export type AgentAction =
+  | { type: 'select'; value: string | null }
+  | { type: 'submit_draft'; value: string }
+  | { type: 'open' | 'close' | 'steer' | 'stop' | 'create_group' | 'run_group'
+      | 'cancel_group' | 'stop_group' | 'remove' | 'agent_group' | 'inspect_group' | 'cancel_draft' }
+export type AgentIcon = 'add' | 'play' | 'stop' | 'remove' | 'settings' | 'refresh' | 'message' | 'tool' | 'complete' | 'error'
+export type AgentTone = 'active' | 'error' | 'waiting' | 'complete' | 'idle'
+export interface AgentControl { label: string; icon: AgentIcon; enabled: boolean; visible: boolean; action: AgentAction }
+export interface AgentUiState { open: boolean; selected: string | null; creating_group: boolean; input_focused: boolean }
+export interface AgentUiEffect { open_group_settings: boolean; submitted_text: string | null }
+export interface AgentsView {
+  state: AgentUiState
+  group: AgentGroupItem
+  group_status: { key: string; label: string; tone: AgentTone }
+  title: string
+  headline: string
+  accessible_label: string
+  empty_title: string
+  empty_message: string
+  composer_hint: string
+  create_hint: string
+  create_control: AgentControl
+  settings_control: AgentControl
+  result: string | null
+  members: Array<{ member: AgentMemberItem; status: { key: string; label: string; tone: AgentTone }; selected: boolean; select_action: AgentAction }>
+  feed: Array<{ id: string; sequence: number | null; at: string; kind: string; detail: string; member_id: string | null; actor: string; icon: AgentIcon; running: boolean; tool: string | null }>
+  findings: Array<{ member_id: string; task_id: string; at: string; summary: string; actor: string }>
+  budget: { output_limit: number; output_used: number; output_percent: number; cost_limit: number; cost_used: number | null; cost_percent: number;
+    tasks: Array<{ task_id: string; label: string; used: number; allocated: number; remaining: number; percent: number; context_window_tokens: number }> }
+  active_count: number
+  waiting_count: number
+  group_controls: AgentControl[]
+  selection_controls: AgentControl[]
+  sections: Array<{ kind: 'objective' | 'result' | 'members' | 'activity' | 'budget' | 'findings'; label: string; visible: boolean; layout: 'full_width' | 'column' }>
+}
+
 export type RemoteServerMessage =
+  | { version: number; type: 'ui_agents'; agents_revision: number; request_id?: string | null; view: AgentsView; effect?: AgentUiEffect | null }
   | ({ version: number; type: 'ui_state'; request_id?: string | null } & UiProjection)
   | { version: number; type: 'welcome'; client_id: string; workspace: string; session_id?: string | null; sequence: number; revision: number; resumed: boolean }
   | { version: number; type: 'snapshot'; sequence: number; revision: number; state: BridgeState }

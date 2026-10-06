@@ -1,10 +1,12 @@
 import type { Page } from '@playwright/test'
+import { projectAgents } from './uiAgentsHarness'
 import { readFileSync } from 'node:fs'
 const shellFixtures = JSON.parse(readFileSync(new URL('./fixtures/ui-shell.json', import.meta.url), 'utf8')) as Array<{
   state: Record<string, unknown>; view: Record<string, unknown>; transitions: Record<string, number>
 }>
 
 export async function installMockRemote(page: Page): Promise<void> {
+  await page.exposeFunction('__yeetProjectAgents', projectAgents)
   await page.route('**/api/auth/status', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -146,6 +148,22 @@ export async function installMockRemote(page: Page): Promise<void> {
     const generatedClientId = `pw-${crypto.randomUUID()}`
     let forceFreshHandshake = false
 
+    let agentUiState: Record<string, unknown> | undefined
+    let agentsRevision = 0
+    let harnessState: Record<string, unknown> = initialState
+    let agentQueue = Promise.resolve()
+    const project = (socket: MockSocket, action?: unknown) => {
+      agentQueue = agentQueue.then(async () => {
+        const host = window as unknown as {
+          __yeetProjectAgents(input: unknown): Promise<{ ui_state: Record<string, unknown>; view: unknown; effect: { command?: unknown } }>
+        }
+        const result = await host.__yeetProjectAgents({ state: harnessState, ui_state: agentUiState, action })
+        agentUiState = result.ui_state
+        if (result.effect.command) sent.push({ type: 'command', version: 1, command: result.effect.command })
+        socket.emit({ type: 'ui_agents', version: 1, agents_revision: ++agentsRevision, view: result.view, effect: result.effect })
+      })
+    }
+
     class MockSocket extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -200,7 +218,10 @@ export async function installMockRemote(page: Page): Promise<void> {
               this.emit({ type: 'snapshot', version: 1, sequence: 1, revision: 1, state })
             }
             this.emitUi()
+            project(this)
           })
+        } else if (message.type === 'ui_agent_action') {
+          project(this, message.action)
         } else if (message.type === 'ui_action') {
           const action = message.action as { type: string; layout?: string }
           const key = action.type === 'set_layout' ? `set_layout:${action.layout}` : action.type
@@ -226,6 +247,11 @@ export async function installMockRemote(page: Page): Promise<void> {
       }
 
       emit(message: Message) {
+        if (message.type === 'snapshot') harnessState = message.state as Record<string, unknown>
+        if (message.type === 'state_update') {
+          harnessState = { ...harnessState, ...(message.patch as Record<string, unknown>) }
+          project(this)
+        }
         this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }))
       }
     }

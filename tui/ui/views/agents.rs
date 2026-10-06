@@ -2,21 +2,21 @@
 //! timeline for the group or one member, and a state inspector.
 use super::super::{
     components::{composer, status, tabbar},
-    shell::conversation_title,
     support::{icons, text::compact_number, theme},
     task::fit,
     views::sessions::tools::{spinner, tool_icon},
 };
+use crate::shared_ui::agents::{AgentControl, AgentIcon, AgentsView, Tone, member_status};
 use crate::{
-    model::{AgentActivityItem, AgentActivityKind, AgentMemberItem},
-    tui::app::{agents::AgentAction, App},
+    model::{AgentActivityKind, AgentMemberItem},
+    tui::app::{App, agents::AgentAction},
 };
 use chrono::{DateTime, Utc};
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     prelude::{Line, Modifier, Span, Style},
     widgets::{Block, Paragraph, Wrap},
-    Frame,
 };
 
 const BOLD: Modifier = Modifier::BOLD;
@@ -35,6 +35,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         );
         return;
     }
+    let model = app.agents.shared.view(&app.state);
     frame.render_widget(
         Block::default().style(Style::default().bg(theme::code_background())),
         bounds,
@@ -64,6 +65,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         draw_rail(
             frame,
             app,
+            &model,
             Rect::new(body.x, body.y, rail_width, body.height + rows[2].height),
         );
     }
@@ -84,7 +86,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         inspector_x.saturating_sub(main_x + inset * 2),
         body.height,
     );
-    draw_main(frame, app, main);
+    draw_main(frame, app, &model, main);
     if wide {
         let inspector = Rect::new(
             inspector_x,
@@ -100,6 +102,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         draw_inspector(
             frame,
             app,
+            &model,
             Rect::new(
                 inspector.x + pad,
                 inspector.y,
@@ -116,17 +119,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     );
     composer::draw(frame, app, composer_area, main_x + inset + 3);
     if app.input.is_empty() {
-        let hint = match app.selected_agent() {
-            _ if app.agents.creating_group => "Describe the shared objective · Esc cancel".into(),
-            Some(member) if member.status == "stopped" => {
-                format!("{} is stopped", member.description)
-            }
-            Some(member) => format!("Steer {}...", member.description),
-            None if app.state.agent_group.objective.is_none() => {
-                "Create a new shared objective...".into()
-            }
-            None => "Ask the Main Agent about this group...".into(),
-        };
+        let hint = model.composer_hint.clone();
         let (x, y, width, height) = app.composer_area;
         frame.render_widget(
             Paragraph::new(hint).style(Style::default().fg(theme::muted())),
@@ -136,32 +129,38 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     status::draw(frame, app, rows[3]);
 }
 
-fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_rail(frame: &mut Frame<'_>, app: &mut App, model: &AgentsView, area: Rect) {
     frame.render_widget(Block::default().style(theme::base()), area);
     if area.height < 3 {
         return;
     }
     let add = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1);
-    let (add_label, add_style) = if app.agents.creating_group {
-        (
-            "Creating group objective".to_owned(),
-            theme::surface().fg(theme::accent()).add_modifier(BOLD),
-        )
-    } else if app.state.agent_group.status == "running" {
-        ("Group is running".to_owned(), muted())
-    } else if app.state.agent_group.status == "paused" {
-        ("Group is paused".to_owned(), muted())
+    let add_style = if model.state.creating_group {
+        theme::surface().fg(theme::accent()).add_modifier(BOLD)
+    } else if model.create_control.enabled {
+        theme::surface()
     } else {
-        ("+  New group".to_owned(), theme::surface())
+        muted()
+    };
+    let add_label = if model.create_control.enabled && !model.state.creating_group {
+        format!(
+            "{}  {}",
+            control_icon(model.create_control.icon),
+            model.create_hint
+        )
+    } else {
+        model.create_hint.clone()
     };
     frame.render_widget(Paragraph::new(add_label).style(add_style).centered(), add);
-    if !matches!(app.state.agent_group.status.as_str(), "running" | "paused") {
-        app.agents.targets.push((add, AgentAction::CreateGroup));
+    if model.create_control.enabled {
+        app.agents
+            .targets
+            .push((add, model.create_control.action.clone()));
     }
-    draw_rail_actions(frame, app, area);
+    draw_rail_actions(frame, app, model, area);
     let members = app.agent_members();
-    let running = counts(members).0;
-    let title = group_title(app).to_owned();
+    let running = model.active_count;
+    let title = model.title.clone();
     let count = format!("{running}/{}", members.len());
     let width = area.width as usize;
     let mut rows: Vec<(Option<String>, Line<'static>, bool)> = Vec::new();
@@ -184,7 +183,7 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         let state_width = state.len();
         let name = fit(&member.description, width.saturating_sub(state_width + 7));
         let gap = width.saturating_sub(5 + Span::raw(&name).width() + state_width + 1);
-        let name_style = if matches!(member_state(member).1, "stopped" | "cancelled" | "failed") {
+        let name_style = if member_status(member).tone == Tone::Error {
             muted()
         } else {
             Style::default().fg(theme::text_dim())
@@ -237,61 +236,65 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             );
         }
         frame.render_widget(Paragraph::new(line), row);
-        app.agents.targets.push((row, AgentAction::Select(id)));
+        let action = id
+            .as_ref()
+            .and_then(|id| model.members.iter().find(|member| &member.member.id == id))
+            .map_or(AgentAction::Select(None), |member| {
+                member.select_action.clone()
+            });
+        app.agents.targets.push((row, action));
     }
 }
 
 /// Stop and Remove for the selection, pinned to the bottom of the rail.
-fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, model: &AgentsView, area: Rect) {
     if area.height < 8 {
         return;
     }
     let selected = app.selected_agent().cloned();
-    let status = app.state.agent_group.status.as_str();
-    let group_action = match status {
-        "running" => Some(("■ Cancel group", AgentAction::CancelGroup)),
-        "paused" => Some(("▶ Resume group", AgentAction::RunGroup)),
-        "created" | "completed" | "failed" if app.state.agent_group.objective.is_some() => {
-            Some(("▶ Start group", AgentAction::RunGroup))
-        }
-        _ => None,
-    };
+    let group_action = model.group_controls.iter().find(|control| {
+        control.enabled
+            && matches!(
+                control.action,
+                AgentAction::RunGroup | AgentAction::CancelGroup
+            )
+    });
     let y = area.bottom().saturating_sub(2);
     if area.height >= 10 {
         let agent_group = Rect::new(area.x + 2, y - 2, area.width.saturating_sub(4), 1);
-        let settings = &app.state.runtime_settings.agent_group;
-        let label = match (app.agent_group_enabled(), settings.auto_deploy) {
-            (false, _) => "⚙ Group Agent off".to_owned(),
-            (true, auto) => format!(
-                "⚙ Group Agent {}×{}",
-                settings.max_concurrent,
-                if auto { " auto" } else { "" }
-            ),
-        };
-        let label = fit(&label, agent_group.width as usize);
-        let style = if app.agent_group_enabled() {
+        let control = &model.settings_control;
+        let label = fit(&control_label(control), agent_group.width as usize);
+        let style = if control.enabled {
             Style::default().fg(theme::accent())
         } else {
             muted()
         };
         frame.render_widget(Paragraph::new(label).style(style), agent_group);
-        app.agents
-            .targets
-            .push((agent_group, AgentAction::AgentGroup));
+        if control.enabled {
+            app.agents
+                .targets
+                .push((agent_group, control.action.clone()));
+        }
     }
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize))
             .style(Style::default().fg(theme::hairline())),
         Rect::new(area.x, y - 1, area.width, 1),
     );
-    if let Some(member) = selected {
-        let (_, state) = member_state(&member);
-        let stoppable = matches!(
-            state,
-            "running" | "reasoning" | "tool call" | "working" | "queued" | "input" | "review"
-        );
-        let stop = "■ Stop";
-        let remove = "× Remove";
+    if selected.is_some() {
+        let stop_control = model
+            .selection_controls
+            .iter()
+            .find(|control| control.action == AgentAction::Stop)
+            .expect("shared stop control");
+        let remove_control = model
+            .selection_controls
+            .iter()
+            .find(|control| control.action == AgentAction::Remove)
+            .expect("shared remove control");
+        let stoppable = stop_control.enabled;
+        let stop = control_label(stop_control);
+        let remove = control_label(remove_control);
         let stop_area = Rect::new(area.x + 2, y, stop.chars().count() as u16, 1);
         let remove_width = remove.chars().count() as u16;
         let remove_area = Rect::new(
@@ -301,16 +304,16 @@ fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             1,
         );
         frame.render_widget(
-            Paragraph::new(stop).style(if stoppable {
+            Paragraph::new(stop.clone()).style(if stoppable {
                 Style::default().fg(theme::text_dim())
             } else {
                 muted()
             }),
             stop_area,
         );
-        if remove_area.x > stop_area.right() {
+        if remove_control.enabled && remove_area.x > stop_area.right() {
             frame.render_widget(
-                Paragraph::new(remove).style(Style::default().fg(theme::text_dim())),
+                Paragraph::new(remove.clone()).style(Style::default().fg(theme::text_dim())),
                 remove_area,
             );
             app.agents.targets.push((remove_area, AgentAction::Remove));
@@ -318,7 +321,9 @@ fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         if stoppable {
             app.agents.targets.push((stop_area, AgentAction::Stop));
         }
-    } else if let Some((label, action)) = group_action {
+    } else if let Some(control) = group_action {
+        let label = control_label(control);
+        let action = control.action.clone();
         let action_area = Rect::new(
             area.x + 2,
             y,
@@ -333,29 +338,13 @@ fn draw_rail_actions(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
-fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn draw_main(frame: &mut Frame<'_>, app: &mut App, model: &AgentsView, area: Rect) {
     if area.width < 10 || area.height < 4 {
         return;
     }
     let selected = app.selected_agent().cloned();
     let members = &app.agent_members().to_vec();
-    let headline = match &selected {
-        Some(member) => {
-            let task = task_of(app, member).unwrap_or(member.description.as_str());
-            format!("{} {} {}", member.description, verb(member), task)
-        }
-        None if app.state.agent_group.objective.is_none() => {
-            "No Agent Group objective yet.".to_owned()
-        }
-        None => {
-            let (running, waiting) = counts(members);
-            format!(
-                "Group is {} · {running} active · {waiting} waiting · {} members",
-                app.state.agent_group.status,
-                members.len(),
-            )
-        }
-    };
+    let headline = model.headline.clone();
     let headline = Paragraph::new(headline)
         .style(Style::default().fg(theme::text()).add_modifier(BOLD))
         .wrap(Wrap { trim: true });
@@ -365,11 +354,7 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Rect::new(area.x, area.y + 1, area.width, headline_height),
     );
     if members.is_empty() {
-        let message = if app.state.agent_group.objective.is_some() {
-            "This shared objective is ready. Start the group from the rail to let the coordinator plan and delegate member tasks."
-        } else {
-            "Create a Group Agent objective with + New group. The coordinator will plan and delegate member tasks around it."
-        };
+        let message = model.empty_message.clone();
         frame.render_widget(
             Paragraph::new(message)
                 .style(muted())
@@ -381,26 +366,38 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 
     let controls_y = area.y + 2 + headline_height;
     let steer = Rect::new(area.x, controls_y, 9.min(area.width), 1);
+    let steer_control = model
+        .selection_controls
+        .iter()
+        .find(|control| control.action == AgentAction::Steer)
+        .expect("shared steer control");
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(if icons_enabled() { "\u{f040} " } else { "› " }, muted()),
-            Span::styled("Steer", Style::default().fg(theme::text_dim())),
-        ])),
+        Paragraph::new(control_label(steer_control)).style(if steer_control.enabled {
+            Style::default().fg(theme::text_dim())
+        } else {
+            muted()
+        }),
         steer,
     );
-    app.agents.targets.push((steer, AgentAction::Steer));
-    let stop_label = if selected.is_some() {
-        "Stop"
+    if steer_control.enabled {
+        app.agents
+            .targets
+            .push((steer, steer_control.action.clone()));
+    }
+    let stop_control = if selected.is_some() {
+        model
+            .selection_controls
+            .iter()
+            .find(|control| control.action == AgentAction::Stop)
     } else {
-        "Stop group"
-    };
-    let stoppable = match &selected {
-        Some(member) => matches!(
-            member_state(member).1,
-            "running" | "reasoning" | "tool call" | "working" | "queued" | "input" | "review"
-        ),
-        None => matches!(app.state.agent_group.status.as_str(), "running" | "paused"),
-    };
+        model
+            .group_controls
+            .iter()
+            .find(|control| control.action == AgentAction::StopGroup)
+    }
+    .expect("shared stop control");
+    let stop_label = &stop_control.label;
+    let stoppable = stop_control.enabled;
     let stop_width = stop_label.chars().count() as u16 + 2;
     let stop = Rect::new(
         area.right().saturating_sub(stop_width),
@@ -417,14 +414,7 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         stop,
     );
     if stoppable {
-        app.agents.targets.push((
-            stop,
-            if selected.is_some() {
-                AgentAction::Stop
-            } else {
-                AgentAction::StopGroup
-            },
-        ));
+        app.agents.targets.push((stop, stop_control.action.clone()));
     }
     frame.render_widget(
         Paragraph::new("─".repeat(area.width as usize))
@@ -436,8 +426,7 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let top = controls_y + 3;
     draw_timeline(
         frame,
-        app,
-        selected.as_ref(),
+        model,
         Rect::new(area.x, top, area.width, pill_y.saturating_sub(top + 1)),
     );
     let pill = match &selected {
@@ -448,7 +437,7 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             elapsed(&member.started_at).unwrap_or_else(|| "—".into())
         ),
         None => {
-            let (running, waiting) = counts(members);
+            let (running, waiting) = (model.active_count, model.waiting_count);
             if waiting > 0 {
                 format!(" {waiting} waiting · {running} running ")
             } else {
@@ -463,33 +452,11 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_timeline(frame: &mut Frame<'_>, app: &App, selected: Option<&AgentMemberItem>, area: Rect) {
+fn draw_timeline(frame: &mut Frame<'_>, model: &AgentsView, area: Rect) {
     if area.height == 0 {
         return;
     }
-    let members = app.agent_members();
-    let name = |id: &Option<String>, kind: AgentActivityKind| match id {
-        Some(id) => members
-            .iter()
-            .find(|member| &member.id == id)
-            .map_or_else(|| "agent".to_owned(), |member| member.description.clone()),
-        None if kind == AgentActivityKind::Steer => "You".to_owned(),
-        None => "Yeet".to_owned(),
-    };
-    let entries: Vec<&AgentActivityItem> = app
-        .state
-        .agent_group
-        .activity
-        .iter()
-        .rev()
-        .filter(|entry| {
-            selected.is_none_or(|member| {
-                entry.from.as_deref() == Some(member.id.as_str())
-                    || entry.to.as_deref() == Some(member.id.as_str())
-            })
-        })
-        .take(area.height as usize)
-        .collect();
+    let entries: Vec<_> = model.feed.iter().take(area.height as usize).collect();
     if entries.is_empty() {
         frame.render_widget(
             Paragraph::new("No activity yet.").style(muted()),
@@ -498,39 +465,16 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &App, selected: Option<&AgentMember
         return;
     }
     let actor_width = (area.width as usize / 4).clamp(8, 24);
-    // A running member's newest entry, when it is a tool, is what it is
-    // doing now.
-    let activity = &app.state.agent_group.activity;
-    let current: Vec<&AgentActivityItem> = members
-        .iter()
-        .filter(|member| member.activity_state == "tool_call")
-        .filter_map(|member| {
-            activity
-                .iter()
-                .rev()
-                .find(|entry| entry.from.as_deref() == Some(member.id.as_str()))
-        })
-        .filter(|entry| entry.kind == AgentActivityKind::Tool)
-        .collect();
     for (index, entry) in entries.iter().enumerate() {
-        let actor = match &entry.to {
-            Some(_) => format!(
-                "{} → {}",
-                name(&entry.from, entry.kind),
-                name(&entry.to, entry.kind)
-            ),
-            None => name(&entry.from, entry.kind),
-        };
-        let running = current.iter().any(|now| std::ptr::eq(*now, *entry));
-        let (icon, text_style) = match entry.kind {
+        let actor = &entry.actor;
+        let running = entry.running;
+        let (icon, text_style) = match entry.icon {
             _ if running => (
                 spinner(),
                 Style::default().fg(theme::text()).add_modifier(BOLD),
             ),
-            AgentActivityKind::Message | AgentActivityKind::Steer => {
-                (message_icon(), Style::default().fg(theme::text_dim()))
-            }
-            AgentActivityKind::Tool => (
+            AgentIcon::Message => (message_icon(), Style::default().fg(theme::text_dim())),
+            AgentIcon::Tool => (
                 if icons_enabled() {
                     tool_icon(entry.tool.as_deref().unwrap_or_default())
                 } else {
@@ -538,15 +482,15 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &App, selected: Option<&AgentMember
                 },
                 Style::default().fg(theme::text_dim()),
             ),
-            AgentActivityKind::Finished => (
+            AgentIcon::Complete => (
                 if icons_enabled() { "\u{f00c}" } else { "✓" },
                 Style::default().fg(theme::text()).add_modifier(BOLD),
             ),
-            AgentActivityKind::Failed => (
+            AgentIcon::Error => (
                 if icons_enabled() { "\u{f00d}" } else { "✗" },
                 Style::default().fg(theme::error()),
             ),
-            AgentActivityKind::Stopped => ("■", muted()),
+            _ => (control_icon(entry.icon), muted()),
         };
         let text_width = (area.width as usize).saturating_sub(7 + actor_width + 3);
         let line = Line::from(vec![
@@ -557,7 +501,7 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &App, selected: Option<&AgentMember
             ),
             Span::styled(icon, if running { glyph_running() } else { muted() }),
             Span::raw(" "),
-            Span::styled(fit(&entry.text, text_width), text_style),
+            Span::styled(fit(&entry.detail, text_width), text_style),
         ]);
         frame.render_widget(
             Paragraph::new(line),
@@ -566,7 +510,7 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &App, selected: Option<&AgentMember
     }
 }
 
-fn draw_inspector(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn draw_inspector(frame: &mut Frame<'_>, app: &App, model: &AgentsView, area: Rect) {
     if area.width < 12 || area.height < 6 {
         return;
     }
@@ -641,10 +585,10 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &App, area: Rect) {
             }
         }
         None => {
-            lines.push(title_line(group_title(app)));
+            lines.push(title_line(&model.title));
             lines.push(Line::default());
             lines.push(section("STATE"));
-            let (running, waiting) = counts(members);
+            let (running, waiting) = (model.active_count, model.waiting_count);
             lines.extend(field("Group", group.status.clone()));
             lines.extend(field(
                 "Members",
@@ -814,26 +758,8 @@ fn title_line(title: &str) -> Line<'static> {
     ))
 }
 
-fn group_title(app: &App) -> &str {
-    app.state
-        .agent_group
-        .objective
-        .as_deref()
-        .unwrap_or_else(|| conversation_title(app))
-}
-
-/// The first message the primary agent sent a member: its assignment.
 fn task_of<'a>(app: &'a App, member: &AgentMemberItem) -> Option<&'a str> {
-    app.state
-        .agent_group
-        .activity
-        .iter()
-        .find(|entry| {
-            entry.from.is_none()
-                && entry.to.as_deref() == Some(member.id.as_str())
-                && entry.kind == AgentActivityKind::Message
-        })
-        .map(|entry| entry.text.as_str())
+    crate::shared_ui::agents::member_task(&app.state.agent_group, member)
 }
 
 /// Members this one has messaged, and who has messaged it.
@@ -860,57 +786,43 @@ fn peers(app: &App, member: &AgentMemberItem) -> (Vec<String>, Vec<String>) {
     (sends, gets)
 }
 
-/// Rail glyph and state word for a member.
-fn member_state(member: &AgentMemberItem) -> (&'static str, &'static str) {
-    match (
-        member.status.as_str(),
-        member.activity_state.as_str(),
-        member.task_status.as_str(),
-    ) {
-        (_, _, "failed") => ("!", "failed"),
-        (_, _, "cancelled") => ("·", "cancelled"),
-        ("stopped", _, _) => ("·", "stopped"),
-        (_, "reasoning", _) => (spinner(), "reasoning"),
-        (_, "tool_call", _) => (spinner(), "tool call"),
-        (_, "provider_activity", _) => (spinner(), "working"),
-        (_, "waiting_for_input", _) => ("?", "input"),
-        (_, "queued", _) => (spinner(), "queued"),
-        (_, _, "needs_verification") => ("?", "review"),
-        (_, _, "verified" | "reported" | "done") => ("·", "done"),
-        ("running", _, _) => (spinner(), "running"),
-        _ => ("·", "idle"),
-    }
-}
-
-fn verb(member: &AgentMemberItem) -> &'static str {
-    match member_state(member).1 {
-        "running" | "reasoning" | "working" | "queued" => "is working on:",
-        "tool call" => "is calling a tool for:",
-        "input" => "is waiting for input on:",
-        "review" => "is waiting for review of:",
-        "failed" => "failed:",
-        "stopped" | "cancelled" => "stopped working on:",
-        _ => "finished:",
-    }
-}
-
-fn counts(members: &[AgentMemberItem]) -> (usize, usize) {
-    members.iter().fold((0, 0), |(running, waiting), member| {
-        match member_state(member).1 {
-            "running" | "reasoning" | "tool call" | "working" | "queued" => (running + 1, waiting),
-            "input" | "review" => (running, waiting + 1),
-            _ => (running, waiting),
-        }
-    })
+/// Native glyphs and colors translate the shared semantic status.
+fn member_state(member: &AgentMemberItem) -> (&'static str, String) {
+    let status = member_status(member);
+    let glyph = match status.tone {
+        Tone::Active => spinner(),
+        Tone::Waiting => "?",
+        Tone::Error if status.key == "failed" => "!",
+        _ => "·",
+    };
+    (glyph, status.label)
 }
 
 fn glyph_style(member: &AgentMemberItem) -> Style {
-    match member_state(member).1 {
-        "running" | "reasoning" | "tool call" | "working" | "queued" => glyph_running(),
-        "input" | "review" => Style::default().fg(theme::warning()),
-        "failed" => Style::default().fg(theme::error()),
+    match member_status(member).tone {
+        Tone::Active => glyph_running(),
+        Tone::Waiting => Style::default().fg(theme::warning()),
+        Tone::Error => Style::default().fg(theme::error()),
         _ => muted(),
     }
+}
+
+fn control_icon(icon: AgentIcon) -> &'static str {
+    match icon {
+        AgentIcon::Add => "+",
+        AgentIcon::Play => "▶",
+        AgentIcon::Stop => "■",
+        AgentIcon::Remove => "×",
+        AgentIcon::Settings => "⚙",
+        AgentIcon::Refresh => "↻",
+        AgentIcon::Message => "›",
+        AgentIcon::Tool => "·",
+        AgentIcon::Complete => "✓",
+        AgentIcon::Error => "!",
+    }
+}
+fn control_label(control: &AgentControl) -> String {
+    format!("{} {}", control_icon(control.icon), control.label)
 }
 
 fn glyph_running() -> Style {
@@ -926,11 +838,7 @@ fn icons_enabled() -> bool {
 }
 
 fn message_icon() -> &'static str {
-    if icons_enabled() {
-        "\u{f075}"
-    } else {
-        "›"
-    }
+    if icons_enabled() { "\u{f075}" } else { "›" }
 }
 
 fn since(at: &str) -> Option<chrono::Duration> {
@@ -966,8 +874,9 @@ fn elapsed(at: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::AgentActivityItem;
     use crate::model::AgentGroupItem;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn group_and_member_views_render_rail_timeline_and_inspector() {

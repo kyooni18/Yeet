@@ -81,15 +81,14 @@ test('shows the group objective, attributed member events, shared findings, resu
 
   await dialog.getByRole('button', { name: 'Cancel group' }).click()
   await dialog.getByRole('button', { name: 'Stop group' }).click()
-  const sent = await page.evaluate(() => (window as unknown as TestHooks).__yeetSent)
-  expect(sent.some((message) => {
-    const command = message.command as { type?: string; group_id?: string } | undefined
-    return command?.type === 'cancel_agent_group' && command.group_id === 'group-1'
+  await expect.poll(() => page.evaluate(() => {
+    const sent = (window as unknown as TestHooks).__yeetSent
+    return ['cancel_agent_group', 'stop_agent_group'].every(type => sent.some(message => {
+      const command = message.command as { type?: string; group_id?: string } | undefined
+      return command?.type === type && command.group_id === 'group-1'
+    }))
   })).toBe(true)
-  expect(sent.some((message) => {
-    const command = message.command as { type?: string; group_id?: string } | undefined
-    return command?.type === 'stop_agent_group' && command.group_id === 'group-1'
-  })).toBe(true)
+
 })
 
 test('creates a shared group objective through the group lifecycle', async ({ page }) => {
@@ -99,13 +98,14 @@ test('creates a shared group objective through the group lifecycle', async ({ pa
   await dialog.getByLabel('Shared objective').fill('Compare two migration options and synthesize the tradeoffs.')
   await dialog.getByRole('button', { name: 'Create group' }).last().click()
 
-  const sent = await page.evaluate(() => (window as unknown as TestHooks).__yeetSent)
-  expect(sent.some((message) => {
+  await expect.poll(() => page.evaluate(() => (window as unknown as TestHooks).__yeetSent.some(message => {
     const command = message.command as { type?: string; objective?: string } | undefined
     return command?.type === 'create_agent_group'
       && command.objective === 'Compare two migration options and synthesize the tradeoffs.'
-  })).toBe(true)
-  expect(sent.some((message) => (message.command as { type?: string } | undefined)?.type === 'spawn_agent')).toBe(false)
+  }))).toBe(true)
+  const sent = await page.evaluate(() => (window as unknown as TestHooks).__yeetSent)
+  expect(sent.some(message => (message.command as { type?: string } | undefined)?.type === 'spawn_agent')).toBe(false)
+
 })
 
 test('resumes a paused group using its stable group identity', async ({ page }) => {
@@ -128,9 +128,9 @@ test('resumes a paused group using its stable group identity', async ({ page }) 
   await expect(dialog.getByRole('button', { name: 'New group' })).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Resume group' }).click()
 
-  const sent = await page.evaluate(() => (window as unknown as TestHooks).__yeetSent)
-  expect(sent.some((message) => {
+  await expect.poll(() => page.evaluate(() => (window as unknown as TestHooks).__yeetSent.some(message => {
     const command = message.command as { type?: string; group_id?: string } | undefined
     return command?.type === 'resume_agent_group' && command.group_id === 'group-paused'
-  })).toBe(true)
+  }))).toBe(true)
+
 })

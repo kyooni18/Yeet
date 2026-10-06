@@ -5,39 +5,27 @@ use crate::model::{AgentMemberItem, FrontendCommand};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentAction {
-    /// A rail row: `None` is the whole group.
-    Select(Option<String>),
-    Steer,
-    Stop,
-    /// Compose and create a new group-level objective.
-    CreateGroup,
-    /// Start a created group, or resume a paused group.
-    RunGroup,
-    /// Cancel the active group as a whole.
-    CancelGroup,
-    /// Stop the active group as a whole.
-    StopGroup,
-    /// Remove the selected member, or clear stopped members from the group row.
-    Remove,
-    /// Open the Agent Group settings panel.
-    AgentGroup,
-}
+pub use crate::shared_ui::agents::AgentAction;
 
+/// Terminal view state wraps the shared agent interaction model. Geometry,
+/// viewport scrolling and native modal return handling remain in this adapter.
 #[derive(Debug, Default)]
 pub struct AgentsState {
-    /// The Agents tab stays listed once opened, even after the group empties.
-    pub open: bool,
-    /// Selected member id; `None` shows the whole group.
-    pub selected: Option<String>,
-    /// The composer is drafting a new group objective.
-    pub creating_group: bool,
-    /// First visible row in the rail, including the group row.
+    pub shared: crate::shared_ui::agents::AgentState,
     pub scroll: usize,
     pub(crate) targets: Vec<(Rect, AgentAction)>,
-    /// Where the Agent Group panel returns on Esc.
     pub agent_group_origin: Option<Mode>,
+}
+impl std::ops::Deref for AgentsState {
+    type Target = crate::shared_ui::agents::AgentState;
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
+}
+impl std::ops::DerefMut for AgentsState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.shared
+    }
 }
 
 impl App {
@@ -45,166 +33,58 @@ impl App {
         &self.state.agent_group.members
     }
 
-    /// The selected member, if it is still part of the group.
+    /// The selected member is resolved by the same UI state as graphical views.
     pub(crate) fn selected_agent(&self) -> Option<&AgentMemberItem> {
-        let id = self.agents.selected.as_deref()?;
-        self.agent_members().iter().find(|member| member.id == id)
+        self.agents.shared.selected_member(&self.state.agent_group)
     }
 
     pub(crate) fn open_agents(&mut self) {
-        self.agents.open = true;
+        self.apply_agent_action(AgentAction::Open);
         self.navigation.activated(WorkbenchTab::Agents);
-        self.input_focused = false;
     }
 
     pub(crate) fn close_agents(&mut self) {
-        self.agents.open = false;
-        self.agents.selected = None;
+        self.apply_agent_action(AgentAction::Close);
         self.activate_workbench_tab(WorkbenchTab::Home);
     }
 
     fn select_agent_row(&mut self, delta: isize) {
-        let rows: Vec<Option<String>> = std::iter::once(None)
-            .chain(
-                self.agent_members()
-                    .iter()
-                    .map(|member| Some(member.id.clone())),
-            )
-            .collect();
-        let current = rows
-            .iter()
-            .position(|row| *row == self.agents.selected)
-            .unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, rows.len() as isize - 1) as usize;
-        self.agents.selected = rows[next].clone();
+        self.agents
+            .shared
+            .move_selection(&self.state.agent_group, delta);
     }
 
-    /// Stops a selected member, or cancels the whole group on its row.
-    fn stop_agent_command(&self) -> Option<FrontendCommand> {
-        match self.selected_agent() {
-            Some(member) if member.status != "stopped" => Some(FrontendCommand::StopAgent {
-                agent_id: Some(member.id.clone()),
-            }),
-            Some(_) => None,
-            None => {
-                let group = &self.state.agent_group;
-                (group.status == "running").then(|| FrontendCommand::CancelAgentGroup {
-                    group_id: group.group_id.clone(),
-                })
-            }
-        }
+    fn stop_agent_command(&mut self) -> Option<FrontendCommand> {
+        self.apply_agent_action(AgentAction::Stop)
     }
 
-    /// Removes the selected member, or every stopped member on the group row.
     fn remove_agent_command(&mut self) -> Option<FrontendCommand> {
-        match self.selected_agent() {
-            Some(member) => {
-                let agent_id = Some(member.id.clone());
-                self.agents.selected = None;
-                Some(FrontendCommand::RemoveAgent { agent_id })
-            }
-            None => self
-                .agent_members()
-                .iter()
-                .any(|member| member.status == "stopped")
-                .then_some(FrontendCommand::RemoveAgent { agent_id: None }),
-        }
+        self.apply_agent_action(AgentAction::Remove)
     }
 
     fn start_creating_group(&mut self) {
-        if matches!(self.state.agent_group.status.as_str(), "running" | "paused") {
-            return;
-        }
-        self.agents.creating_group = true;
-        self.agents.selected = None;
-        self.input_focused = true;
+        self.apply_agent_action(AgentAction::CreateGroup);
     }
 
-    /// Creates a group from a drafted objective, or sends a message to the
-    /// selected member / Main Agent. The draft stays put when it cannot be delivered.
     fn submit_agent_draft(&mut self) -> Option<FrontendCommand> {
-        let text = self.input.trim().to_owned();
-        if text.is_empty() {
-            return None;
-        }
-        let command = if self.agents.creating_group {
-            if matches!(self.state.agent_group.status.as_str(), "running" | "paused") {
-                return None;
-            }
-            self.agents.creating_group = false;
-            FrontendCommand::CreateAgentGroup {
-                objective: text.clone(),
-            }
-        } else {
-            match self.selected_agent() {
-                Some(member) if member.status == "stopped" => return None,
-                Some(member) => FrontendCommand::MessageAgent {
-                    agent_id: member.id.clone(),
-                    message: text.clone(),
-                },
-                None if self.state.is_streaming => return None,
-                None => FrontendCommand::Submit {
-                    text: text.clone(),
-                    images: Vec::new(),
-                    attachment_ids: Vec::new(),
-                },
-            }
-        };
-        self.record_input_history(&text);
-        self.input.clear();
-        self.cursor = 0;
-        Some(command)
+        self.apply_agent_action(AgentAction::SubmitDraft(self.input.clone()))
     }
 
+    /// Native input and pointer targets deliver the shared UI reducer's actions.
     pub(crate) fn apply_agent_action(&mut self, action: AgentAction) -> Option<FrontendCommand> {
-        match action {
-            AgentAction::Select(id) => {
-                self.agents.selected = id;
-                self.input_focused = false;
-                None
-            }
-            AgentAction::Steer => {
-                self.input_focused = true;
-                None
-            }
-            AgentAction::Stop => self.stop_agent_command(),
-            AgentAction::CreateGroup => {
-                self.start_creating_group();
-                None
-            }
-            AgentAction::RunGroup => {
-                let group = &self.state.agent_group;
-                if group.status == "paused" {
-                    Some(FrontendCommand::ResumeAgentGroup {
-                        group_id: group.group_id.clone(),
-                    })
-                } else if group.objective.is_some()
-                    && matches!(group.status.as_str(), "created" | "completed" | "failed")
-                {
-                    Some(FrontendCommand::StartAgentGroup {
-                        group_id: group.group_id.clone(),
-                    })
-                } else {
-                    None
-                }
-            }
-            AgentAction::CancelGroup => {
-                let group = &self.state.agent_group;
-                (group.status == "running").then(|| FrontendCommand::CancelAgentGroup {
-                    group_id: group.group_id.clone(),
-                })
-            }
-            AgentAction::StopGroup => {
-                let group = &self.state.agent_group;
-                matches!(group.status.as_str(), "running" | "paused").then(|| {
-                    FrontendCommand::StopAgentGroup {
-                        group_id: group.group_id.clone(),
-                    }
-                })
-            }
-            AgentAction::Remove => self.remove_agent_command(),
-            AgentAction::AgentGroup => Some(self.open_agent_group()),
+        self.agents.shared.input_focused = self.input_focused;
+        let effect = self.agents.shared.apply(action, &self.state);
+        self.input_focused = self.agents.shared.input_focused;
+        if let Some(text) = effect.submitted_text {
+            self.record_input_history(&text);
+            self.input.clear();
+            self.cursor = 0;
         }
+        if effect.open_group_settings {
+            let request = self.open_agent_group();
+            return effect.command.or(Some(request));
+        }
+        effect.command
     }
 
     pub(crate) fn handle_agents_key(&mut self, event: KeyEvent) -> Option<FrontendCommand> {
@@ -217,7 +97,9 @@ impl App {
                 return None;
             }
             match event.code {
-                KeyCode::Esc if self.agents.creating_group => self.agents.creating_group = false,
+                KeyCode::Esc if self.agents.creating_group => {
+                    self.apply_agent_action(AgentAction::CancelDraft);
+                }
                 KeyCode::Esc => self.input_focused = false,
                 KeyCode::Enter if event.modifiers.contains(KeyModifiers::SHIFT) => {
                     self.insert_char('\n')
@@ -249,14 +131,16 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.select_agent_row(-1),
             KeyCode::Home | KeyCode::Char('g') => self.select_agent_row(isize::MIN / 2),
             KeyCode::End | KeyCode::Char('G') => self.select_agent_row(isize::MAX / 2),
-            KeyCode::Char('i' | 's') | KeyCode::Enter | KeyCode::Tab => self.input_focused = true,
+            KeyCode::Char('i' | 's') | KeyCode::Enter | KeyCode::Tab => {
+                self.apply_agent_action(AgentAction::Steer);
+            }
             KeyCode::Char('x') => return self.stop_agent_command(),
             KeyCode::Char('n' | 'a' | '+') => self.start_creating_group(),
             KeyCode::Char('r') => {
                 return self.apply_agent_action(AgentAction::RunGroup);
             }
             KeyCode::Char('d') | KeyCode::Delete => return self.remove_agent_command(),
-            KeyCode::Char('w') => return Some(self.open_agent_group()),
+            KeyCode::Char('w') => return self.apply_agent_action(AgentAction::AgentGroup),
             KeyCode::Char('q') => self.close_agents(),
             _ => {}
         }

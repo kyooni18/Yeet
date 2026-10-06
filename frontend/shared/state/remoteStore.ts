@@ -4,6 +4,9 @@ import {
   type AuthProviderItem,
   type BridgeState,
   type ShellAction,
+  type AgentAction,
+  type AgentsView,
+  type AgentUiEffect,
   type UiProjection,
   type ConnectionStatus,
   type ConversationEntry,
@@ -15,6 +18,8 @@ import {
 } from '../remote/protocol'
 
 export interface RemoteSnapshot {
+  agents: AgentsView | null
+  agentEffect: { revision: number; value: AgentUiEffect } | null
   ui: UiProjection | null
   state: BridgeState
   entries: ConversationEntry[]
@@ -104,6 +109,9 @@ export class RemoteStore {
   constructor(private readonly options: RemoteStoreOptions) {}
   private ui: UiProjection | null = null
   private uiRevision = -1
+  private agentsRevision = -1
+  private agents: AgentsView | null = null
+  private agentEffect: { revision: number; value: AgentUiEffect } | null = null
   private layout: 'compact' | 'expanded' | null = null
   private state = emptyBridgeState()
   private entries: ConversationEntry[] = []
@@ -141,6 +149,8 @@ export class RemoteStore {
       ? Math.min(100, Math.max(0, Math.round((used / total) * 100)))
       : null
     return {
+      agents: this.agents,
+      agentEffect: this.agentEffect,
       ui: this.ui,
       state: this.state,
       entries: this.entries,
@@ -227,6 +237,12 @@ export class RemoteStore {
 
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
+      case 'ui_agents':
+        if (message.agents_revision < this.agentsRevision) return
+        this.agentsRevision = message.agents_revision
+        this.agents = message.view
+        this.agentEffect = message.effect ? { revision: message.agents_revision, value: message.effect } : null
+        return
       case 'ui_state':
         if (this.layout && message.ui_revision === 0 && message.view.layout !== this.layout) return
         if (message.ui_revision < this.uiRevision) return
@@ -235,6 +251,7 @@ export class RemoteStore {
         return
       case 'welcome':
         this.uiRevision = -1
+        this.agentsRevision = -1
         this.state.workspace_root = message.workspace
         if (message.session_id !== undefined) this.state.current_session_id = message.session_id
         return
@@ -406,6 +423,10 @@ export class RemoteStore {
         entry.uiStreaming = true
       }
     }
+  }
+
+  sendAgentUi(action: AgentAction): boolean {
+    return this.transport?.sendAgentUi?.(action) ?? false
   }
 
   sendUi(action: ShellAction): boolean {

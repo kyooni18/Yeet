@@ -1,5 +1,7 @@
 //! Git-backed resource review state.
-use super::{App, Mode};
+use super::App;
+#[cfg(test)]
+use super::Mode;
 use crate::harness::resources;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::{

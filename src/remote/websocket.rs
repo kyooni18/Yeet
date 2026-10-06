@@ -245,6 +245,11 @@ enum RuntimeControl {
         command: FrontendCommand,
         completion: oneshot::Sender<Result<(), String>>,
     },
+    AgentAction {
+        action: crate::shared_ui::agents::AgentAction,
+        request_id: Option<String>,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -264,6 +269,7 @@ struct RemoteClientRuntime {
     events: broadcast::Sender<ServerMessage>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
     ui: Mutex<RuntimeUi>,
+    agents: Arc<Mutex<crate::shared_ui::agents_session::AgentSession>>,
 }
 
 #[derive(Default)]
@@ -302,6 +308,10 @@ impl RemoteClientRuntime {
         let wake = Wake::new();
         let service = HarnessService::spawn(workspace.to_path_buf(), Some(wake.clone()))?;
         let initial_state = service.state_snapshot();
+        let agents = Arc::new(Mutex::new(
+            crate::shared_ui::agents_session::AgentSession::new(&initial_state),
+        ));
+        let thread_agents = Arc::clone(&agents);
         let shared = Arc::new(Mutex::new(RuntimeShared {
             state: initial_state,
             sequence: 0,
@@ -322,6 +332,7 @@ impl RemoteClientRuntime {
                     thread_shared,
                     thread_events,
                     thread_wake,
+                    thread_agents,
                 );
             })
             .context("start semantic Remote client runtime")?;
@@ -332,6 +343,7 @@ impl RemoteClientRuntime {
             events,
             thread: Mutex::new(Some(thread)),
             ui: Mutex::new(RuntimeUi::default()),
+            agents,
         })
     }
 
@@ -357,6 +369,39 @@ impl RemoteClientRuntime {
         // this client. UI messages do not enter the Harness replay history.
         let _ = self.events.send(message);
         Ok(())
+    }
+
+    fn agents_message(&self) -> Result<ServerMessage> {
+        let agents = self
+            .agents
+            .lock()
+            .map_err(|_| anyhow!("remote agents UI state lock poisoned"))?;
+        Ok(agents_message(agents.projection(), None, None))
+    }
+
+    async fn apply_agents(
+        &self,
+        action: crate::shared_ui::agents::AgentAction,
+        request_id: Option<String>,
+    ) -> Result<()> {
+        self.touch();
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .send(RuntimeControl::AgentAction {
+                action,
+                request_id,
+                completion,
+            })
+            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))?;
+        self.wake.notify();
+        match tokio::time::timeout(BACKEND_COMMAND_DELIVERY_TIMEOUT, result).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(anyhow!(error)),
+            Ok(Err(_)) => Err(anyhow!(
+                "semantic Remote runtime stopped before confirming UI action delivery"
+            )),
+            Err(_) => Err(anyhow!("timed out delivering Remote UI action")),
+        }
     }
 
     fn touch(&self) {
@@ -506,12 +551,27 @@ impl Drop for RemoteClientRuntime {
     }
 }
 
+fn agents_message(
+    projection: crate::shared_ui::agents_session::AgentProjection,
+    request_id: Option<String>,
+    effect: Option<crate::shared_ui::agents::AgentUiEffect>,
+) -> ServerMessage {
+    ServerMessage::UiAgents {
+        version: REMOTE_PROTOCOL_VERSION,
+        agents_revision: projection.agents_revision,
+        request_id,
+        view: projection.view,
+        effect,
+    }
+}
+
 fn runtime_loop(
     mut service: HarnessService,
     commands: mpsc::Receiver<RuntimeControl>,
     shared: Arc<Mutex<RuntimeShared>>,
     events: broadcast::Sender<ServerMessage>,
     wake: Wake,
+    agents: Arc<Mutex<crate::shared_ui::agents_session::AgentSession>>,
 ) {
     let mut shutdown = false;
     while !shutdown {
@@ -527,6 +587,37 @@ fn runtime_loop(
                     let result = service.send(command).map_err(|error| format!("{error:#}"));
                     let _ = completion.send(result);
                 }
+                RuntimeControl::AgentAction {
+                    action,
+                    request_id,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), String> {
+                        let state = shared
+                            .lock()
+                            .map_err(|_| "remote runtime state lock poisoned")?;
+                        let mut agents = agents
+                            .lock()
+                            .map_err(|_| "remote agents UI state lock poisoned")?;
+                        let prepared = agents.prepare(action, &state.state);
+                        if let Some(command) = prepared.effect.command.clone() {
+                            service
+                                .send(command)
+                                .map_err(|error| format!("{error:#}"))?;
+                        }
+                        let (projection, effect) = agents.commit(prepared, &state.state);
+                        let _ = events.send(agents_message(
+                            projection,
+                            request_id,
+                            Some((&effect).into()),
+                        ));
+                        Ok(())
+                    })();
+                    let _ = completion.send(result);
+                }
                 RuntimeControl::Shutdown => {
                     shutdown = true;
                     break;
@@ -535,7 +626,16 @@ fn runtime_loop(
         }
         while let Some(event) = service.try_recv() {
             let ServiceEvent::Envelope(envelope) = event;
+            let projection = envelope.state.as_ref().and_then(|state| {
+                agents
+                    .lock()
+                    .ok()
+                    .and_then(|mut agents| agents.refresh(state))
+            });
             process_envelope(&shared, &events, envelope);
+            if let Some(projection) = projection {
+                let _ = events.send(agents_message(projection, None, None));
+            }
         }
         if !shutdown {
             wake.wait_timeout(RUNTIME_LOOP_IDLE_WAIT);
@@ -1154,19 +1254,21 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
     {
         return;
     }
-    match runtime.ui_message() {
-        Ok(message) => {
-            if send_json(&mut socket, &message).await.is_err() {
+    for message in [runtime.ui_message(), runtime.agents_message()] {
+        match message {
+            Ok(message) => {
+                if send_json(&mut socket, &message).await.is_err() {
+                    return;
+                }
+            }
+            Err(error) => {
+                let _ = send_json(
+                    &mut socket,
+                    &ServerMessage::error("ui_unavailable", error.to_string(), true, None),
+                )
+                .await;
                 return;
             }
-        }
-        Err(error) => {
-            let _ = send_json(
-                &mut socket,
-                &ServerMessage::error("ui_unavailable", error.to_string(), true, None),
-            )
-            .await;
-            return;
         }
     }
     if let Some(state) = plan.snapshot {
@@ -1240,6 +1342,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     )).await;
                                 }
                             }
+                            ClientMessage::UiAgentAction { action, request_id, .. } => {
+                                if let Err(error) = runtime.apply_agents(action, request_id.clone()).await {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_action_failed", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
                             ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
@@ -1298,11 +1407,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        match runtime.ui_message() {
-                            Ok(message) => {
-                                if send_json(&mut socket, &message).await.is_err() { break; }
+                        for message in [runtime.ui_message(), runtime.agents_message()] {
+                            match message {
+                                Ok(message) => {
+                                    if send_json(&mut socket, &message).await.is_err() { return; }
+                                }
+                                Err(_) => return,
                             }
-                            Err(_) => break,
                         }
                         let plan = runtime.resume_plan(None, None);
                         if let Some(state) = plan.snapshot
@@ -1362,6 +1473,41 @@ mod tests {
             decoded,
             super::ClientMessage::UiAction {
                 action: ShellAction::Dismiss,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn agents_wire_preserves_harness_cursors_and_delivers_only_ui_effects() {
+        use crate::shared_ui::{agents::AgentAction, agents_session::AgentSession};
+        let state = crate::harness::HarnessState::default();
+        let mut first = AgentSession::new(&state);
+        let second = AgentSession::new(&state);
+        let prepared = first.prepare(AgentAction::CreateGroup, &state);
+        first.commit(prepared, &state);
+        let prepared = first.prepare(AgentAction::SubmitDraft("group objective".into()), &state);
+        assert!(prepared.effect.command.is_some());
+        let (projection, effect) = first.commit(prepared, &state);
+        let message =
+            super::agents_message(projection, Some("accepted".into()), Some((&effect).into()));
+        assert_eq!(message.sequence(), None);
+        assert_eq!(message.revision(), None);
+        let wire = serde_json::to_value(&message).unwrap();
+        assert_eq!(wire["type"], "ui_agents");
+        assert_eq!(wire["request_id"], "accepted");
+        assert_eq!(wire["agents_revision"], 2);
+        assert_eq!(wire["effect"]["submitted_text"], "group objective");
+        assert!(wire["effect"].get("command").is_none());
+        assert_eq!(second.projection().agents_revision, 0);
+        let action = super::decode_client_message(
+            r#"{"type":"ui_agent_action","version":1,"action":{"type":"create_group"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            action,
+            super::ClientMessage::UiAgentAction {
+                action: AgentAction::CreateGroup,
                 ..
             }
         ));

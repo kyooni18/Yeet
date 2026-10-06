@@ -6,6 +6,8 @@ use std::{
 };
 use tauri::{Emitter, Manager};
 use yeet::harness::{Harness, HarnessCommand, HarnessState};
+use yeet::shared_ui::agents::{AgentAction, AgentUiEffect};
+use yeet::shared_ui::agents_session::{AgentProjection, AgentSession};
 use yeet::shared_ui::shell::{ShellAction, ShellState, ShellView};
 
 #[derive(serde::Serialize)]
@@ -17,6 +19,8 @@ struct CoreConnection {
 enum Control {
     Connect(String, mpsc::Sender<Result<CoreConnection, String>>),
     Command(HarnessCommand, mpsc::Sender<Result<(), String>>),
+    AgentsProjection(mpsc::Sender<Result<AgentProjection, String>>),
+    AgentAction(AgentAction, mpsc::Sender<Result<(), String>>),
     Disconnect(mpsc::Sender<()>),
     Stop,
 }
@@ -91,11 +95,68 @@ fn send_ui_action(
         .map_err(|error| error.to_string())
 }
 
+#[derive(Clone, serde::Serialize)]
+struct AgentsMessage {
+    effect: Option<AgentUiEffect>,
+    version: u16,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: Option<String>,
+    #[serde(flatten)]
+    projection: AgentProjection,
+}
+
+fn publish_agents(
+    app: &tauri::AppHandle,
+    projection: AgentProjection,
+    effect: Option<AgentUiEffect>,
+) -> Result<(), String> {
+    app.emit(
+        "yeet://ui-agents-event",
+        AgentsMessage {
+            version: 1,
+            kind: "ui_agents",
+            request_id: None,
+            projection,
+            effect,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn agents_projection(host: tauri::State<'_, CoreHost>) -> Result<AgentProjection, String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::AgentsProjection(reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn send_ui_agent_action(
+    action: AgentAction,
+    host: tauri::State<'_, CoreHost>,
+) -> Result<(), String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::AgentAction(action, reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
 // One worker owns the harness, serializing commands and workspace changes.
 // No frontend-specific state or domain logic belongs in this adapter.
 fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
     let mut harness: Option<Harness> = None;
     let mut conversation = None;
+    let mut agents = AgentSession::new(&HarnessState::default());
     loop {
         match controls.recv_timeout(Duration::from_millis(16)) {
             Ok(Control::Connect(workspace, reply)) => {
@@ -110,6 +171,11 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                             .as_ref()
                             .and_then(|state| state.conversation.clone());
                         // Preserve the current connection when constructing a new one fails.
+                        if let Some(state) = connection.state.as_ref()
+                            && let Some(projection) = agents.refresh(state)
+                        {
+                            let _ = publish_agents(&app, projection, None);
+                        }
                         harness = Some(next);
                         connection
                     })
@@ -121,6 +187,30 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     Some(core) => core.send(command).map_err(|error| error.to_string()),
                     None => Err("Connect a local workspace first".into()),
                 };
+                let _ = reply.send(result);
+            }
+            Ok(Control::AgentsProjection(reply)) => {
+                let result = if harness.is_some() {
+                    Ok(agents.projection())
+                } else {
+                    Err("Connect a local workspace first".into())
+                };
+                let _ = reply.send(result);
+            }
+            Ok(Control::AgentAction(action, reply)) => {
+                let result = (|| -> Result<(), String> {
+                    let core = harness.as_mut().ok_or("Connect a local workspace first")?;
+                    let state = core
+                        .latest_state()
+                        .cloned()
+                        .ok_or("Local workspace state unavailable")?;
+                    let prepared = agents.prepare(action, &state);
+                    if let Some(command) = prepared.effect.command.clone() {
+                        core.send(command).map_err(|error| error.to_string())?;
+                    }
+                    let (projection, effect) = agents.commit(prepared, &state);
+                    publish_agents(&app, projection, Some((&effect).into()))
+                })();
                 let _ = reply.send(result);
             }
             Ok(Control::Disconnect(reply)) => {
@@ -146,10 +236,14 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         conversation = state.conversation.clone();
                     }
                 }
+                let projection = event.state.as_ref().and_then(|state| agents.refresh(state));
                 if let Ok(mut payload) = serde_json::to_value(event) {
                     payload["workspace"] =
                         serde_json::Value::String(core.workspace().to_string_lossy().into_owned());
                     let _ = app.emit("yeet://core-event", payload);
+                }
+                if let Some(projection) = projection {
+                    let _ = publish_agents(&app, projection, None);
                 }
             }
         }
@@ -226,7 +320,9 @@ fn main() {
             send_core_command,
             disconnect_core,
             ui_projection,
-            send_ui_action
+            send_ui_action,
+            agents_projection,
+            send_ui_agent_action
         ])
         .build(tauri::generate_context!())
         .expect("initialize Yeet desktop");
@@ -241,6 +337,27 @@ fn main() {
 mod tests {
     use super::*;
     use yeet::shared_ui::shell::{Placement, Surface, ViewKind};
+
+    #[test]
+    fn desktop_agents_event_matches_remote_projection_and_safe_effects() {
+        let state = HarnessState::default();
+        let mut session = AgentSession::new(&state);
+        let prepared = session.prepare(AgentAction::CreateGroup, &state);
+        let (projection, effect) = session.commit(prepared, &state);
+        let wire = serde_json::to_value(AgentsMessage {
+            version: 1,
+            kind: "ui_agents",
+            request_id: None,
+            projection,
+            effect: Some((&effect).into()),
+        })
+        .unwrap();
+        assert_eq!(wire["type"], "ui_agents");
+        assert_eq!(wire["agents_revision"], 1);
+        assert_eq!(wire["view"]["state"]["creating_group"], true);
+        assert!(wire.get("projection").is_none());
+        assert!(wire["effect"].get("command").is_none());
+    }
 
     #[test]
     fn desktop_projects_shared_actions_in_remote_message_shape() {
