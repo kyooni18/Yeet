@@ -103,6 +103,48 @@ mod tests {
         assert!(app.application.projection().ui_revision > before);
         assert!(!app.home_visible());
     }
+
+    #[test]
+    fn home_mouse_wheel_selection_updates_shared_projection() {
+        let mut app = App::default();
+        let first = ResourceTarget::Session("first".into());
+        let second = ResourceTarget::Session("second".into());
+        let mut content = WorkspaceContent::default();
+        content.sessions.extend([
+            crate::shared_ui::home::ResourceItem::new(
+                first.clone(),
+                crate::shared_ui::home::ResourceKind::Session,
+                "First session",
+            ),
+            crate::shared_ui::home::ResourceItem::new(
+                second.clone(),
+                crate::shared_ui::home::ResourceKind::Session,
+                "Second session",
+            ),
+        ]);
+        app.home.replace_content(content.clone());
+        app.application.update_home_content(content);
+        app.activate_workbench_tab(WorkbenchTab::Home);
+        app.home_targets.push((
+            ratatui::layout::Rect::new(0, 0, 1, 1),
+            HomeAction::NewSession,
+        ));
+
+        assert_eq!(app.application.projection().home.selected, Some(first));
+        app.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+
+        let projection = app.application.projection();
+        assert_eq!(projection.home.selected, Some(second.clone()));
+        assert_eq!(
+            projection.home.inspector.map(|item| item.target),
+            Some(second)
+        );
+    }
 }
 
 impl App {

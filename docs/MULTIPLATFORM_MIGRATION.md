@@ -443,6 +443,15 @@ activity and inspector drawing now consume ApplicationSession's owned
 HomeView. Its local HomeState still owns viewport scroll and Git refresh bridging;
 provider usage drawing still reads host-supplied usage data directly.
 
+The Home input audit confirms pointer New Session actions in both terminal
+runtimes use the same `take_workbench_command` → `send_ui_command` path as
+keyboard actions. `send_ui_command` calls `finish_home_delivery`, so the shared
+commit occurs after successful backend delivery and a failed send clears the
+pending action without advancing the projection. The audit also found that
+mouse-wheel selection changed only the TUI's duplicate Home state; it now sends
+the resulting stable target through shared `HomeAction::Select`, keeping the
+Home inspector projection in sync. A focused regression check passed.
+
 Remote and Tauri `ui_state` events now include the shared ApplicationView
 content/surface projection alongside their compatibility shell view, so clients
 can migrate primary content without deriving navigation policy locally.

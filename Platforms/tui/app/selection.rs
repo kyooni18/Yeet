@@ -236,6 +236,9 @@ impl App {
                     } else {
                         3
                     });
+                if let Some(target) = self.home.selected.clone() {
+                    self.apply_home_action(crate::shared_ui::home::HomeAction::Select(target));
+                }
                 self.input_focused = false;
                 return Ok(());
             }
