@@ -351,3 +351,11 @@ settings checks and the Agent Group return-navigation regression passed. Eight
 desktop/mobile browser checks cover commands, Flex eligibility, busy/offline
 behavior and dismissal. Web/RN typechecks and desktop host compilation passed.
 Unrelated worktree changes remain preserved.
+
+Home now consumes canonical `UI/home` resource presentation, recent-target
+history, ordered activity groups, empty messages, inspector actions and stable
+selection/scroll behavior. Harness owns the nonblocking Git refresh worker.
+`src/workbench` remains a compatibility facade. TUI keeps native viewport
+geometry, rendering and input translation; its existing Home design is preserved.
+This is an application composition seam, not graphical Home parity: Web has no
+new Home design and Expo remains blank pending the user’s specifications.

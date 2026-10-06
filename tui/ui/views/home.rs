@@ -14,6 +14,8 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
+use crate::shared_ui::home::ActivityRow;
+
 const ACTIVE: Modifier = Modifier::BOLD;
 
 fn draw_compact(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
@@ -58,29 +60,16 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     frame.render_widget(Block::default().style(theme::base()), area);
     let button = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1);
     frame.render_widget(
-        Paragraph::new("+  New session")
+        Paragraph::new(app.home.view(false).new_session_label)
             .style(theme::surface())
             .centered(),
         button,
     );
     app.home_targets.push((button, HomeAction::NewSession));
     let count = area.height.saturating_sub(4) as usize;
-    let content = &app.home.content;
-    let mut items = Vec::new();
-    for item in content
-        .recent_views
-        .iter()
-        .chain(&content.tasks)
-        .chain(&content.diffs)
-        .chain(&content.sessions)
-    {
-        if !items
-            .iter()
-            .any(|existing: &&ResourceItem| existing.target == item.target)
-        {
-            items.push(item);
-        }
-    }
+    let home_state = app.home.projection_state().clone();
+    let projection = home_state.view(false);
+    let items = &projection.recent;
     let selected = items
         .iter()
         .position(|item| Some(&item.target) == app.home.selected.as_ref())
@@ -88,7 +77,7 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let offset = crate::tui::kit::visible_start(selected, count);
     if items.is_empty() {
         frame.render_widget(
-            Paragraph::new("No recent objects")
+            Paragraph::new(projection.recent_empty)
                 .style(Style::default().fg(theme::muted()))
                 .wrap(Wrap { trim: true }),
             Rect::new(area.x + 1, area.y + 3, area.width.saturating_sub(2), 2),
@@ -144,53 +133,18 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
-enum ActivityRow<'a> {
-    Heading(&'static str),
-    Item(&'a ResourceItem),
-    Message(&'a str),
-    Gap,
-}
 
 fn draw_activity(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.height < 3 || area.width < 8 {
         return;
     }
     let compact = frame.area().width < 110;
-    let mut rows = Vec::new();
-    if compact {
-        rows.push(ActivityRow::Heading("Sessions"));
-        rows.extend(app.home.content.sessions.iter().map(ActivityRow::Item));
-        if app.home.content.sessions.is_empty() {
-            rows.push(ActivityRow::Message("No saved sessions"));
-        }
-        rows.push(ActivityRow::Gap);
-    }
-    rows.push(ActivityRow::Heading("Recent views"));
-    rows.extend(app.home.content.recent_views.iter().map(ActivityRow::Item));
-    if app.home.content.recent_views.is_empty() {
-        rows.push(ActivityRow::Message("No views opened yet"));
-    }
-    rows.push(ActivityRow::Gap);
-    rows.push(ActivityRow::Heading("Agent tasks"));
-    rows.extend(app.home.content.tasks.iter().map(ActivityRow::Item));
-    if app.home.content.tasks.is_empty() {
-        rows.push(ActivityRow::Message("No agent tasks"));
-    }
-    rows.push(ActivityRow::Gap);
-    rows.push(ActivityRow::Heading("Changed files"));
-    rows.extend(app.home.content.diffs.iter().map(ActivityRow::Item));
-    if let Some(message) = &app.home.content.git_message {
-        rows.push(ActivityRow::Message(message));
-    } else if app.home.content.diffs.is_empty() {
-        rows.push(ActivityRow::Message("Working tree clean"));
-    }
     let usage_height = if area.height >= 16 { 4 } else { 0 };
     let capacity = area.height.saturating_sub(usage_height + 3) as usize;
-    app.home.scroll = app.home.scroll.min(rows.len().saturating_sub(capacity));
-    if let Some(selected) = rows.iter().position(|row| matches!(row, ActivityRow::Item(item) if Some(&item.target) == app.home.selected.as_ref())) {
-        if selected < app.home.scroll { app.home.scroll = selected; }
-        else if selected >= app.home.scroll + capacity { app.home.scroll = selected.saturating_sub(capacity.saturating_sub(1)); }
-    }
+    app.home.reveal_selection(compact, capacity);
+    let home_state = app.home.projection_state().clone();
+    let projection = home_state.view(compact);
+    let rows = &projection.activity;
     for (index, row) in rows.iter().skip(app.home.scroll).take(capacity).enumerate() {
         let rect = Rect::new(
             area.x + 2,
@@ -362,7 +316,7 @@ fn draw_provider_usage(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         );
     }
     let button = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-    frame.render_widget(Paragraph::new("Usage details →").style(muted), button);
+    frame.render_widget(Paragraph::new(app.home.view(false).usage_label).style(muted), button);
     app.home_targets
         .push((button, HomeAction::Open(ResourceTarget::Status)));
 }
@@ -371,8 +325,9 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.width == 0 || area.height < 5 {
         return;
     }
-    let Some(item) = app.home.selected_item() else {
-        frame.render_widget(Paragraph::new(format!("{}\n\nSelect a session, recent view, task or changed file.\n\nEsc  Browse Home\ni    Write a prompt", app.home.content.workspace.display())).style(Style::default().fg(theme::text_dim())).wrap(Wrap { trim: true }), Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
+    let projection = app.home.view(false);
+    let Some(item) = projection.inspector else {
+        frame.render_widget(Paragraph::new(format!("{}\n\n{}\n\nEsc  Browse Home\ni    Write a prompt", app.home.content.workspace.display(), projection.inspector_empty)).style(Style::default().fg(theme::text_dim())).wrap(Wrap { trim: true }), Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
         return;
     };
     let title = Paragraph::new(item.title.clone())
@@ -405,13 +360,7 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         detail,
         Rect::new(area.x, detail_y, area.width, detail_height),
     );
-    let label = match item.kind {
-        ResourceKind::Session => "Open session →",
-        ResourceKind::Task => "Open agents →",
-        ResourceKind::Diff => "Review diff →",
-        ResourceKind::File => "Open file →",
-        ResourceKind::View => "Open view →",
-    };
+    let label = app.home.view(false).open_label;
     let button = Rect::new(area.x, button_y, area.width, 1);
     frame.render_widget(
         Paragraph::new(label).style(Style::default().fg(theme::text())),

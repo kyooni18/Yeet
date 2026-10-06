@@ -15,6 +15,7 @@ pub mod composer;
 pub mod composer_session;
 pub mod conversation;
 pub mod conversation_session;
+pub mod home;
 pub mod navigation;
 pub mod settings;
 pub mod settings_session;

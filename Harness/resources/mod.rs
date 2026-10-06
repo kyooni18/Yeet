@@ -3,6 +3,7 @@
 mod files;
 mod git;
 mod review;
+mod refresh;
 
 pub use files::{
     FileEntry, count_text_lines, directory_entries, git_changes, git_diff, git_identity,
@@ -10,3 +11,5 @@ pub use files::{
 };
 pub use git::{ChangeStats, GitChange, GitSnapshot};
 pub use review::{repository_root, review_patch};
+
+pub use refresh::GitRefresh;
