@@ -265,3 +265,22 @@ remains in progress and must be verified and selectively committed; its presence
 in the worktree does not yet prove complete composer parity. Delegated agents
 stopped with workspace-credit errors. Foundation saves also remain unavailable;
 Git and these notes preserve the recoverable state.
+
+Composer adapter verification in progress after checkpoint 896b47d: production
+Rust browser fixture and mock UI composer channel added. Seven desktop draft
+context checks now pass. These caught a real accepted-editor comparison bug:
+JSON object key order differed between Rust serialization and the browser,
+preventing draft clearing. Native effect matching now compares snapshot field
+values with a canonical identity. Shared suggestion selection and guarded editor
+replacement are wired into Web. Concurrent design commits incorporated the Web composer adapter; transport and
+TUI changes remain uncommitted pending permission, attachment/edit, host and
+selective staging checks. Initial dirty
+Composer snapshot is `/tmp/yeet-composer-host-start.tsx`; native snapshots are in
+`/tmp/yeet-composer-native/`. Preserve concurrent design edits.
+
+The full worktree library suite now passes 348 tests, with the same two known
+unrelated worktree assertions excluded. It caught and fixed native permission
+input capture and approval hint casing regressions. Shared composer environment
+now explicitly supports freezing editor input during permission shortcut capture;
+Web preserves its drafting behavior. TUI opts into capture. The delegated agents
+remain stopped after credit errors; continue from current source and snapshots.

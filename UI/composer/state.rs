@@ -21,7 +21,7 @@ impl ComposerState {
                 "Message"
             }
             .into(),
-            editable: true,
+            editable: !env.freeze_editor_for_permissions || permissions(harness, env.available).is_empty(),
             can_submit,
             primary_control: if harness.is_streaming {
                 control(

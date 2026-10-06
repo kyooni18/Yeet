@@ -60,6 +60,9 @@ pub struct ComposerEnvironment {
     pub supported_destinations: Vec<ComposerDestination>,
     /// Inspection shortcuts may remain usable during execution when supported.
     pub allow_commands_while_streaming: bool,
+    /// Permission shortcuts can capture editor input without platform types.
+    #[serde(default)]
+    pub freeze_editor_for_permissions: bool,
 }
 impl Default for ComposerEnvironment {
     fn default() -> Self {
@@ -68,6 +71,7 @@ impl Default for ComposerEnvironment {
             available: true,
             supported_destinations: Vec::new(),
             allow_commands_while_streaming: false,
+            freeze_editor_for_permissions: false,
         }
     }
 }

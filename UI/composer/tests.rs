@@ -160,4 +160,8 @@ fn stale_permission_target_cannot_resolve_replacement() {
     );
     let view = state.view(&env, &harness);
     assert_eq!(view.permissions[0].controls[0].label, "Deny");
+    assert!(view.editable);
+    let mut capturing = env.clone();
+    capturing.freeze_editor_for_permissions = true;
+    assert!(!state.view(&capturing, &harness).editable);
 }
