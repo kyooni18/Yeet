@@ -1,7 +1,7 @@
 pub mod actions;
 // Compatibility import; execution ownership lives in Harness.
 pub use harness::agent;
-pub mod agents;
+pub use harness::agents;
 pub mod backend;
 pub mod background;
 pub mod cli;

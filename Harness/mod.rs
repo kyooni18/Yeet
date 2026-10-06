@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 pub mod agent;
+pub mod agents;
 pub mod core;
 pub mod permission;
 pub mod resources;

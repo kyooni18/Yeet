@@ -310,7 +310,7 @@ Agent execution now lives under `Harness/agent.rs` and its 35-file subtree.
 The root `agent` module is a compatibility reexport. Turn coordination, cache
 continuity, progress/retry policy and tool protocol are unchanged; only restricted
 visibility paths and the scripted test fixture location needed adjustment.
-Group orchestration under `src/agents` remains a separate pending runtime move.
+Group orchestration and its Harness command intents now live under `Harness/agents`; the root `crate::agents` re-export preserves existing imports.
 All-target compilation and all 81 existing agent tests passed, including four
 scripted continuity checks. Six source-layout checks passed in the worktree.
 
