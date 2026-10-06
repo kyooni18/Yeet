@@ -11,6 +11,8 @@ pub mod agents;
 pub mod agents_session;
 pub mod application;
 pub mod application_session;
+pub mod composer;
+pub mod composer_session;
 pub mod conversation;
 pub mod conversation_session;
 pub mod navigation;

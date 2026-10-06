@@ -249,3 +249,19 @@ The Harness adds `ResolvePermission { request_id, granted }` for shared UI
 responses. PermissionBroker matches the pending request ID atomically; delayed
 input cannot resolve a replacement request. Legacy permission commands remain
 compatible. Shared composer responses will use this identity-bearing command.
+
+`UI/composer/` and ComposerSession now own submit/edit/cancel/interrupt intent,
+permission controls with request identities, attachment readiness, command
+suggestions/destinations and semantic controls. ApplicationSession owns the
+composer alongside conversation/navigation/agents. Hosts supply authoritative
+workspace/session/unsaved context; native editors retain text input, cursor,
+upload resources and draft checkpoint storage. Prepare/commit preserves failed
+delivery and newer editor revisions, and rejects stale submissions. Three shared
+behavior tests cover routing/delivery, readiness/edit guards and permission
+identity. A production Rust composer fixture supports browser integration tests.
+
+The shared model is an incremental checkpoint. TUI and host/browser integration
+remains in progress and must be verified and selectively committed; its presence
+in the worktree does not yet prove complete composer parity. Delegated agents
+stopped with workspace-credit errors. Foundation saves also remain unavailable;
+Git and these notes preserve the recoverable state.

@@ -5,6 +5,8 @@ use super::{
     agents::{AgentAction, AgentEffect, AgentState},
     agents_session::{AgentProjection, AgentSession, PreparedAgentAction},
     application::ApplicationView,
+    composer::{ComposerAction, ComposerEffect, ComposerEnvironment},
+    composer_session::{ComposerProjection, ComposerSession, PreparedComposerAction},
     conversation::{ConversationAction, ConversationEffect, ConversationState},
     conversation_session::{
         ConversationProjection, ConversationSession, PreparedConversationAction,
@@ -32,12 +34,14 @@ pub struct ApplicationProjection {
     pub application: ApplicationView,
     pub agents: AgentProjection,
     pub conversation: ConversationProjection,
+    pub composer: ComposerProjection,
 }
 pub struct ApplicationSession {
     navigation: NavigationState,
     shell: ShellState,
     agents: AgentSession,
     conversation: ConversationSession,
+    composer: ComposerSession,
     revision: u64,
     serialized: serde_json::Value,
 }
@@ -53,6 +57,7 @@ impl ApplicationSession {
             shell: ShellState::default(),
             agents: AgentSession::new(harness),
             conversation: ConversationSession::new(harness),
+            composer: ComposerSession::new(harness),
             revision: 0,
             serialized: serde_json::Value::Null,
         };
@@ -97,7 +102,47 @@ impl ApplicationSession {
             application: self.application_view(),
             agents: self.agents.projection(),
             conversation: self.conversation.projection(),
+            composer: self.composer.projection(),
         }
+    }
+    pub fn composer_projection(&self) -> ComposerProjection {
+        self.composer.projection()
+    }
+    pub fn composer_environment(&self) -> &ComposerEnvironment {
+        self.composer.environment()
+    }
+    pub fn configure_composer(
+        &mut self,
+        environment: ComposerEnvironment,
+        harness: &HarnessState,
+    ) -> Option<ApplicationProjection> {
+        self.composer.configure(environment, harness)?;
+        self.advance();
+        Some(self.projection())
+    }
+    pub fn prepare_composer(
+        &self,
+        action: ComposerAction,
+        harness: &HarnessState,
+    ) -> PreparedComposerAction {
+        self.composer.prepare(action, harness)
+    }
+    pub fn commit_composer(
+        &mut self,
+        prepared: PreparedComposerAction,
+        harness: &HarnessState,
+    ) -> (ApplicationProjection, ComposerEffect) {
+        let (_, effect) = self.composer.commit(prepared, harness);
+        self.advance();
+        (self.projection(), effect)
+    }
+    pub fn observe_composer_new_session(&mut self, harness: &HarnessState) {
+        let mut environment = self.composer.environment().clone();
+        environment.context.unsaved_generation =
+            environment.context.unsaved_generation.saturating_add(1);
+        environment.context.session_id = None;
+        self.composer.configure(environment, harness);
+        self.advance();
     }
     pub fn conversation_state(&self) -> &ConversationState {
         self.conversation.state()
@@ -267,6 +312,7 @@ impl ApplicationSession {
         // Sparse transport states carry no replacement transcript. Hosts that
         // keep entries separately use the explicit slice variant below.
         self.agents.refresh(harness);
+        self.composer.refresh(harness);
         if self.fingerprint() != self.serialized {
             self.advance();
             Some(self.projection())
@@ -280,6 +326,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> Option<ApplicationProjection> {
         self.agents.refresh(harness);
+        self.composer.refresh(harness);
         self.conversation.refresh_entries(entries, harness);
         if self.fingerprint() != self.serialized {
             self.advance();
@@ -303,6 +350,7 @@ impl ApplicationSession {
             &self.shell,
             self.agents.projection().view,
             self.conversation.projection().view,
+            self.composer.projection().view,
         ))
         .expect("serialize application UI")
     }
