@@ -8,7 +8,12 @@ use crate::model::{
 pub const REMOTE_PROTOCOL_MIN_VERSION: u16 = 1;
 pub const REMOTE_PROTOCOL_MAX_VERSION: u16 = 1;
 pub const REMOTE_PROTOCOL_VERSION: u16 = REMOTE_PROTOCOL_MAX_VERSION;
-pub const REMOTE_PROTOCOL_FEATURES: &[&str] = &["attachments-v1", "files-v1", "turn-replay-v1"];
+pub const REMOTE_PROTOCOL_FEATURES: &[&str] = &[
+    "attachments-v1",
+    "files-v1",
+    "turn-replay-v1",
+    "shared-ui-v1",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -33,6 +38,12 @@ pub enum ClientMessage {
         request_id: Option<String>,
         command: FrontendCommand,
     },
+    UiAction {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        action: crate::shared_ui::shell::ShellAction,
+    },
     Ping {
         version: u16,
         #[serde(default)]
@@ -44,7 +55,9 @@ impl ClientMessage {
     pub fn exact_version(&self) -> Option<u16> {
         match self {
             Self::Hello { .. } => None,
-            Self::Command { version, .. } | Self::Ping { version, .. } => Some(*version),
+            Self::Command { version, .. }
+            | Self::UiAction { version, .. }
+            | Self::Ping { version, .. } => Some(*version),
         }
     }
 }
@@ -56,6 +69,13 @@ impl ClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    UiState {
+        version: u16,
+        ui_revision: u64,
+        request_id: Option<String>,
+        state: crate::shared_ui::shell::ShellState,
+        view: crate::shared_ui::shell::ShellView,
+    },
     Welcome {
         version: u16,
         client_id: String,
@@ -169,9 +189,11 @@ impl ServerMessage {
             | Self::ConversationReset { sequence, .. }
             | Self::ToolUpdate { sequence, .. }
             | Self::ActivityUpdate { sequence, .. } => Some(*sequence),
-            Self::Welcome { .. } | Self::Ack { .. } | Self::Error { .. } | Self::Pong { .. } => {
-                None
-            }
+            Self::UiState { .. }
+            | Self::Welcome { .. }
+            | Self::Ack { .. }
+            | Self::Error { .. }
+            | Self::Pong { .. } => None,
         }
     }
 
@@ -185,9 +207,11 @@ impl ServerMessage {
             | Self::ConversationReset { revision, .. }
             | Self::ToolUpdate { revision, .. }
             | Self::ActivityUpdate { revision, .. } => Some(*revision),
-            Self::Welcome { .. } | Self::Ack { .. } | Self::Error { .. } | Self::Pong { .. } => {
-                None
-            }
+            Self::UiState { .. }
+            | Self::Welcome { .. }
+            | Self::Ack { .. }
+            | Self::Error { .. }
+            | Self::Pong { .. } => None,
         }
     }
 }

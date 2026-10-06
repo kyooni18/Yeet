@@ -47,7 +47,11 @@ export function TopBar({
       <div className="topbar-leading">
         <button
           className="topbar-icon"
-          onClick={onToggleSidebar}
+          onClick={(event) => {
+            // Keep the touch invoker focused while UI crosses transport.
+            event.currentTarget.focus({ preventScroll: true })
+            onToggleSidebar()
+          }}
           aria-label="Open sidebar"
           aria-pressed={sidebarOpen}
         >

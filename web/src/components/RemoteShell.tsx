@@ -7,163 +7,119 @@ import { QuickPanel } from '@/components/QuickPanel'
 import { SettingsSheet } from '@/components/SettingsSheet'
 import { Sidebar } from '@/components/Sidebar'
 import { TopBar } from '@/components/TopBar'
+import { remoteStore, useRemote } from '@/store/remoteStore'
+import type { ShellAction, ShellState } from '@/remote/protocol'
 
+/** Browser visuals and focus for the Rust-authored application shell. */
 export function RemoteShell() {
-  const [sidebar, setSidebar] = useState(false)
-  const [controls, setControls] = useState(false)
-  const [modelSheet, setModelSheet] = useState(false)
-  const [settings, setSettings] = useState(false)
-  const [agents, setAgents] = useState(false)
-  const [desktopLayout, setDesktopLayout] = useState(false)
+  const { ui } = useRemote()
   const modelReturnFocus = useRef<HTMLElement | null>(null)
   const settingsReturnFocus = useRef<HTMLElement | null>(null)
-
+  const navigationReturnFocus = useRef<HTMLElement | null>(null)
+  const priorState = useRef<ShellState | null>(null)
   const [editRequest, setEditRequest] = useState<{ key: number; content: string } | null>(null)
-  const sidebarVisible = sidebar && (desktopLayout || (!modelSheet && !settings && !agents))
-  const controlsVisible = controls && (desktopLayout || (!modelSheet && !settings && !agents))
+  const view = ui?.view
+  const visible = (kind: string) => view?.views.some(item => item.kind === kind && item.placement !== 'hidden') ?? false
+  const sidebarVisible = visible('navigation')
+  const controlsVisible = visible('inspector')
+  const modelSheet = visible('models')
+  const settings = visible('settings')
+  const desktopLayout = view?.layout === 'expanded'
 
   const rememberFocus = (target: React.MutableRefObject<HTMLElement | null>) => {
     const active = document.activeElement
     target.current = active instanceof HTMLElement && active !== document.body ? active : null
   }
-
-  const restoreFocus = (target: React.MutableRefObject<HTMLElement | null>) => {
-    const element = target.current
-    target.current = null
-    if (!element?.isConnected) return
-    requestAnimationFrame(() => {
-      if (element.isConnected) element.focus({ preventScroll: true })
-    })
+  const send = (action: ShellAction) => remoteStore.sendUi(action)
+  const openNavigation = () => {
+    rememberFocus(navigationReturnFocus)
+    send({ type: 'open_navigation' })
   }
-
   const openModel = () => {
     if (!modelSheet) rememberFocus(modelReturnFocus)
-    setModelSheet(true)
+    send({ type: 'open_models' })
   }
-
-  const closeModel = () => {
-    setModelSheet(false)
-    restoreFocus(modelReturnFocus)
-  }
-
   const openSettings = () => {
     if (!settings) rememberFocus(settingsReturnFocus)
-    setSettings(true)
-  }
-
-  const closeSettings = () => {
-    setSettings(false)
-    restoreFocus(settingsReturnFocus)
+    send({ type: 'open_settings' })
   }
 
   useEffect(() => {
-    const media = window.matchMedia('(min-width: 1000px) and (hover: hover) and (pointer: fine)')
-    const update = (initial = false) => {
-      const desktop = media.matches
-      setDesktopLayout(desktop)
-      if (desktop) {
-        if (initial) setSidebar(true)
-      } else if (!initial) {
-        setSidebar(false)
-        setControls(false)
+    if (!ui) return
+    for (const [kind, target] of [['models', modelReturnFocus], ['settings', settingsReturnFocus], ['navigation', navigationReturnFocus]] as const) {
+      const wasOpen = priorState.current?.[kind]
+      const open = ui.state[kind]
+      if (wasOpen && !open) {
+        const element = target.current
+        target.current = null
+        if (element?.isConnected) requestAnimationFrame(() => {
+          if (element.isConnected) element.focus({ preventScroll: true })
+        })
       }
     }
+    priorState.current = ui.state
+  }, [ui])
 
-    update(true)
-    const onChange = () => update(false)
-    media.addEventListener('change', onChange)
-    return () => media.removeEventListener('change', onChange)
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1000px) and (hover: hover) and (pointer: fine)')
+    const update = () => remoteStore.sendUi({ type: 'set_layout', layout: media.matches ? 'expanded' : 'compact' })
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
   }, [])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (modelSheet) closeModel()
-      else if (settings) closeSettings()
-      else if (agents) setAgents(false)
-      else if (controls) setControls(false)
-      else if (sidebar) setSidebar(false)
+      if (event.key === 'Escape') remoteStore.sendUi({ type: 'dismiss' })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [agents, controls, modelSheet, settings, sidebar])
+  }, [])
 
-  const openAgents = () => {
-    setControls(false)
-    setAgents(true)
-  }
+  if (!view) return null
 
   return (
-    <div
-      className={[
-        'remote-stage',
-        'app-shell',
-        desktopLayout ? 'is-desktop' : 'is-compact',
-        sidebarVisible ? 'navigation-open' : '',
-        controlsVisible ? 'inspector-open' : '',
-      ].filter(Boolean).join(' ')}
-    >
-      {!((sidebarVisible && !desktopLayout) || (controlsVisible && !desktopLayout) || modelSheet || settings) && (
-        <a
-          className="skip-link"
-          href="#conversation-transcript"
-          onClick={(event) => {
-            event.preventDefault()
-            document.getElementById('conversation-transcript')?.focus({ preventScroll: true })
-          }}
-        >
-          Skip to conversation
-        </a>
+    <div className={[
+      'remote-stage', 'app-shell', desktopLayout ? 'is-desktop' : 'is-compact',
+      sidebarVisible ? 'navigation-open' : '', controlsVisible ? 'inspector-open' : '',
+    ].filter(Boolean).join(' ')}>
+      {view?.skip_conversation && (
+        <a className="skip-link" href="#conversation-transcript" onClick={(event) => {
+          event.preventDefault()
+          document.getElementById('conversation-transcript')?.focus({ preventScroll: true })
+        }}>Skip to conversation</a>
       )}
-
-      <Sidebar
-        open={sidebarVisible}
-        desktopDocked={desktopLayout}
-        onClose={() => setSidebar(false)}
-        onSettings={openSettings}
-        onAgents={openAgents}
-      />
-      <section className={`main-viewport app-workspace${sidebarVisible ? ' sidebar-open' : ''}`} aria-label="Current session">
-        <TopBar
-          sidebarOpen={sidebarVisible}
-          controlsOpen={controlsVisible}
-          onToggleSidebar={() => {
-            if (!desktopLayout) setControls(false)
-            setSidebar(true)
-          }}
-          onToggleControls={() => {
-            if (!desktopLayout) setSidebar(false)
-            setControls((value) => !value)
-          }}
-        />
-
-        <div className="workspace-transcript">
-          <Conversation onEditLast={(content) => setEditRequest({ key: Date.now(), content })} />
-        </div>
-
-        <div className="workspace-composer">
-          <Composer
-            onModel={openModel}
-            onSessions={() => {
-              if (!desktopLayout) setControls(false)
-              setSidebar(true)
-            }}
-            onSettings={openSettings}
-            editRequest={editRequest}
-            onEditConsumed={() => setEditRequest(null)}
-          />
-        </div>
-      </section>
-
-      <QuickPanel
-        open={controlsVisible}
-        onClose={() => setControls(false)}
-        onModel={openModel}
-        onSettings={openSettings}
-      />
-      <ModelSheet open={modelSheet} onClose={closeModel} />
-      <SettingsSheet open={settings} onClose={closeSettings} />
-      <AgentsSheet open={agents} onClose={() => setAgents(false)} />
+      {view?.views.map(item => {
+        const open = item.placement !== 'hidden'
+        switch (item.kind) {
+          case 'navigation': return <Sidebar key={item.kind} open={open} desktopDocked={desktopLayout}
+            onClose={() => send({ type: 'close_navigation' })} onSettings={openSettings}
+            onAgents={() => send({ type: 'open_agents' })} />
+          case 'workspace': return (
+            <section key={item.kind} className={`main-viewport app-workspace${sidebarVisible ? ' sidebar-open' : ''}`} aria-label="Current session">
+              {item.children.map(child => {
+                switch (child) {
+                  case 'session_header': return <TopBar key={child} sidebarOpen={sidebarVisible} controlsOpen={controlsVisible}
+                    onToggleSidebar={openNavigation}
+                    onToggleControls={() => send({ type: 'toggle_inspector' })} />
+                  case 'conversation': return <div key={child} className="workspace-transcript">
+                    <Conversation onEditLast={(content) => setEditRequest({ key: Date.now(), content })} />
+                  </div>
+                  case 'composer': return <div key={child} className="workspace-composer">
+                    <Composer onModel={openModel} onSessions={openNavigation}
+                      onSettings={openSettings} editRequest={editRequest} onEditConsumed={() => setEditRequest(null)} />
+                  </div>
+                }
+              })}
+            </section>
+          )
+          case 'inspector': return <QuickPanel key={item.kind} open={open} onClose={() => send({ type: 'close_inspector' })}
+            onModel={openModel} onSettings={openSettings} />
+          case 'models': return <ModelSheet key={item.kind} open={open} onClose={() => send({ type: 'close_models' })} />
+          case 'settings': return <SettingsSheet key={item.kind} open={open} onClose={() => send({ type: 'close_settings' })} />
+          case 'agents': return <AgentsSheet key={item.kind} open={open} onClose={() => send({ type: 'close_agents' })} />
+        }
+      })}
     </div>
   )
 }

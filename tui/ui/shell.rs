@@ -27,9 +27,9 @@ fn below_tabbar(bounds: Rect, adaptive: responsive::Metrics) -> Rect {
     )
 }
 
-/// Draws tabs and rail; returns the full conversation pane and its centered
-/// reading column.
-pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> (Rect, Rect) {
+/// Lays out the shared workspace and paints terminal navigation chrome.
+/// Header painting follows the shared workspace child order in the renderer.
+pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> (Rect, Rect, Rect) {
     let adaptive = responsive::metrics(frame.area());
     let header_area = Rect::new(
         bounds.x,
@@ -37,7 +37,6 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> (Rec
         bounds.width,
         adaptive.header_height.min(bounds.height),
     );
-    tabbar::draw(frame, app, header_area, tabbar::Active::Session);
     let rest = below_tabbar(bounds, adaptive);
     let sidebar_width = shell_sidebar_width(frame.area(), adaptive);
     let body = if let Some(sidebar_width) = sidebar_width {
@@ -63,7 +62,11 @@ pub(super) fn draw_shell(frame: &mut Frame<'_>, app: &App, bounds: Rect) -> (Rec
         content_width,
         available.height,
     );
-    (body, content)
+    (body, content, header_area)
+}
+
+pub(super) fn draw_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    tabbar::draw(frame, app, area, tabbar::Active::Session);
 }
 
 fn shell_sidebar_width(bounds: Rect, adaptive: responsive::Metrics) -> Option<u16> {

@@ -5,6 +5,10 @@ use super::{
     support::{responsive, theme},
     task, views,
 };
+use crate::shared_ui::{
+    application::{ApplicationView, Content},
+    shell::WorkspaceView,
+};
 use crate::tui::app::{App, Mode};
 use composer::draw as draw_input;
 use dialogs::{
@@ -46,21 +50,37 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
 }
 
 // Auxiliary workbench surfaces are peers, not dialogs painted on a transcript.
-fn draw_auxiliary(frame: &mut Frame<'_>, app: &mut App) {
+fn draw_auxiliary(frame: &mut Frame<'_>, app: &mut App, application: &ApplicationView) {
     frame.render_widget(Block::default().style(theme::base()), frame.area());
-    tabbar::draw(
-        frame,
-        app,
-        Rect::new(frame.area().x, frame.area().y, frame.area().width, 1),
-        app.active_workbench_tab(),
-    );
-    match app.mode {
+    if !(application.surfaces == [Mode::Sessions]
+        && responsive::shape(frame.area()) == responsive::Shape::Portrait)
+    {
+        tabbar::draw(
+            frame,
+            app,
+            Rect::new(frame.area().x, frame.area().y, frame.area().width, 1),
+            app.active_workbench_tab(),
+        );
+    }
+    for &surface in &application.surfaces {
+        draw_surface(frame, app, surface);
+    }
+}
+
+fn draw_surface(frame: &mut Frame<'_>, app: &mut App, surface: Mode) {
+    match surface {
         Mode::Debate => dialogs::draw_debate(frame, app),
         Mode::Models => draw_models(frame, app),
         Mode::Reasoning => draw_reasoning(frame, app),
         Mode::Goal => draw_goal(frame, app),
         Mode::AgentGroup => dialogs::draw_agent_group(frame, app),
-        Mode::Sessions => draw_sessions(frame, app),
+        Mode::Sessions => {
+            if responsive::shape(frame.area()) == responsive::Shape::Portrait {
+                views::session_picker::draw(frame, app);
+            } else {
+                draw_sessions(frame, app);
+            }
+        }
         Mode::Capabilities => draw_capabilities(frame, app),
         Mode::CapabilityDetail => draw_capability_detail(frame, app),
         Mode::Auth => draw_auth(frame, app),
@@ -70,13 +90,17 @@ fn draw_auxiliary(frame: &mut Frame<'_>, app: &mut App) {
         Mode::Settings => draw_settings(frame, app),
         Mode::SandboxPresets => draw_sandbox_presets(frame, app),
         Mode::SandboxPolicy => draw_sandbox_policy(frame, app),
-        Mode::SettingsEdit => {
-            draw_sandbox_policy(frame, app);
-            draw_settings_edit(frame, app);
-        }
+        Mode::SettingsEdit => draw_settings_edit(frame, app),
         Mode::Status => draw_status_dialog(frame, app),
         Mode::Help => draw_help(frame),
+        Mode::Views => views::draw(frame, app),
         _ => {}
+    }
+}
+
+fn draw_overlays(frame: &mut Frame<'_>, app: &mut App, application: &ApplicationView) {
+    for &surface in &application.overlays {
+        draw_surface(frame, app, surface);
     }
 }
 
@@ -102,41 +126,23 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     if show_tabs {
         app.tab_targets = tabbar::targets(app, Rect::new(area.x, area.y, area.width, 1), active);
     }
-    if app.mode == Mode::Sessions && responsive::shape(frame.area()) == responsive::Shape::Portrait
-    {
-        views::session_picker::draw(frame, app);
-        return;
-    }
-    if !matches!(
-        app.mode,
-        Mode::Chat | Mode::Files | Mode::Diff | Mode::Agents | Mode::Views
-    ) {
-        app.transcript_area = (0, 0, 0, 0);
-        app.sidebar_area = (0, 0, 0, 0);
-        app.sidebar_session_targets.clear();
-        draw_auxiliary(frame, app);
-        return;
-    }
-    if app.mode == Mode::Agents || (app.mode == Mode::Views && app.views_origin == Mode::Agents) {
-        views::agents::draw(frame, app);
-        if app.mode == Mode::Views {
-            views::draw(frame, app);
+    let application = ApplicationView::from_navigation(&app.navigation);
+    match application.content {
+        Content::Auxiliary => {
+            draw_auxiliary(frame, app, &application);
+            return;
         }
-        return;
-    }
-    if app.mode == Mode::Diff || (app.mode == Mode::Views && app.views_origin == Mode::Diff) {
-        views::diff::draw(frame, app);
-        if app.mode == Mode::Views {
-            views::draw(frame, app);
+        Content::Agents | Content::Diff | Content::Files => {
+            match application.content {
+                Content::Agents => views::agents::draw(frame, app),
+                Content::Diff => views::diff::draw(frame, app),
+                Content::Files => views::files::draw(frame, app),
+                _ => unreachable!(),
+            }
+            draw_overlays(frame, app, &application);
+            return;
         }
-        return;
-    }
-    if app.mode == Mode::Files || (app.mode == Mode::Views && app.views_origin == Mode::Files) {
-        views::files::draw(frame, app);
-        if app.mode == Mode::Views {
-            views::draw(frame, app);
-        }
-        return;
+        Content::Home | Content::Session => {}
     }
     if app.state.is_streaming {
         let activity_label = task::live_operation(app)
@@ -144,16 +150,12 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
             .unwrap_or_else(|| task::live_activity(app).0);
         app.sync_activity_label(&activity_label);
     }
-    let home = app.home_visible()
-        && (app.mode == Mode::Chat || (app.mode == Mode::Views && app.views_origin == Mode::Chat));
-    if home {
+    if application.content == Content::Home {
         if app.home_override.is_none() {
             app.home_override = Some(true);
         }
         views::home::draw(frame, app);
-        if app.mode == Mode::Views {
-            views::draw(frame, app);
-        }
+        draw_overlays(frame, app, &application);
         return;
     }
     frame.render_widget(Block::default().style(theme::base()), frame.area());
@@ -170,7 +172,7 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         app.sidebar_nav_ids.clear();
         app.sidebar_focus = false;
     }
-    let (pane, area) = shell::draw_shell(frame, app, main);
+    let (pane, area, header) = shell::draw_shell(frame, app, main);
     let suggestions = app.command_suggestions();
     let requested_suggestion_height = if suggestions.is_empty() {
         0
@@ -206,47 +208,80 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
         .then(|| status::usage_line(app, pane.width.saturating_sub(4) as usize))
         .flatten()
         .filter(|_| area.height >= task_height + suggestion_height + input_height + 4);
+    // UI supplies workspace sibling order and semantic roles. Terminal metrics
+    // supply only intrinsic cell heights and the attached status/detail rows.
+    let mut constraints = Vec::new();
+    let mut conversation_regions = [0; 3];
+    let mut composer_regions = [0; 2];
+    for child in &application.workspace_children {
+        match child {
+            WorkspaceView::SessionHeader => {} // full-width native header geometry
+            WorkspaceView::Conversation => {
+                let start = constraints.len();
+                conversation_regions = [start, start + 1, start + 2];
+                constraints.extend([
+                    Constraint::Min(1),
+                    Constraint::Length(task_height),
+                    Constraint::Length(suggestion_height),
+                ]);
+            }
+            WorkspaceView::Composer => {
+                let start = constraints.len();
+                composer_regions = [start, start + 1];
+                constraints.extend([
+                    Constraint::Length(u16::from(usage.is_some())),
+                    Constraint::Length(input_height),
+                ]);
+            }
+        }
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(task_height),
-            Constraint::Length(suggestion_height),
-            Constraint::Length(u16::from(usage.is_some())),
-            Constraint::Length(input_height),
-        ])
+        .constraints(constraints)
         .split(area);
 
-    views::sessions::draw(frame, app, chunks[0], adaptive.shape);
-    if suggestion_height > 0 {
-        draw_suggestions(frame, app, chunks[2], &suggestions);
+    for child in &application.workspace_children {
+        match child {
+            WorkspaceView::SessionHeader => shell::draw_header(frame, app, header),
+            WorkspaceView::Conversation => {
+                views::sessions::draw(frame, app, chunks[conversation_regions[0]], adaptive.shape);
+                if suggestion_height > 0 {
+                    draw_suggestions(frame, app, chunks[conversation_regions[2]], &suggestions);
+                }
+                task::draw(
+                    frame,
+                    app,
+                    Rect::new(
+                        chunks[conversation_regions[1]].x + 1,
+                        chunks[conversation_regions[1]].y,
+                        chunks[conversation_regions[1]].width.saturating_sub(2),
+                        chunks[conversation_regions[1]].height,
+                    ),
+                );
+            }
+            WorkspaceView::Composer => {
+                // The usage pill and composer span the whole pane; the composer text
+                // lines up with the transcript column.
+                if let Some(line) = &usage {
+                    let width = (line.width() as u16).min(pane.width.saturating_sub(4));
+                    frame.render_widget(
+                        ratatui::widgets::Paragraph::new(line.clone()),
+                        Rect::new(pane.x + 2, chunks[composer_regions[0]].y, width, 1),
+                    );
+                }
+                let composer_area = Rect::new(
+                    pane.x,
+                    chunks[composer_regions[1]].y,
+                    pane.width,
+                    chunks[composer_regions[1]].height,
+                );
+                draw_input(frame, app, composer_area, area.x + 1);
+            }
+        }
     }
-    task::draw(
-        frame,
-        app,
-        Rect::new(
-            chunks[1].x + 1,
-            chunks[1].y,
-            chunks[1].width.saturating_sub(2),
-            chunks[1].height,
-        ),
-    );
-    // The usage pill and composer span the whole pane; the composer text
-    // lines up with the transcript column.
-    if let Some(line) = usage {
-        let width = (line.width() as u16).min(pane.width.saturating_sub(4));
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new(line),
-            Rect::new(pane.x + 2, chunks[3].y, width, 1),
-        );
-    }
-    let composer_area = Rect::new(pane.x, chunks[4].y, pane.width, chunks[4].height);
-    draw_input(frame, app, composer_area, area.x + 1);
     draw_status(frame, app, status_area);
     views::sessions::draw_context_menu(frame, app);
-    if app.mode == Mode::Views {
-        views::draw(frame, app);
-    }
+    draw_overlays(frame, app, &application);
 }
 
 fn draw_suggestions(

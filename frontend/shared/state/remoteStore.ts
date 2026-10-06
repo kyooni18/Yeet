@@ -3,6 +3,8 @@ import {
   emptyBridgeState,
   type AuthProviderItem,
   type BridgeState,
+  type ShellAction,
+  type UiProjection,
   type ConnectionStatus,
   type ConversationEntry,
   type FrontendCommand,
@@ -13,6 +15,7 @@ import {
 } from '../remote/protocol'
 
 export interface RemoteSnapshot {
+  ui: UiProjection | null
   state: BridgeState
   entries: ConversationEntry[]
   connection: ConnectionStatus
@@ -99,6 +102,9 @@ export class RemoteStore {
   private unsubscribeConnectivity: (() => void) | undefined
 
   constructor(private readonly options: RemoteStoreOptions) {}
+  private ui: UiProjection | null = null
+  private uiRevision = -1
+  private layout: 'compact' | 'expanded' | null = null
   private state = emptyBridgeState()
   private entries: ConversationEntry[] = []
   private connection: ConnectionStatus = 'connecting'
@@ -135,6 +141,7 @@ export class RemoteStore {
       ? Math.min(100, Math.max(0, Math.round((used / total) * 100)))
       : null
     return {
+      ui: this.ui,
       state: this.state,
       entries: this.entries,
       connection: this.connection,
@@ -164,6 +171,7 @@ export class RemoteStore {
         this.connection = 'connected'
         this.connectionError = null
         this.requestRemoteState()
+        if (this.layout) this.transport?.sendUi?.({ type: 'set_layout', layout: this.layout })
         this.emit()
       },
       onMessage: (message) => this.enqueue(message),
@@ -219,7 +227,14 @@ export class RemoteStore {
 
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
+      case 'ui_state':
+        if (this.layout && message.ui_revision === 0 && message.view.layout !== this.layout) return
+        if (message.ui_revision < this.uiRevision) return
+        this.uiRevision = message.ui_revision
+        this.ui = { ui_revision: message.ui_revision, state: message.state, view: message.view }
+        return
       case 'welcome':
+        this.uiRevision = -1
         this.state.workspace_root = message.workspace
         if (message.session_id !== undefined) this.state.current_session_id = message.session_id
         return
@@ -391,6 +406,11 @@ export class RemoteStore {
         entry.uiStreaming = true
       }
     }
+  }
+
+  sendUi(action: ShellAction): boolean {
+    if (action.type === 'set_layout') this.layout = action.layout
+    return this.transport?.sendUi?.(action) ?? false
   }
 
   send(command: FrontendCommand): boolean {

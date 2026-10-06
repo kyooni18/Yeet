@@ -263,6 +263,35 @@ struct RemoteClientRuntime {
     wake: Wake,
     events: broadcast::Sender<ServerMessage>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
+    ui: Mutex<RuntimeUi>,
+}
+
+#[derive(Default)]
+struct RuntimeUi {
+    state: crate::shared_ui::shell::ShellState,
+    revision: u64,
+}
+
+impl RuntimeUi {
+    fn message(&self, request_id: Option<String>) -> ServerMessage {
+        ServerMessage::UiState {
+            version: REMOTE_PROTOCOL_VERSION,
+            ui_revision: self.revision,
+            request_id,
+            state: self.state.clone(),
+            view: self.state.view(),
+        }
+    }
+
+    fn apply(
+        &mut self,
+        action: crate::shared_ui::shell::ShellAction,
+        request_id: Option<String>,
+    ) -> ServerMessage {
+        self.state.apply(action);
+        self.revision = self.revision.saturating_add(1);
+        self.message(request_id)
+    }
 }
 
 impl RemoteClientRuntime {
@@ -302,7 +331,32 @@ impl RemoteClientRuntime {
             wake,
             events,
             thread: Mutex::new(Some(thread)),
+            ui: Mutex::new(RuntimeUi::default()),
         })
+    }
+
+    fn ui_message(&self) -> Result<ServerMessage> {
+        self.ui
+            .lock()
+            .map(|ui| ui.message(None))
+            .map_err(|_| anyhow!("remote UI state lock poisoned"))
+    }
+
+    fn apply_ui(
+        &self,
+        action: crate::shared_ui::shell::ShellAction,
+        request_id: Option<String>,
+    ) -> Result<()> {
+        self.touch();
+        let mut ui = self
+            .ui
+            .lock()
+            .map_err(|_| anyhow!("remote UI state lock poisoned"))?;
+        let message = ui.apply(action, request_id);
+        // Keep publication ordered with the reducer for concurrent sockets sharing
+        // this client. UI messages do not enter the Harness replay history.
+        let _ = self.events.send(message);
+        Ok(())
     }
 
     fn touch(&self) {
@@ -1100,6 +1154,21 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
     {
         return;
     }
+    match runtime.ui_message() {
+        Ok(message) => {
+            if send_json(&mut socket, &message).await.is_err() {
+                return;
+            }
+        }
+        Err(error) => {
+            let _ = send_json(
+                &mut socket,
+                &ServerMessage::error("ui_unavailable", error.to_string(), true, None),
+            )
+            .await;
+            return;
+        }
+    }
     if let Some(state) = plan.snapshot {
         if send_json(
             &mut socket,
@@ -1164,6 +1233,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     break;
                                 }
                             }
+                            ClientMessage::UiAction { action, request_id, .. } => {
+                                if let Err(error) = runtime.apply_ui(action, request_id.clone()) {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_unavailable", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
                             ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
@@ -1222,6 +1298,12 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
+                        match runtime.ui_message() {
+                            Ok(message) => {
+                                if send_json(&mut socket, &message).await.is_err() { break; }
+                            }
+                            Err(_) => break,
+                        }
                         let plan = runtime.resume_plan(None, None);
                         if let Some(state) = plan.snapshot
                             && send_json(&mut socket, &ServerMessage::Snapshot {
@@ -1245,6 +1327,45 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
 #[cfg(test)]
 mod tests {
     use super::RemoteHub;
+
+    #[test]
+    fn ui_actions_are_client_local_and_do_not_advance_harness_cursors() {
+        use super::{RuntimeUi, ServerMessage};
+        use crate::shared_ui::shell::{ShellAction, Surface};
+        let mut first = RuntimeUi::default();
+        let second = RuntimeUi::default();
+        let message = first.apply(ShellAction::OpenModels, Some("open-models".into()));
+        assert_eq!(message.sequence(), None);
+        assert_eq!(message.revision(), None);
+        match message {
+            ServerMessage::UiState {
+                ui_revision,
+                request_id,
+                state,
+                view,
+                ..
+            } => {
+                assert_eq!(ui_revision, 1);
+                assert_eq!(request_id.as_deref(), Some("open-models"));
+                assert!(state.models);
+                assert_eq!(view.dismiss, Some(Surface::Models));
+            }
+            _ => panic!("expected shared UI projection"),
+        }
+        assert!(!second.state.models);
+        assert_eq!(second.revision, 0);
+        let decoded = super::decode_client_message(
+            r#"{"type":"ui_action","version":1,"action":{"type":"dismiss"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            decoded,
+            super::ClientMessage::UiAction {
+                action: ShellAction::Dismiss,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn workspace_fallback_is_home_not_process_cwd() {

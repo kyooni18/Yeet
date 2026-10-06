@@ -31,15 +31,19 @@ retained interactions use stable view identities.
 icons and close actions. Terminal facades preserve existing callers while the
 TUI begins consuming those shared declarations.
 
-The terminal application still mixes most UI state and navigation transitions
-with terminal input, rectangles, rendered transcript caches and hit targets.
-Its renderer still selects and orchestrates application views. Migrating the
-TUI into the shared architecture remains required.
+The terminal application now holds shared navigation state and consumes
+`ApplicationView` for primary content, auxiliary surfaces and launcher overlays.
+Its Session layout and painting follow the canonical workspace child order used
+by the graphical shell. Component-specific state, menus, actions and conversation
+presentation still need extraction; migrating those remains required.
 
-The working browser client remains in `web/`. `RemoteShell.tsx` independently
-owns sidebar, inspector and sheet visibility, dismissal priority and compact
-navigation interactions. The existing Remote v1 protocol exposes Harness
-state/events/commands, not shared application UI projections.
+The working browser client remains in `web/`. `RemoteShell.tsx` renders ordered
+semantic views supplied by `UI/shell.rs`, reports viewport capabilities and sends
+shared shell actions. Rust owns panel visibility, dismissal priority and compact
+navigation interactions. Remote v1 adds per-client `ui_action`/`ui_state` messages;
+UI revisions do not advance Harness sequence/replay cursors. Tauri exposes the
+same shell state/actions/projection through its local adapter. Browser focus
+handles, DOM accessibility and native bridge lifecycle stay in adapters.
 
 `frontend/shared` shares Remote protocol, transport and streaming reconciliation.
 Sharing runtime DTOs alone does not share application UI. Expo/React Native is
@@ -115,3 +119,36 @@ repository discovery and review patches consumed by the TUI. Existing workbench
 resource reexports remain compatible. Ten navigation tests and five workbench
 checks passed, including tab identity, launcher behavior and Git index/worktree,
 rename, binary and unborn repository handling.
+
+The shared composition checkpoint introduces `UI/application.rs` and
+`UI/shell.rs`. Terminal orchestration consumes the ApplicationView; Web shell
+maps ordered Rust views and workspace children into native components. Tauri and
+Remote adapters carry the same UI shell projections. Reconnect retains mounted
+browser state and treats UI revision independently from Harness cursors. Browser
+tests use generated Rust reducer fixtures (`examples/ui_shell_fixture.rs`), not
+a second TypeScript implementation of application interaction policy.
+
+Verification: 330 library tests passed, excluding only the two independently
+attributed pre-existing TUI assertions documented above. The desktop UI
+wire/isolation test and RN typecheck/lint passed. Web typecheck and 23 targeted
+desktop/mobile shell, navigation, modal and protocol checks passed (five checks
+skip inapplicable layouts). Startup layout and touch focus regressions found by
+those tests were corrected before commit.
+
+This checkpoint still does not establish the complete requested architecture.
+Platform buttons/menus, drafts, settings forms and conversation grouping remain
+partly independent; Home/Files/Diff graphical parity and native visual rendering
+are not established. The shared terminal and browser state need convergence into
+one application controller, and active renderer paths still need relocation
+under `Platforms/`. Much runtime implementation is still in `src/`. Subsequent
+work must remove those ownership gaps, not count shared projection types alone
+as completion.
+
+Five further reconnect/outage/client-identity and draft-preservation checks passed
+across desktop/mobile (three inapplicable cases skipped). The next cross-platform
+seam is Agent Group view state and controls: move semantic actions, eligibility,
+member/feed projection and control labels/icons/order from the TUI and Web into
+UI, then render the same controls in both. Also merge shell and navigation into
+one application session so graphical clients can consume Home/Files/Diff as well
+as Session. The blank native design is a remaining parity constraint; native
+transport support alone does not prove native rendering completion.

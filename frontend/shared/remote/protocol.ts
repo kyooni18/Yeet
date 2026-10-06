@@ -539,7 +539,40 @@ export interface RemoteHello {
   last_revision?: number | null
 }
 
+// Shared UI projections authored by Rust UI/shell.rs. Adapters render these
+// semantic views; visibility and transition rules are never reimplemented here.
+export type ShellSurface = 'navigation' | 'inspector' | 'models' | 'settings' | 'agents'
+export type ShellAction =
+  | { type: 'set_layout'; layout: 'compact' | 'expanded' }
+  | { type: 'open_navigation' | 'close_navigation' | 'toggle_inspector' | 'close_inspector'
+      | 'open_models' | 'close_models' | 'open_settings' | 'close_settings'
+      | 'open_agents' | 'close_agents' | 'dismiss' }
+export interface ShellState {
+  layout: 'compact' | 'expanded'
+  navigation: boolean
+  inspector: boolean
+  models: boolean
+  settings: boolean
+  agents: boolean
+}
+export interface ShellView {
+  layout: 'compact' | 'expanded'
+  views: Array<{
+    kind: ShellSurface | 'workspace'
+    placement: 'hidden' | 'docked' | 'overlay' | 'content'
+    children: Array<'session_header' | 'conversation' | 'composer'>
+  }>
+  skip_conversation: boolean
+  dismiss: ShellSurface | null
+}
+export interface UiProjection {
+  ui_revision: number
+  state: ShellState
+  view: ShellView
+}
+
 export type RemoteServerMessage =
+  | ({ version: number; type: 'ui_state'; request_id?: string | null } & UiProjection)
   | { version: number; type: 'welcome'; client_id: string; workspace: string; session_id?: string | null; sequence: number; revision: number; resumed: boolean }
   | { version: number; type: 'snapshot'; sequence: number; revision: number; state: BridgeState }
   | { version: number; type: 'state_update'; sequence: number; revision: number; patch: Partial<BridgeState> }
