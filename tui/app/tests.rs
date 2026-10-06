@@ -481,7 +481,10 @@ fn bracketed_paste_inserts_multiline_chat_text_at_the_cursor() {
 #[test]
 fn bracketed_paste_uses_literal_text_only_in_editable_popup_fields() {
     let mut app = App {
-        mode: Mode::Models,
+        navigation: crate::shared_ui::navigation::NavigationState {
+            mode: Mode::Models,
+            ..Default::default()
+        },
         popup_filter: "gpt-".into(),
         popup_index: 4,
         ..App::default()

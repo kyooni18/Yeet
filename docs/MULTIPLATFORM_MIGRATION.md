@@ -104,3 +104,14 @@ adapters reverted: `git_review_is_wired_to_launcher_files_tabs_and_mouse`
 expects one diff instance while the existing worktree creates two;
 `home_overview_layout_tracks_mockup_regions_at_desktop_preview_size` expects
 older Home colors/layout. Those unrelated worktree changes are preserved.
+
+The next checkpoint moves actual navigation state and transitions into
+`UI/navigation.rs`: screen selection, launcher origin/cursor, tab order and
+cycling, accepted activation and diff closure fallback. The TUI holds this shared
+state; temporary field forwarding keeps legacy panel access working during
+migration. Terminal key mappings, frame caches and hit geometry remain adapters.
+`Harness/resources` now owns directory metadata, file inspection, Git snapshots,
+repository discovery and review patches consumed by the TUI. Existing workbench
+resource reexports remain compatible. Ten navigation tests and five workbench
+checks passed, including tab identity, launcher behavior and Git index/worktree,
+rename, binary and unborn repository handling.

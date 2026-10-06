@@ -1,9 +1,9 @@
 //! Git-backed resource review state.
 use super::{App, Mode};
+use crate::harness::resources;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::{
     path::{Path, PathBuf},
-    process::Command,
 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffAction {
@@ -40,28 +40,14 @@ impl DiffFrame {
         self.body = ratatui::layout::Rect::default();
     }
 }
-fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let o = Command::new("git")
-        .arg("--literal-pathspecs")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|e| e.to_string())?;
-    if o.status.success() {
-        Ok(o.stdout)
-    } else {
-        Err(String::from_utf8_lossy(&o.stderr).trim().into())
-    }
-}
 impl DiffState {
     pub fn open(dir: &Path, selected: Option<&Path>) -> Self {
         let mut s = Self {
             root: dir.into(),
             ..Self::default()
         };
-        match git(dir, &["rev-parse", "--show-toplevel"]) {
-            Ok(o) => s.root = PathBuf::from(String::from_utf8_lossy(&o).trim()),
+        match resources::repository_root(dir) {
+            Ok(root) => s.root = root,
             Err(_) => {
                 s.error = Some("Not a Git repository".into());
                 return s;
@@ -105,12 +91,7 @@ impl DiffState {
     pub fn reload(&mut self) {
         let old = self.selected_path();
         self.error = None;
-        self.branch = git(&self.root, &["branch", "--show-current"])
-            .map(|o| String::from_utf8_lossy(&o).trim().into())
-            .unwrap_or_default();
-        self.base = git(&self.root, &["rev-parse", "--short", "HEAD"])
-            .map(|o| String::from_utf8_lossy(&o).trim().into())
-            .unwrap_or_default();
+        (self.branch, self.base) = resources::git_identity(&self.root);
         let snapshot = crate::workbench::GitSnapshot::load(&self.root);
         self.paths.clear();
         self.statuses.clear();
@@ -138,43 +119,16 @@ impl DiffState {
             return;
         };
         self.error = None;
-        let untracked = self.statuses.get(self.selected).is_some_and(|s| s == "??");
-        let mut c = Command::new("git");
-        c.arg("--literal-pathspecs").current_dir(&self.root).args([
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            if self.full {
-                "--unified=1000000"
-            } else {
-                "--unified=3"
-            },
-        ]);
-        if untracked {
-            c.args(["--no-index", "--", "/dev/null"]).arg(p);
-        } else {
-            let base = if self.base.is_empty() {
-                git(&self.root, &["hash-object", "-t", "tree", "--stdin"])
-                    .map(|o| String::from_utf8_lossy(&o).trim().to_owned())
-                    .unwrap_or_default()
-            } else {
-                "HEAD".into()
-            };
-            c.arg(base).arg("--").arg(p);
-            if let Some(Some(original)) = self.original_paths.get(self.selected) {
-                c.arg(original);
-            }
-        }
-        match c.output() {
-            Ok(o) if o.status.success() || (untracked && o.status.code() == Some(1)) => {
-                self.lines = String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(str::to_owned)
-                    .collect()
-            }
-            Ok(o) => self.error = Some(String::from_utf8_lossy(&o.stderr).trim().into()),
-            Err(e) => self.error = Some(e.to_string()),
+        match resources::review_patch(
+            &self.root,
+            p,
+            self.original_paths.get(self.selected).and_then(|path| path.as_deref()),
+            self.statuses.get(self.selected).is_some_and(|status| status == "??"),
+            !self.base.is_empty(),
+            self.full,
+        ) {
+            Ok(lines) => self.lines = lines,
+            Err(error) => self.error = Some(error),
         }
         self.scroll = self.scroll.min(self.lines.len().saturating_sub(1));
     }
@@ -213,12 +167,11 @@ impl App {
             self.diff_tabs.open("Diff", state);
         }
         self.diff_frame.begin(ratatui::layout::Rect::default());
-        self.mode = Mode::Diff;
+        self.navigation.activated(super::WorkbenchTab::NewDiff);
     }
     pub(crate) fn handle_diff_key(&mut self, e: KeyEvent) {
         if e.code == KeyCode::Esc {
-            self.mode = Mode::Chat;
-            self.home_override = Some(true);
+            self.activate_workbench_tab(super::WorkbenchTab::Home);
             return;
         }
         if matches!(e.code, KeyCode::Enter | KeyCode::Char('o')) {
@@ -234,7 +187,7 @@ impl App {
                 if let Some(f) = &mut self.files {
                     f.open_path(p, false);
                 }
-                self.mode = Mode::Files;
+                self.navigation.activated(super::WorkbenchTab::Files);
             }
             return;
         }
@@ -529,5 +482,21 @@ mod tests {
         state.reload();
         assert!(state.error.is_none(), "{:?}", state.error);
         assert!(state.lines.iter().any(|l| l == "+new"));
+    }
+}
+
+#[cfg(test)]
+fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let o = std::process::Command::new("git")
+        .arg("--literal-pathspecs")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if o.status.success() {
+        Ok(o.stdout)
+    } else {
+        Err(String::from_utf8_lossy(&o.stderr).trim().into())
     }
 }

@@ -53,7 +53,7 @@ impl App {
 
     pub(crate) fn open_agents(&mut self) {
         self.agents.open = true;
-        self.mode = Mode::Agents;
+        self.navigation.activated(WorkbenchTab::Agents);
         self.input_focused = false;
     }
 

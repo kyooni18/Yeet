@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+pub mod resources;
 mod service;
 
 pub use service::{HarnessClient, ServiceEvent, forward_cli};

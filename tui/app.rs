@@ -32,32 +32,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Chat,
-    Debate,
-    Models,
-    Reasoning,
-    Goal,
-    Sessions,
-    Capabilities,
-    CapabilityDetail,
-    Auth,
-    AuthKey,
-    Providers,
-    ProviderEdit,
-    Settings,
-    SandboxPresets,
-    SandboxPolicy,
-    SettingsEdit,
-    Status,
-    Help,
-    Files,
-    Diff,
-    Agents,
-    AgentGroup,
-    Views,
-}
+pub use crate::shared_ui::navigation::Screen as Mode;
 
 #[derive(Debug, Clone)]
 pub struct SessionPickerItem<'a> {
@@ -115,12 +90,9 @@ pub struct App {
     pub input: String,
     pub input_focused: bool,
     pub cursor: usize,
-    pub mode: Mode,
-    pub home_override: Option<bool>,
+    pub navigation: crate::shared_ui::navigation::NavigationState,
     pub(crate) tab_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub(crate) view_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
-    pub views_origin: Mode,
-    pub views_index: usize,
     pub popup_filter: String,
     pub popup_index: usize,
     pub capability_detail_id: Option<String>,
@@ -175,6 +147,20 @@ pub struct App {
     pub activity_label_transition_ms: u16,
 }
 
+// Temporary field compatibility while existing panels migrate to shared UI.
+// The owned navigation state and its transitions remain in UI.
+impl std::ops::Deref for App {
+    type Target = crate::shared_ui::navigation::NavigationState;
+    fn deref(&self) -> &Self::Target {
+        &self.navigation
+    }
+}
+impl std::ops::DerefMut for App {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.navigation
+    }
+}
+
 impl Default for App {
     fn default() -> Self {
         Self {
@@ -197,12 +183,9 @@ impl Default for App {
             input: String::new(),
             input_focused: true,
             cursor: 0,
-            mode: Mode::Chat,
-            home_override: None,
+            navigation: Default::default(),
             tab_targets: Vec::new(),
             view_targets: Vec::new(),
-            views_origin: Mode::Chat,
-            views_index: 0,
             popup_filter: String::new(),
             popup_index: 0,
             capability_detail_id: None,
@@ -1585,23 +1568,7 @@ impl App {
     }
 
     pub(crate) fn open_views(&mut self) {
-        self.views_origin = if matches!(self.mode, Mode::Files | Mode::Diff | Mode::Agents) {
-            self.mode
-        } else {
-            Mode::Chat
-        };
-        self.views_index = if self.views_origin == Mode::Agents {
-            4
-        } else if self.views_origin == Mode::Diff {
-            3
-        } else if self.views_origin == Mode::Files {
-            2
-        } else if self.home_visible() {
-            0
-        } else {
-            1
-        };
-        self.mode = Mode::Views;
+        self.navigation.open_launcher();
     }
 
     fn handle_views_key(&mut self, event: KeyEvent) {
@@ -1610,18 +1577,16 @@ impl App {
         }
         match event.code {
             KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
-                self.mode = self.views_origin;
+                self.navigation.dismiss_launcher();
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.views_index = self.views_index.saturating_sub(1);
+                self.navigation.move_launcher(-1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.views_index = (self.views_index + 1)
-                    .min(crate::shared_ui::workbench::LAUNCHER.len() - 1);
+                self.navigation.move_launcher(1);
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Right => {
-                let items = crate::shared_ui::workbench::LAUNCHER;
-                let tab = items[self.views_index.min(items.len() - 1)].action;
+                let tab = self.navigation.launcher_selection();
                 self.activate_workbench_tab(tab);
             }
             _ => {}

@@ -7,6 +7,7 @@
 //! The `.ui` design documents remain design specifications, not executable input.
 
 pub mod actions;
+pub mod navigation;
 pub mod surfaces;
 pub mod workbench;
 

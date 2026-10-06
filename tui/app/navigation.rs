@@ -5,60 +5,26 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use crate::shared_ui::workbench::WorkbenchTab;
 
 impl App {
-    pub fn home_visible(&self) -> bool {
-        // Visibility is workbench navigation state, not conversation state.
-        self.home_override.unwrap_or(true)
-    }
-
-    pub fn active_workbench_tab(&self) -> WorkbenchTab {
-        if self.mode == Mode::Agents
-            || (self.mode == Mode::Views && self.views_origin == Mode::Agents)
-        {
-            return WorkbenchTab::Agents;
-        }
-        if self.mode == Mode::Diff || (self.mode == Mode::Views && self.views_origin == Mode::Diff)
-        {
-            return self
-                .diff_tabs
-                .active_id()
-                .map_or(WorkbenchTab::Home, WorkbenchTab::Diff);
-        }
-        if self.mode == Mode::Files
-            || (self.mode == Mode::Views && self.views_origin == Mode::Files)
-        {
-            self.files
+    fn workbench_resources(&self) -> crate::shared_ui::navigation::WorkbenchResources {
+        crate::shared_ui::navigation::WorkbenchResources {
+            agents: self.agents.open || !self.agent_members().is_empty(),
+            files: self
+                .files
                 .as_ref()
-                .and_then(|files| files.active_tab())
-                .map_or(WorkbenchTab::Files, WorkbenchTab::File)
-        } else if self.home_visible() {
-            WorkbenchTab::Home
-        } else {
-            WorkbenchTab::Session
+                .map(|files| files.tabs.views().iter().map(|view| view.id).collect()),
+            active_file: self.files.as_ref().and_then(|files| files.active_tab()),
+            diffs: self.diff_tabs.views().iter().map(|view| view.id).collect(),
+            active_diff: self.diff_tabs.active_id(),
         }
     }
-
+    pub fn home_visible(&self) -> bool {
+        self.navigation.home_visible()
+    }
+    pub fn active_workbench_tab(&self) -> WorkbenchTab {
+        self.navigation.active_tab(&self.workbench_resources())
+    }
     pub fn workbench_tabs(&self) -> Vec<WorkbenchTab> {
-        let mut tabs = vec![WorkbenchTab::Home, WorkbenchTab::Session];
-        if self.agents.open || !self.agent_members().is_empty() {
-            tabs.push(WorkbenchTab::Agents);
-        }
-        if let Some(files) = &self.files {
-            tabs.push(WorkbenchTab::Files);
-            tabs.extend(
-                files
-                    .tabs
-                    .views()
-                    .iter()
-                    .map(|view| WorkbenchTab::File(view.id)),
-            );
-        }
-        tabs.extend(
-            self.diff_tabs
-                .views()
-                .iter()
-                .map(|view| WorkbenchTab::Diff(view.id)),
-        );
-        tabs
+        self.workbench_resources().tabs()
     }
 
     pub fn activate_workbench_tab(&mut self, tab: WorkbenchTab) {
@@ -105,8 +71,7 @@ impl App {
     pub(crate) fn apply_navigation(&mut self, tab: WorkbenchTab) {
         match tab {
             WorkbenchTab::Home | WorkbenchTab::Session => {
-                self.home_override = Some(tab == WorkbenchTab::Home);
-                self.mode = Mode::Chat;
+                self.navigation.activated(tab);
                 self.sidebar_focus = false;
                 self.clear_transcript_selection();
             }
@@ -117,12 +82,12 @@ impl App {
                 if let Some(files) = &mut self.files {
                     files.activate_browser();
                 }
-                self.mode = Mode::Files;
+                self.navigation.activated(tab);
             }
             WorkbenchTab::File(index) => {
                 if let Some(files) = &mut self.files {
                     if files.activate_tab(index) {
-                        self.mode = Mode::Files;
+                        self.navigation.activated(tab);
                     }
                 }
             }
@@ -135,16 +100,12 @@ impl App {
             WorkbenchTab::Agents => self.open_agents(),
             WorkbenchTab::Diff(id) => {
                 if self.diff_tabs.activate(id) {
-                    self.mode = Mode::Diff;
+                    self.navigation.activated(tab);
                 }
             }
             WorkbenchTab::CloseDiff(id) => {
-                if self.diff_tabs.close(id).is_some()
-                    && self.diff_tabs.is_empty()
-                    && self.mode == Mode::Diff
-                {
-                    self.mode = Mode::Chat;
-                    self.home_override = Some(true);
+                if self.diff_tabs.close(id).is_some() {
+                    self.navigation.diff_closed(self.diff_tabs.len());
                 }
             }
             WorkbenchTab::Launcher => self.open_views(),
@@ -168,19 +129,10 @@ impl App {
         match event.code {
             KeyCode::Char('o') => self.open_views(),
             KeyCode::Tab | KeyCode::BackTab => {
-                let tabs = self.workbench_tabs();
-                let current = tabs
-                    .iter()
-                    .position(|tab| *tab == self.active_workbench_tab())
-                    .unwrap_or(0);
                 let back =
                     event.code == KeyCode::BackTab || event.modifiers.contains(KeyModifiers::SHIFT);
-                let next = if back {
-                    (current + tabs.len() - 1) % tabs.len()
-                } else {
-                    (current + 1) % tabs.len()
-                };
-                self.activate_workbench_tab(tabs[next]);
+                let target = self.navigation.cycle_tab(&self.workbench_resources(), back);
+                self.activate_workbench_tab(target);
             }
             KeyCode::Char('w') => match self.active_workbench_tab() {
                 WorkbenchTab::File(index) => {

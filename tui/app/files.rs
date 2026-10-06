@@ -1,6 +1,6 @@
 //! Keyboard-driven file browser view (`Mode::Files`).
 use super::{
-    App, Mode,
+    App,
     keymap::{Action, Context},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -8,22 +8,14 @@ use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    process::Command,
-    time::SystemTime,
 };
 
 use crate::tui::kit::{SurfaceId, Tabs};
 
 const PAGE: isize = 10;
 
-#[derive(Debug, Clone)]
-pub struct FileEntry {
-    pub name: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub modified: Option<SystemTime>,
-}
-
+pub use crate::harness::resources::FileEntry;
+use crate::harness::resources;
 #[derive(Debug, Clone, Default)]
 pub struct FileViewState {
     /// Resource identity is independent of the current rail selection.
@@ -123,35 +115,9 @@ impl FilesState {
 
 impl FileViewState {
     pub fn reload(&mut self) {
-        self.changed = git_changes(&self.dir);
-        self.git_branch = git(&self.dir, &["branch", "--show-current"])
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
-        self.git_commit = git(&self.dir, &["rev-parse", "--short", "HEAD"])
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
-        let mut entries: Vec<FileEntry> = std::fs::read_dir(&self.dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|entry| {
-                let meta = entry.metadata().ok()?;
-                Some(FileEntry {
-                    name: entry.file_name().to_string_lossy().into_owned(),
-                    is_dir: meta.is_dir(),
-                    size: meta.len(),
-                    modified: meta.modified().ok(),
-                })
-            })
-            .collect();
-        entries.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-        self.entries = entries;
+        self.changed = resources::git_changes(&self.dir);
+        (self.git_branch, self.git_commit) = resources::git_identity(&self.dir);
+        self.entries = resources::directory_entries(&self.dir);
         self.cursor = 0;
         self.refresh_detail();
     }
@@ -209,16 +175,16 @@ impl FileViewState {
         self.clamp();
         self.selected_lines = self.selected().and_then(|entry| {
             (!entry.is_dir)
-                .then(|| count_text_lines(&self.dir.join(&entry.name)))
+                .then(|| resources::count_text_lines(&self.dir.join(&entry.name)))
                 .flatten()
         });
         self.diff_stats = self.selected().and_then(|entry| {
             (!entry.is_dir)
-                .then(|| git_numstat(&self.dir, &entry.name))
+                .then(|| resources::git_numstat(&self.dir, &entry.name))
                 .flatten()
         });
         self.diff_lines = match (self.diff, self.selected()) {
-            (true, Some(entry)) if !entry.is_dir => git_diff(&self.dir, &entry.name),
+            (true, Some(entry)) if !entry.is_dir => resources::git_diff(&self.dir, &entry.name),
             _ => Vec::new(),
         };
     }
@@ -459,62 +425,6 @@ pub enum FilesOutcome {
     Close,
 }
 
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// Paths relative to `dir` mapped to their two-character porcelain status.
-fn git_changes(dir: &Path) -> HashMap<String, String> {
-    let Some(prefix) = git(dir, &["rev-parse", "--show-prefix"]) else {
-        return HashMap::new();
-    };
-    let prefix = prefix.trim();
-    let Some(status) = git(dir, &["status", "--porcelain", "--untracked-files=all"]) else {
-        return HashMap::new();
-    };
-    status
-        .lines()
-        .filter(|line| line.len() > 3)
-        .filter_map(|line| {
-            let path = line[3..].rsplit(" -> ").next()?.trim_matches('"');
-            let relative = path.strip_prefix(prefix)?;
-            Some((relative.to_owned(), line[..2].to_owned()))
-        })
-        .collect()
-}
-
-fn git_diff(dir: &Path, name: &str) -> Vec<String> {
-    git(dir, &["diff", "HEAD", "--no-color", "--", name])
-        .map(|text| text.lines().map(str::to_owned).collect())
-        .unwrap_or_default()
-}
-
-fn git_numstat(dir: &Path, name: &str) -> Option<(usize, usize)> {
-    let output = git(dir, &["diff", "HEAD", "--numstat", "--", name])?;
-    let mut parts = output.split_whitespace();
-    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
-}
-
-fn count_text_lines(path: &Path) -> Option<usize> {
-    if std::fs::metadata(path).ok()?.len() > 2 * 1024 * 1024 {
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
-    std::str::from_utf8(&bytes).ok()?;
-    Some(
-        bytes.iter().filter(|byte| **byte == b'\n').count()
-            + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n")),
-    )
-}
 
 impl App {
     pub(crate) fn open_files(&mut self) {
@@ -527,7 +437,7 @@ impl App {
             None => FilesState::open(dir),
         };
         self.files = Some(files);
-        self.mode = Mode::Files;
+        self.navigation.activated(super::WorkbenchTab::Files);
     }
 
     pub(crate) fn handle_files_key(&mut self, event: KeyEvent) {
