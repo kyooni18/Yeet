@@ -130,6 +130,7 @@ pub fn files_view(workspace: &Path, path: &str, selected: Option<&str>) -> Resul
     let (branch, _) = resources::git_identity(&dir);
     let entries = resources::directory_entries(&dir)
         .into_iter()
+        .filter(|entry| entry.name != ".git")
         .map(|entry| {
             let full = dir.join(&entry.name);
             let status = if entry.is_dir {

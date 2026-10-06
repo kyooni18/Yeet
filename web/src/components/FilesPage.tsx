@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronRight, Folder } from '@/components/Icons'
 import { formatBytes, formatModified } from '@/ui/format'
 import { remoteStore, useRemote } from '@/store/remoteStore'
@@ -15,13 +15,17 @@ export function FilesPage({ onShowChanges }: { onShowChanges: (path: string) => 
   const view = remote.workspaceFiles
   const connected = remote.connection === 'connected'
 
+  const [unsupported, setUnsupported] = useState(false)
+
   useEffect(() => {
-    if (connected) remoteStore.requestFiles(view?.path ?? '', null)
+    if (connected) setUnsupported(!remoteStore.requestFiles(view?.path ?? '', null))
     // Only the first load and reconnects; navigation is driven by clicks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected])
 
-  if (!view) return <section className="page-view" aria-label="Files"><p className="page-empty page-pad">Loading files…</p></section>
+  if (!view) return <section className="page-view" aria-label="Files">
+    <p className="page-empty page-pad">{unsupported ? 'Files are not available in this client.' : connected ? 'Loading files…' : 'Reconnecting…'}</p>
+  </section>
   const parts = view.path ? view.path.split('/') : []
   const crumbs = [{ label: view.root, path: '' }, ...parts.map((label, index) => ({ label, path: parts.slice(0, index + 1).join('/') }))]
   const info = view.info

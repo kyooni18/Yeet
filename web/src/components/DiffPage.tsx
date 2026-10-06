@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { parsePatch } from '@/ui/format'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 
@@ -21,9 +21,13 @@ export function DiffPage({ initialFile }: { initialFile: string | null }) {
   const selected = view?.selected ?? null
   const full = view?.full ?? false
 
+  const [unsupported, setUnsupported] = useState(false)
+
   useEffect(() => {
     if (!connected) return
-    remoteStore.requestChanges(initialFile, false)
+    const supported = remoteStore.requestChanges(initialFile, false)
+    setUnsupported(!supported)
+    if (!supported) return
     // Agents change files while the page is open, so keep the list current.
     const timer = window.setInterval(() => {
       const current = remoteStore.getSnapshot().workspaceChanges
@@ -37,7 +41,9 @@ export function DiffPage({ initialFile }: { initialFile: string | null }) {
     (sum, file) => ({ added: sum.added + (file.added ?? 0), removed: sum.removed + (file.removed ?? 0) }),
     { added: 0, removed: 0 }), [view?.files])
 
-  if (!view) return <section className="page-view" aria-label="Diff"><p className="page-empty page-pad">Loading changes…</p></section>
+  if (!view) return <section className="page-view" aria-label="Diff">
+    <p className="page-empty page-pad">{unsupported ? 'Diff is not available in this client.' : connected ? 'Loading changes…' : 'Reconnecting…'}</p>
+  </section>
 
   return (
     <section className="page-view" aria-label="Diff">
@@ -80,7 +86,8 @@ export function DiffPage({ initialFile }: { initialFile: string | null }) {
             {view.message && <p className="page-error">{view.message}</p>}
             {rows.length === 0 && !view.message && <p className="page-empty page-pad">No textual changes to show.</p>}
             {rows.map((row, index) => row.kind === 'hunk'
-              ? <div key={index} className="patch-hunk">{row.text || ' '}</div>
+              ? (row.text ? <div key={index} className="patch-hunk">{row.text}</div>
+                  : index > 0 ? <div key={index} className="patch-gap" aria-hidden="true" /> : null)
               : <div key={index} className={`patch-line is-${row.kind}`}>
                   <i aria-hidden="true">{row.newNumber ?? row.oldNumber ?? ''}</i>
                   <b aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ''}</b>
