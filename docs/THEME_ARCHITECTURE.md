@@ -33,3 +33,11 @@ This is an incremental ownership seam, not complete visual parity. The legacy
 runtime/wire DTOs can eventually separate, and all graphical renderers still need
 to consume shared appearance projections consistently. The rest of the
 multiplatform migration remains tracked in MULTIPLATFORM_MIGRATION.md.
+
+Verification for checkpoint aa5e4ad used an exact staged export. All-target
+compilation passed, as did ten theme behavior tests, five Remote checks, three
+Tauri checks and the native renderer check. Source-layout checks passed five of
+six gates; the remaining RuntimeSource gate reported the unchanged committed
+`RuntimeSource/src/auth.ts` at 1,205 lines against its 1,200-line ceiling. Both
+that source and the guard matched HEAD/index/export byte for byte. The unrelated
+worktree authentication edits were excluded, and no ceiling was raised.
