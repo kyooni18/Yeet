@@ -11,11 +11,12 @@ use ratatui::{
 
 /// `text_x` is the column the draft starts at, so it can line up with the transcript.
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16) {
+    app.sync_composer();
+    let view = app.application.composer_projection().view;
     let focused = app.input_focused
         && !app.sidebar_focus
         && app.mode == Mode::Chat
-        && app.state.pending_shell_permission.is_none()
-        && app.state.pending_native_app_permission.is_none();
+        && view.editable;
     frame.render_widget(
         Block::default().style(Style::default().fg(theme::text()).bg(if focused {
             theme::surface_color()
@@ -48,7 +49,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16
         Rect::new(text_x - 3, inner.y, 1, 1),
     );
     frame.render_widget(
-        Paragraph::new(Line::styled("→", Style::default().fg(theme::secondary()))),
+        Paragraph::new(Line::styled(
+            match view.primary_control.icon { crate::shared_ui::composer::ComposerIcon::Stop => "■", _ => "→" },
+            Style::default().fg(if view.primary_control.enabled { theme::secondary() } else { theme::muted() }),
+        )),
         Rect::new(area.right().saturating_sub(5), inner.y, 1, 1),
     );
     let layout = layout(&app.input, app.cursor, inner.width);

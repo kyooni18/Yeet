@@ -11,6 +11,7 @@ mod home;
 pub(crate) use home::HomeAction;
 pub mod diff;
 mod input;
+mod composer;
 mod navigation;
 pub use navigation::WorkbenchTab;
 pub mod agent_group;
@@ -87,6 +88,7 @@ pub struct App {
     pub debate_topic_draft: String,
     pub conversation: Vec<ConversationEntry>,
     pub state: BridgeState,
+    pub(crate) composer: composer::ComposerAdapter,
     pub input: String,
     pub input_focused: bool,
     pub cursor: usize,
@@ -179,6 +181,7 @@ impl Default for App {
             debate_topic_draft: String::new(),
             conversation: Vec::new(),
             state: BridgeState::default(),
+            composer: Default::default(),
             input: String::new(),
             input_focused: true,
             cursor: 0,
@@ -329,10 +332,8 @@ impl App {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
-        if text.is_empty()
-            || self.state.pending_shell_permission.is_some()
-            || self.state.pending_native_app_permission.is_some()
-        {
+        self.sync_composer();
+        if text.is_empty() || !self.application.composer_projection().view.editable {
             return;
         }
 
@@ -464,35 +465,22 @@ impl App {
             };
         }
 
-        if self.state.pending_shell_permission.is_some()
-            || self.state.pending_native_app_permission.is_some()
-        {
+        self.sync_composer();
+        let composer_view = self.application.composer_projection().view;
+        if let Some(permission) = composer_view.permissions.first() {
             if let Some(action) = Self::permission_prompt_action(&event, self.state.is_streaming) {
-                let command = match action {
-                    PermissionPromptAction::Allow => {
-                        if self.state.pending_native_app_permission.is_some() {
-                            FrontendCommand::AllowNativeApp
-                        } else {
-                            FrontendCommand::AllowShell
-                        }
-                    }
-                    PermissionPromptAction::Deny => {
-                        if self.state.pending_native_app_permission.is_some() {
-                            FrontendCommand::DenyNativeApp
-                        } else {
-                            FrontendCommand::DenyShell
-                        }
-                    }
-                    PermissionPromptAction::Interrupt => FrontendCommand::Interrupt,
+                let action = match action {
+                    PermissionPromptAction::Allow => crate::shared_ui::composer::ComposerAction::RespondPermission { target: permission.target.clone(), allow: true },
+                    PermissionPromptAction::Deny => crate::shared_ui::composer::ComposerAction::RespondPermission { target: permission.target.clone(), allow: false },
+                    PermissionPromptAction::Interrupt => crate::shared_ui::composer::ComposerAction::Interrupt,
                 };
-                backend.send(command)?;
+                self.send_composer_action(backend, action)?;
             }
-
             return Ok(());
         }
 
         if Self::should_interrupt_active_non_chat(&event, self.state.is_streaming, self.mode) {
-            backend.send(FrontendCommand::Interrupt)?;
+            self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?;
             return Ok(());
         }
 
@@ -511,7 +499,7 @@ impl App {
                 match event.code {
                     KeyCode::Esc => self.close_popup(),
                     KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                        backend.send(FrontendCommand::Interrupt)?
+                        self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?
                     }
                     KeyCode::Enter
                         if !self.state.is_streaming
@@ -592,43 +580,16 @@ impl App {
     }
 
     pub fn command_suggestions(&self) -> Vec<(String, String)> {
-        if !self.input.starts_with('/') || self.input.chars().any(char::is_whitespace) {
-            return Vec::new();
-        }
-        let query = self.input.to_ascii_lowercase();
-        let mut commands = COMMANDS
-            .iter()
-            .map(|(name, description)| ((*name).to_owned(), (*description).to_owned()))
-            .collect::<Vec<_>>();
-        for item in &self.state.extension_commands {
-            if !commands
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(&item.command))
-            {
-                commands.push((item.command.clone(), item.description.clone()));
-            }
-        }
-        commands.sort_by(|left, right| left.0.cmp(&right.0));
-        commands
-            .into_iter()
-            .filter(|(name, _)| name.to_ascii_lowercase().starts_with(&query))
-            .take(6)
-            .collect()
+        crate::shared_ui::composer::suggestions(&self.input, &self.state)
+            .into_iter().take(6).map(|item| (item.command, item.description)).collect()
     }
 
+    #[cfg(test)]
     fn extension_command_invocation(&self, text: &str) -> Option<(String, Vec<String>)> {
-        let mut parts = text.split_whitespace();
-        let command = parts.next()?;
-        self.state
-            .extension_commands
-            .iter()
-            .any(|item| item.command.eq_ignore_ascii_case(command))
-            .then(|| {
-                (
-                    command.trim_start_matches('/').to_owned(),
-                    parts.map(str::to_owned).collect(),
-                )
-            })
+        match crate::shared_ui::composer::extension_command_invocation(text, &self.state) {
+            Some(FrontendCommand::ExtensionCommand { command, args }) => Some((command, args)),
+            _ => None,
+        }
     }
 
     pub fn filtered_models(&self) -> Vec<&str> {
@@ -822,7 +783,7 @@ impl App {
             sidebar::SidebarKey::Ignored => {}
             sidebar::SidebarKey::Handled => return Ok(()),
             sidebar::SidebarKey::NewSession => {
-                backend.send(FrontendCommand::NewSession)?;
+                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
                 self.home_override = Some(false);
                 self.follow_tail = true;
                 return Ok(());
@@ -838,7 +799,7 @@ impl App {
                         return Ok(());
                     }
                     if self.state.is_streaming {
-                        backend.send(FrontendCommand::Interrupt)?;
+                        self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?;
                     } else {
                         self.quit = true;
                     }
@@ -849,7 +810,7 @@ impl App {
                     return Ok(());
                 }
                 KeyCode::Char('n') => {
-                    backend.send(FrontendCommand::NewSession)?;
+                    self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
                     self.home_override = Some(false);
                     self.follow_tail = true;
                     return Ok(());
@@ -960,71 +921,8 @@ impl App {
                 self.insert_char('\n');
             }
             KeyCode::Enter => {
-                let text = self.input.trim().to_owned();
-                if text.is_empty() {
-                    return Ok(());
-                }
-                if text == "/new" {
-                    self.record_input_history(&text);
-                    backend.send(FrontendCommand::NewSession)?;
-                    self.home_override = Some(false);
-                    self.input.clear();
-                    self.cursor = 0;
-                    self.command_index = 0;
-                    self.follow_tail = true;
-                    return Ok(());
-                }
-                if self.state.is_streaming
-                    && !text.starts_with('/')
-                    && text != "?"
-                    && text != "/views"
-                {
-                    return Ok(());
-                }
-                match text.as_str() {
-                    "?" => self.mode = Mode::Help,
-                    "/debate" => {
-                        self.open_debate();
-                        backend.send(FrontendCommand::RequestModels)?;
-                    }
-                    "/model" => self.open_models(backend)?,
-                    "/reasoning" => self.open_reasoning(),
-                    "/goal" => self.open_goal(),
-                    "/agent-group" => {
-                        let command = self.open_agent_group();
-                        backend.send(command)?;
-                    }
-                    "/sessions" => self.open_sessions(backend)?,
-                    "/files" => self.open_files(),
-                    "/views" => self.open_views(),
-                    "/capabilities" => self.open_capabilities(backend)?,
-                    "/settings" => self.open_settings(backend)?,
-                    "/permissions" => {
-                        self.open_sandbox_presets();
-                        backend.send(FrontendCommand::RequestSandbox)?;
-                    }
-                    "/status" => self.open_status(backend)?,
-                    "/login" => self.open_auth(backend)?,
-                    "/provider" | "/providers" => self.open_providers(backend)?,
-                    _ => {
-                        self.home_override = Some(false);
-                        if let Some((command, args)) = self.extension_command_invocation(&text) {
-                            backend.send(FrontendCommand::ExtensionCommand { command, args })?;
-                        } else {
-                            backend.send(FrontendCommand::Submit {
-                                text,
-                                images: Vec::new(),
-                                attachment_ids: Vec::new(),
-                            })?;
-                        }
-                    }
-                }
-                let submitted = self.input.clone();
-                self.record_input_history(&submitted);
-                self.input.clear();
-                self.cursor = 0;
-                self.command_index = 0;
-                self.follow_tail = true;
+                let editor = self.composer_editor_snapshot();
+                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Submit(editor))?;
             }
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),
@@ -1248,7 +1146,7 @@ impl App {
         match event.code {
             KeyCode::Esc => self.close_popup(),
             KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                backend.send(FrontendCommand::Interrupt)?;
+                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?;
             }
             KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down | KeyCode::Right => self.popup_index = cmp::min(self.popup_index + 1, 1),
@@ -1361,14 +1259,14 @@ impl App {
                 self.popup_index = cmp::min(self.popup_index.saturating_add(8), count);
             }
             KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                backend.send(FrontendCommand::NewSession)?;
+                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
                 self.home_override = Some(false);
                 self.close_popup();
             }
             KeyCode::Enter => {
                 let items = self.filtered_session_picker_items();
                 if self.popup_index == items.len() {
-                    backend.send(FrontendCommand::NewSession)?;
+                    self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
                     self.home_override = Some(false);
                     self.close_popup();
                     return Ok(());
@@ -1658,41 +1556,3 @@ fn same_activity_pattern(left: &str, right: &str) -> bool {
 }
 
 pub const SANDBOX_PRESET_ROW_COUNT: usize = 4;
-
-const COMMANDS: &[(&str, &str)] = &[
-    (
-        "/debate",
-        "Debate with independent Pro, Con and Jury models",
-    ),
-    ("/new", "Start a new session"),
-    ("/model", "Select model"),
-    ("/reasoning", "Select reasoning level"),
-    ("/login", "Manage provider authentication"),
-    ("/provider", "Manage custom API endpoints"),
-    ("/providers", "Manage custom API endpoints"),
-    ("/settings", "Runtime and application settings"),
-    ("/permissions", "Sandbox and permission settings"),
-    ("/sessions", "Browse saved chats"),
-    ("/files", "Browse workspace files"),
-    ("/views", "Switch view"),
-    ("/capabilities", "Toggle skills, capabilities, and MCP"),
-    ("/skyline", "Attach or detach Skyline coordination"),
-    ("/image", "Queue an image for the next turn"),
-    ("/compact", "Compact model context now"),
-    ("/context", "Show or override model context length"),
-    ("/status", "Show detailed runtime and usage status"),
-    (
-        "/goal",
-        "Continue until a strict success judge accepts concrete evidence",
-    ),
-    (
-        "/agent-group",
-        "Agent Group: member coordination and shared budgets",
-    ),
-    ("/attach", "Attach an optional capability"),
-    ("/detach", "Detach an optional capability"),
-    ("/allow", "Allow pending shell command once"),
-    ("/deny", "Deny pending shell command"),
-    ("/help", "Show commands"),
-    ("/clear", "Dismiss latest system notice"),
-];

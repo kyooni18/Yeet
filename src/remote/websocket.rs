@@ -260,6 +260,11 @@ enum RuntimeControl {
         request_id: Option<String>,
         completion: oneshot::Sender<Result<(), String>>,
     },
+    ComposerAction {
+        action: crate::shared_ui::composer::ComposerAction,
+        request_id: Option<String>,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -289,9 +294,14 @@ impl RemoteClientRuntime {
         let wake = Wake::new();
         let service = HarnessService::spawn(workspace.to_path_buf(), Some(wake.clone()))?;
         let initial_state = service.state_snapshot();
-        let ui = Arc::new(Mutex::new(
-            crate::shared_ui::application_session::ApplicationSession::new(&initial_state),
-        ));
+        let mut application =
+            crate::shared_ui::application_session::ApplicationSession::new(&initial_state);
+        configure_composer_host(
+            &mut application,
+            &initial_state,
+            Some(workspace.to_string_lossy().into_owned()),
+        );
+        let ui = Arc::new(Mutex::new(application));
         let thread_ui = Arc::clone(&ui);
         let shared = Arc::new(Mutex::new(RuntimeShared {
             state: initial_state,
@@ -327,7 +337,7 @@ impl RemoteClientRuntime {
         })
     }
 
-    fn ui_messages(&self) -> Result<[ServerMessage; 3]> {
+    fn ui_messages(&self) -> Result<[ServerMessage; 4]> {
         let ui = self
             .ui
             .lock()
@@ -394,6 +404,30 @@ impl RemoteClientRuntime {
         let (completion, result) = oneshot::channel();
         self.commands
             .send(RuntimeControl::ConversationAction {
+                action,
+                request_id,
+                completion,
+            })
+            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))?;
+        self.wake.notify();
+        match tokio::time::timeout(BACKEND_COMMAND_DELIVERY_TIMEOUT, result).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(anyhow!(error)),
+            Ok(Err(_)) => Err(anyhow!(
+                "semantic Remote runtime stopped before confirming UI action delivery"
+            )),
+            Err(_) => Err(anyhow!("timed out delivering Remote UI action")),
+        }
+    }
+    async fn apply_composer(
+        &self,
+        action: crate::shared_ui::composer::ComposerAction,
+        request_id: Option<String>,
+    ) -> Result<()> {
+        self.touch();
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .send(RuntimeControl::ComposerAction {
                 action,
                 request_id,
                 completion,
@@ -561,7 +595,7 @@ fn application_messages(
     projection: crate::shared_ui::application_session::ApplicationProjection,
     request_id: Option<String>,
     effect: Option<crate::shared_ui::agents::AgentUiEffect>,
-) -> [ServerMessage; 3] {
+) -> [ServerMessage; 4] {
     [
         ServerMessage::UiState {
             version: REMOTE_PROTOCOL_VERSION,
@@ -571,7 +605,8 @@ fn application_messages(
             view: projection.view,
         },
         agents_message(projection.agents, request_id.clone(), effect),
-        conversation_message(projection.conversation, request_id, None),
+        conversation_message(projection.conversation, request_id.clone(), None),
+        composer_message(projection.composer, request_id, None),
     ]
 }
 
@@ -603,6 +638,44 @@ fn conversation_message(
     }
 }
 
+fn composer_message(
+    projection: crate::shared_ui::composer_session::ComposerProjection,
+    request_id: Option<String>,
+    effect: Option<crate::shared_ui::composer::ComposerUiEffect>,
+) -> ServerMessage {
+    ServerMessage::UiComposer {
+        version: REMOTE_PROTOCOL_VERSION,
+        composer_revision: projection.composer_revision,
+        request_id,
+        view: projection.view,
+        effect,
+    }
+}
+
+fn configure_composer_host(
+    ui: &mut crate::shared_ui::application_session::ApplicationSession,
+    state: &BridgeState,
+    workspace: Option<String>,
+) -> bool {
+    use crate::shared_ui::composer::ComposerDestination::*;
+    let mut environment = ui.composer_environment().clone();
+    if let Some(workspace) = workspace {
+        environment.context.workspace = workspace;
+    }
+    environment.context.session_id = state.current_session_id.clone();
+    environment.available = true;
+    environment.supported_destinations = vec![
+        Models,
+        Sessions,
+        Settings,
+        Permissions,
+        Auth,
+        Providers,
+        Capabilities,
+    ];
+    ui.configure_composer(environment, state).is_some()
+}
+
 fn runtime_loop(
     mut service: HarnessService,
     commands: mpsc::Receiver<RuntimeControl>,
@@ -622,7 +695,15 @@ fn runtime_loop(
                     if completion.is_closed() {
                         continue;
                     }
+                    let new_session = matches!(command, FrontendCommand::NewSession);
                     let result = service.send(command).map_err(|error| format!("{error:#}"));
+                    if result.is_ok() && new_session {
+                        if let (Ok(state), Ok(mut ui)) = (shared.lock(), ui.lock()) {
+                            ui.observe_composer_new_session(&state.state);
+                            let _ =
+                                events.send(composer_message(ui.composer_projection(), None, None));
+                        }
+                    }
                     let _ = completion.send(result);
                 }
                 RuntimeControl::ShellAction {
@@ -704,6 +785,41 @@ fn runtime_loop(
                     })();
                     let _ = completion.send(result);
                 }
+                RuntimeControl::ComposerAction {
+                    action,
+                    request_id,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), String> {
+                        let state = shared
+                            .lock()
+                            .map_err(|_| "remote runtime state lock poisoned")?;
+                        let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
+                        let prepared = ui.prepare_composer(action, &state.state);
+                        let new_session =
+                            matches!(prepared.effect.command, Some(FrontendCommand::NewSession));
+                        if let Some(command) = prepared.effect.command.clone() {
+                            service
+                                .send(command)
+                                .map_err(|error| format!("{error:#}"))?;
+                        }
+                        let (mut projection, effect) = ui.commit_composer(prepared, &state.state);
+                        if new_session {
+                            ui.observe_composer_new_session(&state.state);
+                            projection = ui.projection();
+                        }
+                        let _ = events.send(composer_message(
+                            projection.composer,
+                            request_id,
+                            Some(effect.ui),
+                        ));
+                        Ok(())
+                    })();
+                    let _ = completion.send(result);
+                }
                 RuntimeControl::Shutdown => {
                     shutdown = true;
                     break;
@@ -715,10 +831,13 @@ fn runtime_loop(
             process_envelope(&shared, &events, envelope);
             // Harness snapshots may omit unchanged history. Project the accumulated
             // transport state after applying the envelope, preserving its transcript.
-            let projection = shared
-                .lock()
-                .ok()
-                .and_then(|state| ui.lock().ok().and_then(|mut ui| ui.refresh(&state.state)));
+            let projection = shared.lock().ok().and_then(|state| {
+                ui.lock().ok().and_then(|mut ui| {
+                    let refreshed = ui.refresh(&state.state).is_some();
+                    let configured = configure_composer_host(&mut ui, &state.state, None);
+                    (refreshed || configured).then(|| ui.projection())
+                })
+            });
             if let Some(projection) = projection {
                 for message in application_messages(projection, None, None) {
                     let _ = events.send(message);
@@ -1444,6 +1563,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     )).await;
                                 }
                             }
+                            ClientMessage::UiComposerAction { action, request_id, .. } => {
+                                if let Err(error) = runtime.apply_composer(action, request_id.clone()).await {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_action_failed", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
                             ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
@@ -1597,7 +1723,7 @@ mod tests {
             ShellAction::OpenModels,
             &crate::harness::HarnessState::default(),
         );
-        let [message, _, _] =
+        let [message, ..] =
             super::application_messages(projection, Some("open-models".into()), None);
         assert_eq!(message.sequence(), None);
         assert_eq!(message.revision(), None);
@@ -1622,7 +1748,7 @@ mod tests {
             ShellAction::OpenAgents,
             &crate::harness::HarnessState::default(),
         );
-        let [shell, agents, _] = super::application_messages(opened, None, None);
+        let [shell, agents, ..] = super::application_messages(opened, None, None);
         let shell = serde_json::to_value(shell).unwrap();
         let agents = serde_json::to_value(agents).unwrap();
         assert_eq!(shell["state"]["agents"], true);
@@ -1635,7 +1761,7 @@ mod tests {
             ShellAction::Dismiss,
             &crate::harness::HarnessState::default(),
         );
-        let [shell, agents, _] = super::application_messages(dismissed, None, None);
+        let [shell, agents, ..] = super::application_messages(dismissed, None, None);
         assert_eq!(
             serde_json::to_value(shell).unwrap()["state"]["agents"],
             false

@@ -1,9 +1,10 @@
-import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, UiProjection, AgentAction, ConversationAction } from '../../../../shared/remote/protocol'
+import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, UiProjection, AgentAction, ConversationAction, ComposerAction } from '../../../../shared/remote/protocol'
 import type { RemoteTransportEvents } from '../../../../shared/remote/transport'
 
+type ComposerEvent = Extract<RemoteServerMessage, { type: 'ui_composer' }>
 type ConversationEvent = Extract<RemoteServerMessage, { type: 'ui_conversation' }>
 type AgentsEvent = Extract<RemoteServerMessage, { type: 'ui_agents' }>
-type ApplicationProjection = UiProjection & { conversation: Omit<ConversationEvent, 'version' | 'type' | 'request_id' | 'effect'>; agents: Omit<AgentsEvent, 'version' | 'type' | 'request_id' | 'effect'> }
+type ApplicationProjection = UiProjection & { composer: Omit<ComposerEvent, 'version' | 'type' | 'request_id' | 'effect'>; conversation: Omit<ConversationEvent, 'version' | 'type' | 'request_id' | 'effect'>; agents: Omit<AgentsEvent, 'version' | 'type' | 'request_id' | 'effect'> }
 type UiEvent = Extract<RemoteServerMessage, { type: 'ui_state' }>
 type CoreEvent = { workspace?: string; type: string; state: BridgeState | null; message: string | null }
 type TauriBridge = {
@@ -20,6 +21,7 @@ export class DesktopTransport {
   private generation = 0
   private sequence = 0
   private uiRevision = -1
+  private composerRevision = -1
   private conversationRevision = -1
   private agentsRevision = -1
   private conversation: BridgeState["conversation"] = []
@@ -51,6 +53,11 @@ export class DesktopTransport {
       const applyConversation = (event: ConversationEvent) => {
         if (event.conversation_revision < this.conversationRevision) return
         this.conversationRevision = event.conversation_revision
+        this.events.onMessage(event)
+      }
+      const applyComposer = (event: ComposerEvent) => {
+        if (event.composer_revision < this.composerRevision) return
+        this.composerRevision = event.composer_revision
         this.events.onMessage(event)
       }
       const applyEvent = (event: CoreEvent) => {
@@ -86,6 +93,13 @@ export class DesktopTransport {
       })
       if (generation !== this.generation) { unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe(); return }
       this.unsubscribe = () => { unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe() }
+      const unsubscribeComposer = await api.event.listen<ComposerEvent>('yeet://ui-composer-event', event => {
+        if (generation !== this.generation) return
+        if (initializing) buffered.push(() => applyComposer(event.payload))
+        else applyComposer(event.payload)
+      })
+      if (generation !== this.generation) { unsubscribeComposer(); unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe(); return }
+      this.unsubscribe = () => { unsubscribeComposer(); unsubscribeConversation(); unsubscribeAgents(); unsubscribeUi(); unsubscribe() }
       const result = await api.core.invoke<{ workspace: string; state: BridgeState | null }>('connect_core', { workspace: this.workspace })
       if (generation !== this.generation) return
       const projection = await api.core.invoke<ApplicationProjection>('application_projection')
@@ -98,6 +112,7 @@ export class DesktopTransport {
       applyUi({ version: 1, type: 'ui_state', ui_revision: projection.ui_revision, state: projection.state, view: projection.view })
       applyAgents({ version: 1, type: 'ui_agents', ...projection.agents })
       applyConversation({ version: 1, type: 'ui_conversation', ...projection.conversation })
+      applyComposer({ version: 1, type: 'ui_composer', ...projection.composer })
       initializing = false
       for (const apply of buffered) apply()
       this.events.onOpen()
@@ -121,6 +136,11 @@ export class DesktopTransport {
   sendUi(action: ShellAction): boolean {
     if (!this.connected) return false
     void bridge()!.core.invoke('send_ui_action', { action }).catch(error => this.events.onError(String(error)))
+    return true
+  }
+  sendComposerUi(action: ComposerAction): boolean {
+    if (!this.connected) return false
+    void bridge()!.core.invoke('send_ui_composer_action', { action }).catch(error => this.events.onError(String(error)))
     return true
   }
   sendConversationUi(action: ConversationAction): boolean {

@@ -172,8 +172,8 @@ test('permission prompts send semantic allow and deny commands', async ({ page }
   await prompt.getByRole('button', { name: 'Deny' }).click()
 
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'allow_shell' }),
-    expect.objectContaining({ type: 'deny_native_app' }),
+    expect.objectContaining({ type: 'resolve_permission', request_id: 'shell-1', granted: true }),
+    expect.objectContaining({ type: 'resolve_permission', request_id: 'native-1', granted: false }),
   ]))
 })
 

@@ -284,3 +284,24 @@ input capture and approval hint casing regressions. Shared composer environment
 now explicitly supports freezing editor input during permission shortcut capture;
 Web preserves its drafting behavior. TUI opts into capture. The delegated agents
 remain stopped after credit errors; continue from current source and snapshots.
+
+Composer adapters now route TUI Enter/slash/extension submission, permission
+shortcuts and interrupt through the shared controller. Terminal input/history,
+geometry and focus remain native. Remote/Tauri publish revisioned composer views
+and safe editor effects; command delivery precedes commit. Web renders shared
+permission controls and suggestions, and clears only matching editor snapshots.
+The browser permission adapter retains return-focus ownership across keyed card
+replacement and restores it on resolution without taking focus from another
+control. Working design edits incorporated into concurrent commits are preserved.
+
+Verification of the selectively staged adapter checkpoint: 347 isolated library
+tests passed with existing runtime assets configured, excluding the same two
+known worktree assertions. Web/RN typechecks and three desktop host tests passed.
+Seven desktop draft-context checks passed. Ten permission accessibility checks
+and one desktop semantic permission check passed; three inapplicable viewport
+cases skipped. Unrelated native/provider changes remain unstaged.
+
+Remaining composer work includes shared edit-entry annotation conversion, native
+message control bindings and toolbar/menu ownership. Shared settings, graphical
+Home/Files/Diff parity, actual thin Platforms ownership and residual Harness
+runtime moves remain required for the full architecture goal.

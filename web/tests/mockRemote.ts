@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { projectAgents } from './uiAgentsHarness'
+import { projectComposer } from './uiComposerHarness'
 import { projectConversation } from './uiConversationHarness'
 import { readFileSync } from 'node:fs'
 const shellFixtures = JSON.parse(readFileSync(new URL('./fixtures/ui-shell.json', import.meta.url), 'utf8')) as Array<{
@@ -9,6 +10,7 @@ const shellFixtures = JSON.parse(readFileSync(new URL('./fixtures/ui-shell.json'
 export async function installMockRemote(page: Page): Promise<void> {
   await page.exposeFunction('__yeetProjectAgents', projectAgents)
   await page.exposeFunction('__yeetProjectConversation', projectConversation)
+  await page.exposeFunction('__yeetProjectComposer', projectComposer)
   await page.route('**/api/auth/status', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -181,6 +183,28 @@ export async function installMockRemote(page: Page): Promise<void> {
       })
     }
 
+    let composerUiState: Record<string, unknown> | undefined
+    let composerRevision = 0
+    let composerWorkspace = '/Users/test/Code/Rust/Yeet'
+    let unsavedGeneration = 0
+    let composerQueue = Promise.resolve()
+    const projectComposerUi = (socket: MockSocket, action?: unknown) => {
+      composerQueue = composerQueue.then(async () => {
+        const host = window as unknown as {
+          __yeetProjectComposer(input: unknown): Promise<{ ui_state: Record<string, unknown>; view: unknown; effect: unknown; command?: unknown }>
+        }
+        const result = await host.__yeetProjectComposer({ state: harnessState, ui_state: composerUiState, action,
+          environment: { context: { workspace: composerWorkspace, session_id: harnessState.current_session_id ?? null, unsaved_generation: unsavedGeneration },
+            available: true, supported_destinations: ['models', 'sessions', 'settings', 'permissions', 'auth', 'providers', 'capabilities'], allow_commands_while_streaming: false } })
+        composerUiState = result.ui_state
+        if (result.command) {
+          sent.push({ type: 'command', version: 1, command: result.command })
+          if ((result.command as { type?: string }).type === 'new_session') unsavedGeneration++
+        }
+        socket.emit({ type: 'ui_composer', version: 1, composer_revision: ++composerRevision, view: result.view, effect: result.effect })
+      })
+    }
+
     class MockSocket extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -225,6 +249,7 @@ export async function installMockRemote(page: Page): Promise<void> {
             const workspace = typeof message.workspace === 'string' && message.workspace
               ? message.workspace
               : '/Users/test/Code/Rust/Yeet'
+            composerWorkspace = workspace
             forceFreshHandshake = false
             this.emit({ type: 'welcome', version: 1, client_id: clientId, workspace, session_id: sessionId, sequence: cursor ?? 0, revision, resumed })
             if (!resumed) {
@@ -237,7 +262,10 @@ export async function installMockRemote(page: Page): Promise<void> {
             this.emitUi()
             project(this)
             projectConversation(this)
+            projectComposerUi(this)
           })
+        } else if (message.type === 'ui_composer_action') {
+          projectComposerUi(this, message.action)
         } else if (message.type === 'ui_conversation_action') {
           projectConversation(this, message.action)
         } else if (message.type === 'ui_agent_action') {
@@ -287,6 +315,7 @@ export async function installMockRemote(page: Page): Promise<void> {
           harnessState[`active_${prefix}_entry_id`] = message.entry_id
           harnessState.is_streaming = true
         }
+        if (message.type === 'state_update' || message.type === 'snapshot') projectComposerUi(this)
         if (['state_update', 'snapshot', 'conversation_reset', 'conversation_entry', 'tool_update', 'activity_update', 'reasoning_delta', 'assistant_delta'].includes(String(message.type))) projectConversation(this)
         this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }))
       }

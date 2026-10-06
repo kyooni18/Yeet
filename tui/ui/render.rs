@@ -26,12 +26,11 @@ use ratatui::{
 use status::draw as draw_status;
 
 pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
+    app.sync_composer();
     app.toasts.expire(std::time::Instant::now());
     draw_content(frame, app);
     // Global runtime attention is workbench chrome and never selects a view.
-    if app.state.pending_shell_permission.is_some()
-        || app.state.pending_native_app_permission.is_some()
-    {
+    if !app.application.composer_projection().view.permissions.is_empty() {
         draw_permission(frame, app);
     }
     chrome::draw(frame, app);

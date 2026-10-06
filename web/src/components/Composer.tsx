@@ -98,39 +98,31 @@ function editableText(content: string): { text: string; hasAttachments: boolean 
   return { text: lines.join('\n'), hasAttachments }
 }
 
-function PermissionCard({ permission, index }: { permission: ComposerPermissionView; index: number }) {
+interface PermissionFocus {
+  returnFocus: { current: HTMLElement | null }
+  hadFocus: { current: boolean }
+}
+function PermissionCard({ permission, index, focus }: { permission: ComposerPermissionView; index: number; focus: PermissionFocus }) {
   const remote = useRemote()
   const canRespond = remote.connection === 'connected' && permission.controls.every(control => control.enabled)
   const prompt = useRef<HTMLDivElement>(null)
   const denyButton = useRef<HTMLButtonElement>(null)
   const allowButton = useRef<HTMLButtonElement>(null)
-  const returnFocus = useRef<HTMLElement | null>(null)
-  const previousPermission = useRef<string | null>(null)
+  const returnFocus = focus.returnFocus
   const previousCanRespond = useRef(canRespond)
-  const permissionHadFocus = useRef(false)
+  const permissionHadFocus = focus.hadFocus
 
   const permissionKey = `${permission.target.kind}:${permission.target.id}`
   const { title, detail, reason, operation } = permission
   const suffix = index ? `-${index}` : ''
 
   useEffect(() => {
-    const previous = previousPermission.current
-    if (permissionKey) {
-      if (!previous) {
-        const active = document.activeElement
-        returnFocus.current = active instanceof HTMLElement && active !== document.body ? active : null
-      }
-      requestAnimationFrame(() => denyButton.current?.focus({ preventScroll: true }))
-    } else if (previous) {
-      const target = returnFocus.current
-      const shouldRestore = permissionHadFocus.current
-      returnFocus.current = null
-      permissionHadFocus.current = false
-      if (shouldRestore && target?.isConnected) {
-        requestAnimationFrame(() => target.focus({ preventScroll: true }))
-      }
+    if (!returnFocus.current) {
+      const active = document.activeElement
+      returnFocus.current = active instanceof HTMLElement && active !== document.body ? active : null
     }
-    previousPermission.current = permissionKey
+    const frame = requestAnimationFrame(() => denyButton.current?.focus({ preventScroll: true }))
+    return () => cancelAnimationFrame(frame)
   }, [permissionKey])
 
   useLayoutEffect(() => {
@@ -159,8 +151,6 @@ function PermissionCard({ permission, index }: { permission: ComposerPermissionV
     })
   }, [canRespond, permissionKey])
 
-  if (!permission) return null
-
   const describedBy = canRespond
     ? `permission-reason${suffix} permission-detail${suffix}`
     : `permission-reason${suffix} permission-detail${suffix} permission-connection-status${suffix}`
@@ -181,6 +171,7 @@ function PermissionCard({ permission, index }: { permission: ComposerPermissionV
       onBlurCapture={(event) => {
         const next = event.relatedTarget
         if (next instanceof Node && prompt.current?.contains(next)) return
+        if (next instanceof HTMLElement && next.closest('.composer-permission')) return
         if (
           next instanceof HTMLElement
           && next !== document.body
@@ -546,7 +537,30 @@ export function Composer({
     return total > 0 ? formatTokens(total) : 'API'
   }, [remote.activeProviderUsage, remote.state.credit_usage, remote.state.token_usage])
 
+  const permissionReturnFocus = useRef<HTMLElement | null>(null)
+  const permissionHadFocus = useRef(false)
+  const hadPermissions = useRef(false)
+  const permissionFocus: PermissionFocus = { returnFocus: permissionReturnFocus, hadFocus: permissionHadFocus }
   const composer = remote.composer
+  const permissionCount = composer?.permissions.length ?? 0
+  useLayoutEffect(() => {
+    const previous = hadPermissions.current
+    hadPermissions.current = permissionCount > 0
+    if (permissionCount || !previous) return
+    const target = permissionReturnFocus.current
+    const restore = permissionHadFocus.current
+    permissionReturnFocus.current = null
+    permissionHadFocus.current = false
+    if (!restore || !target?.isConnected) return
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement
+      if (active == null || active === document.body || active === document.documentElement) {
+        target.focus({ preventScroll: true })
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [permissionCount])
+
   const context = composer?.context ?? { workspace: remote.state.workspace_root ?? '', session_id: remote.state.current_session_id ?? null, unsaved_generation: remote.sessionResetRevision }
   const editorIdentity = useRef({ signature: '', revision: 0 })
   const editorContent = {
@@ -673,7 +687,7 @@ export function Composer({
 
   return (
     <div ref={composerShell} className="composer-shell">
-      {composer?.permissions.map((permission, index) => <PermissionCard key={`${permission.target.kind}:${permission.target.id}`} permission={permission} index={index} />)}
+      {composer?.permissions.map((permission, index) => <PermissionCard key={`${permission.target.kind}:${permission.target.id}`} permission={permission} index={index} focus={permissionFocus} />)}
 
 {slashSuggestions.length > 0 && (
         <div className="slash-palette glass-panel">

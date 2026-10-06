@@ -8,6 +8,8 @@ use yeet::shared_ui::agents_session::AgentProjection;
 use yeet::shared_ui::application_session::{
     ApplicationProjection, ApplicationSession, ShellProjection as UiProjection,
 };
+use yeet::shared_ui::composer::{ComposerAction, ComposerUiEffect};
+use yeet::shared_ui::composer_session::ComposerProjection;
 use yeet::shared_ui::conversation::{ConversationAction, ConversationUiEffect};
 use yeet::shared_ui::conversation_session::ConversationProjection;
 use yeet::shared_ui::shell::ShellAction;
@@ -27,6 +29,7 @@ enum Control {
     AgentsProjection(mpsc::Sender<Result<AgentProjection, String>>),
     AgentAction(AgentAction, mpsc::Sender<Result<(), String>>),
     ConversationAction(ConversationAction, mpsc::Sender<Result<(), String>>),
+    ComposerAction(ComposerAction, mpsc::Sender<Result<(), String>>),
     Disconnect(mpsc::Sender<()>),
     Stop,
 }
@@ -137,6 +140,48 @@ async fn send_ui_conversation_action(
         .map_err(|error| error.to_string())?
 }
 
+#[derive(Clone, serde::Serialize)]
+struct ComposerMessage {
+    version: u16,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: Option<String>,
+    effect: Option<ComposerUiEffect>,
+    #[serde(flatten)]
+    projection: ComposerProjection,
+}
+fn publish_composer(
+    app: &tauri::AppHandle,
+    projection: ComposerProjection,
+    effect: Option<ComposerUiEffect>,
+) -> Result<(), String> {
+    app.emit(
+        "yeet://ui-composer-event",
+        ComposerMessage {
+            version: 1,
+            kind: "ui_composer",
+            request_id: None,
+            projection,
+            effect,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+#[tauri::command]
+async fn send_ui_composer_action(
+    action: ComposerAction,
+    host: tauri::State<'_, CoreHost>,
+) -> Result<(), String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::ComposerAction(action, reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+
 fn publish_application(
     app: &tauri::AppHandle,
     projection: ApplicationProjection,
@@ -157,7 +202,8 @@ fn publish_application(
     )
     .map_err(|error| error.to_string())?;
     publish_agents(app, projection.agents, effect)?;
-    publish_conversation(app, projection.conversation, None)
+    publish_conversation(app, projection.conversation, None)?;
+    publish_composer(app, projection.composer, None)
 }
 
 fn publish_agents(
@@ -205,6 +251,30 @@ async fn send_ui_agent_action(
         .map_err(|error| error.to_string())?
 }
 
+fn configure_composer_host(
+    ui: &mut ApplicationSession,
+    state: &HarnessState,
+    workspace: Option<String>,
+) -> bool {
+    use yeet::shared_ui::composer::ComposerDestination::*;
+    let mut environment = ui.composer_environment().clone();
+    if let Some(workspace) = workspace {
+        environment.context.workspace = workspace;
+    }
+    environment.context.session_id = state.current_session_id.clone();
+    environment.available = true;
+    environment.supported_destinations = vec![
+        Models,
+        Sessions,
+        Settings,
+        Permissions,
+        Auth,
+        Providers,
+        Capabilities,
+    ];
+    ui.configure_composer(environment, state).is_some()
+}
+
 // One worker owns the harness, serializing commands and workspace changes.
 // No frontend-specific state or domain logic belongs in this adapter.
 fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
@@ -225,10 +295,14 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                             .as_ref()
                             .and_then(|state| state.conversation.clone());
                         // Preserve the current connection when constructing a new one fails.
-                        if let Some(state) = connection.state.as_ref()
-                            && let Some(projection) = ui.refresh(state)
-                        {
-                            let _ = publish_application(&app, projection, None);
+                        if let Some(state) = connection.state.as_ref() {
+                            ui.refresh(state);
+                            configure_composer_host(
+                                &mut ui,
+                                state,
+                                Some(connection.workspace.clone()),
+                            );
+                            let _ = publish_application(&app, ui.projection(), None);
                         }
                         harness = Some(next);
                         connection
@@ -238,7 +312,16 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
             }
             Ok(Control::Command(command, reply)) => {
                 let result = match harness.as_mut() {
-                    Some(core) => core.send(command).map_err(|error| error.to_string()),
+                    Some(core) => {
+                        let new_session = matches!(command, HarnessCommand::NewSession);
+                        let result = core.send(command).map_err(|error| error.to_string());
+                        if result.is_ok() && new_session {
+                            let state = core.latest_state().cloned().unwrap_or_default();
+                            ui.observe_composer_new_session(&state);
+                            let _ = publish_composer(&app, ui.composer_projection(), None);
+                        }
+                        result
+                    }
                     None => Err("Connect a local workspace first".into()),
                 };
                 let _ = reply.send(result);
@@ -301,6 +384,31 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                 })();
                 let _ = reply.send(result);
             }
+            Ok(Control::ComposerAction(action, reply)) => {
+                let result = (|| -> Result<(), String> {
+                    let core = harness.as_mut().ok_or("Connect a local workspace first")?;
+                    let mut state = core
+                        .latest_state()
+                        .cloned()
+                        .ok_or("Local workspace state unavailable")?;
+                    if state.conversation.is_none() {
+                        state.conversation = conversation.clone();
+                    }
+                    let prepared = ui.prepare_composer(action, &state);
+                    let new_session =
+                        matches!(prepared.effect.command, Some(HarnessCommand::NewSession));
+                    if let Some(command) = prepared.effect.command.clone() {
+                        core.send(command).map_err(|error| error.to_string())?;
+                    }
+                    let (mut projection, effect) = ui.commit_composer(prepared, &state);
+                    if new_session {
+                        ui.observe_composer_new_session(&state);
+                        projection = ui.projection();
+                    }
+                    publish_composer(&app, projection.composer, Some(effect.ui))
+                })();
+                let _ = reply.send(result);
+            }
             Ok(Control::Disconnect(reply)) => {
                 harness = None;
                 conversation = None;
@@ -324,7 +432,11 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         conversation = state.conversation.clone();
                     }
                 }
-                let projection = event.state.as_ref().and_then(|state| ui.refresh(state));
+                let projection = event.state.as_ref().and_then(|state| {
+                    let refreshed = ui.refresh(state).is_some();
+                    let configured = configure_composer_host(&mut ui, state, None);
+                    (refreshed || configured).then(|| ui.projection())
+                });
                 if let Ok(mut payload) = serde_json::to_value(event) {
                     payload["workspace"] =
                         serde_json::Value::String(core.workspace().to_string_lossy().into_owned());
@@ -411,7 +523,8 @@ fn main() {
             send_ui_action,
             agents_projection,
             send_ui_agent_action,
-            send_ui_conversation_action
+            send_ui_conversation_action,
+            send_ui_composer_action
         ])
         .build(tauri::generate_context!())
         .expect("initialize Yeet desktop");

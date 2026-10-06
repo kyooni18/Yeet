@@ -482,6 +482,7 @@ export type FrontendCommand =
   | { type: 'interrupt' }
   | { type: 'regenerate_last' }
   | { type: 'edit_last'; text: string }
+  | { type: 'resolve_permission'; request_id: string; granted: boolean }
   | { type: 'allow_shell' }
   | { type: 'deny_shell' }
   | { type: 'allow_native_app' }
@@ -627,7 +628,26 @@ export type ConversationDisplayItem =
 export interface ConversationView { items: ConversationDisplayItem[]; last_user_id: string | null; last_assistant_id: string | null; streaming_text: string; streaming: boolean; preparing: boolean; preparing_label: string; error: string | null; selected: string | null }
 export interface ConversationUiEffect { copy: { entry_id: string; text: string } | null; edit_draft: string | null }
 
+export interface ComposerContext { workspace: string; session_id: string | null; unsaved_generation: number }
+export type ComposerMode = { type: 'draft' } | { type: 'edit_last'; has_attachments: boolean }
+export interface ComposerAttachmentSnapshot { id: string; name: string; attachment_id: string | null; ready: boolean; error: string | null }
+export interface EditorSnapshot { context: ComposerContext; text: string; revision: number; mode: ComposerMode; attachments: ComposerAttachmentSnapshot[] }
+export type ComposerDestination = 'models' | 'sessions' | 'settings' | 'reasoning' | 'goal' | 'agents' | 'files' | 'views' | 'capabilities' | 'permissions' | 'status' | 'auth' | 'providers' | 'debate' | 'help'
+export interface ComposerPermissionTarget { kind: 'shell' | 'native_app'; id: string }
+export type ComposerAction =
+  | { type: 'update_editor' | 'submit' | 'cancel_edit'; value: EditorSnapshot }
+  | { type: 'interrupt' | 'new_session' }
+  | { type: 'select_suggestion'; value: { editor: EditorSnapshot; command: string } }
+  | { type: 'respond_permission'; value: { target: ComposerPermissionTarget; allow: boolean } }
+export type ComposerIcon = 'send' | 'stop' | 'edit' | 'close' | 'terminal' | 'application' | 'allow' | 'deny'
+export interface ComposerControl { label: string; icon: ComposerIcon; action: ComposerAction; enabled: boolean }
+export interface ComposerPermissionView { target: ComposerPermissionTarget; title: string; detail: string; operation: string; reason: string; icon: ComposerIcon; controls: ComposerControl[] }
+export interface ComposerView { context: ComposerContext; editor: EditorSnapshot; placeholder: string; editable: boolean; can_submit: boolean; primary_control: ComposerControl; edit_banner: string | null; cancel_edit_control: ComposerControl | null; permissions: ComposerPermissionView[]; suggestions: ComposerSuggestion[] }
+export interface ComposerSuggestion { command: string; description: string; destination: ComposerDestination | null; arguments?: string | null }
+export interface ComposerUiEffect { accepted_editor: EditorSnapshot | null; cancel_edit: EditorSnapshot | null; destination: ComposerDestination | null; replace_editor: { editor: EditorSnapshot; text: string } | null }
+
 export type RemoteServerMessage =
+  | { version: number; type: 'ui_composer'; composer_revision: number; request_id?: string | null; view: ComposerView; effect?: ComposerUiEffect | null }
   | { version: number; type: 'ui_conversation'; conversation_revision: number; request_id?: string | null; view: ConversationView; effect?: ConversationUiEffect | null }
   | { version: number; type: 'ui_agents'; agents_revision: number; request_id?: string | null; view: AgentsView; effect?: AgentUiEffect | null }
   | ({ version: number; type: 'ui_state'; request_id?: string | null } & UiProjection)

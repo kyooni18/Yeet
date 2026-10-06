@@ -976,88 +976,41 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
     );
 }
 
-fn permission_action_line() -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            "Enter/y",
-            Style::default()
-                .fg(theme::accent())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" allow once  ·  ", Style::default().fg(theme::muted())),
-        Span::styled(
-            "n/Esc",
-            Style::default()
-                .fg(theme::accent_hot())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" deny  ·  ", Style::default().fg(theme::muted())),
-        Span::styled(
-            "Ctrl+C",
-            Style::default()
-                .fg(theme::accent_hot())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" stop task", Style::default().fg(theme::muted())),
-    ])
+fn permission_action_line(permission: &crate::shared_ui::composer::PermissionView, primary: &crate::shared_ui::composer::ComposerControl) -> Line<'static> {
+    use crate::shared_ui::composer::ComposerAction;
+    let mut spans = Vec::new();
+    for control in &permission.controls {
+        if !spans.is_empty() { spans.push(Span::raw(" · ")); }
+        let shortcut = match control.action {
+            ComposerAction::RespondPermission { allow: true, .. } => "Enter/y",
+            ComposerAction::RespondPermission { allow: false, .. } => "n/Esc",
+            _ => "",
+        };
+        spans.push(Span::styled(format!("{shortcut} {}", control.label.to_lowercase()), Style::default().fg(if control.enabled { theme::accent() } else { theme::muted() })));
+    }
+    if matches!(primary.action, ComposerAction::Interrupt) {
+        spans.push(Span::styled(format!(" · Ctrl+C {}", primary.label), Style::default().fg(theme::accent_hot())));
+    }
+    Line::from(spans)
 }
 
 pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
-    if let Some(permission) = app.state.pending_native_app_permission.as_ref() {
-        let identity = match (&permission.app_name, &permission.bundle_id) {
-            (Some(name), Some(bundle_id)) => format!("{name} ({bundle_id})"),
-            (Some(name), None) => name.clone(),
-            (None, Some(bundle_id)) => bundle_id.clone(),
-            (None, None) => "Unknown native application".into(),
-        };
-        let source = if permission.server == "codex-computer-use" {
-            format!("Computer Use: Codex / {}", permission.tool)
-        } else {
-            format!("MCP: {}/{}", permission.server, permission.tool)
-        };
-        let text = Text::from(vec![
-            Line::from(vec![
-                Span::styled(
-                    "Native application approval: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(identity),
-            ]),
-            Line::from(format!("Operation: {}", permission.operation)).fg(theme::accent_hot()),
-            Line::from(source).fg(theme::muted()),
-            Line::from("Session-only access; no persistent approval will be saved.")
-                .fg(theme::accent()),
-            Line::from(permission.reason.clone()).fg(theme::text_dim()),
-        ]);
-        draw_permission_panel(frame, text, "Native app permission");
-        return;
-    }
-    let Some(permission) = app.state.pending_shell_permission.as_ref() else {
-        return;
-    };
+    let projection = app.application.composer_projection();
+    let Some(permission) = projection.view.permissions.first() else { return; };
     let text = Text::from(vec![
-        Line::from(vec![
-            Span::styled(
-                "Permission required: ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(&permission.operation),
-        ]),
-        Line::from(format!("{} action", permission.kind)).fg(theme::muted()),
-        Line::from(Span::styled(
-            permission.command.clone(),
-            Style::default().fg(theme::accent_hot()),
-        )),
+        Line::from(permission.title.clone()).bold(),
+        Line::from(permission.operation.clone()).fg(theme::accent_hot()),
+        Line::from(permission.detail.clone()).fg(theme::muted()),
         Line::from(permission.reason.clone()).fg(theme::text_dim()),
     ]);
-    draw_permission_panel(frame, text, "Permission");
+    draw_permission_panel(frame, text, &permission.title, permission_action_line(permission, &projection.view.primary_control));
 }
 
-fn draw_permission_panel(frame: &mut Frame<'_>, text: Text<'_>, title: &str) {
+fn draw_permission_panel(frame: &mut Frame<'_>, text: Text<'_>, title: &str, actions: Line<'static>) {
     let mut area = centered_rect(82, 90, frame.area());
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let content_height = paragraph.line_count(area.width.saturating_sub(4).max(1));
-    let actions = Paragraph::new(permission_action_line()).wrap(Wrap { trim: false });
+    let actions = Paragraph::new(actions).wrap(Wrap { trim: false });
     let action_height = actions.line_count(area.width.saturating_sub(4).max(1)) as u16;
     let height = (content_height.saturating_add(action_height as usize + 4))
         .min(area.height as usize) as u16;

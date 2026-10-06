@@ -6,6 +6,9 @@ import {
   type ShellAction,
   type AgentAction,
   type ConversationAction,
+  type ComposerAction,
+  type ComposerView,
+  type ComposerUiEffect,
   type ConversationView,
   type ConversationUiEffect,
   type AgentsView,
@@ -21,6 +24,8 @@ import {
 } from '../remote/protocol'
 
 export interface RemoteSnapshot {
+  composer: ComposerView | null
+  composerEffect: { revision: number; value: ComposerUiEffect } | null
   conversation: ConversationView | null
   conversationEffect: { revision: number; value: ConversationUiEffect } | null
   agents: AgentsView | null
@@ -114,6 +119,9 @@ export class RemoteStore {
   constructor(private readonly options: RemoteStoreOptions) {}
   private ui: UiProjection | null = null
   private uiRevision = -1
+  private composerRevision = -1
+  private composer: ComposerView | null = null
+  private composerEffect: { revision: number; value: ComposerUiEffect } | null = null
   private conversationRevision = -1
   private conversation: ConversationView | null = null
   private conversationEffect: { revision: number; value: ConversationUiEffect } | null = null
@@ -157,6 +165,8 @@ export class RemoteStore {
       ? Math.min(100, Math.max(0, Math.round((used / total) * 100)))
       : null
     return {
+      composer: this.composer,
+      composerEffect: this.composerEffect,
       conversation: this.conversation,
       conversationEffect: this.conversationEffect,
       agents: this.agents,
@@ -247,6 +257,14 @@ export class RemoteStore {
 
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
+      case 'ui_composer':
+        if (message.composer_revision < this.composerRevision) return
+        this.composerRevision = message.composer_revision
+        this.composer = message.view
+        if (message.effect?.accepted_editor != null || message.effect?.cancel_edit != null || message.effect?.destination != null || message.effect?.replace_editor != null) {
+          this.composerEffect = { revision: message.composer_revision, value: message.effect }
+        }
+        return
       case 'ui_conversation':
         if (message.conversation_revision < this.conversationRevision) return
         this.conversationRevision = message.conversation_revision
@@ -275,6 +293,8 @@ export class RemoteStore {
         this.uiRevision = -1
         this.agentsRevision = -1
         this.agentEffect = null
+        this.composerRevision = -1
+        this.composerEffect = null
         this.conversationRevision = -1
         this.conversationEffect = null
         this.state.workspace_root = message.workspace
@@ -448,6 +468,17 @@ export class RemoteStore {
         entry.uiStreaming = true
       }
     }
+  }
+
+  consumeComposerEffect(revision: number): ComposerUiEffect | null {
+    if (this.composerEffect?.revision !== revision) return null
+    const effect = this.composerEffect.value
+    this.composerEffect = null
+    return effect
+  }
+
+  sendComposerUi(action: ComposerAction): boolean {
+    return this.transport?.sendComposerUi?.(action) ?? false
   }
 
   consumeConversationEffect(revision: number): ConversationUiEffect | null {

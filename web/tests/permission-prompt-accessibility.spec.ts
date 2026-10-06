@@ -60,7 +60,7 @@ test('permission alertdialog takes keyboard focus and restores the prior control
   await expect(allow).toBeFocused()
   await page.keyboard.press('Enter')
   await expect.poll(() => sentCommands(page)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'allow_shell' }),
+    expect.objectContaining({ type: 'resolve_permission', request_id: 'shell-focus', granted: true }),
   ]))
 
   await emit(page, {
@@ -122,7 +122,7 @@ test('a replacement permission is re-announced from the dialog root without losi
   await expect(prompt).toContainText('Safari · click')
   await page.keyboard.press('Enter')
   await expect.poll(() => sentCommands(page)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'deny_native_app' }),
+    expect.objectContaining({ type: 'resolve_permission', request_id: 'native-replacement', granted: false }),
   ]))
 
   await emit(page, {
