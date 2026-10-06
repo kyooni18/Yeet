@@ -414,3 +414,10 @@ semantics. Primary-content projection is still incomplete: Home, Files and Diff
 are not yet shared end-to-end through Remote, Tauri and Web, and many Harness
 runtime modules still remain under `src/`. The Expo visual app remains blank
 until the user supplies its OpenPencil design.
+
+The Home model now has owned serializable `HomeView`, row/resource DTOs and
+stable `HomeAction` values under `UI/home/`. `HomeState` validates resource
+targets against current content before adapters apply them. This establishes a
+wire-safe model without changing the existing Home composition or labels; it is
+not yet carried in `ApplicationProjection` or rendered end-to-end by Remote,
+Tauri and Web.
