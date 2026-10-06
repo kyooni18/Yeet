@@ -13,9 +13,11 @@ use anyhow::{Context, Result, bail};
 pub mod agent;
 pub mod agents;
 pub mod core;
+pub mod context_cache;
 pub mod permission;
 pub mod resources;
 pub mod session_store;
+pub mod workers;
 mod service;
 
 pub use service::{HarnessClient, ServiceEvent, forward_cli};
