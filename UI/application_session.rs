@@ -125,11 +125,27 @@ impl ApplicationSession {
             .groups
             .iter()
             .flat_map(|g| &g.controls)
+            .chain(view.sandbox_controls.iter())
             .find(|c| c.id == id && c.enabled)
         else {
             return prepared;
         };
         if let Some(value) = choice {
+            if id == "sandbox_preset" && control.options.iter().any(|option| option.value == value)
+            {
+                prepared.effect.command = Some(crate::harness::HarnessCommand::UpdateSandbox {
+                    action: crate::model::SandboxAction::ApplyPreset {
+                        preset: value.clone(),
+                    },
+                });
+            }
+            if id == "auto_approve" && control.options.iter().any(|option| option.value == value) {
+                prepared.effect.command = Some(crate::harness::HarnessCommand::UpdateSandbox {
+                    action: crate::model::SandboxAction::SetAutoApprove {
+                        enabled: value == "true",
+                    },
+                });
+            }
             if id == "reasoning" && control.options.iter().any(|o| o.value == value) {
                 prepared.effect.command = Some(crate::harness::HarnessCommand::SelectReasoning {
                     level: value.clone(),
@@ -144,6 +160,16 @@ impl ApplicationSession {
         }
         use super::composer::ComposerDestination as Destination;
         match id.as_str() {
+            "auto_approve" => {
+                prepared.effect.command = Some(crate::harness::HarnessCommand::UpdateSandbox {
+                    action: crate::model::SandboxAction::SetAutoApprove {
+                        enabled: !harness
+                            .sandbox_settings
+                            .as_ref()
+                            .is_some_and(|settings| settings.auto_approve),
+                    },
+                });
+            }
             "new_session" | "interrupt" => {
                 let action = if id == "new_session" {
                     ComposerAction::NewSession

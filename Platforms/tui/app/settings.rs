@@ -249,16 +249,30 @@ impl App {
             }
             KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down => {
-                self.popup_index = cmp::min(self.popup_index + 1, SANDBOX_PRESET_ROW_COUNT - 1)
+                let count = self
+                    .toolbar_control("sandbox_preset")
+                    .map_or(0, |control| control.options.len())
+                    + 1;
+                self.popup_index = cmp::min(self.popup_index + 1, count.saturating_sub(1));
             }
             KeyCode::Char('r') => backend.send(FrontendCommand::RequestSandbox)?,
-            KeyCode::Enter | KeyCode::Char(' ') => match self.popup_index {
-                0 => self.apply_sandbox_preset("safe", backend)?,
-                1 => self.apply_sandbox_preset("balanced", backend)?,
-                2 => self.apply_sandbox_preset("unlimited", backend)?,
-                3 => self.open_sandbox_policy(),
-                _ => {}
-            },
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let options = self
+                    .toolbar_control("sandbox_preset")
+                    .map(|control| control.options)
+                    .unwrap_or_default();
+                if let Some(option) = options.get(self.popup_index) {
+                    self.send_toolbar_action(
+                        backend,
+                        crate::shared_ui::toolbar::ToolbarAction::Choose {
+                            id: "sandbox_preset".into(),
+                            value: option.value.clone(),
+                        },
+                    )?;
+                } else if self.popup_index == options.len() {
+                    self.open_sandbox_policy();
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -548,18 +562,20 @@ impl App {
     }
 
     pub(super) fn sandbox_preset_picker_index(&self) -> usize {
-        match self
-            .state
-            .sandbox_settings
-            .as_ref()
-            .map(|settings| settings.preset.as_str())
-        {
-            Some("safe") => 0,
-            Some("balanced") => 1,
-            Some("unlimited") => 2,
-            Some(_) => 3,
-            None => 0,
-        }
+        let Some(settings) = self.state.sandbox_settings.as_ref() else {
+            return 0;
+        };
+        self.toolbar_control("sandbox_preset")
+            .and_then(|control| {
+                control
+                    .options
+                    .iter()
+                    .position(|option| option.value == settings.preset)
+            })
+            .unwrap_or_else(|| {
+                self.toolbar_control("sandbox_preset")
+                    .map_or(0, |control| control.options.len())
+            })
     }
 
     pub(super) fn open_sandbox_policy(&mut self) {
@@ -603,18 +619,6 @@ impl App {
             })?;
         }
         Ok(())
-    }
-
-    pub(super) fn apply_sandbox_preset(
-        &mut self,
-        preset: &str,
-        backend: &mut Backend,
-    ) -> anyhow::Result<()> {
-        backend.send(FrontendCommand::UpdateSandbox {
-            action: SandboxAction::ApplyPreset {
-                preset: preset.into(),
-            },
-        })
     }
 
     pub(super) fn toggle_execution_mode(&mut self, backend: &mut Backend) -> anyhow::Result<()> {

@@ -344,31 +344,27 @@ pub(super) fn draw_sandbox_presets(frame: &mut Frame<'_>, app: &App) {
         );
         return;
     };
-    let rows = vec![
-        (
-            "safe",
-            "Safe",
-            "strict shell isolation · workspace shell access disabled".to_owned(),
-        ),
-        (
-            "balanced",
-            "Balanced",
-            "sandboxed shell · workspace reads · restricted writes ask first".to_owned(),
-        ),
-        (
-            "unlimited",
-            "Unlimited",
-            "normal user authority · approvals handled automatically".to_owned(),
-        ),
-        (
-            "advanced",
-            "Advanced sandbox rules",
+    let options = app
+        .toolbar_control("sandbox_preset")
+        .map(|control| control.options)
+        .unwrap_or_default();
+    let rows = options
+        .into_iter()
+        .map(|option| {
+            (
+                option.value == settings.preset,
+                option.label,
+                option.description,
+            )
+        })
+        .chain(std::iter::once((
+            false,
+            "Advanced sandbox rules".into(),
             format!("current policy: {}", settings.preset),
-        ),
-    ];
-    let items = rows.into_iter().map(|(id, name, value)| {
-        let marker = if id == settings.preset { "●" } else { "○" };
-        let marker = if id == "advanced" { "◇" } else { marker };
+        )));
+    let items = rows.map(|(selected, name, value)| {
+        let marker = if selected { "●" } else { "○" };
+        let marker = if name == "Advanced sandbox rules" { "◇" } else { marker };
         ListItem::new(Line::from(vec![
             Span::styled(
                 format!("{marker} {name:<25}"),

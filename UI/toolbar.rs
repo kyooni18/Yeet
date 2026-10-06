@@ -70,6 +70,8 @@ pub struct ToolbarView {
     pub groups: Vec<ToolbarGroup>,
     pub quick_title: String,
     pub quick_sections: Vec<QuickSection>,
+    #[serde(default)]
+    pub sandbox_controls: Vec<ToolbarControl>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolbarUiEffect {
@@ -87,6 +89,9 @@ pub(super) struct ToolbarRuntime {
     goal: bool,
     streaming: bool,
     sandbox: bool,
+    sandbox_preset: String,
+    sandbox_auto_approve: bool,
+    sandbox_working: bool,
     context: bool,
 }
 impl ToolbarRuntime {
@@ -96,6 +101,16 @@ impl ToolbarRuntime {
         self.goal = h.goal_mode;
         self.streaming = h.is_streaming;
         self.sandbox = h.sandbox_settings.is_some();
+        self.sandbox_preset = h
+            .sandbox_settings
+            .as_ref()
+            .map(|settings| settings.preset.clone())
+            .unwrap_or_default();
+        self.sandbox_auto_approve = h
+            .sandbox_settings
+            .as_ref()
+            .is_some_and(|settings| settings.auto_approve);
+        self.sandbox_working = h.sandbox_working;
         self.context = h.current_context_tokens.is_some()
             && h.active_model_context_length.is_some_and(|total| total > 0);
     }
@@ -191,8 +206,67 @@ impl ToolbarRuntime {
             quick_sections.push(QuickSection::Context);
         }
         quick_sections.push(QuickSection::Usage);
+        let sandbox_enabled = available && self.sandbox && !self.sandbox_working;
+        let mut sandbox_preset = control(
+            "sandbox_preset",
+            "Preset",
+            ToolbarIcon::Settings,
+            sandbox_enabled,
+            None,
+        );
+        sandbox_preset.kind = ToolbarControlKind::Choice;
+        sandbox_preset.value = self.sandbox_preset.clone();
+        sandbox_preset.options = [
+            (
+                "safe",
+                "Safe",
+                "strict shell isolation · workspace shell access disabled",
+            ),
+            (
+                "balanced",
+                "Balanced",
+                "sandboxed shell · workspace reads · restricted writes ask first",
+            ),
+            (
+                "unlimited",
+                "Unlimited",
+                "normal user authority · approvals handled automatically",
+            ),
+        ]
+        .into_iter()
+        .map(|(value, label, description)| ToolbarOption {
+            value: value.into(),
+            label: label.into(),
+            description: description.into(),
+        })
+        .collect();
+        let mut auto_approve = control(
+            "auto_approve",
+            "Auto approve",
+            ToolbarIcon::Settings,
+            sandbox_enabled,
+            Some(self.sandbox_auto_approve),
+        );
+        auto_approve.kind = ToolbarControlKind::Toggle;
+        auto_approve.value = self.sandbox_auto_approve.to_string();
+        auto_approve.options = [
+            ("true", "On", "Approve sandbox actions automatically"),
+            ("false", "Off", "Ask before sandbox actions"),
+        ]
+        .into_iter()
+        .map(|(value, label, description)| ToolbarOption {
+            value: value.into(),
+            label: label.into(),
+            description: description.into(),
+        })
+        .collect();
         ToolbarView {
             quick_sections,
+            sandbox_controls: if self.sandbox {
+                vec![sandbox_preset, auto_approve]
+            } else {
+                Vec::new()
+            },
             quick_title: if self.streaming {
                 "Working"
             } else {
@@ -336,5 +410,92 @@ mod tests {
                 .command
                 .is_none()
         );
+    }
+
+    #[test]
+    fn sandbox_controls_are_projected_and_guard_invalid_or_in_flight_changes() {
+        let mut state = HarnessState::default();
+        state.sandbox_settings = Some(crate::model::SandboxSettingsState {
+            preset: "balanced".into(),
+            execution_mode: "sandboxed".into(),
+            auto_approve: false,
+            workspace_mode: "all".into(),
+            workspace_paths: Vec::new(),
+            scratch_writable: true,
+            network_allow: Vec::new(),
+            environment: Vec::new(),
+            secret_ids: Vec::new(),
+            limits: crate::model::SandboxLimitsState {
+                wall_time_seconds: 30,
+                max_stdout_bytes: 1024,
+                max_stderr_bytes: 1024,
+                max_memory_bytes: 0,
+                max_processes: 0,
+            },
+        });
+        let ui = ApplicationSession::new(&state);
+        let view = ui.toolbar_view_for(&state);
+        assert_eq!(view.sandbox_controls[0].value, "balanced");
+        assert_eq!(view.sandbox_controls[0].options.len(), 3);
+        assert!(view.sandbox_controls.iter().all(|control| control.enabled));
+
+        let invalid = ui.prepare_toolbar(
+            ToolbarAction::Choose {
+                id: "sandbox_preset".into(),
+                value: "custom".into(),
+            },
+            &state,
+        );
+        assert!(invalid.effect.command.is_none());
+        assert!(
+            ui.prepare_toolbar(ToolbarAction::Activate("sandbox_preset".into()), &state)
+                .effect
+                .command
+                .is_none()
+        );
+
+        let selected = ui.prepare_toolbar(
+            ToolbarAction::Choose {
+                id: "sandbox_preset".into(),
+                value: "safe".into(),
+            },
+            &state,
+        );
+        assert!(matches!(
+            selected.effect.command,
+            Some(HarnessCommand::UpdateSandbox {
+                action: crate::model::SandboxAction::ApplyPreset { preset }
+            }) if preset == "safe"
+        ));
+        let approved = ui.prepare_toolbar(
+            ToolbarAction::Choose {
+                id: "auto_approve".into(),
+                value: "true".into(),
+            },
+            &state,
+        );
+        assert!(matches!(
+            approved.effect.command,
+            Some(HarnessCommand::UpdateSandbox {
+                action: crate::model::SandboxAction::SetAutoApprove { enabled: true }
+            })
+        ));
+
+        state.sandbox_working = true;
+        let busy_view = ui.toolbar_view_for(&state);
+        assert!(
+            busy_view
+                .sandbox_controls
+                .iter()
+                .all(|control| !control.enabled)
+        );
+        let busy = ui.prepare_toolbar(
+            ToolbarAction::Choose {
+                id: "sandbox_preset".into(),
+                value: "safe".into(),
+            },
+            &state,
+        );
+        assert!(busy.effect.command.is_none());
     }
 }

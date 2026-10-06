@@ -45,6 +45,9 @@ export function QuickPanel({
   const remote = useRemote()
   const toolbar = remote.ui?.toolbar
   const response = toolbar?.groups.find(group => group.id === 'quick_response')?.controls ?? []
+  const sandboxControls = toolbar?.sandbox_controls ?? []
+  const sandboxPreset = sandboxControls.find(control => control.id === 'sandbox_preset')
+  const autoApprove = sandboxControls.find(control => control.id === 'auto_approve')
   const sandbox = remote.state.sandbox_settings
   const current = remote.state.current_context_tokens
   const total = remote.state.active_model_context_length
@@ -126,22 +129,26 @@ export function QuickPanel({
                   <span>Preset</span>
                   <strong>{sandbox.preset}</strong>
                   <select
-                    value={sandbox.preset}
-                    onChange={(event) => remoteStore.updateSandbox({ type: 'apply_preset', preset: event.target.value })}
+                    value={sandboxPreset?.value ?? sandbox.preset}
+                    onChange={(event) => sandboxPreset
+                      ? remoteStore.sendToolbarUi({type:'choose',value:{id:'sandbox_preset',value:event.target.value}})
+                      : remoteStore.updateSandbox({type:'apply_preset',preset:event.target.value})}
                     aria-label="Sandbox preset"
-                    disabled={!canMutate}
+                    disabled={!canMutate || (sandboxPreset ? !sandboxPreset.enabled : false)}
                   >
-                    {['safe', 'balanced', 'unlimited'].map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+                    {(sandboxPreset?.options ?? ['safe', 'balanced', 'unlimited'].map(value => ({value,label:value,description:''}))).map((option) => <option key={option.value} value={option.value} title={option.description}>{option.label.toLowerCase()}</option>)}
                   </select>
                 </label>
                 <div className="quick-row">
                   <CheckCircle2 size={13} />
                   <span>Auto approve</span>
                   <Toggle
-                    checked={sandbox.auto_approve}
-                    onChange={(enabled) => remoteStore.updateSandbox({ type: 'set_auto_approve', enabled })}
+                    checked={autoApprove?.pressed ?? sandbox.auto_approve}
+                    onChange={(enabled) => autoApprove
+                      ? remoteStore.sendToolbarUi({type:'choose',value:{id:'auto_approve',value:String(enabled)}})
+                      : remoteStore.updateSandbox({type:'set_auto_approve',enabled})}
                     label="Auto approve"
-                    disabled={!canMutate}
+                    disabled={!canMutate || (autoApprove ? !autoApprove.enabled : false)}
                   />
                 </div>
               </div>

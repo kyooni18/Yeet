@@ -47,11 +47,11 @@ impl App {
         &self,
         id: &str,
     ) -> Option<crate::shared_ui::toolbar::ToolbarControl> {
-        self.application
-            .toolbar_view_for(&self.state)
-            .groups
+        let view = self.application.toolbar_view_for(&self.state);
+        view.groups
             .into_iter()
             .flat_map(|group| group.controls)
+            .chain(view.sandbox_controls)
             .find(|control| control.id == id)
     }
 
