@@ -432,3 +432,5 @@ The browser consumes the one-shot session-open intent through its existing
 load-session command. A production Rust Home fixture checks browser projection,
 selection, stale-target validation and delivery rollback. This does not yet
 complete graphical Files/Diff rendering or native TUI controller unification.
+Delivered resource-open intents are also recorded in each host's RecentViews
+and immediately reprojected; desktop clears that history on workspace changes.

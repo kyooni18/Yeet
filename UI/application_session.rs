@@ -382,6 +382,13 @@ impl ApplicationSession {
             effect,
         }
     }
+    /// A host can record a delivered resource open without owning Home labels.
+    pub fn home_resource_title(&self, target: &ResourceTarget) -> Option<&str> {
+        self.home
+            .content
+            .find(target)
+            .map(|item| item.title.as_str())
+    }
     /// Commit only after a host has performed any returned effect. A failed
     /// Harness delivery or resource open leaves the prepared state unapplied.
     pub fn commit_home(
@@ -767,6 +774,7 @@ mod tests {
         ));
         let projection = session.update_home_content(content).unwrap();
         assert_eq!(projection.ui_revision, 1);
+        assert_eq!(session.home_resource_title(&target), Some("src/lib.rs"));
         let selected = session.prepare_home(HomeAction::Select(target.clone()), &harness);
         let (projection, effect) = session.commit_home(selected, &harness);
         assert!(effect.open.is_none());

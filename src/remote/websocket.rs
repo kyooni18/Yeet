@@ -685,7 +685,7 @@ fn runtime_loop(
     mut git: crate::harness::resources::GitRefresh,
 ) {
     let mut shutdown = false;
-    let recent = crate::shared_ui::home::RecentViews::default();
+    let mut recent = crate::shared_ui::home::RecentViews::default();
     while !shutdown {
         while let Ok(control) = commands.try_recv() {
             match control {
@@ -908,11 +908,23 @@ fn runtime_loop(
                                 .send(ServerMessage::UiHomeEffect {
                                     version: REMOTE_PROTOCOL_VERSION,
                                     request_id: request_id.clone(),
-                                    open,
+                                    open: open.clone(),
                                 })
                                 .map_err(|_| "Remote Home action has no active client")?;
+                            if let Some(title) = ui.home_resource_title(&open) {
+                                recent.visit(open, title);
+                            }
                         }
-                        let (projection, _) = ui.commit_home(prepared, &state.state);
+                        let (mut projection, _) = ui.commit_home(prepared, &state.state);
+                        if let Some(updated) = ui.update_home_content(
+                            crate::shared_ui::home::WorkspaceContent::collect(
+                                &state.state,
+                                &recent,
+                                &git.snapshot,
+                            ),
+                        ) {
+                            projection = updated;
+                        }
                         for message in application_messages(projection, request_id, None) {
                             let _ = events.send(message);
                         }

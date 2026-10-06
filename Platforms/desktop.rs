@@ -427,12 +427,18 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
     let mut theme_cache = yeet::theme::ThemeProjectionCache::default();
     let mut ui = ApplicationSession::default();
     let mut git = yeet::harness::resources::GitRefresh::default();
-    let recent = RecentViews::default();
+    let mut recent = RecentViews::default();
     loop {
         match controls.recv_timeout(Duration::from_millis(16)) {
             Ok(Control::Connect(workspace, reply)) => {
                 let result = Harness::embedded(&workspace)
                     .map(|next| {
+                        if harness
+                            .as_ref()
+                            .is_none_or(|current| current.workspace() != next.workspace())
+                        {
+                            recent = RecentViews::default();
+                        }
                         theme_cache.invalidate();
                         let mut connection = CoreConnection {
                             workspace: next.workspace().to_string_lossy().into_owned(),
@@ -524,9 +530,19 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         theme_cache.invalidate_for_command(&theme_command);
                     }
                     if let Some(open) = prepared.effect.open.clone() {
-                        publish_home_effect(&app, Some(open))?;
+                        publish_home_effect(&app, Some(open.clone()))?;
+                        if let Some(title) = ui.home_resource_title(&open) {
+                            recent.visit(open, title);
+                        }
                     }
-                    let (projection, effect) = ui.commit_home(prepared, &state);
+                    let (mut projection, effect) = ui.commit_home(prepared, &state);
+                    if let Some(updated) = ui.update_home_content(WorkspaceContent::collect(
+                        &state,
+                        &recent,
+                        &git.snapshot,
+                    )) {
+                        projection = updated;
+                    }
                     if matches!(effect.command, Some(HarnessCommand::NewSession)) {
                         publish_composer(&app, projection.composer.clone(), None)?;
                     }
@@ -654,6 +670,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                 harness = None;
                 conversation = None;
                 git = yeet::harness::resources::GitRefresh::default();
+                recent = RecentViews::default();
                 ui = ApplicationSession::default();
                 let _ = reply.send(());
             }
