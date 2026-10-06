@@ -958,3 +958,22 @@ body { font-size: 13px; }
   .sidebar-search input { font-size: 13px; }
   .sidebar-new-session { min-height: 34px; }
 }
+
+@media (hover: hover) and (pointer: fine) and (min-width: 1000px) {
+  /* Reasoning header reads as its summary text, like the mockup. */
+  .reasoning-trace .trace-disclosure__row:has(.trace-disclosure__summary) { align-items: flex-start; padding-top: 4px; padding-bottom: 4px; }
+  .reasoning-trace .trace-disclosure__row:has(.trace-disclosure__summary) .trace-disclosure__title,
+  .reasoning-trace .trace-disclosure__row:has(.trace-disclosure__summary) .trace-disclosure__dot { display: none; }
+  .reasoning-trace .trace-disclosure__summary {
+    display: -webkit-box;
+    max-width: none;
+    flex: 1;
+    overflow: hidden;
+    color: var(--y-reason);
+    font: 400 12px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .reasoning-trace .trace-disclosure__spacer { display: none; }
+}
