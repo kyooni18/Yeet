@@ -24,6 +24,10 @@ Current shared-tree observation:
 
 `@WEBUI` integration note: protocol-v1 assistant/reasoning streams are delta-first. The final store appends `delta` for `reset=false`, replaces from authoritative `content` for `reset=true`, batches semantic events on `requestAnimationFrame`, and preserves the server conversation revision rather than manufacturing browser-side revisions.
 
+## Pages
+
+The WebUI sidebar has four destinations: Sessions, Files, Diff and Agents. Agents renders the Rust `AgentsView` (`ui_agents`) as a page on expanded layouts and as the existing sheet on compact layouts. Files and Diff are read-only pages backed by the `workspace-views-v1` request/response messages in `docs/REMOTE_PROTOCOL.md`; which page is shown is client-local presentation state, while all data (listings, git status, patches) comes from Harness resources. Clients that do not implement these requests, such as the Tauri bridge, show a plain "not available" message.
+
 ## Protocol / frontend state
 
 Protocol version: `1` (`/api/ws`, semantic WebSocket backend implemented by `@REMOTECORE`).
