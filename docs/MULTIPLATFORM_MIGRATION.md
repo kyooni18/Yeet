@@ -378,3 +378,9 @@ older desktop control assertions continue to target an unavailable element. The
 new toolbar checks use the visible QuickPanel controls and the platform's existing
 interrupt affordance. Expo remains blank pending user-provided design. The broader
 move into thin Platforms adapters and graphical Home/Files/Diff parity remain open.
+
+
+The native terminal adapter now lives under `Platforms/tui`. Its canonical Rust module
+is `crate::platforms::tui`; `crate::tui` remains a compatibility alias, with root `app` and `ui` compatibility exports. The physical
+move preserves pending native worktree changes separately from committed source,
+and production/file size guards now traverse `Platforms` alongside Harness.

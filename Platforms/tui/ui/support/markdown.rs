@@ -2,14 +2,14 @@
 use super::theme;
 use ratatui::prelude::{Line, Modifier, Span, Style};
 
-pub(in crate::tui::ui) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
+pub(in crate::platforms::tui::ui) fn markdown_lines(content: &str) -> Vec<Line<'static>> {
     markdown_lines_fit(content, usize::MAX)
 }
 
 /// Like [`markdown_lines`], but code blocks are laid out as solid panels that
 /// never exceed `width` cells, so their background stays rectangular after
 /// the transcript wraps them.
-pub(in crate::tui::ui) fn markdown_lines_fit(content: &str, width: usize) -> Vec<Line<'static>> {
+pub(in crate::platforms::tui::ui) fn markdown_lines_fit(content: &str, width: usize) -> Vec<Line<'static>> {
     // Preserve every source row so intentional Markdown line breaks survive in
     // the TUI instead of streamed reasoning collapsing into one paragraph.
     let source: Vec<&str> = content.split('\n').collect();

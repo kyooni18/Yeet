@@ -2,7 +2,7 @@
 use super::theme;
 use ratatui::prelude::{Line, Span, Style};
 
-pub(in crate::tui::ui) fn cell_width(value: &str) -> usize {
+pub(in crate::platforms::tui::ui) fn cell_width(value: &str) -> usize {
     Span::raw(value).width()
 }
 
@@ -10,7 +10,7 @@ fn char_cell_width(value: char) -> usize {
     cell_width(&value.to_string())
 }
 
-pub(in crate::tui::ui) fn truncate_end(value: &str, max_cells: usize) -> String {
+pub(in crate::platforms::tui::ui) fn truncate_end(value: &str, max_cells: usize) -> String {
     if max_cells == 0 {
         return String::new();
     }
@@ -36,7 +36,7 @@ pub(in crate::tui::ui) fn truncate_end(value: &str, max_cells: usize) -> String 
     output
 }
 
-pub(in crate::tui::ui) fn truncate_middle(value: &str, max_cells: usize) -> String {
+pub(in crate::platforms::tui::ui) fn truncate_middle(value: &str, max_cells: usize) -> String {
     if max_cells == 0 {
         return String::new();
     }
@@ -163,7 +163,7 @@ fn push_styled_text(row: &mut Vec<Span<'static>>, value: &str, style: Style) {
     }
 }
 
-pub(in crate::tui::ui) fn prefixed_wrapped_line(
+pub(in crate::platforms::tui::ui) fn prefixed_wrapped_line(
     prefix: Span<'static>,
     line: Line<'static>,
     width: u16,
@@ -256,7 +256,7 @@ pub(in crate::tui::ui) fn prefixed_wrapped_line(
     rows.into_iter().map(Line::from).collect()
 }
 
-pub(in crate::tui::ui) fn compact_number(value: u64) -> String {
+pub(in crate::platforms::tui::ui) fn compact_number(value: u64) -> String {
     if value >= 1_000_000 {
         compact_scaled(value, 1_000_000, "M")
     } else if value >= 1_000 {
@@ -275,7 +275,7 @@ fn compact_scaled(value: u64, divisor: u64, suffix: &str) -> String {
     }
 }
 
-pub(in crate::tui::ui) fn format_elapsed(elapsed_ms: u128) -> String {
+pub(in crate::platforms::tui::ui) fn format_elapsed(elapsed_ms: u128) -> String {
     if elapsed_ms < 60_000 {
         format!("{:.1}s", elapsed_ms as f64 / 1_000.0)
     } else {

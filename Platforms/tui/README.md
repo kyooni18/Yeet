@@ -1,7 +1,7 @@
 # Terminal frontend
 
 This directory owns Yeet's terminal UI and is a module of the existing `yeet`
-crate, not a separate Cargo package. `src/lib.rs` loads `tui/mod.rs`.
+crate, not a separate Cargo package. `src/lib.rs` loads `Platforms/tui/mod.rs`.
 
 ## Current structure
 

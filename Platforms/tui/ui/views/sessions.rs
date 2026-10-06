@@ -1,6 +1,6 @@
 //! Active session/conversation view. `Mode::Sessions` remains the session picker.
 mod shared;
-pub(in crate::tui::ui) mod tools;
+pub(in crate::platforms::tui::ui) mod tools;
 
 use super::super::{
     shell,
@@ -150,7 +150,7 @@ impl TranscriptCache {
     }
 }
 
-pub(in crate::tui::ui) fn draw(
+pub(in crate::platforms::tui::ui) fn draw(
     frame: &mut Frame<'_>,
     app: &mut App,
     area: Rect,
@@ -375,7 +375,7 @@ fn capture_transcript_cells(app: &mut App, area: Rect, text: &Text<'static>, off
         .collect();
 }
 
-pub(in crate::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
+pub(in crate::platforms::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, app: &mut App) {
     let Some(menu) = app.transcript_context_menu else {
         app.transcript_context_menu_area = (0, 0, 0, 0);
         return;

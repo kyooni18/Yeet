@@ -1,11 +1,11 @@
 //! Compact tool traces and backend operation summaries.
 use super::*;
-pub(in crate::tui::ui) use crate::shared_ui::conversation::compact::{
+pub(in crate::platforms::tui::ui) use crate::shared_ui::conversation::compact::{
     reasoning_summary_items, tool_activity_summary, tool_activity_title,
 };
 use crate::tui::ui::support::icons;
 
-pub(in crate::tui::ui) fn tool_icon(name: &str) -> &'static str {
+pub(in crate::platforms::tui::ui) fn tool_icon(name: &str) -> &'static str {
     // Font Awesome's Nerd Font codepoints cover the mockup's pixel icons in a
     // terminal cell. The active terminal font controls their final shape.
     match name {
@@ -147,7 +147,7 @@ mod tool_summary_layout_tests {
     }
 }
 
-pub(in crate::tui::ui) fn spinner() -> &'static str {
+pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {
     let tick = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() / 180)

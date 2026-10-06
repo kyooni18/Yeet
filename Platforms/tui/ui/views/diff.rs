@@ -15,7 +15,7 @@ use ratatui::{
 };
 use std::path::PathBuf;
 
-pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
+pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     app.diff_frame.begin(area);
     frame.render_widget(

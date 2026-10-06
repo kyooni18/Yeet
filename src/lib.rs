@@ -47,8 +47,10 @@ pub use harness::workers;
 #[path = "../UI/mod.rs"]
 pub mod shared_ui;
 
-#[path = "../tui/mod.rs"]
-pub mod tui;
+#[path = "../Platforms/mod.rs"]
+pub mod platforms;
+// Compatibility import; native terminal adapter ownership lives in Platforms.
+pub use platforms::tui;
 
 // Compatibility exports for callers migrating to the terminal subsystem.
 pub use tui::{app, ui};

@@ -20,7 +20,7 @@ const RUNTIME_SOURCE_LINE_LIMIT: usize = 1_200;
 fn rust_production_modules_have_a_hard_size_ceiling() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut oversized = Vec::new();
-    for source_root in [&root, &root.parent().unwrap().join("Harness")] {
+    for source_root in [&root, &root.parent().unwrap().join("Harness"), &root.parent().unwrap().join("Platforms")] {
         visit_rust_files(source_root, &mut |path| {
             let source = fs::read_to_string(path).expect("source file should be readable");
             let production_lines = production_line_count(&source);
@@ -40,7 +40,7 @@ fn rust_production_modules_have_a_hard_size_ceiling() {
 fn rust_source_files_do_not_return_to_monolithic_sizes() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut oversized = Vec::new();
-    for source_root in [&root, &root.parent().unwrap().join("Harness")] {
+    for source_root in [&root, &root.parent().unwrap().join("Harness"), &root.parent().unwrap().join("Platforms")] {
         visit_rust_files(source_root, &mut |path| {
             let source = fs::read_to_string(path).expect("source file should be readable");
             let lines = source.lines().count();

@@ -27,7 +27,7 @@ const HINT_ACTIONS: [Action; 7] = [
     Action::FocusInput,
 ];
 
-pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
+pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     frame.render_widget(
         Block::default().style(theme::base().bg(theme::code_background())),

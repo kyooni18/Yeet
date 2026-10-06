@@ -6,7 +6,7 @@
 - `agents/registry`: synchronized process-wide state and run lifecycle; no provider/UI dependencies.
 - `agent`: execution orchestrator; registers lazily, updates model/workspace each run,
   records public goal verdicts/outcomes and unregisters on teardown.
-- `tui/app/actions`: adapter interpreting navigation locally and sending commands
+- `Platforms/tui/app/actions`: adapter interpreting navigation locally and sending commands
   through the existing Harness pipeline. `WorkbenchTab` and `model::FrontendCommand`
   are compatibility re-exports, not duplicate state or command definitions.
 

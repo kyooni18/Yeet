@@ -159,7 +159,7 @@ fn capability_preview(item: &CapabilityToggleItem, streaming: bool) -> Text<'sta
     Text::from(lines)
 }
 
-pub(in crate::tui::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
+pub(in crate::platforms::tui::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(92, 82, frame.area());
     theme::modal_backdrop(frame, area);
     let block = if app.state.is_streaming {
@@ -305,7 +305,7 @@ pub(in crate::tui::ui) fn draw_capabilities(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-pub(in crate::tui::ui) fn draw_capability_detail(frame: &mut Frame<'_>, app: &App) {
+pub(in crate::platforms::tui::ui) fn draw_capability_detail(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(80, 68, frame.area());
     theme::modal_backdrop(frame, area);
     let block = if app.state.is_streaming {

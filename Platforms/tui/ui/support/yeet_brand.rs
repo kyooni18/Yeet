@@ -15,7 +15,7 @@ const WORDMARK: [&str; 4] = [
     "  ▀    ▀▀▀▀  ▀▀▀▀    ▀  ",
 ];
 
-pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape) {
+pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, area: Rect, _shape: responsive::Shape) {
     if area.is_empty() {
         return;
     }

@@ -11,23 +11,23 @@ fn nerd() -> bool {
     })
 }
 
-pub(in crate::tui::ui) fn home() -> &'static str {
+pub(in crate::platforms::tui::ui) fn home() -> &'static str {
     if nerd() { "\u{f015}" } else { "⌂" }
 }
 
-pub(in crate::tui::ui) fn session_tab() -> &'static str {
+pub(in crate::platforms::tui::ui) fn session_tab() -> &'static str {
     if nerd() { "\u{f27a}" } else { "▤" }
 }
 
-pub(in crate::tui::ui) fn agent_tab() -> &'static str {
+pub(in crate::platforms::tui::ui) fn agent_tab() -> &'static str {
     if nerd() { "\u{f06a9}" } else { "♟" }
 }
 
-pub(in crate::tui::ui) fn diff_tab() -> &'static str {
+pub(in crate::platforms::tui::ui) fn diff_tab() -> &'static str {
     if nerd() { "\u{f407}" } else { "⑂" }
 }
 
-pub(in crate::tui::ui) fn chevron(expanded: bool) -> &'static str {
+pub(in crate::platforms::tui::ui) fn chevron(expanded: bool) -> &'static str {
     match (expanded, nerd()) {
         (true, true) => "\u{f078}",
         (false, true) => "\u{f054}",
@@ -36,11 +36,11 @@ pub(in crate::tui::ui) fn chevron(expanded: bool) -> &'static str {
     }
 }
 
-pub(in crate::tui::ui) fn workspace() -> &'static str {
+pub(in crate::platforms::tui::ui) fn workspace() -> &'static str {
     if nerd() { "\u{f07b}" } else { "▣" }
 }
 
-pub(in crate::tui::ui) fn session(current: bool) -> &'static str {
+pub(in crate::platforms::tui::ui) fn session(current: bool) -> &'static str {
     match (current, nerd()) {
         (true, true) => "\u{f111}",
         (false, true) => "\u{f10c}",
@@ -49,7 +49,7 @@ pub(in crate::tui::ui) fn session(current: bool) -> &'static str {
     }
 }
 
-pub(in crate::tui::ui) fn folder(open: bool) -> &'static str {
+pub(in crate::platforms::tui::ui) fn folder(open: bool) -> &'static str {
     match (open, nerd()) {
         (true, true) => "\u{f07c}",
         (false, true) => "\u{f07b}",
@@ -58,7 +58,7 @@ pub(in crate::tui::ui) fn folder(open: bool) -> &'static str {
     }
 }
 
-pub(in crate::tui::ui) fn file(name: &str) -> &'static str {
+pub(in crate::platforms::tui::ui) fn file(name: &str) -> &'static str {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     let kind = match ext.as_deref() {
         Some(
@@ -104,7 +104,7 @@ enum Kind {
 }
 
 /// Translate shared visual meaning into terminal glyphs only.
-pub(in crate::tui::ui) fn semantic(
+pub(in crate::platforms::tui::ui) fn semantic(
     icon: crate::shared_ui::workbench::Icon,
     label: &str,
 ) -> &'static str {

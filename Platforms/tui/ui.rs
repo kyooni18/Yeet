@@ -1,4 +1,4 @@
-//! Native ratatui UI facade. View implementation lives in `tui/ui/`.
+//! Native ratatui UI facade. View implementation lives in `Platforms/tui/ui/`.
 mod components;
 mod dialogs;
 mod render;

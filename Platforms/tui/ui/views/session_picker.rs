@@ -29,7 +29,7 @@ enum Row {
     },
 }
 
-pub(in crate::tui::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
+pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
     frame.render_widget(Block::default().style(theme::base()), area);
     if area.width == 0 || area.height < 3 {
