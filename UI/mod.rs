@@ -22,6 +22,7 @@ pub mod settings_session;
 pub mod shell;
 pub mod surfaces;
 pub mod theme;
+pub mod toolbar;
 pub mod workbench;
 
 pub use actions::{Action, NavigationAction};

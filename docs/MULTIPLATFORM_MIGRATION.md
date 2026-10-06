@@ -359,3 +359,22 @@ selection/scroll behavior. Harness owns the nonblocking Git refresh worker.
 geometry, rendering and input translation; its existing Home design is preserved.
 This is an application composition seam, not graphical Home parity: Web has no
 new Home design and Expo remains blank pending the user’s specifications.
+
+Shared toolbar controls now project ordered header and quick-menu groups, semantic
+icons, reasoning choices, Goal values, eligible runtime actions and ordered quick
+sections from `UI/toolbar.rs`. ApplicationSession validates live control IDs and
+choices and prepares delivery before committing UI changes; New Session and
+Interrupt delegate to Composer, panel navigation delegates to Shell, and reasoning
+choices use the existing Rust model capability source. Remote and Tauri carry the
+projection with UI state and serialize toolbar actions through the application
+controller. Web retains its existing layout, focus adapters and formatting while
+rendering these shared groups. Browser fixtures execute the production Rust
+controller rather than a TypeScript policy copy.
+
+Sandbox forms, workspace switching and usage formatting remain native adapters;
+the toolbar migration shares their section ordering and visibility, not their
+remaining form policy. Existing desktop CSS hides the Composer Goal chip, so three
+older desktop control assertions continue to target an unavailable element. The
+new toolbar checks use the visible QuickPanel controls and the platform's existing
+interrupt affordance. Expo remains blank pending user-provided design. The broader
+move into thin Platforms adapters and graphical Home/Files/Diff parity remain open.

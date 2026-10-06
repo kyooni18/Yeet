@@ -1,3 +1,4 @@
+import type { ToolbarAction } from '../remote/protocol'
 import type { RemoteClientTransport, RemoteTransportEvents } from '../remote/transport'
 import {
   emptyBridgeState,
@@ -305,7 +306,7 @@ export class RemoteStore {
         if (this.layout && message.ui_revision === 0 && message.view.layout !== this.layout) return
         if (message.ui_revision < this.uiRevision) return
         this.uiRevision = message.ui_revision
-        this.ui = { ui_revision: message.ui_revision, state: message.state, view: message.view }
+        this.ui = { ui_revision: message.ui_revision, state: message.state, view: message.view, toolbar: message.toolbar }
         return
       case 'welcome':
         this.uiRevision = -1
@@ -497,6 +498,7 @@ export class RemoteStore {
     return effect
   }
 
+  sendToolbarUi(action: ToolbarAction): boolean { return this.transport?.sendToolbarUi?.(action) ?? false }
   sendSettingsUi(action: SettingsAction): boolean {
     return this.transport?.sendSettingsUi?.(action) ?? false
   }

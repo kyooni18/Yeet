@@ -1,6 +1,7 @@
 //! One application controller for native and Remote hosts.
 //! Owns navigation, shell placement and agent interaction state. Harness event
 //! cursors stay in Harness/transport; these revisions describe only UI intent.
+use super::toolbar::*;
 use super::{
     agents::{AgentAction, AgentEffect, AgentState},
     agents_session::{AgentProjection, AgentSession, PreparedAgentAction},
@@ -18,17 +19,28 @@ use super::{
     workbench::WorkbenchTab,
 };
 use crate::harness::HarnessState;
+pub struct PreparedToolbarAction {
+    pub effect: ToolbarEffect,
+    route: ToolbarRoute,
+}
+enum ToolbarRoute {
+    None,
+    Shell(ShellAction),
+    Composer(PreparedComposerAction),
+}
 use serde::{Deserialize, Serialize};
 
 /// Existing shell channel shape, retained during adapter migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShellProjection {
+    pub toolbar: ToolbarView,
     pub ui_revision: u64,
     pub state: ShellState,
     pub view: ShellView,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplicationProjection {
+    pub toolbar: ToolbarView,
     pub ui_revision: u64,
     pub navigation: NavigationState,
     pub state: ShellState,
@@ -40,6 +52,7 @@ pub struct ApplicationProjection {
     pub settings: SettingsProjection,
 }
 pub struct ApplicationSession {
+    toolbar: ToolbarRuntime,
     navigation: NavigationState,
     shell: ShellState,
     agents: AgentSession,
@@ -56,7 +69,10 @@ impl Default for ApplicationSession {
 }
 impl ApplicationSession {
     pub fn new(harness: &HarnessState) -> Self {
+        let mut toolbar = ToolbarRuntime::default();
+        toolbar.update(harness);
         let mut session = Self {
+            toolbar,
             navigation: NavigationState::default(),
             shell: ShellState::default(),
             agents: AgentSession::new(harness),
@@ -68,6 +84,134 @@ impl ApplicationSession {
         };
         session.serialized = session.fingerprint();
         session
+    }
+    pub fn toolbar_view(&self) -> ToolbarView {
+        self.toolbar.view(
+            &self.shell,
+            &self.composer.projection().view,
+            self.composer.environment().available,
+        )
+    }
+    pub fn toolbar_view_for(&self, harness: &HarnessState) -> ToolbarView {
+        let mut runtime = ToolbarRuntime::default();
+        runtime.update(harness);
+        runtime.view(
+            &self.shell,
+            &self.composer.projection().view,
+            self.composer.environment().available,
+        )
+    }
+    pub fn prepare_toolbar(
+        &self,
+        action: ToolbarAction,
+        harness: &HarnessState,
+    ) -> PreparedToolbarAction {
+        let mut runtime = ToolbarRuntime::default();
+        runtime.update(harness);
+        let view = runtime.view(
+            &self.shell,
+            &self.composer.projection().view,
+            self.composer.environment().available,
+        );
+        let (id, choice) = match action {
+            ToolbarAction::Activate(id) => (id, None),
+            ToolbarAction::Choose { id, value } => (id, Some(value)),
+        };
+        let mut prepared = PreparedToolbarAction {
+            effect: ToolbarEffect::default(),
+            route: ToolbarRoute::None,
+        };
+        let Some(control) = view
+            .groups
+            .iter()
+            .flat_map(|g| &g.controls)
+            .find(|c| c.id == id && c.enabled)
+        else {
+            return prepared;
+        };
+        if let Some(value) = choice {
+            if id == "reasoning" && control.options.iter().any(|o| o.value == value) {
+                prepared.effect.command = Some(crate::harness::HarnessCommand::SelectReasoning {
+                    level: value.clone(),
+                });
+            }
+            if id == "goal" && control.options.iter().any(|o| o.value == value) {
+                prepared.effect.command = Some(crate::harness::HarnessCommand::SetGoal {
+                    enabled: value == "true",
+                });
+            }
+            return prepared;
+        }
+        use super::composer::ComposerDestination as Destination;
+        match id.as_str() {
+            "new_session" | "interrupt" => {
+                let action = if id == "new_session" {
+                    ComposerAction::NewSession
+                } else {
+                    ComposerAction::Interrupt
+                };
+                let composer = self.prepare_composer(action, harness);
+                prepared.effect.command = composer.effect.command.clone();
+                prepared.route = ToolbarRoute::Composer(composer);
+            }
+            "navigation" => {
+                prepared.route = ToolbarRoute::Shell(if self.shell.navigation {
+                    ShellAction::CloseNavigation
+                } else {
+                    ShellAction::OpenNavigation
+                })
+            }
+            "quick_controls" => prepared.route = ToolbarRoute::Shell(ShellAction::ToggleInspector),
+            "models" => {
+                prepared.route = ToolbarRoute::Shell(ShellAction::OpenModels);
+                prepared.effect.destination = Some(Destination::Models);
+            }
+            "settings" => {
+                prepared.route = ToolbarRoute::Shell(ShellAction::OpenSettings);
+                prepared.effect.destination = Some(Destination::Settings);
+            }
+            "reasoning" => prepared.effect.destination = Some(Destination::Reasoning),
+            "sessions" => prepared.effect.destination = Some(Destination::Sessions),
+            "files" => prepared.effect.destination = Some(Destination::Files),
+            "capabilities" => prepared.effect.destination = Some(Destination::Capabilities),
+            "goal" => {
+                prepared.effect.command = Some(crate::harness::HarnessCommand::SetGoal {
+                    enabled: !harness.goal_mode,
+                })
+            }
+            _ => {}
+        }
+        prepared
+    }
+    pub fn commit_toolbar(
+        &mut self,
+        prepared: PreparedToolbarAction,
+        harness: &HarnessState,
+    ) -> (ApplicationProjection, ToolbarUiEffect) {
+        let new_session = matches!(
+            prepared.effect.command,
+            Some(crate::harness::HarnessCommand::NewSession)
+        );
+        match prepared.route {
+            ToolbarRoute::None => {}
+            ToolbarRoute::Shell(action) => {
+                self.apply_shell(action, harness);
+            }
+            ToolbarRoute::Composer(composer) => {
+                self.commit_composer(composer, harness);
+            }
+        }
+        if new_session {
+            self.observe_composer_new_session(harness);
+        }
+        self.toolbar.update(harness);
+        self.advance();
+        (
+            self.projection(),
+            ToolbarUiEffect {
+                destination: prepared.effect.destination,
+            },
+        )
     }
     pub fn navigation(&self) -> &NavigationState {
         &self.navigation
@@ -90,6 +234,7 @@ impl ApplicationSession {
     }
     pub fn shell_projection(&self) -> ShellProjection {
         ShellProjection {
+            toolbar: self.toolbar_view(),
             ui_revision: self.revision,
             state: self.shell.clone(),
             view: self.shell.view(),
@@ -100,6 +245,7 @@ impl ApplicationSession {
     }
     pub fn projection(&self) -> ApplicationProjection {
         ApplicationProjection {
+            toolbar: self.toolbar_view(),
             ui_revision: self.revision,
             navigation: self.navigation.clone(),
             state: self.shell.clone(),
@@ -126,6 +272,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> Option<ApplicationProjection> {
         self.settings.configure(environment, harness)?;
+        self.toolbar.update(harness);
         self.advance();
         Some(self.projection())
     }
@@ -142,6 +289,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> (ApplicationProjection, SettingsEffect) {
         let (_, effect) = self.settings.commit(prepared, harness);
+        self.toolbar.update(harness);
         self.advance();
         (self.projection(), effect)
     }
@@ -157,6 +305,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> Option<ApplicationProjection> {
         self.composer.configure(environment, harness)?;
+        self.toolbar.update(harness);
         self.advance();
         Some(self.projection())
     }
@@ -173,6 +322,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> (ApplicationProjection, ComposerEffect) {
         let (_, effect) = self.composer.commit(prepared, harness);
+        self.toolbar.update(harness);
         self.advance();
         (self.projection(), effect)
     }
@@ -182,6 +332,7 @@ impl ApplicationSession {
             environment.context.unsaved_generation.saturating_add(1);
         environment.context.session_id = None;
         self.composer.configure(environment, harness);
+        self.toolbar.update(harness);
         self.advance();
     }
     pub fn conversation_state(&self) -> &ConversationState {
@@ -203,6 +354,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> (ApplicationProjection, ConversationEffect) {
         let (_, effect) = self.conversation.commit(prepared, harness);
+        self.toolbar.update(harness);
         self.advance();
         (self.projection(), effect)
     }
@@ -222,6 +374,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> (ApplicationProjection, ConversationEffect) {
         let (_, effect) = self.conversation.commit_entries(prepared, entries, harness);
+        self.toolbar.update(harness);
         self.advance();
         (self.projection(), effect)
     }
@@ -231,6 +384,7 @@ impl ApplicationSession {
         harness: &HarnessState,
     ) -> Option<ApplicationProjection> {
         self.conversation.refresh_entries(entries, harness)?;
+        self.toolbar.update(harness);
         self.advance();
         Some(self.projection())
     }
@@ -259,6 +413,7 @@ impl ApplicationSession {
             }
             _ => {}
         }
+        self.toolbar.update(harness);
         self.advance();
         (self.projection(), effect)
     }
@@ -283,6 +438,7 @@ impl ApplicationSession {
                 self.leave_agents();
             }
         }
+        self.toolbar.update(harness);
         self.advance();
         self.projection()
     }
@@ -341,6 +497,7 @@ impl ApplicationSession {
                 self.navigation.activated(tab);
             }
         }
+        self.toolbar.update(harness);
         self.advance();
         Some(self.projection())
     }
@@ -351,10 +508,12 @@ impl ApplicationSession {
         }
         // Sparse transport states carry no replacement transcript. Hosts that
         // keep entries separately use the explicit slice variant below.
+        self.toolbar.update(harness);
         self.agents.refresh(harness);
         self.composer.refresh(harness);
         self.settings.refresh(harness);
         if self.fingerprint() != self.serialized {
+            self.toolbar.update(harness);
             self.advance();
             Some(self.projection())
         } else {
@@ -366,11 +525,13 @@ impl ApplicationSession {
         entries: &[crate::model::ConversationEntry],
         harness: &HarnessState,
     ) -> Option<ApplicationProjection> {
+        self.toolbar.update(harness);
         self.agents.refresh(harness);
         self.composer.refresh(harness);
         self.settings.refresh(harness);
         self.conversation.refresh_entries(entries, harness);
         if self.fingerprint() != self.serialized {
+            self.toolbar.update(harness);
             self.advance();
             Some(self.projection())
         } else {
@@ -388,6 +549,7 @@ impl ApplicationSession {
     }
     fn fingerprint(&self) -> serde_json::Value {
         serde_json::to_value((
+            self.toolbar_view(),
             &self.navigation,
             &self.shell,
             self.agents.projection().view,

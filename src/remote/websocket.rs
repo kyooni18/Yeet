@@ -238,15 +238,15 @@ fn prune_attachments(attachments: &mut HashMap<String, PendingRemoteAttachment>,
     attachments.retain(|_, value| now.duration_since(value.created_at) < ATTACHMENT_TTL);
 }
 
-struct RuntimeShared {
-    theme_cache: crate::theme::ThemeProjectionCache,
-    state: BridgeState,
+pub(super) struct RuntimeShared {
+    pub(super) theme_cache: crate::theme::ThemeProjectionCache,
+    pub(super) state: BridgeState,
     sequence: u64,
     history: VecDeque<ServerMessage>,
     last_touched: Instant,
 }
 
-enum RuntimeControl {
+pub(super) enum RuntimeControl {
     Command {
         command: FrontendCommand,
         completion: oneshot::Sender<Result<(), String>>,
@@ -268,6 +268,11 @@ enum RuntimeControl {
     },
     ComposerAction {
         action: crate::shared_ui::composer::ComposerAction,
+        request_id: Option<String>,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
+    ToolbarAction {
+        action: crate::shared_ui::toolbar::ToolbarAction,
         request_id: Option<String>,
         completion: oneshot::Sender<Result<(), String>>,
     },
@@ -783,6 +788,24 @@ fn runtime_loop(
                         ));
                         Ok(())
                     })();
+                    let _ = completion.send(result);
+                }
+                RuntimeControl::ToolbarAction {
+                    action,
+                    request_id,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
+                    }
+                    let result = super::ui_host::run_toolbar_action(
+                        &shared,
+                        &ui,
+                        &mut service,
+                        &events,
+                        action,
+                        request_id,
+                    );
                     let _ = completion.send(result);
                 }
                 RuntimeControl::SettingsAction {
@@ -1562,6 +1585,14 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                             }
                             ClientMessage::UiComposerAction { action, request_id, .. } => {
                                 if let Err(error) = runtime.apply_composer(action, request_id.clone()).await {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_action_failed", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
+                            ClientMessage::UiToolbarAction { action, request_id, .. } => {
+                                runtime.touch();
+                                if let Err(error) = super::ui_host::enqueue_toolbar(&runtime.commands,&runtime.wake,action,request_id.clone(),BACKEND_COMMAND_DELIVERY_TIMEOUT).await {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
                                         "ui_action_failed", error.to_string(), false, request_id,
                                     )).await;

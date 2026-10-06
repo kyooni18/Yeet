@@ -32,6 +32,10 @@ enum Control {
     AgentAction(AgentAction, mpsc::Sender<Result<(), String>>),
     ConversationAction(ConversationAction, mpsc::Sender<Result<(), String>>),
     ComposerAction(ComposerAction, mpsc::Sender<Result<(), String>>),
+    ToolbarAction(
+        yeet::shared_ui::toolbar::ToolbarAction,
+        mpsc::Sender<Result<(), String>>,
+    ),
     SettingsAction(SettingsAction, mpsc::Sender<Result<(), String>>),
     Disconnect(mpsc::Sender<()>),
     Stop,
@@ -213,6 +217,20 @@ fn publish_settings(
     .map_err(|error| error.to_string())
 }
 #[tauri::command]
+async fn send_ui_toolbar_action(
+    action: yeet::shared_ui::toolbar::ToolbarAction,
+    host: tauri::State<'_, CoreHost>,
+) -> Result<(), String> {
+    let (reply, response) = mpsc::channel();
+    host.0
+        .send(Control::ToolbarAction(action, reply))
+        .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || response.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?
+}
+#[tauri::command]
 async fn send_ui_settings_action(
     action: SettingsAction,
     host: tauri::State<'_, CoreHost>,
@@ -239,6 +257,7 @@ fn publish_application(
             kind: "ui_state",
             request_id: None,
             projection: UiProjection {
+                toolbar: projection.toolbar,
                 ui_revision: projection.ui_revision,
                 state: projection.state,
                 view: projection.view,
@@ -470,6 +489,27 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                 })();
                 let _ = reply.send(result);
             }
+            Ok(Control::ToolbarAction(action, reply)) => {
+                let result = (|| -> Result<(), String> {
+                    let core = harness.as_mut().ok_or("Connect a local workspace first")?;
+                    let mut state = core
+                        .latest_state()
+                        .cloned()
+                        .ok_or("Local workspace state unavailable")?;
+                    if state.conversation.is_none() {
+                        state.conversation = conversation.clone();
+                    }
+                    let prepared = ui.prepare_toolbar(action, &state);
+                    if let Some(command) = prepared.effect.command.clone() {
+                        let theme_command = command.clone();
+                        core.send(command).map_err(|error| error.to_string())?;
+                        theme_cache.invalidate_for_command(&theme_command);
+                    }
+                    let (projection, _effect) = ui.commit_toolbar(prepared, &state);
+                    publish_application(&app, projection, None)
+                })();
+                let _ = reply.send(result);
+            }
             Ok(Control::SettingsAction(action, reply)) => {
                 let result = (|| -> Result<(), String> {
                     let core = harness.as_mut().ok_or("Connect a local workspace first")?;
@@ -608,6 +648,7 @@ fn main() {
             send_ui_agent_action,
             send_ui_conversation_action,
             send_ui_composer_action,
+            send_ui_toolbar_action,
             send_ui_settings_action
         ])
         .build(tauri::generate_context!())

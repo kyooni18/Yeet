@@ -1,3 +1,4 @@
+import type { ToolbarAction } from '../../../../shared/remote/protocol'
 import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, UiProjection, AgentAction, ConversationAction, ComposerAction, SettingsAction } from '../../../../shared/remote/protocol'
 import type { RemoteTransportEvents } from '../../../../shared/remote/transport'
 
@@ -123,7 +124,7 @@ export class DesktopTransport {
       this.connected = true
       this.events.onMessage({ version: 1, type: 'welcome', client_id: 'desktop', workspace: result.workspace, sequence: 0, revision: 0, resumed: false })
       if (result.state) this.snapshot(result.state)
-      applyUi({ version: 1, type: 'ui_state', ui_revision: projection.ui_revision, state: projection.state, view: projection.view })
+      applyUi({ version: 1, type: 'ui_state', ui_revision: projection.ui_revision, state: projection.state, view: projection.view, toolbar: projection.toolbar })
       applyAgents({ version: 1, type: 'ui_agents', ...projection.agents })
       applyConversation({ version: 1, type: 'ui_conversation', ...projection.conversation })
       applyComposer({ version: 1, type: 'ui_composer', ...projection.composer })
@@ -151,6 +152,11 @@ export class DesktopTransport {
   sendUi(action: ShellAction): boolean {
     if (!this.connected) return false
     void bridge()!.core.invoke('send_ui_action', { action }).catch(error => this.events.onError(String(error)))
+    return true
+  }
+  sendToolbarUi(action:ToolbarAction):boolean {
+    const api=bridge(); if(!api || !this.connected)return false
+    void api.core.invoke('send_ui_toolbar_action',{action}).catch(error=>this.events.onError(String(error)))
     return true
   }
   sendSettingsUi(action: SettingsAction): boolean {

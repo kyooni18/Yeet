@@ -24,6 +24,7 @@ pub(super) fn application_messages(
 ) -> [ServerMessage; 5] {
     [
         ServerMessage::UiState {
+            toolbar: projection.toolbar,
             version: REMOTE_PROTOCOL_VERSION,
             ui_revision: projection.ui_revision,
             request_id: request_id.clone(),
@@ -117,3 +118,56 @@ pub(super) fn configure_composer_host(
     ui.configure_composer(environment, state).is_some()
 }
 
+/// Keep toolbar delivery and UI commit on the serialized host lane.
+pub(super) fn run_toolbar_action(
+    shared: &std::sync::Arc<std::sync::Mutex<super::websocket::RuntimeShared>>,
+    ui: &std::sync::Arc<std::sync::Mutex<ApplicationSession>>,
+    service: &mut crate::harness::HarnessService,
+    events: &tokio::sync::broadcast::Sender<ServerMessage>,
+    action: crate::shared_ui::toolbar::ToolbarAction,
+    request_id: Option<String>,
+) -> Result<(), String> {
+    let mut state = shared
+        .lock()
+        .map_err(|_| "remote runtime state lock poisoned")?;
+    let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
+    let prepared = ui.prepare_toolbar(action, &state.state);
+    if let Some(command) = prepared.effect.command.clone() {
+        let theme_command = command.clone();
+        service
+            .send(command)
+            .map_err(|error| format!("{error:#}"))?;
+        state.theme_cache.invalidate_for_command(&theme_command);
+    }
+    let (projection, _) = ui.commit_toolbar(prepared, &state.state);
+    for message in application_messages(projection, request_id, None) {
+        let _ = events.send(message);
+    }
+    Ok(())
+}
+
+pub(super) async fn enqueue_toolbar(
+    commands: &std::sync::mpsc::Sender<super::websocket::RuntimeControl>,
+    wake: &crate::background::Wake,
+    action: crate::shared_ui::toolbar::ToolbarAction,
+    request_id: Option<String>,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    let (completion, result) = tokio::sync::oneshot::channel();
+    commands
+        .send(super::websocket::RuntimeControl::ToolbarAction {
+            action,
+            request_id,
+            completion,
+        })
+        .map_err(|_| anyhow::anyhow!("semantic Remote runtime is no longer available"))?;
+    wake.notify();
+    match tokio::time::timeout(timeout, result).await {
+        Ok(Ok(Ok(()))) => Ok(()),
+        Ok(Ok(Err(error))) => Err(anyhow::anyhow!(error)),
+        Ok(Err(_)) => Err(anyhow::anyhow!(
+            "semantic Remote runtime stopped before confirming UI action delivery"
+        )),
+        Err(_) => Err(anyhow::anyhow!("timed out delivering Remote UI action")),
+    }
+}

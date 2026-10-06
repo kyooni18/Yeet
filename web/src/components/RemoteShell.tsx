@@ -8,7 +8,7 @@ import { SettingsSheet } from '@/components/SettingsSheet'
 import { Sidebar } from '@/components/Sidebar'
 import { TopBar } from '@/components/TopBar'
 import { remoteStore, useRemote } from '@/store/remoteStore'
-import type { ShellAction, ShellState } from '@/remote/protocol'
+import type { ShellAction, ShellState, ToolbarAction } from '@/remote/protocol'
 
 /** Browser visuals and focus for the Rust-authored application shell. */
 export function RemoteShell() {
@@ -31,17 +31,17 @@ export function RemoteShell() {
     target.current = active instanceof HTMLElement && active !== document.body ? active : null
   }
   const send = (action: ShellAction) => remoteStore.sendUi(action)
-  const openNavigation = () => {
+  const openNavigation = (action?: ToolbarAction) => {
     rememberFocus(navigationReturnFocus)
-    send({ type: 'open_navigation' })
+    if(action) remoteStore.sendToolbarUi(action); else send({ type: 'open_navigation' })
   }
-  const openModel = () => {
+  const openModel = (action?: ToolbarAction) => {
     if (!modelSheet) rememberFocus(modelReturnFocus)
-    send({ type: 'open_models' })
+    if(action) remoteStore.sendToolbarUi(action); else send({ type: 'open_models' })
   }
-  const openSettings = () => {
+  const openSettings = (action?: ToolbarAction) => {
     if (!settings) rememberFocus(settingsReturnFocus)
-    send({ type: 'open_settings' })
+    if(action) remoteStore.sendToolbarUi(action); else send({ type: 'open_settings' })
   }
 
   useEffect(() => {
@@ -101,7 +101,7 @@ export function RemoteShell() {
                 switch (child) {
                   case 'session_header': return <TopBar key={child} sidebarOpen={sidebarVisible} controlsOpen={controlsVisible}
                     onToggleSidebar={openNavigation}
-                    onToggleControls={() => send({ type: 'toggle_inspector' })} />
+                    onToggleControls={(action) => action ? remoteStore.sendToolbarUi(action) : send({ type: 'toggle_inspector' })} />
                   case 'conversation': return <div key={child} className="workspace-transcript">
                     <Conversation onEditLast={(content) => setEditRequest({ key: Date.now(), content })} />
                   </div>

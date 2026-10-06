@@ -62,6 +62,12 @@ pub enum ClientMessage {
         request_id: Option<String>,
         action: crate::shared_ui::composer::ComposerAction,
     },
+    UiToolbarAction {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        action: crate::shared_ui::toolbar::ToolbarAction,
+    },
     UiSettingsAction {
         version: u16,
         #[serde(default)]
@@ -84,6 +90,7 @@ impl ClientMessage {
             | Self::UiAgentAction { version, .. }
             | Self::UiConversationAction { version, .. }
             | Self::UiComposerAction { version, .. }
+            | Self::UiToolbarAction { version, .. }
             | Self::UiSettingsAction { version, .. }
             | Self::Ping { version, .. } => Some(*version),
         }
@@ -98,6 +105,7 @@ impl ClientMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     UiState {
+        toolbar: crate::shared_ui::toolbar::ToolbarView,
         version: u16,
         ui_revision: u64,
         request_id: Option<String>,

@@ -1,3 +1,4 @@
+import { projectToolbar } from './uiToolbarHarness'
 import { projectSettings } from './uiSettingsHarness'
 import type { Page } from '@playwright/test'
 import { projectAgents } from './uiAgentsHarness'
@@ -13,6 +14,7 @@ export async function installMockRemote(page: Page): Promise<void> {
   await page.exposeFunction('__yeetProjectConversation', projectConversation)
   await page.exposeFunction('__yeetProjectComposer', projectComposer)
   await page.exposeFunction('__yeetProjectSettings', projectSettings)
+  await page.exposeFunction('__yeetProjectToolbar', projectToolbar)
   await page.route('**/api/auth/status', async (route) => {
     await route.fulfill({
       contentType: 'application/json',
@@ -222,6 +224,18 @@ export async function installMockRemote(page: Page): Promise<void> {
       })
     }
 
+    let toolbarQueue = Promise.resolve()
+    const projectToolbarUi = (socket:MockSocket,action?:unknown) => {
+      toolbarQueue=toolbarQueue.then(async()=>{
+        const host=window as unknown as {__yeetProjectToolbar(input:unknown):Promise<{projection:{state:Record<string,unknown>;view:unknown;toolbar:unknown};command?:unknown}>}
+        const result=await host.__yeetProjectToolbar({state:harnessState,shell:shellNodes[uiNode].state,action})
+        if(result.command){sent.push({type:'command',version:1,command:result.command});if((result.command as {type?:string}).type==='new_session'){unsavedGeneration++;projectComposerUi(socket)}}
+        const next=shellNodes.findIndex(node=>JSON.stringify(node.state)===JSON.stringify(result.projection.state))
+        if(next>=0)uiNode=next
+        socket.emit({type:'ui_state',version:1,ui_revision:++uiRevision,state:result.projection.state,view:result.projection.view,toolbar:result.projection.toolbar})
+      })
+    }
+
     class MockSocket extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -282,6 +296,8 @@ export async function installMockRemote(page: Page): Promise<void> {
             projectComposerUi(this)
             projectSettingsUi(this)
           })
+        } else if (message.type === 'ui_toolbar_action') {
+          projectToolbarUi(this,message.action)
         } else if (message.type === 'ui_settings_action') {
           projectSettingsUi(this, message.action)
         } else if (message.type === 'ui_composer_action') {
@@ -305,7 +321,7 @@ export async function installMockRemote(page: Page): Promise<void> {
 
       emitUi() {
         const node = shellNodes[uiNode]
-        this.emit({ type: 'ui_state', version: 1, ui_revision: uiRevision, state: node.state, view: node.view })
+        projectToolbarUi(this)
       }
 
       close(code = 1000, reason = '') {
@@ -335,7 +351,7 @@ export async function installMockRemote(page: Page): Promise<void> {
           harnessState[`active_${prefix}_entry_id`] = message.entry_id
           harnessState.is_streaming = true
         }
-        if (message.type === 'state_update' || message.type === 'snapshot') { projectComposerUi(this); projectSettingsUi(this) }
+        if (message.type === 'state_update' || message.type === 'snapshot') { projectComposerUi(this); projectSettingsUi(this); projectToolbarUi(this) }
         if (['state_update', 'snapshot', 'conversation_reset', 'conversation_entry', 'tool_update', 'activity_update', 'reasoning_delta', 'assistant_delta'].includes(String(message.type))) projectConversation(this)
         this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(message) }))
       }

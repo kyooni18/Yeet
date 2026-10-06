@@ -1,7 +1,9 @@
+import { Fragment } from 'react'
+import type { ToolbarAction } from '@/remote/protocol'
 import { BarChart3, CheckCircle2, ChevronRight, ChevronsUpDown, Cpu, Flag, Folder, Layers3, Lightbulb, Lock, Settings, ShieldCheck, X } from '@/components/Icons'
 import { ProviderIcon } from '@/components/ProviderIcon'
 import { remoteStore, useRemote } from '@/store/remoteStore'
-import { formatReset, formatTokens, reasoningLevelsForModel, reasoningName, shortModelName } from '@/ui/format'
+import { formatReset, formatTokens, shortModelName } from '@/ui/format'
 
 function Toggle({
   checked,
@@ -37,10 +39,12 @@ export function QuickPanel({
 }: {
   open: boolean
   onClose: () => void
-  onModel: () => void
-  onSettings: () => void
+  onModel: (action?: ToolbarAction) => void
+  onSettings: (action?: ToolbarAction) => void
 }) {
   const remote = useRemote()
+  const toolbar = remote.ui?.toolbar
+  const response = toolbar?.groups.find(group => group.id === 'quick_response')?.controls ?? []
   const sandbox = remote.state.sandbox_settings
   const current = remote.state.current_context_tokens
   const total = remote.state.active_model_context_length
@@ -52,12 +56,13 @@ export function QuickPanel({
       <aside className={`quick-panel${open ? ' is-open' : ''}`} aria-hidden={!open}>
         <div className="quick-panel__header">
           <span className={`connection-dot connection-dot--${remote.connection === 'connected' ? 'ok' : 'warn'}`} />
-          <strong>{remote.state.is_streaming ? 'Working' : 'Controls'}</strong>
+          <strong>{toolbar?.quick_title}</strong>
           <button className="panel-icon" onClick={onClose} aria-label="Close controls"><X size={15} /></button>
         </div>
 
         <div className="quick-panel__scroll">
-          <label className="quick-workspace inset-surface">
+          {toolbar?.quick_sections.map(section => <Fragment key={section}>
+            {section === 'workspace' && (<label className="quick-workspace inset-surface">
             <Folder size={13} />
             <span>
               <strong>{remote.currentWorkspace?.display_name || remote.state.workspace_root || 'Workspace'}</strong>
@@ -73,48 +78,27 @@ export function QuickPanel({
                 <option key={workspace.id} value={workspace.path}>{workspace.display_name}</option>
               ))}
             </select>
-          </label>
-
-          <div className="quick-group inset-surface">
-            <button
-              className="quick-row"
-              onClick={(event) => {
-                event.currentTarget.focus({ preventScroll: true })
-                onModel()
-              }}
-              disabled={!canMutate}
-            >
-              {remote.activeProvider ? <ProviderIcon provider={remote.activeProvider} size={16} /> : <Cpu size={13} />}
-              <span>Model</span>
-              <strong>{shortModelName(remote.state.active_model)}</strong>
-              <ChevronRight size={13} />
-            </button>
-            <label className="quick-row">
-              <Lightbulb size={14} strokeWidth={1.7} />
-              <span>Reasoning</span>
-              <strong>{reasoningName(remote.state.active_reasoning_level)}</strong>
-              <select
-                value={remote.state.active_reasoning_level || 'auto'}
-                onChange={(event) => remoteStore.selectReasoning(event.target.value)}
-                aria-label="Reasoning"
-                disabled={!canMutate}
-              >
-                {reasoningLevelsForModel(remote.state.active_model).map((level) => <option key={level} value={level}>{reasoningName(level)}</option>)}
-              </select>
-            </label>
-            <div className="quick-row">
-              <Flag size={13} strokeWidth={1.7} />
-              <span>Goal</span>
-              <Toggle
-                checked={remote.state.goal_mode}
-                onChange={(value) => remoteStore.setGoal(value)}
-                label="Goal mode"
-                disabled={!canMutate}
-              />
-            </div>
-          </div>
-
-          {remote.composer?.permissions.map((permission) => (
+          </label>)}
+            {section === 'response' && (<div className="quick-group inset-surface">
+            {response.map(control => control.kind === 'choice'
+              ? <label className="quick-row" key={control.id}>
+                <Lightbulb size={14} strokeWidth={1.7}/><span>{control.label}</span>
+                <strong>{control.options.find(option => option.value === control.value)?.label}</strong>
+                <select value={control.value} aria-label={control.label} disabled={!canMutate || !control.enabled}
+                  onChange={event => remoteStore.sendToolbarUi({type:'choose',value:{id:control.id,value:event.target.value}})}>
+                  {control.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              : control.kind === 'toggle' ? <div className="quick-row" key={control.id}>
+                <Flag size={13}/><span>Goal</span><Toggle checked={control.pressed ?? false} label={control.label}
+                  disabled={!canMutate || !control.enabled} onChange={() => remoteStore.sendToolbarUi({type:'activate',value:control.id})}/>
+              </div> : <button className="quick-row" key={control.id} disabled={!canMutate || !control.enabled}
+                onClick={event => {event.currentTarget.focus({preventScroll:true});onModel({type:'activate',value:control.id})}}>
+                {remote.activeProvider ? <ProviderIcon provider={remote.activeProvider} size={16}/> : <Cpu size={13}/>}
+                <span>{control.label}</span><strong>{shortModelName(control.value)}</strong><ChevronRight size={13}/>
+              </button>)}
+          </div>)}
+            {section === 'permissions' && (remote.composer?.permissions.map((permission) => (
             <div className="permission-panel inset-surface" key={`${permission.target.kind}:${permission.target.id}`}>
               <div>
                 <ShieldCheck size={14} />
@@ -134,10 +118,8 @@ export function QuickPanel({
                 ))}
               </div>
             </div>
-          ))}
-
-          {sandbox && (
-            <div className="quick-section">
+          )))}
+            {section === 'sandbox' && sandbox && (<div className="quick-section">
               <div className="quick-section__label"><Lock size={12} /> Sandbox</div>
               <div className="quick-group inset-surface">
                 <label className="quick-row quick-row--plain">
@@ -163,21 +145,16 @@ export function QuickPanel({
                   />
                 </div>
               </div>
-            </div>
-          )}
-
-          {typeof current === 'number' && typeof total === 'number' && total > 0 && (
-            <div className="context-panel inset-surface">
+            </div>)}
+            {section === 'context' && (<div className="context-panel inset-surface">
               <div>
                 <Layers3 size={14} strokeWidth={1.65} />
                 <span>Context</span>
-                <strong>{formatTokens(current)} / {formatTokens(total)}</strong>
+                <strong>{formatTokens(current ?? 0)} / {formatTokens(total ?? 0)}</strong>
               </div>
-              <progress value={Math.min(current / total, 1)} max={1} />
-            </div>
-          )}
-
-          <div className="usage-panel inset-surface">
+              <progress value={Math.min((current ?? 0) / (total ?? 1), 1)} max={1} />
+            </div>)}
+            {section === 'usage' && (<div className="usage-panel inset-surface">
             <div className="usage-panel__heading">
               <BarChart3 size={15} strokeWidth={1.7} />
               <span>
@@ -201,20 +178,15 @@ export function QuickPanel({
                 <span><small>Output</small><strong>{formatTokens(remote.state.token_usage.output_tokens ?? 0)}</strong></span>
               </div>
             )}
-          </div>
+          </div>)}
+          </Fragment>)}
         </div>
 
-        <button
-          className="quick-settings-button inset-surface"
-          onClick={(event) => {
-            event.currentTarget.focus({ preventScroll: true })
-            onSettings()
-          }}
-        >
-          <Settings size={14} />
-          <span>Settings</span>
-          <ChevronRight size={13} />
-        </button>
+        {toolbar?.groups.find(group => group.id === 'quick_footer')?.controls.map(control => <button key={control.id}
+          className="quick-settings-button inset-surface" disabled={!control.enabled}
+          onClick={event => {event.currentTarget.focus({preventScroll:true});onSettings({type:'activate',value:control.id})}}>
+          <Settings size={14}/><span>{control.label}</span><ChevronRight size={13}/>
+        </button>)}
       </aside>
     </>
   )

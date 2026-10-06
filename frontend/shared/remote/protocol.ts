@@ -566,7 +566,11 @@ export interface ShellView {
   skip_conversation: boolean
   dismiss: ShellSurface | null
 }
+export type ToolbarAction = { type: 'activate'; value: string } | { type: 'choose'; value: { id: string; value: string } }
+export interface ToolbarControl { id: string; label: string; icon: 'menu'|'new_session'|'controls'|'interrupt'|'model'|'reasoning'|'goal'|'settings'|'sessions'|'files'|'capabilities'; kind: 'button'|'choice'|'toggle'; value: string; enabled: boolean; pressed: boolean | null; options: {value:string;label:string;description:string}[] }
+export interface ToolbarView { groups: {id:string;controls:ToolbarControl[]}[]; quick_title:string; quick_sections:('workspace'|'response'|'permissions'|'sandbox'|'context'|'usage')[] }
 export interface UiProjection {
+  toolbar?: ToolbarView
   ui_revision: number
   state: ShellState
   view: ShellView
