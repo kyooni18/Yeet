@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import {
   ArrowUp,
   BarChart3,
-  ChevronRight,
   ChevronsUpDown,
   CornerDownLeft,
   FileText,
@@ -29,7 +28,6 @@ import { remoteStore, useRemote } from '@/store/remoteStore'
 import { formatReset, formatTokens, reasoningName, shortModelName } from '@/ui/format'
 import { readComposerDraft, writeComposerDraft } from '@/ui/composerDrafts'
 
-const TOOLBAR_KEY = 'YeetRemoteComposerToolbarExpanded'
 const MAX_ATTACHMENTS = 8
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
@@ -441,14 +439,6 @@ export function Composer({
   ])
   const draftContextKeyRef = useRef(draftContextKey)
   const [text, setText] = useState(() => readComposerDraft(draftContextKey))
-  const [expanded, setExpanded] = useState(() => {
-    try {
-      const stored = localStorage.getItem(TOOLBAR_KEY)
-      return stored == null ? true : stored === 'true'
-    } catch {
-      return true
-    }
-  })
   const [usageOpen, setUsageOpen] = useState(false)
   const [features, setFeatures] = useState<Set<string>>(new Set())
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
@@ -619,15 +609,6 @@ export function Composer({
     remoteStore.sendComposerUi({ type: 'select_suggestion', value: { editor: currentEditor.current, command: item.command } })
   }
 
-  const toggleExpanded = () => {
-    setUsageOpen(false)
-    setExpanded((value) => {
-      const next = !value
-      try { localStorage.setItem(TOOLBAR_KEY, String(next)) } catch { /* unavailable */ }
-      return next
-    })
-  }
-
   const removeAttachment = (localID: string) => {
     const attachment = attachments.find((candidate) => candidate.localID === localID)
     if (!attachment) return
@@ -707,7 +688,7 @@ export function Composer({
         </div>
       )}
 
-      <div className={`composer-toolbar${expanded ? ' is-expanded' : ' is-collapsed'}`}>
+      <div className="composer-toolbar is-expanded">
         <div className="composer-toolbar__scroller">
           <div className="composer-toolbar__controls">
             <button
@@ -798,9 +779,6 @@ export function Composer({
           </div>
         </div>
 
-        <button className="toolbar-collapse glass-circle" onClick={toggleExpanded} aria-label={expanded ? 'Collapse toolbar' : 'Expand toolbar'}>
-          <ChevronRight size={12} className={expanded ? 'is-expanded' : ''} />
-        </button>
       </div>
 
       {composer?.edit_banner && (

@@ -99,17 +99,11 @@ test('uses an overlay sidebar on touch and a docked sidebar on desktop', async (
   }
 })
 
-test('collapses the composer toolbar and keeps the affordance usable', async ({ page }) => {
+test('keeps the composer toolbar always visible', async ({ page }) => {
   const toolbar = page.locator('.composer-toolbar')
   await expect(toolbar).toHaveClass(/is-expanded/)
   await expect(toolbar.getByText('gpt-5.6-sol')).toBeVisible()
-
-  await page.getByRole('button', { name: 'Collapse toolbar' }).click()
-  await expect(toolbar).toHaveClass(/is-collapsed/)
-  await expect(page.getByRole('button', { name: 'Expand toolbar' })).toBeVisible()
-
-  await page.getByRole('button', { name: 'Expand toolbar' }).click()
-  await expect(toolbar).toHaveClass(/is-expanded/)
+  await expect(page.getByRole('button', { name: /toolbar/i })).toHaveCount(0)
 })
 
 test('opens model sheet and emits model, goal, submit and interrupt commands', async ({ page }) => {

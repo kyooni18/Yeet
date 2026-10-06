@@ -999,3 +999,82 @@ body { font-size: 13px; }
   font: 400 12px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   white-space: pre-wrap;
 }
+
+/* Compact and touch layouts: same single-surface composer, 36px touch targets. */
+@media not all and (hover: hover) and (pointer: fine) and (min-width: 1000px) {
+  .workspace-composer { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); overflow: visible; border-top: 1px solid var(--y-line); }
+  .attachment-menu { bottom: 44px; }
+  .composer-shell {
+    display: flex;
+    width: 100%;
+    flex-flow: row wrap;
+    align-items: center;
+    align-content: flex-start;
+    gap: 4px;
+    padding: 8px;
+    border: 1px solid var(--y-line);
+    border-radius: 12px;
+    background: var(--y-surface);
+    overflow: visible;
+  }
+  .composer-shell > .permission-card,
+  .composer-shell > .composer-permission,
+  .composer-shell > .edit-last-banner,
+  .composer-shell > .attachment-strip,
+  .composer-shell > .attachment-error { flex: 1 0 100%; order: -1; }
+  .composer-toolbar,
+  .composer-toolbar__scroller,
+  .composer-toolbar__controls,
+  .composer-row { display: contents; }
+  .composer-input { order: 0; flex: 1 0 100%; width: 100%; padding: 0; border: 0; background: transparent; }
+  .composer-input textarea { min-height: 40px; padding: 4px 6px 6px; color: var(--y-t1); font-size: 16px; line-height: 1.4; }
+  .attachment-add-wrap { order: 1; width: 36px; min-width: 36px; height: 36px; flex: 0 0 36px; margin: 0; padding: 0; }
+  .composer-toolbar__controls > .toolbar-chip { order: 2; min-height: 36px; }
+  .composer-toolbar__controls > .goal-chip,
+  .composer-toolbar__controls > .usage-control,
+  .composer-toolbar__controls > .toolbar-chip[title^="Context"] { display: none; }
+  .composer-settings { order: 3; margin-left: auto; }
+  .composer-send { order: 4; }
+  .composer-settings,
+  .composer-send,
+  .attachment-add {
+    display: grid;
+    position: static;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    flex: 0 0 36px;
+    padding: 0;
+    place-items: center;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--y-t5);
+  }
+  .composer-send:not(.is-stop):not(:disabled) { background: var(--y-pbtn); color: var(--y-pbtn-ink); }
+  .composer-send:disabled { background: var(--y-btn); color: var(--y-t6); }
+  .composer-shell .attachment-add::before,
+  .composer-shell .attachment-add::after,
+  .composer-shell .composer-send::before,
+  .composer-shell .composer-send::after { display: none; }
+
+  .workspace-composer .composer-shell .composer-input,
+  .workspace-composer .composer-shell .composer-input textarea { border: 0; background: transparent; box-shadow: none; }
+  .workspace-composer .composer-toolbar::after,
+  .workspace-composer .composer-toolbar.is-expanded::after,
+  .composer-shell .composer-input::before,
+  .composer-shell .composer-input::after { display: none; }
+  .workspace-composer .composer-shell .attachment-add,
+  .workspace-composer .composer-shell .composer-settings,
+  .workspace-composer .composer-shell .composer-send { border: 0; box-shadow: none; }
+  .workspace-composer .composer-shell .attachment-add,
+  .workspace-composer .composer-shell .composer-settings { background: transparent; }
+  .workspace-composer .composer-shell .composer-send:disabled { background: var(--y-btn); }
+  .composer-toolbar__controls > .toolbar-chip { flex: 0 1 auto; min-width: 0; padding: 0 4px; gap: 4px; overflow: hidden; }
+  .composer-toolbar__controls > .toolbar-chip:first-child { max-width: 30vw; }
+  .composer-toolbar__controls > .toolbar-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .reasoning-trace .trace-detail { background: transparent; padding: 0; border-radius: 0; }
+  .reasoning-trace .trace-detail__content { background: transparent; padding: 0; }
+}
