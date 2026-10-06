@@ -238,3 +238,9 @@ native input bindings. Composer semantics, settings, graphical Home/Files/Diff
 rendering parity, thin adapter ownership under Platforms and remaining runtime
 moves are still required.
 The blank native OpenPencil design constraint remains in force.
+
+Session persistence now lives in `Harness/session_store.rs` and its six
+submodules: manifest/object commits, append-only events, locking, legacy readers,
+export and workspace identity. Root `session_store` remains a compatibility
+reexport. No storage format, filesystem behavior or locking policy changed.
+Twelve existing persistence tests and all-target compilation passed.

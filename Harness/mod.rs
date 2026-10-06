@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 
 pub mod core;
 pub mod resources;
+pub mod session_store;
 mod service;
 
 pub use service::{HarnessClient, ServiceEvent, forward_cli};

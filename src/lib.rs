@@ -26,7 +26,8 @@ pub mod project_settings;
 pub mod remote;
 pub mod sandbox;
 pub mod sandbox_cli;
-pub mod session_store;
+// Compatibility import; persistent session ownership lives in Harness.
+pub use harness::session_store;
 pub mod shell;
 pub mod skyline;
 mod text_layout;
