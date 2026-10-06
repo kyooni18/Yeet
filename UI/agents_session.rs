@@ -11,6 +11,7 @@ pub struct AgentProjection {
 }
 
 pub struct PreparedAgentAction {
+    pub action: AgentAction,
     state: AgentState,
     pub effect: AgentEffect,
 }
@@ -36,14 +37,28 @@ impl AgentSession {
         }
     }
 
+    pub fn state(&self) -> &AgentState {
+        &self.state
+    }
+
+    /// Transitional access for native panels migrating field-by-field. Call
+    /// `refresh` after editing to reconcile selection and update projections.
+    pub fn compatibility_state_mut(&mut self) -> &mut AgentState {
+        &mut self.state
+    }
+
     pub fn projection(&self) -> AgentProjection {
         self.projection.clone()
     }
 
     pub fn prepare(&self, action: AgentAction, harness: &HarnessState) -> PreparedAgentAction {
         let mut state = self.state.clone();
-        let effect = state.apply(action, harness);
-        PreparedAgentAction { state, effect }
+        let effect = state.apply(action.clone(), harness);
+        PreparedAgentAction {
+            action,
+            state,
+            effect,
+        }
     }
 
     /// Call only after any generated command was successfully delivered.

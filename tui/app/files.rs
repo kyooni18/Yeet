@@ -437,7 +437,7 @@ impl App {
             None => FilesState::open(dir),
         };
         self.files = Some(files);
-        self.navigation.activated(super::WorkbenchTab::Files);
+        self.report_navigation(super::WorkbenchTab::Files);
     }
 
     pub(crate) fn handle_files_key(&mut self, event: KeyEvent) {

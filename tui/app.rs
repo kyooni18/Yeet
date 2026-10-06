@@ -90,7 +90,7 @@ pub struct App {
     pub input: String,
     pub input_focused: bool,
     pub cursor: usize,
-    pub navigation: crate::shared_ui::navigation::NavigationState,
+    pub application: crate::shared_ui::application_session::ApplicationSession,
     pub(crate) tab_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub(crate) view_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub popup_filter: String,
@@ -148,16 +148,16 @@ pub struct App {
 }
 
 // Temporary field compatibility while existing panels migrate to shared UI.
-// The owned navigation state and its transitions remain in UI.
+// The sole application UI owner is the shared controller.
 impl std::ops::Deref for App {
     type Target = crate::shared_ui::navigation::NavigationState;
     fn deref(&self) -> &Self::Target {
-        &self.navigation
+        self.application.navigation()
     }
 }
 impl std::ops::DerefMut for App {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.navigation
+        self.application.navigation_mut()
     }
 }
 
@@ -183,7 +183,7 @@ impl Default for App {
             input: String::new(),
             input_focused: true,
             cursor: 0,
-            navigation: Default::default(),
+            application: Default::default(),
             tab_targets: Vec::new(),
             view_targets: Vec::new(),
             popup_filter: String::new(),
@@ -287,6 +287,7 @@ impl App {
             self.work_rows.clear();
         }
         self.state = next;
+        self.application.refresh(&self.state);
         if provider_configurations_changed {
             self.pending_provider_delete_id = None;
         }
@@ -536,7 +537,7 @@ impl App {
             }
             Mode::Agents => {
                 if let Some(command) = self.handle_agents_key(event) {
-                    backend.send(command)?;
+                    self.send_ui_command(backend, command)?;
                 }
                 Ok(())
             }
@@ -1568,7 +1569,7 @@ impl App {
     }
 
     pub(crate) fn open_views(&mut self) {
-        self.navigation.open_launcher();
+        self.application.navigation_mut().open_launcher();
     }
 
     fn handle_views_key(&mut self, event: KeyEvent) {
@@ -1577,16 +1578,16 @@ impl App {
         }
         match event.code {
             KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
-                self.navigation.dismiss_launcher();
+                self.application.navigation_mut().dismiss_launcher();
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.navigation.move_launcher(-1);
+                self.application.navigation_mut().move_launcher(-1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.navigation.move_launcher(1);
+                self.application.navigation_mut().move_launcher(1);
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Right => {
-                let tab = self.navigation.launcher_selection();
+                let tab = self.application.navigation().launcher_selection();
                 self.activate_workbench_tab(tab);
             }
             _ => {}

@@ -75,7 +75,7 @@ pub fn run_remote(options: RemoteOptions) -> Result<()> {
                 RemoteInput::Mouse(mouse) => {
                     app.handle_mouse(mouse);
                     if let Some(command) = app.take_workbench_command() {
-                        backend.send(command)?;
+                        app.send_ui_command(&mut backend, command)?;
                     }
                 }
                 RemoteInput::Resize { cols, rows } if cols != width || rows != height => {
@@ -184,7 +184,7 @@ fn event_loop(
                         Event::Mouse(mouse) => {
                             app.handle_mouse(mouse);
                             if let Some(command) = app.take_workbench_command() {
-                                backend.send(command)?;
+                                app.send_ui_command(backend, command)?;
                             }
                         }
                         Event::Paste(text) => app.handle_paste(&text),

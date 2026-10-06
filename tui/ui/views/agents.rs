@@ -35,7 +35,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         );
         return;
     }
-    let model = app.agents.shared.view(&app.state);
+    app.application.refresh(&app.state);
+    let model = app.application.agents_projection().view;
     frame.render_widget(
         Block::default().style(Style::default().bg(theme::code_background())),
         bounds,
@@ -164,7 +165,8 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, model: &AgentsView, area: Rec
     let count = format!("{running}/{}", members.len());
     let width = area.width as usize;
     let mut rows: Vec<(Option<String>, Line<'static>, bool)> = Vec::new();
-    let group_selected = app.agents.selected.is_none() || app.selected_agent().is_none();
+    let group_selected =
+        app.application.agent_state().selected.is_none() || app.selected_agent().is_none();
     let label = fit(&title, width.saturating_sub(count.len() + 6));
     let gap = width.saturating_sub(4 + Span::raw(&label).width() + count.len() + 1);
     rows.push((
@@ -198,7 +200,8 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, model: &AgentsView, area: Rec
                 Span::raw(" ".repeat(gap)),
                 Span::styled(state, muted()),
             ]),
-            !group_selected && app.agents.selected.as_deref() == Some(member.id.as_str()),
+            !group_selected
+                && app.application.agent_state().selected.as_deref() == Some(member.id.as_str()),
         ));
     }
     // Rows sit between the new group action and the Group Agent/action rows.
@@ -209,7 +212,7 @@ fn draw_rail(frame: &mut Frame<'_>, app: &mut App, model: &AgentsView, area: Rec
     let visible = last.saturating_sub(first_row) as usize;
     let selected_index = rows
         .iter()
-        .position(|(id, _, _)| id == &app.agents.selected)
+        .position(|(id, _, _)| id == &app.application.agent_state().selected)
         .unwrap_or(0);
     if visible > 0 {
         if selected_index < app.agents.scroll {
@@ -430,7 +433,9 @@ fn draw_main(frame: &mut Frame<'_>, app: &mut App, model: &AgentsView, area: Rec
         Rect::new(area.x, top, area.width, pill_y.saturating_sub(top + 1)),
     );
     let pill = match &selected {
-        _ if app.agents.creating_group => " New group objective · Enter to create ".to_owned(),
+        _ if app.application.agent_state().creating_group => {
+            " New group objective · Enter to create ".to_owned()
+        }
         Some(member) => format!(
             " {} · {} ",
             member.description,
@@ -874,8 +879,7 @@ fn elapsed(at: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::AgentActivityItem;
-    use crate::model::AgentGroupItem;
+    use crate::model::{AgentActivityItem, AgentGroupItem};
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]

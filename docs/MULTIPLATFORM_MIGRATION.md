@@ -169,3 +169,29 @@ browser checks caught and corrected a changing accessible dialog name and hidden
 empty state in the shared projection. Group settings forms remain native to the
 TUI, and shell/navigation/agent session ownership still needs consolidation.
 This is another incremental seam, not complete platform parity.
+
+`UI/application_session.rs` now owns navigation, shell and agent interaction state
+for the TUI, Remote client runtimes and Tauri's worker. Opening/dismissing Agents
+coordinates the same semantic state, and accepted resource navigation validates
+current surface identities. Adapters publish compatible shell/agent messages from
+one aggregate snapshot; Tauri startup now fetches `application_projection` once.
+Independent adapter reducers `RuntimeUi` and `DesktopUi` have been removed.
+Temporary native field accessors reconcile through the controller while panels
+migrate. The TUI's prepared agent effects commit after successful Harness delivery
+for both keyboard and pointer input; failure preserves creation intent and text.
+A browser batching regression also ensures accepted editor effects survive a
+runtime refresh before the next paint and do not replay across reconnect.
+
+Verification: 337 library tests passed with only the two previously attributed
+worktree assertions excluded; 13 shared UI tests cover controller coordination,
+stable identity, rollback and refresh. Three Remote integration/wire checks, two
+desktop host checks, native navigation/rendering/delivery checks, Web typecheck
+and RN typecheck/lint passed. Twenty-six targeted desktop/mobile browser checks
+passed, with four skips for inapplicable layouts. Unrelated checkout edits remain
+unstaged. Foundation recall/remember still return internal errors.
+
+Controller ownership is consolidated, but graphical adapters still consume its
+compatibility shell projection rather than rendering all ApplicationView primary
+content. Graphical Home/Files/Diff parity, conversation/composer semantics, settings
+forms, renderer path ownership under Platforms and remaining runtime source moves
+are still required. The blank native OpenPencil specification remains in force.

@@ -7,27 +7,16 @@ use ratatui::layout::Rect;
 
 pub use crate::shared_ui::agents::AgentAction;
 
-/// Terminal view state wraps the shared agent interaction model. Geometry,
-/// viewport scrolling and native modal return handling remain in this adapter.
-#[derive(Debug, Default)]
+/// Terminal geometry, scrolling and native modal return handling. Application
+/// state has one owner in UI; an in-flight delivery candidate is only a host
+/// transaction and becomes live state after Harness delivery succeeds.
+#[derive(Default)]
 pub struct AgentsState {
-    pub shared: crate::shared_ui::agents::AgentState,
     pub scroll: usize,
     pub(crate) targets: Vec<(Rect, AgentAction)>,
     pub agent_group_origin: Option<Mode>,
+    pending_delivery: Option<crate::shared_ui::agents_session::PreparedAgentAction>,
 }
-impl std::ops::Deref for AgentsState {
-    type Target = crate::shared_ui::agents::AgentState;
-    fn deref(&self) -> &Self::Target {
-        &self.shared
-    }
-}
-impl std::ops::DerefMut for AgentsState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.shared
-    }
-}
-
 impl App {
     pub(crate) fn agent_members(&self) -> &[AgentMemberItem] {
         &self.state.agent_group.members
@@ -35,12 +24,14 @@ impl App {
 
     /// The selected member is resolved by the same UI state as graphical views.
     pub(crate) fn selected_agent(&self) -> Option<&AgentMemberItem> {
-        self.agents.shared.selected_member(&self.state.agent_group)
+        self.application
+            .agent_state()
+            .selected_member(&self.state.agent_group)
     }
 
     pub(crate) fn open_agents(&mut self) {
         self.apply_agent_action(AgentAction::Open);
-        self.navigation.activated(WorkbenchTab::Agents);
+        self.report_navigation(WorkbenchTab::Agents);
     }
 
     pub(crate) fn close_agents(&mut self) {
@@ -49,9 +40,10 @@ impl App {
     }
 
     fn select_agent_row(&mut self, delta: isize) {
-        self.agents
-            .shared
+        self.application
+            .compatibility_agent_state_mut()
             .move_selection(&self.state.agent_group, delta);
+        self.application.refresh(&self.state);
     }
 
     fn stop_agent_command(&mut self) -> Option<FrontendCommand> {
@@ -70,11 +62,25 @@ impl App {
         self.apply_agent_action(AgentAction::SubmitDraft(self.input.clone()))
     }
 
-    /// Native input and pointer targets deliver the shared UI reducer's actions.
+    /// Native input and pointer targets deliver shared controller actions.
     pub(crate) fn apply_agent_action(&mut self, action: AgentAction) -> Option<FrontendCommand> {
-        self.agents.shared.input_focused = self.input_focused;
-        let effect = self.agents.shared.apply(action, &self.state);
-        self.input_focused = self.agents.shared.input_focused;
+        self.application
+            .compatibility_agent_state_mut()
+            .input_focused = self.input_focused;
+        let prepared = self.application.prepare_agent(action, &self.state);
+        if let Some(command) = prepared.effect.command.clone() {
+            self.agents.pending_delivery = Some(prepared);
+            return Some(command);
+        }
+        let (_, effect) = self.application.commit_agent(prepared, &self.state);
+        self.apply_agent_effect(effect)
+    }
+
+    fn apply_agent_effect(
+        &mut self,
+        effect: crate::shared_ui::agents::AgentEffect,
+    ) -> Option<FrontendCommand> {
+        self.input_focused = self.application.agent_state().input_focused;
         if let Some(text) = effect.submitted_text {
             self.record_input_history(&text);
             self.input.clear();
@@ -87,6 +93,31 @@ impl App {
         effect.command
     }
 
+    /// The host commits the prepared UI transaction only after Harness delivery.
+    pub(crate) fn complete_agent_delivery(&mut self) {
+        if let Some(prepared) = self.agents.pending_delivery.take() {
+            let (_, effect) = self.application.commit_agent(prepared, &self.state);
+            self.apply_agent_effect(effect);
+        }
+    }
+
+    pub(crate) fn send_ui_command(
+        &mut self,
+        backend: &mut crate::backend::Backend,
+        command: FrontendCommand,
+    ) -> anyhow::Result<()> {
+        self.finish_agent_delivery(backend.send(command))
+    }
+
+    fn finish_agent_delivery(&mut self, delivered: anyhow::Result<()>) -> anyhow::Result<()> {
+        if delivered.is_ok() {
+            self.complete_agent_delivery();
+        } else {
+            self.agents.pending_delivery = None;
+        }
+        delivered
+    }
+
     pub(crate) fn handle_agents_key(&mut self, event: KeyEvent) -> Option<FrontendCommand> {
         if event.modifiers == KeyModifiers::CONTROL && event.code == KeyCode::Char('c') {
             self.quit = true;
@@ -97,7 +128,7 @@ impl App {
                 return None;
             }
             match event.code {
-                KeyCode::Esc if self.agents.creating_group => {
+                KeyCode::Esc if self.application.agent_state().creating_group => {
                     self.apply_agent_action(AgentAction::CancelDraft);
                 }
                 KeyCode::Esc => self.input_focused = false,
@@ -184,7 +215,10 @@ mod tests {
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
 
         app.handle_agents_key(key(KeyCode::Char('j')));
-        assert_eq!(app.agents.selected.as_deref(), Some("planner"));
+        assert_eq!(
+            app.application.agent_state().selected.as_deref(),
+            Some("planner")
+        );
         app.handle_agents_key(key(KeyCode::Char('i')));
         for character in "floor 3 km".chars() {
             app.handle_agents_key(key(KeyCode::Char(character)));
@@ -195,11 +229,16 @@ mod tests {
             Some(FrontendCommand::MessageAgent { ref agent_id, ref message })
                 if agent_id == "planner" && message == "floor 3 km"
         ));
+        assert_eq!(app.input, "floor 3 km", "draft remains until delivery");
+        app.complete_agent_delivery();
         assert!(app.input.is_empty());
 
         app.handle_agents_key(key(KeyCode::Esc));
         app.handle_agents_key(key(KeyCode::Char('j')));
-        assert_eq!(app.agents.selected.as_deref(), Some("docs"));
+        assert_eq!(
+            app.application.agent_state().selected.as_deref(),
+            Some("docs")
+        );
         assert!(app.handle_agents_key(key(KeyCode::Char('x'))).is_none());
 
         assert!(matches!(
@@ -207,6 +246,7 @@ mod tests {
             Some(FrontendCommand::RemoveAgent { agent_id: Some(ref id) }) if id == "docs"
         ));
 
+        app.complete_agent_delivery();
         app.handle_agents_key(key(KeyCode::Char('g')));
         assert!(matches!(
             app.handle_agents_key(key(KeyCode::Char('x'))),
@@ -226,7 +266,7 @@ mod tests {
         ));
         app.state.agent_group.status = "paused".into();
         app.apply_agent_action(AgentAction::CreateGroup);
-        assert!(!app.agents.creating_group);
+        assert!(!app.application.agent_state().creating_group);
 
         // Creating an objective uses the Group Agent lifecycle command; it
         // cannot accidentally replace the group with a standalone member run.
@@ -240,6 +280,18 @@ mod tests {
             Some(FrontendCommand::CreateAgentGroup { ref objective })
                 if objective == "Compare the candidate models"
         ));
-        assert!(!app.agents.creating_group);
+        assert!(app.application.agent_state().creating_group);
+        assert!(
+            app.finish_agent_delivery(Err(anyhow::anyhow!("unavailable")))
+                .is_err()
+        );
+        assert!(app.application.agent_state().creating_group);
+        assert_eq!(app.input, "Compare the candidate models");
+        assert!(matches!(
+            app.handle_agents_key(key(KeyCode::Enter)),
+            Some(FrontendCommand::CreateAgentGroup { .. })
+        ));
+        app.finish_agent_delivery(Ok(())).unwrap();
+        assert!(!app.application.agent_state().creating_group);
     }
 }

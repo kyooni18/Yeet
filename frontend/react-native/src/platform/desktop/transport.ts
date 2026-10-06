@@ -2,6 +2,7 @@ import type { BridgeState, FrontendCommand, RemoteServerMessage, ShellAction, Ui
 import type { RemoteTransportEvents } from '../../../../shared/remote/transport'
 
 type AgentsEvent = Extract<RemoteServerMessage, { type: 'ui_agents' }>
+type ApplicationProjection = UiProjection & { agents: Omit<AgentsEvent, 'version' | 'type' | 'request_id' | 'effect'> }
 type UiEvent = Extract<RemoteServerMessage, { type: 'ui_state' }>
 type CoreEvent = { workspace?: string; type: string; state: BridgeState | null; message: string | null }
 type TauriBridge = {
@@ -73,17 +74,15 @@ export class DesktopTransport {
       this.unsubscribe = () => { unsubscribeAgents(); unsubscribeUi(); unsubscribe() }
       const result = await api.core.invoke<{ workspace: string; state: BridgeState | null }>('connect_core', { workspace: this.workspace })
       if (generation !== this.generation) return
-      const projection = await api.core.invoke<UiProjection>('ui_projection')
-      if (generation !== this.generation) return
-      const agents = await api.core.invoke<Omit<AgentsEvent, 'version' | 'type' | 'request_id'>>('agents_projection')
+      const projection = await api.core.invoke<ApplicationProjection>('application_projection')
       if (generation !== this.generation) return
       this.workspace = result.workspace
       this.conversation = []
       this.connected = true
       this.events.onMessage({ version: 1, type: 'welcome', client_id: 'desktop', workspace: result.workspace, sequence: 0, revision: 0, resumed: false })
       if (result.state) this.snapshot(result.state)
-      applyUi({ version: 1, type: 'ui_state', ...projection })
-      applyAgents({ version: 1, type: 'ui_agents', ...agents })
+      applyUi({ version: 1, type: 'ui_state', ui_revision: projection.ui_revision, state: projection.state, view: projection.view })
+      applyAgents({ version: 1, type: 'ui_agents', ...projection.agents })
       initializing = false
       for (const apply of buffered) apply()
       this.events.onOpen()

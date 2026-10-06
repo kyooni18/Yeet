@@ -462,11 +462,11 @@ fn main() -> anyhow::Result<()> {
                 input_tokens: 1_200_000,
                 output_tokens: 148_000,
             };
-            app.agents.open = true;
+            app.application.compatibility_agent_state_mut().open = true;
             app.mode = Mode::Agents;
             app.input_focused = false;
             if scene == "agent" {
-                app.agents.selected = Some("Planner".into());
+                app.application.compatibility_agent_state_mut().selected = Some("Planner".into());
             }
         }
         "views" => {

@@ -126,7 +126,7 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
     if show_tabs {
         app.tab_targets = tabbar::targets(app, Rect::new(area.x, area.y, area.width, 1), active);
     }
-    let application = ApplicationView::from_navigation(&app.navigation);
+    let application = app.application.application_view();
     match application.content {
         Content::Auxiliary => {
             draw_auxiliary(frame, app, &application);

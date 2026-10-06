@@ -169,7 +169,7 @@ impl App {
             self.diff_tabs.open("Diff", state);
         }
         self.diff_frame.begin(ratatui::layout::Rect::default());
-        self.navigation.activated(super::WorkbenchTab::NewDiff);
+        self.report_navigation(super::WorkbenchTab::NewDiff);
     }
     pub(crate) fn handle_diff_key(&mut self, e: KeyEvent) {
         if e.code == KeyCode::Esc {
@@ -189,7 +189,7 @@ impl App {
                 if let Some(f) = &mut self.files {
                     f.open_path(p, false);
                 }
-                self.navigation.activated(super::WorkbenchTab::Files);
+                self.report_navigation(super::WorkbenchTab::Files);
             }
             return;
         }

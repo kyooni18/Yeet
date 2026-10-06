@@ -5,9 +5,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use crate::shared_ui::workbench::WorkbenchTab;
 
 impl App {
-    fn workbench_resources(&self) -> crate::shared_ui::navigation::WorkbenchResources {
+    pub(crate) fn workbench_resources(&self) -> crate::shared_ui::navigation::WorkbenchResources {
         crate::shared_ui::navigation::WorkbenchResources {
-            agents: self.agents.open || !self.agent_members().is_empty(),
+            agents: self.application.agent_state().open || !self.agent_members().is_empty(),
             files: self
                 .files
                 .as_ref()
@@ -17,11 +17,18 @@ impl App {
             active_diff: self.diff_tabs.active_id(),
         }
     }
+    pub(crate) fn report_navigation(&mut self, tab: WorkbenchTab) {
+        let resources = self.workbench_resources();
+        self.application
+            .accepted_navigation(tab, &resources, &self.state);
+    }
     pub fn home_visible(&self) -> bool {
-        self.navigation.home_visible()
+        self.application.navigation().home_visible()
     }
     pub fn active_workbench_tab(&self) -> WorkbenchTab {
-        self.navigation.active_tab(&self.workbench_resources())
+        self.application
+            .navigation()
+            .active_tab(&self.workbench_resources())
     }
     pub fn workbench_tabs(&self) -> Vec<WorkbenchTab> {
         self.workbench_resources().tabs()
@@ -71,7 +78,7 @@ impl App {
     pub(crate) fn apply_navigation(&mut self, tab: WorkbenchTab) {
         match tab {
             WorkbenchTab::Home | WorkbenchTab::Session => {
-                self.navigation.activated(tab);
+                self.report_navigation(tab);
                 self.sidebar_focus = false;
                 self.clear_transcript_selection();
             }
@@ -82,12 +89,12 @@ impl App {
                 if let Some(files) = &mut self.files {
                     files.activate_browser();
                 }
-                self.navigation.activated(tab);
+                self.report_navigation(tab);
             }
             WorkbenchTab::File(index) => {
                 if let Some(files) = &mut self.files {
                     if files.activate_tab(index) {
-                        self.navigation.activated(tab);
+                        self.report_navigation(tab);
                     }
                 }
             }
@@ -100,12 +107,14 @@ impl App {
             WorkbenchTab::Agents => self.open_agents(),
             WorkbenchTab::Diff(id) => {
                 if self.diff_tabs.activate(id) {
-                    self.navigation.activated(tab);
+                    self.report_navigation(tab);
                 }
             }
             WorkbenchTab::CloseDiff(id) => {
                 if self.diff_tabs.close(id).is_some() {
-                    self.navigation.diff_closed(self.diff_tabs.len());
+                    self.application
+                        .navigation_mut()
+                        .diff_closed(self.diff_tabs.len());
                 }
             }
             WorkbenchTab::Launcher => self.open_views(),
@@ -131,7 +140,10 @@ impl App {
             KeyCode::Tab | KeyCode::BackTab => {
                 let back =
                     event.code == KeyCode::BackTab || event.modifiers.contains(KeyModifiers::SHIFT);
-                let target = self.navigation.cycle_tab(&self.workbench_resources(), back);
+                let target = self
+                    .application
+                    .navigation()
+                    .cycle_tab(&self.workbench_resources(), back);
                 self.activate_workbench_tab(target);
             }
             KeyCode::Char('w') => match self.active_workbench_tab() {

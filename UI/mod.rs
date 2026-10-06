@@ -10,6 +10,7 @@ pub mod actions;
 pub mod agents;
 pub mod agents_session;
 pub mod application;
+pub mod application_session;
 pub mod navigation;
 pub mod shell;
 pub mod surfaces;
