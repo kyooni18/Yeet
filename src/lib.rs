@@ -6,7 +6,8 @@ pub mod background;
 pub mod cli;
 pub mod config;
 pub mod context_cache;
-pub mod core;
+// Compatibility import while runtime callers migrate to Harness ownership.
+pub use harness::core;
 pub mod debate;
 pub mod edit;
 pub mod extensions;

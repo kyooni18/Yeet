@@ -1,3 +1,4 @@
+//! Provider-neutral runtime types and the persistent provider bridge protocol.
 use std::{
     collections::HashMap,
     fs,

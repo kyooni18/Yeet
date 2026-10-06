@@ -7,15 +7,15 @@ background runtime per workspace:
 
 ```text
 Frontend / host (Ratatui TUI, Remote web client, desktop host, CLI)
-  -> Harness                         src/harness.rs (Shared or Embedded mode)
+  -> Harness                         Harness/mod.rs (Shared or Embedded mode)
       -> BackgroundConnection        src/background/connection.rs
           -> workspace daemon        src/background.rs (one per workspace + scope)
               -> RuntimeProcess      src/background/runtime_process.rs
                                      (one dedicated thread per session runtime)
-                  -> HarnessService  src/backend.rs (command routing)
+                  -> HarnessService  Harness/service.rs (command routing)
                       -> AgentCoordinator  src/agent.rs (turn loop)
                           -> ToolRegistry  src/tools.rs
-                          -> ProviderBridge (BridgeClient, src/core/provider_bridge.rs)
+                          -> ProviderBridge (BridgeClient, Harness/core/provider_bridge.rs)
                               -> Node sidecar RuntimeSource/dist/bridge.js
 ```
 

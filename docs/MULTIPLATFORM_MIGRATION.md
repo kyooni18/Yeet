@@ -195,3 +195,12 @@ compatibility shell projection rather than rendering all ApplicationView primary
 content. Graphical Home/Files/Diff parity, conversation/composer semantics, settings
 forms, renderer path ownership under Platforms and remaining runtime source moves
 are still required. The blank native OpenPencil specification remains in force.
+
+The provider-neutral runtime types and persistent provider bridge now live under
+`Harness/core.rs` and `Harness/core/`. The root `core` import is a compatibility
+reexport of that implementation, not a second owner. Runtime asset lookup retains
+its configured/executable/workspace behavior. An isolated checkpoint build passed
+all targets and three existing core tests. Two stale Agent Group preview literals
+now use defaults for newer runtime fields. Five source-layout checks passed; the
+sixth found unchanged committed RuntimeSource auth.ts at 1205 lines against a
+1200-line ceiling. The unrelated auth worktree edits are preserved.

@@ -74,7 +74,7 @@ activation.
 
 ## Provider bridge
 
-`src/core.rs` implements the Rust side of the persistent JSONL protocol in
+`Harness/core.rs` implements the Rust side of the persistent JSONL protocol in
 `RuntimeSource/src/bridge.ts`. New wire operations must be implemented and
 tested on both sides. Keep protocol version 1 backward-compatible unless a
 coordinated version change is required.
