@@ -19,6 +19,11 @@ use crate::{
     model::{BridgeEnvelope, BridgeState, ConversationEntry, ConversationKind, FrontendCommand},
 };
 
+use super::ui_host::{
+    application_messages, composer_message, configure_composer_host,
+    conversation_message, settings_message,
+};
+
 use super::protocol::{
     ClientMessage, REMOTE_PROTOCOL_VERSION, ServerMessage, decode_client_message,
     negotiate_version, validate_exact_version,
@@ -618,106 +623,6 @@ impl Drop for RemoteClientRuntime {
             drop(handle.take());
         }
     }
-}
-
-fn application_messages(
-    projection: crate::shared_ui::application_session::ApplicationProjection,
-    request_id: Option<String>,
-    effect: Option<crate::shared_ui::agents::AgentUiEffect>,
-) -> [ServerMessage; 5] {
-    [
-        ServerMessage::UiState {
-            version: REMOTE_PROTOCOL_VERSION,
-            ui_revision: projection.ui_revision,
-            request_id: request_id.clone(),
-            state: projection.state,
-            view: projection.view,
-        },
-        agents_message(projection.agents, request_id.clone(), effect),
-        conversation_message(projection.conversation, request_id.clone(), None),
-        composer_message(projection.composer, request_id.clone(), None),
-        settings_message(projection.settings, request_id, None),
-    ]
-}
-
-fn agents_message(
-    projection: crate::shared_ui::agents_session::AgentProjection,
-    request_id: Option<String>,
-    effect: Option<crate::shared_ui::agents::AgentUiEffect>,
-) -> ServerMessage {
-    ServerMessage::UiAgents {
-        version: REMOTE_PROTOCOL_VERSION,
-        agents_revision: projection.agents_revision,
-        request_id,
-        view: projection.view,
-        effect,
-    }
-}
-
-fn conversation_message(
-    projection: crate::shared_ui::conversation_session::ConversationProjection,
-    request_id: Option<String>,
-    effect: Option<crate::shared_ui::conversation::ConversationUiEffect>,
-) -> ServerMessage {
-    ServerMessage::UiConversation {
-        version: REMOTE_PROTOCOL_VERSION,
-        conversation_revision: projection.conversation_revision,
-        request_id,
-        view: projection.view,
-        effect,
-    }
-}
-
-fn composer_message(
-    projection: crate::shared_ui::composer_session::ComposerProjection,
-    request_id: Option<String>,
-    effect: Option<crate::shared_ui::composer::ComposerUiEffect>,
-) -> ServerMessage {
-    ServerMessage::UiComposer {
-        version: REMOTE_PROTOCOL_VERSION,
-        composer_revision: projection.composer_revision,
-        request_id,
-        view: projection.view,
-        effect,
-    }
-}
-
-fn settings_message(
-    projection: crate::shared_ui::settings_session::SettingsProjection,
-    request_id: Option<String>,
-    effect: Option<crate::shared_ui::settings::SettingsUiEffect>,
-) -> ServerMessage {
-    ServerMessage::UiSettings {
-        version: REMOTE_PROTOCOL_VERSION,
-        settings_revision: projection.settings_revision,
-        request_id,
-        view: projection.view,
-        effect,
-    }
-}
-
-fn configure_composer_host(
-    ui: &mut crate::shared_ui::application_session::ApplicationSession,
-    state: &BridgeState,
-    workspace: Option<String>,
-) -> bool {
-    use crate::shared_ui::composer::ComposerDestination::*;
-    let mut environment = ui.composer_environment().clone();
-    if let Some(workspace) = workspace {
-        environment.context.workspace = workspace;
-    }
-    environment.context.session_id = state.current_session_id.clone();
-    environment.available = true;
-    environment.supported_destinations = vec![
-        Models,
-        Sessions,
-        Settings,
-        Permissions,
-        Auth,
-        Providers,
-        Capabilities,
-    ];
-    ui.configure_composer(environment, state).is_some()
 }
 
 fn runtime_loop(
@@ -1875,7 +1780,7 @@ mod tests {
             first.prepare_agent(AgentAction::SubmitDraft("group objective".into()), &state);
         assert!(prepared.effect.command.is_some());
         let (projection, effect) = first.commit_agent(prepared, &state);
-        let message = super::agents_message(
+        let message = super::super::ui_host::agents_message(
             projection.agents,
             Some("accepted".into()),
             Some((&effect).into()),
