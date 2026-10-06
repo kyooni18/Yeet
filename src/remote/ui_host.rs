@@ -37,7 +37,7 @@ pub(super) fn application_messages(
         settings_message(projection.settings, request_id.clone(), None),
         ServerMessage::UiHome {
             version: REMOTE_PROTOCOL_VERSION,
-            home_revision: projection.ui_revision,
+            home_revision: projection.home_revision,
             request_id,
             view: projection.home,
         },

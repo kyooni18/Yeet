@@ -80,3 +80,136 @@ test('agent acceptance survives a batched refresh without replaying across recon
   expect(store.getSnapshot().agentEffect).toBeNull()
   store.destroy()
 })
+
+test('Home projections use their own revision and reset on welcome', async () => {
+  const { RemoteStore } = await import('../../frontend/shared/state/remoteStore')
+  const view: import('../src/remote/protocol').HomeView = {
+    overview_label: 'Overview',
+    summary: 'Workspace  ·  local  ·  working tree clean',
+    recent: [],
+    activity: [{ type: 'heading', value: 'Recent views' }],
+    selected: null,
+    inspector: null,
+    open_label: 'Open view →',
+    new_session_label: '+  New session',
+    recent_empty: 'No recent objects',
+    inspector_empty: 'Select a session, recent view, task or changed file.',
+    usage_label: 'Usage details →',
+  }
+  const action: import('../src/remote/protocol').HomeAction = {
+    type: 'open', value: { type: 'session', value: 'session-a' },
+  }
+  let events!: import('../../frontend/shared/remote/transport').RemoteTransportEvents
+  let frame!: () => void
+  let sentHome: typeof action | null = null
+  const store = new RemoteStore({
+    createTransport: handlers => {
+      events = handlers
+      return {
+        connect: async () => {}, close: () => {}, send: () => true,
+        sendHomeUi: next => { sentHome = next; return true },
+        markApplied: () => {}, switchWorkspace: () => {}, reconnectAfterAuth: () => {},
+      }
+    },
+    scheduleFrame: callback => { frame = callback; return 1 },
+    cancelFrame: () => {},
+  })
+  store.init()
+  events.onMessage({ type: 'ui_home', version: 1, home_revision: 4, view })
+  events.onMessage({ type: 'ui_home', version: 1, home_revision: 3, view: { ...view, summary: 'stale' } })
+  frame()
+  expect(store.getSnapshot().home?.summary).toBe(view.summary)
+  expect(store.sendHomeUi(action)).toBe(true)
+  expect(sentHome).toEqual(action)
+
+  events.onMessage({ type: 'welcome', version: 1, client_id: 'client', workspace: '/workspace', sequence: 0, revision: 0, resumed: true })
+  frame()
+  expect(store.getSnapshot().home).toBeNull()
+  events.onMessage({ type: 'ui_home', version: 1, home_revision: 0, view })
+  frame()
+  expect(store.getSnapshot().home).toEqual(view)
+  store.destroy()
+})
+
+test('Home actions use the revision-independent ui_home_action wire envelope', async () => {
+  const { RemoteTransport } = await import('../../frontend/shared/remote/transport')
+  const sent: unknown[] = []
+  const listeners = new Map<string, ((event?: { data: unknown }) => void)[]>()
+  const socket = {
+    readyState: 0,
+    send(data: string) { sent.push(JSON.parse(data)) },
+    close() {},
+    addEventListener(type: string, listener: (event?: { data: unknown }) => void) {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener])
+    },
+  }
+  const transport = new RemoteTransport({
+    onOpen: () => {}, onMessage: () => {}, onStatus: () => {}, onError: () => {},
+  }, {
+    request: async <T,>(path: string) => (path.endsWith('/auth/status')
+      ? { required: false, authenticated: true }
+      : { minVersion: 1, maxVersion: 1, websocket: '/api/ws' }) as T,
+    websocketUrl: path => `ws://example.test${path}`,
+    createSocket: () => socket as unknown as import('../../frontend/shared/remote/transport').RemoteSocket,
+    storage: { getItem: () => null, setItem: () => {} },
+    isOnline: () => true,
+    now: () => 1,
+    requestId: () => 'home-request',
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+  })
+  await transport.connect()
+  socket.readyState = 1
+  listeners.get('open')?.forEach(listener => listener())
+  listeners.get('message')?.forEach(listener => listener({ data: JSON.stringify({
+    type: 'welcome', version: 1, client_id: 'client', workspace: '/workspace',
+    sequence: 0, revision: 0, resumed: true,
+  }) }))
+
+  const action: import('../src/remote/protocol').HomeAction = {
+    type: 'select', value: { type: 'file', value: '/workspace/readme.md' },
+  }
+  expect(transport.sendHomeUi(action)).toBe(true)
+  expect(sent.at(-1)).toEqual({
+    type: 'ui_home_action', version: 1, request_id: 'home-request', action,
+  })
+  transport.close()
+})
+
+test('Home browser store consumes production Rust projection and one-shot open intent', async () => {
+  const { projectHome } = await import('./uiHomeHarness')
+  const { RemoteStore } = await import('../../frontend/shared/state/remoteStore')
+  const sessions = [{ id: 'session-a', title: 'First session' }, { id: 'session-b', title: 'Second session' }]
+  const selected = await projectHome({ sessions, action: { type: 'select', value: { type: 'session', value: 'session-b' } } })
+  const view = selected.view as import('../src/remote/protocol').HomeView
+  expect(view.selected).toEqual({ type: 'session', value: 'session-b' })
+  expect((await projectHome({ sessions, action: { type: 'select', value: { type: 'session', value: 'session-b' } }, deliver: false })).view)
+    .toHaveProperty('selected', { type: 'session', value: 'session-a' })
+  const opened = await projectHome({ sessions, action: { type: 'open', value: { type: 'session', value: 'session-b' } } })
+  expect(opened.open).toEqual({ type: 'session', value: 'session-b' })
+  expect((await projectHome({ sessions, action: { type: 'open', value: { type: 'session', value: 'missing' } } })).open).toBeNull()
+
+  let events!: import('../../frontend/shared/remote/transport').RemoteTransportEvents
+  let frame!: () => void
+  const store = new RemoteStore({
+    createTransport: handlers => {
+      events = handlers
+      return { connect: async () => {}, close: () => {}, send: () => true,
+        markApplied: () => {}, switchWorkspace: () => {}, reconnectAfterAuth: () => {} }
+    },
+    scheduleFrame: callback => { frame = callback; return 1 },
+    cancelFrame: () => {},
+  })
+  store.init()
+  events.onMessage({ type: 'ui_home', version: 1, home_revision: selected.home_revision as number, view })
+  events.onMessage({ type: 'ui_home_effect', version: 1, open: opened.open as import('../src/remote/protocol').ResourceTarget })
+  frame()
+  expect(store.getSnapshot().home?.selected).toEqual({ type: 'session', value: 'session-b' })
+  const effect = store.getSnapshot().homeEffect
+  expect(effect?.open).toEqual({ type: 'session', value: 'session-b' })
+  expect(store.consumeHomeEffect(effect!.id)).toEqual(effect?.open)
+  expect(store.consumeHomeEffect(effect!.id)).toBeNull()
+  store.destroy()
+})

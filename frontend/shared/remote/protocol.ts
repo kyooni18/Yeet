@@ -575,7 +575,62 @@ export interface UiProjection {
   ui_revision: number
   state: ShellState
   view: ShellView
+  application?: ApplicationView
 }
+
+// Rust UI/application.rs and UI/navigation.rs own this application structure.
+// Screen keeps its Rust serde variant spelling; Content and WorkspaceView use
+// their declared snake_case serde names.
+export type ApplicationContent = 'home' | 'session' | 'files' | 'diff' | 'agents' | 'auxiliary'
+export type ApplicationScreen =
+  | 'Chat' | 'Debate' | 'Models' | 'Reasoning' | 'Goal' | 'Sessions' | 'Capabilities'
+  | 'CapabilityDetail' | 'Auth' | 'AuthKey' | 'Providers' | 'ProviderEdit' | 'Settings'
+  | 'SandboxPresets' | 'SandboxPolicy' | 'SettingsEdit' | 'Status' | 'Help' | 'Files'
+  | 'Diff' | 'Agents' | 'AgentGroup' | 'Views'
+export interface ApplicationView {
+  content: ApplicationContent
+  surfaces: ApplicationScreen[]
+  overlays: ApplicationScreen[]
+  workspace_children: Array<'session_header' | 'conversation' | 'composer'>
+}
+
+export type ResourceTarget =
+  | { type: 'current_session' }
+  | { type: 'session' | 'task'; value: string }
+  | { type: 'files' | 'file' | 'diff'; value: string }
+  | { type: 'status' }
+export type ResourceKind = 'session' | 'view' | 'file' | 'diff' | 'task'
+export interface ResourceChanges { added: number; removed: number }
+export interface HomeResourceView {
+  target: ResourceTarget
+  kind: ResourceKind
+  title: string
+  context: string
+  age: string
+  detail: string
+  changes: ResourceChanges | null
+}
+export type HomeRow =
+  | { type: 'heading' | 'message'; value: string }
+  | { type: 'item'; value: HomeResourceView }
+  | { type: 'gap' }
+export interface HomeView {
+  overview_label: string
+  summary: string
+  recent: HomeResourceView[]
+  activity: HomeRow[]
+  selected: ResourceTarget | null
+  inspector: HomeResourceView | null
+  open_label: string
+  new_session_label: string
+  recent_empty: string
+  inspector_empty: string
+  usage_label: string
+}
+export type HomeAction =
+  | { type: 'select' | 'open'; value: ResourceTarget }
+  | { type: 'new_session' }
+export interface HomeUiEffect { open: ResourceTarget | null }
 
 // Rust UI/agents.rs owns these application views and effects.
 export type AgentAction =
@@ -670,6 +725,8 @@ export interface SettingsUiEffect { destination: SettingsDestination | null; acc
 
 export type RemoteServerMessage =
   | { version: number; type: 'workspace_switch_requested'; id: string; path: string; source_workspace: string }
+  | { version: number; type: 'ui_home'; home_revision: number; request_id?: string | null; view: HomeView }
+  | { version: number; type: 'ui_home_effect'; request_id?: string | null; open: ResourceTarget | null }
   | { version: number; type: 'ui_settings'; settings_revision: number; request_id?: string | null; view: SettingsView; effect?: SettingsUiEffect | null }
   | { version: number; type: 'ui_composer'; composer_revision: number; request_id?: string | null; view: ComposerView; effect?: ComposerUiEffect | null }
   | { version: number; type: 'ui_conversation'; conversation_revision: number; request_id?: string | null; view: ConversationView; effect?: ConversationUiEffect | null }

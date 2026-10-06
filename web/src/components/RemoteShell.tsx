@@ -12,7 +12,7 @@ import type { ShellAction, ShellState, ToolbarAction } from '@/remote/protocol'
 
 /** Browser visuals and focus for the Rust-authored application shell. */
 export function RemoteShell() {
-  const { ui } = useRemote()
+  const { ui, homeEffect } = useRemote()
   const modelReturnFocus = useRef<HTMLElement | null>(null)
   const settingsReturnFocus = useRef<HTMLElement | null>(null)
   const navigationReturnFocus = useRef<HTMLElement | null>(null)
@@ -43,6 +43,12 @@ export function RemoteShell() {
     if (!settings) rememberFocus(settingsReturnFocus)
     if(action) remoteStore.sendToolbarUi(action); else send({ type: 'open_settings' })
   }
+
+  useEffect(() => {
+    if (!homeEffect) return
+    const target = remoteStore.consumeHomeEffect(homeEffect.id)
+    if (target?.type === 'session') remoteStore.loadSession(target.value)
+  }, [homeEffect])
 
   useEffect(() => {
     if (!ui) return

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Check, ChevronsUpDown, Folder, Lock, Plus, Search, Settings, SessionList, X } from '@/components/Icons'
 import { remoteStore, useRemote } from '@/store/remoteStore'
+import type { ResourceTarget } from '@/remote/protocol'
 
 function sessionAge(value: string): string {
   const time = new Date(value).getTime()
@@ -49,6 +50,20 @@ export function Sidebar({
   const activeMembers = members.filter((member) =>
     member.status === 'running' || ['reasoning', 'tool_call', 'provider_activity', 'queued'].includes(member.activityState),
   ).length
+  const homeRows = remote.home?.activity ?? []
+  const sessionEnd = homeRows.findIndex(row => row.type === 'gap')
+  const sessionRows: { id: string; title: string; detail: string; target: ResourceTarget | null }[] = remote.home
+    ? homeRows
+      .slice(0, sessionEnd < 0 ? homeRows.length : sessionEnd)
+      .flatMap(row => row.type === 'item' && row.value.target.type === 'session'
+        ? [{ id: row.value.target.value, title: row.value.title, detail: [row.value.context, row.value.age].filter(Boolean).join(' · '), target: row.value.target }]
+        : [])
+    : remote.currentWorkspaceSessions.map(session => ({
+      id: session.id,
+      title: session.title || 'Untitled',
+      detail: [remote.currentWorkspace?.display_name, sessionAge(session.updated_at)].filter(Boolean).join(' · ') || session.model,
+      target: null,
+    }))
 
   useEffect(() => {
     if (open && !wasOpen.current) {
@@ -182,7 +197,7 @@ export function Sidebar({
         </div>
 
         <div className="sidebar-session-list" aria-label="Saved sessions">
-          {remote.currentWorkspaceSessions.filter((session) => !filter.trim() || (session.title || 'Untitled').toLowerCase().includes(filter.trim().toLowerCase())).map((session) => {
+          {sessionRows.filter((session) => !filter.trim() || session.title.toLowerCase().includes(filter.trim().toLowerCase())).map((session) => {
             const current = session.id === remote.state.current_session_id
             return (
               <button
@@ -192,13 +207,16 @@ export function Sidebar({
                 aria-current={current ? 'page' : undefined}
                 disabled={!current && remote.connection !== 'connected'}
                 onClick={() => {
-                  if (!current) remoteStore.loadSession(session.id)
+                  if (!current) {
+                    if (session.target) remoteStore.sendHomeUi({ type: 'open', value: session.target })
+                    else remoteStore.loadSession(session.id)
+                  }
                   if (!desktopDocked) onClose()
                 }}
               >
                 <span className="sidebar-session__copy">
-                  <strong>{session.title || 'Untitled'}</strong>
-                  <span>{[remote.currentWorkspace?.display_name, sessionAge(session.updated_at)].filter(Boolean).join(' · ') || session.model}</span>
+                  <strong>{session.title}</strong>
+                  <span>{session.detail}</span>
                 </span>
                 <span className="sidebar-session__activity">
                   {current && awaitingPermission ? <Lock size={12} strokeWidth={1.8} className="sidebar-session__lock" aria-label="Needs approval" role="img" /> : null}
@@ -207,7 +225,7 @@ export function Sidebar({
               </button>
             )
           })}
-          {!remote.currentWorkspaceSessions.length && (
+          {!sessionRows.length && (
             <div className="sidebar-empty">No saved sessions in this workspace.</div>
           )}
         </div>
@@ -216,7 +234,8 @@ export function Sidebar({
           <button
             className="sidebar-new-session"
             onClick={() => {
-              remoteStore.newSession()
+              if (remote.home) remoteStore.sendHomeUi({ type: 'new_session' })
+              else remoteStore.newSession()
               if (!desktopDocked) onClose()
             }}
             disabled={remote.connection !== 'connected'}

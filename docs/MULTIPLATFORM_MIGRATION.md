@@ -418,6 +418,17 @@ until the user supplies its OpenPencil design.
 The Home model now has owned serializable `HomeView`, row/resource DTOs and
 stable `HomeAction` values under `UI/home/`. `HomeState` validates resource
 targets against current content before adapters apply them. This establishes a
-wire-safe model without changing the existing Home composition or labels; it is
-not yet carried in `ApplicationProjection` or rendered end-to-end by Remote,
-Tauri and Web.
+wire-safe model without changing the existing Home composition or labels. At
+that checkpoint it had not yet reached `ApplicationProjection` or graphical hosts.
+
+Home inventory now enters `ApplicationSession` from each Remote/Tauri host's
+Harness-owned nonblocking Git refresh and accumulated BridgeState. The controller
+owns a Home-only revision, and both hosts publish the same `HomeView` on a
+dedicated UI channel without advancing Harness replay cursors. Remote and Tauri
+accept typed Home actions; command delivery and resource-open intent publication
+precede shared commit. The Web sessions sidebar keeps its existing layout while
+reading the shared Sessions rows and dispatching Home open/new-session actions.
+The browser consumes the one-shot session-open intent through its existing
+load-session command. A production Rust Home fixture checks browser projection,
+selection, stale-target validation and delivery rollback. This does not yet
+complete graphical Files/Diff rendering or native TUI controller unification.

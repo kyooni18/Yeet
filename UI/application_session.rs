@@ -55,6 +55,7 @@ pub struct ShellProjection {
 pub struct ApplicationProjection {
     pub toolbar: ToolbarView,
     pub ui_revision: u64,
+    pub home_revision: u64,
     pub navigation: NavigationState,
     pub state: ShellState,
     pub view: ShellView,
@@ -75,6 +76,8 @@ pub struct ApplicationSession {
     settings: SettingsSession,
     home: HomeState,
     revision: u64,
+    home_revision: u64,
+    home_serialized: HomeView,
     serialized: serde_json::Value,
 }
 impl Default for ApplicationSession {
@@ -96,6 +99,8 @@ impl ApplicationSession {
             settings: SettingsSession::new(harness),
             home: HomeState::default(),
             revision: 0,
+            home_revision: 0,
+            home_serialized: HomeState::default().project(true),
             serialized: serde_json::Value::Null,
         };
         session.serialized = session.fingerprint();
@@ -316,6 +321,7 @@ impl ApplicationSession {
         ApplicationProjection {
             toolbar: self.toolbar_view(),
             ui_revision: self.revision,
+            home_revision: self.home_revision,
             navigation: self.navigation.clone(),
             state: self.shell.clone(),
             view: self.shell.view(),
@@ -674,6 +680,11 @@ impl ApplicationSession {
         }
     }
     fn advance(&mut self) {
+        let home = self.home.project(true);
+        if home != self.home_serialized {
+            self.home_revision = self.home_revision.saturating_add(1);
+            self.home_serialized = home;
+        }
         self.revision = self.revision.saturating_add(1);
         self.serialized = self.fingerprint();
     }
@@ -716,6 +727,7 @@ mod tests {
 
         let projection = session.update_home_content(content.clone()).unwrap();
         assert_eq!(projection.ui_revision, 1);
+        assert_eq!(projection.home_revision, 1);
         assert_eq!(
             projection.home.summary,
             "yeet  ·  main  ·  working tree clean"
@@ -731,6 +743,8 @@ mod tests {
                 .map(|item| item.target.clone())
         );
         assert!(session.update_home_content(content).is_none());
+        let shell = session.apply_shell(ShellAction::OpenModels, &HarnessState::default());
+        assert_eq!(shell.home_revision, 1);
     }
 
     #[test]
@@ -836,9 +850,11 @@ mod tests {
             active_diff: Some(second),
             ..Default::default()
         };
-        assert!(session
-            .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
-            .is_none());
+        assert!(
+            session
+                .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
+                .is_none()
+        );
         let projection = session
             .accepted_navigation(WorkbenchTab::Diff(second), &resources, &harness)
             .unwrap();

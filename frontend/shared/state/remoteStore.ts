@@ -25,9 +25,14 @@ import {
   type SandboxAction,
   type SessionSummary,
   type WorkspaceSummary,
+  type HomeAction,
+  type HomeView,
+  type ResourceTarget,
 } from '../remote/protocol'
 
 export interface RemoteSnapshot {
+  home: HomeView | null
+  homeEffect: { id: number; open: ResourceTarget } | null
   settings: SettingsView | null
   settingsEffect: { revision: number; value: SettingsUiEffect } | null
   composer: ComposerView | null
@@ -125,6 +130,10 @@ export class RemoteStore {
   constructor(private readonly options: RemoteStoreOptions) {}
   private ui: UiProjection | null = null
   private uiRevision = -1
+  private homeRevision = -1
+  private home: HomeView | null = null
+  private homeEffect: { id: number; open: ResourceTarget } | null = null
+  private homeEffectId = 0
   private settingsRevision = -1
   private settings: SettingsView | null = null
   private settingsEffect: { revision: number; value: SettingsUiEffect } | null = null
@@ -174,6 +183,8 @@ export class RemoteStore {
       ? Math.min(100, Math.max(0, Math.round((used / total) * 100)))
       : null
     return {
+      home: this.home,
+      homeEffect: this.homeEffect,
       settings: this.settings,
       settingsEffect: this.settingsEffect,
       composer: this.composer,
@@ -268,6 +279,14 @@ export class RemoteStore {
 
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
+      case 'ui_home':
+        if (message.home_revision < this.homeRevision) return
+        this.homeRevision = message.home_revision
+        this.home = message.view
+        return
+      case 'ui_home_effect':
+        if (message.open) this.homeEffect = { id: ++this.homeEffectId, open: message.open }
+        return
       case 'ui_settings':
         if (message.settings_revision < this.settingsRevision) return
         this.settingsRevision = message.settings_revision
@@ -316,6 +335,9 @@ export class RemoteStore {
         return
       case 'welcome':
         this.uiRevision = -1
+        this.homeRevision = -1
+        this.home = null
+        this.homeEffect = null
         this.agentsRevision = -1
         this.agentEffect = null
         this.settingsRevision = -1
@@ -505,6 +527,13 @@ export class RemoteStore {
   }
 
   sendToolbarUi(action: ToolbarAction): boolean { return this.transport?.sendToolbarUi?.(action) ?? false }
+  sendHomeUi(action: HomeAction): boolean { return this.transport?.sendHomeUi?.(action) ?? false }
+  consumeHomeEffect(id: number): ResourceTarget | null {
+    if (this.homeEffect?.id !== id) return null
+    const open = this.homeEffect.open
+    this.homeEffect = null
+    return open
+  }
   sendSettingsUi(action: SettingsAction): boolean {
     return this.transport?.sendSettingsUi?.(action) ?? false
   }

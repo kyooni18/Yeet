@@ -60,25 +60,6 @@ struct HomeProjection {
     view: HomeView,
 }
 
-#[derive(Default)]
-struct HomeRevision {
-    revision: u64,
-    view: Option<HomeView>,
-}
-
-impl HomeRevision {
-    fn projection(&mut self, view: &HomeView) -> HomeProjection {
-        if self.view.as_ref() != Some(view) {
-            self.revision = self.revision.saturating_add(1);
-            self.view = Some(view.clone());
-        }
-        HomeProjection {
-            home_revision: self.revision,
-            view: view.clone(),
-        }
-    }
-}
-
 #[derive(Clone, serde::Serialize)]
 struct HomeEffectMessage {
     version: u16,
@@ -283,20 +264,15 @@ struct HomeMessage {
     home_revision: u64,
     view: HomeView,
 }
-fn publish_home(
-    app: &tauri::AppHandle,
-    projection: &ApplicationProjection,
-    revision: &mut HomeRevision,
-) -> Result<(), String> {
-    let home = revision.projection(&projection.home);
+fn publish_home(app: &tauri::AppHandle, projection: &ApplicationProjection) -> Result<(), String> {
     app.emit(
         "yeet://ui-home-event",
         HomeMessage {
             version: 1,
             kind: "ui_home",
             request_id: None,
-            home_revision: home.home_revision,
-            view: home.view,
+            home_revision: projection.home_revision,
+            view: projection.home.clone(),
         },
     )
     .map_err(|error| error.to_string())
@@ -351,9 +327,8 @@ fn publish_application(
     app: &tauri::AppHandle,
     projection: ApplicationProjection,
     effect: Option<AgentUiEffect>,
-    home_revision: &mut HomeRevision,
 ) -> Result<(), String> {
-    publish_home(app, &projection, home_revision)?;
+    publish_home(app, &projection)?;
     app.emit(
         "yeet://ui-event",
         UiMessage {
@@ -451,7 +426,6 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
     let mut conversation = None;
     let mut theme_cache = yeet::theme::ThemeProjectionCache::default();
     let mut ui = ApplicationSession::default();
-    let mut home_revision = HomeRevision::default();
     let mut git = yeet::harness::resources::GitRefresh::default();
     let recent = RecentViews::default();
     loop {
@@ -485,12 +459,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                                 &recent,
                                 &git.snapshot,
                             ));
-                            let _ = publish_application(
-                                &app,
-                                ui.projection(),
-                                None,
-                                &mut home_revision,
-                            );
+                            let _ = publish_application(&app, ui.projection(), None);
                         }
                         harness = Some(next);
                         connection
@@ -522,7 +491,11 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                 let _ = reply.send(Ok(ui.projection()));
             }
             Ok(Control::HomeProjection(reply)) => {
-                let projection = home_revision.projection(&ui.projection().home);
+                let application = ui.projection();
+                let projection = HomeProjection {
+                    home_revision: application.home_revision,
+                    view: application.home,
+                };
                 let _ = reply.send(Ok(projection));
             }
             Ok(Control::UiProjection(reply)) => {
@@ -535,12 +508,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     .cloned()
                     .unwrap_or_default();
                 let projection = ui.apply_shell(action, &state);
-                let _ = reply.send(publish_application(
-                    &app,
-                    projection,
-                    None,
-                    &mut home_revision,
-                ));
+                let _ = reply.send(publish_application(&app, projection, None));
             }
             Ok(Control::HomeAction(action, reply)) => {
                 let result = (|| -> Result<(), String> {
@@ -562,7 +530,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     if matches!(effect.command, Some(HarnessCommand::NewSession)) {
                         publish_composer(&app, projection.composer.clone(), None)?;
                     }
-                    publish_application(&app, projection, None, &mut home_revision)
+                    publish_application(&app, projection, None)
                 })();
                 let _ = reply.send(result);
             }
@@ -588,12 +556,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (projection, effect) = ui.commit_agent(prepared, &state);
-                    publish_application(
-                        &app,
-                        projection,
-                        Some((&effect).into()),
-                        &mut home_revision,
-                    )
+                    publish_application(&app, projection, Some((&effect).into()))
                 })();
                 let _ = reply.send(result);
             }
@@ -662,7 +625,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (projection, _effect) = ui.commit_toolbar(prepared, &state);
-                    publish_application(&app, projection, None, &mut home_revision)
+                    publish_application(&app, projection, None)
                 })();
                 let _ = reply.send(result);
             }
@@ -724,14 +687,14 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     let _ = app.emit("yeet://core-event", payload);
                 }
                 if let Some(projection) = projection {
-                    let _ = publish_application(&app, projection, None, &mut home_revision);
+                    let _ = publish_application(&app, projection, None);
                 }
             }
             git.refresh_git(core.workspace(), false);
             if let Some(state) = core.latest_state() {
                 let content = WorkspaceContent::collect(state, &recent, &git.snapshot);
                 if let Some(projection) = ui.update_home_content(content) {
-                    let _ = publish_application(&app, projection, None, &mut home_revision);
+                    let _ = publish_application(&app, projection, None);
                 }
             }
         }
@@ -836,7 +799,6 @@ mod tests {
     fn desktop_home_event_carries_shared_inventory_and_revision() {
         use yeet::shared_ui::home::{ResourceItem, ResourceKind, ResourceTarget};
         let mut session = ApplicationSession::default();
-        let mut revision = HomeRevision::default();
         let mut content = WorkspaceContent::default();
         content.sessions.push(ResourceItem::new(
             ResourceTarget::Session("session-1".into()),
@@ -844,13 +806,12 @@ mod tests {
             "Recent work",
         ));
         let projection = session.update_home_content(content).expect("home changed");
-        let home = revision.projection(&projection.home);
         let wire = serde_json::to_value(HomeMessage {
             version: 1,
             kind: "ui_home",
             request_id: None,
-            home_revision: home.home_revision,
-            view: home.view,
+            home_revision: projection.home_revision,
+            view: projection.home,
         })
         .unwrap();
         assert_eq!(wire["type"], "ui_home");
@@ -864,11 +825,10 @@ mod tests {
         use yeet::shared_ui::home::ResourceTarget;
 
         let mut session = ApplicationSession::default();
-        let mut revision = HomeRevision::default();
-        let initial = revision.projection(&session.projection().home);
+        let initial = session.projection().home_revision;
         session.apply_shell(ShellAction::OpenModels, &HarnessState::default());
-        let after_shell_change = revision.projection(&session.projection().home);
-        assert_eq!(after_shell_change.home_revision, initial.home_revision);
+        let after_shell_change = session.projection().home_revision;
+        assert_eq!(after_shell_change, initial);
 
         let prepared = session.prepare_home(
             HomeAction::Open(ResourceTarget::Status),

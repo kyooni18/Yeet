@@ -74,6 +74,12 @@ pub enum ClientMessage {
         request_id: Option<String>,
         action: crate::shared_ui::settings::SettingsAction,
     },
+    UiHomeAction {
+        version: u16,
+        #[serde(default)]
+        request_id: Option<String>,
+        action: crate::shared_ui::home::HomeAction,
+    },
     Ping {
         version: u16,
         #[serde(default)]
@@ -92,6 +98,7 @@ impl ClientMessage {
             | Self::UiComposerAction { version, .. }
             | Self::UiToolbarAction { version, .. }
             | Self::UiSettingsAction { version, .. }
+            | Self::UiHomeAction { version, .. }
             | Self::Ping { version, .. } => Some(*version),
         }
     }
@@ -151,6 +158,11 @@ pub enum ServerMessage {
         home_revision: u64,
         request_id: Option<String>,
         view: crate::shared_ui::home::HomeView,
+    },
+    UiHomeEffect {
+        version: u16,
+        request_id: Option<String>,
+        open: crate::shared_ui::home::ResourceTarget,
     },
     Welcome {
         version: u16,
@@ -272,6 +284,7 @@ impl ServerMessage {
             | Self::UiComposer { .. }
             | Self::UiSettings { .. }
             | Self::UiHome { .. }
+            | Self::UiHomeEffect { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }
@@ -296,6 +309,7 @@ impl ServerMessage {
             | Self::UiComposer { .. }
             | Self::UiSettings { .. }
             | Self::UiHome { .. }
+            | Self::UiHomeEffect { .. }
             | Self::Welcome { .. }
             | Self::Ack { .. }
             | Self::Error { .. }

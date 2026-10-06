@@ -281,6 +281,11 @@ pub(super) enum RuntimeControl {
         request_id: Option<String>,
         completion: oneshot::Sender<Result<(), String>>,
     },
+    HomeAction {
+        action: crate::shared_ui::home::HomeAction,
+        request_id: Option<String>,
+        completion: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -481,6 +486,31 @@ impl RemoteClientRuntime {
         let (completion, result) = oneshot::channel();
         self.commands
             .send(RuntimeControl::SettingsAction {
+                action,
+                request_id,
+                completion,
+            })
+            .map_err(|_| anyhow!("semantic Remote runtime is no longer available"))?;
+        self.wake.notify();
+        match tokio::time::timeout(BACKEND_COMMAND_DELIVERY_TIMEOUT, result).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(error))) => Err(anyhow!(error)),
+            Ok(Err(_)) => Err(anyhow!(
+                "semantic Remote runtime stopped before confirming UI action delivery"
+            )),
+            Err(_) => Err(anyhow!("timed out delivering Remote UI action")),
+        }
+    }
+
+    async fn apply_home(
+        &self,
+        action: crate::shared_ui::home::HomeAction,
+        request_id: Option<String>,
+    ) -> Result<()> {
+        self.touch();
+        let (completion, result) = oneshot::channel();
+        self.commands
+            .send(RuntimeControl::HomeAction {
                 action,
                 request_id,
                 completion,
@@ -848,6 +878,44 @@ fn runtime_loop(
                             request_id,
                             Some(effect.ui),
                         ));
+                        Ok(())
+                    })();
+                    let _ = completion.send(result);
+                }
+                RuntimeControl::HomeAction {
+                    action,
+                    request_id,
+                    completion,
+                } => {
+                    if completion.is_closed() {
+                        continue;
+                    }
+                    let result = (|| -> Result<(), String> {
+                        let mut state = shared
+                            .lock()
+                            .map_err(|_| "remote runtime state lock poisoned")?;
+                        let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
+                        let prepared = ui.prepare_home(action, &state.state);
+                        if let Some(command) = prepared.effect.command.clone() {
+                            let theme_command = command.clone();
+                            service
+                                .send(command)
+                                .map_err(|error| format!("{error:#}"))?;
+                            state.theme_cache.invalidate_for_command(&theme_command);
+                        }
+                        if let Some(open) = prepared.effect.open.clone() {
+                            events
+                                .send(ServerMessage::UiHomeEffect {
+                                    version: REMOTE_PROTOCOL_VERSION,
+                                    request_id: request_id.clone(),
+                                    open,
+                                })
+                                .map_err(|_| "Remote Home action has no active client")?;
+                        }
+                        let (projection, _) = ui.commit_home(prepared, &state.state);
+                        for message in application_messages(projection, request_id, None) {
+                            let _ = events.send(message);
+                        }
                         Ok(())
                     })();
                     let _ = completion.send(result);
@@ -1631,6 +1699,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     )).await;
                                 }
                             }
+                            ClientMessage::UiHomeAction { action, request_id, .. } => {
+                                if let Err(error) = runtime.apply_home(action, request_id.clone()).await {
+                                    let _ = send_json(&mut socket, &ServerMessage::error(
+                                        "ui_action_failed", error.to_string(), false, request_id,
+                                    )).await;
+                                }
+                            }
                             ClientMessage::Command { request_id, mut command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
@@ -1916,6 +1991,20 @@ mod tests {
         assert_eq!(wire["home_revision"], 1);
         assert_eq!(message.sequence(), None);
         assert_eq!(message.revision(), None);
+        let decoded = super::decode_client_message(
+            r#"{"type":"ui_home_action","version":1,"request_id":"open-home","action":{"type":"open","value":{"type":"session","value":"session-1"}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            decoded,
+            super::ClientMessage::UiHomeAction {
+                action: crate::shared_ui::home::HomeAction::Open(
+                    crate::shared_ui::home::ResourceTarget::Session(id)
+                ),
+                request_id: Some(request_id),
+                ..
+            } if id == "session-1" && request_id == "open-home"
+        ));
     }
 
     #[test]
