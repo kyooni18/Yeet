@@ -25,6 +25,7 @@ pub(super) fn application_messages(
     [
         ServerMessage::UiState {
             toolbar: projection.toolbar,
+            application: projection.application,
             version: REMOTE_PROTOCOL_VERSION,
             ui_revision: projection.ui_revision,
             request_id: request_id.clone(),

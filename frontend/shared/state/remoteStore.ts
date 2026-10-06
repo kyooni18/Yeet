@@ -325,7 +325,7 @@ export class RemoteStore {
         if (this.layout && message.ui_revision === 0 && message.view.layout !== this.layout) return
         if (message.ui_revision < this.uiRevision) return
         this.uiRevision = message.ui_revision
-        this.ui = { ui_revision: message.ui_revision, state: message.state, view: message.view, toolbar: message.toolbar }
+        this.ui = { ui_revision: message.ui_revision, state: message.state, view: message.view, toolbar: message.toolbar, application: message.application }
         return
       case 'workspace_switch_requested':
         if (this.state.workspace_root !== message.source_workspace) return

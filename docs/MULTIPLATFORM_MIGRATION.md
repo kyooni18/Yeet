@@ -442,3 +442,7 @@ opening, and commits New Session only after backend delivery. Terminal recent,
 activity and inspector drawing now consume ApplicationSession's owned
 HomeView. Its local HomeState still owns viewport scroll and Git refresh bridging;
 provider usage drawing still reads host-supplied usage data directly.
+
+Remote and Tauri `ui_state` events now include the shared ApplicationView
+content/surface projection alongside their compatibility shell view, so clients
+can migrate primary content without deriving navigation policy locally.

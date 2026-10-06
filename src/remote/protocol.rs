@@ -113,6 +113,7 @@ impl ClientMessage {
 pub enum ServerMessage {
     UiState {
         toolbar: crate::shared_ui::toolbar::ToolbarView,
+        application: crate::shared_ui::application::ApplicationView,
         version: u16,
         ui_revision: u64,
         request_id: Option<String>,

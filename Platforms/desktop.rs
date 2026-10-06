@@ -50,6 +50,7 @@ struct UiMessage {
     #[serde(rename = "type")]
     kind: &'static str,
     request_id: Option<String>,
+    application: yeet::shared_ui::application::ApplicationView,
     #[serde(flatten)]
     projection: UiProjection,
 }
@@ -335,6 +336,7 @@ fn publish_application(
             version: 1,
             kind: "ui_state",
             request_id: None,
+            application: projection.application,
             projection: UiProjection {
                 toolbar: projection.toolbar,
                 ui_revision: projection.ui_revision,

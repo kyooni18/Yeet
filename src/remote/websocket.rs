@@ -1993,7 +1993,12 @@ mod tests {
             "Recent work",
         ));
         let projection = ui.update_home_content(content).expect("home changed");
-        let message = super::application_messages(projection, None, None)
+        let messages = super::application_messages(projection, None, None);
+        assert_eq!(
+            serde_json::to_value(&messages[0]).unwrap()["application"]["content"],
+            "home"
+        );
+        let message = messages
             .into_iter()
             .find(|message| matches!(message, super::ServerMessage::UiHome { .. }))
             .expect("home message");
