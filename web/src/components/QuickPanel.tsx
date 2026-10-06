@@ -45,6 +45,8 @@ export function QuickPanel({
   const remote = useRemote()
   const toolbar = remote.ui?.toolbar
   const response = toolbar?.groups.find(group => group.id === 'quick_response')?.controls ?? []
+  const workspaceChoices = toolbar?.workspace_choices
+  const selectedWorkspace = workspaceChoices?.find(workspace => workspace.selected)
   const sandboxControls = toolbar?.sandbox_controls ?? []
   const sandboxPreset = sandboxControls.find(control => control.id === 'sandbox_preset')
   const autoApprove = sandboxControls.find(control => control.id === 'auto_approve')
@@ -73,13 +75,27 @@ export function QuickPanel({
             </span>
             <ChevronsUpDown className="quick-workspace__indicator" size={12} strokeWidth={1.8} />
             <select
-              value={remote.currentWorkspace?.path || remote.state.workspace_root || ''}
-              onChange={(event) => remoteStore.switchWorkspace(event.target.value)}
+              value={workspaceChoices
+                ? selectedWorkspace?.id ?? ''
+                : remote.currentWorkspace?.path || remote.state.workspace_root || ''}
+              onChange={(event) => {
+                const workspace = workspaceChoices?.find(choice => choice.id === event.target.value)
+                if (workspace && toolbar?.workspace_source) {
+                  remoteStore.sendToolbarUi({
+                    type: 'choose_workspace',
+                    value: { id: workspace.id, source_workspace: toolbar.workspace_source },
+                  })
+                } else {
+                  remoteStore.switchWorkspace(event.target.value)
+                }
+              }}
               aria-label="Workspace"
             >
-              {remote.state.known_workspaces.map((workspace) => (
-                <option key={workspace.id} value={workspace.path}>{workspace.display_name}</option>
-              ))}
+              {workspaceChoices
+                ? workspaceChoices.map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.label}</option>)
+                : remote.state.known_workspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.path}>{workspace.display_name}</option>
+                ))}
             </select>
           </label>)}
             {section === 'response' && (<div className="quick-group inset-surface">

@@ -308,6 +308,12 @@ export class RemoteStore {
         this.uiRevision = message.ui_revision
         this.ui = { ui_revision: message.ui_revision, state: message.state, view: message.view, toolbar: message.toolbar }
         return
+      case 'workspace_switch_requested':
+        if (this.state.workspace_root !== message.source_workspace) return
+        if (this.state.known_workspaces.some(workspace => workspace.id === message.id && workspace.path === message.path)) {
+          this.switchWorkspace(message.path)
+        }
+        return
       case 'welcome':
         this.uiRevision = -1
         this.agentsRevision = -1

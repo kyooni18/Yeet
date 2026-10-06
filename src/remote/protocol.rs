@@ -112,6 +112,12 @@ pub enum ServerMessage {
         state: crate::shared_ui::shell::ShellState,
         view: crate::shared_ui::shell::ShellView,
     },
+    WorkspaceSwitchRequested {
+        version: u16,
+        id: String,
+        path: String,
+        source_workspace: String,
+    },
     UiAgents {
         version: u16,
         agents_revision: u64,
@@ -254,6 +260,7 @@ impl ServerMessage {
             | Self::ToolUpdate { sequence, .. }
             | Self::ActivityUpdate { sequence, .. } => Some(*sequence),
             Self::UiState { .. }
+            | Self::WorkspaceSwitchRequested { .. }
             | Self::UiAgents { .. }
             | Self::UiConversation { .. }
             | Self::UiComposer { .. }
@@ -276,6 +283,7 @@ impl ServerMessage {
             | Self::ToolUpdate { revision, .. }
             | Self::ActivityUpdate { revision, .. } => Some(*revision),
             Self::UiState { .. }
+            | Self::WorkspaceSwitchRequested { .. }
             | Self::UiAgents { .. }
             | Self::UiConversation { .. }
             | Self::UiComposer { .. }

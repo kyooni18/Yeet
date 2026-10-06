@@ -566,9 +566,10 @@ export interface ShellView {
   skip_conversation: boolean
   dismiss: ShellSurface | null
 }
-export type ToolbarAction = { type: 'activate'; value: string } | { type: 'choose'; value: { id: string; value: string } }
+export type ToolbarAction = { type: 'activate'; value: string } | { type: 'choose'; value: { id: string; value: string } } | { type: 'choose_workspace'; value: { id: string; source_workspace: string } }
 export interface ToolbarControl { id: string; label: string; icon: 'menu'|'new_session'|'controls'|'interrupt'|'model'|'reasoning'|'goal'|'settings'|'sessions'|'files'|'capabilities'; kind: 'button'|'choice'|'toggle'; value: string; enabled: boolean; pressed: boolean | null; options: {value:string;label:string;description:string}[] }
-export interface ToolbarView { groups: {id:string;controls:ToolbarControl[]}[]; quick_title:string; quick_sections:('workspace'|'response'|'permissions'|'sandbox'|'context'|'usage')[]; sandbox_controls?:ToolbarControl[] }
+export interface ToolbarWorkspaceChoice { id: string; path: string; label: string; selected: boolean }
+export interface ToolbarView { groups: {id:string;controls:ToolbarControl[]}[]; quick_title:string; quick_sections:('workspace'|'response'|'permissions'|'sandbox'|'context'|'usage')[]; sandbox_controls?:ToolbarControl[]; workspace_choices?:ToolbarWorkspaceChoice[]; workspace_source?:string }
 export interface UiProjection {
   toolbar?: ToolbarView
   ui_revision: number
@@ -668,6 +669,7 @@ export interface SettingsView { title: string; subtitle: string; sections: Setti
 export interface SettingsUiEffect { destination: SettingsDestination | null; accepted_editor: SettingsEditorView | null }
 
 export type RemoteServerMessage =
+  | { version: number; type: 'workspace_switch_requested'; id: string; path: string; source_workspace: string }
   | { version: number; type: 'ui_settings'; settings_revision: number; request_id?: string | null; view: SettingsView; effect?: SettingsUiEffect | null }
   | { version: number; type: 'ui_composer'; composer_revision: number; request_id?: string | null; view: ComposerView; effect?: ComposerUiEffect | null }
   | { version: number; type: 'ui_conversation'; conversation_revision: number; request_id?: string | null; view: ConversationView; effect?: ConversationUiEffect | null }

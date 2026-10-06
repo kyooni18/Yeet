@@ -116,6 +116,33 @@ impl ApplicationSession {
         let (id, choice) = match action {
             ToolbarAction::Activate(id) => (id, None),
             ToolbarAction::Choose { id, value } => (id, Some(value)),
+            ToolbarAction::ChooseWorkspace {
+                id,
+                source_workspace,
+            } => {
+                let mut prepared = PreparedToolbarAction {
+                    effect: ToolbarEffect::default(),
+                    route: ToolbarRoute::None,
+                };
+                if source_workspace != view.workspace_source {
+                    return prepared;
+                }
+                let Some(workspace) = view
+                    .workspace_choices
+                    .iter()
+                    .find(|workspace| workspace.id == id)
+                else {
+                    return prepared;
+                };
+                if !workspace.selected {
+                    prepared.effect.workspace_switch = Some(WorkspaceSwitch {
+                        id: workspace.id.clone(),
+                        path: workspace.path.clone(),
+                        source_workspace,
+                    });
+                }
+                return prepared;
+            }
         };
         let mut prepared = PreparedToolbarAction {
             effect: ToolbarEffect::default(),

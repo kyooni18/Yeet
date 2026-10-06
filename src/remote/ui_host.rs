@@ -132,6 +132,7 @@ pub(super) fn run_toolbar_action(
         .map_err(|_| "remote runtime state lock poisoned")?;
     let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
     let prepared = ui.prepare_toolbar(action, &state.state);
+    let workspace_switch = prepared.effect.workspace_switch.clone();
     if let Some(command) = prepared.effect.command.clone() {
         let theme_command = command.clone();
         service
@@ -142,6 +143,14 @@ pub(super) fn run_toolbar_action(
     let (projection, _) = ui.commit_toolbar(prepared, &state.state);
     for message in application_messages(projection, request_id, None) {
         let _ = events.send(message);
+    }
+    if let Some(workspace) = workspace_switch {
+        let _ = events.send(ServerMessage::WorkspaceSwitchRequested {
+            version: REMOTE_PROTOCOL_VERSION,
+            id: workspace.id,
+            path: workspace.path,
+            source_workspace: workspace.source_workspace,
+        });
     }
     Ok(())
 }

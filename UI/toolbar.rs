@@ -42,6 +42,20 @@ pub enum QuickSection {
 pub enum ToolbarAction {
     Activate(String),
     Choose { id: String, value: String },
+    ChooseWorkspace { id: String, source_workspace: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceChoice {
+    pub id: String,
+    pub path: String,
+    pub label: String,
+    pub selected: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSwitch {
+    pub id: String,
+    pub path: String,
+    pub source_workspace: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolbarOption {
@@ -72,6 +86,10 @@ pub struct ToolbarView {
     pub quick_sections: Vec<QuickSection>,
     #[serde(default)]
     pub sandbox_controls: Vec<ToolbarControl>,
+    #[serde(default)]
+    pub workspace_choices: Vec<WorkspaceChoice>,
+    #[serde(default)]
+    pub workspace_source: String,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolbarUiEffect {
@@ -81,6 +99,7 @@ pub struct ToolbarUiEffect {
 pub struct ToolbarEffect {
     pub command: Option<HarnessCommand>,
     pub destination: Option<ComposerDestination>,
+    pub workspace_switch: Option<WorkspaceSwitch>,
 }
 #[derive(Clone, Default)]
 pub(super) struct ToolbarRuntime {
@@ -92,6 +111,8 @@ pub(super) struct ToolbarRuntime {
     sandbox_preset: String,
     sandbox_auto_approve: bool,
     sandbox_working: bool,
+    workspace_choices: Vec<WorkspaceChoice>,
+    workspace_source: String,
     context: bool,
 }
 impl ToolbarRuntime {
@@ -111,6 +132,22 @@ impl ToolbarRuntime {
             .as_ref()
             .is_some_and(|settings| settings.auto_approve);
         self.sandbox_working = h.sandbox_working;
+        self.workspace_source = h
+            .known_workspaces
+            .iter()
+            .find(|workspace| workspace.is_current)
+            .map(|workspace| workspace.path.clone())
+            .unwrap_or_default();
+        self.workspace_choices = h
+            .known_workspaces
+            .iter()
+            .map(|workspace| WorkspaceChoice {
+                id: workspace.id.clone(),
+                path: workspace.path.clone(),
+                label: workspace.display_name.clone(),
+                selected: workspace.is_current || workspace.path == self.workspace_source,
+            })
+            .collect();
         self.context = h.current_context_tokens.is_some()
             && h.active_model_context_length.is_some_and(|total| total > 0);
     }
@@ -267,6 +304,8 @@ impl ToolbarRuntime {
             } else {
                 Vec::new()
             },
+            workspace_choices: self.workspace_choices.clone(),
+            workspace_source: self.workspace_source.clone(),
             quick_title: if self.streaming {
                 "Working"
             } else {
@@ -497,5 +536,60 @@ mod tests {
             &state,
         );
         assert!(busy.effect.command.is_none());
+    }
+
+    #[test]
+    fn workspace_choices_use_stable_ids_and_reject_stale_or_current_selection() {
+        let mut state = HarnessState::default();
+        state.known_workspaces = vec![
+            crate::model::WorkspaceSummary {
+                id: "current-id".into(),
+                path: "/work/current".into(),
+                display_name: "Current".into(),
+                updated_at: None,
+                session_count: 1,
+                is_current: true,
+            },
+            crate::model::WorkspaceSummary {
+                id: "target-id".into(),
+                path: "/work/target".into(),
+                display_name: "Target".into(),
+                updated_at: None,
+                session_count: 2,
+                is_current: false,
+            },
+        ];
+        let ui = ApplicationSession::new(&state);
+        let view = ui.toolbar_view_for(&state);
+        assert_eq!(view.workspace_source, "/work/current");
+        assert_eq!(view.workspace_choices[1].id, "target-id");
+        assert!(!view.workspace_choices[1].selected);
+
+        let selected = ui.prepare_toolbar(
+            ToolbarAction::ChooseWorkspace {
+                id: "target-id".into(),
+                source_workspace: "/work/current".into(),
+            },
+            &state,
+        );
+        assert!(matches!(
+            selected.effect.workspace_switch,
+            Some(WorkspaceSwitch { id, path, source_workspace })
+                if id == "target-id" && path == "/work/target" && source_workspace == "/work/current"
+        ));
+        for (id, source_workspace) in [
+            ("missing", "/work/current"),
+            ("target-id", "/work/old"),
+            ("current-id", "/work/current"),
+        ] {
+            let rejected = ui.prepare_toolbar(
+                ToolbarAction::ChooseWorkspace {
+                    id: id.into(),
+                    source_workspace: source_workspace.into(),
+                },
+                &state,
+            );
+            assert!(rejected.effect.workspace_switch.is_none());
+        }
     }
 }

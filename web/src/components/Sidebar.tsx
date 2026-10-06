@@ -28,6 +28,16 @@ export function Sidebar({
   onAgents: () => void
 }) {
   const remote = useRemote()
+  const toolbar = remote.ui?.toolbar
+  const workspaceChoices = toolbar?.workspace_choices?.map(workspace => ({
+    ...workspace,
+    is_current: workspace.selected,
+  })) ?? remote.state.known_workspaces.map(workspace => ({
+    id: workspace.id,
+    path: workspace.path,
+    label: workspace.display_name,
+    is_current: workspace.is_current,
+  }))
   const [workspaceMenu, setWorkspaceMenu] = useState(false)
   const [filter, setFilter] = useState('')
   const panelRef = useRef<HTMLElement>(null)
@@ -119,19 +129,30 @@ export function Sidebar({
           </button>
           {workspaceMenu && (
             <div className="floating-menu workspace-menu">
-              {remote.state.known_workspaces.map((workspace) => (
+              {workspaceChoices.map((workspace) => (
                 <button
                   key={workspace.id}
                   onClick={() => {
                     setWorkspaceMenu(false)
-                    if (!workspace.is_current) remoteStore.switchWorkspace(workspace.path)
+                    if (workspace.is_current) return
+                    if (toolbar?.workspace_choices && toolbar.workspace_source) {
+                      remoteStore.sendToolbarUi({
+                        type: 'choose_workspace',
+                        value: {
+                          id: workspace.id,
+                          source_workspace: toolbar.workspace_source ?? remote.state.workspace_root ?? '',
+                        },
+                      })
+                    } else {
+                      remoteStore.switchWorkspace(workspace.path)
+                    }
                   }}
                 >
-                  <span>{workspace.display_name}</span>
+                  <span>{workspace.label}</span>
                   {workspace.is_current && <Check size={13} />}
                 </button>
               ))}
-              {!remote.state.known_workspaces.length && <div className="menu-empty">No workspaces</div>}
+              {!workspaceChoices.length && <div className="menu-empty">No workspaces</div>}
             </div>
           )}
         </div>
