@@ -434,3 +434,11 @@ selection, stale-target validation and delivery rollback. This does not yet
 complete graphical Files/Diff rendering or native TUI controller unification.
 Delivered resource-open intents are also recorded in each host's RecentViews
 and immediately reprojected; desktop clears that history on workspace changes.
+
+The terminal Home adapter now installs the same host-collected WorkspaceContent
+in ApplicationSession and routes pointer/keyboard Select, Open and New Session
+through shared HomeAction validation. It keeps native hit geometry and resource
+opening, and commits New Session only after backend delivery. Terminal recent,
+activity and inspector drawing now consume ApplicationSession's owned
+HomeView. Its local HomeState still owns viewport scroll and Git refresh bridging;
+provider usage drawing still reads host-supplied usage data directly.
