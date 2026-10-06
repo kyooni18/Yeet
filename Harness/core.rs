@@ -14,8 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::harness::sandbox::SandboxStore;
 use crate::platform::{TrackedChild, configure_process_group, force_terminate_process_tree};
-use crate::sandbox::SandboxStore;
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

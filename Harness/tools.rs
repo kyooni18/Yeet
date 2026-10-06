@@ -13,9 +13,9 @@ use crate::{
     core::{BridgeClient, ToolCall, ToolDefinition, Usage},
     edit::{ApplyResult, EditClient},
     general,
+    harness::sandbox::{SandboxMode, SandboxStore},
     permission::PermissionBroker,
     project_settings::ServiceBackend,
-    sandbox::{SandboxMode, SandboxStore},
     session_store::SessionStore,
     shell::{
         ShellExecutionRequest, ShellProgress, restricted_operation, run_shell_cancellable,

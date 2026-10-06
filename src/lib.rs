@@ -28,6 +28,7 @@ pub use harness::permission;
 mod platform;
 pub mod project_settings;
 pub mod remote;
+// Compatibility import; sandbox policy and persistence are owned by Harness.
 pub mod sandbox;
 pub mod sandbox_cli;
 // Compatibility import; persistent session ownership lives in Harness.

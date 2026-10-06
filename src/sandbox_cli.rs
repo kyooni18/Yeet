@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::sandbox::{
+use crate::harness::sandbox::{
     NetworkEndpoint, SandboxLimits, SandboxMode, SandboxPolicy, SandboxStore, WorkspaceRead,
     validate_environment, validate_relative_path, validate_secret_id,
 };

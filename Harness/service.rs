@@ -30,6 +30,10 @@ use crate::{
     core::{
         BridgeEvent, CallRequest, HarnessCapabilityDescriptor, ImageAttachment, Message, Usage,
     },
+    harness::sandbox::{
+        NetworkEndpoint, SandboxMode, SandboxPolicy, SandboxStore, WorkspaceRead,
+        validate_environment, validate_relative_path, validate_secret_id,
+    },
     model::{
         AgentMode, AuthProviderItem, AutonomyMode, CapabilityToggleItem, ConversationEntry,
         ConversationKind, ConversationToolCall, FrontendCommand, HarnessEvent, HarnessState,
@@ -41,10 +45,6 @@ use crate::{
     },
     permission::PermissionBroker,
     project_settings::{ProjectSettingsStore, ServiceBackend},
-    sandbox::{
-        NetworkEndpoint, SandboxMode, SandboxPolicy, SandboxStore, WorkspaceRead,
-        validate_environment, validate_relative_path, validate_secret_id,
-    },
     session_store::{RunStatus, SessionStore, StoredRun, StoredSession},
     tools::{BridgeHandle, ToolRegistry},
     workers::WorkerRegistry,

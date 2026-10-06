@@ -12,16 +12,17 @@ use anyhow::{Context, Result, bail};
 
 pub mod agent;
 pub mod agents;
-pub mod core;
 pub mod context_cache;
+pub mod core;
 pub mod model;
 pub mod permission;
 pub mod resources;
+pub mod sandbox;
+mod service;
+pub mod session_store;
 pub mod theme_resources;
 pub mod tools;
-pub mod session_store;
 pub mod workers;
-mod service;
 
 pub use service::{HarnessClient, ServiceEvent, forward_cli};
 pub(crate) use service::{HarnessService, SessionCatalog, tool_detail};

@@ -16,10 +16,10 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::platform::{TrackedChild, configure_process_group};
-use crate::sandbox::{
+use crate::harness::sandbox::{
     SandboxMode, SandboxPolicy, SandboxStore, WorkspaceRead, validate_relative_path,
 };
+use crate::platform::{TrackedChild, configure_process_group};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -928,7 +928,7 @@ fn trusted_maximum(requested: &SandboxPolicy, allow_write: bool) -> SandboxPolic
         network_allow: Default::default(),
         environment: safe_environment,
         secret_ids: Default::default(),
-        limits: crate::sandbox::SandboxLimits {
+        limits: crate::harness::sandbox::SandboxLimits {
             wall_time_seconds: 86_400,
             max_stdout_bytes: 4 * 1024 * 1024,
             max_stderr_bytes: 4 * 1024 * 1024,
