@@ -324,3 +324,16 @@ An outstanding dependency audit finding: Harness settings projection still uses
 root theme palette resolution/catalog and exposes resolved colors in runtime
 settings. Theme configuration storage and platform-neutral UI palette projection
 need a later separation without introducing a Harness-to-UI dependency.
+
+`UI/settings/` and SettingsSession now own ordered root sections, typed
+choice/toggle/navigation/editor controls, semantic icons, stable selection,
+provider/capability actions and shared availability policy. Flex eligibility
+uses authoritative model/provider authentication facts; settings-working blocks
+mutations consistently. Prepare/commit preserves rejected editor delivery.
+Context shorthand/reset uses the existing configuration parser; theme values
+remain Harness commands rather than UI persistence or palette resolution.
+
+The exact staged shared Settings model passed three behavioral tests and
+all-target compilation in an isolated checkout. Native/Web root adapters and
+transport are still being verified before their own checkpoint. Advanced
+settings forms and graphical content parity remain incomplete.

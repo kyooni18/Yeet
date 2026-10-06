@@ -16,6 +16,8 @@ pub mod composer_session;
 pub mod conversation;
 pub mod conversation_session;
 pub mod navigation;
+pub mod settings;
+pub mod settings_session;
 pub mod shell;
 pub mod surfaces;
 pub mod workbench;

@@ -12,6 +12,8 @@ use super::{
         ConversationProjection, ConversationSession, PreparedConversationAction,
     },
     navigation::{NavigationState, WorkbenchResources},
+    settings::{SettingsAction, SettingsEffect, SettingsEnvironment, SettingsState},
+    settings_session::{PreparedSettingsAction, SettingsProjection, SettingsSession},
     shell::{ShellAction, ShellState, ShellView, Surface},
     workbench::WorkbenchTab,
 };
@@ -35,6 +37,7 @@ pub struct ApplicationProjection {
     pub agents: AgentProjection,
     pub conversation: ConversationProjection,
     pub composer: ComposerProjection,
+    pub settings: SettingsProjection,
 }
 pub struct ApplicationSession {
     navigation: NavigationState,
@@ -42,6 +45,7 @@ pub struct ApplicationSession {
     agents: AgentSession,
     conversation: ConversationSession,
     composer: ComposerSession,
+    settings: SettingsSession,
     revision: u64,
     serialized: serde_json::Value,
 }
@@ -58,6 +62,7 @@ impl ApplicationSession {
             agents: AgentSession::new(harness),
             conversation: ConversationSession::new(harness),
             composer: ComposerSession::new(harness),
+            settings: SettingsSession::new(harness),
             revision: 0,
             serialized: serde_json::Value::Null,
         };
@@ -103,7 +108,42 @@ impl ApplicationSession {
             agents: self.agents.projection(),
             conversation: self.conversation.projection(),
             composer: self.composer.projection(),
+            settings: self.settings.projection(),
         }
+    }
+    pub fn settings_projection(&self) -> SettingsProjection {
+        self.settings.projection()
+    }
+    pub fn settings_state(&self) -> &SettingsState {
+        self.settings.state()
+    }
+    pub fn settings_environment(&self) -> &SettingsEnvironment {
+        self.settings.environment()
+    }
+    pub fn configure_settings(
+        &mut self,
+        environment: SettingsEnvironment,
+        harness: &HarnessState,
+    ) -> Option<ApplicationProjection> {
+        self.settings.configure(environment, harness)?;
+        self.advance();
+        Some(self.projection())
+    }
+    pub fn prepare_settings(
+        &self,
+        action: SettingsAction,
+        harness: &HarnessState,
+    ) -> PreparedSettingsAction {
+        self.settings.prepare(action, harness)
+    }
+    pub fn commit_settings(
+        &mut self,
+        prepared: PreparedSettingsAction,
+        harness: &HarnessState,
+    ) -> (ApplicationProjection, SettingsEffect) {
+        let (_, effect) = self.settings.commit(prepared, harness);
+        self.advance();
+        (self.projection(), effect)
     }
     pub fn composer_projection(&self) -> ComposerProjection {
         self.composer.projection()
@@ -313,6 +353,7 @@ impl ApplicationSession {
         // keep entries separately use the explicit slice variant below.
         self.agents.refresh(harness);
         self.composer.refresh(harness);
+        self.settings.refresh(harness);
         if self.fingerprint() != self.serialized {
             self.advance();
             Some(self.projection())
@@ -327,6 +368,7 @@ impl ApplicationSession {
     ) -> Option<ApplicationProjection> {
         self.agents.refresh(harness);
         self.composer.refresh(harness);
+        self.settings.refresh(harness);
         self.conversation.refresh_entries(entries, harness);
         if self.fingerprint() != self.serialized {
             self.advance();
@@ -351,6 +393,7 @@ impl ApplicationSession {
             self.agents.projection().view,
             self.conversation.projection().view,
             self.composer.projection().view,
+            self.settings.projection().view,
         ))
         .expect("serialize application UI")
     }
