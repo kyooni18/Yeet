@@ -4,9 +4,7 @@ use super::App;
 use super::Mode;
 use crate::harness::resources;
 use crossterm::event::{KeyCode, KeyEvent};
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffAction {
     SelectFile(usize),
@@ -65,21 +63,13 @@ impl DiffState {
         self.paths.get(self.selected).map(|p| self.root.join(p))
     }
     pub fn select_path(&mut self, p: &Path) {
-        let canonical = p
-            .canonicalize()
-            .or_else(|_| {
-                p.parent()
-                    .unwrap_or(Path::new("."))
-                    .canonicalize()
-                    .map(|parent| parent.join(p.file_name().unwrap_or_default()))
-            })
-            .unwrap_or_else(|_| p.to_path_buf());
+        let canonical = resources::canonical_resource_path(p);
         let p = canonical.as_path();
         if let Some(i) = self.paths.iter().position(|f| self.root.join(f) == p) {
             self.selected = i;
             self.scroll = 0;
             self.patch();
-        } else if p.starts_with(&self.root) && p.is_file() {
+        } else if p.starts_with(&self.root) && resources::path_is_file(p) {
             // An explicitly requested clean file must not silently select a different change.
             self.paths
                 .push(p.strip_prefix(&self.root).unwrap().to_path_buf());
@@ -147,7 +137,11 @@ impl App {
     pub(crate) fn open_diff(&mut self, path: Option<PathBuf>) {
         let dir = path
             .as_ref()
-            .and_then(|p| p.ancestors().skip(1).find(|dir| dir.is_dir()))
+            .and_then(|p| {
+                p.ancestors()
+                    .skip(1)
+                    .find(|dir| resources::path_is_dir(dir))
+            })
             .map(Path::to_path_buf)
             .or_else(|| self.files.as_ref().map(|f| f.dir.clone()))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -181,7 +175,7 @@ impl App {
                 .diff_tabs
                 .active()
                 .and_then(|view| view.state.selected_path())
-                .filter(|p| p.is_file())
+                .filter(|p| resources::path_is_file(p))
             {
                 if self.files.is_none() {
                     self.open_files();

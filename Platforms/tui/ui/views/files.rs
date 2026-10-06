@@ -4,6 +4,7 @@ use super::super::{
     support::{icons, responsive, theme},
     task::fit,
 };
+use crate::harness::resources;
 use crate::tui::app::{
     App,
     files::FilesState,
@@ -456,7 +457,7 @@ fn draw_info(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         .map(|value| value.trim().to_owned())
         .unwrap_or_else(|| "clean".to_owned());
     let size = if entry.is_dir {
-        let count = std::fs::read_dir(files.dir.join(&entry.name)).map_or(0, Iterator::count);
+        let count = resources::directory_entry_count(&files.dir.join(&entry.name));
         format!("{count} items")
     } else {
         human_size(entry.size)
@@ -671,21 +672,10 @@ fn draw_parent_column(
     area: Rect,
 ) {
     let child_name = child.file_name().map(|n| n.to_string_lossy().into_owned());
-    let mut entries: Vec<(String, bool)> = std::fs::read_dir(dir)
+    let entries: Vec<(String, bool)> = resources::directory_entries(dir)
         .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| {
-            (
-                e.file_name().to_string_lossy().into_owned(),
-                e.metadata().is_ok_and(|m| m.is_dir()),
-            )
-        })
+        .map(|entry| (entry.name, entry.is_dir))
         .collect();
-    entries.sort_by(|a, b| {
-        b.1.cmp(&a.1)
-            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
-    });
     let selected = entries
         .iter()
         .position(|(name, _)| Some(name) == child_name.as_ref())
@@ -735,12 +725,11 @@ fn draw_parent_column(
 }
 
 fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
-    use std::os::unix::fs::PermissionsExt;
     let Some(entry) = files.selected() else {
         return;
     };
     let path = files.dir.join(&entry.name);
-    let meta = std::fs::metadata(&path).ok();
+    let metadata = resources::file_metadata(&path);
     let stamp = |time: Option<SystemTime>| {
         time.map(|t| {
             chrono::DateTime::<chrono::Local>::from(t)
@@ -751,17 +740,14 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
     };
     let kind = file_kind(entry);
     let size = if entry.is_dir {
-        format!(
-            "{} items",
-            std::fs::read_dir(&path).map_or(0, Iterator::count)
-        )
+        format!("{} items", resources::directory_entry_count(&path))
     } else {
         human_size(entry.size)
     };
-    let perms = meta
+    let perms = metadata
         .as_ref()
-        .map(|m| {
-            let mode = m.permissions().mode();
+        .and_then(|metadata| metadata.permissions)
+        .map(|mode| {
             "rwxrwxrwx"
                 .chars()
                 .enumerate()
@@ -796,12 +782,12 @@ fn draw_inspector(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         ("Size", size),
         (
             "Created",
-            stamp(meta.as_ref().and_then(|m| m.created().ok())),
+            stamp(metadata.as_ref().and_then(|metadata| metadata.created)),
         ),
         ("Modified", stamp(entry.modified)),
         (
             "Opened",
-            stamp(meta.as_ref().and_then(|m| m.accessed().ok())),
+            stamp(metadata.as_ref().and_then(|metadata| metadata.accessed)),
         ),
         (
             "Where",

@@ -465,3 +465,10 @@ revision test, the TUI Home render test and both Tauri Home wire tests.
 Remote and Tauri `ui_state` events now include the shared ApplicationView
 content/surface projection alongside their compatibility shell view, so clients
 can migrate primary content without deriving navigation policy locally.
+
+The TUI Files adapter now requests directory counts, parent-column entries,
+creation/access timestamps and permission bits through `Harness/resources`.
+File and directory checks plus diff-target canonicalization also use Harness
+resource helpers. The renderer retains presentation and layout only. A focused
+Harness resource test covers the new metadata and path helpers. Shared Files/Diff
+view state and graphical rendering remain follow-up architecture work.

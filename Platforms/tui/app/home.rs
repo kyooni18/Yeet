@@ -1,6 +1,6 @@
 use super::{App, Mode, WorkbenchTab, files::FilesState};
 use crate::{
-    harness::resources::{GitRefresh, GitSnapshot},
+    harness::resources::{self, GitRefresh, GitSnapshot},
     model::FrontendCommand,
     workbench::{ResourceTarget, WorkspaceContent},
 };
@@ -328,7 +328,7 @@ impl App {
             }
             ResourceTarget::Diff(path) => self.open_diff(Some(path)),
             ResourceTarget::File(path) => {
-                if !path.exists() {
+                if !resources::path_is_file(&path) {
                     self.backend_message = Some(format!("File unavailable: {}", path.display()));
                     return;
                 }

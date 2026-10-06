@@ -14,8 +14,8 @@ use crate::tui::kit::{SurfaceId, Tabs};
 
 const PAGE: isize = 10;
 
-pub use crate::harness::resources::FileEntry;
 use crate::harness::resources;
+pub use crate::harness::resources::FileEntry;
 #[derive(Debug, Clone, Default)]
 pub struct FileViewState {
     /// Resource identity is independent of the current rail selection.
@@ -476,7 +476,7 @@ impl App {
                 .active_resource()
                 .cloned()
                 .or_else(|| files.selected_path());
-            self.open_diff(path.filter(|p| !p.is_dir()));
+            self.open_diff(path.filter(|p| !resources::path_is_dir(p)));
             return;
         }
         if action == Action::OpenViews {
