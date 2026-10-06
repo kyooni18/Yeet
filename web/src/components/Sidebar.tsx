@@ -21,12 +21,16 @@ export function Sidebar({
   onClose,
   onSettings,
   onAgents,
+  agentsOpen,
+  onCloseAgents,
 }: {
   open: boolean
   desktopDocked: boolean
   onClose: () => void
   onSettings: () => void
   onAgents: () => void
+  agentsOpen: boolean
+  onCloseAgents: () => void
 }) {
   const remote = useRemote()
   const toolbar = remote.ui?.toolbar
@@ -129,7 +133,16 @@ export function Sidebar({
         </div>
 
         <nav className="sidebar-nav" aria-label="Navigation">
-          <span className="sidebar-nav__row is-current" aria-current="page"><SessionList size={15} strokeWidth={1.6} /><span>Sessions</span></span>
+          <button className={`sidebar-nav__row${agentsOpen ? '' : ' is-current'}`} aria-current={agentsOpen ? undefined : 'page'}
+            onClick={() => { if (agentsOpen) onCloseAgents(); if (!desktopDocked) onClose() }}>
+            <SessionList size={15} strokeWidth={1.6} /><span>Sessions</span>
+          </button>
+          <button className={`sidebar-nav__row${agentsOpen ? ' is-current' : ''}`} aria-current={agentsOpen ? 'page' : undefined}
+            aria-label={`Agents${activeMembers ? `, ${activeMembers} running` : ''}`}
+            onClick={() => { onAgents(); if (!desktopDocked) onClose() }}>
+            <Bot size={15} strokeWidth={1.6} /><span>Agents</span>
+            {activeMembers > 0 && <span className="sidebar-nav__count">{activeMembers}</span>}
+          </button>
         </nav>
 
         <div className="workspace-picker">
@@ -171,19 +184,6 @@ export function Sidebar({
             </div>
           )}
         </div>
-
-        <button
-          className="sidebar-agents-link"
-          onClick={() => {
-            onAgents()
-            if (!desktopDocked) onClose()
-          }}
-          aria-label={`Open Agents${activeMembers ? `, ${activeMembers} active members` : ''}`}
-        >
-          <Bot size={16} />
-          <span><strong>Agents</strong><small>{group?.objective || 'No active group objective'}</small></span>
-          {activeMembers > 0 && <b>{activeMembers}</b>}
-        </button>
 
         <div className="sidebar-search inset-surface">
           <Search size={13} strokeWidth={1.8} />

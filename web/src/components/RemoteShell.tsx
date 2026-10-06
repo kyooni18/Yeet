@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Composer } from '@/components/Composer'
 import { Conversation } from '@/components/Conversation'
+import { AgentsPage } from '@/components/AgentsPage'
 import { AgentsSheet } from '@/components/AgentsSheet'
 import { ModelSheet } from '@/components/ModelSheet'
 import { QuickPanel } from '@/components/QuickPanel'
@@ -25,6 +26,7 @@ export function RemoteShell() {
   const modelSheet = visible('models')
   const settings = visible('settings')
   const desktopLayout = view?.layout === 'expanded'
+  const agentsPage = desktopLayout && visible('agents')
 
   const rememberFocus = (target: React.MutableRefObject<HTMLElement | null>) => {
     const active = document.activeElement
@@ -100,10 +102,16 @@ export function RemoteShell() {
         switch (item.kind) {
           case 'navigation': return <Sidebar key={item.kind} open={open} desktopDocked={desktopLayout}
             onClose={() => send({ type: 'close_navigation' })} onSettings={openSettings}
-            onAgents={() => send({ type: 'open_agents' })} />
+            onAgents={() => send({ type: 'open_agents' })}
+            agentsOpen={visible('agents')} onCloseAgents={() => send({ type: 'close_agents' })} />
           case 'workspace': return (
             <section key={item.kind} className={`main-viewport app-workspace${sidebarVisible ? ' sidebar-open' : ''}`} aria-label="Current session">
-              {item.children.map(child => {
+              {agentsPage ? <>
+                <TopBar sidebarOpen={sidebarVisible} controlsOpen={controlsVisible} page="Agents"
+                  onToggleSidebar={openNavigation}
+                  onToggleControls={(action) => action ? remoteStore.sendToolbarUi(action) : send({ type: 'toggle_inspector' })} />
+                <AgentsPage />
+              </> : item.children.map(child => {
                 switch (child) {
                   case 'session_header': return <TopBar key={child} sidebarOpen={sidebarVisible} controlsOpen={controlsVisible}
                     onToggleSidebar={openNavigation}
@@ -123,7 +131,7 @@ export function RemoteShell() {
             onModel={openModel} onSettings={openSettings} />
           case 'models': return <ModelSheet key={item.kind} open={open} onClose={() => send({ type: 'close_models' })} />
           case 'settings': return <SettingsSheet key={item.kind} open={open} onClose={() => send({ type: 'close_settings' })} />
-          case 'agents': return <AgentsSheet key={item.kind} open={open} onClose={() => send({ type: 'close_agents' })} />
+          case 'agents': return agentsPage ? null : <AgentsSheet key={item.kind} open={open} onClose={() => send({ type: 'close_agents' })} />
         }
       })}
     </div>

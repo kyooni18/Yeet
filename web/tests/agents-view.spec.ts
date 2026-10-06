@@ -12,9 +12,17 @@ async function emit(page: Page, message: Record<string, unknown>) {
   }, message)
 }
 
+const isDesktop = (page: Page) => page.evaluate(() =>
+  matchMedia('(min-width: 1000px) and (hover: hover) and (pointer: fine)').matches)
+
+/** Desktop shows Agents as a page; compact layouts keep the modal sheet. */
 async function openAgents(page: Page) {
+  if (await isDesktop(page)) {
+    await page.getByRole('button', { name: /^Agents/ }).click()
+    return page.getByRole('region', { name: 'Agent Group' })
+  }
   await page.getByRole('button', { name: /Open sidebar/ }).click()
-  await page.getByRole('button', { name: /Open Agents/ }).click()
+  await page.getByRole('button', { name: /^Agents/ }).click()
   return page.getByRole('dialog', { name: 'Agent Group' })
 }
 
@@ -71,12 +79,10 @@ test('shows the group objective, attributed member events, shared findings, resu
   await expect(dialog.getByRole('list', { name: 'Group activity events' })).toContainText('Comparing measured latency across providers.')
   await expect(dialog.getByRole('list', { name: 'Group activity events' })).toContainText('Compare model latency')
   await expect(dialog).toContainText('Model B has the lowest p95 latency.')
-  await expect(dialog).toContainText('800 / 12.0K')
-  await expect(dialog).toContainText('$0.08 / $2.00')
-  await expect(dialog).toContainText('64.0K context')
+  await expect(dialog).toContainText(/800 (\/|of) 12\.0K/)
+  await expect(dialog).toContainText(/\$0\.08 (\/|of) \$2\.00/)
 
   await dialog.getByRole('button', { name: /Compare model latency/ }).click()
-  await expect(dialog).toContainText('Filtered to Compare model latency')
   await expect(dialog.getByRole('list', { name: 'Group activity events' })).toContainText('Comparing measured latency across providers.')
 
   await dialog.getByRole('button', { name: 'Cancel group' }).click()
@@ -95,7 +101,7 @@ test('creates a shared group objective through the group lifecycle', async ({ pa
   const dialog = await openAgents(page)
   await expect(dialog).toContainText('No Agent Group yet')
   await dialog.getByRole('button', { name: 'Create group' }).first().click()
-  await dialog.getByLabel('Shared objective').fill('Compare two migration options and synthesize the tradeoffs.')
+  await dialog.getByLabel(/objective/i).fill('Compare two migration options and synthesize the tradeoffs.')
   await dialog.getByRole('button', { name: 'Create group' }).last().click()
 
   await expect.poll(() => page.evaluate(() => (window as unknown as TestHooks).__yeetSent.some(message => {

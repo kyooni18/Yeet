@@ -8,11 +8,13 @@ export function TopBar({
   controlsOpen,
   onToggleSidebar,
   onToggleControls,
+  page,
 }: {
   sidebarOpen: boolean
   controlsOpen: boolean
   onToggleSidebar: (action?: ToolbarAction) => void
   onToggleControls: (action?: ToolbarAction) => void
+  page?: string
 }) {
   const remote = useRemote()
   const groups = remote.ui?.toolbar?.groups ?? []
@@ -31,13 +33,13 @@ export function TopBar({
       }}>{Icon && <Icon size={group === 'header_leading' ? 18 : 16} />}</button>
   })
   const workspace = remote.currentWorkspace?.display_name || remote.state.workspace_root || 'Workspace'
-  const title = remote.currentSession?.title || 'New Chat'
+  const title = page ?? (remote.currentSession?.title || 'New Chat')
   const directory = remote.currentWorkspace?.path || remote.state.workspace_root || workspace
   const usage = remote.state.token_usage
   const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
 
   return (
-    <header className="remote-topbar">
+    <header className={`remote-topbar${page ? ' is-page' : ''}`}>
       <div className="topbar-leading">
         {renderControls('header_leading')}
 
@@ -51,14 +53,14 @@ export function TopBar({
         {renderControls('header_actions')}
       </div>
 
-      <div className="session-meta" aria-label="Session details">
+      {!page && <div className="session-meta" aria-label="Session details">
         <span className="session-meta__path" title={directory}>{directory}</span>
         <span className="session-meta__spacer" />
         {remote.state.is_streaming && <span className="session-meta__run"><span className="mini-spinner" aria-hidden="true" />Running</span>}
         {tokens > 0 && <span className="session-meta__tokens" title="Tokens used"><Layers3 size={12} strokeWidth={1.8} />{formatTokens(tokens)}</span>}
         <span className="session-meta__divider" aria-hidden="true" />
         {renderControls('session_actions')}
-      </div>
+      </div>}
     </header>
   )
 }
