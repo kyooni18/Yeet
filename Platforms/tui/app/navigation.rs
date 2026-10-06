@@ -270,7 +270,7 @@ mod tests {
         app.diff_frame.view = Some(second);
         app.diff_frame
             .hits
-            .register(Rect::new(0, 0, 10, 1), DiffAction::Display(true));
+            .register(Rect::new(0, 0, 10, 1), DiffAction::SetFull(true));
         app.activate_workbench_tab(WorkbenchTab::CloseDiff(first));
         app.activate_workbench_tab(WorkbenchTab::CloseDiff(first));
         assert_eq!(app.diff_tabs.len(), 1);

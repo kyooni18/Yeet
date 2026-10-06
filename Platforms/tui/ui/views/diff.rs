@@ -93,13 +93,13 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) 
             Rect::new(r.x, r.y, 11, 1),
             " full file ",
             full_style,
-            DiffAction::Display(true),
+            DiffAction::SetFull(true),
         );
         ui.button(
             Rect::new(r.x + 13, r.y, 14, 1),
             " changes only ",
             changes_style,
-            DiffAction::Display(false),
+            DiffAction::SetFull(false),
         );
     }
     let patch = Rect::new(
@@ -200,7 +200,7 @@ fn draw_rail(
         return;
     }
     frame.render_widget(Block::default().style(theme::surface()), rail);
-    let mut rows: Vec<(String, Option<usize>)> = Vec::new();
+    let mut rows: Vec<(String, Option<usize>, Option<PathBuf>)> = Vec::new();
     let mut previous = PathBuf::new();
     for (i, path) in s.paths.iter().enumerate() {
         let parent = path.parent().unwrap_or(std::path::Path::new(""));
@@ -209,7 +209,7 @@ fn draw_rail(
             directory.push(part);
             if !previous.starts_with(&directory) {
                 if !rows.is_empty() && depth == 0 {
-                    rows.push((String::new(), None));
+                    rows.push((String::new(), None, None));
                 }
                 rows.push((
                     format!(
@@ -220,6 +220,7 @@ fn draw_rail(
                         part.as_os_str().to_string_lossy()
                     ),
                     None,
+                    None,
                 ));
             }
         }
@@ -228,17 +229,18 @@ fn draw_rail(
         rows.push((
             format!(" {}{} {}", "  ".repeat(depth + 1), icons::file(&name), name),
             Some(i),
+            Some(path.clone()),
         ));
         previous = parent.into();
     }
     let available = rail.height.saturating_sub(4) as usize;
     let selected_row = rows
         .iter()
-        .position(|(_, i)| *i == Some(s.selected))
+        .position(|(_, i, _)| *i == Some(s.selected))
         .unwrap_or(0);
     let start = crate::tui::kit::visible_start(selected_row, available);
     let mut last = rail.y + 1;
-    for (row, (label, index)) in rows.into_iter().skip(start).take(available).enumerate() {
+    for (row, (label, index, target)) in rows.into_iter().skip(start).take(available).enumerate() {
         let r = Rect::new(rail.x, rail.y + 1 + row as u16, rail.width, 1);
         let style = if index == Some(s.selected) {
             theme::surface()
@@ -253,8 +255,10 @@ fn draw_rail(
             })
         };
         text(frame, r, &label, style);
-        if let Some(i) = index {
-            geometry.hits.register(r, DiffAction::SelectFile(i));
+        if let Some(target) = target {
+            geometry
+                .hits
+                .register(r, DiffAction::SelectFile(s.root.join(target)));
         }
         last = r.y + 2;
     }

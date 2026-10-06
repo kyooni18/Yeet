@@ -472,3 +472,9 @@ File and directory checks plus diff-target canonicalization also use Harness
 resource helpers. The renderer retains presentation and layout only. A focused
 Harness resource test covers the new metadata and path helpers. Shared Files/Diff
 view state and graphical rendering remain follow-up architecture work.
+
+Diff file selection and context-width changes now use serializable actions in
+`UI/diff.rs`. TUI hit targets carry stable absolute resource paths instead of
+row indexes, and the adapter rejects a path that disappeared after rendering.
+The action contract is shared; ApplicationSession ownership and Remote/Tauri
+dispatch for Files/Diff remain incomplete.

@@ -3,13 +3,9 @@ use super::App;
 #[cfg(test)]
 use super::Mode;
 use crate::harness::resources;
+pub use crate::shared_ui::diff::DiffAction;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::path::{Path, PathBuf};
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiffAction {
-    SelectFile(usize),
-    Display(bool),
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct DiffState {
@@ -66,18 +62,16 @@ impl DiffState {
         let canonical = resources::canonical_resource_path(p);
         let p = canonical.as_path();
         if let Some(i) = self.paths.iter().position(|f| self.root.join(f) == p) {
-            self.selected = i;
-            self.scroll = 0;
-            self.patch();
+            self.apply_action(DiffAction::SelectFile(self.root.join(&self.paths[i])));
         } else if p.starts_with(&self.root) && resources::path_is_file(p) {
             // An explicitly requested clean file must not silently select a different change.
             self.paths
                 .push(p.strip_prefix(&self.root).unwrap().to_path_buf());
             self.statuses.push("  ".into());
             self.original_paths.push(None);
-            self.selected = self.paths.len() - 1;
-            self.scroll = 0;
-            self.patch();
+            self.apply_action(DiffAction::SelectFile(self.root.join(
+                self.paths.last().expect("the selected path was just inserted"),
+            )));
         }
     }
     pub fn reload(&mut self) {
@@ -124,13 +118,40 @@ impl DiffState {
         }
         self.scroll = self.scroll.min(self.lines.len().saturating_sub(1));
     }
+    pub fn apply_action(&mut self, action: DiffAction) -> bool {
+        match action {
+            DiffAction::SelectFile(target) => {
+                let Some(index) = self
+                    .paths
+                    .iter()
+                    .position(|path| self.root.join(path) == target)
+                else {
+                    return false;
+                };
+                self.selected = index;
+                self.scroll = 0;
+                self.patch();
+                true
+            }
+            DiffAction::SetFull(full) => {
+                self.full = full;
+                self.scroll = 0;
+                self.patch();
+                true
+            }
+        }
+    }
     pub fn move_file(&mut self, delta: isize) {
-        self.selected = self
+        let selected = self
             .selected
             .saturating_add_signed(delta)
             .min(self.paths.len().saturating_sub(1));
-        self.scroll = 0;
-        self.patch();
+        if let Some(path) = self.paths.get(selected) {
+            self.apply_action(DiffAction::SelectFile(self.root.join(path)));
+        } else {
+            self.scroll = 0;
+            self.patch();
+        }
     }
 }
 impl App {
@@ -202,9 +223,7 @@ impl App {
             KeyCode::Right | KeyCode::Char(']') => s.move_file(1),
             KeyCode::Left | KeyCode::Char('[') => s.move_file(-1),
             KeyCode::Char('f') => {
-                s.full = !s.full;
-                s.scroll = 0;
-                s.patch();
+                s.apply_action(DiffAction::SetFull(!s.full));
             }
             KeyCode::Char('r') => s.reload(),
             KeyCode::Char('n') => {
@@ -245,18 +264,8 @@ impl App {
         let point = (e.column, e.row).into();
         match e.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                match self.diff_frame.hits.at(point).copied() {
-                    Some(DiffAction::SelectFile(i)) => {
-                        s.selected = i;
-                        s.scroll = 0;
-                        s.patch();
-                    }
-                    Some(DiffAction::Display(full)) => {
-                        s.full = full;
-                        s.scroll = 0;
-                        s.patch();
-                    }
-                    None => {}
+                if let Some(action) = self.diff_frame.hits.at(point).cloned() {
+                    s.apply_action(action);
                 }
             }
             MouseEventKind::ScrollDown if self.diff_frame.body.contains(point) => {
@@ -275,6 +284,32 @@ mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn shared_diff_actions_select_stable_paths_and_reject_stale_targets() {
+        let root = PathBuf::from("/workspace");
+        let mut state = DiffState {
+            root: root.clone(),
+            paths: vec![
+                PathBuf::from("src/current.rs"),
+                PathBuf::from("src/other.rs"),
+            ],
+            selected: 0,
+            ..DiffState::default()
+        };
+        let other = root.join("src/other.rs");
+        assert!(state.apply_action(DiffAction::SelectFile(other.clone())));
+        assert_eq!(state.selected_path(), Some(other.clone()));
+
+        assert!(!state.apply_action(DiffAction::SelectFile(
+            root.join("src/removed.rs")
+        )));
+        assert_eq!(state.selected_path(), Some(other));
+        state.scroll = 7;
+        assert!(state.apply_action(DiffAction::SetFull(false)));
+        assert_eq!(state.scroll, 0);
+    }
+
     #[test]
     fn git_review_is_wired_to_launcher_files_tabs_and_mouse() {
         let dir = tempfile::tempdir().unwrap();
@@ -340,7 +375,7 @@ mod tests {
             .diff_frame
             .hits
             .targets()
-            .find(|(_, a)| *a == DiffAction::Display(true))
+            .find(|(_, a)| *a == DiffAction::SetFull(true))
             .unwrap()
             .0;
         app.handle_mouse(crossterm::event::MouseEvent {
