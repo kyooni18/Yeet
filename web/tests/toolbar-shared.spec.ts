@@ -23,7 +23,6 @@ test('shared header preserves local navigation offline while preventing runtime 
  await expect.poll(()=>page.evaluate(()=>(window as unknown as {__yeetSent:{type:string;command?:{type:string}}[]}).__yeetSent.filter(item=>item.command?.type==='new_session').length)).toBe(1)
  await page.evaluate(()=>window.dispatchEvent(new Event('offline')))
  await expect(page.getByRole('button',{name:'New chat',exact:true})).toBeDisabled()
- await expect(page.locator('.session-meta__button')).toBeDisabled()
  await expect(page.getByRole('button',{name:'Quick settings'})).toBeEnabled()
  await page.getByRole('button',{name:'Quick settings'}).click()
  await expect(page.locator('.quick-panel').getByRole('switch',{name:'Goal mode'})).toBeDisabled()

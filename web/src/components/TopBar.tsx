@@ -38,6 +38,15 @@ export function TopBar({
   const usage = remote.state.token_usage
   const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
 
+  // Only a connection problem is worth a label; a healthy session shows nothing.
+  const problem = remote.connection === 'connected' ? null
+    : remote.connection === 'failed' ? (remote.connectionError || 'Connection failed')
+    : remote.connection === 'offline' ? 'Offline'
+    : remote.connection === 'auth-required' ? 'Sign in required'
+    : remote.connection === 'reconnecting' ? 'Reconnecting'
+    : 'Connecting'
+  const fatal = remote.connection === 'failed' || remote.connection === 'offline' || remote.connection === 'auth-required'
+
   return (
     <header className={`remote-topbar${page ? ' is-page' : ''}`}>
       <div className="topbar-leading">
@@ -48,6 +57,13 @@ export function TopBar({
           <span className="topbar-workspace">{workspace}</span>
         </div>
       </div>
+
+      {problem && <div className={`topbar-status ${fatal ? 'is-warning' : 'is-busy'}`}
+        role={remote.connection === 'failed' ? 'alert' : 'status'}
+        aria-live={remote.connection === 'failed' ? 'assertive' : 'polite'}
+        aria-label={remote.connection === 'failed' ? 'Connection failed' : undefined} title={problem}>
+        <span className="topbar-status__dot" aria-hidden="true" /><span>{problem}</span>
+      </div>}
 
       <div className="topbar-actions">
         {renderControls('header_actions')}
