@@ -1616,16 +1616,12 @@ impl App {
                 self.views_index = self.views_index.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.views_index = (self.views_index + 1).min(4);
+                self.views_index = (self.views_index + 1)
+                    .min(crate::shared_ui::workbench::LAUNCHER.len() - 1);
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('l') | KeyCode::Right => {
-                let tab = [
-                    WorkbenchTab::Home,
-                    WorkbenchTab::Session,
-                    WorkbenchTab::Files,
-                    WorkbenchTab::NewDiff,
-                    WorkbenchTab::Agents,
-                ][self.views_index.min(4)];
+                let items = crate::shared_ui::workbench::LAUNCHER;
+                let tab = items[self.views_index.min(items.len() - 1)].action;
                 self.activate_workbench_tab(tab);
             }
             _ => {}

@@ -36,6 +36,9 @@ pub mod web_search;
 pub mod workbench;
 pub mod workers;
 
+#[path = "../UI/mod.rs"]
+pub mod shared_ui;
+
 #[path = "../tui/mod.rs"]
 pub mod tui;
 

@@ -1,4 +1,4 @@
-//! Small shared interaction and surface primitives over Ratatui.
+//! Terminal geometry and native controls over shared UI surface state.
 mod surfaces;
 mod widgets;
 pub use surfaces::{FloatingView, SurfaceId, Tabs, Toast, Toasts, View};
@@ -30,15 +30,7 @@ mod tests {
     }
 
     #[test]
-    fn surfaces_preserve_state_and_expire_notifications() {
-        let mut tabs = Tabs::default();
-        let first = tabs.open("same title", 12);
-        let second = tabs.open("same title", 99);
-        tabs.activate(first);
-        assert_eq!(tabs.active().unwrap().state, 12);
-        tabs.close(first);
-        assert_eq!(tabs.active().unwrap().id, second);
-        assert!(!tabs.activate(first));
+    fn floating_surfaces_and_notifications_keep_terminal_behavior() {
         let floating = FloatingView {
             width: 58,
             height: 9,

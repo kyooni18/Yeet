@@ -1,5 +1,6 @@
-//! Compatibility exports for agent-owned actions.
+//! Compatibility exports for UI actions and Harness commands.
 //!
-//! New callers should use [`crate::agents::actions`]. Skyline is a separate
-//! capability and does not own these intents or their frontend dispatch.
-pub use crate::agents::actions::{Action, FrontendCommand, NavigationAction};
+//! New callers use [`crate::shared_ui::actions`] for UI interaction and
+//! [`crate::harness::HarnessCommand`] for runtime commands.
+pub use crate::harness::HarnessCommand as FrontendCommand;
+pub use crate::shared_ui::actions::{Action, NavigationAction};

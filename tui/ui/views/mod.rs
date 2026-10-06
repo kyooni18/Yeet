@@ -7,7 +7,8 @@ pub(super) mod home;
 pub(super) mod session_picker;
 pub(super) mod sessions;
 use super::support::theme;
-use crate::tui::app::{App, WorkbenchTab};
+use crate::shared_ui::workbench::LAUNCHER;
+use crate::tui::app::App;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -31,16 +32,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    for (index, (target, name, description)) in [
-        (WorkbenchTab::Home, "Home", "Workspace overview"),
-        (WorkbenchTab::Session, "Session", "Current conversation"),
-        (WorkbenchTab::Files, "Files", "Browse workspace files"),
-        (WorkbenchTab::NewDiff, "Diff", "Review Git changes"),
-        (WorkbenchTab::Agents, "Agents", "Delegated agent group"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (index, item) in LAUNCHER.iter().enumerate() {
         if index as u16 >= inner.height {
             break;
         }
@@ -55,11 +47,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
         };
         let line = Line::from(vec![
             Span::styled(if selected { " › " } else { "   " }, style),
-            Span::styled(format!("{name:<10}"), style),
-            Span::styled(description, style.fg(theme::muted())),
+            Span::styled(format!("{:<10}", item.label), style),
+            Span::styled(item.description, style.fg(theme::muted())),
         ]);
         let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
-        app.view_targets.push((row, target));
+        app.view_targets.push((row, item.action));
         frame.render_widget(Paragraph::new(line).style(style), row);
     }
     if inner.height >= 5 {

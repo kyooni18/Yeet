@@ -30,45 +30,38 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
         .workbench_tabs()
         .into_iter()
         .map(|target| {
-            let (icon, label) = match target {
-                Active::Home => (icons::home(), "Home".to_owned()),
-                Active::Session => (icons::session_tab(), conversation_title(app).to_owned()),
-                Active::Files => (icons::folder(false), "Files".to_owned()),
-                Active::Agents => (icons::agent_tab(), "Agents".to_owned()),
+            let resource_label = match target {
+                Active::Session => conversation_title(app).to_owned(),
                 Active::Diff(id) => {
                     let state = &app.diff_tabs.get(id).expect("listed diff instance").state;
-                    (
-                        icons::diff_tab(),
-                        state
-                            .paths
-                            .get(state.selected)
-                            .and_then(|path| path.file_name())
-                            .or_else(|| state.root.file_name())
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                    )
-                }
-                Active::File(index) => {
-                    let label = app
-                        .files
-                        .as_ref()
-                        .and_then(|files| files.tabs.get(index))
-                        .and_then(|view| view.state.resource.as_ref())
+                    state
+                        .paths
+                        .get(state.selected)
                         .and_then(|path| path.file_name())
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    (
-                        if target == active && app.files.as_ref().is_some_and(|files| files.diff) {
-                            icons::diff_tab()
-                        } else {
-                            icons::file(&label)
-                        },
-                        label,
-                    )
+                        .or_else(|| state.root.file_name())
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
                 }
-                _ => unreachable!(),
+                Active::File(id) => app
+                    .files
+                    .as_ref()
+                    .and_then(|files| files.tabs.get(id))
+                    .and_then(|view| view.state.resource.as_ref())
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                _ => String::new(),
             };
+            let mut tab = crate::shared_ui::workbench::Tab::new(target, resource_label);
+            if matches!(target, Active::File(_))
+                && target == active
+                && app.files.as_ref().is_some_and(|files| files.diff)
+            {
+                tab.icon = crate::shared_ui::workbench::Icon::Changes;
+            }
+            let icon = icons::semantic(tab.icon, &tab.label);
+            let label = tab.label;
             let label = fit(&label, 26);
             let text = format!(" {icon} {label} ");
             let width = (Span::raw(&text).width() as u16

@@ -2,23 +2,7 @@
 use super::{App, Mode};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::tui::kit::SurfaceId;
-
-/// Terminal actions use instance identities, never mutable vector positions.
-/// The shared/wire navigation API remains index-based at the adapter boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkbenchTab {
-    Home,
-    Session,
-    Files,
-    File(SurfaceId),
-    CloseFile(SurfaceId),
-    Diff(SurfaceId),
-    CloseDiff(SurfaceId),
-    NewDiff,
-    Agents,
-    Launcher,
-}
+pub use crate::shared_ui::workbench::WorkbenchTab;
 
 impl App {
     pub fn home_visible(&self) -> bool {
@@ -83,9 +67,9 @@ impl App {
 
     pub(crate) fn apply_shared_navigation(
         &mut self,
-        action: crate::agents::actions::NavigationAction,
+        action: crate::shared_ui::actions::NavigationAction,
     ) {
-        use crate::agents::actions::NavigationAction as Shared;
+        use crate::shared_ui::actions::NavigationAction as Shared;
         let target = match action {
             Shared::Home => Some(WorkbenchTab::Home),
             Shared::Session => Some(WorkbenchTab::Session),
@@ -272,7 +256,7 @@ mod tests {
         app.activate_workbench_tab(WorkbenchTab::Diff(first));
         assert_eq!(app.diff_tabs.active_id(), Some(second));
         // Wire compatibility translates positions to IDs only at dispatch time.
-        app.apply_shared_navigation(crate::agents::actions::NavigationAction::Diff(0));
+        app.apply_shared_navigation(crate::shared_ui::actions::NavigationAction::Diff(0));
         assert_eq!(app.active_workbench_tab(), WorkbenchTab::Diff(second));
         let mut terminal = Terminal::new(TestBackend::new(4, 3)).unwrap();
         terminal

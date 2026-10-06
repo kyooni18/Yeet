@@ -102,3 +102,20 @@ enum Kind {
     Lock,
     Other,
 }
+
+/// Translate shared visual meaning into terminal glyphs only.
+pub(in crate::tui::ui) fn semantic(
+    icon: crate::shared_ui::workbench::Icon,
+    label: &str,
+) -> &'static str {
+    use crate::shared_ui::workbench::Icon;
+    match icon {
+        Icon::Home => home(),
+        Icon::Conversation => session_tab(),
+        Icon::Folder => folder(false),
+        Icon::File => file(label),
+        Icon::Changes => diff_tab(),
+        Icon::Agents => agent_tab(),
+        Icon::Add => "+",
+    }
+}

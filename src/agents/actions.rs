@@ -1,33 +1,10 @@
-//! Agent-owned actions shared by run hosts and frontends.
+//! Harness commands shared by run hosts and frontends.
 //!
 //! Independent of Skyline deployment and orchestration. Adapters interpret
 //! these intents; this module never renders UI or starts a Skyline service.
 
 use crate::model::{AgentGroupSettings, AgentMode, AutonomyMode, SandboxAction};
 use serde::{Deserialize, Serialize};
-
-/// Stable navigation intents shared by keyboard, mouse and other frontends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "index", rename_all = "snake_case")]
-pub enum NavigationAction {
-    Home,
-    Session,
-    Files,
-    File(usize),
-    CloseFile(usize),
-    Diff(usize),
-    CloseDiff(usize),
-    NewDiff,
-    Launcher,
-}
-
-/// A common envelope without forcing navigation through the backend transport.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "scope", content = "action", rename_all = "snake_case")]
-pub enum Action {
-    Navigate(NavigationAction),
-    Command(FrontendCommand),
-}
 
 // FrontendCommand is defined here and re-exported by model for wire compatibility.
 
@@ -188,7 +165,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commands_keep_existing_wire_format_and_actions_round_trip() {
+    fn commands_keep_existing_wire_format() {
         let command = FrontendCommand::Submit {
             text: "hello".into(),
             images: Vec::new(),
@@ -200,12 +177,5 @@ mod tests {
                 "type": "submit", "text": "hello"
             })
         );
-        let action = Action::Navigate(NavigationAction::File(2));
-        let encoded = serde_json::to_string(&action).unwrap();
-        let decoded: Action = serde_json::from_str(&encoded).unwrap();
-        assert!(matches!(
-            decoded,
-            Action::Navigate(NavigationAction::File(2))
-        ));
     }
 }
