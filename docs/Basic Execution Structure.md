@@ -14,7 +14,7 @@ Frontend / host (Ratatui TUI, Remote web client, desktop host, CLI)
                                      (one dedicated thread per session runtime)
                   -> HarnessService  Harness/service.rs (command routing)
                       -> AgentCoordinator  Harness/agent.rs (turn loop)
-                          -> ToolRegistry  src/tools.rs
+                          -> ToolRegistry  Harness/tools.rs
                           -> ProviderBridge (BridgeClient, Harness/core/provider_bridge.rs)
                               -> Node sidecar RuntimeSource/dist/bridge.js
 ```

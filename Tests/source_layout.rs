@@ -63,7 +63,7 @@ fn extracted_responsibility_modules_stay_within_target() {
         root.parent().unwrap().join("Harness/agent"),
         root.parent().unwrap().join("Harness/agents"),
         root.parent().unwrap().join("Harness/service"),
-        root.join("tools"),
+        root.parent().unwrap().join("Harness/tools"),
     ];
     let mut oversized = Vec::new();
     for focused_root in focused_roots {
@@ -88,7 +88,7 @@ fn central_coordinators_do_not_absorb_extracted_responsibilities_again() {
     let coordinators = [
         root.parent().unwrap().join("Harness/agent.rs"),
         root.parent().unwrap().join("Harness/service.rs"),
-        root.join("tools.rs"),
+        root.parent().unwrap().join("Harness/tools.rs"),
     ];
     let mut oversized = Vec::new();
     for path in coordinators {
@@ -158,12 +158,12 @@ fn extracted_modules_explain_their_responsibility() {
         "../Harness/service/state.rs",
         "../Harness/service/titles.rs",
         "../Harness/service/transport.rs",
-        "tools/definitions.rs",
-        "tools/editing.rs",
-        "tools/io.rs",
-        "tools/paths.rs",
-        "tools/shell_runtime.rs",
-        "tools/support.rs",
+        "../Harness/tools/definitions.rs",
+        "../Harness/tools/editing.rs",
+        "../Harness/tools/io.rs",
+        "../Harness/tools/paths.rs",
+        "../Harness/tools/shell_runtime.rs",
+        "../Harness/tools/support.rs",
     ];
     let mut undocumented = Vec::new();
     for relative in modules {

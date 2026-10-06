@@ -35,7 +35,8 @@ pub mod shell;
 pub mod skyline;
 mod text_layout;
 pub mod theme;
-pub mod tools;
+// Compatibility import; tool execution lives in Harness.
+pub use harness::tools;
 pub mod update;
 pub mod web_search;
 pub mod workbench;

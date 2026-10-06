@@ -27,7 +27,7 @@ local file paths out of provider payloads.
 
 ## Direct tools
 
-The base tool surface lives in `src/tools.rs`. A direct tool needs:
+The base tool surface lives in `Harness/tools.rs`. A direct tool needs:
 
 1. a `ToolDefinition` in `base_tool_definitions()`;
 2. an execution branch in `ToolRegistry::execute()`;
@@ -53,7 +53,7 @@ should return structured errors to the agent rather than crashing the TUI.
 
 ## Rust Workers
 
-Workers implement `HarnessWorker` in `src/workers.rs`:
+Workers implement `HarnessWorker` in `Harness/workers.rs`:
 
 ```rust
 pub trait HarnessWorker: Send + Sync {

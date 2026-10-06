@@ -600,7 +600,7 @@ impl ToolRegistry {
     /// Direct MCP calls do not reveal client-context lifetime. Clear only
     /// duplicate-suppression state between calls while preserving state required
     /// by a subsequent dependent call (fresh edit snapshots and web source grants).
-    pub(super) fn reset_direct_mcp_visibility(&mut self) {
+    pub(crate) fn reset_direct_mcp_visibility(&mut self) {
         self.evidence.reset_model_visible_window();
     }
 
