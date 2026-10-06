@@ -4,6 +4,7 @@ import { RemoteShell } from '@/components/RemoteShell'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 import '@/styles/ios-remote.css'
 import '@/styles/agents.css'
+import '@/styles/yeet-design.css'
 
 export default function App() {
   const remote = useRemote()

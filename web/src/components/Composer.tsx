@@ -17,7 +17,12 @@ import {
   Square,
   Terminal,
   X,
+  Lock,
+  SignalBars,
+  SlidersHorizontal,
+  Bolt,
 } from '@/components/Icons'
+import type { EditorSnapshot, ComposerPermissionView, ComposerSuggestion } from '@/remote/protocol'
 import { ProviderIcon } from '@/components/ProviderIcon'
 import { deleteAttachment, remoteFeatureSet, uploadAttachment } from '@/remote/attachments'
 import { remoteStore, useRemote } from '@/store/remoteStore'
@@ -27,41 +32,6 @@ import { readComposerDraft, writeComposerDraft } from '@/ui/composerDrafts'
 const TOOLBAR_KEY = 'YeetRemoteComposerToolbarExpanded'
 const MAX_ATTACHMENTS = 8
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
-
-interface SlashCommand {
-  command: string
-  arguments?: string
-  description: string
-}
-
-const SLASH_COMMANDS: SlashCommand[] = [
-  { command: '/debate', arguments: 'TOPIC', description: 'Pro / Con / Jury debate' },
-  { command: '/new', description: 'Start a new session' },
-  { command: '/model', arguments: 'MODEL_ID', description: 'Select model' },
-  { command: '/reasoning', arguments: 'auto|low|medium|high', description: 'Change reasoning level' },
-  { command: '/sessions', description: 'View saved sessions' },
-  { command: '/status', description: 'Runtime / usage status' },
-  { command: '/goal', arguments: 'on|off|toggle|status', description: 'Control Goal mode' },
-  { command: '/context', arguments: 'LENGTH|auto', description: 'Inspect / change context length' },
-  { command: '/compact', description: 'Compact current model context' },
-  { command: '/workspace', arguments: 'list|cd|add|remove|reset PATH', description: 'Manage session workspace' },
-  { command: '/cd', arguments: 'PATH', description: 'Change session working directory' },
-  { command: '/capabilities', description: 'Manage Skills / MCP / capabilities' },
-  { command: '/attach', arguments: 'ID', description: 'Attach capability' },
-  { command: '/detach', arguments: 'ID', description: 'Detach capability' },
-  { command: '/skyline', arguments: 'on|off', description: 'Control Skyline coordination' },
-  { command: '/image', arguments: 'PATH|clear', description: 'Queue image for next turn' },
-  { command: '/permission', arguments: 'allow|deny', description: 'Respond to pending permission' },
-  { command: '/allow', description: 'Allow pending permission once' },
-  { command: '/deny', description: 'Deny pending permission' },
-  { command: '/login', description: 'Provider authentication' },
-  { command: '/provider', description: 'Custom provider settings' },
-  { command: '/providers', description: 'Refresh provider list' },
-  { command: '/settings', description: 'Runtime settings' },
-  { command: '/permissions', description: 'Sandbox / permission settings' },
-  { command: '/help', description: 'Command list' },
-  { command: '/clear', description: 'Clear recent system notice' },
-]
 
 function isWeekWindowLabel(label: string): boolean {
   const value = label.toLowerCase()
@@ -98,6 +68,16 @@ interface ComposerAttachment {
   error?: string
 }
 
+function sameEditor(left: EditorSnapshot, right: EditorSnapshot): boolean {
+  const identity = (editor: EditorSnapshot) => [
+    editor.context.workspace, editor.context.session_id, editor.context.unsaved_generation,
+    editor.text, editor.revision, editor.mode.type,
+    editor.mode.type === 'edit_last' ? editor.mode.has_attachments : false,
+    editor.attachments.map(item => [item.id, item.name, item.attachment_id, item.ready, item.error]),
+  ]
+  return JSON.stringify(identity(left)) === JSON.stringify(identity(right))
+}
+
 function attachmentAnnotation(line: string): boolean {
   const value = line.trim().toLowerCase()
   return value.startsWith('[')
@@ -118,12 +98,9 @@ function editableText(content: string): { text: string; hasAttachments: boolean 
   return { text: lines.join('\n'), hasAttachments }
 }
 
-function PermissionCard() {
+function PermissionCard({ permission, index }: { permission: ComposerPermissionView; index: number }) {
   const remote = useRemote()
-  const shell = remote.state.pending_shell_permission
-  const native = remote.state.pending_native_app_permission
-  const permission = shell ?? native
-  const canRespond = remote.connection === 'connected'
+  const canRespond = remote.connection === 'connected' && permission.controls.every(control => control.enabled)
   const prompt = useRef<HTMLDivElement>(null)
   const denyButton = useRef<HTMLButtonElement>(null)
   const allowButton = useRef<HTMLButtonElement>(null)
@@ -132,20 +109,9 @@ function PermissionCard() {
   const previousCanRespond = useRef(canRespond)
   const permissionHadFocus = useRef(false)
 
-  const permissionKey = shell
-    ? `shell:${shell.id}`
-    : native
-      ? `native:${native.id}`
-      : null
-
-  const title = shell ? 'Shell permission requested' : 'Native app permission requested'
-  const detail = shell
-    ? shell.command
-    : native
-      ? `${native.appName || native.server} · ${native.tool}`
-      : ''
-  const reason = shell?.reason || native?.reason || ''
-  const operation = shell?.operation || native?.operation || ''
+  const permissionKey = `${permission.target.kind}:${permission.target.id}`
+  const { title, detail, reason, operation } = permission
+  const suffix = index ? `-${index}` : ''
 
   useEffect(() => {
     const previous = previousPermission.current
@@ -196,8 +162,8 @@ function PermissionCard() {
   if (!permission) return null
 
   const describedBy = canRespond
-    ? 'permission-reason permission-detail'
-    : 'permission-reason permission-detail permission-connection-status'
+    ? `permission-reason${suffix} permission-detail${suffix}`
+    : `permission-reason${suffix} permission-detail${suffix} permission-connection-status${suffix}`
 
   return (
     <div
@@ -206,7 +172,7 @@ function PermissionCard() {
       data-testid="permission-prompt"
       role="alertdialog"
       aria-live="assertive"
-      aria-labelledby="permission-title"
+      aria-labelledby={`permission-title${suffix}`}
       aria-describedby={describedBy}
       tabIndex={-1}
       onFocusCapture={() => {
@@ -234,14 +200,14 @@ function PermissionCard() {
     >
       <div className="composer-permission__top">
         <span className="composer-permission__icon" aria-hidden="true">
-          {shell ? <Terminal size={15} /> : <MacWindow size={15} />}
+          {permission.icon === 'terminal' ? <Terminal size={15} /> : <MacWindow size={15} />}
         </span>
         <span className="composer-permission__copy">
-          <strong id="permission-title">{title}</strong>
+          <strong id={`permission-title${suffix}`}>{title}</strong>
           {operation && <small className="composer-permission__operation">{operation}</small>}
-          {reason && <small id="permission-reason" className="composer-permission__reason">{reason}</small>}
+          {reason && <small id={`permission-reason${suffix}`} className="composer-permission__reason">{reason}</small>}
           <code
-            id="permission-detail"
+            id={`permission-detail${suffix}`}
             className="composer-permission__detail"
             tabIndex={0}
             aria-label="Requested command or tool"
@@ -249,7 +215,7 @@ function PermissionCard() {
             {detail}
           </code>
           {!canRespond && (
-            <small id="permission-connection-status" className="composer-permission__reason">
+            <small id={`permission-connection-status${suffix}`} className="composer-permission__reason">
               Remote is disconnected. Reconnect to respond.
             </small>
           )}
@@ -257,8 +223,8 @@ function PermissionCard() {
       </div>
 
       <div className="composer-permission__actions">
-        <button ref={denyButton} disabled={!canRespond} onClick={() => remoteStore.denyPermission()}>Deny</button>
-        <button ref={allowButton} disabled={!canRespond} className="permission-primary" onClick={() => remoteStore.allowPermission()}>Allow</button>
+        <button ref={denyButton} disabled={!canRespond} onClick={() => remoteStore.sendComposerUi(permission.controls[0].action)}>{permission.controls[0].label}</button>
+        <button ref={allowButton} disabled={!canRespond} className="permission-primary" onClick={() => remoteStore.sendComposerUi(permission.controls[1].action)}>{permission.controls[1].label}</button>
       </div>
     </div>
   )
@@ -461,12 +427,14 @@ export function Composer({
   onModel,
   onSessions,
   onSettings,
+  onControls,
   editRequest,
   onEditConsumed,
 }: {
   onModel: () => void
   onSessions: () => void
   onSettings: () => void
+  onControls: () => void
   editRequest: { key: number; content: string } | null
   onEditConsumed: () => void
 }) {
@@ -578,92 +546,63 @@ export function Composer({
     return total > 0 ? formatTokens(total) : 'API'
   }, [remote.activeProviderUsage, remote.state.credit_usage, remote.state.token_usage])
 
-  const slashSuggestions = useMemo(() => {
-    const value = text.trim()
-    if (!value.startsWith('/') || value.includes(' ') || value.includes('\n')) return []
-    const query = value.toLowerCase()
-    return SLASH_COMMANDS
-      .filter((item) => query === '/' || item.command.toLowerCase().startsWith(query))
-      .slice(0, 7)
-  }, [text])
-
-  const attachmentsReady = attachments.every(
-    (attachment) => !attachment.isUploading && !attachment.error && Boolean(attachment.remoteID),
-  )
-
-  const hasContent = Boolean(text.trim())
-    || attachments.some((attachment) => Boolean(attachment.remoteID))
-    || (isEditingLast && editingLastHasAttachments)
-
-  const canSend = remote.connection === 'connected'
-    && !remote.state.is_streaming
-    && (isEditingLast || attachmentsReady)
-    && hasContent
-
-  const clearEditing = () => {
-    setText(readComposerDraft(draftContextKeyRef.current))
-    setIsEditingLast(false)
-    setEditingLastHasAttachments(false)
+  const composer = remote.composer
+  const context = composer?.context ?? { workspace: remote.state.workspace_root ?? '', session_id: remote.state.current_session_id ?? null, unsaved_generation: remote.sessionResetRevision }
+  const editorIdentity = useRef({ signature: '', revision: 0 })
+  const editorContent = {
+    context, text,
+    mode: isEditingLast ? { type: 'edit_last' as const, has_attachments: editingLastHasAttachments } : { type: 'draft' as const },
+    attachments: attachments.map(attachment => ({ id: attachment.localID, name: attachment.name,
+      attachment_id: attachment.remoteID ?? null, ready: !attachment.isUploading && !attachment.error && !!attachment.remoteID, error: attachment.error ?? null })),
   }
-
-  const selectSlashCommand = (item: SlashCommand) => {
-    const { command } = item
-    if (command === '/model') {
-      setText('')
-      onModel()
-      return
-    }
-    if (command === '/sessions') {
-      setText('')
-      onSessions()
-      return
-    }
-    if (['/settings', '/permissions', '/provider', '/providers', '/login', '/capabilities'].includes(command)) {
-      setText('')
-      onSettings()
-      return
-    }
-    setText(command + (item.arguments ? ' ' : ''))
-    requestAnimationFrame(() => textarea.current?.focus())
+  const signature = JSON.stringify(editorContent)
+  if (editorIdentity.current.signature !== signature) {
+    editorIdentity.current = { signature, revision: editorIdentity.current.revision + 1 }
   }
+  const editor: EditorSnapshot = { ...editorContent, revision: editorIdentity.current.revision }
+  const currentEditor = useRef(editor)
+  currentEditor.current = editor
+  const nativeAttachments = useRef(attachments)
+  nativeAttachments.current = attachments
+  const slashSuggestions = composer?.suggestions.slice(0, 7) ?? []
 
-  const submit = () => {
-    const value = text.trim()
-    if (remote.connection !== 'connected' || remote.state.is_streaming) return
+  useEffect(() => {
+    if (remote.connection === 'connected' && composer) {
+      remoteStore.sendComposerUi({ type: 'update_editor', value: currentEditor.current })
+    }
+  }, [signature, remote.connection, !!composer])
 
-    if (!isEditingLast) {
-      if (value === '/model') {
+  useEffect(() => {
+    const pending = remote.composerEffect
+    if (!pending) return
+    const effect = remoteStore.consumeComposerEffect(pending.revision)
+    if (!effect) return
+    const accepted = effect.accepted_editor ?? effect.cancel_edit
+    if (accepted && sameEditor(accepted, currentEditor.current)) {
+      if (accepted.mode.type === 'edit_last') {
+        setText(readComposerDraft(draftContextKeyRef.current))
+        setIsEditingLast(false)
+        setEditingLastHasAttachments(false)
+      } else {
         setText('')
-        onModel()
-        return
-      }
-      if (value === '/sessions') {
-        setText('')
-        onSessions()
-        return
-      }
-      if (['/settings', '/permissions', '/provider', '/providers', '/login', '/capabilities'].includes(value)) {
-        setText('')
-        onSettings()
-        return
+        for (const attachment of nativeAttachments.current) {
+          if (attachment.previewURL) URL.revokeObjectURL(attachment.previewURL)
+        }
+        setAttachments([])
       }
     }
-
-    if (isEditingLast) {
-      if (!value && !editingLastHasAttachments) return
-      if (remoteStore.editLast(value)) clearEditing()
-      return
+    if (effect.replace_editor && sameEditor(effect.replace_editor.editor, currentEditor.current)) {
+      setText(effect.replace_editor.text)
+      requestAnimationFrame(() => textarea.current?.focus())
     }
+    if (effect.destination === 'models') onModel()
+    else if (effect.destination === 'sessions') onSessions()
+    else if (effect.destination) onSettings()
+  }, [remote.composerEffect, onModel, onSessions, onSettings])
 
-    const ids = attachments.flatMap((attachment) => attachment.remoteID ? [attachment.remoteID] : [])
-    if (!attachmentsReady || (!value && !ids.length)) return
-    if (remoteStore.submit(value, ids)) {
-      setText('')
-      for (const attachment of attachments) {
-        if (attachment.previewURL) URL.revokeObjectURL(attachment.previewURL)
-      }
-      setAttachments([])
-    }
+  const submit = () => remoteStore.sendComposerUi({ type: 'submit', value: currentEditor.current })
+  const selectSlashCommand = (item: ComposerSuggestion) => {
+    remoteStore.sendComposerUi({ type: 'select_suggestion', value: { editor: currentEditor.current, command: item.command } })
   }
 
   const toggleExpanded = () => {
@@ -734,7 +673,7 @@ export function Composer({
 
   return (
     <div ref={composerShell} className="composer-shell">
-      <PermissionCard />
+      {composer?.permissions.map((permission, index) => <PermissionCard key={`${permission.target.kind}:${permission.target.id}`} permission={permission} index={index} />)}
 
 {slashSuggestions.length > 0 && (
         <div className="slash-palette glass-panel">
@@ -773,7 +712,7 @@ export function Composer({
             </button>
 
             <label className="toolbar-chip glass-capsule toolbar-select-chip">
-              <Lightbulb size={15} strokeWidth={1.7} />
+              <SignalBars size={14} strokeWidth={1.7} />
               <span>{reasoningName(remote.state.active_reasoning_level)}</span>
               <select
                 value={remote.state.active_reasoning_level || 'auto'}
@@ -784,6 +723,20 @@ export function Composer({
                 {['auto', 'low', 'medium', 'high'].map((level) => <option key={level} value={level}>{reasoningName(level)}</option>)}
               </select>
             </label>
+
+            <button
+              className="toolbar-chip glass-capsule permission-chip"
+              onClick={(event) => {
+                event.currentTarget.focus({ preventScroll: true })
+                onControls()
+              }}
+              aria-label={`Permissions: ${remote.state.sandbox_settings?.auto_approve ? 'auto approve' : 'ask first'}`}
+              title="Permissions"
+              disabled={!remote.state.sandbox_settings}
+            >
+              {remote.state.sandbox_settings?.auto_approve ? <Bolt size={14} strokeWidth={1.7} /> : <Lock size={14} strokeWidth={1.7} />}
+              <span>{remote.state.sandbox_settings?.auto_approve ? 'auto' : 'ask'}</span>
+            </button>
 
             <button
               className={`toolbar-chip glass-capsule goal-chip${remote.state.goal_mode ? ' is-active' : ''}`}
@@ -836,16 +789,15 @@ export function Composer({
         </button>
       </div>
 
-      {isEditingLast && (
+      {composer?.edit_banner && (
         <div className="edit-last-banner glass-panel">
           <Pencil size={12} />
           <span>
-            <strong>Editing last message</strong>
-            {editingLastHasAttachments && <small>Existing attachments will be preserved.</small>}
+            <strong>{composer.edit_banner}</strong>
           </span>
           <button
-            onClick={clearEditing}
-            aria-label="Cancel editing"
+            onClick={() => remoteStore.sendComposerUi({ type: 'cancel_edit', value: currentEditor.current })}
+            aria-label={composer.cancel_edit_control?.label}
           >
             <X size={11} strokeWidth={2.2} />
           </button>
@@ -930,32 +882,28 @@ export function Composer({
               event.preventDefault()
               submit()
             }}
-            placeholder={
-              remote.state.is_streaming
-                ? 'Draft your next message…'
-                : remote.connection === 'connected'
-                  ? 'Message'
-                  : 'Draft while reconnecting…'
-            }
+            placeholder={composer?.placeholder ?? 'Message'}
             rows={1}
             aria-label="Message"
           />
         </div>
 
-        {remote.state.is_streaming ? (
-          <button className="composer-send glass-circle is-stop" onClick={() => remoteStore.interrupt()} aria-label="Stop">
-            <Square size={13} fill="currentColor" />
-          </button>
-        ) : (
+        <button className="composer-settings" onClick={onSettings} aria-label="Composer settings" title="Settings">
+          <SlidersHorizontal size={14} strokeWidth={1.7} />
+        </button>
+
+        {composer && (
           <button
-            className="composer-send glass-circle"
-            onClick={submit}
-            disabled={!canSend}
-            aria-label="Send"
+            className={`composer-send glass-circle${composer.primary_control.icon === 'stop' ? ' is-stop' : ''}`}
+            onClick={() => composer.primary_control.action.type === 'interrupt'
+              ? remoteStore.sendComposerUi(composer.primary_control.action) : submit()}
+            disabled={!composer.primary_control.enabled || remote.connection !== 'connected'}
+            aria-label={composer.primary_control.label}
           >
-            <ArrowUp size={16} strokeWidth={2} />
+            {composer.primary_control.icon === 'stop' ? <Square size={13} fill="currentColor" /> : <ArrowUp size={16} strokeWidth={2} />}
           </button>
         )}
+
       </div>
     </div>
   )

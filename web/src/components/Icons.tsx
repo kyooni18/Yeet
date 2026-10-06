@@ -136,3 +136,8 @@ export const Lock = (p: IconProps) => (
     <path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10M12 14v2" />
   </Icon>
 )
+
+export const Pause = (p: IconProps) => <Icon {...p}><path d="M9 6v12M15 6v12" /></Icon>
+export const SignalBars = (p: IconProps) => <Icon {...p}><path d="M6 19v-3M12 19v-7M18 19V6" /></Icon>
+export const SessionList = (p: IconProps) => <Icon {...p}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 12.5h8M8 16h5" /></Icon>
+export const Bolt = (p: IconProps) => <Icon {...p}><path d="M13 3L5 13.5h6L10 21l8-10.5h-6L13 3z" /></Icon>

@@ -1,4 +1,5 @@
-import { Menu, SlidersHorizontal, SquarePen } from '@/components/Icons'
+import { Layers3, Menu, Pause, SlidersHorizontal, SquarePen } from '@/components/Icons'
+import { formatTokens } from '@/ui/format'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 
 export function TopBar({
@@ -15,6 +16,9 @@ export function TopBar({
   const remote = useRemote()
   const workspace = remote.currentWorkspace?.display_name || remote.state.workspace_root || 'Workspace'
   const title = remote.currentSession?.title || 'New Chat'
+  const directory = remote.currentWorkspace?.path || remote.state.workspace_root || workspace
+  const usage = remote.state.token_usage
+  const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
 
   const connectionLabel = remote.state.is_streaming
     ? 'Running'
@@ -32,7 +36,6 @@ export function TopBar({
   const statusText = remote.connection === 'failed' && remote.connectionError
     ? remote.connectionError
     : connectionLabel
-
 
   const connectionTone = remote.state.is_streaming
     ? 'busy'
@@ -59,8 +62,8 @@ export function TopBar({
         </button>
 
         <div className="topbar-identity">
-          <span className="topbar-workspace">{workspace}</span>
           <strong className="topbar-title">{title}</strong>
+          <span className="topbar-workspace">{workspace}</span>
         </div>
       </div>
 
@@ -91,6 +94,23 @@ export function TopBar({
           aria-pressed={controlsOpen}
         >
           <SlidersHorizontal size={16} />
+        </button>
+      </div>
+
+      <div className="session-meta" aria-label="Session details">
+        <span className="session-meta__path" title={directory}>{directory}</span>
+        <span className="session-meta__spacer" />
+        {remote.state.is_streaming && <span className="session-meta__run"><span className="mini-spinner" aria-hidden="true" />Running</span>}
+        {tokens > 0 && <span className="session-meta__tokens" title="Tokens used"><Layers3 size={12} strokeWidth={1.8} />{formatTokens(tokens)}</span>}
+        <span className="session-meta__divider" aria-hidden="true" />
+        <button
+          className="session-meta__button"
+          onClick={() => remoteStore.interrupt()}
+          disabled={!remote.state.is_streaming}
+          aria-label="Interrupt run"
+          title="Interrupt run"
+        >
+          <Pause size={14} strokeWidth={1.9} />
         </button>
       </div>
     </header>

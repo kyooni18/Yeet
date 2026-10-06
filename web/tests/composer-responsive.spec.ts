@@ -155,7 +155,7 @@ test('touch-first wide layouts keep native-sized composer controls', async ({ pa
   expect(Math.round(stopBox!.height)).toBe(48)
 })
 
-test('fine-pointer layouts preserve text density without shrinking iOS hit targets', async ({ page }) => {
+test('fine-pointer layouts use the compact macOS composer density', async ({ page }) => {
   const viewport = page.viewportSize()
   const finePointer = await page.evaluate(() => matchMedia('(hover: hover) and (pointer: fine)').matches)
   test.skip(!finePointer || !viewport || viewport.width < 900)
@@ -165,7 +165,7 @@ test('fine-pointer layouts preserve text density without shrinking iOS hit targe
   const sendBox = await send.boundingBox()
 
   expect(sendBox).not.toBeNull()
-  expect(Math.round(sendBox!.width)).toBe(48)
-  expect(Math.round(sendBox!.height)).toBe(48)
-  expect(await textarea.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBe(15)
+  expect(Math.round(sendBox!.width)).toBe(30)
+  expect(Math.round(sendBox!.height)).toBe(24)
+  expect(await textarea.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBe(13)
 })

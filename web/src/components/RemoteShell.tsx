@@ -107,7 +107,7 @@ export function RemoteShell() {
                   </div>
                   case 'composer': return <div key={child} className="workspace-composer">
                     <Composer onModel={openModel} onSessions={openNavigation}
-                      onSettings={openSettings} editRequest={editRequest} onEditConsumed={() => setEditRequest(null)} />
+                      onSettings={openSettings} onControls={() => send({ type: 'toggle_inspector' })} editRequest={editRequest} onEditConsumed={() => setEditRequest(null)} />
                   </div>
                 }
               })}

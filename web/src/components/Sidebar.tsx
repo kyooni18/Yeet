@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bot, Check, ChevronsUpDown, Folder, Plus, Settings, X } from '@/components/Icons'
+import { Bot, Check, ChevronsUpDown, Folder, Lock, Plus, Search, Settings, SessionList, X } from '@/components/Icons'
 import { remoteStore, useRemote } from '@/store/remoteStore'
+
+function sessionAge(value: string): string {
+  const time = new Date(value).getTime()
+  if (Number.isNaN(time)) return ''
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60_000))
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.round(hours / 24)
+  return days === 1 ? 'yesterday' : `${days}d`
+}
 
 export function Sidebar({
   open,
@@ -17,9 +29,11 @@ export function Sidebar({
 }) {
   const remote = useRemote()
   const [workspaceMenu, setWorkspaceMenu] = useState(false)
+  const [filter, setFilter] = useState('')
   const panelRef = useRef<HTMLElement>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
+  const awaitingPermission = Boolean(remote.state.pending_shell_permission || remote.state.pending_native_app_permission)
   const group = remote.state.agent_group
   const members = group?.members ?? []
   const activeMembers = members.filter((member) =>
@@ -89,6 +103,10 @@ export function Sidebar({
           </div>
         </div>
 
+        <nav className="sidebar-nav" aria-label="Navigation">
+          <span className="sidebar-nav__row is-current" aria-current="page"><SessionList size={15} strokeWidth={1.6} /><span>Sessions</span></span>
+        </nav>
+
         <div className="workspace-picker">
           <button
             className="workspace-picker__button inset-surface"
@@ -131,23 +149,19 @@ export function Sidebar({
           {activeMembers > 0 && <b>{activeMembers}</b>}
         </button>
 
-        <div className="sidebar-section-heading">
-          <span>Sessions</span>
-          <button
-            className="panel-icon"
-            onClick={() => {
-              remoteStore.newSession()
-              if (!desktopDocked) onClose()
-            }}
-            aria-label="New session"
-            disabled={remote.connection !== 'connected'}
-          >
-            <Plus size={15} strokeWidth={1.9} />
-          </button>
+        <div className="sidebar-search inset-surface">
+          <Search size={13} strokeWidth={1.8} />
+          <input
+            type="search"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="Search"
+            aria-label="Search sessions"
+          />
         </div>
 
         <div className="sidebar-session-list" aria-label="Saved sessions">
-          {remote.currentWorkspaceSessions.map((session) => {
+          {remote.currentWorkspaceSessions.filter((session) => !filter.trim() || (session.title || 'Untitled').toLowerCase().includes(filter.trim().toLowerCase())).map((session) => {
             const current = session.id === remote.state.current_session_id
             return (
               <button
@@ -161,12 +175,13 @@ export function Sidebar({
                   if (!desktopDocked) onClose()
                 }}
               >
-                <span className="sidebar-session__activity">
-                  {current && remote.state.is_streaming ? <span className="mini-spinner" /> : null}
-                </span>
                 <span className="sidebar-session__copy">
                   <strong>{session.title || 'Untitled'}</strong>
-                  <span>{session.model || 'Model'}</span>
+                  <span>{[remote.currentWorkspace?.display_name, sessionAge(session.updated_at)].filter(Boolean).join(' · ') || session.model}</span>
+                </span>
+                <span className="sidebar-session__activity">
+                  {current && awaitingPermission ? <Lock size={12} strokeWidth={1.8} className="sidebar-session__lock" aria-label="Needs approval" role="img" /> : null}
+                  {current && remote.state.is_streaming ? <span className="mini-spinner" role="img" aria-label="Running" /> : null}
                 </span>
               </button>
             )
@@ -174,6 +189,20 @@ export function Sidebar({
           {!remote.currentWorkspaceSessions.length && (
             <div className="sidebar-empty">No saved sessions in this workspace.</div>
           )}
+        </div>
+
+        <div className="sidebar-footer">
+          <button
+            className="sidebar-new-session"
+            onClick={() => {
+              remoteStore.newSession()
+              if (!desktopDocked) onClose()
+            }}
+            disabled={remote.connection !== 'connected'}
+          >
+            <Plus size={14} strokeWidth={1.9} />
+            <span>New session</span>
+          </button>
         </div>
       </aside>
     </>
