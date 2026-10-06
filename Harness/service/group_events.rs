@@ -4,7 +4,7 @@
 use super::*;
 use crate::{agents::group::AgentGroupCheckpoint, model::AgentTaskItem};
 
-impl BackendService {
+impl HarnessService {
     /// Publishes the task list on every group change, including changes
     /// made by member threads after the primary turn has ended.
     pub(super) fn install_agent_group_listener(&self) {
@@ -19,7 +19,7 @@ impl BackendService {
                     state.state.agent_tasks = items;
                     state.state.agent_group = group.clone();
                     let session_id = state.state.current_session_id.clone();
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope_without_conversation(
+                    let _ = tx.send(ServiceEvent::Envelope(state_envelope_without_conversation(
                         &state.state,
                     )));
                     session_id

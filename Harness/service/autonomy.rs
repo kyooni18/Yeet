@@ -73,7 +73,7 @@ pub(super) fn next_cycle(
     CycleDecision::Continue
 }
 
-impl BackendService {
+impl HarnessService {
     pub(super) fn set_goal_enabled(&mut self, enabled: bool) -> Result<()> {
         self.set_autonomy_mode(if enabled {
             AutonomyMode::Goal

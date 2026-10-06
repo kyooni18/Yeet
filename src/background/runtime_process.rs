@@ -14,7 +14,7 @@ use anyhow::{Result, anyhow};
 
 use super::Wake;
 use crate::{
-    backend::{BackendEvent, BackendService, SessionCatalog},
+    harness::{HarnessService, ServiceEvent, SessionCatalog},
     model::{FrontendCommand, HarnessEvent, HarnessState},
 };
 
@@ -29,7 +29,7 @@ enum RuntimeCommand {
 
 /// Daemon-side handle for one semantic backend runtime.
 ///
-/// BackendService deliberately lives on a dedicated worker thread. The background
+/// HarnessService deliberately lives on a dedicated worker thread. The background
 /// daemon owns socket acceptance, client routing, heartbeats, and runtime fan-out;
 /// none of those operations may ever wait on backend mutexes, provider work,
 /// persistence, session scans, or a slow command.
@@ -64,7 +64,7 @@ impl RuntimeProcess {
             .spawn(move || {
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
                     let mut service =
-                        match BackendService::spawn(workspace, Some(runtime_wake.clone())) {
+                        match HarnessService::spawn(workspace, Some(runtime_wake.clone())) {
                             Ok(service) => service,
                             Err(error) => {
                                 let _ = startup_tx.send(Err(error.to_string()));
@@ -248,7 +248,7 @@ impl Drop for RuntimeProcess {
 }
 
 fn handle_runtime_command(
-    service: &mut BackendService,
+    service: &mut HarnessService,
     command: RuntimeCommand,
     event_tx: &Sender<HarnessEvent>,
     daemon_wake: &Wake,
@@ -276,12 +276,12 @@ fn handle_runtime_command(
 }
 
 fn drain_backend_events(
-    service: &mut BackendService,
+    service: &mut HarnessService,
     event_tx: &Sender<HarnessEvent>,
     daemon_wake: &Wake,
 ) {
     while let Some(event) = service.try_recv() {
-        let BackendEvent::Envelope(envelope) = event;
+        let ServiceEvent::Envelope(envelope) = event;
         if event_tx.send(envelope).is_err() {
             return;
         }

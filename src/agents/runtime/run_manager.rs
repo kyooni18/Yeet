@@ -1,7 +1,7 @@
 //! Run-keyed cancellation ownership.
 //!
-//! A `BackendService` executes at most one top-level run at a time (see
-//! `backend/run.rs`); this registry does not admit runs and does not make
+//! A `HarnessService` executes at most one top-level run at a time (see
+//! `Harness/service/run.rs`); this registry does not admit runs and does not make
 //! concurrent top-level execution possible. It is keyed by run ID because a
 //! run that has already settled may still be registered while it finishes
 //! post-run persistence and titling, and because interrupt must reach every

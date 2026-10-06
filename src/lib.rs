@@ -12,6 +12,7 @@ pub mod edit;
 pub mod extensions;
 mod foundation_backend;
 pub mod general;
+#[path = "../Harness/mod.rs"]
 pub mod harness;
 pub mod harness_ffi;
 pub mod install;

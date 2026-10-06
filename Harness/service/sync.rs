@@ -1,7 +1,7 @@
 //! Cross-runtime plumbing: waking the daemon on published state, sharing the
 //! workspace session catalog, and surviving poisoned locks.
 //!
-//! A background daemon hosts several `BackendService` runtimes on one thread.
+//! A background daemon hosts several `HarnessService` runtimes on one thread.
 //! These helpers keep one runtime's failure or stale view from leaking into
 //! the others.
 
@@ -67,18 +67,18 @@ pub(super) fn apply_session_catalog_locked(state: &mut SharedSession, catalog: &
 /// state reaches clients immediately instead of on the next polling tick.
 #[derive(Clone)]
 pub(crate) struct EventSender {
-    tx: mpsc::Sender<BackendEvent>,
+    tx: mpsc::Sender<ServiceEvent>,
     wake: Option<Wake>,
 }
 
 impl EventSender {
-    pub(super) fn new(tx: mpsc::Sender<BackendEvent>, wake: Option<Wake>) -> Self {
+    pub(super) fn new(tx: mpsc::Sender<ServiceEvent>, wake: Option<Wake>) -> Self {
         Self { tx, wake }
     }
 
     // Mirrors `mpsc::Sender::send` so existing call sites are unchanged.
     #[allow(clippy::result_large_err)]
-    pub(crate) fn send(&self, event: BackendEvent) -> Result<(), mpsc::SendError<BackendEvent>> {
+    pub(crate) fn send(&self, event: ServiceEvent) -> Result<(), mpsc::SendError<ServiceEvent>> {
         let result = self.tx.send(event);
         if let Some(wake) = &self.wake {
             wake.notify();
@@ -89,7 +89,7 @@ impl EventSender {
 
 /// Daemon-facing view of a runtime. The daemon polls these every tick, so
 /// they only read shared state and never block on the coordinator.
-impl BackendService {
+impl HarnessService {
     pub(crate) fn state_snapshot(&self) -> HarnessState {
         self.shared.lock_or_recover().state.clone()
     }

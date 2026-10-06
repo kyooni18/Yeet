@@ -20,13 +20,15 @@ const RUNTIME_SOURCE_LINE_LIMIT: usize = 1_200;
 fn rust_production_modules_have_a_hard_size_ceiling() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut oversized = Vec::new();
-    visit_rust_files(&root, &mut |path| {
-        let source = fs::read_to_string(path).expect("source file should be readable");
-        let production_lines = production_line_count(&source);
-        if production_lines > HARD_PRODUCTION_LINE_LIMIT {
-            oversized.push(format!("{}: {production_lines}", display_path(path)));
-        }
-    });
+    for source_root in [&root, &root.parent().unwrap().join("Harness")] {
+        visit_rust_files(source_root, &mut |path| {
+            let source = fs::read_to_string(path).expect("source file should be readable");
+            let production_lines = production_line_count(&source);
+            if production_lines > HARD_PRODUCTION_LINE_LIMIT {
+                oversized.push(format!("{}: {production_lines}", display_path(path)));
+            }
+        });
+    }
     assert!(
         oversized.is_empty(),
         "production modules exceeded the {HARD_PRODUCTION_LINE_LIMIT}-line hard ceiling; split by responsibility before adding more code:\n{}",
@@ -38,13 +40,15 @@ fn rust_production_modules_have_a_hard_size_ceiling() {
 fn rust_source_files_do_not_return_to_monolithic_sizes() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut oversized = Vec::new();
-    visit_rust_files(&root, &mut |path| {
-        let source = fs::read_to_string(path).expect("source file should be readable");
-        let lines = source.lines().count();
-        if lines > HARD_FILE_LINE_LIMIT {
-            oversized.push(format!("{}: {lines}", display_path(path)));
-        }
-    });
+    for source_root in [&root, &root.parent().unwrap().join("Harness")] {
+        visit_rust_files(source_root, &mut |path| {
+            let source = fs::read_to_string(path).expect("source file should be readable");
+            let lines = source.lines().count();
+            if lines > HARD_FILE_LINE_LIMIT {
+                oversized.push(format!("{}: {lines}", display_path(path)));
+            }
+        });
+    }
     assert!(
         oversized.is_empty(),
         "source files exceeded the {HARD_FILE_LINE_LIMIT}-line absolute ceiling; split tests and implementation before adding more code:\n{}",
@@ -58,7 +62,7 @@ fn extracted_responsibility_modules_stay_within_target() {
     let focused_roots = [
         root.join("agent"),
         root.join("agents"),
-        root.join("backend"),
+        root.parent().unwrap().join("Harness/service"),
         root.join("tools"),
     ];
     let mut oversized = Vec::new();
@@ -83,7 +87,7 @@ fn central_coordinators_do_not_absorb_extracted_responsibilities_again() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let coordinators = [
         root.join("agent.rs"),
-        root.join("backend.rs"),
+        root.parent().unwrap().join("Harness/service.rs"),
         root.join("tools.rs"),
     ];
     let mut oversized = Vec::new();
@@ -144,16 +148,16 @@ fn extracted_modules_explain_their_responsibility() {
         "agents/runtime/run_manager.rs",
         "agents/supervisor.rs",
         "agents/task/model.rs",
-        "backend/agent_notifications.rs",
-        "backend/debate_context.rs",
-        "backend/debate_runtime.rs",
-        "backend/events.rs",
-        "backend/lifecycle.rs",
-        "backend/settings.rs",
-        "backend/settings_support.rs",
-        "backend/state.rs",
-        "backend/titles.rs",
-        "backend/transport.rs",
+        "../Harness/service/bootstrap.rs",
+        "../Harness/service/debate_context.rs",
+        "../Harness/service/debate_runtime.rs",
+        "../Harness/service/events.rs",
+        "../Harness/service/lifecycle.rs",
+        "../Harness/service/settings.rs",
+        "../Harness/service/settings_support.rs",
+        "../Harness/service/state.rs",
+        "../Harness/service/titles.rs",
+        "../Harness/service/transport.rs",
         "tools/definitions.rs",
         "tools/editing.rs",
         "tools/io.rs",

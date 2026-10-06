@@ -13,9 +13,9 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    backend::{BackendEvent, BackendService},
     background::Wake,
     core::ImageAttachment,
+    harness::{HarnessService, ServiceEvent},
     model::{BridgeEnvelope, BridgeState, ConversationEntry, ConversationKind, FrontendCommand},
 };
 
@@ -271,7 +271,7 @@ impl RemoteClientRuntime {
         // this PID; external provider/edit/MCP sidecars remain lazy and appear
         // only when that client actually invokes a capability that needs one.
         let wake = Wake::new();
-        let service = BackendService::spawn(workspace.to_path_buf(), Some(wake.clone()))?;
+        let service = HarnessService::spawn(workspace.to_path_buf(), Some(wake.clone()))?;
         let initial_state = service.state_snapshot();
         let shared = Arc::new(Mutex::new(RuntimeShared {
             state: initial_state,
@@ -453,7 +453,7 @@ impl Drop for RemoteClientRuntime {
 }
 
 fn runtime_loop(
-    mut service: BackendService,
+    mut service: HarnessService,
     commands: mpsc::Receiver<RuntimeControl>,
     shared: Arc<Mutex<RuntimeShared>>,
     events: broadcast::Sender<ServerMessage>,
@@ -480,7 +480,7 @@ fn runtime_loop(
             }
         }
         while let Some(event) = service.try_recv() {
-            let BackendEvent::Envelope(envelope) = event;
+            let ServiceEvent::Envelope(envelope) = event;
             process_envelope(&shared, &events, envelope);
         }
         if !shutdown {

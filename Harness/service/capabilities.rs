@@ -1,7 +1,7 @@
 //! Harness capability discovery, toggling, and project-level persistence.
 use super::*;
 
-impl BackendService {
+impl HarnessService {
     pub(super) fn request_capabilities(&self) {
         if let Err(error) = self.reload_project_capabilities() {
             self.append_error(format!("Unable to load project settings: {error}"));
@@ -126,7 +126,7 @@ impl BackendService {
                             Some(format!("Unable to load capabilities: {error}"))
                     }
                 }
-                let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
             }
         });
     }

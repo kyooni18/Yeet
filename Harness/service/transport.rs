@@ -1,24 +1,24 @@
 //! Harness-event creation and concise tool-activity presentation.
 //!
-//! Transport serialization and UI-facing labels are kept out of the backend
+//! Transport serialization and UI-facing labels are kept out of the Harness
 //! dispatcher so execution logic does not depend on presentation details.
 
 use serde_json::Value;
 
-use super::BackendEvent;
+use super::ServiceEvent;
 use crate::{
     core::{ToolCall, Usage},
     harness::Harness,
     model::{FrontendCommand, HarnessEvent, HarnessState},
 };
 
-/// Compatibility adapter retained for existing TUI code. New hosts should use
+/// Workspace client with shared-runtime attachment and embedded fallback. Hosts can use
 /// [`crate::harness::Harness`] directly.
-pub struct Backend {
+pub struct HarnessClient {
     harness: Harness,
 }
 
-impl Backend {
+impl HarnessClient {
     /// Attaches to the workspace's shared background runtime so switching
     /// sessions leaves running sessions alive; falls back to an in-process
     /// runtime when the daemon cannot be reached.
@@ -46,8 +46,8 @@ impl Backend {
         self.harness.send(command)
     }
 
-    pub fn try_recv(&mut self) -> Option<BackendEvent> {
-        self.harness.try_recv().map(BackendEvent::Envelope)
+    pub fn try_recv(&mut self) -> Option<ServiceEvent> {
+        self.harness.try_recv().map(ServiceEvent::Envelope)
     }
 }
 

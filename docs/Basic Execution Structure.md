@@ -12,14 +12,14 @@ Frontend / host (Ratatui TUI, Remote web client, desktop host, CLI)
           -> workspace daemon        src/background.rs (one per workspace + scope)
               -> RuntimeProcess      src/background/runtime_process.rs
                                      (one dedicated thread per session runtime)
-                  -> BackendService  src/backend.rs (command routing)
+                  -> HarnessService  src/backend.rs (command routing)
                       -> AgentCoordinator  src/agent.rs (turn loop)
                           -> ToolRegistry  src/tools.rs
                           -> ProviderBridge (BridgeClient, src/core/provider_bridge.rs)
                               -> Node sidecar RuntimeSource/dist/bridge.js
 ```
 
-`Harness::embedded` skips the daemon and owns a `BackendService` in-process for
+`Harness::embedded` skips the daemon and owns a `HarnessService` in-process for
 native hosts, the one-shot `yeet agent` command and tests.
 
 Two transports are deliberately named differently:
@@ -57,21 +57,21 @@ Two transports are deliberately named differently:
   work cannot block the daemon loop. Connection lifetime and reconnect policy
   live separately in `background/connection.rs`.
 - **Recovery.** An interrupted run whose worker does not settle is abandoned
-  (`BackendService::abandon_stuck_run`) and the runtime replaced; idle
+  (`HarnessService::abandon_stuck_run`) and the runtime replaced; idle
   runtimes retire after a minute and an idle daemon exits after ten minutes.
 
-## Backend service and runs
+## Harness service and runs
 
-`BackendService` routes `FrontendCommand`s to focused modules and owns the
+`HarnessService` routes `FrontendCommand`s to focused modules and owns the
 wiring between them (see `docs/CODEBASE.md` for the module map). A service
 executes **at most one top-level run at a time**: its single coordinator is
 held for the run, and live state carries one `current_turn`, one streaming
 assistant/reasoning buffer and one pending tool-call projection. Admission is
 gated on `is_streaming`; every projection is fenced by
 `current_turn == run.id`, so a replaced or abandoned run cannot write into its
-successor. The run lifecycle (`backend/run.rs`: admit, drive, settle, release)
+successor. The run lifecycle (`Harness/service/run.rs`: admit, drive, settle, release)
 is independent of storage: persistence is prepared under the live-state lock
-and committed after it is released (`backend/persistence.rs`).
+and committed after it is released (`Harness/service/persistence.rs`).
 
 ## Agent coordinator
 

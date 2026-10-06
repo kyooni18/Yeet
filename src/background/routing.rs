@@ -9,7 +9,7 @@ use super::{
     allocate_runtime_id, broadcast_runtime_envelope, send_client_error,
     state_with_extension_commands,
 };
-use crate::{backend::SessionCatalog, extensions::ExtensionHost, model::HarnessEvent};
+use crate::{extensions::ExtensionHost, harness::SessionCatalog, model::HarnessEvent};
 
 /// An isolated runtime being started off the daemon thread, with every client
 /// waiting for it. Clients loading the same session join one startup instead

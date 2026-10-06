@@ -114,7 +114,7 @@ pub(super) fn replay_input(
     Ok((text, images))
 }
 
-impl BackendService {
+impl HarnessService {
     pub(super) fn regenerate_last(&mut self) -> Result<()> {
         self.replay_last_visible_turn(None)
     }

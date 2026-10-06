@@ -11,9 +11,9 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
-    backend::SessionCatalog,
     config::ConfigStore,
     extensions::{ExtensionHost, ExtensionRequest},
+    harness::SessionCatalog,
     model::{FrontendCommand, HarnessEvent, HarnessState},
     platform::{LocalStream, bind_local, set_private_file},
 };
@@ -84,7 +84,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 // Keep the lightweight socket owner around longer than its heavy session
 // runtimes. This avoids daemon start/stop churn while still reclaiming inactive
-// BackendService/bridge state promptly.
+// HarnessService/bridge state promptly.
 const DAEMON_IDLE_EXIT_AFTER: Duration = Duration::from_secs(10 * 60);
 const STALE_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_BACKGROUND_LOG_BYTES: u64 = 8 * 1024 * 1024;
@@ -949,7 +949,7 @@ fn reusable_runtime_id(runtimes: &[SessionRuntime], clients: &[ClientConnection]
     choose_reusable_runtime_id(&states).or_else(|| {
         // A reconnect can arrive before the daemon reader observes the old
         // socket closing. In that window there is no detached runtime, and the
-        // old implementation eagerly booted a second BackendService/provider
+        // old implementation eagerly booted a second HarnessService/provider
         // bridge just to discard it after LoadSession. Prefer the most recently
         // attached live runtime; session routing will isolate later only when a
         // client actually selects a different session.

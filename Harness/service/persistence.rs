@@ -165,7 +165,7 @@ impl SessionWriter {
     fn publish_compact(&self, state: &SharedSession) {
         let _ = self
             .tx
-            .send(BackendEvent::Envelope(state_envelope_without_conversation(
+            .send(ServiceEvent::Envelope(state_envelope_without_conversation(
                 &state.state,
             )));
     }

@@ -5,7 +5,7 @@
 
 use super::*;
 
-impl BackendService {
+impl HarnessService {
     /// Refreshes the authentication providers exposed by the runtime bridge.
     pub(super) fn request_auth(&self) {
         {
@@ -28,7 +28,7 @@ impl BackendService {
                             Some(format!("Unable to load authentication: {error}"))
                     }
                 }
-                let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
             }
         });
     }
@@ -111,7 +111,7 @@ impl BackendService {
                             Some(format!("Unable to load providers: {error}"))
                     }
                 }
-                let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
             }
         });
     }

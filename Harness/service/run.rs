@@ -1,6 +1,6 @@
 //! Top-level run lifecycle: admission, execution, settlement and release.
 //!
-//! A `BackendService` executes at most one top-level run at a time. This is a
+//! A `HarnessService` executes at most one top-level run at a time. This is a
 //! structural property rather than a scheduling choice: the service owns one
 //! `AgentCoordinator` (held for the whole run) and the live `SharedSession`
 //! carries singular run state — `current_turn`, `active_run_id`, one streaming
@@ -113,7 +113,7 @@ struct RunWorker {
     agent_groups: AgentGroupSupervisor,
 }
 
-impl BackendService {
+impl HarnessService {
     pub(super) fn session_writer(&self) -> SessionWriter {
         SessionWriter {
             store: self.store.clone(),
@@ -376,7 +376,7 @@ impl RunWorker {
                 );
                 let _ = self
                     .tx
-                    .send(BackendEvent::Envelope(state_envelope_without_conversation(
+                    .send(ServiceEvent::Envelope(state_envelope_without_conversation(
                         &state.state,
                     )));
             }
@@ -422,7 +422,7 @@ impl RunWorker {
         };
 
         let (session_id, envelope) = projected;
-        let _ = self.tx.send(BackendEvent::Envelope(envelope));
+        let _ = self.tx.send(ServiceEvent::Envelope(envelope));
 
         // Event-log writes happen outside the live-state mutex (see
         // `SessionWriter`).
@@ -437,7 +437,7 @@ impl RunWorker {
                 state.state.error_message = Some(format!("Event log write failed: {error}"));
                 let _ = self
                     .tx
-                    .send(BackendEvent::Envelope(state_envelope_without_conversation(
+                    .send(ServiceEvent::Envelope(state_envelope_without_conversation(
                         &state.state,
                     )));
             }
@@ -493,7 +493,7 @@ impl RunWorker {
         // catalog scan happen after releasing the live-state mutex.
         let _ = self
             .tx
-            .send(BackendEvent::Envelope(state_envelope(&state.state)));
+            .send(ServiceEvent::Envelope(state_envelope(&state.state)));
         (final_write, title_request)
     }
 
@@ -518,7 +518,7 @@ impl RunWorker {
             );
             let _ = self
                 .tx
-                .send(BackendEvent::Envelope(state_envelope_without_conversation(
+                .send(ServiceEvent::Envelope(state_envelope_without_conversation(
                     &state.state,
                 )));
             prepared

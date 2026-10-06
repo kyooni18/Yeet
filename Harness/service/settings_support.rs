@@ -68,7 +68,7 @@ pub(super) fn finish_auth_action(
             (Err(error), _) => format!("Authentication error: {error}"),
             (Ok(message), Err(error)) => format!("{message} Refresh failed: {error}"),
         });
-        let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+        let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
     }
 }
 
@@ -108,7 +108,7 @@ pub(super) fn finish_provider_action(
             (Err(error), _) => format!("Provider error: {error}"),
             (Ok(message), Err(error)) => format!("{message} Refresh failed: {error}"),
         });
-        let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+        let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
     }
 }
 

@@ -201,7 +201,7 @@ impl MemberRunner for CoordinatorRunner {
                         });
                     }
                     AgentEvent::ToolExecutionStarted(call) => {
-                        let detail = crate::backend::tool_detail(&call).unwrap_or_default();
+                        let detail = crate::harness::tool_detail(&call).unwrap_or_default();
                         on_progress(MemberProgress::Event {
                             kind: "tool_started",
                             detail: format!("{} {detail}", call.name),

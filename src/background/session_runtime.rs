@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 
 use super::{Wake, runtime_process::RuntimeProcess};
-use crate::backend::SessionCatalog;
+use crate::harness::SessionCatalog;
 
 const INTERRUPT_RECOVERY_AFTER: Duration = Duration::from_secs(4);
 // Transport loss is not cancellation: a detached streaming runtime survives.

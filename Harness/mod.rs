@@ -1,6 +1,6 @@
 //! Reusable Yeet runtime attachment surface.
 //!
-//! Frontends should depend on this module instead of the TUI/backend adapter.
+//! Frontends depend on this module for agent and session execution.
 //! A harness can either attach to the workspace's shared background runtime or
 //! own an in-process runtime directly. The latter is intended for native apps,
 //! tests, and other hosts that embed Yeet as a library and therefore cannot
@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::{
-    backend::{BackendEvent, BackendService},
-    background::BackgroundConnection,
-};
+mod service;
+
+pub use service::{HarnessClient, ServiceEvent, forward_cli};
+pub(crate) use service::{HarnessService, SessionCatalog, tool_detail};
+
+use crate::background::BackgroundConnection;
 
 pub use crate::model::{FrontendCommand as HarnessCommand, HarnessEvent, HarnessState};
 
@@ -47,7 +49,7 @@ impl Default for HarnessOptions {
 
 enum HarnessTransport {
     Shared(BackgroundConnection),
-    Embedded(BackendService),
+    Embedded(HarnessService),
 }
 
 /// Frontend-neutral handle to Yeet's agent/session runtime.
@@ -103,7 +105,7 @@ impl Harness {
                 None,
             ),
             HarnessMode::Embedded => {
-                let service = BackendService::spawn(workspace.clone(), None)?;
+                let service = HarnessService::spawn(workspace.clone(), None)?;
                 let state = service.state_snapshot();
                 (HarnessTransport::Embedded(service), Some(state))
             }
@@ -146,7 +148,7 @@ impl Harness {
         let event = match &mut self.transport {
             HarnessTransport::Shared(connection) => connection.try_recv(),
             HarnessTransport::Embedded(service) => match service.try_recv()? {
-                BackendEvent::Envelope(envelope) => Some(envelope),
+                ServiceEvent::Envelope(envelope) => Some(envelope),
             },
         }?;
 

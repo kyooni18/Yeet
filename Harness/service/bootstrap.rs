@@ -1,4 +1,4 @@
-//! Initial live session state for a freshly spawned `BackendService`.
+//! Initial live session state for a freshly spawned `HarnessService`.
 //!
 //! Populates the pieces a client needs before any command arrives: model
 //! catalog cache, the workspace session catalog (with a single-workspace

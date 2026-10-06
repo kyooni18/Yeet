@@ -5,7 +5,7 @@
 
 use super::*;
 
-impl BackendService {
+impl HarnessService {
     /// Starts a debate run and drives research, advocacy, jury, and knowledge retention.
     pub(super) fn start_debate(
         &mut self,
@@ -118,7 +118,7 @@ impl BackendService {
                     };
                     s.set_activity("thinking", "Framing debate", None);
                     persist_locked(&mut s, &store, &workspace, history.clone())?;
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                    let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                     request
                 };
                 let contract_response = bridge.complete_cancellable(&contract_request, &cancel);
@@ -168,7 +168,7 @@ impl BackendService {
                         s.append(ConversationKind::System { content: warning });
                     }
                     persist_locked(&mut s, &store, &workspace, history.clone())?;
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                    let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                 }
                 let mut step = 0usize;
                 loop {
@@ -216,7 +216,7 @@ impl BackendService {
                                 s.state.debate.as_mut().unwrap().status = label.clone();
                                 s.set_activity("research", &label, None);
                                 persist_locked(&mut s, &store, &workspace, history.clone())?;
-                                let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                                 s.state.debate.clone().unwrap()
                             };
                             let research = (|| -> Result<crate::debate::ResearchRecord> {
@@ -294,7 +294,7 @@ impl BackendService {
                                         }
                                         let tool = detail.get("call").and_then(|c| c.get("name")).and_then(Value::as_str).unwrap_or(kind);
                                         s.set_activity("research", &label, Some(tool.into()));
-                                        let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                                        let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                                         Ok(())
                                     })
                                 });
@@ -356,7 +356,7 @@ impl BackendService {
                                 .unwrap()
                                 .upsert_research_record(dossier);
                             persist_locked(&mut s, &store, &workspace, history.clone())?;
-                            let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                            let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                         }
 
                         if step == 0 {
@@ -406,7 +406,7 @@ impl BackendService {
                         let status = d.status.clone();
                         s.set_activity("thinking", &status, None);
                         persist_locked(&mut s, &store, &workspace, history.clone())?;
-                        let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                        let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                         request
                     };
                     let response = match bridge.complete_cancellable(&request, &cancel) {
@@ -429,7 +429,7 @@ impl BackendService {
                                 tool_calls: vec![],
                             });
                             persist_locked(&mut s, &store, &workspace, history.clone())?;
-                            let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                            let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                             step += 1;
                             continue;
                         }
@@ -496,7 +496,7 @@ impl BackendService {
                         d.record_jury_response(reversed, &response);
                     }
                     persist_locked(&mut s, &store, &workspace, history.clone())?;
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                    let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                     step += 1;
                     let completed_strengthening_stage = (!judging && step.is_multiple_of(2))
                         .then(|| step / 2 - 1)
@@ -519,7 +519,7 @@ impl BackendService {
                             };
                             s.set_activity("thinking", "Checking debate progress", None);
                             persist_locked(&mut s, &store, &workspace, history.clone())?;
-                            let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                            let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                             request
                         };
 
@@ -574,7 +574,7 @@ impl BackendService {
                                     }
                                 }
                                 persist_locked(&mut s, &store, &workspace, history.clone())?;
-                                let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                             }
                             Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
                             Err(error) => {
@@ -589,7 +589,7 @@ impl BackendService {
                                     ),
                                 });
                                 persist_locked(&mut s, &store, &workspace, history.clone())?;
-                                let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                             }
                         }
                     }
@@ -642,7 +642,7 @@ impl BackendService {
                             .map(|coordinator| coordinator.model_history())
                             .unwrap_or_else(|_| history.clone()),
                     );
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+                    let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
                     request
                 };
                 match bridge.complete_cancellable(&request, &cancel) {
@@ -755,7 +755,7 @@ impl BackendService {
             if let Err(error) = persist_locked(&mut s, &store, &workspace, final_history) {
                 s.state.error_message = Some(format!("Save failed: {error}"));
             }
-            let _ = tx.send(BackendEvent::Envelope(state_envelope(&s.state)));
+            let _ = tx.send(ServiceEvent::Envelope(state_envelope(&s.state)));
             drop(s);
             if let Some(knowledge) = retained_for_coordinator
                 && let Ok(mut coordinator) = coordinator.lock()

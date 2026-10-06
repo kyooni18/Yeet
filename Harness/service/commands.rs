@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl BackendService {
+impl HarnessService {
     pub(super) fn start_group_background(&mut self, group_id: String, resume: bool) -> Result<()> {
         let (model, session) = {
             let shared = self.shared.lock_or_recover();
@@ -29,7 +29,7 @@ impl BackendService {
                         if state.state.agent_group.group_id == group_id {
                             state.state.error_message =
                                 Some(format!("Agent Group failed: {error}"));
-                            let _ = tx.send(BackendEvent::Envelope(
+                            let _ = tx.send(ServiceEvent::Envelope(
                                 state_envelope_without_conversation(&state.state),
                             ));
                         }
@@ -642,7 +642,7 @@ impl BackendService {
                     if let Ok(mut state) = shared.lock() {
                         state.state.is_loading_models = false;
                         state.state.error_message = Some(format!("Unable to load models: {error}"));
-                        let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                        let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
                     }
                     return;
                 }
@@ -669,7 +669,7 @@ impl BackendService {
                         .map(|item| item.id.clone())
                         .collect();
                     pruned_cache = Some(state.state.model_catalog.clone());
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                    let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
                 }
             }
             if let Some(catalog) = pruned_cache {
@@ -682,7 +682,7 @@ impl BackendService {
                     state.state.error_message = Some(
                         "No available models could be loaded. Check provider credentials.".into(),
                     );
-                    let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                    let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
                 }
                 return;
             }
@@ -770,7 +770,7 @@ impl BackendService {
                             } else if !state.state.available_models.is_empty() {
                                 state.state.error_message = None;
                             }
-                            let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                            let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
                         }
                     }
                     Err(_) => {
@@ -787,7 +787,7 @@ impl BackendService {
                             } else if !state.state.available_models.is_empty() {
                                 state.state.error_message = None;
                             }
-                            let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                            let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
                         }
                     }
                 }
@@ -806,7 +806,7 @@ impl BackendService {
                         "No available models could be loaded. Check provider credentials.".into(),
                     );
                 }
-                let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
             }
         });
     }

@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 use yeet::{
-    backend,
+    harness,
     remote::{
         RemoteControl, RemoteOptions, RemoteServer, clear_remote_access_key, clear_remote_passkeys,
         generate_remote_access_key, remote_auth_status, remote_browser_url, remote_status,
@@ -112,7 +112,7 @@ fn main() -> Result<()> {
         };
     }
     if !arguments.is_empty() {
-        process::exit(backend::forward_cli(&arguments)?);
+        process::exit(harness::forward_cli(&arguments)?);
     }
 
     yeet::tui::run()

@@ -1,6 +1,6 @@
 use super::*;
 
-impl BackendService {
+impl HarnessService {
     pub(super) fn select_model(&self, model: String) -> Result<()> {
         let model = self.config.set_model(&model)?;
         let levels = reasoning_levels_for_model(&model);
@@ -80,7 +80,7 @@ impl BackendService {
                 && state.state.active_model == model
             {
                 state.state.active_model_context_length = length;
-                let _ = tx.send(BackendEvent::Envelope(state_envelope(&state.state)));
+                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
             }
         });
     }

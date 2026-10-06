@@ -5,7 +5,7 @@
 
 use super::*;
 
-impl BackendService {
+impl HarnessService {
     /// Restores a persisted session and rebinds coordinator runtime state.
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
@@ -359,7 +359,7 @@ impl BackendService {
         state.state.pending_native_app_permission = self.permission.pending_native_app();
         let _ = self
             .tx
-            .send(BackendEvent::Envelope(state_envelope(&state.state)));
+            .send(ServiceEvent::Envelope(state_envelope(&state.state)));
     }
 
     /// Stops active work and tears down the runtime bridge without deadlocking.
