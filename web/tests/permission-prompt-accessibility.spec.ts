@@ -302,3 +302,26 @@ test('wide permission actions adapt touch target size to pointer type', async ({
     }
   }
 })
+
+test('QuickPanel uses shared permission identities when native and shell requests coexist', async ({ page }) => {
+  await page.getByRole('button', { name: 'Quick settings' }).click()
+  await emit(page, {
+    type: 'state_update', version: 1, sequence: 2, revision: 2,
+    patch: {
+      pending_shell_permission: { id: 'quick-shell', kind: 'shell', command: 'cargo test', operation: 'execute', reason: 'Verify' },
+      pending_native_app_permission: { id: 'quick-native', server: 'macos', tool: 'open_app', appName: 'Notes', operation: 'launch', reason: 'Open notes' },
+    },
+  })
+  const permissions = page.locator('.quick-panel .permission-panel')
+  await expect(permissions).toHaveCount(2)
+  await expect(permissions.nth(0)).toContainText('Notes')
+  await expect(permissions.nth(1)).toContainText('cargo test')
+  await permissions.nth(0).getByRole('button', { name: 'Allow', exact: true }).click()
+  await expect.poll(() => sentCommands(page)).toContainEqual(
+    expect.objectContaining({ type: 'resolve_permission', request_id: 'quick-native', granted: true }),
+  )
+  await permissions.nth(1).getByRole('button', { name: 'Deny', exact: true }).click()
+  await expect.poll(() => sentCommands(page)).toContainEqual(
+    expect.objectContaining({ type: 'resolve_permission', request_id: 'quick-shell', granted: false }),
+  )
+})

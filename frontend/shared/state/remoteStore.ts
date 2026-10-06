@@ -633,14 +633,6 @@ export class RemoteStore {
     return this.send({ type: 'update_sandbox', action })
   }
 
-  allowPermission(): boolean {
-    return this.send(this.state.pending_shell_permission ? { type: 'allow_shell' } : { type: 'allow_native_app' })
-  }
-
-  denyPermission(): boolean {
-    return this.send(this.state.pending_shell_permission ? { type: 'deny_shell' } : { type: 'deny_native_app' })
-  }
-
   switchWorkspace(workspace: string): void {
     const next = workspace.trim()
     if (!next) return

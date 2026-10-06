@@ -114,29 +114,27 @@ export function QuickPanel({
             </div>
           </div>
 
-          {(remote.state.pending_shell_permission || remote.state.pending_native_app_permission) && (
-            <div className="permission-panel inset-surface">
+          {remote.composer?.permissions.map((permission) => (
+            <div className="permission-panel inset-surface" key={`${permission.target.kind}:${permission.target.id}`}>
               <div>
                 <ShieldCheck size={14} />
                 <span>
-                  <strong>
-                    {remote.state.pending_shell_permission?.operation
-                      || remote.state.pending_native_app_permission?.operation
-                      || 'Permission'}
-                  </strong>
-                  <small>
-                    {remote.state.pending_shell_permission?.command
-                      || remote.state.pending_native_app_permission?.appName
-                      || remote.state.pending_native_app_permission?.tool}
-                  </small>
+                  <strong>{permission.operation || permission.title}</strong>
+                  <small>{permission.detail}</small>
                 </span>
               </div>
               <div className="permission-actions">
-                <button disabled={!canMutate} onClick={() => remoteStore.denyPermission()}>Deny</button>
-                <button disabled={!canMutate} className="permission-primary" onClick={() => remoteStore.allowPermission()}>Allow</button>
+                {permission.controls.map((control, index) => (
+                  <button
+                    key={control.label}
+                    disabled={!canMutate || !control.enabled}
+                    className={index === 1 ? 'permission-primary' : undefined}
+                    onClick={() => remoteStore.sendComposerUi(control.action)}
+                  >{control.label}</button>
+                ))}
               </div>
             </div>
-          )}
+          ))}
 
           {sandbox && (
             <div className="quick-section">
