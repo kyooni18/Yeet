@@ -140,20 +140,17 @@ pub(super) fn runtime_settings_state(
     let theme = config.theme_settings()?;
     let dark = theme.dark.unwrap_or_else(|| "kanagawa".into());
     let light = theme.light.unwrap_or_else(|| "adwaita".into());
-    let dark_resolved = crate::theme::resolve_palette(crate::theme::Appearance::Dark, Some(&dark));
-    let light_resolved =
-        crate::theme::resolve_palette(crate::theme::Appearance::Light, Some(&light));
     Ok(RuntimeSettingsState {
         appearance: theme.appearance.unwrap_or_else(|| "auto".into()),
-        theme_dark: dark,
-        theme_light: light,
-        theme_dark_resolved: dark_resolved.resolved,
-        theme_light_resolved: light_resolved.resolved,
-        theme_dark_palette: dark_resolved.palette.into(),
-        theme_light_palette: light_resolved.palette.into(),
-        theme_catalog: crate::theme::catalog(),
-        theme_dark_warning: dark_resolved.warning,
-        theme_light_warning: light_resolved.warning,
+        theme_dark: dark.clone(),
+        theme_light: light.clone(),
+        theme_dark_resolved: dark.clone(),
+        theme_light_resolved: light.clone(),
+        theme_dark_palette: Default::default(),
+        theme_light_palette: Default::default(),
+        theme_catalog: Vec::new(),
+        theme_dark_warning: None,
+        theme_light_warning: None,
         context_length_override: if active_model.is_empty() {
             None
         } else {

@@ -20,8 +20,8 @@ use crate::{
 };
 
 use super::ui_host::{
-    application_messages, composer_message, configure_composer_host,
-    conversation_message, settings_message,
+    application_messages, composer_message, configure_composer_host, conversation_message,
+    settings_message,
 };
 
 use super::protocol::{
@@ -239,6 +239,7 @@ fn prune_attachments(attachments: &mut HashMap<String, PendingRemoteAttachment>,
 }
 
 struct RuntimeShared {
+    theme_cache: crate::theme::ThemeProjectionCache,
     state: BridgeState,
     sequence: u64,
     history: VecDeque<ServerMessage>,
@@ -303,7 +304,9 @@ impl RemoteClientRuntime {
         // only when that client actually invokes a capability that needs one.
         let wake = Wake::new();
         let service = HarnessService::spawn(workspace.to_path_buf(), Some(wake.clone()))?;
-        let initial_state = service.state_snapshot();
+        let mut initial_state = service.state_snapshot();
+        let mut theme_cache = crate::theme::ThemeProjectionCache::default();
+        theme_cache.hydrate(&mut initial_state.runtime_settings);
         let mut application =
             crate::shared_ui::application_session::ApplicationSession::new(&initial_state);
         configure_composer_host(
@@ -314,6 +317,7 @@ impl RemoteClientRuntime {
         let ui = Arc::new(Mutex::new(application));
         let thread_ui = Arc::clone(&ui);
         let shared = Arc::new(Mutex::new(RuntimeShared {
+            theme_cache,
             state: initial_state,
             sequence: 0,
             history: VecDeque::new(),
@@ -645,7 +649,13 @@ fn runtime_loop(
                         continue;
                     }
                     let new_session = matches!(command, FrontendCommand::NewSession);
+                    let theme_command = command.clone();
                     let result = service.send(command).map_err(|error| format!("{error:#}"));
+                    if result.is_ok() {
+                        if let Ok(mut state) = shared.lock() {
+                            state.theme_cache.invalidate_for_command(&theme_command);
+                        }
+                    }
                     if result.is_ok() && new_session {
                         if let (Ok(state), Ok(mut ui)) = (shared.lock(), ui.lock()) {
                             ui.observe_composer_new_session(&state.state);
@@ -685,15 +695,17 @@ fn runtime_loop(
                         continue;
                     }
                     let result = (|| -> Result<(), String> {
-                        let state = shared
+                        let mut state = shared
                             .lock()
                             .map_err(|_| "remote runtime state lock poisoned")?;
                         let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
                         let prepared = ui.prepare_agent(action, &state.state);
                         if let Some(command) = prepared.effect.command.clone() {
+                            let theme_command = command.clone();
                             service
                                 .send(command)
                                 .map_err(|error| format!("{error:#}"))?;
+                            state.theme_cache.invalidate_for_command(&theme_command);
                         }
                         let (projection, effect) = ui.commit_agent(prepared, &state.state);
                         for message in
@@ -714,15 +726,17 @@ fn runtime_loop(
                         continue;
                     }
                     let result = (|| -> Result<(), String> {
-                        let state = shared
+                        let mut state = shared
                             .lock()
                             .map_err(|_| "remote runtime state lock poisoned")?;
                         let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
                         let prepared = ui.prepare_conversation(action, &state.state);
                         if let Some(command) = prepared.effect.command.clone() {
+                            let theme_command = command.clone();
                             service
                                 .send(command)
                                 .map_err(|error| format!("{error:#}"))?;
+                            state.theme_cache.invalidate_for_command(&theme_command);
                         }
                         let (projection, effect) = ui.commit_conversation(prepared, &state.state);
                         let _ = events.send(conversation_message(
@@ -743,7 +757,7 @@ fn runtime_loop(
                         continue;
                     }
                     let result = (|| -> Result<(), String> {
-                        let state = shared
+                        let mut state = shared
                             .lock()
                             .map_err(|_| "remote runtime state lock poisoned")?;
                         let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
@@ -751,9 +765,11 @@ fn runtime_loop(
                         let new_session =
                             matches!(prepared.effect.command, Some(FrontendCommand::NewSession));
                         if let Some(command) = prepared.effect.command.clone() {
+                            let theme_command = command.clone();
                             service
                                 .send(command)
                                 .map_err(|error| format!("{error:#}"))?;
+                            state.theme_cache.invalidate_for_command(&theme_command);
                         }
                         let (mut projection, effect) = ui.commit_composer(prepared, &state.state);
                         if new_session {
@@ -778,15 +794,17 @@ fn runtime_loop(
                         continue;
                     }
                     let result = (|| -> Result<(), String> {
-                        let state = shared
+                        let mut state = shared
                             .lock()
                             .map_err(|_| "remote runtime state lock poisoned")?;
                         let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
                         let prepared = ui.prepare_settings(action, &state.state);
                         if let Some(command) = prepared.effect.command.clone() {
+                            let theme_command = command.clone();
                             service
                                 .send(command)
                                 .map_err(|error| format!("{error:#}"))?;
+                            state.theme_cache.invalidate_for_command(&theme_command);
                         }
                         let (projection, effect) = ui.commit_settings(prepared, &state.state);
                         let _ = events.send(settings_message(
@@ -864,6 +882,7 @@ fn process_state_update(
     // Move the old state out instead of cloning it. Compact streaming updates
     // intentionally omit conversation history; moving that history into the new
     // state avoids copying the full transcript on every token/reasoning delta.
+    shared.theme_cache.hydrate(&mut update.runtime_settings);
     let mut previous = std::mem::take(&mut shared.state);
     let had_conversation = update.conversation.is_some();
     let session_changed = previous.current_session_id != update.current_session_id;
@@ -1644,6 +1663,53 @@ mod tests {
     use super::RemoteHub;
 
     #[test]
+    fn transport_hydrates_theme_snapshots_and_changed_preference_patches() {
+        use super::*;
+        let shared = Arc::new(Mutex::new(RuntimeShared {
+            theme_cache: crate::theme::ThemeProjectionCache::default(),
+            state: BridgeState::default(),
+            sequence: 0,
+            history: VecDeque::new(),
+            last_touched: Instant::now(),
+        }));
+        let (events, mut receiver) = broadcast::channel(8);
+        let mut state = BridgeState::default();
+        state.current_session_id = Some("theme-session".into());
+        state.runtime_settings.theme_dark = "quiet-night".into();
+        process_state_update(&shared, &events, state.clone());
+        let ServerMessage::Snapshot {
+            state: snapshot, ..
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("initial snapshot")
+        };
+        assert!(
+            !snapshot
+                .runtime_settings
+                .theme_dark_palette
+                .background
+                .is_empty()
+        );
+        assert!(!snapshot.runtime_settings.theme_catalog.is_empty());
+        state.runtime_settings.theme_dark = "/missing/theme-for-remote-test.json".into();
+        process_state_update(&shared, &events, state);
+        let patch = std::iter::from_fn(|| receiver.try_recv().ok())
+            .find_map(|message| match message {
+                ServerMessage::StateUpdate { patch, .. } => Some(patch),
+                _ => None,
+            })
+            .expect("theme preference patch");
+        assert_eq!(patch["runtime_settings"]["themeDarkResolved"], "kanagawa");
+        assert!(patch["runtime_settings"]["themeDarkWarning"].is_string());
+        assert!(
+            !patch["runtime_settings"]["themeDarkPalette"]["background"]
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn shared_transcript_projects_accumulated_sparse_updates_and_stream_deltas() {
         use super::*;
         use crate::shared_ui::application_session::ApplicationSession;
@@ -1656,6 +1722,7 @@ mod tests {
             .unwrap(),
         );
         let shared = Arc::new(Mutex::new(RuntimeShared {
+            theme_cache: crate::theme::ThemeProjectionCache::default(),
             state: initial.clone(),
             sequence: 0,
             history: VecDeque::new(),

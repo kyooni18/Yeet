@@ -1,6 +1,6 @@
 //! Ratatui adapter for the shared Yeet theme engine.
 
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 
 use ratatui::{
     Frame,
@@ -9,8 +9,10 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Padding},
 };
 
-pub(in crate::tui::ui) use crate::theme::Appearance;
-use crate::theme::{Palette, Rgb};
+pub(in crate::tui::ui) use crate::shared_ui::theme::Appearance;
+use crate::shared_ui::theme::{Palette, Rgb};
+
+static RESOURCES: OnceLock<Mutex<crate::theme::ThemeProjectionCache>> = OnceLock::new();
 
 static ACTIVE: OnceLock<RwLock<Palette>> = OnceLock::new();
 
@@ -19,31 +21,8 @@ pub(in crate::tui::ui) fn active_palette() -> Palette {
 }
 
 fn active() -> Palette {
-    let lock = ACTIVE.get_or_init(|| RwLock::new(load_palette()));
+    let lock = ACTIVE.get_or_init(|| RwLock::new(Palette::kanagawa()));
     *lock.read().expect("theme lock poisoned")
-}
-
-pub(in crate::tui::ui) fn initialize(appearance: Appearance, name_or_path: Option<&str>) {
-    let palette = crate::theme::resolve_palette(appearance, name_or_path).palette;
-    let lock = ACTIVE.get_or_init(|| RwLock::new(palette));
-    *lock.write().expect("theme lock poisoned") = palette;
-}
-
-fn load_palette() -> Palette {
-    let appearance = match std::env::var("YEET_THEME_MODE").ok().as_deref() {
-        Some(value) if value.eq_ignore_ascii_case("light") => Appearance::Light,
-        _ => Appearance::Dark,
-    };
-    let settings = crate::config::ConfigStore::default().theme_settings().ok();
-    let name = match appearance {
-        Appearance::Dark => settings
-            .as_ref()
-            .and_then(|settings| settings.dark.as_deref()),
-        Appearance::Light => settings
-            .as_ref()
-            .and_then(|settings| settings.light.as_deref()),
-    };
-    crate::theme::resolve_palette(appearance, name).palette
 }
 
 fn color(rgb: Rgb) -> Color {
@@ -234,17 +213,26 @@ pub fn initialize_theme() {
 }
 
 pub(crate) fn apply_runtime_theme(settings: &crate::model::RuntimeSettingsState) {
-    let appearance = match std::env::var("YEET_THEME_MODE")
-        .ok()
-        .as_deref()
-        .unwrap_or(settings.appearance.as_str())
-    {
-        value if value.eq_ignore_ascii_case("light") => Appearance::Light,
-        _ => Appearance::Dark,
-    };
-    let theme_name = match appearance {
-        Appearance::Dark => settings.theme_dark.as_str(),
-        Appearance::Light => settings.theme_light.as_str(),
-    };
-    initialize(appearance, Some(theme_name));
+    let mut projected = settings.clone();
+    RESOURCES
+        .get_or_init(Default::default)
+        .lock()
+        .expect("theme resource lock poisoned")
+        .hydrate(&mut projected);
+    // The terminal override remains a host observation; UI chooses the palette.
+    if let Ok(appearance) = std::env::var("YEET_THEME_MODE") {
+        projected.appearance = appearance;
+    }
+    let palette = crate::shared_ui::theme::palette_for_settings(&projected, Appearance::Dark);
+    let lock = ACTIVE.get_or_init(|| RwLock::new(palette));
+    *lock.write().expect("theme lock poisoned") = palette;
+}
+
+pub(crate) fn refresh_runtime_theme(settings: &crate::model::RuntimeSettingsState) {
+    RESOURCES
+        .get_or_init(Default::default)
+        .lock()
+        .expect("theme resource lock poisoned")
+        .invalidate();
+    apply_runtime_theme(settings);
 }

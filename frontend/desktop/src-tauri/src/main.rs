@@ -326,16 +326,21 @@ fn configure_composer_host(
 fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
     let mut harness: Option<Harness> = None;
     let mut conversation = None;
+    let mut theme_cache = yeet::theme::ThemeProjectionCache::default();
     let mut ui = ApplicationSession::default();
     loop {
         match controls.recv_timeout(Duration::from_millis(16)) {
             Ok(Control::Connect(workspace, reply)) => {
                 let result = Harness::embedded(&workspace)
                     .map(|next| {
-                        let connection = CoreConnection {
+                        theme_cache.invalidate();
+                        let mut connection = CoreConnection {
                             workspace: next.workspace().to_string_lossy().into_owned(),
                             state: next.latest_state().cloned(),
                         };
+                        if let Some(state) = connection.state.as_mut() {
+                            theme_cache.hydrate(&mut state.runtime_settings);
+                        }
                         conversation = connection
                             .state
                             .as_ref()
@@ -360,7 +365,11 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                 let result = match harness.as_mut() {
                     Some(core) => {
                         let new_session = matches!(command, HarnessCommand::NewSession);
+                        let theme_command = command.clone();
                         let result = core.send(command).map_err(|error| error.to_string());
+                        if result.is_ok() {
+                            theme_cache.invalidate_for_command(&theme_command);
+                        }
                         if result.is_ok() && new_session {
                             let state = core.latest_state().cloned().unwrap_or_default();
                             ui.observe_composer_new_session(&state);
@@ -404,7 +413,9 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                         .ok_or("Local workspace state unavailable")?;
                     let prepared = ui.prepare_agent(action, &state);
                     if let Some(command) = prepared.effect.command.clone() {
+                        let theme_command = command.clone();
                         core.send(command).map_err(|error| error.to_string())?;
+                        theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (projection, effect) = ui.commit_agent(prepared, &state);
                     publish_application(&app, projection, Some((&effect).into()))
@@ -423,7 +434,9 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     }
                     let prepared = ui.prepare_conversation(action, &state);
                     if let Some(command) = prepared.effect.command.clone() {
+                        let theme_command = command.clone();
                         core.send(command).map_err(|error| error.to_string())?;
+                        theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (projection, effect) = ui.commit_conversation(prepared, &state);
                     publish_conversation(&app, projection.conversation, Some((&effect).into()))
@@ -444,7 +457,9 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     let new_session =
                         matches!(prepared.effect.command, Some(HarnessCommand::NewSession));
                     if let Some(command) = prepared.effect.command.clone() {
+                        let theme_command = command.clone();
                         core.send(command).map_err(|error| error.to_string())?;
+                        theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (mut projection, effect) = ui.commit_composer(prepared, &state);
                     if new_session {
@@ -467,7 +482,9 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                     }
                     let prepared = ui.prepare_settings(action, &state);
                     if let Some(command) = prepared.effect.command.clone() {
+                        let theme_command = command.clone();
                         core.send(command).map_err(|error| error.to_string())?;
+                        theme_cache.invalidate_for_command(&theme_command);
                     }
                     let (projection, effect) = ui.commit_settings(prepared, &state);
                     publish_settings(&app, projection.settings, Some(effect.ui))
@@ -491,6 +508,7 @@ fn run_core(app: tauri::AppHandle, controls: mpsc::Receiver<Control>) {
                 // Harness updates omit unchanged conversation history. Normalize
                 // that optimization at the transport boundary into full snapshots.
                 if let Some(state) = event.state.as_mut() {
+                    theme_cache.hydrate(&mut state.runtime_settings);
                     if state.conversation.is_none() {
                         state.conversation = conversation.clone();
                     } else {

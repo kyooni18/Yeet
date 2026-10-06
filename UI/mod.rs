@@ -20,6 +20,7 @@ pub mod settings;
 pub mod settings_session;
 pub mod shell;
 pub mod surfaces;
+pub mod theme;
 pub mod workbench;
 
 pub use actions::{Action, NavigationAction};

@@ -175,7 +175,11 @@ impl App {
         let editor_fields = self.editor_fields.clone();
         let prepared = self.application.prepare_settings(action, &self.state);
         if let Some(command) = prepared.effect.command.clone() {
+            let refresh_theme = matches!(command, FrontendCommand::RequestSettings);
             backend.send(command)?;
+            if refresh_theme {
+                crate::tui::ui::refresh_runtime_theme(&self.state.runtime_settings);
+            }
         }
         if let Some(destination) = prepared.effect.ui.destination {
             match destination {

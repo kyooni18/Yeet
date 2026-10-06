@@ -16,6 +16,7 @@ pub mod core;
 pub mod context_cache;
 pub mod permission;
 pub mod resources;
+pub mod theme_resources;
 pub mod session_store;
 pub mod workers;
 mod service;

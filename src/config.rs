@@ -130,7 +130,7 @@ impl ConfigStore {
         if value.is_empty() {
             bail!("Theme name or path cannot be empty");
         }
-        if let Err(error) = crate::theme::validate_reference(value) {
+        if let Err(error) = crate::harness::theme_resources::validate_reference(value) {
             bail!("{error}");
         }
         let mut document = self.read()?;
