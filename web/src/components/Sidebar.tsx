@@ -242,6 +242,7 @@ export function Sidebar({
           >
             <Plus size={14} strokeWidth={1.9} />
             <span>New session</span>
+            <kbd aria-hidden="true">⌘N</kbd>
           </button>
         </div>
       </aside>

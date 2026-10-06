@@ -817,7 +817,7 @@ body { font-size: 13px; }
     content: "";
     background: var(--y-titlebar);
   }
-  .remote-sidebar.is-desktop-docked .sidebar-header { top: 48px; }
+  .remote-sidebar.is-desktop-docked .sidebar-header { top: 7px; right: 8px; }
   .sidebar-session { border: 0; box-shadow: none; }
   .sidebar-session__activity::before,
   .sidebar-session__activity::after,
@@ -975,3 +975,11 @@ body { font-size: 13px; }
   }
   .reasoning-trace .trace-disclosure__spacer { display: none; }
 }
+
+/* Sidebar polish: header actions sit in the title bar strip, shortcut hint on New session. */
+.sidebar-new-session kbd {
+  margin-left: auto;
+  color: var(--y-t6);
+  font: 400 10.5px/1 var(--y-mono);
+}
+@media (hover: none), (pointer: coarse) { .sidebar-new-session kbd { display: none; } }
