@@ -1079,3 +1079,22 @@ body { font-size: 13px; }
   .reasoning-trace .trace-detail { background: transparent; padding: 0; border-radius: 0; }
   .reasoning-trace .trace-detail__content { background: transparent; padding: 0; }
 }
+
+/* Agent trace, flat: no rail, no wells, no emphasis on summaries. Rows differ by
+   content only; disclosure details are plain indented text. */
+.reasoning-trace,
+.activity-group { padding-left: 0; border-left: 0; }
+.activity-group__summary,
+.activity-group__summary.is-active { font-weight: 400; }
+.trace-detail,
+.trace-detail.has-background { background: transparent; padding-left: 0; padding-right: 0; }
+.trace-disclosure__details,
+.activity-group__events { border: 0; background: transparent; box-shadow: none; }
+@media not all and (hover: hover) and (pointer: fine) and (min-width: 1000px) {
+  .reasoning-trace,
+  .activity-group { margin-left: 0; padding-left: 0; }
+  .activity-group__events { padding-left: 22px; }
+}
+.trace-disclosure__dot { display: none; }
+.trace-disclosure__summary { margin-left: 8px; }
+.trace-disclosure__details { padding: 2px 0; margin-left: 21px; }
