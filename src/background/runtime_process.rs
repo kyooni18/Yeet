@@ -208,6 +208,12 @@ impl RuntimeProcess {
         self.last_state.is_streaming
     }
 
+    /// Work the user has not stopped: a streaming turn or running background
+    /// agents. The daemon never retires, exits, or reuses such a runtime.
+    pub(super) fn is_busy(&self) -> bool {
+        self.last_state.is_streaming || self.last_state.agent_group.status == "running"
+    }
+
     pub(super) fn current_session_id(&self) -> Option<String> {
         self.last_state.current_session_id.clone()
     }

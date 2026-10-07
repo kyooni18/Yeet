@@ -664,7 +664,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
         for runtime in &mut runtimes {
             runtime.lifecycle.observe_idle(
                 runtime_client_count(&clients, runtime.id) > 0,
-                runtime.service.is_streaming(),
+                runtime.service.is_busy(),
                 now,
             );
         }
@@ -724,7 +724,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
 
         let any_streaming = runtimes
             .iter()
-            .any(|runtime| runtime.service.is_streaming());
+            .any(|runtime| runtime.service.is_busy());
         if clients.is_empty() && !any_streaming && pending_isolations.is_empty() {
             let since = idle_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= DAEMON_IDLE_EXIT_AFTER {
@@ -808,7 +808,7 @@ fn runtime_requires_isolation(
     let is_streaming = runtimes
         .iter()
         .find(|runtime| runtime.id == runtime_id)
-        .is_some_and(|runtime| runtime.service.is_streaming());
+        .is_some_and(|runtime| runtime.service.is_busy());
     should_isolate_runtime(client_count, is_streaming)
 }
 
@@ -942,7 +942,7 @@ fn reusable_runtime_id(runtimes: &[SessionRuntime], clients: &[ClientConnection]
             (
                 runtime.id,
                 runtime_client_count(clients, runtime.id) > 0,
-                runtime.service.is_streaming(),
+                runtime.service.is_busy(),
             )
         })
         .collect::<Vec<_>>();

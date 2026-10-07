@@ -8,7 +8,7 @@ use super::*;
 impl HarnessService {
     /// Restores a persisted session and rebinds coordinator runtime state.
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
-        self.interrupt();
+        self.ensure_replaceable()?;
         // Settle and persist the live run before reading from disk. Loading
         // first would observe the still-`Running` record of the session being
         // replaced (including reloads of the active session) and mislabel it
@@ -144,8 +144,26 @@ impl HarnessService {
         Ok(())
     }
 
+    /// A run only ends when the user stops it. Replacing the session would
+    /// cancel it, so refuse; the daemon opens other sessions in their own
+    /// runtime instead.
+    fn ensure_replaceable(&self) -> Result<()> {
+        let busy = {
+            let shared = self.shared.lock_or_recover();
+            shared.state.is_streaming || shared.meta.current_turn.is_some()
+        } || self.agent_groups.group_item().status == "running";
+        if busy {
+            anyhow::bail!("A run is still active in this session. Stop it explicitly before replacing the session.");
+        }
+        Ok(())
+    }
+
     /// Replaces the active session with a fresh empty transcript.
     pub(super) fn new_session(&mut self) {
+        if let Err(error) = self.ensure_replaceable() {
+            self.append_error(format!("{error:#}"));
+            return;
+        }
         let _ = self.set_goal_enabled(false);
         self.interrupt();
         self.agent_groups.replace_active_group();
