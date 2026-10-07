@@ -220,7 +220,7 @@ impl SharedSession {
                     continue;
                 }
                 activity.phase = json!("interrupted");
-                activity.title = "Interrupted · Recovered stale run".into();
+                activity.title = "Interrupted".into();
                 activity.detail = Some(reason.to_owned());
                 transcript_changed = true;
             }

@@ -9,6 +9,11 @@ impl HarnessService {
     /// Restores a persisted session and rebinds coordinator runtime state.
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
         self.interrupt();
+        // Settle and persist the live run before reading from disk. Loading
+        // first would observe the still-`Running` record of the session being
+        // replaced (including reloads of the active session) and mislabel it
+        // as an orphan from a dead runtime.
+        self.invalidate_active_turn_for_replacement()?;
         let stored = self.store.load(id)?;
         let group_checkpoint = self
             .store
@@ -46,7 +51,6 @@ impl HarnessService {
             .and_then(|store| store.load())
             .ok()
             .map(|policy| sandbox_settings_state(&policy));
-        self.invalidate_active_turn_for_replacement()?;
         self.coordinator
             .lock()
             .map_err(|_| anyhow!("coordinator lock poisoned"))?
@@ -90,7 +94,7 @@ impl HarnessService {
         shared.meta.context_roots = stored_context_roots.clone();
         shared.state.error_message = None;
         let reconciled = shared.reconcile_orphaned_runs(
-            "Persisted run had no live runtime when this session was restored.",
+            "The app stopped before this run finished.",
         );
         if reconciled {
             persist_locked(
