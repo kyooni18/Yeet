@@ -1098,3 +1098,20 @@ body { font-size: 13px; }
 .trace-disclosure__dot { display: none; }
 .trace-disclosure__summary { margin-left: 8px; }
 .trace-disclosure__details { padding: 2px 0; margin-left: 21px; }
+
+/* Trace density: rows pack tight; only touch layouts get larger targets. */
+.activity-group,
+.reasoning-trace { margin: 0 0 2px; padding-right: 0; }
+.activity-group__header,
+.trace-disclosure__row { min-height: 24px; padding-top: 0; padding-bottom: 0; gap: 8px; align-items: center; }
+.activity-group__header > svg:last-child,
+.activity-group__icon { margin-top: 0; }
+.trace-disclosure__details { gap: 2px; margin: 0 0 2px 20px; padding: 0; }
+.activity-group__events { padding: 0 0 2px 20px; }
+.trace-detail__content { line-height: 1.45; }
+.reasoning-trace .trace-detail + .trace-detail { margin-top: 2px; }
+@media (hover: none), (pointer: coarse) {
+  .activity-group__header,
+  .trace-disclosure__row { min-height: 32px; }
+}
+.conversation-content > :is(.reasoning-trace, .activity-group) + :is(.reasoning-trace, .activity-group) { margin-top: -12px; }
