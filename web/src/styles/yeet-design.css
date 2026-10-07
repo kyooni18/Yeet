@@ -1033,8 +1033,8 @@ body { font-size: 13px; }
   .composer-toolbar__controls > .goal-chip,
   .composer-toolbar__controls > .usage-control,
   .composer-toolbar__controls > .toolbar-chip[title^="Context"] { display: none; }
-  .composer-settings { order: 3; margin-left: auto; }
-  .composer-send { order: 4; }
+  .composer-settings { display: none; }
+  .composer-send { order: 4; margin-left: auto; }
   .composer-settings,
   .composer-send,
   .attachment-add {
@@ -1052,6 +1052,7 @@ body { font-size: 13px; }
     box-shadow: none;
     color: var(--y-t5);
   }
+  .workspace-composer .composer-shell .composer-settings { display: none; }
   .composer-send:not(.is-stop):not(:disabled) { background: var(--y-pbtn); color: var(--y-pbtn-ink); }
   .composer-send:disabled { background: var(--y-btn); color: var(--y-t6); }
   .composer-shell .attachment-add::before,
