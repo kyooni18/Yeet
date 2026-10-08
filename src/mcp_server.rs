@@ -656,7 +656,12 @@ impl McpServer {
                 .and_then(Value::as_str)
                 .is_some_and(|command| !command.trim().is_empty());
             match (has_command, job) {
-                (true, None) => {}
+                (true, None) => {
+                    // The MCP caller is already the reasoning actor. Default to direct
+                    // execution so useful stdout/stderr is not replaced by Yeet's
+                    // internal actor summary before it crosses the MCP boundary.
+                    arguments.entry("mode").or_insert_with(|| json!("direct"));
+                }
                 (false, Some(Value::Object(job))) => {
                     arguments = job;
                     execution_name = "shell_job".into();
@@ -721,7 +726,7 @@ impl McpServer {
             .runtime(workspace)
             .and_then(|runtime| runtime.execute(&execution_name, arguments));
         Ok(match result {
-            Ok(output) => tool_success(output, &workspace_text, modern),
+            Ok(output) => tool_success(&execution_name, output, &workspace_text, modern),
             Err(error) => tool_error(error.to_string(), Some(&workspace_text), modern),
         })
     }
@@ -845,11 +850,10 @@ impl Drop for McpServer {
     }
 }
 
-fn tool_success(output: String, workspace: &str, modern: bool) -> Value {
-    let structured = serde_json::from_str::<Value>(&output).unwrap_or_else(|_| json!(output));
+fn tool_success(tool_name: &str, output: String, _workspace: &str, modern: bool) -> Value {
+    let output = compact_mcp_tool_output(tool_name, &output);
     let mut result = json!({
         "content": [{"type":"text","text":output}],
-        "structuredContent": {"workspace":workspace,"result":structured},
         "isError": false,
     });
     if modern {
@@ -858,23 +862,91 @@ fn tool_success(output: String, workspace: &str, modern: bool) -> Value {
     result
 }
 
-fn tool_error(message: impl Into<String>, workspace: Option<&str>, modern: bool) -> Value {
+fn tool_error(message: impl Into<String>, _workspace: Option<&str>, modern: bool) -> Value {
     let message = message.into();
-    let mut structured = json!({"status":"error","error":message});
-    if let Some(workspace) = workspace
-        && let Some(object) = structured.as_object_mut()
-    {
-        object.insert("workspace".into(), json!(workspace));
-    }
     let mut result = json!({
         "content": [{"type":"text","text":message}],
-        "structuredContent": structured,
         "isError": true,
     });
     if modern {
         modernize_result(&mut result);
     }
     result
+}
+
+/// Removes Yeet/runtime bookkeeping from the MCP-visible payload while preserving
+/// semantic data needed by an external caller. The raw runtime result is still
+/// available inside the server before this response-boundary projection.
+fn compact_mcp_tool_output(tool_name: &str, output: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return output.to_owned();
+    };
+    let value = compact_mcp_value(tool_name, &value);
+    match value {
+        Value::String(text) => text,
+        other => other.to_string(),
+    }
+}
+
+fn compact_mcp_value(tool_name: &str, value: &Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| compact_mcp_value(tool_name, value))
+                .filter(|value| !value.is_null())
+                .collect(),
+        ),
+        Value::Object(object) => {
+            let synchronous_shell = tool_name == "run_shell"
+                && !object.contains_key("status")
+                && object.contains_key("exitCode");
+            let file_read = tool_name == "read_file";
+            let mut compact = Map::new();
+
+            for (key, value) in object {
+                if value.is_null()
+                    || matches!(
+                        key.as_str(),
+                        "_meta"
+                            | "resultType"
+                            | "route"
+                            | "durationMilliseconds"
+                            | "stdoutBytes"
+                            | "stderrBytes"
+                            | "duplicateReadBytesAvoided"
+                            | "contentAlreadyReturned"
+                    )
+                    || (file_read
+                        && matches!(
+                            key.as_str(),
+                            "snapshot"
+                                | "requestedStartLine"
+                                | "requestedEndLine"
+                                | "refreshReplay"
+                        ))
+                    || (synchronous_shell
+                        && matches!(key.as_str(), "command" | "workingDirectory" | "succeeded"))
+                    || (matches!(key.as_str(), "stdoutTruncated" | "stderrTruncated")
+                        && value.as_bool() == Some(false))
+                {
+                    continue;
+                }
+
+                let value = compact_mcp_value(tool_name, value);
+                if value.is_null()
+                    || value.as_array().is_some_and(|values| values.is_empty())
+                    || value.as_object().is_some_and(|values| values.is_empty())
+                {
+                    continue;
+                }
+                compact.insert(key.clone(), value);
+            }
+
+            Value::Object(compact)
+        }
+        _ => value.clone(),
+    }
 }
 
 fn discover_result() -> Value {
@@ -1125,6 +1197,80 @@ mod contract_tests {
         let schema = &read_file["inputSchema"];
         assert!(schema["properties"].get("requests").is_none());
         assert_eq!(schema["required"], json!(["path"]));
+    }
+
+    #[test]
+    fn direct_mcp_success_payload_is_content_only_and_compact() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("example.txt"), "hello\n").unwrap();
+        let mut server = McpServer::new(directory.path().to_path_buf());
+
+        let response = server
+            .handle(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"tools/call",
+                "params":{
+                    "name":"read_file",
+                    "arguments":{"path":"example.txt"}
+                }
+            }))
+            .expect("tools/call response");
+
+        let result = &response["result"];
+        assert_eq!(result["isError"], json!(false), "{response}");
+        assert!(result.get("structuredContent").is_none(), "{response}");
+
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        let visible: Value = serde_json::from_str(text).expect("compact JSON content");
+        assert_eq!(visible["path"], json!("example.txt"));
+        assert!(visible.get("lines").is_some());
+        assert!(visible.get("snapshot").is_none(), "{visible}");
+        assert!(visible.get("requestedStartLine").is_none(), "{visible}");
+        assert!(visible.get("requestedEndLine").is_none(), "{visible}");
+        assert!(visible.get("refreshReplay").is_none(), "{visible}");
+    }
+
+    #[test]
+    fn direct_mcp_shell_keeps_stdout_without_actor_bookkeeping() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut server = McpServer::new(directory.path().to_path_buf());
+
+        // A pipeline would choose actor mode under the normal Yeet auto policy.
+        // MCP defaults it to direct because the external MCP client is the actor.
+        let response = server
+            .handle(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"tools/call",
+                "params":{
+                    "name":"run_shell",
+                    "arguments":{"command":"printf 'alpha\\n' | cat"}
+                }
+            }))
+            .expect("tools/call response");
+
+        let result = &response["result"];
+        assert_eq!(result["isError"], json!(false), "{response}");
+        assert!(result.get("structuredContent").is_none(), "{response}");
+
+        let text = result["content"][0]["text"].as_str().expect("text content");
+        let visible: Value = serde_json::from_str(text).expect("compact shell JSON");
+        assert_eq!(visible["exitCode"], json!(0), "{visible}");
+        assert_eq!(visible["stdout"], json!("alpha\n"), "{visible}");
+        for key in [
+            "route",
+            "command",
+            "workingDirectory",
+            "succeeded",
+            "durationMilliseconds",
+            "stdoutBytes",
+            "stderrBytes",
+            "stdoutTruncated",
+            "stderrTruncated",
+        ] {
+            assert!(visible.get(key).is_none(), "{key} leaked: {visible}");
+        }
     }
 
     #[test]

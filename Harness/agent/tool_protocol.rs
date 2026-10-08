@@ -69,7 +69,11 @@ impl PartialToolCall {
     }
 }
 
-/// Converts structured MCP output into compact model text plus supported images.
+/// Converts structured tool output into compact model text plus supported images.
+///
+/// Raw tool results remain untouched for execution bookkeeping, evidence, replay, and UI
+/// events. This is the model-facing projection boundary: transport metadata, duplicated
+/// MCP structured payloads, and opaque cache handles are removed here.
 pub(super) fn normalize_tool_output_for_model(
     content: &str,
     vision_enabled: bool,
@@ -78,13 +82,12 @@ pub(super) fn normalize_tool_output_for_model(
         return (content.to_owned(), Vec::new());
     };
     let Some(object) = value.as_object() else {
-        return (content.to_owned(), Vec::new());
+        return (render_model_value(&value), Vec::new());
     };
     let Some(items) = object.get("content").and_then(Value::as_array) else {
-        return (content.to_owned(), Vec::new());
+        return (render_model_value(&value), Vec::new());
     };
 
-    let structured = object.get("structuredContent");
     let mut lines = Vec::new();
     let mut images = Vec::new();
     for item in items {
@@ -98,17 +101,12 @@ pub(super) fn normalize_tool_output_for_model(
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
                 {
-                    let parsed = serde_json::from_str::<Value>(text).ok();
-                    if parsed
-                        .as_ref()
-                        .is_some_and(|value| Some(value) == structured)
-                    {
-                        continue;
+                    let rendered = serde_json::from_str::<Value>(text)
+                        .map(|value| render_model_value(&value))
+                        .unwrap_or_else(|_| text.to_owned());
+                    if !rendered.is_empty() {
+                        lines.push(rendered);
                     }
-                    lines.push(match parsed {
-                        Some(value @ (Value::Object(_) | Value::Array(_))) => value.to_string(),
-                        _ => text.to_owned(),
-                    });
                 }
             }
             "image" => {
@@ -149,37 +147,123 @@ pub(super) fn normalize_tool_output_for_model(
         }
     }
 
-    if let Some(structured) = structured {
-        lines.push(format!("Structured output: {structured}"));
+    // content is the canonical model-facing representation. MCP structuredContent
+    // is frequently the same payload wrapped in workspace/transport metadata, so it
+    // is only a fallback when the server supplied no usable content at all.
+    if lines.is_empty()
+        && let Some(structured) = object.get("structuredContent")
+    {
+        let rendered = render_model_value(structured);
+        if !rendered.is_empty() {
+            lines.push(rendered);
+        }
     }
-    if object.get("isError").and_then(Value::as_bool) == Some(true) {
+    if lines.is_empty() && object.get("isError").and_then(Value::as_bool) == Some(true) {
         lines.push("Tool reported an error.".into());
     }
+
     if lines.is_empty() {
-        (sanitize_tool_json_for_model(&value).to_string(), images)
+        (render_model_value(&value), images)
     } else {
         (lines.join("\n"), images)
     }
 }
 
-/// Removes large binary payloads before returning generic structured output to a model.
-fn sanitize_tool_json_for_model(value: &Value) -> Value {
+/// Produces a semantic model-facing JSON projection without mutating the raw result.
+fn project_tool_json_for_model(value: &Value) -> Value {
     match value {
-        Value::Array(values) => {
-            Value::Array(values.iter().map(sanitize_tool_json_for_model).collect())
-        }
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(project_tool_json_for_model)
+                .filter(|value| !value.is_null())
+                .collect(),
+        ),
         Value::Object(object) => {
-            let mut sanitized = serde_json::Map::new();
-            for (key, value) in object {
-                if key == "data" && value.as_str().is_some_and(|text| text.len() > 512) {
-                    sanitized.insert(key.clone(), Value::String("[binary data omitted]".into()));
-                } else {
-                    sanitized.insert(key.clone(), sanitize_tool_json_for_model(value));
-                }
+            if let Some(payload) = mcp_structured_payload(object) {
+                return project_tool_json_for_model(payload);
             }
-            Value::Object(sanitized)
+
+            let synchronous_shell = looks_like_synchronous_shell_result(object);
+            let mut projected = serde_json::Map::new();
+            for (key, value) in object {
+                if value.is_null()
+                    || matches!(
+                        key.as_str(),
+                        "_meta"
+                            | "resultType"
+                            | "route"
+                            | "durationMilliseconds"
+                            | "stdoutBytes"
+                            | "stderrBytes"
+                            | "requestedStartLine"
+                            | "requestedEndLine"
+                            | "refreshReplay"
+                            | "snapshot"
+                            | "duplicateReadBytesAvoided"
+                            | "contentAlreadyReturned"
+                    )
+                    || (synchronous_shell
+                        && matches!(key.as_str(), "command" | "workingDirectory" | "succeeded"))
+                    || (matches!(key.as_str(), "stdoutTruncated" | "stderrTruncated")
+                        && value.as_bool() == Some(false))
+                    || (key == "data" && value.as_str().is_some_and(|text| text.len() > 512))
+                {
+                    continue;
+                }
+
+                let projected_value = project_tool_json_for_model(value);
+                if projected_value.is_null()
+                    || projected_value
+                        .as_array()
+                        .is_some_and(|values| values.is_empty())
+                    || projected_value
+                        .as_object()
+                        .is_some_and(|values| values.is_empty())
+                {
+                    continue;
+                }
+                projected.insert(key.clone(), projected_value);
+            }
+            Value::Object(projected)
         }
         _ => value.clone(),
+    }
+}
+
+/// Unwraps Yeet's legacy MCP structuredContent envelope when it contains no
+/// information beyond the actual result plus transport metadata.
+fn mcp_structured_payload<'a>(object: &'a serde_json::Map<String, Value>) -> Option<&'a Value> {
+    let result = object.get("result")?;
+    object
+        .keys()
+        .all(|key| {
+            matches!(
+                key.as_str(),
+                "result" | "workspace" | "status" | "resultType" | "_meta"
+            )
+        })
+        .then_some(result)
+}
+
+fn looks_like_synchronous_shell_result(object: &serde_json::Map<String, Value>) -> bool {
+    !object.contains_key("status")
+        && object.contains_key("exitCode")
+        && (object.contains_key("stdout")
+            || object.contains_key("stderr")
+            || object.contains_key("stdoutBytes")
+            || object.contains_key("durationMilliseconds")
+            || object.contains_key("route"))
+}
+
+fn render_model_value(value: &Value) -> String {
+    let projected = project_tool_json_for_model(value);
+    match projected {
+        Value::Null => String::new(),
+        Value::String(text) => text,
+        Value::Object(ref object) if object.is_empty() => String::new(),
+        Value::Array(ref values) if values.is_empty() => String::new(),
+        other => other.to_string(),
     }
 }
 
@@ -349,5 +433,101 @@ mod tests {
         let first = PartialToolCall::new(0, None, Some("lookup".into())).finish();
         let second = PartialToolCall::new(0, None, Some("lookup".into())).finish();
         assert_ne!(first.id, second.id);
+    }
+
+    #[test]
+    fn mcp_content_is_not_repeated_from_structured_content() {
+        let payload = json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"value\":42,\"durationMilliseconds\":8}"
+            }],
+            "structuredContent": {
+                "workspace": "/tmp/project",
+                "result": {"value":42,"durationMilliseconds":8}
+            },
+            "isError": false
+        })
+        .to_string();
+
+        let (text, images) = normalize_tool_output_for_model(&payload, false);
+
+        assert!(images.is_empty());
+        assert_eq!(text, "{\"value\":42}");
+        assert!(!text.contains("Structured output"));
+        assert!(!text.contains("/tmp/project"));
+    }
+
+    #[test]
+    fn shell_projection_keeps_output_and_drops_execution_bookkeeping() {
+        let payload = json!({
+            "route": "actor",
+            "command": "printf ok",
+            "workingDirectory": "/tmp/project",
+            "exitCode": 0,
+            "succeeded": true,
+            "durationMilliseconds": 12,
+            "stdoutBytes": 3,
+            "stderrBytes": 0,
+            "stdoutTruncated": false,
+            "stderrTruncated": false,
+            "stdout": "ok\n",
+            "stderr": null
+        })
+        .to_string();
+
+        let (text, _) = normalize_tool_output_for_model(&payload, false);
+        let projected: Value = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(projected["exitCode"], json!(0));
+        assert_eq!(projected["stdout"], json!("ok\n"));
+        for key in [
+            "route",
+            "command",
+            "workingDirectory",
+            "succeeded",
+            "durationMilliseconds",
+            "stdoutBytes",
+            "stderrBytes",
+            "stdoutTruncated",
+            "stderrTruncated",
+            "stderr",
+        ] {
+            assert!(
+                projected.get(key).is_none(),
+                "{key} leaked into model output"
+            );
+        }
+    }
+
+    #[test]
+    fn structured_only_result_unwraps_yeet_transport_envelope() {
+        let payload = json!({
+            "content": [],
+            "structuredContent": {
+                "workspace": "/tmp/project",
+                "result": {
+                    "path": "src/main.rs",
+                    "snapshot": "opaque-cache-handle",
+                    "requestedStartLine": 1,
+                    "requestedEndLine": 5,
+                    "startLine": 1,
+                    "endLine": 5,
+                    "lines": "1:abcd|fn main() {}"
+                }
+            },
+            "isError": false
+        })
+        .to_string();
+
+        let (text, _) = normalize_tool_output_for_model(&payload, false);
+        let projected: Value = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(projected["path"], json!("src/main.rs"));
+        assert_eq!(projected["lines"], json!("1:abcd|fn main() {}"));
+        assert!(projected.get("workspace").is_none());
+        assert!(projected.get("snapshot").is_none());
+        assert!(projected.get("requestedStartLine").is_none());
+        assert!(projected.get("requestedEndLine").is_none());
     }
 }
