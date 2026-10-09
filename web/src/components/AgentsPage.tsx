@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { Lock } from '@/components/Icons'
-import { formatTokens } from '@/ui/format'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 import type { AgentControl, AgentTone } from '@/remote/protocol'
 
@@ -97,7 +96,6 @@ export function AgentsPage() {
                 case 'members': return selected ? <section key={section.kind}>
                   <h2>{selected.member.description || selected.member.role}</h2>
                   <p>{selected.member.summary || 'No summary yet.'}</p>
-                  <p className="page-meta">{selected.member.role} · {selected.member.model || 'default model'} · {formatTokens(selected.member.inputTokens)} in · {formatTokens(selected.member.outputTokens)} out</p>
                   <div className="page-actions">{view.selection_controls.map(item => control(item, item.action.type === 'stop' || item.action.type === 'remove' ? 'danger' : 'secondary'))}</div>
                 </section> : null
                 case 'activity': return <section key={section.kind}>
@@ -114,17 +112,7 @@ export function AgentsPage() {
                   <h2>{section.label}</h2>
                   {view.findings.map((finding, index) => <p key={`${finding.task_id}:${index}`}><strong>{finding.actor}</strong> {finding.summary}</p>)}
                 </section> : null
-                case 'budget': return <section key={section.kind}>
-                  <h2>{section.label}</h2>
-                  {view.budget.output_limit > 0 && <div className="page-meter">
-                    <progress value={view.budget.output_percent} max={100} aria-label="Output tokens" />
-                    <span>{formatTokens(view.budget.output_used)} of {formatTokens(view.budget.output_limit)} output tokens</span>
-                  </div>}
-                  {view.budget.cost_limit > 0 && <div className="page-meter">
-                    <progress value={view.budget.cost_percent} max={100} aria-label="Estimated cost" />
-                    <span>{view.budget.cost_used == null ? 'Cost not reported' : `$${view.budget.cost_used.toFixed(2)}`} of ${view.budget.cost_limit.toFixed(2)}</span>
-                  </div>}
-                </section>
+
               }
             })}
             {view.state.input_focused && <form className="page-form" onSubmit={event => { event.preventDefault(); submit() }}>

@@ -105,39 +105,9 @@ pub struct AgentGroupItem {
     pub activity: Vec<AgentActivityItem>,
     /// RFC 3339 time of the first member launch.
     pub started_at: Option<String>,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub estimated_cost_usd: Option<f64>,
-    pub budget: AgentGroupBudgetItem,
     /// Oldest first; each event carries stable group/member/task identity.
     pub events: Vec<AgentGroupEventItem>,
     pub shared_findings: Vec<AgentGroupFindingItem>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AgentGroupBudgetItem {
-    pub output_limit_tokens: u64,
-    pub output_used_tokens: u64,
-    pub cost_limit_usd: f64,
-    pub estimated_cost_used_usd: Option<f64>,
-    pub coordination_reserve_tokens: u64,
-    pub synthesis_reserve_tokens: u64,
-    pub coordination_reserve_cost_usd: f64,
-    pub synthesis_reserve_cost_usd: f64,
-    pub tasks: Vec<AgentTaskBudgetItem>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AgentTaskBudgetItem {
-    pub task_id: String,
-    pub allocated_output_tokens: u64,
-    pub used_output_tokens: u64,
-    pub remaining_output_tokens: u64,
-    pub allocated_cost_usd: f64,
-    pub estimated_cost_used_usd: Option<f64>,
-    pub context_window_tokens: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -176,8 +146,6 @@ pub struct AgentMemberItem {
     pub task_status: String,
     pub summary: Option<String>,
     pub started_at: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -420,7 +388,6 @@ impl Default for RuntimeSettingsState {
     }
 }
 
-/// User-tunable limits and behavior for Group Agents.
 /// Persisted globally; whether a session uses Group Agent tools is its `AgentMode`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
@@ -428,40 +395,12 @@ pub struct AgentGroupSettings {
     /// Allow the Main Agent to delegate eligible work to a Group Agent.
     /// New sessions start with the Group Agent enabled when this is true.
     pub auto_deploy: bool,
-    /// Agents that may work at once.
-    pub max_concurrent: u32,
-    /// Agents kept alive, idle ones included.
-    pub max_members: u32,
-    /// Group-wide output-token ceiling for one Group Agent lifecycle.
-    pub max_tokens: u64,
-    /// Group-wide estimated-cost ceiling for one Group Agent lifecycle, in US cents.
-    pub max_cost_cents: u64,
     /// `single_writer` or `primary_only`.
     pub write_policy: String,
 }
 
 impl AgentGroupSettings {
-    pub const MAX_CONCURRENT: u32 = 16;
-    pub const MAX_MEMBERS: u32 = 32;
-    pub const MIN_TOKENS: u64 = 10_000;
-    pub const MAX_TOKENS: u64 = 10_000_000;
-    pub const MIN_COST_CENTS: u64 = 10;
-    pub const MAX_COST_CENTS: u64 = 100_000;
-
-    /// Clamps every field into range; the pool never holds fewer agents than
-    /// may run at once.
-    pub fn normalized(mut self) -> Self {
-        self.max_concurrent = self.max_concurrent.clamp(1, Self::MAX_CONCURRENT);
-        self.max_members = self
-            .max_members
-            .clamp(self.max_concurrent, Self::MAX_MEMBERS);
-        self.max_tokens = self.max_tokens.clamp(Self::MIN_TOKENS, Self::MAX_TOKENS);
-        self.max_cost_cents = self
-            .max_cost_cents
-            .clamp(Self::MIN_COST_CENTS, Self::MAX_COST_CENTS);
-        if self.write_policy != "primary_only" {
-            self.write_policy = "single_writer".into();
-        }
+    pub fn normalized(self) -> Self {
         self
     }
 }
@@ -470,10 +409,6 @@ impl Default for AgentGroupSettings {
     fn default() -> Self {
         Self {
             auto_deploy: false,
-            max_concurrent: 4,
-            max_members: 8,
-            max_tokens: 200_000,
-            max_cost_cents: 200,
             write_policy: "single_writer".into(),
         }
     }

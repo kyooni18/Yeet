@@ -731,7 +731,8 @@ select:focus-visible {
 }
 
 
-.activity-group {
+.activity-group,
+.reasoning-trace {
   width: 100%;
   margin: 0 0 11px;
   padding-right: 28px;

@@ -1,0 +1,50 @@
+import { Animation, Button, Element, State, Text, VStack } from 'vune-ui'
+import { mount } from '@vune-ui/web'
+import './style.css'
+
+const isLaunched = State(false)
+
+struct HelloFromVune: View {
+  var body: some View {
+    Element('main', { className: 'page' },
+      VStack(spacing: 24) {
+        Element('div', { className: 'eyebrow' }, Text('A TINY MOTION DEMO'))
+        Element('h1', { className: 'title' }, Text('Hello from Vune'))
+        Element('p', { className: 'description' },
+          Text('A little spring, powered by Native Vune.')
+        )
+
+        Element('section', { className: 'demo', 'aria-label': 'Spring motion demo' },
+          Element('div', { className: 'demo-topline' },
+            Element('span', { className: 'demo-label' }, Text('SPRING MOTION')),
+            Element('span', { className: 'demo-spec' }, Text('big bounce · slow settle'))
+          ),
+          Element('div', { className: 'motion-stage' },
+            Element('div', { className: 'stage-rail' }),
+            Text('✦')
+              .className('motion-star')
+              .offset(isLaunched.value ? 148 : -148, 0)
+              .scaleEffect(isLaunched.value ? 1.3 : 0.72)
+              .rotationEffect(isLaunched.value ? 420 : -60)
+              .animation(Animation.spring(2.1, 0.5), isLaunched.value)
+          ),
+          Element('div', { className: 'motion-caption' },
+            Text(isLaunched.value ? 'Nice landing. Run it again?' : 'Tap play and watch it spring across.')
+          )
+        ),
+
+        Button(isLaunched.value ? 'Replay spring' : 'Play with spring') {
+          isLaunched.value = !isLaunched.value
+        }.className('button'),
+
+        Element('div', { className: 'footer-note' },
+          Text('Built with Vune views · animated with spring physics')
+        )
+      }.className('content')
+    )
+  }
+}
+
+const root = document.getElementById('app')
+if (!root) throw new Error('Missing app root')
+mount(HelloFromVune(), root)

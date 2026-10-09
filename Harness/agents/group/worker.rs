@@ -38,8 +38,7 @@ pub(super) struct MemberThread {
 
 impl MemberThread {
     pub(super) fn run(mut self) {
-        while let Some((task_id, input, cancel, output_cap)) = self.next_message() {
-            self.runner.set_output_cap(output_cap);
+        while let Some((task_id, input, cancel)) = self.next_message() {
             self.shared.changed();
             let shared = self.shared.clone();
             let generation = self.generation;
@@ -74,14 +73,7 @@ impl MemberThread {
 
     /// Blocks until a message is queued. Returns `None` when this thread
     /// should exit.
-    fn next_message(
-        &self,
-    ) -> Option<(
-        AgentTaskId,
-        String,
-        Arc<AtomicBool>,
-        Arc<std::sync::atomic::AtomicU64>,
-    )> {
+    fn next_message(&self) -> Option<(AgentTaskId, String, Arc<AtomicBool>)> {
         let mut state = self.shared.lock();
         loop {
             if !self.owns(&state) {
@@ -96,11 +88,6 @@ impl MemberThread {
             };
             if let Some((task_id, input)) = message {
                 let cancel = Arc::new(AtomicBool::new(false));
-                let output_cap = state
-                    .task_caps
-                    .get(&task_id)
-                    .cloned()
-                    .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicU64::new(0)));
                 if let Some(slot) = state.slots.get_mut(&self.member) {
                     slot.running = Some((task_id, cancel.clone()));
                 }
@@ -118,7 +105,7 @@ impl MemberThread {
                     "task_started",
                     "Member began its assigned task",
                 );
-                return Some((task_id, input, cancel, output_cap));
+                return Some((task_id, input, cancel));
             }
             state = self.shared.wait(state, IDLE_RECHECK);
         }
@@ -177,7 +164,7 @@ impl MemberThread {
                 };
                 task.outcome = Some(task.status.as_str().into());
                 task.summary = Some(if cancelled {
-                    "cancelled (budget exhausted or interrupted)".into()
+                    "cancelled".into()
                 } else {
                     error.to_string()
                 });
@@ -226,8 +213,6 @@ impl MemberThread {
             },
             task.summary.as_deref().unwrap_or(task.status.as_str()),
         );
-        state.budget.complete_task(&task_id.to_string());
-        state.sync_budget_projection();
         true
     }
 
@@ -284,18 +269,14 @@ fn record_usage(
     if state.group.generation != generation {
         return;
     }
-    let ledger_key = format!("{member}:{task_id}:{event_key}");
-    if !state
-        .budget
-        .account(&task_id.to_string(), &ledger_key, usage)
-    {
+    let event_key = format!("{member}:{task_id}:{event_key}");
+    if !state.group.record_usage_once(event_key.clone()) {
         return;
     }
     state.group.usage.accumulate(usage);
     if let Some(task) = state.group.task_mut(task_id) {
         task.usage.accumulate(usage);
     }
-    state.sync_budget_projection();
     state.group.record_event(
         Some(member),
         Some(task_id),

@@ -326,7 +326,7 @@ impl HarnessService {
             .set_agent_group_settings(settings)
             .map(|settings| {
                 self.agent_groups
-                    .set_limits(crate::agents::group::AgentLimits::from(&settings));
+                    .set_policy(crate::agents::group::AgentGroupPolicy::from(&settings));
             });
         let active_model = self.shared.lock_or_recover().state.active_model.clone();
         self.finish_runtime_setting(result, &active_model, "Agent Group settings updated.");

@@ -338,7 +338,6 @@ impl RunWorker {
                     cancel: run.cancel.clone(),
                     goal_mode: self.goal_mode.clone(),
                     continuation: cycle_continuation,
-                    max_output_tokens: None,
                 },
                 |event| self.project_event(&run.id, event),
             )?;

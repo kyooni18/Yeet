@@ -27,9 +27,7 @@ use crate::{
 };
 
 use super::{
-    AgentLimits,
-    budget_ledger::{BudgetLedger, TaskNeed},
-    scheduler,
+    AgentGroupPolicy, scheduler,
     state::{AgentGroupCheckpoint, GroupRuntimeState, MemberSlot},
     worker::MemberThread,
 };
@@ -44,9 +42,8 @@ pub(crate) type ChangeListener =
 pub(super) struct GroupShared {
     state: Mutex<GroupRuntimeState>,
     signal: Condvar,
-    limits: Mutex<AgentLimits>,
+    policy: Mutex<AgentGroupPolicy>,
     listener: Mutex<Option<ChangeListener>>,
-    coordinator_output_cap: Arc<std::sync::atomic::AtomicU64>,
     coordinator_cancel: Arc<AtomicBool>,
 }
 
@@ -57,8 +54,8 @@ impl GroupShared {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub(super) fn limits(&self) -> AgentLimits {
-        self.limits
+    pub(super) fn policy(&self) -> AgentGroupPolicy {
+        self.policy
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -105,25 +102,19 @@ impl GroupShared {
 pub(crate) struct AgentGroupRuntime {
     launcher: Arc<dyn MemberLauncher>,
     shared: Arc<GroupShared>,
-    /// Serializes admission with launch so concurrent spawns cannot both
-    /// pass the same limit check.
+    /// Serializes workspace-policy admission with launch so requests see current group state.
     spawn_lock: Arc<Mutex<()>>,
 }
 
 impl AgentGroupRuntime {
-    pub(crate) fn new(launcher: Arc<dyn MemberLauncher>, limits: AgentLimits) -> Self {
-        let budget = BudgetLedger::new(limits.budget_limits());
-        let coordinator_output_cap = Arc::new(std::sync::atomic::AtomicU64::new(
-            limits.budget_limits().coordination_output_reserve,
-        ));
+    pub(crate) fn new(launcher: Arc<dyn MemberLauncher>, policy: AgentGroupPolicy) -> Self {
         Self {
             launcher,
             shared: Arc::new(GroupShared {
-                state: Mutex::new(GroupRuntimeState::new(0, None, budget)),
+                state: Mutex::new(GroupRuntimeState::new(0, None)),
                 signal: Condvar::new(),
-                limits: Mutex::new(limits),
+                policy: Mutex::new(policy),
                 listener: Mutex::new(None),
-                coordinator_output_cap,
                 coordinator_cancel: Arc::new(AtomicBool::new(false)),
             }),
             spawn_lock: Arc::new(Mutex::new(())),
@@ -138,23 +129,17 @@ impl AgentGroupRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(listener);
     }
 
-    /// Applies new limits to later admissions; running work is not cut short.
-    pub(crate) fn set_limits(&self, limits: AgentLimits) {
-        {
-            let mut state = self.shared.lock();
-            state.budget.set_limits(limits.budget_limits());
-            state.sync_budget_projection();
-        }
+    pub(crate) fn set_policy(&self, policy: AgentGroupPolicy) {
         *self
             .shared
-            .limits
+            .policy
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = limits;
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = policy;
         self.shared.changed();
     }
 
     pub(crate) fn group_guidance(&self) -> Option<String> {
-        self.shared.limits().group_guidance()
+        self.shared.policy().group_guidance()
     }
 
     pub(crate) fn restore_checkpoint(&self, mut checkpoint: AgentGroupCheckpoint) -> Result<()> {
@@ -182,7 +167,6 @@ impl AgentGroupRuntime {
                             "Interrupted when the session was restored; resume from the group checkpoint.".into(),
                         );
                     }
-                    checkpoint.budget.complete_task(&task.id.to_string());
                 }
             }
             if checkpoint.group.status == "running" {
@@ -198,19 +182,11 @@ impl AgentGroupRuntime {
                 group: checkpoint.group,
                 checkpoint_revision: checkpoint.revision,
                 slots: Default::default(),
-                task_caps: Default::default(),
-                budget: checkpoint.budget,
             };
-            state.sync_budget_projection();
         }
         self.shared
             .coordinator_cancel
             .store(false, Ordering::Release);
-        let limits = self.shared.limits();
-        self.shared.coordinator_output_cap.store(
-            limits.budget_limits().coordination_output_reserve,
-            Ordering::Release,
-        );
         self.shared.changed();
         Ok(())
     }
@@ -310,15 +286,6 @@ impl AgentGroupRuntime {
             state
                 .group
                 .record_event(None, None, "group_started", "Coordinator started");
-            let phase = if state.group.synthesis_started {
-                "synthesis"
-            } else {
-                "coordination"
-            };
-            self.shared.coordinator_output_cap.store(
-                state.budget.remaining_phase_output(phase),
-                Ordering::Release,
-            );
         }
         self.shared.changed();
         Ok(())
@@ -335,12 +302,10 @@ impl AgentGroupRuntime {
     pub(crate) fn record_coordinator_usage(&self, event_key: &str, usage: &Usage) {
         {
             let mut state = self.shared.lock();
-            let phase = if state.group.synthesis_started {
-                "__synthesis"
-            } else {
-                "__coordination"
-            };
-            if !state.budget.account(phase, event_key, usage) {
+            if !state
+                .group
+                .record_usage_once(format!("coordinator:{event_key}"))
+            {
                 return;
             }
             state.group.usage.accumulate(usage);
@@ -353,16 +318,6 @@ impl AgentGroupRuntime {
                     usage.output_tokens.unwrap_or(0)
                 ),
             );
-            state.sync_budget_projection();
-            let phase = if state.group.synthesis_started {
-                "synthesis"
-            } else {
-                "coordination"
-            };
-            self.shared.coordinator_output_cap.store(
-                state.budget.remaining_phase_output(phase),
-                Ordering::Release,
-            );
         }
         self.shared.changed();
     }
@@ -371,32 +326,11 @@ impl AgentGroupRuntime {
         {
             let mut state = self.shared.lock();
             state.group.synthesis_started = true;
-            state.group.record_event(
-                None,
-                None,
-                "synthesis_started",
-                "Reserved synthesis budget activated",
-            );
-            self.shared.coordinator_output_cap.store(
-                state.budget.remaining_phase_output("synthesis"),
-                Ordering::Release,
-            );
+            state
+                .group
+                .record_event(None, None, "synthesis_started", "Synthesis phase started");
         }
         self.shared.changed();
-    }
-
-    pub(crate) fn coordinator_output_cap(&self) -> Arc<std::sync::atomic::AtomicU64> {
-        self.shared.coordinator_output_cap.clone()
-    }
-
-    pub(crate) fn coordinator_cost_budget(&self) -> f64 {
-        let state = self.shared.lock();
-        let phase = if state.group.synthesis_started {
-            "synthesis"
-        } else {
-            "coordination"
-        };
-        state.budget.remaining_phase_cost(phase)
     }
 
     pub(crate) fn coordinator_cancel(&self) -> Arc<AtomicBool> {
@@ -495,38 +429,16 @@ impl AgentGroupRuntime {
             .spawn_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let cost_budget_usd = {
+        let selected_model = model.to_owned();
+        let (generation, spawned_by, scoped_prompt) = {
             let state = self.shared.lock();
-            state
-                .budget
-                .prospective_cost_allocation(request.role, request.weight)
-        };
-        let selected_model = self
-            .launcher
-            .model_for_budget(model, request.role, cost_budget_usd);
-        let context_window_tokens = self
-            .launcher
-            .context_window_tokens(&selected_model)
-            .unwrap_or_default();
-        let (generation, spawned_by, retire, scoped_prompt) = {
-            let state = self.shared.lock();
-            let retire = scheduler::admit_spawn(
-                &self.shared.limits(),
-                &state.group,
-                &state.budget,
-                request.role,
-                request.weight,
-            )?;
+            scheduler::check_spawn(&self.shared.policy(), &state.group, request.role)?;
             (
                 state.group.generation,
                 state.group.primary_agent,
-                retire,
                 state.group.task_context(&request.prompt),
             )
         };
-        if let Some(idle) = retire {
-            self.retire(idle, "retired to make room for a new agent");
-        }
         let (member_id, runner) = self.launcher.launch(&MemberSpec {
             role: request.role,
             description: request.description.clone(),
@@ -568,16 +480,6 @@ impl AgentGroupRuntime {
                 &request.description,
             );
             state.group.tasks.push(task);
-            state.budget.add_task(TaskNeed {
-                task_id: task_id.to_string(),
-                role: request.role,
-                weight: request.weight,
-                context_window_tokens,
-            });
-            state
-                .task_caps
-                .insert(task_id, Arc::new(std::sync::atomic::AtomicU64::new(0)));
-            state.sync_budget_projection();
             let mut slot = MemberSlot::default();
             slot.inbox.push_back((task_id, scoped_prompt));
             state.slots.insert(member_id, slot);
@@ -617,7 +519,7 @@ impl AgentGroupRuntime {
                 .member(to)
                 .ok_or_else(|| anyhow!("unknown agent: {to}"))?
                 .clone();
-            scheduler::admit_message(&self.shared.limits(), &state.group, &state.budget, &member)?;
+            scheduler::check_message(&self.shared.policy(), &state.group, &member)?;
             if !state.slots.contains_key(&to) {
                 bail!("agent {to} is no longer running");
             }
@@ -636,19 +538,6 @@ impl AgentGroupRuntime {
                 .ok_or_else(|| anyhow!("agent {to} is no longer running"))?;
             slot.inbox.push_back((task_id, scoped_prompt));
             state.group.tasks.push(task);
-            state.budget.add_task(TaskNeed {
-                task_id: task_id.to_string(),
-                role: member.role,
-                weight: 1.0,
-                context_window_tokens: self
-                    .launcher
-                    .context_window_tokens(&member.model)
-                    .unwrap_or_default(),
-            });
-            state
-                .task_caps
-                .insert(task_id, Arc::new(std::sync::atomic::AtomicU64::new(0)));
-            state.sync_budget_projection();
             if let Some(member) = state.group.member_mut(to) {
                 member.status = MemberStatus::Running;
                 member.activity_state = "queued".into();
@@ -765,13 +654,7 @@ impl AgentGroupRuntime {
             }
             let generation = state.group.generation.wrapping_add(1);
             let primary_agent = state.group.primary_agent;
-            let limits = self.shared.limits();
-            let budget = BudgetLedger::new(limits.budget_limits());
-            self.shared.coordinator_output_cap.store(
-                limits.budget_limits().coordination_output_reserve,
-                Ordering::Release,
-            );
-            *state = GroupRuntimeState::new(generation, primary_agent, budget);
+            *state = GroupRuntimeState::new(generation, primary_agent);
         }
         self.shared.changed();
     }

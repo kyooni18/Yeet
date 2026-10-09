@@ -636,6 +636,17 @@ export class OpenAIProvider implements ProviderAdapter {
         const title = raw.type.includes("web_search") ? "Searching web"
           : raw.type.includes("file_search") ? "Searching files" : "Running remote code";
         yield { type: "activity", title, detail: "Provider-managed tool" };
+      } else if (raw.type === "response.output_item.added"
+          && (raw.item?.type === "shell_call" || raw.item?.type === "local_shell_call")) {
+        const commands = raw.item.action?.commands;
+        const command = Array.isArray(commands)
+          ? commands.filter((part: unknown): part is string => typeof part === "string").join(" && ")
+          : undefined;
+        yield {
+          type: "activity",
+          title: raw.item.type === "local_shell_call" ? "Running local shell" : "Running shell",
+          ...(command ? { detail: command } : {}),
+        };
       } else if (raw.type === "response.output_item.added" && raw.item?.type === "function_call") {
         const index = raw.output_index ?? 0;
         const current: { id?: string; name?: string; argumentsText: string } = {

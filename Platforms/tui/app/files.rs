@@ -516,6 +516,7 @@ mod tests {
         files.count = Some(3);
         files.open_path(second.clone(), false);
         let second_id = files.active_tab().unwrap();
+        assert_ne!(first_id, second_id);
         assert!(!files.info);
         assert_eq!(files.find, None);
         files.activate_tab(first_id);

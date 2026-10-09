@@ -23,7 +23,7 @@ pub(crate) fn tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition::new(
             CREATE_TOOL,
-            "Create a Group Agent for one shared objective. The group owns decomposition, role-specific delegation, shared findings, its budget, and the integrated result.",
+            "Create a Group Agent for one shared objective. The group owns decomposition, role-specific delegation, shared findings, and the integrated result.",
             json!({
                 "type":"object",
                 "properties":{"objective":{"type":"string","minLength":1,"maxLength":12000}},
@@ -53,7 +53,7 @@ pub(crate) fn tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             INSPECT_TOOL,
-            "Inspect the Group Agent lifecycle, member states, shared findings, event stream, and remaining budget.",
+            "Inspect the Group Agent lifecycle, member states, shared findings, and event stream.",
             group_id_schema(),
         ),
     ]

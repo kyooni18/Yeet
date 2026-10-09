@@ -10,7 +10,7 @@ older reasoning in the live status.
 
 | Yeet route | Wire protocol | Visible model information | Continuation and cache behavior |
 | --- | --- | --- | --- |
-| `codex-cli` (ChatGPT subscription) | Streaming Responses over OAuth | Reasoning summary parts; explicit reasoning phase; hosted-tool activity | Streaming-only, `store: false`; signed reasoning items retained; API-only request fields removed |
+| `codex-cli` (ChatGPT subscription) | Streaming Responses over OAuth | Reasoning summary parts; explicit reasoning phase; hosted-tool and Codex shell-call activity | Streaming-only, `store: false`; signed reasoning items retained; API-only request fields removed |
 | `openai` (API) | Responses | Summary deltas and done-only summaries, compatible plaintext reasoning, hosted-tool activity | Reasoning items including encrypted state replayed only for the same provider/model; stable context cache affinity |
 | `claude` (subscription), `anthropic`, `claude-api` | Messages over OAuth or API key | Visible thinking summaries and progress updates; hidden thinking phase; server-managed tool activity | Existing thinking mode, budgets, sampling controls, and authentication routes preserved; signed/redacted blocks replayed unchanged; four cache breakpoints; one-hour cache write pricing shared by aliases |
 | `gemini` (API), `gemini-web` (Code Assist) | GenerateContent, optionally Code Assist envelope | `thought: true` text is a model summary | `includeThoughts` requested for supported models; explicit opt-outs preserved; thought signatures retained for continuation; output usage includes thinking tokens and input usage includes tool-use prompts |

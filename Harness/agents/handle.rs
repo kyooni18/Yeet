@@ -315,18 +315,6 @@ impl AgentGroupHandle {
             .ok_or_else(|| anyhow!("Agent Group has no objective"))?;
         self.runtime.begin_group(group_id)?;
         let group_cancel = self.runtime.coordinator_cancel();
-        let output_cap = self.runtime.coordinator_output_cap();
-        let coordinator_model = factory.model_for_budget(
-            model,
-            crate::agents::member::AgentRole::Researcher,
-            self.runtime.coordinator_cost_budget(),
-        );
-        if coordinator_model != model {
-            self.runtime.record_coordinator_event(
-                "model_selected_for_budget",
-                &format!("Group coordinator selected {coordinator_model} within its shared budget"),
-            );
-        }
         let (outcome, result_text) = {
             let mut state = lock_slot(slot);
             state.run_sequence = state.run_sequence.saturating_add(1);
@@ -360,14 +348,13 @@ impl AgentGroupHandle {
                     AgentRunRequest {
                         input: &input,
                         images: Vec::new(),
-                        model: &coordinator_model,
+                        model,
                         reasoning_level: "auto",
                         attached_capabilities: None,
                         disabled_capabilities: Vec::new(),
                         goal_mode,
                         cancel: group_cancel.clone(),
                         continuation: continuation && !fresh_coordinator,
-                        max_output_tokens: Some(output_cap),
                     },
                     |event| match event {
                         AgentEvent::ModelAttemptFinished(_, Some(usage)) => {

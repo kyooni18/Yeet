@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bot, Check, CircleAlert, Plus, RotateCw, Send, Settings, Square, X } from '@/components/Icons'
-import { formatTokens } from '@/ui/format'
 import { remoteStore, useRemote } from '@/store/remoteStore'
 import type { AgentControl, AgentIcon } from '@/remote/protocol'
 
@@ -118,8 +117,6 @@ export function AgentsSheet({ open, onClose }: { open: boolean; onClose: () => v
                       {selectedMember && <div className="agent-member-detail">
                         <div className="agent-card-heading"><strong>{selectedMember.member.description || selectedMember.member.role}</strong><span>{selectedMember.status.label}</span></div>
                         <p>{selectedMember.member.summary || 'No member summary yet.'}</p>
-                        <div className="agent-usage-pair"><span>{formatTokens(selectedMember.member.inputTokens)} input tokens</span>
-                          <span>{formatTokens(selectedMember.member.outputTokens)} output tokens</span></div>
                       </div>}
                       <div className="agent-lifecycle">{view.selection_controls.map(item => control(item))}</div>
                     </section>
@@ -139,25 +136,7 @@ export function AgentsSheet({ open, onClose }: { open: boolean; onClose: () => v
                       <strong>{finding.actor}</strong><p>{finding.summary}</p>
                     </div>)}
                   </section>
-                  case 'budget': return <section key={section.kind} style={style} className="agent-card agent-budget">
-                    <div className="agent-card-heading"><strong>{section.label}</strong><span>Usage and limits are shown separately</span></div>
-                    <div className="agent-budget-grid">
-                      {view.budget.output_limit > 0 && <div className="agent-budget-metric">
-                        <div><strong>Output tokens</strong><span>{formatTokens(view.budget.output_used)} / {formatTokens(view.budget.output_limit)}</span></div>
-                        <progress value={view.budget.output_percent} max={100} />
-                        <small>{formatTokens(group.budget.coordinationReserveTokens)} coordination · {formatTokens(group.budget.synthesisReserveTokens)} synthesis reserved</small>
-                      </div>}
-                      {view.budget.cost_limit > 0 && <div className="agent-budget-metric">
-                        <div><strong>Estimated cost</strong><span>{view.budget.cost_used == null ? 'Not reported' : `$${view.budget.cost_used.toFixed(2)}`} / ${view.budget.cost_limit.toFixed(2)}</span></div>
-                        <progress value={view.budget.cost_percent} max={100} />
-                        <small>${group.budget.coordinationReserveCostUsd.toFixed(2)} coordination · ${group.budget.synthesisReserveCostUsd.toFixed(2)} synthesis reserved</small>
-                      </div>}
-                    </div>
-                    {view.budget.tasks.length > 0 && <div className="agent-task-contexts"><span className="agent-section-label">TASK CONTEXT WINDOWS</span>
-                      {view.budget.tasks.map(task => <div key={task.task_id}><span>{task.label}</span>
-                        <small>{formatTokens(task.context_window_tokens)} context · {formatTokens(task.used)} / {formatTokens(task.allocated)} output</small></div>)}
-                    </div>}
-                  </section>
+
                 }
               })}
               </div>

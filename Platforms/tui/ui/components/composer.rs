@@ -13,10 +13,8 @@ use ratatui::{
 pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16) {
     app.sync_composer();
     let view = app.application.composer_projection().view;
-    let focused = app.input_focused
-        && !app.sidebar_focus
-        && app.mode == Mode::Chat
-        && view.editable;
+    let focused =
+        app.input_focused && !app.sidebar_focus && app.mode == Mode::Chat && view.editable;
     frame.render_widget(
         Block::default().style(Style::default().fg(theme::text()).bg(if focused {
             theme::surface_color()
@@ -25,10 +23,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16
         })),
         area,
     );
-    let portrait = super::super::support::responsive::shape(frame.area())
-        == super::super::support::responsive::Shape::Portrait;
     let top = u16::from(area.height >= 2);
-    let bottom = u16::from(portrait && area.height >= 3);
+    let bottom = u16::from(area.height >= 3);
     let text_x = text_x
         .min(area.x + area.width / 3)
         .max(area.x.saturating_add(5));
@@ -50,8 +46,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16
     );
     frame.render_widget(
         Paragraph::new(Line::styled(
-            match view.primary_control.icon { crate::shared_ui::composer::ComposerIcon::Stop => "■", _ => "→" },
-            Style::default().fg(if view.primary_control.enabled { theme::secondary() } else { theme::muted() }),
+            match view.primary_control.icon {
+                crate::shared_ui::composer::ComposerIcon::Stop => "■",
+                _ => "→",
+            },
+            Style::default().fg(if view.primary_control.enabled {
+                theme::secondary()
+            } else {
+                theme::muted()
+            }),
         )),
         Rect::new(area.right().saturating_sub(5), inner.y, 1, 1),
     );

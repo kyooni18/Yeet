@@ -92,16 +92,6 @@ pub struct FeedEntry {
     pub running: bool,
     pub tool: Option<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BudgetView {
-    pub output_limit: u64,
-    pub output_used: u64,
-    pub output_percent: f64,
-    pub cost_limit: f64,
-    pub cost_used: Option<f64>,
-    pub cost_percent: f64,
-    pub tasks: Vec<TaskBudgetView>,
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSection {
@@ -109,7 +99,6 @@ pub enum AgentSection {
     Result,
     Members,
     Activity,
-    Budget,
     Findings,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,16 +123,6 @@ pub struct FindingView {
     pub actor: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskBudgetView {
-    pub task_id: String,
-    pub label: String,
-    pub used: u64,
-    pub allocated: u64,
-    pub remaining: u64,
-    pub context_window_tokens: u64,
-    pub percent: f64,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentsView {
     pub state: AgentState,
     pub group: AgentGroupItem,
@@ -160,7 +139,6 @@ pub struct AgentsView {
     pub result: Option<String>,
     pub members: Vec<MemberView>,
     pub feed: Vec<FeedEntry>,
-    pub budget: BudgetView,
     pub active_count: usize,
     pub waiting_count: usize,
     pub settings_control: AgentControl,

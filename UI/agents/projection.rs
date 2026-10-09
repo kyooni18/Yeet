@@ -234,15 +234,6 @@ impl AgentState {
         {
             feed.retain(|entry| entry.member_id.as_ref() == Some(id));
         }
-        let budget = &group.budget;
-        let percent = |used: f64, limit: f64| {
-            if limit > 0.0 {
-                (used / limit * 100.0).clamp(0.0, 100.0)
-            } else {
-                0.0
-            }
-        };
-        let cost_used = budget.estimated_cost_used_usd.or(group.estimated_cost_usd);
         AgentsView {
             state: normalized.clone(),
             group: group.clone(),
@@ -266,18 +257,6 @@ impl AgentState {
                 .or_else(|| group.checkpoint_summary.clone()),
             members,
             feed,
-            budget: BudgetView {
-                output_limit: budget.output_limit_tokens,
-                output_used: budget.output_used_tokens,
-                output_percent: percent(
-                    budget.output_used_tokens as f64,
-                    budget.output_limit_tokens as f64,
-                ),
-                cost_limit: budget.cost_limit_usd,
-                cost_used,
-                cost_percent: percent(cost_used.unwrap_or(0.0), budget.cost_limit_usd),
-                tasks: budget.tasks.iter().map(|task| TaskBudgetView { task_id: task.task_id.clone(), label: state.agent_tasks.iter().find(|item| item.id == task.task_id).map(|item| item.objective.clone()).unwrap_or_else(|| task.task_id.clone()), used: task.used_output_tokens, allocated: task.allocated_output_tokens, remaining: task.remaining_output_tokens, context_window_tokens: task.context_window_tokens, percent: percent(task.used_output_tokens as f64, task.allocated_output_tokens as f64) }).collect(),
-            },
             active_count,
             waiting_count,
             group_controls,
@@ -287,7 +266,6 @@ impl AgentState {
                 SectionView { kind: AgentSection::Result, layout: SectionLayout::FullWidth, label: if group.final_result.is_some() { "Group result" } else { "Latest checkpoint" }.into(), visible: group.final_result.is_some() || group.checkpoint_summary.is_some() },
                 SectionView { kind: AgentSection::Members, layout: SectionLayout::Column, label: "Members".into(), visible: true },
                 SectionView { kind: AgentSection::Activity, layout: SectionLayout::Column, label: "Activity".into(), visible: true },
-                SectionView { kind: AgentSection::Budget, layout: SectionLayout::FullWidth, label: "Group budget".into(), visible: budget.output_limit_tokens > 0 || budget.output_used_tokens > 0 || budget.cost_limit_usd > 0.0 || cost_used.is_some_and(|cost| cost > 0.0) || group.input_tokens > 0 || group.output_tokens > 0 || !budget.tasks.is_empty() },
                 SectionView { kind: AgentSection::Findings, layout: SectionLayout::FullWidth, label: "Shared findings".into(), visible: !group.shared_findings.is_empty() },
             ],
         }

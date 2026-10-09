@@ -513,12 +513,7 @@ test("Claude subscription usage comes directly from the Anthropic OAuth usage AP
         subscription_type: "max",
         five_hour: { utilization: 80, resets_at: "2026-09-10T00:00:00Z" },
         seven_day: { utilization: 35, resets_at: "2026-09-15T00:00:00Z" },
-        limits: [{
-          kind: "weekly_scoped",
-          percent: 60,
-          resets_at: "2026-09-15T00:00:00Z",
-          scope: { model: { display_name: "Fable" } },
-        }],
+
       }), { status: 200, headers: { "content-type": "application/json" } });
     },
   });
@@ -528,9 +523,10 @@ test("Claude subscription usage comes directly from the Anthropic OAuth usage AP
   assert.equal(usage.source, "anthropic-oauth-api");
   assert.equal(usage.plan, "max");
   assert.equal(usage.available, true);
-  assert.ok(usage.windows.some((window) => window.label === "5h" && window.remainingPercent === 20));
-  assert.ok(usage.windows.some((window) => window.label === "7d" && window.remainingPercent === 65));
-  assert.ok(usage.windows.some((window) => window.label === "Fable 7d" && window.remainingPercent === 40));
+  assert.deepEqual(usage.windows.map(({ label, remainingPercent }) => ({ label, remainingPercent })), [
+    { label: "Week", remainingPercent: 65 },
+    { label: "5h", remainingPercent: 20 },
+  ]);
 });
 
 test("Gemini plan usage comes directly from the Code Assist quota API", async () => {

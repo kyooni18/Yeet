@@ -2,7 +2,7 @@
 //! timeline for the group or one member, and a state inspector.
 use super::super::{
     components::{composer, status, tabbar},
-    support::{icons, text::compact_number, theme},
+    support::{icons, theme},
     task::fit,
     views::sessions::tools::{spinner, tool_icon},
 };
@@ -542,13 +542,6 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &App, model: &AgentsView, area: Re
             Style::default().fg(theme::muted()).add_modifier(BOLD),
         ))
     };
-    let tokens = |input: u64, output: u64| {
-        format!(
-            "{} in · {} out",
-            compact_number(input),
-            compact_number(output)
-        )
-    };
     match app.selected_agent() {
         Some(member) => {
             lines.push(title_line(&member.description));
@@ -560,10 +553,6 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &App, model: &AgentsView, area: Re
             }
             lines.extend(field("Role", member.role.clone()));
             lines.extend(field("Model", member.model.clone()));
-            lines.extend(field(
-                "Tokens",
-                tokens(member.input_tokens, member.output_tokens),
-            ));
             if let Some(elapsed) = elapsed(&member.started_at) {
                 lines.extend(field("Elapsed", elapsed));
             }
@@ -621,52 +610,15 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &App, model: &AgentsView, area: Re
                     models.join(", "),
                 ));
             }
-            lines.extend(field(
-                "Tokens",
-                tokens(group.input_tokens, group.output_tokens),
-            ));
             if let Some(elapsed) = group.started_at.as_deref().and_then(elapsed) {
                 lines.extend(field("Elapsed", elapsed));
             }
-            if let Some(cost) = group.estimated_cost_usd {
-                lines.extend(field("Est. cost", format!("${cost:.2}")));
-            }
-            if group.budget.output_limit_tokens > 0 {
-                lines.push(Line::default());
-                lines.push(section("SHARED BUDGET"));
-                lines.extend(field(
-                    "Output",
-                    format!(
-                        "{} / {} tokens",
-                        compact_number(group.budget.output_used_tokens),
-                        compact_number(group.budget.output_limit_tokens),
-                    ),
-                ));
-                lines.extend(field(
-                    "Reserved",
-                    format!(
-                        "{} coordination · {} synthesis",
-                        compact_number(group.budget.coordination_reserve_tokens),
-                        compact_number(group.budget.synthesis_reserve_tokens),
-                    ),
-                ));
-            }
-            if group.budget.cost_limit_usd > 0.0 {
-                lines.extend(field(
-                    "Cost limit",
-                    format!("${:.2}", group.budget.cost_limit_usd),
-                ));
-                if let Some(used) = group.budget.estimated_cost_used_usd {
-                    lines.extend(field("Cost used", format!("${used:.2}")));
-                }
-            }
-            if let Some(result) = group
+            let result = group
                 .final_result
                 .as_deref()
                 .or(group.checkpoint_summary.as_deref())
-                .filter(|result| !result.trim().is_empty())
-            {
-                lines.push(Line::default());
+                .filter(|result| !result.trim().is_empty());
+            if let Some(result) = result {
                 lines.push(section(if group.final_result.is_some() {
                     "GROUP RESULT"
                 } else {
@@ -883,24 +835,18 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
-    fn group_and_member_views_render_rail_timeline_and_inspector() {
+    fn group_and_member_inspector_render_without_budget_details() {
         let mut app = App::default();
         let now = Utc::now().to_rfc3339();
-        let member = |id: &str, status: &str, task_status: &str| AgentMemberItem {
+        let member = |id: &str, task_status: &str| AgentMemberItem {
             id: id.into(),
             description: id.into(),
             role: "researcher".into(),
             model: "opus-5.5".into(),
-            status: status.into(),
+            status: "idle".into(),
             task_status: task_status.into(),
-            activity_state: if id == "Planner" {
-                "reasoning".into()
-            } else {
-                String::new()
-            },
+            activity_state: if id == "Planner" { "reasoning" } else { "" }.into(),
             started_at: now.clone(),
-            input_tokens: 312_000,
-            output_tokens: 41_000,
             ..Default::default()
         };
         let entry = |from: Option<&str>, to: Option<&str>, kind, text: &str| AgentActivityItem {
@@ -916,8 +862,8 @@ mod tests {
             objective: Some("Inspect feasibility across the candidate radii".into()),
             status: "running".into(),
             members: vec![
-                member("Planner", "idle", "running"),
-                member("Verification", "idle", "needs_verification"),
+                member("Planner", "running"),
+                member("Verification", "needs_verification"),
             ],
             activity: vec![
                 entry(
@@ -940,22 +886,11 @@ mod tests {
                 ),
             ],
             started_at: Some(now.clone()),
-            input_tokens: 1_200_000,
-            output_tokens: 148_000,
-            budget: crate::model::AgentGroupBudgetItem {
-                output_limit_tokens: 500_000,
-                output_used_tokens: 148_000,
-                cost_limit_usd: 15.0,
-                estimated_cost_used_usd: Some(4.25),
-                coordination_reserve_tokens: 30_000,
-                synthesis_reserve_tokens: 45_000,
-                ..Default::default()
-            },
             final_result: Some("Candidate radius 1.8 remains feasible.".into()),
             shared_findings: vec![crate::model::AgentGroupFindingItem {
                 member_id: "Planner".into(),
                 task_id: "task-1".into(),
-                at: now.clone(),
+                at: now,
                 summary: "1.8 is the best candidate radius".into(),
             }],
             ..Default::default()
@@ -981,20 +916,18 @@ mod tests {
         for expected in [
             "1/2",
             "Group is running",
-            "waiting",
             "Cancel group",
             "Yeet → Planner",
             "NTRS TAEM energy notes",
-            "1.2M in · 148k out",
             "Inspect feasibility",
             "GROUP RESULT",
-            "SHARED BUDGET",
             "SHARED FINDINGS",
             "NEEDS REVIEW",
-            "1 waiting · 1 running",
         ] {
             assert!(group.contains(expected), "missing {expected:?}:\n{group}");
         }
+        assert!(!group.contains("BUDGET"));
+        assert!(!group.contains("tokens"));
 
         let planner = app
             .agents
@@ -1010,16 +943,8 @@ mod tests {
             modifiers: crossterm::event::KeyModifiers::NONE,
         });
         let detail = screen(&mut terminal, &mut app);
-        for expected in [
-            "Planner is working on: Sweep feasible radii",
-            "Gets from  Yeet",
-            "312k in · 41k out",
-        ] {
-            assert!(detail.contains(expected), "missing {expected:?}:\n{detail}");
-        }
-        assert!(
-            !detail.contains("Offline heading sweep"),
-            "member filter:\n{detail}"
-        );
+        assert!(detail.contains("Planner is working on: Sweep feasible radii"));
+        assert!(detail.contains("Gets from  Yeet"));
+        assert!(!detail.contains("Offline heading sweep"));
     }
 }

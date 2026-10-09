@@ -26,7 +26,7 @@ fn draw_compact(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(2),
         Constraint::Length(1),
     ])
     .split(area);
@@ -132,11 +132,26 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
+fn draw_workspace_summary(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let projection = app.application.projection().home;
+    let summary = &projection.summary;
+    let content = Rect::new(area.x + 2, area.y, area.width.saturating_sub(4), 1);
+    frame.render_widget(
+        Paragraph::new(projection.overview_label).style(Style::default().fg(theme::text()).add_modifier(ACTIVE)),
+        content,
+    );
+    frame.render_widget(
+        Paragraph::new(super::super::task::fit(&summary, content.width as usize))
+            .style(Style::default().fg(theme::muted())),
+        Rect::new(content.x, content.y + 1, content.width, 1),
+    );
+}
 
 fn draw_activity(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.height < 3 || area.width < 8 {
         return;
     }
+    draw_workspace_summary(frame, app, area);
     let compact = frame.area().width < 110;
     let usage_height = if area.height >= 16 { 4 } else { 0 };
     let capacity = area.height.saturating_sub(usage_height + 3) as usize;
@@ -404,7 +419,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let scale_x = |px: u16| bounds.width as u32 * px as u32 / 1440;
     let scale_y = |px: u16| (bounds.height as u32 * px as u32 + 432) / 864;
     let tab_height = 1;
-    let composer_height = scale_y(36).max(1) as u16;
+    let composer_height = scale_y(48).max(2) as u16;
     let status_height = scale_y(24).max(1) as u16;
     let rows = Layout::vertical([
         Constraint::Length(tab_height),
@@ -486,7 +501,34 @@ fn draw_composer(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         return;
     }
     let inset = (area.width as u32 * 30 / 1208).max(2) as u16;
-    composer::draw(frame, app, area, area.x + inset + 3);
+    if area.height >= 2 {
+        let model = if app.state.active_model.is_empty() {
+            "model: auto"
+        } else {
+            app.state.active_model.as_str()
+        };
+        let reasoning = if app.state.active_reasoning_level.is_empty() {
+            "auto"
+        } else {
+            app.state.active_reasoning_level.as_str()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(
+                format!("{model}  ·  reasoning: {reasoning}"),
+                Style::default().fg(theme::muted()),
+            )])),
+            Rect::new(
+                area.x + inset + 3,
+                area.y,
+                area.width.saturating_sub(inset + 3),
+                1,
+            ),
+        );
+        let input_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+        composer::draw(frame, app, input_area, area.x + inset + 3);
+    } else {
+        composer::draw(frame, app, area, area.x + inset + 3);
+    }
     if app.input.is_empty() {
         let (x, y, width, height) = app.composer_area;
         frame.render_widget(
@@ -596,6 +638,8 @@ mod tests {
                     "Real workspace session",
                     "12 messages",
                     "src/real.rs",
+                    "real-branch",
+                    "1 changed",
                     "Verify resource navigation",
                     "+27",
                     "−8",

@@ -152,10 +152,21 @@ async function stop(stateFile, roots) {
     excluded.add(parent); parent = rows.find(p => p.pid === parent)?.ppid ?? 1;
   }
   const owned = ownedProcesses(rows, process.getuid(), excluded);
+  const restartable = [];
   for (const p of owned) {
-    if (names.has(basename(p.executable))) { p.argv = argv(p.pid); p.cwd = cwd(p.pid); }
+    if (!names.has(basename(p.executable))) continue;
+    try {
+      p.argv = argv(p.pid);
+      p.cwd = cwd(p.pid);
+      restartable.push(p);
+    } catch (error) {
+      // KERN_PROCARGS2 can return EINVAL if the process exited after inventory.
+      // Ignore only that race; retain real inspection errors for live processes.
+      const current = inventory().find(row => row.pid === p.pid);
+      if (current?.uid === p.uid && current.executable === p.executable) throw error;
+    }
   }
-  const plan = restartPlan(owned);
+  const plan = restartPlan(restartable);
   plan.supervisors = supervisors();
   // A supervisor or another terminal can select a different installation on PATH.
   plan.installations = [...new Set((process.env.PATH ?? '').split(':')

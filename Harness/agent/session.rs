@@ -63,9 +63,6 @@ impl AgentCoordinator {
             skill_instruction_history: Default::default(),
             warm_tool_names: Vec::new(),
             warm_tool_search_enabled: false,
-            output_token_cap: None,
-            output_checkpoint_threshold: None,
-            output_checkpoint_prompted: false,
         }
     }
     pub fn set_session_runtime(

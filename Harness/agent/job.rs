@@ -34,14 +34,7 @@ impl AgentCoordinator {
             goal_mode,
             cancel,
             continuation: initial_continuation,
-            max_output_tokens,
         } = request;
-        self.output_token_cap = max_output_tokens;
-        self.output_checkpoint_threshold = self
-            .output_token_cap
-            .as_ref()
-            .map(|cap| (cap.load(Ordering::Acquire) / 4).clamp(256, 2_048));
-        self.output_checkpoint_prompted = false;
         self.context_memory.load(&mut self.history)?;
         settle_interrupted_context_batch(&mut self.history);
         let goal_input = if initial_continuation {
@@ -283,11 +276,7 @@ impl AgentCoordinator {
 
             let mut request = CallRequest::simple(model, messages);
             request.temperature = Some(0.0);
-            request.max_tokens = Some(
-                self.output_token_cap
-                    .as_ref()
-                    .map_or(2_048, |cap| cap.load(Ordering::Acquire).max(256).min(2_048)),
-            );
+            request.max_tokens = Some(2_048);
             request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
             let mut request_metadata = HashMap::from([
                 ("lane".into(), "goal-judge".into()),

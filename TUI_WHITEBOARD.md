@@ -8,7 +8,22 @@ Status: living design whiteboard, not a frozen specification.
 
 The bottom composer remains the direct way to ask or command Yeet.
 
+Session picker activity is daemon-owned: show `running` or `permission` for any
+live session, including detached sessions, independently of the current-session
+marker. Idle sessions retain their age. Activity is ephemeral, not saved to disk.
+
 ## Non-negotiable mental model
+
+### Views are peers, never children of Sessions
+
+The workbench owns navigation and open view state. Sessions is one peer view,
+not the app root or a parent shell for Overview, Files, Diff, Agent, Settings,
+or other views. Session activity, errors, permissions, and conversation changes
+must not choose another view's content or reset its local navigation. Shared
+chrome and global dialogs belong to the workbench, not to the session renderer.
+Closing a resource view returns to the workbench Overview, not implicitly to a
+conversation. Overview has its own mixed recent-object rail, not a sessions menu.
+These rules supersede the historical conversation-centric migration notes below.
 
 ### Tabs are stateful view instances
 
@@ -751,9 +766,25 @@ Do not silently let implementation diverge from this file. Either follow it or u
 
 The Home/Overview renderer uses the mockup's Desktop / Overview shell geometry and fixture labels (sessions rail, activity/file rows, decision inspector, tabs, composer). `cargo run --example tui_preview -- home 144 44` was raster-text inspected against the OpenPencil frame: its 232px rail and 540px activity pane scale to 23 and 54 terminal cells, respectively, and the inspector copy follows the same ordering and approximate vertical anchors. The inspector is offset to the mockup's measured 54px gap after the activity pane. This is a structural/content comparison, not a pixel-diff verification: terminal cell metrics and glyph rendering differ, and some fixture/detail positioning is still approximate. Do not claim pixel identity. The src/ui tree is organized into views, components, dialogs, support, and task responsibility folders (with shared render/shell modules at the ui root).
 
+
+### Desktop Diff implementation
+
+The Desktop / Diff frame (0:444 in ~/Desktop/TUI-Mockup.fig; the supplied underscore path is actually hyphenated on disk) defines a 232px changes rail, 958px main diff, and 250px inspector beneath the shared tab strip. Implement this as a Git-backed resource view, not FilesState.diff. Each diff tab owns its repository, selected path, context mode and scroll; file tabs and diff tabs coexist. Launcher opens/reuses the current repository diff; Files diff action targets the actual selected/open file. Render HEAD-to-working-tree changes including staged, unstaged, untracked, deleted and binary paths, with explicit clean/non-repository/error states. Controls must use real state (full file/changes only, file selection, hunk movement, refresh, open file). Do not copy fixture comments or pretend that mockup review metadata exists.
+
+
+## Session input focus
+
+The session composer keeps explicit input focus independently of draft contents. Esc unfocuses without discarding the draft; plain `i` refocuses without inserting the shortcut. Unfocused sessions accept transcript navigation, not draft edits or submission. Clicking the composer restores focus. The composer caret and surface reflect focus. Focus shortcuts are view-local: Files `i` opens/unlocks its find field; other dialogs retain their own input handling and never redirect `i` to the session composer.
+
+### Session input focus
+
+Session composer focus is explicit: Esc leaves editing without discarding the draft; i resumes editing without inserting the activation key. Unfocused navigation does not edit, paste into, or submit the draft. Composer styling/caret reflect focus, and clicking the composer restores it. Focus shortcuts are view-local: Files i activates its own search field; popup text entry remains owned by the popup.
+
 ### TUI responsiveness
 
 Keep transcript styling/wrapped-row offsets cached across input and scrolling frames. Invalidate for conversation replacement, active streamed content, width, tool expansion, session and palette changes. Render only logical lines intersecting the viewport rather than wrapping all preceding scrollback. Cache memory scales with transcript text, not an entire terminal-sized scrollback buffer. Drain bounded input bursts per frame; cap backend processing by elapsed time as well as event count so background activity cannot indefinitely starve input.
+
+Desktop Diff is now implemented in src/app/diff.rs and src/ui/views/diff.rs. Launcher Diff and Files `d` enter the same repository-owned review tab; each tab retains selection/context/scroll, supports shared keyboard cycling and mouse activation/close, and Enter opens the selected actual file tab. The view uses the mockup's rail/main/inspector proportions, numbered unified patches, real Git metadata and counts. `f` toggles full context, `n/p` moves hunks, arrows select/scroll, and `r` refreshes. A compact control row replaces the mockup composer: this review view does not falsely advertise agent submission or mock review comments. Narrow layouts hide the inspector/rail while retaining keyboard navigation. Comparison is structural, not pixel-identical. Focused Diff and navigation tests pass; the wider app/UI runs observed existing failures in two transcript wheel tests and the Home composer-row expectation amid concurrent workspace changes.
 
 ### Session work selection
 
@@ -763,6 +794,11 @@ expands the selected work unit; the draft is never edited/submitted by these key
 Selection is hidden while the composer or session rail has focus. A click on a
 work header also selects it when the composer is unfocused; drag-to-copy remains
 independent. Active/failed tool groups retain automatic expansion.
+
+Reasoning summaries and reasoning text are shown as standalone transcript blocks,
+with the full provider-supplied text visible separately from the compact header.
+Tool calls stay in their own dropdowns; a reasoning summary never owns or expands
+the following tool list. Reasoning blocks can be collapsed independently from tools.
 
 ## TUI subsystem ownership
 

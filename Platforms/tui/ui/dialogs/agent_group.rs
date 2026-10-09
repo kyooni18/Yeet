@@ -1,4 +1,4 @@
-//! Agent Group settings panel: session availability, delegation, and budgets.
+//! Agent Group settings panel: session availability and delegation.
 
 use crate::tui::app::agent_group::{AGENT_GROUP_ROWS, AgentGroupRow};
 
@@ -62,26 +62,6 @@ pub(crate) fn draw_agent_group(frame: &mut Frame<'_>, app: &App) {
                 on_off(agent_group.auto_deploy),
                 "allow automatic group delegation for new sessions",
             ),
-            AgentGroupRow::Parallel => (
-                "Parallel members",
-                format!("‹ {} ›", agent_group.max_concurrent),
-                "members working at once",
-            ),
-            AgentGroupRow::Pool => (
-                "Member capacity",
-                format!("‹ {} ›", agent_group.max_members),
-                "members kept for follow-ups",
-            ),
-            AgentGroupRow::Tokens => (
-                "Output token budget",
-                format!("‹ {} ›", compact_number(agent_group.max_tokens)),
-                "shared group output tokens",
-            ),
-            AgentGroupRow::Cost => (
-                "Cost budget",
-                format!("‹ ${:.2} ›", agent_group.max_cost_cents as f64 / 100.0),
-                "shared group cost ceiling",
-            ),
             AgentGroupRow::Writers => (
                 "Writers",
                 if agent_group.write_policy == "primary_only" {
@@ -117,7 +97,7 @@ pub(crate) fn draw_agent_group(frame: &mut Frame<'_>, app: &App) {
         .state
         .settings_notice
         .as_deref()
-        .unwrap_or("Limits are saved globally and apply to the next agent launched.");
+        .unwrap_or("Settings are saved globally and apply to new sessions.");
     frame.render_widget(
         Paragraph::new(truncate_end(notice, chunks[2].width as usize)).fg(theme::muted()),
         chunks[2],

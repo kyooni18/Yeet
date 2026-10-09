@@ -31,10 +31,6 @@ impl AgentGroupState {
                 .collect(),
             activity: self.activity.iter().cloned().collect(),
             started_at: self.members.first().map(|member| member.started_at.clone()),
-            input_tokens: self.usage.input_tokens.unwrap_or_default(),
-            output_tokens: self.usage.output_tokens.unwrap_or_default(),
-            estimated_cost_usd: self.usage.estimated_cost_usd,
-            budget: self.budget.clone(),
             events: self.events.iter().cloned().collect(),
             shared_findings: self.shared_findings.iter().cloned().collect(),
         }
@@ -59,8 +55,6 @@ impl AgentGroupState {
                 .unwrap_or_default(),
             summary: latest.and_then(|task| task.summary.clone()),
             started_at: member.started_at.clone(),
-            input_tokens: usage.input_tokens.unwrap_or_default(),
-            output_tokens: usage.output_tokens.unwrap_or_default(),
         }
     }
 }

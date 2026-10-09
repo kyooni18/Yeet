@@ -296,16 +296,16 @@ export class AntigravityLocalClient {
 
   async getAvailableModels(
     forceRefresh = true,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; launch?: boolean } = {},
   ): Promise<AntigravityAvailableModelsResponse> {
-    const auth = await this.getAuthStatus({ launch: true });
+    const auth = await this.getAuthStatus({ launch: options.launch ?? false });
     if (!auth.hasValidAuth) {
       throw new Error("Google Antigravity is not signed in. Use Yeet's Antigravity sign-in action first.");
     }
     return await this.rpc(
       "GetAvailableModels",
       { forceRefresh },
-      { launch: true, timeoutMs: 15_000, ...(options.signal ? { signal: options.signal } : {}) },
+      { launch: options.launch ?? false, timeoutMs: 15_000, ...(options.signal ? { signal: options.signal } : {}) },
     ) as AntigravityAvailableModelsResponse;
   }
 

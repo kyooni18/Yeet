@@ -188,7 +188,7 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) 
     );
     draw_inspector(frame, s, inspector, &name, additions, deletions);
     // Keep the draft and composer geometry shared with the other workbench views.
-    let composer_area = Rect::new(main.x, main.bottom().saturating_sub(1), main.width, 1);
+    let composer_area = Rect::new(main.x, main.bottom().saturating_sub(2), main.width, 2);
     composer::draw(frame, app, composer_area, main.x + inset + 2);
     frame
         .buffer_mut()

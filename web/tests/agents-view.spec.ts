@@ -32,7 +32,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('shows the group objective, attributed member events, shared findings, result and separate budgets', async ({ page }) => {
+test('shows the group objective, attributed member events, shared findings and result', async ({ page }) => {
   await emit(page, {
     type: 'state_update', version: 1, sequence: 2, revision: 2,
     patch: {
@@ -51,18 +51,6 @@ test('shows the group objective, attributed member events, shared findings, resu
         startedAt: new Date().toISOString(),
         inputTokens: 3200,
         outputTokens: 800,
-        estimatedCostUsd: 0.08,
-        budget: {
-          outputLimitTokens: 12000, outputUsedTokens: 800, costLimitUsd: 2,
-          estimatedCostUsedUsd: 0.08, coordinationReserveTokens: 900,
-          synthesisReserveTokens: 1200, coordinationReserveCostUsd: 0.2,
-          synthesisReserveCostUsd: 0.3,
-          tasks: [{
-            taskId: 'task-1', allocatedOutputTokens: 3000, usedOutputTokens: 800,
-            remainingOutputTokens: 2200, allocatedCostUsd: 0.6,
-            estimatedCostUsedUsd: 0.08, contextWindowTokens: 64000,
-          }],
-        },
         events: [
           { groupId: 'group-1', sequence: 1, memberId: null, taskId: null, at: new Date().toISOString(), kind: 'group_started', detail: 'Coordinator started.' },
           { groupId: 'group-1', sequence: 2, memberId: 'member-1', taskId: 'task-1', at: new Date().toISOString(), kind: 'member_reasoning', detail: 'Comparing measured latency across providers.' },
@@ -79,8 +67,6 @@ test('shows the group objective, attributed member events, shared findings, resu
   await expect(dialog.getByRole('list', { name: 'Group activity events' })).toContainText('Comparing measured latency across providers.')
   await expect(dialog.getByRole('list', { name: 'Group activity events' })).toContainText('Compare model latency')
   await expect(dialog).toContainText('Model B has the lowest p95 latency.')
-  await expect(dialog).toContainText(/800 (\/|of) 12\.0K/)
-  await expect(dialog).toContainText(/\$0\.08 (\/|of) \$2\.00/)
 
   await dialog.getByRole('button', { name: /Compare model latency/ }).click()
   await expect(dialog.getByRole('list', { name: 'Group activity events' })).toContainText('Comparing measured latency across providers.')
@@ -121,11 +107,6 @@ test('resumes a paused group using its stable group identity', async ({ page }) 
       agent_group: {
         groupId: 'group-paused', objective: 'Continue the saved analysis.', status: 'paused',
         members: [], activity: [], inputTokens: 0, outputTokens: 0,
-        budget: {
-          outputLimitTokens: 0, outputUsedTokens: 0, costLimitUsd: 0,
-          coordinationReserveTokens: 0, synthesisReserveTokens: 0,
-          coordinationReserveCostUsd: 0, synthesisReserveCostUsd: 0, tasks: [],
-        },
         events: [], sharedFindings: [],
       },
     },

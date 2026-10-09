@@ -54,7 +54,7 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &mut App) 
         let rows = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(2),
             Constraint::Length(1),
         ])
         .split(area);

@@ -17,7 +17,6 @@ pub(crate) const LEGACY_PROPOSE_TOOL: &str = "propose_agent_tasks";
 
 pub(crate) const TOOL_NAMES: [&str; 1] = [AGENT_TOOL];
 
-const MAX_LEGACY_TASKS: usize = 4;
 const LEGACY_DESCRIPTION_CHARS: usize = 60;
 
 pub(crate) fn tool_definitions() -> Vec<ToolDefinition> {
@@ -30,7 +29,6 @@ pub(crate) fn tool_definitions() -> Vec<ToolDefinition> {
                 "description":{"type":"string","minLength":1,"maxLength":120,"description":"A short (3-8 word) label for the task."},
                 "prompt":{"type":"string","minLength":1,"maxLength":12000,"description":"The complete, self-contained task for the agent."},
                 "role":{"type":"string","enum":["researcher","implementer","verifier"]},
-                "effort":{"type":"number","minimum":0.1,"maximum":10,"description":"Relative output and cost need for this assignment. Defaults to 1."}
             },
             "required":["description","prompt","role"],
             "additionalProperties":false
@@ -44,7 +42,6 @@ pub(crate) fn parse_spawn(arguments: &Map<String, Value>) -> Result<SpawnRequest
         description: required_str(arguments, "description")?.to_owned(),
         prompt: required_str(arguments, "prompt")?.to_owned(),
         background: false,
-        weight: task_weight(arguments)?,
     })
 }
 
@@ -54,8 +51,8 @@ pub(crate) fn parse_legacy_proposals(arguments: &Map<String, Value>) -> Result<V
         .get("tasks")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("tasks must be an array"))?;
-    if tasks.is_empty() || tasks.len() > MAX_LEGACY_TASKS {
-        bail!("tasks must contain between 1 and {MAX_LEGACY_TASKS} items");
+    if tasks.is_empty() {
+        bail!("tasks must not be empty");
     }
     tasks
         .iter()
@@ -69,23 +66,9 @@ pub(crate) fn parse_legacy_proposals(arguments: &Map<String, Value>) -> Result<V
                 description: prompt.chars().take(LEGACY_DESCRIPTION_CHARS).collect(),
                 prompt: prompt.to_owned(),
                 background: false,
-                weight: 1.0,
             })
         })
         .collect()
-}
-
-fn task_weight(arguments: &Map<String, Value>) -> Result<f64> {
-    let Some(value) = arguments.get("effort") else {
-        return Ok(1.0);
-    };
-    let weight = value
-        .as_f64()
-        .ok_or_else(|| anyhow!("effort must be a number between 0.1 and 10"))?;
-    if !weight.is_finite() || !(0.1..=10.0).contains(&weight) {
-        bail!("effort must be a number between 0.1 and 10");
-    }
-    Ok(weight)
 }
 
 fn required_str<'a>(arguments: &'a Map<String, Value>, key: &str) -> Result<&'a str> {
@@ -119,12 +102,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_proposals_stay_bounded() {
-        let task = json!({"role":"researcher","task":"a"});
-        let five = json!({"tasks":[task, task, task, task, task]});
-        assert!(parse_legacy_proposals(five.as_object().unwrap()).is_err());
-        let one = json!({"tasks":[task]});
-        let parsed = parse_legacy_proposals(one.as_object().unwrap()).unwrap();
+    fn legacy_proposals_allow_arbitrary_group_size() {
+        let tasks = (0..8)
+            .map(|_| json!({"role":"researcher","task":"a"}))
+            .collect::<Vec<_>>();
+        let arguments = json!({"tasks":tasks});
+        let parsed = parse_legacy_proposals(arguments.as_object().unwrap()).unwrap();
+        assert_eq!(parsed.len(), 8);
         assert!(!parsed[0].background);
     }
 }

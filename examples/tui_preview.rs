@@ -329,8 +329,6 @@ fn main() -> anyhow::Result<()> {
                         task_status: task.into(),
                         summary: None,
                         started_at: at(started),
-                        input_tokens: tokens.0,
-                        output_tokens: tokens.1,
                         ..Default::default()
                     }
                 };
@@ -460,8 +458,6 @@ fn main() -> anyhow::Result<()> {
                     ),
                 ],
                 started_at: Some(at(1_240)),
-                input_tokens: 1_200_000,
-                output_tokens: 148_000,
                 ..Default::default()
             };
             app.application.compatibility_agent_state_mut().open = true;

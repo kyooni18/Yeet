@@ -81,47 +81,56 @@ test('long completed runs remain compact by default', async ({ page }) => {
   await expect(group.locator('.activity-group__events')).toHaveCount(0)
 })
 
-test('shared reasoning rows preserve transcript order and strip markdown from summaries', async ({ page }) => {
+test('reasoning displays separately from tool groups and preserves transcript order', async ({ page }) => {
   await resetConversation(page, [
     {
       id: 'reasoning-1',
-      kind: { type: 'reasoning', content: '', summary: '**Checking sources**' },
+      kind: { type: 'reasoning', content: 'First full reasoning details', summary: '**Checking sources**' },
     },
     toolEntry('tool-20', 'completed', 'read_file'),
     {
       id: 'reasoning-2',
-      kind: { type: 'reasoning', content: '', summary: '**Cross-checking claims**' },
+      kind: { type: 'reasoning', content: 'Second full reasoning details', summary: '**Cross-checking claims**' },
     },
     toolEntry('tool-21', 'completed', 'run_shell'),
   ])
 
-  const items = page.locator('.conversation-content > .trace-disclosure, .conversation-content > .activity-group')
-  const reasoning = page.locator('.conversation-content > .trace-disclosure')
+  const transcriptItems = page.locator('.conversation-content > .reasoning-trace, .conversation-content > .activity-group')
+  const reasoning = page.locator('.reasoning-trace')
   const groups = page.locator('.activity-group')
-  await expect(items).toHaveCount(4)
+  await expect(transcriptItems).toHaveCount(4)
   await expect(reasoning).toHaveCount(2)
   await expect(groups).toHaveCount(2)
-  await expect(items.nth(0)).toContainText('Checking sources')
-  await expect(items.nth(2)).toContainText('Cross-checking claims')
+  await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
+  await expect(transcriptItems.nth(0)).toHaveClass(/reasoning-trace/)
+  await expect(transcriptItems.nth(0)).toContainText('Checking sources')
+  await expect(transcriptItems.nth(0)).toContainText('First full reasoning details')
+  await expect(transcriptItems.nth(1)).toHaveClass(/activity-group/)
+  await expect(transcriptItems.nth(2)).toHaveClass(/reasoning-trace/)
+  await expect(transcriptItems.nth(2)).toContainText('Cross-checking claims')
+  await expect(transcriptItems.nth(2)).toContainText('Second full reasoning details')
   await expect(page.locator('.conversation-content')).not.toContainText('**')
+
   await groups.nth(0).locator('.activity-group__header').click()
-  await expect(items.nth(1)).toContainText('Read file')
+  await expect(groups.nth(0)).toContainText('Read file')
   await groups.nth(1).locator('.activity-group__header').click()
-  await expect(items.nth(3)).toContainText(/Command|Run shell/)
+  await expect(groups.nth(1)).toContainText(/Command|Run shell/)
 })
 
 
-test('current tool activity remains separate from shared reasoning details', async ({ page }) => {
+test('current tool activity remains separate from the full reasoning trace', async ({ page }) => {
   await resetConversation(page, [
-    { id: 'old-reasoning', kind: { type: 'reasoning', content: '', summary: '**Inspecting inputs****Checking constraints**' } },
+    { id: 'old-reasoning', kind: { type: 'reasoning', content: '**Raw provider reasoning details**', summary: '**Inspecting inputs****Checking constraints**' } },
     toolEntry('current-read', 'running'),
   ])
   const group = page.locator('.activity-group')
   const header = group.locator('.activity-group__header')
   await expect(header).toContainText(/Reading file|Read file/)
   await expect(header).toContainText('src/file-current-read.rs')
-  const reasoning = page.locator('.conversation-content > .trace-disclosure').filter({ hasText: 'Reasoning' })
-  await expect(reasoning.locator('.trace-disclosure__row')).toContainText('Checking constraints')
-  await expect(reasoning.locator('.trace-disclosure__row')).toHaveAttribute('aria-expanded', 'true')
-  await expect(reasoning.locator('.trace-detail__content')).toContainText('Inspecting inputs')
+  const reasoning = page.locator('.reasoning-trace')
+  await expect(reasoning).toHaveCount(1)
+  await expect(reasoning).toContainText('Checking constraints')
+  await expect(reasoning).toContainText('Inspecting inputs')
+  await expect(reasoning).toContainText('Raw provider reasoning details')
+  await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
 })

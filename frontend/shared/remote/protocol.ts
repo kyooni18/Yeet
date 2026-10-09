@@ -261,27 +261,6 @@ export interface AgentTaskItem {
   summary?: string | null
 }
 
-export interface AgentGroupBudgetItem {
-  outputLimitTokens: number
-  outputUsedTokens: number
-  costLimitUsd: number
-  estimatedCostUsedUsd?: number | null
-  coordinationReserveTokens: number
-  synthesisReserveTokens: number
-  coordinationReserveCostUsd: number
-  synthesisReserveCostUsd: number
-  tasks: AgentTaskBudgetItem[]
-}
-
-export interface AgentTaskBudgetItem {
-  taskId: string
-  allocatedOutputTokens: number
-  usedOutputTokens: number
-  remainingOutputTokens: number
-  allocatedCostUsd: number
-  estimatedCostUsedUsd?: number | null
-  contextWindowTokens: number
-}
 
 export interface AgentGroupEventItem {
   groupId: string
@@ -310,8 +289,6 @@ export interface AgentMemberItem {
   taskStatus: string
   summary?: string | null
   startedAt: string
-  inputTokens: number
-  outputTokens: number
 }
 
 export type AgentActivityKind = 'message' | 'steer' | 'tool' | 'finished' | 'failed' | 'stopped'
@@ -336,10 +313,6 @@ export interface AgentGroupItem {
   /** Legacy activity feed, oldest first. Prefer sequence-numbered events. */
   activity: AgentActivityItem[]
   startedAt?: string | null
-  inputTokens: number
-  outputTokens: number
-  estimatedCostUsd?: number | null
-  budget: AgentGroupBudgetItem
   events: AgentGroupEventItem[]
   sharedFindings: AgentGroupFindingItem[]
 }
@@ -418,18 +391,6 @@ export const emptyBridgeState = (): BridgeState => ({
     status: 'idle',
     members: [],
     activity: [],
-    inputTokens: 0,
-    outputTokens: 0,
-    budget: {
-      outputLimitTokens: 0,
-      outputUsedTokens: 0,
-      costLimitUsd: 0,
-      coordinationReserveTokens: 0,
-      synthesisReserveTokens: 0,
-      coordinationReserveCostUsd: 0,
-      synthesisReserveCostUsd: 0,
-      tasks: [],
-    },
     events: [],
     sharedFindings: [],
   },
@@ -700,13 +661,11 @@ export interface AgentsView {
   members: Array<{ member: AgentMemberItem; status: { key: string; label: string; tone: AgentTone }; selected: boolean; select_action: AgentAction }>
   feed: Array<{ id: string; sequence: number | null; at: string; kind: string; detail: string; member_id: string | null; actor: string; icon: AgentIcon; running: boolean; tool: string | null }>
   findings: Array<{ member_id: string; task_id: string; at: string; summary: string; actor: string }>
-  budget: { output_limit: number; output_used: number; output_percent: number; cost_limit: number; cost_used: number | null; cost_percent: number;
-    tasks: Array<{ task_id: string; label: string; used: number; allocated: number; remaining: number; percent: number; context_window_tokens: number }> }
   active_count: number
   waiting_count: number
   group_controls: AgentControl[]
   selection_controls: AgentControl[]
-  sections: Array<{ kind: 'objective' | 'result' | 'members' | 'activity' | 'budget' | 'findings'; label: string; visible: boolean; layout: 'full_width' | 'column' }>
+  sections: Array<{ kind: 'objective' | 'result' | 'members' | 'activity' | 'findings'; label: string; visible: boolean; layout: 'full_width' | 'column' }>
 }
 
 export type ConversationAction =

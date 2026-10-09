@@ -124,14 +124,6 @@ fn shared_controls_and_event_projection_keep_identity_and_status_precedence() {
             .unwrap()
             .visible
     );
-    assert!(
-        !empty
-            .sections
-            .iter()
-            .find(|section| section.kind == AgentSection::Budget)
-            .unwrap()
-            .visible
-    );
     let action: AgentAction =
         serde_json::from_value(serde_json::json!({ "type": "select", "value": "planner" }))
             .unwrap();

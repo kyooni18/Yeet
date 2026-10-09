@@ -7,8 +7,6 @@ use anyhow::Result;
 
 use crate::{
     agent::AgentCoordinator,
-    agents::member::AgentRole,
-    core::ModelInfo,
     permission::PermissionBroker,
     project_settings::ProjectSettingsStore,
     session_store::SessionStore,
@@ -97,71 +95,4 @@ impl AgentRuntimeFactory {
         }
         Ok(coordinator)
     }
-
-    pub(crate) fn context_window_tokens(&self, model: &str) -> Option<u64> {
-        self.bridge.context_length(model).ok().flatten()
-    }
-
-    /// Keep the requested provider/model when pricing or context metadata is
-    /// absent. When the task allocation cannot cover the requested model's
-    /// ordinary task envelope, choose the least costly same-provider option
-    /// with enough context for the role.
-    pub(crate) fn model_for_budget(
-        &self,
-        model: &str,
-        role: AgentRole,
-        cost_budget_usd: f64,
-    ) -> String {
-        let Some((provider, requested_id)) = model.split_once('/') else {
-            return model.to_owned();
-        };
-        let Ok(models) = self.bridge.list_model_info(provider) else {
-            return model.to_owned();
-        };
-        let requested = models
-            .iter()
-            .find(|info| info.id == requested_id || info.id == model);
-        let Some(requested) = requested else {
-            return model.to_owned();
-        };
-        let Some(requested_cost) = estimated_task_cost(requested) else {
-            return model.to_owned();
-        };
-        if requested_cost <= cost_budget_usd {
-            return model.to_owned();
-        }
-        let required_context = match role {
-            AgentRole::Verifier => 16_000,
-            AgentRole::Researcher | AgentRole::Implementer => 32_000,
-        };
-        let Some(candidate) = models
-            .iter()
-            .filter(|info| {
-                info.context_length
-                    .is_some_and(|length| length >= required_context)
-            })
-            .filter_map(|info| estimated_task_cost(info).map(|cost| (info, cost)))
-            .filter(|(_, cost)| *cost <= cost_budget_usd)
-            .min_by(|left, right| left.1.total_cmp(&right.1))
-        else {
-            return model.to_owned();
-        };
-        if candidate.1 < requested_cost {
-            format!("{provider}/{}", candidate.0.id)
-        } else {
-            model.to_owned()
-        }
-    }
-}
-
-fn estimated_task_cost(info: &ModelInfo) -> Option<f64> {
-    let pricing = info.pricing.as_ref()?;
-    if pricing.get("currency")?.as_str()? != "USD"
-        || pricing.get("unit")?.as_str()? != "per1MTokens"
-    {
-        return None;
-    }
-    let input = pricing.get("input")?.as_f64()?;
-    let output = pricing.get("output")?.as_f64()?;
-    Some((8_000.0 * input + 2_000.0 * output) / 1_000_000.0)
 }

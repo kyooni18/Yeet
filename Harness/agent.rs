@@ -57,10 +57,7 @@ use tool_protocol::{
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -89,9 +86,6 @@ pub struct AgentCoordinator {
     // prefixes, so remember the warmed surface until an explicit session/history reset.
     warm_tool_names: Vec<String>,
     warm_tool_search_enabled: bool,
-    output_token_cap: Option<Arc<AtomicU64>>,
-    output_checkpoint_threshold: Option<u64>,
-    output_checkpoint_prompted: bool,
 }
 
 impl AgentCoordinator {
@@ -258,18 +252,6 @@ impl AgentCoordinator {
                 &mut last_jev_instruction,
             );
 
-            if let (Some(cap), Some(threshold)) = (
-                self.output_token_cap.as_ref(),
-                self.output_checkpoint_threshold,
-            ) && cap.load(Ordering::Acquire) <= threshold
-                && !self.output_checkpoint_prompted
-            {
-                self.history.push(Message::system(
-                    "Group budget checkpoint: your allocated output budget is nearly spent. Stop expanding the task, preserve important findings and decisions, and return a concise checkpoint now so the group coordinator can reassign remaining work.",
-                ).request_only());
-                self.output_checkpoint_prompted = true;
-            }
-
             let request_assembly::PreparedHistory {
                 request_messages,
                 request_context_chars,
@@ -327,7 +309,7 @@ impl AgentCoordinator {
                 );
             }
             let request_assembly::PreparedRequest {
-                mut request,
+                request,
                 diagnostics: attempt_cache_diagnostics,
             } = self.finalize_request(request_assembly::FinalizationInput {
                 model,
@@ -353,11 +335,6 @@ impl AgentCoordinator {
                 reasoning_level,
                 attached_capabilities: attached_capabilities.as_deref(),
             })?;
-            if let Some(cap) = self.output_token_cap.as_ref() {
-                // A small completion floor lets a member return the checkpoint
-                // requested above when its remaining allocation is nearly zero.
-                request.max_tokens = Some(cap.load(Ordering::Acquire).max(256));
-            }
             let sent_request_chars = serde_json::to_vec(&request)
                 .map(|serialized| serialized.len())
                 .unwrap_or(request_context_chars);

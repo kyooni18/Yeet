@@ -21,7 +21,8 @@ impl ComposerState {
                 "Message"
             }
             .into(),
-            editable: !env.freeze_editor_for_permissions || permissions(harness, env.available).is_empty(),
+            editable: !env.freeze_editor_for_permissions
+                || permissions(harness, env.available).is_empty(),
             can_submit,
             primary_control: if harness.is_streaming {
                 control(
@@ -365,7 +366,7 @@ pub fn suggestions(text: &str, harness: &HarnessState) -> Vec<ComposerSuggestion
         ),
         (
             "/agent-group",
-            "Agent Group: member coordination and shared budgets",
+            "Agent Group: coordinate member work and synthesize results",
         ),
         ("/attach", "Attach an optional capability"),
         ("/detach", "Detach an optional capability"),

@@ -72,22 +72,12 @@ pub(crate) trait MemberRunner: Send {
         cancel: Arc<AtomicBool>,
         on_progress: &mut dyn FnMut(MemberProgress<'_>),
     ) -> Result<RunReport>;
-
-    fn set_output_cap(&mut self, _cap: Arc<std::sync::atomic::AtomicU64>) {}
 }
 
 pub(crate) trait MemberLauncher: Send + Sync {
     /// Registers the member identity and prepares its runner. Called on the
     /// requesting thread so the caller receives the member id immediately.
     fn launch(&self, spec: &MemberSpec) -> Result<(AgentId, Box<dyn MemberRunner>)>;
-
-    fn context_window_tokens(&self, _model: &str) -> Option<u64> {
-        None
-    }
-
-    fn model_for_budget(&self, model: &str, _role: AgentRole, _cost_budget_usd: f64) -> String {
-        model.to_owned()
-    }
 }
 
 /// Production launcher: each member owns a scoped coordinator and volatile
@@ -125,17 +115,8 @@ impl MemberLauncher for CoordinatorLauncher {
                 model: spec.model.clone(),
                 started: false,
                 usage_sequence: 0,
-                output_cap: None,
             }),
         ))
-    }
-
-    fn context_window_tokens(&self, model: &str) -> Option<u64> {
-        self.factory.context_window_tokens(model)
-    }
-
-    fn model_for_budget(&self, model: &str, role: AgentRole, cost_budget_usd: f64) -> String {
-        self.factory.model_for_budget(model, role, cost_budget_usd)
     }
 }
 
@@ -145,14 +126,9 @@ struct CoordinatorRunner {
     model: String,
     started: bool,
     usage_sequence: u64,
-    output_cap: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl MemberRunner for CoordinatorRunner {
-    fn set_output_cap(&mut self, cap: Arc<std::sync::atomic::AtomicU64>) {
-        self.output_cap = Some(cap);
-    }
-
     fn run(
         &mut self,
         input: &str,
@@ -177,7 +153,6 @@ impl MemberRunner for CoordinatorRunner {
                 goal_mode: Arc::new(AtomicBool::new(true)),
                 cancel: cancel.clone(),
                 continuation: false,
-                max_output_tokens: self.output_cap.clone(),
             },
             {
                 move |event| match event {

@@ -2,7 +2,7 @@
 use super::support::theme;
 use super::support::{
     responsive,
-    text::{cell_width, compact_number, truncate_end, truncate_middle},
+    text::{cell_width, truncate_end, truncate_middle},
 };
 use crate::{
     app::{App, SettingsEditKind, SettingsSection},
@@ -292,7 +292,15 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
     let view = app.application.settings_projection().view;
     let area = centered_rect(84, 72, frame.area());
     theme::modal_backdrop(frame, area);
-    let title = format!(" {} · {} · ↑/↓ navigate · Enter/Space change/open · r refresh · Esc close ", view.title, if view.working { "saving…" } else { &view.subtitle });
+    let title = format!(
+        " {} · {} · ↑/↓ navigate · Enter/Space change/open · r refresh · Esc close ",
+        view.title,
+        if view.working {
+            "saving…"
+        } else {
+            &view.subtitle
+        }
+    );
     let block = theme::modal_block(&title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -300,28 +308,66 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, app: &App) {
     let mut rows = Vec::new();
     let mut selected = None;
     for section in &view.sections {
-        rows.push(ListItem::new(Line::styled(section.label.clone(), Style::default().fg(theme::muted()).add_modifier(Modifier::BOLD))));
+        rows.push(ListItem::new(Line::styled(
+            section.label.clone(),
+            Style::default()
+                .fg(theme::muted())
+                .add_modifier(Modifier::BOLD),
+        )));
         for control in &section.controls {
-            if view.selected.as_deref() == Some(control.id.as_str()) { selected = Some(rows.len()); }
+            if view.selected.as_deref() == Some(control.id.as_str()) {
+                selected = Some(rows.len());
+            }
             rows.push(ListItem::new(Line::from(vec![
-                Span::styled(format!("{} {:<22}", settings_icon(control.icon), control.label), Style::default().fg(if control.enabled {theme::text()} else {theme::muted()}).add_modifier(Modifier::BOLD)),
-                Span::styled(control.value.clone(), Style::default().fg(if control.enabled {theme::accent()} else {theme::muted()})),
-                Span::styled(format!(" · {}", control.detail), Style::default().fg(theme::muted())),
+                Span::styled(
+                    format!("{} {:<22}", settings_icon(control.icon), control.label),
+                    Style::default()
+                        .fg(if control.enabled {
+                            theme::text()
+                        } else {
+                            theme::muted()
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    control.value.clone(),
+                    Style::default().fg(if control.enabled {
+                        theme::accent()
+                    } else {
+                        theme::muted()
+                    }),
+                ),
+                Span::styled(
+                    format!(" · {}", control.detail),
+                    Style::default().fg(theme::muted()),
+                ),
             ])));
         }
     }
-    let list = List::new(rows).highlight_style(theme::selected()).highlight_symbol("▸ ");
+    let list = List::new(rows)
+        .highlight_style(theme::selected())
+        .highlight_symbol("▸ ");
     let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(list, chunks[0], &mut state);
     let status = view.notice.as_deref().unwrap_or(&view.subtitle);
-    frame.render_widget(Paragraph::new(truncate_end(status, chunks[1].width as usize)).fg(theme::muted()), chunks[1]);
+    frame.render_widget(
+        Paragraph::new(truncate_end(status, chunks[1].width as usize)).fg(theme::muted()),
+        chunks[1],
+    );
 }
 fn settings_icon(icon: crate::shared_ui::settings::SettingsIcon) -> &'static str {
     use crate::shared_ui::settings::SettingsIcon::*;
     match icon {
-        Appearance | Theme => "◐", Settings | Policy => "⚙", Memory => "\u{f1c0}", Web => "\u{f0ac}",
-        Model | Reasoning => "\u{f0eb}", Context => "\u{f15c}", Agents => "\u{f0c0}", Permissions => "\u{f023}",
-        Provider => "\u{f084}", Capabilities => "\u{f0e7}",
+        Appearance | Theme => "◐",
+        Settings | Policy => "⚙",
+        Memory => "\u{f1c0}",
+        Web => "\u{f0ac}",
+        Model | Reasoning => "\u{f0eb}",
+        Context => "\u{f15c}",
+        Agents => "\u{f0c0}",
+        Permissions => "\u{f023}",
+        Provider => "\u{f084}",
+        Capabilities => "\u{f0e7}",
     }
 }
 
@@ -364,7 +410,11 @@ pub(super) fn draw_sandbox_presets(frame: &mut Frame<'_>, app: &App) {
         )));
     let items = rows.map(|(selected, name, value)| {
         let marker = if selected { "●" } else { "○" };
-        let marker = if name == "Advanced sandbox rules" { "◇" } else { marker };
+        let marker = if name == "Advanced sandbox rules" {
+            "◇"
+        } else {
+            marker
+        };
         ListItem::new(Line::from(vec![
             Span::styled(
                 format!("{marker} {name:<25}"),
@@ -655,16 +705,20 @@ pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
     let view = app.application.settings_projection().view;
     let (title, labels): (&str, Vec<&str>) = if let Some(editor) = &view.editor {
         (&editor.label, vec![&editor.hint])
-    } else { match app.settings_edit_kind.as_ref() {
-        Some(SettingsEditKind::WorkspacePath) => ("Add workspace path", vec!["Relative path"]),
-        Some(SettingsEditKind::Network) => ("Add network grant", vec!["Host", "Port (* = any)"]),
-        Some(SettingsEditKind::Environment { .. }) => {
-            ("Environment variable", vec!["Key", "Value"])
+    } else {
+        match app.settings_edit_kind.as_ref() {
+            Some(SettingsEditKind::WorkspacePath) => ("Add workspace path", vec!["Relative path"]),
+            Some(SettingsEditKind::Network) => {
+                ("Add network grant", vec!["Host", "Port (* = any)"])
+            }
+            Some(SettingsEditKind::Environment { .. }) => {
+                ("Environment variable", vec!["Key", "Value"])
+            }
+            Some(SettingsEditKind::Secret) => ("Add secret ID", vec!["Secret ID"]),
+            Some(SettingsEditKind::Limit { name }) => (name.as_str(), vec!["Value"]),
+            _ => ("Edit setting", vec!["Value"]),
         }
-        Some(SettingsEditKind::Secret) => ("Add secret ID", vec!["Secret ID"]),
-        Some(SettingsEditKind::Limit { name }) => (name.as_str(), vec!["Value"]),
-        _ => ("Edit setting", vec!["Value"]),
-    }};
+    };
     let block = theme::modal_block(format!(" {title} · Tab fields · Enter save · Esc cancel "));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -681,7 +735,17 @@ pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
     draw_form_rows(frame, inner, &rows, app.editor_index, true);
     if view.editor.is_some() {
         if let Some(notice) = &view.notice {
-            frame.render_widget(Paragraph::new(notice.as_str()).fg(theme::error()).wrap(Wrap { trim: false }), Rect::new(inner.x, inner.bottom().saturating_sub(2), inner.width, 2.min(inner.height)));
+            frame.render_widget(
+                Paragraph::new(notice.as_str())
+                    .fg(theme::error())
+                    .wrap(Wrap { trim: false }),
+                Rect::new(
+                    inner.x,
+                    inner.bottom().saturating_sub(2),
+                    inner.width,
+                    2.min(inner.height),
+                ),
+            );
         }
     }
 }
@@ -833,37 +897,64 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
     );
 }
 
-fn permission_action_line(permission: &crate::shared_ui::composer::PermissionView, primary: &crate::shared_ui::composer::ComposerControl) -> Line<'static> {
+fn permission_action_line(
+    permission: &crate::shared_ui::composer::PermissionView,
+    primary: &crate::shared_ui::composer::ComposerControl,
+) -> Line<'static> {
     use crate::shared_ui::composer::ComposerAction;
     let mut spans = Vec::new();
     for control in &permission.controls {
-        if !spans.is_empty() { spans.push(Span::raw(" · ")); }
+        if !spans.is_empty() {
+            spans.push(Span::raw(" · "));
+        }
         let shortcut = match control.action {
             ComposerAction::RespondPermission { allow: true, .. } => "Enter/y",
             ComposerAction::RespondPermission { allow: false, .. } => "n/Esc",
             _ => "",
         };
-        spans.push(Span::styled(format!("{shortcut} {}", control.label.to_lowercase()), Style::default().fg(if control.enabled { theme::accent() } else { theme::muted() })));
+        spans.push(Span::styled(
+            format!("{shortcut} {}", control.label.to_lowercase()),
+            Style::default().fg(if control.enabled {
+                theme::accent()
+            } else {
+                theme::muted()
+            }),
+        ));
     }
     if matches!(primary.action, ComposerAction::Interrupt) {
-        spans.push(Span::styled(format!(" · Ctrl+C {}", primary.label), Style::default().fg(theme::accent_hot())));
+        spans.push(Span::styled(
+            format!(" · Ctrl+C {}", primary.label),
+            Style::default().fg(theme::accent_hot()),
+        ));
     }
     Line::from(spans)
 }
 
 pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
     let projection = app.application.composer_projection();
-    let Some(permission) = projection.view.permissions.first() else { return; };
+    let Some(permission) = projection.view.permissions.first() else {
+        return;
+    };
     let text = Text::from(vec![
         Line::from(permission.title.clone()).bold(),
         Line::from(permission.operation.clone()).fg(theme::accent_hot()),
         Line::from(permission.detail.clone()).fg(theme::muted()),
         Line::from(permission.reason.clone()).fg(theme::text_dim()),
     ]);
-    draw_permission_panel(frame, text, &permission.title, permission_action_line(permission, &projection.view.primary_control));
+    draw_permission_panel(
+        frame,
+        text,
+        &permission.title,
+        permission_action_line(permission, &projection.view.primary_control),
+    );
 }
 
-fn draw_permission_panel(frame: &mut Frame<'_>, text: Text<'_>, title: &str, actions: Line<'static>) {
+fn draw_permission_panel(
+    frame: &mut Frame<'_>,
+    text: Text<'_>,
+    title: &str,
+    actions: Line<'static>,
+) {
     let mut area = centered_rect(82, 90, frame.area());
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let content_height = paragraph.line_count(area.width.saturating_sub(4).max(1));

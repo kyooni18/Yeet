@@ -23,7 +23,7 @@ use crate::{
     },
     agents::{
         AgentGroupSupervisor,
-        group::AgentLimits,
+        group::AgentGroupPolicy,
         runtime::{AgentRuntimeFactory, RunManager},
     },
     config::{ConfigStore, parse_context_length},
@@ -204,8 +204,10 @@ impl HarnessService {
         );
         let run_manager = RunManager::default();
         let agent_group = config.agent_group_settings().unwrap_or_default();
-        let agent_groups =
-            AgentGroupSupervisor::new(runtime_factory.clone(), AgentLimits::from(&agent_group));
+        let agent_groups = AgentGroupSupervisor::new(
+            runtime_factory.clone(),
+            AgentGroupPolicy::from(&agent_group),
+        );
         let coordinator = Arc::new(Mutex::new(runtime_factory.build(None)?));
         let mut session = bootstrap::initial_session(
             model,
@@ -282,7 +284,10 @@ impl HarnessService {
             }
             FrontendCommand::RegenerateLast => self.regenerate_last(),
             FrontendCommand::EditLast { text } => self.edit_last(text),
-            FrontendCommand::ResolvePermission { request_id, granted } => {
+            FrontendCommand::ResolvePermission {
+                request_id,
+                granted,
+            } => {
                 self.permission.resolve_request(&request_id, granted);
                 self.publish_state();
                 Ok(())

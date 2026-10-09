@@ -76,7 +76,7 @@ fn cached_viewport_matches_full_transcript_and_invalidates_on_updates() {
 }
 
 #[test]
-fn reasoning_work_headers_select_and_expand_independently() {
+fn reasoning_details_are_visible_outside_tool_groups_and_toggle_independently() {
     let mut app = App::default();
     app.input_focused = false;
     app.conversation = (0..2)
@@ -88,22 +88,26 @@ fn reasoning_work_headers_select_and_expand_independently() {
             },
         })
         .collect();
-    let (expanded, headers) = transcript_content(&app, 60);
+    let (visible, headers) = transcript_content(&app, 60);
     assert_eq!(headers.len(), 2);
+    let visible_text = visible.to_string();
+    assert!(visible_text.contains("Detail 0"));
+    assert!(visible_text.contains("Detail 1"));
+
     app.selected_work = Some(1);
     app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Select(Some("reasoning:1".into())));
     app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Toggle("reasoning:1".into()));
-    let (collapsed, headers) = transcript_content(&app, 60);
-    assert!(expanded.lines.len() > collapsed.lines.len());
+    let (partially_collapsed, headers) = transcript_content(&app, 60);
+    assert!(partially_collapsed.lines.len() < visible.lines.len());
+    assert!(partially_collapsed.to_string().contains("Detail 0"));
+    assert!(!partially_collapsed.to_string().contains("Detail 1"));
     assert!(
-        collapsed.lines[headers[1]]
+        partially_collapsed.lines[headers[1]]
             .style
             .add_modifier
             .contains(Modifier::REVERSED)
     );
-    let text = collapsed.to_string();
-    assert!(!text.contains("Detail 1"));
-    assert!(text.contains("Detail 0"));
+
     app.input_focused = true;
     let (focused, headers) = transcript_content(&app, 60);
     assert!(
@@ -130,7 +134,7 @@ fn copying_user_bubbles_excludes_padding_and_keeps_content_indentation() {
 }
 
 #[test]
-fn summary_dropdown_keyboard_toggles_its_tool_list() {
+fn reasoning_summary_stays_visible_separate_from_its_tool_dropdown() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = App::default();
     app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
@@ -155,25 +159,31 @@ fn summary_dropdown_keyboard_toggles_its_tool_list() {
             },
         },
     ];
-    let (collapsed, headers) = transcript_content(&app, 90);
-    assert_eq!(headers.len(), 2, "shared reasoning and tool rows are separate");
-    assert!(!collapsed.to_string().contains("src/example.rs"));
+    let (separate, headers) = transcript_content(&app, 90);
+    assert_eq!(
+        headers.len(),
+        2,
+        "reasoning and tool work have separate rows"
+    );
+    let text = separate.to_string();
+    assert!(text.contains("Inspect the source"));
+    assert!(text.contains("Check the implementation"));
+    assert!(!text.contains("src/example.rs"));
+
     app.work_rows = headers.iter().map(|row| *row as u16).collect();
     let view = app.application.conversation_state().view(&app.conversation, &app.state);
     app.work_ids = view.items.iter().filter(|item| !matches!(item, crate::shared_ui::conversation::DisplayItem::Entry { .. })).map(|item| item.id().to_owned()).collect();
-    app.selected_work = Some(1);
+    app.selected_work = Some(1); // Toggle the tool row, not the reasoning block.
     for key in [KeyCode::Char(' '), KeyCode::Enter] {
         assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
-        let expanded = transcript_content(&app, 90).0.to_string();
-        assert!(expanded.contains("src/example.rs"));
-        assert!(expanded.contains("Check the implementation"));
+        let toggled = transcript_content(&app, 90).0.to_string();
+        assert!(toggled.contains("src/example.rs"));
+        assert!(toggled.contains("Check the implementation"));
+        assert!(!app.input_focused);
+        assert_eq!(app.input, "keep draft");
         assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
-        assert!(
-            !transcript_content(&app, 90)
-                .0
-                .to_string()
-                .contains("src/example.rs")
-        );
+        let collapsed = transcript_content(&app, 90).0.to_string();
+        assert!(!collapsed.contains("src/example.rs"));
+        assert!(collapsed.contains("Check the implementation"));
     }
-    assert_eq!(app.input, "keep draft");
 }

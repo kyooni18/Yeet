@@ -12,7 +12,7 @@ use anyhow::{Result, anyhow};
 use crate::model::{AgentGroupItem, AgentTaskItem};
 
 use super::{
-    group::{AgentGroupCheckpoint, AgentGroupRuntime, AgentLimits, ChangeListener},
+    group::{AgentGroupCheckpoint, AgentGroupPolicy, AgentGroupRuntime, ChangeListener},
     handle::AgentGroupHandle,
     member::CoordinatorLauncher,
     runtime::AgentRuntimeFactory,
@@ -25,9 +25,9 @@ pub(crate) struct AgentGroupSupervisor {
 }
 
 impl AgentGroupSupervisor {
-    pub(crate) fn new(factory: AgentRuntimeFactory, limits: AgentLimits) -> Self {
+    pub(crate) fn new(factory: AgentRuntimeFactory, policy: AgentGroupPolicy) -> Self {
         let active =
-            AgentGroupRuntime::new(Arc::new(CoordinatorLauncher::new(factory.clone())), limits);
+            AgentGroupRuntime::new(Arc::new(CoordinatorLauncher::new(factory.clone())), policy);
         Self {
             handle: AgentGroupHandle::new(active.clone(), factory),
             active,
@@ -39,9 +39,9 @@ impl AgentGroupSupervisor {
         self.active.set_change_listener(listener);
     }
 
-    /// Applies group limits to the active group and every later one.
-    pub(crate) fn set_limits(&self, limits: AgentLimits) {
-        self.active.set_limits(limits);
+    /// Applies group behavior settings to the active group.
+    pub(crate) fn set_policy(&self, policy: AgentGroupPolicy) {
+        self.active.set_policy(policy);
     }
 
     /// Stops every member and starts an empty group, so a new session or

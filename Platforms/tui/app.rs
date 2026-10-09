@@ -577,7 +577,7 @@ impl App {
                     event.code,
                     KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?')
                 ) {
-                    self.mode = Mode::Chat;
+                    self.activate_workbench_tab(WorkbenchTab::Home);
                 }
                 Ok(())
             }
@@ -1281,6 +1281,7 @@ impl App {
                 self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
                 self.home_override = Some(false);
                 self.close_popup();
+                self.activate_workbench_tab(WorkbenchTab::Session);
             }
             KeyCode::Enter => {
                 let items = self.filtered_session_picker_items();
@@ -1288,6 +1289,7 @@ impl App {
                     self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
                     self.home_override = Some(false);
                     self.close_popup();
+                    self.activate_workbench_tab(WorkbenchTab::Session);
                     return Ok(());
                 }
                 let id = items
@@ -1296,11 +1298,13 @@ impl App {
                 if let Some(session_id) = id {
                     if !self.session_requires_load(&session_id) {
                         self.close_popup();
+                        self.activate_workbench_tab(WorkbenchTab::Session);
                         return Ok(());
                     }
                     backend.send(FrontendCommand::LoadSession { session_id })?;
                     self.home_override = Some(false);
                     self.close_popup();
+                    self.activate_workbench_tab(WorkbenchTab::Session);
                     self.follow_tail = true;
                 }
             }
@@ -1481,7 +1485,7 @@ impl App {
     }
 
     fn close_popup(&mut self) {
-        self.mode = Mode::Chat;
+        self.activate_workbench_tab(WorkbenchTab::Home);
         self.debate_model_picker = false;
         self.popup_filter.clear();
         self.popup_index = 0;

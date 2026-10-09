@@ -20,13 +20,13 @@ function fakeCatalog() {
           model: "MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE",
           maxTokens: 1_048_576,
           maxOutputTokens: 65_535,
-          quotaInfo: { remainingFraction: 0.8, resetTime: "2026-10-02T00:00:00Z" },
+          quotaInfo: { remainingFraction: 0.8, resetTime: "2026-10-02T00:00:00Z", windowSeconds: 604800 },
         },
         "claude-sonnet-4-6": {
           displayName: "Claude Sonnet 4.6",
           model: "MODEL_CLAUDE_SONNET_4_6",
           maxTokens: 200_000,
-          quotaInfo: { remainingFraction: 0.5 },
+          quotaInfo: { remainingFraction: 0.5, windowSeconds: 18000 },
         },
         internal: {
           displayName: "Internal",
@@ -42,6 +42,7 @@ test("Antigravity local client uses the official local RPC session without OAuth
   const calls = [];
   const client = new AntigravityLocalClient({
     endpoint: { baseUrl: "https://127.0.0.1:61234", csrfToken: "test-csrf" },
+    openApp: async () => { throw new Error("model listing must not launch Antigravity"); },
     request: async (endpoint, method, body) => {
       calls.push({ endpoint, method, body });
       if (method === "GetAuthStatus") {
@@ -69,7 +70,7 @@ test("Antigravity local client uses the official local RPC session without OAuth
   ]);
 });
 
-test("AuthManager reports Antigravity browser auth and model quota through the local app", async () => {
+test("AuthManager reports Antigravity browser auth and model quota without launching the local app", async () => {
   const configDir = await mkdtemp(path.join(os.tmpdir(), "yeet-antigravity-auth-"));
   let loginCalls = 0;
   const local = {
@@ -98,8 +99,10 @@ test("AuthManager reports Antigravity browser auth and model quota through the l
   const usage = await auth.providerUsage("antigravity");
   assert.equal(usage.source, "antigravity-local");
   assert.equal(usage.plan, "test-tier");
-  assert.ok(usage.windows.some((window) =>
-    window.label === "Gemini 3.5 Flash Lite" && window.remainingPercent === 80));
+  assert.deepEqual(usage.windows.map(({ label, remainingPercent }) => ({ label, remainingPercent })), [
+    { label: "Week", remainingPercent: 80 },
+    { label: "5h", remainingPercent: 50 },
+  ]);
 });
 
 test("Antigravity local provider maps account model ids and adapts Yeet tool calls", async () => {

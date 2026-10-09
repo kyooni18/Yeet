@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { accountIdFromJwt, jwtExpiresAt } from "./auth-jwt.js";
 import type { FetchLike } from "./types.js";
 import { defaultConfigDirectory } from "./platform.js";
-import { claudeUsageLabel, durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
+import { durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
 import { loginGeminiOAuth, refreshGeminiOAuth, setupGeminiCodeAssist } from "./gemini-oauth.js";
 import { AntigravityLocalClient } from "./antigravity-local.js";
 
@@ -714,10 +714,11 @@ export class AuthManager {
   }
 
   async #antigravityUsage(): Promise<ProviderUsageStatus> {
-    const payload = await this.#antigravityLocal.getAvailableModels(true);
+    // Quota polling is read-only: never attempt to launch the desktop application.
+    const payload = await this.#antigravityLocal.getAvailableModels(true, { launch: false });
     const response = asObject(payload.response);
     const models = asObject(response.models ?? payload.models);
-    const windows: ProviderUsageWindow[] = [];
+    const candidates: Array<{ id: string; model: Record<string, unknown>; remaining: number; reset: string | undefined }> = [];
 
     for (const [id, raw] of Object.entries(models)) {
       const model = asObject(raw);
@@ -725,25 +726,36 @@ export class AuthManager {
       const quota = asObject(model.quotaInfo ?? model.quota_info);
       const remaining = percent(quota.remainingFraction ?? quota.remaining_fraction, true);
       if (remaining === undefined) continue;
-      const label = typeof model.displayName === "string" && model.displayName.trim()
-        ? model.displayName
-        : typeof model.display_name === "string" && model.display_name.trim()
-          ? model.display_name
-          : id;
-      windows.push(usageWindow(
-        id,
-        label,
-        Math.max(0, 100 - remaining),
-        resetIso(quota.resetTime ?? quota.reset_time),
-      ));
+      candidates.push({ id, model, remaining, reset: resetIso(quota.resetTime ?? quota.reset_time) });
     }
 
-    windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
-    const plan = typeof response.userTier === "string"
-      ? response.userTier
-      : typeof response.user_tier === "string"
-        ? response.user_tier
-        : undefined;
+    // Antigravity exposes quotas on each model record, rather than a single
+    // account summary. Collapse duplicate per-model values to one weekly and,
+    // only when explicitly indicated by the quota window/reset, one 5h limit.
+    const fiveHour: typeof candidates = [];
+    const weekly: typeof candidates = [];
+    for (const candidate of candidates) {
+      const quota = asObject(candidate.model.quotaInfo ?? candidate.model.quota_info);
+      const seconds = numeric(quota.limitWindowSeconds ?? quota.windowSeconds ?? quota.window_seconds);
+      const untilReset = candidate.reset ? (Date.parse(candidate.reset) - Date.now()) / 1000 : undefined;
+      const isFiveHour = seconds !== undefined
+        ? seconds <= 5 * 60 * 60 + 60
+        : untilReset !== undefined && untilReset >= 0 && untilReset <= 6 * 60 * 60;
+      (isFiveHour ? fiveHour : weekly).push(candidate);
+    }
+
+    const windows: ProviderUsageWindow[] = [];
+    const addGroup = (group: typeof candidates, id: string, label: string) => {
+      if (group.length === 0) return;
+      // The lowest remaining quota is the useful summary for a grouped limit.
+      const candidate = group.reduce((lowest, current) => current.remaining < lowest.remaining ? current : lowest);
+      windows.push(usageWindow(id, label, 100 - candidate.remaining, candidate.reset));
+    };
+    addGroup(weekly, "weekly", "Week");
+    addGroup(fiveHour, "five_hour", "5h");
+
+    const plan = typeof response.userTier === "string" ? response.userTier
+      : typeof response.user_tier === "string" ? response.user_tier : undefined;
     return {
       provider: "antigravity",
       available: windows.length > 0,
@@ -751,7 +763,7 @@ export class AuthManager {
       fetchedAt: new Date().toISOString(),
       ...(plan ? { plan } : {}),
       windows,
-      ...(windows.length === 0 ? { message: "Antigravity did not report model quota windows for this account." } : {}),
+      ...(windows.length === 0 ? { message: "Antigravity did not report weekly quota usage for this account." } : {}),
     };
   }
 
@@ -778,56 +790,22 @@ export class AuthManager {
     if (!response.ok) {
       const retryAfter = response.headers.get("retry-after");
       const retry = retryAfter ? ` Retry after ${retryAfter}s.` : "";
-      return unavailableUsage(
-        "claude",
-        "anthropic-oauth-api",
-        `Anthropic usage API returned HTTP ${response.status}.${retry}`,
-      );
+      return unavailableUsage("claude", "anthropic-oauth-api", `Anthropic usage API returned HTTP ${response.status}.${retry}`);
     }
 
     const payload = asObject(await response.json());
     const plan = typeof payload.subscription_type === "string" ? payload.subscription_type : undefined;
     const windows: ProviderUsageWindow[] = [];
-    const seen = new Set<string>();
     const append = (id: string, label: string, raw: unknown) => {
       const value = asObject(raw);
       const used = percent(value.utilization ?? value.used_percentage ?? value.usedPercent ?? value.percent, true);
       if (used === undefined) return;
-      const key = `${id}:${label}`;
-      if (seen.has(key)) return;
-      seen.add(key);
       windows.push(usageWindow(id, label, used, resetIso(value.resets_at ?? value.resetsAt)));
     };
 
-    for (const [id, raw] of Object.entries(payload)) {
-      if (["limits", "model_scoped", "extra_usage", "spend", "subscription_type"].includes(id)) continue;
-      append(id, claudeUsageLabel(id), raw);
-    }
-    for (const rawList of [payload.limits, payload.model_scoped]) {
-      if (!Array.isArray(rawList)) continue;
-      for (const [index, raw] of rawList.entries()) {
-        const value = asObject(raw);
-        const kind = typeof value.kind === "string" ? value.kind : `model-${index + 1}`;
-        const scope = asObject(value.scope);
-        const model = asObject(scope.model);
-        const displayName = typeof model.display_name === "string"
-          ? model.display_name
-          : typeof value.display_name === "string"
-            ? value.display_name
-            : typeof value.label === "string"
-              ? value.label
-              : undefined;
-        const label = displayName ? `${displayName} 7d` : claudeUsageLabel(kind);
-        append(`${kind}:${displayName ?? index + 1}`, label, value);
-      }
-    }
+    append("seven_day", "Week", payload.seven_day);
+    append("five_hour", "5h", payload.five_hour);
 
-    const spend = asObject(payload.spend);
-    if (spend.enabled === true) append("spend", "Spend", { ...spend, utilization: spend.percent });
-    const extra = asObject(payload.extra_usage);
-    if (extra.is_enabled === true) append("extra_usage", "Extra usage", extra);
-
-    windows.sort((a, b) => a.remainingPercent - b.remainingPercent || a.label.localeCompare(b.label));
     return {
       provider: "claude",
       available: windows.length > 0,
@@ -835,7 +813,7 @@ export class AuthManager {
       fetchedAt: new Date().toISOString(),
       ...(plan ? { plan } : {}),
       windows,
-      ...(windows.length === 0 ? { message: "Anthropic usage API returned no populated subscription windows." } : {}),
+      ...(windows.length === 0 ? { message: "Anthropic usage API returned no weekly or 5h subscription limits." } : {}),
     };
   }
 

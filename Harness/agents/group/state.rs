@@ -6,11 +6,8 @@
 //! stable list.
 
 use std::{
-    collections::{HashMap, VecDeque},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64},
-    },
+    collections::{HashMap, HashSet, VecDeque},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use serde::{Deserialize, Serialize};
@@ -23,13 +20,8 @@ use crate::{
         task::{AgentTask, AgentTaskId},
     },
     core::Usage,
-    model::{
-        AgentActivityItem, AgentActivityKind, AgentGroupBudgetItem, AgentGroupEventItem,
-        AgentGroupFindingItem,
-    },
+    model::{AgentActivityItem, AgentActivityKind, AgentGroupEventItem, AgentGroupFindingItem},
 };
-
-use super::budget_ledger::BudgetLedger;
 
 pub(crate) type AgentGroupId = Uuid;
 
@@ -52,11 +44,13 @@ pub(crate) struct AgentGroupState {
     pub final_result: Option<String>,
     pub checkpoint_summary: Option<String>,
     pub synthesis_started: bool,
-    pub budget: AgentGroupBudgetItem,
     pub members: Vec<AgentMember>,
     pub tasks: Vec<AgentTask>,
     /// Usage since the group was created.
     pub usage: Usage,
+    /// Event keys already reflected in usage totals; retained for checkpoint replay safety.
+    #[serde(default)]
+    pub(crate) usage_events: HashSet<String>,
     /// Recent member activity, oldest first.
     pub activity: VecDeque<AgentActivityItem>,
     pub event_sequence: u64,
@@ -75,10 +69,10 @@ impl AgentGroupState {
             final_result: None,
             checkpoint_summary: None,
             synthesis_started: false,
-            budget: AgentGroupBudgetItem::default(),
             members: Vec::new(),
             tasks: Vec::new(),
             usage: Usage::default(),
+            usage_events: HashSet::new(),
             activity: VecDeque::new(),
             event_sequence: 0,
             events: VecDeque::new(),
@@ -205,21 +199,11 @@ impl AgentGroupState {
         self.tasks.iter_mut().find(|task| task.id == id)
     }
 
-    /// Members running or holding queued work.
-    pub(crate) fn busy_member_count(&self) -> usize {
-        self.members
-            .iter()
-            .filter(|member| member.status == MemberStatus::Running)
-            .count()
+    pub(crate) fn record_usage_once(&mut self, event_key: String) -> bool {
+        self.usage_events.insert(event_key)
     }
 
-    pub(crate) fn live_member_count(&self) -> usize {
-        self.members
-            .iter()
-            .filter(|member| member.status != MemberStatus::Stopped)
-            .count()
-    }
-
+    /// Whether an active writer currently holds exclusive workspace access.
     pub(crate) fn has_busy_writer(&self) -> bool {
         self.members
             .iter()
@@ -241,8 +225,6 @@ pub(super) struct GroupRuntimeState {
     /// Monotonic checkpoint ordering, incremented for each published change.
     pub checkpoint_revision: u64,
     pub slots: HashMap<AgentId, MemberSlot>,
-    pub task_caps: HashMap<AgentTaskId, Arc<AtomicU64>>,
-    pub budget: BudgetLedger,
 }
 
 /// Durable group state without threads, inboxes, locks, or cancellation flags.
@@ -253,61 +235,14 @@ pub(crate) struct AgentGroupCheckpoint {
     #[serde(default)]
     pub revision: u64,
     pub group: AgentGroupState,
-    pub budget: BudgetLedger,
 }
 
 impl GroupRuntimeState {
-    pub(super) fn new(
-        generation: u64,
-        primary_agent: Option<AgentId>,
-        budget: BudgetLedger,
-    ) -> Self {
+    pub(super) fn new(generation: u64, primary_agent: Option<AgentId>) -> Self {
         Self {
             group: AgentGroupState::new(generation, primary_agent),
             checkpoint_revision: 0,
             slots: HashMap::new(),
-            task_caps: HashMap::new(),
-            budget,
-        }
-    }
-
-    pub(super) fn sync_budget_projection(&mut self) {
-        let limits = self.budget.limits();
-        let usage = self.budget.usage();
-        let mut tasks = self
-            .task_caps
-            .iter()
-            .filter_map(|(task_id, cap)| {
-                let id = task_id.to_string();
-                let allocation = self.budget.allocation(&id)?;
-                let task_usage = self.budget.task_usage(&id);
-                Some(crate::model::AgentTaskBudgetItem {
-                    task_id: id,
-                    allocated_output_tokens: allocation.output_tokens,
-                    used_output_tokens: task_usage.map_or(0, |usage| usage.output_tokens),
-                    remaining_output_tokens: cap.load(std::sync::atomic::Ordering::Acquire),
-                    allocated_cost_usd: allocation.cost_usd,
-                    estimated_cost_used_usd: task_usage.and_then(|usage| usage.estimated_cost_usd),
-                    context_window_tokens: allocation.context_window_tokens,
-                })
-            })
-            .collect::<Vec<_>>();
-        tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
-        self.group.budget = crate::model::AgentGroupBudgetItem {
-            output_limit_tokens: limits.output_tokens,
-            output_used_tokens: usage.output_tokens,
-            cost_limit_usd: limits.estimated_cost_usd,
-            estimated_cost_used_usd: usage.estimated_cost_usd,
-            coordination_reserve_tokens: limits.coordination_output_reserve,
-            synthesis_reserve_tokens: limits.synthesis_output_reserve,
-            coordination_reserve_cost_usd: limits.coordination_cost_reserve_usd,
-            synthesis_reserve_cost_usd: limits.synthesis_cost_reserve_usd,
-            tasks,
-        };
-        for (task_id, cap) in &self.task_caps {
-            if let Some(remaining) = self.budget.remaining_output_cap(&task_id.to_string()) {
-                cap.store(remaining, std::sync::atomic::Ordering::Release);
-            }
         }
     }
 
@@ -316,7 +251,6 @@ impl GroupRuntimeState {
             schema_version: 1,
             revision: self.checkpoint_revision,
             group: self.group.clone(),
-            budget: self.budget.checkpoint_clone(),
         }
     }
 }

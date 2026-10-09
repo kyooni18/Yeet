@@ -12,6 +12,7 @@ import {
   Globe,
   Info,
   Lightbulb,
+  Lock,
   MacWindow,
   Pencil,
   Plug,
@@ -85,8 +86,8 @@ const traceIcons: Record<ConversationIcon, typeof Terminal> = {
   reasoning: Lightbulb, info: Info, error: CircleAlert, copy: Copy,
   refresh: RotateCw, activity: Info,
 }
-function TraceDetails({ details, title }: { details: ConversationDetail[]; title: string }) {
-  return <div className="trace-disclosure__details">{details.map((detail, index) => {
+function TraceDetails({ details, title, summary }: { details: ConversationDetail[]; title: string; summary?: string | null }) {
+  return <div className="trace-disclosure__details">{details.filter(detail => ![title, summary].some(text => text && text.trim() === detail.content.trim())).map((detail, index) => {
     const scrollable = detail.content.length > 600 || detail.content.split('\n').length > 12
     return <div className={`trace-detail${detail.has_background ? ' has-background' : ''}`} key={`${detail.title}-${index}`}>
       {detail.title && <div className="trace-detail__title">{detail.title}</div>}
@@ -95,6 +96,20 @@ function TraceDetails({ details, title }: { details: ConversationDetail[]; title
     </div>
   })}</div>
 }
+/** Status slot: spinner, padlock or dot, never a checkmark; completed rows stay empty. */
+function TraceStatus({ trace }: { trace: ConversationTrace }) {
+  const label = trace.status_label
+  const kind = trace.active ? 'running'
+    : label && /permission|approv/i.test(label) ? 'waiting'
+    : label && /fail|error|denied|timed|cancel|interrupt/i.test(label) ? 'failed'
+    : null
+  return <span className="trace-disclosure__status" data-status={kind ?? undefined}>
+    {kind === 'running' && <span className="mini-spinner" role="img" aria-label={label || 'Running'} />}
+    {kind === 'waiting' && <Lock size={12} strokeWidth={1.8} role="img" aria-label={label || 'Awaiting approval'} />}
+    {kind === 'failed' && <span className="trace-disclosure__failed" role="img" aria-label={label || 'Failed'} />}
+    {kind === null && label && <span className="visually-hidden">{label}</span>}
+  </span>
+}
 function TraceDisclosure({ trace }: { trace: ConversationTrace }) {
   const Icon = traceIcons[trace.icon]
   const expandable = trace.details.length > 0
@@ -102,22 +117,29 @@ function TraceDisclosure({ trace }: { trace: ConversationTrace }) {
     <button className={`trace-disclosure__row${expandable ? ' is-expandable' : ''}`}
       onClick={() => expandable && remoteStore.sendConversationUi({ type: 'toggle', value: trace.id })}
       aria-expanded={expandable ? trace.expanded : undefined}>
-      <span className="trace-disclosure__icon"><Icon size={12} strokeWidth={1.8} /></span>
+      {trace.icon !== 'reasoning' && <span className="trace-disclosure__icon"><Icon size={12} strokeWidth={1.8} /></span>}
       <span className={`trace-disclosure__title${trace.active ? ' is-active' : ''}`}>{trace.title}</span>
       {trace.summary && <><span className="trace-disclosure__dot">·</span><span className="trace-disclosure__summary">{trace.summary}</span></>}
       <span className="trace-disclosure__spacer" />
-      {trace.status_label && <span className="trace-disclosure__status">{trace.status_label}</span>}
       {trace.metadata && <span className="trace-disclosure__metadata">{trace.metadata}</span>}
-      {expandable && <ChevronDown size={9} className={trace.expanded ? 'is-open' : ''} />}
+      <TraceStatus trace={trace} />
+      {expandable ? <ChevronDown size={9} className={trace.expanded ? 'is-open' : ''} /> : <span className="trace-disclosure__chevron-gap" />}
     </button>
-    {trace.expanded && expandable && <TraceDetails details={trace.details} title={trace.title} />}
+    {trace.expanded && expandable && <TraceDetails details={trace.details} title={trace.title} summary={trace.summary} />}
   </div>
 }
 function ActivityGroupView({ group }: { group: ConversationActivityGroup }) {
+  const lead = group.events[group.events.length - 1]?.trace.icon
+  const GroupIcon = lead && lead !== 'reasoning' && lead !== 'activity' && lead !== 'info' ? traceIcons[lead] : null
+  const groupIcon = GroupIcon ? <GroupIcon size={12} strokeWidth={1.8} /> : null
   return <div className="activity-group">
     <button className="activity-group__header" onClick={() => remoteStore.sendConversationUi({ type: 'toggle', value: group.id })} aria-expanded={group.expanded}>
+      {groupIcon && <span className="activity-group__icon">{groupIcon}</span>}
       <span className={`activity-group__summary${group.active ? ' is-active' : ''}`}>{group.summary}</span>
-      <ChevronDown size={9} className={group.expanded ? 'is-open' : ''} />
+      {group.awaits_permission && <Lock size={12} strokeWidth={1.8} role="img" aria-label="Awaiting approval" className="activity-group__lock" />}
+      {group.active && <span className="mini-spinner" role="img" aria-label="Running" />}
+      {group.failed && !group.active && <span className="trace-disclosure__failed" role="img" aria-label="Failed" />}
+      <ChevronDown size={10} className={group.expanded ? 'is-open' : ''} />
     </button>
     {group.expanded && <div className="activity-group__events">{group.events.map(event => <div className="activity-group__event" key={event.key}><TraceDisclosure trace={event.trace} /></div>)}</div>}
   </div>
@@ -370,7 +392,7 @@ export function Conversation({ onEditLast }: { onEditLast: (content: string) => 
           item.type === 'activity'
             ? <ActivityGroupView key={item.id} group={item.group} />
             : item.type === 'reasoning'
-              ? <TraceDisclosure key={item.id} trace={item.trace} />
+              ? <div className="reasoning-trace" key={item.id}><TraceDisclosure trace={item.trace} /></div>
               : (
                 <ConversationEntry
                   key={item.id}

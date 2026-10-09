@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('shared live reasoning displays its full details separately from activity', async ({ page }) => {
+test('live reasoning stays compact in the activity header and shows full reasoning below', async ({ page }) => {
   await emit(page, {
     type: 'conversation_entry',
     version: 1,
@@ -44,11 +44,15 @@ test('shared live reasoning displays its full details separately from activity',
     reset: true,
   })
 
-  const reasoning = page.locator('.conversation-content > .trace-disclosure').filter({ hasText: 'Thinking' })
+  const reasoning = page.locator('.reasoning-trace').last()
   const row = reasoning.locator('.trace-disclosure__row')
+  await expect(reasoning).toBeVisible()
+  await expect(row).toContainText('Thinking')
   await expect(row).toContainText('Comparing the responsive layout')
-  await expect(row).toHaveAttribute('aria-expanded', 'true')
-  await expect(reasoning.locator('.trace-detail__content')).toHaveText('Comparing the responsive layout')
+  const details = reasoning.locator('.trace-disclosure__details')
+  await expect(details).toBeVisible()
+  await expect(details.locator('.trace-detail__content')).toHaveText('Comparing the responsive layout')
+  await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
 })
 
 test('incomplete streamed reasoning markdown never leaks formatting markers', async ({ page }) => {
@@ -78,12 +82,17 @@ test('incomplete streamed reasoning markdown never leaks formatting markers', as
     reset: true,
   })
 
-  const reasoning = page.locator('.conversation-content > .trace-disclosure').filter({ hasText: 'Thinking' })
+  const reasoning = page.locator('.reasoning-trace').last()
   const row = reasoning.locator('.trace-disclosure__row')
+  await expect(reasoning).toBeVisible()
+  await expect(row).toContainText('Thinking')
   await expect(row).toContainText('Checking live sources')
   await expect(row).not.toContainText('**')
-  await expect(reasoning.locator('.trace-disclosure__details')).toContainText('Checking live sources')
-  await expect(reasoning.locator('.trace-disclosure__details')).not.toContainText('**')
+  const details = reasoning.locator('.trace-disclosure__details')
+  await expect(details).toBeVisible()
+  await expect(details).toContainText('Checking live sources')
+  await expect(details).not.toContainText('**')
+  await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
 })
 
 test('completed tools stay collapsed while failed tools open prominently with status', async ({ page }) => {

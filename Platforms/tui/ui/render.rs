@@ -182,7 +182,7 @@ fn draw_content(frame: &mut Frame<'_>, app: &mut App) {
             .min(area.height / 3)
     };
     let portrait = adaptive.shape == responsive::Shape::Portrait;
-    let (input_inset, input_chrome) = (9, if portrait { 2 } else { 1 });
+    let (input_inset, input_chrome) = (9, if portrait { 3 } else { 2 });
     let input_rows = composer::layout(
         &app.input,
         app.cursor,

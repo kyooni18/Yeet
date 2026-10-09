@@ -364,15 +364,6 @@
   font-size: 11px;
 }
 
-.agent-usage-pair {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  margin-top: 8px;
-  color: var(--text-tertiary);
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-}
 
 .agent-event-list {
   display: flex;
@@ -443,8 +434,7 @@
   text-align: center;
 }
 
-.agent-findings,
-.agent-budget {
+.agent-findings {
   margin-top: 9px;
 }
 
@@ -458,87 +448,6 @@
   font-size: 10px;
 }
 
-.agent-budget-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.agent-budget-metric > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.agent-budget-metric strong,
-.agent-budget-metric span {
-  font-size: 10px;
-  font-weight: 560;
-}
-
-.agent-budget-metric span {
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.agent-budget-metric progress {
-  display: block;
-  width: 100%;
-  height: 5px;
-  margin-top: 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--surface-selected);
-}
-
-.agent-budget-metric progress::-webkit-progress-bar {
-  border-radius: 999px;
-  background: var(--surface-selected);
-}
-
-.agent-budget-metric progress::-webkit-progress-value {
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.agent-budget-metric progress::-moz-progress-bar {
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.agent-budget-metric small {
-  display: block;
-  margin-top: 5px;
-  color: var(--text-tertiary);
-  font-size: 9px;
-  line-height: 1.35;
-}
-
-.agent-task-contexts {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.agent-task-contexts > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 9px;
-  padding-top: 6px;
-  border-top: 0.5px solid var(--line-soft);
-}
-
-.agent-task-contexts > div span,
-.agent-task-contexts > div small {
-  overflow: hidden;
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-task-contexts > div span { color: var(--text-secondary); }
-.agent-task-contexts > div small { flex: 0 0 auto; color: var(--text-tertiary); }
 
 .agent-empty {
   display: flex;
@@ -586,7 +495,6 @@
   .agent-group-grid { grid-template-columns: minmax(0, 1fr); }
   .agent-member-list,
   .agent-event-list { max-height: 220px; }
-  .agent-budget-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (hover: none) and (pointer: coarse) {

@@ -1,0 +1,19 @@
+{
+  "name": "hello-from-vune-native",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@vune-ui/web": "latest",
+    "vune-ui": "latest"
+  },
+  "devDependencies": {
+    "@vune-ui/vite": "0.1.23",
+    "vite": "latest"
+  }
+}

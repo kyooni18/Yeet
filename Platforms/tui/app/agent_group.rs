@@ -1,4 +1,4 @@
-//! Agent Group settings panel for session availability and shared limits.
+//! Agent Group settings panel for session availability and member coordination.
 use super::{App, Mode};
 use crate::model::{AgentMode, FrontendCommand};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -7,39 +7,16 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub enum AgentGroupRow {
     Enabled,
     AutoDeploy,
-    Parallel,
-    Pool,
-    Tokens,
-    Cost,
     Writers,
     OpenAgents,
 }
 
-pub const AGENT_GROUP_ROWS: [AgentGroupRow; 8] = [
+pub const AGENT_GROUP_ROWS: [AgentGroupRow; 4] = [
     AgentGroupRow::Enabled,
     AgentGroupRow::AutoDeploy,
-    AgentGroupRow::Parallel,
-    AgentGroupRow::Pool,
-    AgentGroupRow::Tokens,
-    AgentGroupRow::Cost,
     AgentGroupRow::Writers,
     AgentGroupRow::OpenAgents,
 ];
-
-const TOKEN_STEPS: [u64; 8] = [
-    50_000, 100_000, 200_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000,
-];
-const COST_CENT_STEPS: [u64; 9] = [25, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000];
-
-/// The next preset after `current` in `forward` direction, clamped at the ends.
-fn step(steps: &[u64], current: u64, forward: bool) -> u64 {
-    if forward {
-        steps.iter().copied().find(|value| *value > current)
-    } else {
-        steps.iter().rev().copied().find(|value| *value < current)
-    }
-    .unwrap_or(current)
-}
 
 impl App {
     pub(crate) fn agent_group_enabled(&self) -> bool {
@@ -84,9 +61,9 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 self.popup_index = (self.popup_index + 1).min(last)
             }
-            KeyCode::Left | KeyCode::Char('h' | '-') => return self.adjust_agent_group(false),
+            KeyCode::Left | KeyCode::Char('h' | '-') => return self.adjust_agent_group(),
             KeyCode::Right | KeyCode::Char('l' | '+' | '=') => {
-                return self.adjust_agent_group(true);
+                return self.adjust_agent_group();
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 if AGENT_GROUP_ROWS[self.popup_index.min(last)] == AgentGroupRow::OpenAgents {
@@ -94,7 +71,7 @@ impl App {
                     self.open_agents();
                     return Vec::new();
                 }
-                return self.adjust_agent_group(true);
+                return self.adjust_agent_group();
             }
             _ => {}
         }
@@ -103,7 +80,7 @@ impl App {
 
     /// Changes the selected row. Settings are applied locally right away so
     /// repeated presses build on each other before the backend echoes them.
-    fn adjust_agent_group(&mut self, forward: bool) -> Vec<FrontendCommand> {
+    fn adjust_agent_group(&mut self) -> Vec<FrontendCommand> {
         let row = AGENT_GROUP_ROWS[self.popup_index.min(AGENT_GROUP_ROWS.len() - 1)];
         let mut settings = self.state.runtime_settings.agent_group.clone();
         let mut commands = Vec::new();
@@ -131,27 +108,6 @@ impl App {
                         mode: AgentMode::Adaptive,
                     });
                 }
-            }
-            AgentGroupRow::Parallel => {
-                settings.max_concurrent = if forward {
-                    settings.max_concurrent.saturating_add(1)
-                } else {
-                    settings.max_concurrent.saturating_sub(1)
-                };
-            }
-            AgentGroupRow::Pool => {
-                let floor = settings.max_concurrent;
-                settings.max_members = if forward {
-                    settings.max_members.saturating_add(1)
-                } else {
-                    settings.max_members.saturating_sub(1).max(floor)
-                };
-            }
-            AgentGroupRow::Tokens => {
-                settings.max_tokens = step(&TOKEN_STEPS, settings.max_tokens, forward)
-            }
-            AgentGroupRow::Cost => {
-                settings.max_cost_cents = step(&COST_CENT_STEPS, settings.max_cost_cents, forward)
             }
             AgentGroupRow::Writers => {
                 settings.write_policy = if settings.write_policy == "primary_only" {
@@ -181,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_group_panel_edits_limits_and_auto_deploy_turns_the_agent_group_on() {
+    fn agent_group_panel_edits_delegation_and_writer_settings() {
         let mut app = App::default();
         app.open_agents();
         assert!(matches!(
@@ -201,23 +157,12 @@ mod tests {
             ] if settings.auto_deploy
         ));
 
-        // Raising parallel agents past the pool grows the pool with it.
         app.popup_index = 2;
-        for _ in 0..6 {
-            app.handle_agent_group_key(key(KeyCode::Right));
-        }
-        let agent_group = &app.state.runtime_settings.agent_group;
-        assert_eq!(
-            (agent_group.max_concurrent, agent_group.max_members),
-            (10, 10)
-        );
-        app.popup_index = 3;
-        app.handle_agent_group_key(key(KeyCode::Left));
-        assert_eq!(app.state.runtime_settings.agent_group.max_members, 10);
-
-        app.popup_index = 4;
         app.handle_agent_group_key(key(KeyCode::Right));
-        assert_eq!(app.state.runtime_settings.agent_group.max_tokens, 500_000);
+        assert_eq!(
+            app.state.runtime_settings.agent_group.write_policy,
+            "primary_only"
+        );
 
         app.handle_agent_group_key(key(KeyCode::Esc));
         assert_eq!(app.mode, Mode::Agents);

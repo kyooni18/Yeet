@@ -120,7 +120,6 @@ impl Harness {
                     goal_mode: Arc::new(AtomicBool::new(goal)),
                     cancel: Arc::new(AtomicBool::new(false)),
                     continuation,
-                    max_output_tokens: None,
                 },
                 |_| {},
             )

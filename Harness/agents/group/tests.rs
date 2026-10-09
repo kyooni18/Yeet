@@ -19,7 +19,7 @@ use crate::agents::{
     task::{AgentTaskStatus, SpawnRequest},
 };
 
-use super::{AgentGroupRuntime, AgentLimits};
+use super::{AgentGroupPolicy, AgentGroupRuntime};
 use crate::{agents::AgentGroupHandle, core::ToolCall};
 
 struct ScriptedLauncher;
@@ -103,7 +103,7 @@ impl MemberRunner for ScriptedRunner {
 }
 
 fn runtime() -> AgentGroupRuntime {
-    AgentGroupRuntime::new(Arc::new(ScriptedLauncher), AgentLimits::default())
+    AgentGroupRuntime::new(Arc::new(ScriptedLauncher), AgentGroupPolicy::default())
 }
 
 fn request(prompt: &str, background: bool) -> SpawnRequest {
@@ -112,7 +112,6 @@ fn request(prompt: &str, background: bool) -> SpawnRequest {
         description: "inspect".into(),
         prompt: prompt.into(),
         background,
-        weight: 1.0,
     }
 }
 
@@ -207,8 +206,6 @@ fn member_events_are_attributed_and_results_feed_relevant_shared_context() {
     assert_eq!(view.group_id, group_id);
     assert_eq!(view.status, "running");
     assert_eq!(view.shared_findings.len(), 2);
-    assert_eq!(view.output_tokens, 10);
-    assert_eq!(view.estimated_cost_usd, Some(0.02));
     assert!(view.events.iter().all(|event| event.group_id == group_id));
     assert!(
         view.events
@@ -244,11 +241,11 @@ fn group_usage_counts_member_and_coordinator_reports_once() {
     };
     group.record_coordinator_usage("run:1", &coordinator_usage);
     group.record_coordinator_usage("run:1", &coordinator_usage);
+    let usage = group.checkpoint().group.usage.clone();
+    assert_eq!(usage.input_tokens, Some(23));
+    assert_eq!(usage.output_tokens, Some(12));
 
     let view = group.group_item();
-    assert_eq!(view.input_tokens, 23);
-    assert_eq!(view.output_tokens, 12);
-    assert_eq!(view.estimated_cost_usd, Some(0.03));
     assert!(view.events.iter().any(|event| {
         event.kind == "usage" && event.member_id.is_none() && event.task_id.is_none()
     }));
@@ -443,4 +440,15 @@ fn persisted_group_checkpoint_restores_paused_work_and_event_order() {
         restored.group_item().final_result.as_deref(),
         Some("Integrated group result")
     );
+}
+
+#[test]
+fn group_members_are_not_limited_by_a_capacity_setting() {
+    let group = runtime();
+    for index in 0..16 {
+        group
+            .spawn(request(&format!("research task {index}"), true), "m", None)
+            .unwrap();
+    }
+    assert_eq!(group.group_item().members.len(), 16);
 }
