@@ -1,6 +1,6 @@
 {
   "name": "harness-call-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Provider-neutral TypeScript LLM call core for agent harnesses",
   "type": "module",
