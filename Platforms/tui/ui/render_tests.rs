@@ -461,7 +461,7 @@ fn home_overview_layout_tracks_mockup_regions_at_desktop_preview_size() {
     assert_eq!(cell(1, 6).bg, theme::background());
     assert_eq!(cell(40, 18).bg, theme::code_background());
     assert_eq!(cell(100, 18).bg, theme::background());
-    assert_eq!(cell(30, 41).bg, theme::surface_color());
+    assert_eq!(cell(30, 41).bg, theme::code_background());
     assert_eq!(cell(0, 43).bg, theme::status_background());
     assert!(text.contains("Recent views"));
     assert!(text.contains("No views opened yet"));

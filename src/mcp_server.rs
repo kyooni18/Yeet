@@ -1234,6 +1234,13 @@ mod contract_tests {
     #[test]
     fn direct_mcp_shell_keeps_stdout_without_actor_bookkeeping() {
         let directory = tempfile::tempdir().unwrap();
+        let sandbox = crate::sandbox::SandboxStore::new(directory.path()).unwrap();
+        let mut policy = sandbox.load().unwrap();
+        // This contract test exercises MCP output projection; bypass the host's
+        // Linux sandbox backend so the shell command itself can run in the test
+        // process environment.
+        policy.mode = crate::sandbox::SandboxMode::Unlimited;
+        sandbox.save(&policy).unwrap();
         let mut server = McpServer::new(directory.path().to_path_buf());
 
         // A pipeline would choose actor mode under the normal Yeet auto policy.
