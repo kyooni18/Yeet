@@ -291,7 +291,7 @@ pub(super) fn reasoning_lines(
         {
             lines.extend(prefixed_wrapped_line(
                 Span::styled(" │   ", Style::default().fg(theme::hairline())),
-                line.style(Style::default().fg(theme::muted())),
+                line.style(Style::default().fg(theme::text())),
                 width as u16,
             ));
         }
