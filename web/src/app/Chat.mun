@@ -1,5 +1,14 @@
+import { Transition, withAnimation } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
-import { remote, page, sidebarOpen, draft, send, connected } from "./state"
+import { color, mono } from "./theme"
+import {
+  remote, page, ease, isWide, sidebarOpen, connected, toggleSidebar, openSheet, contextLabel, shortModel,
+  toolbarControl, pinToBottom,
+} from "./state"
+import {
+  text, attachments, canAttach, setText, primary, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
+  removeAttachment, pickFiles, addFiles,
+} from "./composer"
 
 function connectionLabel(): string {
   switch (remote.value.connection) {
@@ -11,45 +20,91 @@ function connectionLabel(): string {
   }
 }
 
+function pageTitle(): string {
+  if (page.value === "files") return "Files"
+  if (page.value === "diff") return "Changes"
+  if (page.value === "agents") return "Agents"
+  return remote.value.currentSession?.title || "New session"
+}
+
+/** Small text button used for toolbars and message actions. */
+struct Chip: View {
+  let title: String
+  let action: () => void
+  @State var hovering: Bool = false
+  var body: some View {
+    Button(title, action)
+      .fontSize(12)
+      .foregroundStyle(hovering.value ? color.text : color.muted)
+      .padding({ top: 3, bottom: 3, leading: 8, trailing: 8 })
+      .background(hovering.value ? color.hover : "transparent")
+      .style({ borderRadius: "6px" })
+      .animation(ease, value: hovering.value)
+      .onHover(inside => { hovering.value = inside })
+  }
+}
+
 export struct TopBar: View {
   var body: some View {
-    HStack(spacing: 12) {
-      Button("☰") { sidebarOpen.value = !sidebarOpen.value }
-        .className("icon-button")
+    HStack(spacing: 10) {
+      Chip(title: sidebarOpen.value ? "Hide" : "Menu", action: { toggleSidebar() })
         .accessibilityLabel("Toggle sidebar")
-      Text(page.value === "chat" ? (remote.value.currentSession?.title || "New session") : page.value === "files" ? "Files" : "Changes")
-        .className("title")
+      Text(pageTitle())
+        .fontWeight("semibold")
+        .lineLimit(1)
+        .contentTransition(ContentTransition.opacity)
       Spacer()
-      Text(connectionLabel()).className("status")
+      Text(connectionLabel())
+        .fontSize(12)
+        .foregroundStyle(remote.value.connection === "failed" ? color.del : color.muted)
+      Text(contextLabel())
+        .fontSize(12)
+        .foregroundStyle(color.faint)
     }
-    .className("topbar")
+    .padding({ leading: 12, trailing: 16 })
+    .style({ height: "46px", flex: "none" })
+    .style({ borderBottom: "1px solid var(--line)", flex: "none" })
   }
 }
 
 struct Detail: View {
   let detail: Any
   var body: some View {
-    Text(detail.content).className(detail.is_error ? "detail is-error" : detail.monospaced ? "detail mono" : "detail")
+    Text(detail.content)
+      .fontSize(detail.monospaced ? 12 : 13)
+      .foregroundStyle(detail.is_error ? color.del : detail.monospaced ? color.text : color.muted)
+      .padding(detail.monospaced ? 10 : 0)
+      .background(detail.monospaced ? color.panel : "transparent")
+      .style({ width: "100%" })
+      .style({ borderRadius: "6px", whiteSpace: "pre-wrap", fontFamily: detail.monospaced ? mono : "inherit", maxHeight: "320px", overflow: "auto" })
   }
 }
 
 struct Trace: View {
   let trace: Any
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) }, label: {
+    VStack(alignment: .stretch, spacing: 6) {
+      Button(action: { withAnimation(ease) { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) } }, label: {
         HStack(spacing: 8) {
-          Text(trace.title).className("trace-title")
-          Text(trace.summary || "").className("trace-summary")
+          Text(trace.expanded ? "▾" : "▸").foregroundStyle(color.faint)
+          Text(trace.title).foregroundStyle(trace.active ? color.text : color.muted)
+          Text(trace.summary || "")
+            .fontSize(12)
+            .foregroundStyle(color.faint)
+            .lineLimit(1)
           Spacer()
-          Text(trace.status_label || "").className("trace-status")
+          Text(trace.status_label || "").fontSize(12).foregroundStyle(color.faint)
         }
       })
-      .className(trace.active ? "trace is-active" : "trace")
+      .fontSize(13)
       if trace.expanded {
-        ForEach(trace.details, { id: detail => detail.title + detail.content.length }) { detail in
-          Detail(detail: detail)
+        VStack(alignment: .stretch, spacing: 6) {
+          ForEach(trace.details, { id: detail => detail.title + ":" + detail.content.length }) { detail in
+            Detail(detail: detail)
+          }
         }
+        .padding({ leading: 18 })
+        .transition(Transition.opacity.combined(Transition.move("top", 6)))
       }
     }
   }
@@ -58,37 +113,80 @@ struct Trace: View {
 struct Activity: View {
   let group: Any
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Button(group.summary + (group.active ? " …" : "")) {
-        remoteStore.sendConversationUi({ type: "toggle", value: group.id })
-      }
-      .className(group.failed ? "activity is-error" : "activity")
+    VStack(alignment: .stretch, spacing: 4) {
+      Button(action: { withAnimation(ease) { remoteStore.sendConversationUi({ type: "toggle", value: group.id }) } }, label: {
+        HStack(spacing: 8) {
+          Text(group.expanded ? "▾" : "▸").foregroundStyle(color.faint)
+          Text(group.summary)
+            .foregroundStyle(group.failed ? color.del : group.awaits_permission ? color.text : color.muted)
+            .lineLimit(1)
+          if group.active {
+            ProgressView()
+              .frame(width: 10, height: 10)
+              .transition(Transition.opacity)
+          }
+          Spacer()
+        }
+      })
+      .fontSize(13)
       if group.expanded {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .stretch, spacing: 4) {
           ForEach(group.events, { id: event => event.key }) { event in
             Trace(trace: event.trace)
           }
         }
-        .className("activity-events")
+        .padding({ leading: 18 })
+        .transition(Transition.opacity.combined(Transition.move("top", 6)))
       }
     }
   }
 }
 
-struct Entry: View {
-  let entry: Any
+struct MessageControls: View {
+  let controls: Any
+  let trailing: Bool
   var body: some View {
-    Group() {
-      if entry.kind.type === "user" {
-        Element("yeet-markdown", { source: entry.kind.content, class: "msg user" })
-      } else if entry.kind.type === "assistant" {
-        Element("yeet-markdown", { source: entry.kind.content, class: "msg assistant" })
-      } else if entry.kind.type === "error" {
-        Text(entry.kind.content).className("msg error")
-      } else {
-        Text(entry.kind.content || "").className("msg system")
+    HStack(spacing: 2) {
+      if trailing {
+        Spacer()
+      }
+      ForEach(controls, { id: control => control.action.type }) { control in
+        Chip(title: control.label, action: { remoteStore.sendConversationUi(control.action) })
+          .disabled(!control.enabled)
+      }
+      if !trailing {
+        Spacer()
       }
     }
+  }
+}
+
+struct Message: View {
+  let item: Any
+  @State var hovering: Bool = false
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 4) {
+      if item.entry.kind.type === "user" {
+        Element("yeet-markdown", { source: item.entry.kind.content })
+          .padding({ top: 8, bottom: 8, leading: 12, trailing: 12 })
+          .background(color.raised)
+          .style({ borderRadius: "12px", maxWidth: "85%" })
+      } else if item.entry.kind.type === "assistant" {
+        Element("yeet-markdown", { source: item.entry.kind.content })
+          .style({ width: "100%" })
+      } else if item.entry.kind.type === "error" {
+        Text(item.entry.kind.content).foregroundStyle(color.del)
+      } else {
+        Text(item.entry.kind.content || item.entry.kind.name || "")
+          .fontSize(12)
+          .foregroundStyle(color.muted)
+      }
+      MessageControls(controls: item.controls, trailing: item.entry.kind.type === "user")
+        .opacity(hovering.value || !isWide.value ? 1 : 0)
+        .animation(ease, value: hovering.value)
+    }
+    .style({ alignItems: item.entry.kind.type === "user" ? "flex-end" : "stretch" })
+    .onHover(inside => { hovering.value = inside })
   }
 }
 
@@ -101,77 +199,208 @@ struct Item: View {
       } else if item.type === "reasoning" {
         Trace(trace: item.trace)
       } else {
-        Entry(entry: item.entry)
+        Message(item: item)
       }
     }
+  }
+}
+
+struct Thread: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 18) {
+      if !(remote.value.conversation?.items.length) && !remote.value.conversation?.streaming_text {
+        Text(connected() ? "Start a conversation." : "Waiting for Yeet…")
+          .foregroundStyle(color.faint)
+          .style({ width: "100%" })
+          .padding({ top: 120 })
+          .transition(Transition.opacity)
+      }
+      ForEach(remote.value.conversation?.items ?? [], { id: item => item.id }) { item in
+        Item(item: item)
+          .transition(Transition.opacity.combined(Transition.move("bottom", 8)))
+      }
+      if remote.value.conversation?.streaming_text {
+        Element("yeet-markdown", { source: remote.value.conversation.streaming_text })
+          .style({ width: "100%" })
+      }
+      if remote.value.conversation?.preparing {
+        HStack(spacing: 8) {
+          ProgressView().frame(width: 10, height: 10)
+          Text(remote.value.conversation.preparing_label || "Thinking…").fontSize(13).foregroundStyle(color.muted)
+        }
+        .transition(Transition.opacity)
+      }
+      if remote.value.conversation?.error {
+        Text(remote.value.conversation.error).foregroundStyle(color.del)
+      }
+    }
+    .padding({ top: 24, bottom: 32, leading: 20, trailing: 20 })
+    .style({ maxWidth: "760px" })
+    .style({ margin: "0 auto" })
   }
 }
 
 struct Permission: View {
   let request: Any
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text(request.title).className("permission-title")
-      Text(request.operation || request.detail).className("permission-detail")
+    VStack(alignment: .stretch, spacing: 8) {
+      Text(request.title).fontWeight("semibold")
+      Text(request.operation || request.detail)
+        .fontSize(12)
+        .foregroundStyle(color.muted)
+        .style({ fontFamily: mono, whiteSpace: "pre-wrap" })
+      if request.reason {
+        Text(request.reason).fontSize(12).foregroundStyle(color.muted)
+      }
       HStack(spacing: 8) {
         ForEach(request.controls, { id: control => control.label }) { control in
           Button(control.label) { remoteStore.sendComposerUi(control.action) }
-            .className(control.icon === "allow" ? "button primary" : "button")
-            .disabled(!control.enabled)
+            .padding({ top: 6, bottom: 6, leading: 12, trailing: 12 })
+            .background(control.icon === "allow" ? color.accent : color.raised)
+            .foregroundStyle(control.icon === "allow" ? color.accentInk : color.text)
+            .style({ borderRadius: "6px" })
+            .disabled(!control.enabled || !connected())
         }
       }
     }
-    .className("permission")
+    .padding(12)
+    .border(color.line, 1)
+    .style({ borderRadius: "10px" })
+    .transition(Transition.opacity.combined(Transition.move("bottom", 8)))
+  }
+}
+
+struct Suggestions: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 0) {
+      ForEach(suggestions(), { id: item => item.command }) { item in
+        Button(action: { chooseSuggestion(item) }, label: {
+          HStack(spacing: 10) {
+            Text(item.command).style({ fontFamily: mono }).fontSize(12)
+            Text(item.description).fontSize(12).foregroundStyle(color.muted).lineLimit(1)
+            Spacer()
+          }
+        })
+        .padding({ top: 6, bottom: 6, leading: 10, trailing: 10 })
+      }
+    }
+    .background(color.panel)
+    .style({ borderRadius: "8px" })
+    .transition(Transition.opacity.combined(Transition.move("bottom", 6)))
+  }
+}
+
+struct AttachmentStrip: View {
+  var body: some View {
+    HStack(spacing: 6) {
+      ForEach(attachments.value, { id: item => item.id }) { item in
+        HStack(spacing: 6) {
+          Text(item.name).fontSize(12).lineLimit(1)
+          Text(item.error ? "failed" : item.remoteId ? "" : "uploading…").fontSize(12).foregroundStyle(item.error ? color.del : color.faint)
+          Button("×") { removeAttachment(item.id) }.foregroundStyle(color.muted)
+        }
+        .padding({ top: 4, bottom: 4, leading: 8, trailing: 6 })
+        .background(color.panel)
+        .style({ borderRadius: "6px", maxWidth: "220px" })
+        .transition(Transition.scale(0.9).combined(Transition.opacity))
+      }
+    }
+    .style({ flexWrap: "wrap" })
+  }
+}
+
+struct ToolbarChoice: View {
+  let id: String
+  var body: some View {
+    Group() {
+      if toolbarControl(id) {
+        Picker(Binding(() => toolbarControl(id).value, value => remoteStore.sendToolbarUi({ type: "choose", value: { id, value } })),
+             toolbarControl(id).options.map(option => ({ value: option.value, label: option.label })))
+        .accessibilityLabel(toolbarControl(id).label)
+        .fontSize(12)
+        .foregroundStyle(color.muted)
+        .disabled(!connected() || !toolbarControl(id).enabled)
+        .style({ background: "transparent", border: "0", maxWidth: "160px" })
+      }
+    }
   }
 }
 
 struct Composer: View {
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      ForEach(remote.value.composer?.permissions ?? [], { id: request => request.target.id }) { request in
+    VStack(alignment: .stretch, spacing: 8) {
+      ForEach(remote.value.composer?.permissions ?? [], { id: request => request.target.kind + ":" + request.target.id }) { request in
         Permission(request: request)
       }
-      HStack(alignment: .bottom, spacing: 8) {
-        TextEditor(Binding(draft), remote.value.composer?.placeholder || "Message", 1)
-          .className("input")
-          .withProps({ onKeyDown: event => {
-            if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send() }
-          } })
-        if remote.value.state.is_streaming {
-          Button("Stop") { remoteStore.interrupt() }.className("button")
-        } else {
-          Button("Send") { send() }
-            .className("button primary")
-            .disabled(!connected() || !draft.value.trim())
+      if suggestions().length {
+        Suggestions()
+      }
+      if remote.value.composer?.edit_banner {
+        HStack(spacing: 8) {
+          Text(remote.value.composer.edit_banner).fontSize(12).foregroundStyle(color.muted)
+          Spacer()
+          Chip(title: "Cancel", action: { cancelEdit() })
+        }
+        .transition(Transition.opacity)
+      }
+      if attachments.value.length {
+        AttachmentStrip()
+      }
+      VStack(alignment: .stretch, spacing: 6) {
+        TextEditor(Binding(() => text.value, setText), remote.value.composer?.placeholder || "Message", 1)
+          .accessibilityLabel("Message")
+          .withProps({
+            onKeyDown,
+            onPaste: event => { if (canAttach.value && event.clipboardData?.files.length) { event.preventDefault(); addFiles(event.clipboardData.files) } },
+          })
+          .padding({ top: 4, leading: 4, trailing: 4 })
+          .style({ width: "100%", minHeight: "24px" })
+          .style({ border: "0", outline: "none", background: "transparent", resize: "none", fieldSizing: "content", maxHeight: "40vh", font: "inherit", color: "inherit" })
+        HStack(spacing: 4) {
+          if canAttach.value {
+            Chip(title: "Attach", action: { pickFiles() })
+              .disabled(!connected() || remote.value.state.is_streaming)
+          }
+          Button(shortModel(remote.value.state.active_model) || "Model") { openSheet("model") }
+            .fontSize(12)
+            .foregroundStyle(color.muted)
+            .padding({ leading: 6, trailing: 6 })
+          ToolbarChoice(id: "reasoning")
+          Spacer()
+          Button(remote.value.composer?.primary_control.label || "Send") { primary() }
+            .fontSize(13)
+            .fontWeight("medium")
+            .padding({ top: 6, bottom: 6, leading: 14, trailing: 14 })
+            .background(remote.value.state.is_streaming ? color.raised : color.accent)
+            .foregroundStyle(remote.value.state.is_streaming ? color.text : color.accentInk)
+            .style({ borderRadius: "8px" })
+            .opacity(remote.value.composer?.primary_control.enabled ? 1 : 0.4)
+            .animation(ease, value: remote.value.state.is_streaming)
+            .disabled(!connected() || !remote.value.composer?.primary_control.enabled)
         }
       }
-      Text(remote.value.state.active_model + " · " + remote.value.state.active_reasoning_level)
-        .className("meta")
+      .padding(10)
+      .background(color.panel)
+      .border(color.line, 1)
+      .style({ borderRadius: "12px" })
     }
-    .className("composer")
+    .padding({ top: 8, bottom: 16, leading: 20, trailing: 20 })
+    .style({ maxWidth: "760px" })
+    .style({ margin: "0 auto", width: "100%" })
   }
 }
 
 export struct Chat: View {
   var body: some View {
-    VStack(spacing: 0) {
+    VStack(alignment: .stretch, spacing: 0) {
       ScrollView() {
-        VStack(alignment: .leading, spacing: 16) {
-          ForEach(remote.value.conversation?.items ?? [], { id: item => item.id }) { item in
-            Item(item: item)
-          }
-          if remote.value.conversation?.streaming_text {
-            Element("yeet-markdown", { source: remote.value.conversation.streaming_text, class: "msg assistant" })
-          }
-          if remote.value.conversation?.error {
-            Text(remote.value.conversation.error).className("msg error")
-          }
-        }
-        .className("thread")
+        Thread()
       }
-      .className("scroll")
+      .elementRef(pinToBottom)
+      .style({ flex: "1", minHeight: "0", width: "100%" })
       Composer()
     }
-    .className("chat")
+    .style({ flex: "1", minHeight: "0" })
+    .style({ minHeight: "0" })
   }
 }

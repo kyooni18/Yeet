@@ -1,0 +1,139 @@
+import { Transition } from "@mun/core"
+import { remoteStore } from "@/store/remoteStore"
+import { color } from "./theme"
+import { remote, ease, connected } from "./state"
+
+const objective = State("")
+
+function toneColor(tone: string): string {
+  if (tone === "active") return color.run
+  if (tone === "error") return color.del
+  if (tone === "complete") return color.add
+  return color.faint
+}
+
+function submitObjective() {
+  const value = objective.value.trim()
+  if (!value) return
+  remoteStore.sendAgentUi({ type: "submit_draft", value })
+  objective.value = ""
+}
+
+struct AgentButton: View {
+  let control: Any
+  var body: some View {
+    Button(control.label) { remoteStore.sendAgentUi(control.action) }
+      .fontSize(12)
+      .padding({ top: 5, bottom: 5, leading: 10, trailing: 10 })
+      .background(color.raised)
+      .style({ borderRadius: "6px" })
+      .disabled(!control.enabled || !connected())
+  }
+}
+
+struct Member: View {
+  let row: Any
+  var body: some View {
+    Button(action: { remoteStore.sendAgentUi(row.select_action) }, label: {
+      HStack(spacing: 10) {
+        Circle().frame(width: 7, height: 7)
+        .style({ borderRadius: "50%", flex: "none" }).background(toneColor(row.status.tone))
+        VStack(alignment: .stretch, spacing: 1) {
+          Text(row.member.role || row.member.id).fontSize(13)
+          Text(row.member.summary || row.member.description).fontSize(12).foregroundStyle(color.muted).lineLimit(2)
+        }
+        Spacer()
+        Text(row.status.label).fontSize(12).foregroundStyle(color.faint)
+      }
+    })
+    .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
+    .background(row.selected ? color.select : "transparent")
+    .style({ borderRadius: "8px" })
+    .animation(ease, value: row.selected)
+  }
+}
+
+struct Feed: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 4) {
+      Text("Activity").fontSize(12).foregroundStyle(color.faint)
+      ForEach(remote.value.agents.feed.slice(-40).reverse(), { id: event => event.id }) { event in
+        HStack(alignment: .top, spacing: 10) {
+          Text(event.actor).fontSize(12).foregroundStyle(color.muted).frame(width: 96, alignment: "leading").lineLimit(1)
+          Text(event.detail).fontSize(12).style({ width: "100%" })
+        }
+        .transition(Transition.opacity)
+      }
+    }
+  }
+}
+
+struct AgentsContent: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 20) {
+      HStack(spacing: 10) {
+        VStack(alignment: .stretch, spacing: 2) {
+          Text(remote.value.agents.headline || remote.value.agents.title).fontWeight("semibold")
+          Text(remote.value.agents.group_status.label).fontSize(12).foregroundStyle(toneColor(remote.value.agents.group_status.tone))
+        }
+        Spacer()
+        ForEach(remote.value.agents.group_controls.filter(control => control.visible), { id: control => control.label }) { control in
+          AgentButton(control: control)
+        }
+      }
+      HStack(spacing: 8) {
+        TextField(Binding(objective), remote.value.agents.create_hint || "Describe an objective for a new agent group")
+          .withProps({ onKeyDown: event => { if (event.key === "Enter") submitObjective() } })
+          .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
+          .background(color.panel)
+          .style({ flex: "1", minWidth: "0" })
+          .style({ border: "1px solid var(--line)", outline: "none", borderRadius: "8px", font: "inherit", color: "inherit" })
+        Button("Create") { submitObjective() }
+          .padding({ top: 8, bottom: 8, leading: 14, trailing: 14 })
+          .background(color.accent)
+          .foregroundStyle(color.accentInk)
+          .style({ borderRadius: "8px" })
+          .disabled(!objective.value.trim() || !connected())
+      }
+      if remote.value.agents.group.objective {
+        Text(remote.value.agents.group.objective).foregroundStyle(color.muted)
+      }
+      if remote.value.agents.result {
+        Element("yeet-markdown", { source: remote.value.agents.result })
+      }
+      if remote.value.agents.members.length {
+        VStack(alignment: .stretch, spacing: 2) {
+          ForEach(remote.value.agents.members, { id: row => row.member.id }) { row in
+            Member(row: row)
+          }
+        }
+      } else {
+        VStack(alignment: .stretch, spacing: 4) {
+          Text(remote.value.agents.empty_title).foregroundStyle(color.muted)
+          Text(remote.value.agents.empty_message).fontSize(12).foregroundStyle(color.faint)
+        }
+      }
+      if remote.value.agents.feed.length {
+        Feed()
+      }
+    }
+  }
+}
+
+export struct AgentsPage: View {
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 0) {
+        if remote.value.agents {
+          AgentsContent()
+        } else {
+          Text("Agents are not available on this connection.").foregroundStyle(color.muted)
+        }
+      }
+      .padding({ top: 24, bottom: 40, leading: 20, trailing: 20 })
+      .style({ maxWidth: "820px" })
+      .style({ margin: "0 auto" })
+    }
+    .style({ flex: "1", minHeight: "0", width: "100%" })
+  }
+}

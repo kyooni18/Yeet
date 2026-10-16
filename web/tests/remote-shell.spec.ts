@@ -6,8 +6,8 @@ test('remote shell sends, navigates and hides the sidebar', async ({ page }) => 
   await installMockRemote(page)
   await page.goto('/')
 
-  await expect(page.locator('yeet-markdown.assistant').first()).toBeVisible()
-  const input = page.locator('textarea.input')
+  await expect(page.locator('yeet-markdown').nth(1)).toBeVisible()
+  const input = page.getByRole('textbox', { name: 'Message' })
   await input.fill('hello there')
   await input.press('Enter')
   await expect(input).toHaveValue('')
@@ -15,8 +15,8 @@ test('remote shell sends, navigates and hides the sidebar', async ({ page }) => 
   await page.getByRole('button', { name: 'Files' }).click()
   await expect(page.getByRole('button', { name: /README\.md/ })).toBeVisible()
   await page.getByRole('button', { name: 'Changes' }).click()
-  await expect(page.locator('.line.add').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /src\/limiter\.ts/ })).toBeVisible()
 
   await page.getByRole('button', { name: 'Toggle sidebar' }).click()
-  await expect(page.locator('.sidebar')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Files' })).toHaveCount(0)
 })

@@ -1,5 +1,7 @@
+import { Transition } from "@mun/core"
 import { loginWithAccessKey, loginWithPasskey, registerPasskey } from "@/remote/auth"
 import { remoteStore } from "@/store/remoteStore"
+import { color } from "./theme"
 
 const key = State("")
 const error = State("")
@@ -33,23 +35,39 @@ async function enroll() {
 
 export struct AuthView: View {
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Yeet").className("auth-title")
-      Text("Enter the access key printed by `yeet remote`, or use a passkey.").className("muted")
+    VStack(alignment: .stretch, spacing: 12) {
+      Text("Yeet").fontSize(20).fontWeight("semibold")
+      Text("Enter the access key printed by `yeet remote`, or use a passkey.").foregroundStyle(color.muted)
       TextField(Binding(key), "Access key")
-        .className("input")
         .withProps({ type: "password", autocomplete: "current-password", onKeyDown: event => { if (event.key === "Enter") submitKey() } })
+        .padding({ top: 10, bottom: 10, leading: 12, trailing: 12 })
+        .background(color.panel)
+        .style({ border: "1px solid var(--line)", outline: "none", borderRadius: "8px", font: "inherit", color: "inherit" })
       if enrollToken {
-        Button("Register this device's passkey") { enroll() }.className("button primary")
+        Button("Register this device's passkey") { enroll() }
+          .padding(10)
+          .background(color.accent)
+          .foregroundStyle(color.accentInk)
+          .style({ borderRadius: "8px", textAlign: "center" })
       }
       HStack(spacing: 8) {
-        Button("Sign in") { submitKey() }.className("button primary").disabled(!key.value.trim())
-        Button("Use passkey") { usePasskey() }.className("button")
+        Button("Sign in") { submitKey() }
+          .padding({ top: 8, bottom: 8, leading: 16, trailing: 16 })
+          .background(color.accent)
+          .foregroundStyle(color.accentInk)
+          .style({ borderRadius: "8px" })
+          .disabled(!key.value.trim())
+        Button("Use passkey") { usePasskey() }
+          .padding({ top: 8, bottom: 8, leading: 16, trailing: 16 })
+          .background(color.raised)
+          .style({ borderRadius: "8px" })
       }
       if error.value {
-        Text(error.value).className("error")
+        Text(error.value).foregroundStyle(color.del).transition(Transition.opacity)
       }
     }
-    .className("auth")
+    .padding(20)
+    .style({ maxWidth: "380px" })
+    .style({ margin: "18vh auto 0" })
   }
 }

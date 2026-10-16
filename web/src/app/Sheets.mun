@@ -1,0 +1,201 @@
+import { Transition } from "@mun/core"
+import { remoteStore } from "@/store/remoteStore"
+import { color, mono } from "./theme"
+import { remote, sheet, ease, connected, openSheet, shortModel } from "./state"
+
+const modelQuery = State("")
+const editorValue = State("")
+
+function filteredModels() {
+  const needle = modelQuery.value.trim().toLowerCase()
+  const catalog = remote.value.state.model_catalog.length
+    ? remote.value.state.model_catalog
+    : remote.value.state.available_models.map(id => ({ id, provider: id.split("/")[0], model: id }))
+  return needle ? catalog.filter(item => item.id.toLowerCase().includes(needle)) : catalog
+}
+
+function chooseModel(id: string) {
+  remoteStore.selectModel(id)
+  openSheet("none")
+}
+
+struct ListRow: View {
+  let title: String
+  let detail: String
+  let selected: Bool
+  let action: () => void
+  @State var hovering: Bool = false
+  var body: some View {
+    Button(action: action, label: {
+      HStack(spacing: 10) {
+        Text(title).lineLimit(1)
+        Spacer()
+        Text(detail).fontSize(12).foregroundStyle(color.faint)
+        Text(selected ? "✓" : "").foregroundStyle(color.text).frame(width: 12)
+      }
+    })
+    .padding({ top: 7, bottom: 7, leading: 10, trailing: 10 })
+    .background(hovering.value ? color.hover : "transparent")
+    .style({ borderRadius: "6px" })
+    .onHover(inside => { hovering.value = inside })
+  }
+}
+
+struct ModelSheet: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 8) {
+      TextField(Binding(modelQuery), "Search models")
+        .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
+        .background(color.raised)
+        .style({ border: "0", outline: "none", borderRadius: "8px", font: "inherit", color: "inherit" })
+      if remote.value.state.is_loading_models {
+        Text("Loading models…").fontSize(12).foregroundStyle(color.muted)
+      }
+      ScrollView() {
+        VStack(alignment: .stretch, spacing: 1) {
+          ForEach(filteredModels(), { id: item => item.id }) { item in
+            ListRow(title: shortModel(item.model || item.id), detail: item.provider === item.id ? "" : item.provider, selected: item.id === remote.value.state.active_model, action: { chooseModel(item.id) })
+              .disabled(!connected())
+          }
+        }
+      }
+      .style({ maxHeight: "420px" })
+    }
+  }
+}
+
+struct Switch: View {
+  let on: Bool
+  var body: some View {
+    HStack(spacing: 0) {
+      Circle()
+        .frame(width: 16, height: 16)
+        .style({ borderRadius: "50%", flex: "none" })
+        .background(on ? color.accentInk : color.muted)
+        .offset(on ? 14 : 0, 0)
+        .animation(ease, value: on)
+      Spacer()
+    }
+    .padding(2)
+    .background(on ? color.accent : color.raised)
+    .animation(ease, value: on)
+    .style({ width: "34px", height: "20px", borderRadius: "999px", flex: "none" })
+  }
+}
+
+struct SettingControl: View {
+  let control: Any
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 6) {
+      if control.kind === "choice" {
+        Text(control.label).fontSize(13)
+        HStack(spacing: 2) {
+          ForEach(control.options, { id: option => option.value }) { option in
+            Button(option.label) { remoteStore.sendSettingsUi(option.action) }
+              .fontSize(12)
+              .padding({ top: 4, bottom: 4, leading: 10, trailing: 10 })
+              .background(option.selected ? color.bg : "transparent")
+              .foregroundStyle(option.selected ? color.text : color.muted)
+              .style({ borderRadius: "6px" })
+              .animation(ease, value: option.selected)
+              .disabled(!connected() || !control.enabled)
+          }
+        }
+        .padding(2)
+        .background(color.raised)
+        .style({ borderRadius: "8px" })
+      } else {
+        Button(action: { remoteStore.sendSettingsUi(control.action) }, label: {
+          HStack(spacing: 10) {
+            VStack(alignment: .stretch, spacing: 1) {
+              Text(control.label).fontSize(13)
+              Text(control.detail).fontSize(12).foregroundStyle(color.muted)
+            }
+            Spacer()
+            if control.kind === "toggle" {
+              Switch(on: !!control.checked)
+            } else {
+              Text(control.action_label || control.value || "›").fontSize(12).foregroundStyle(color.muted).style({ whiteSpace: "nowrap" })
+            }
+          }
+        })
+        .disabled(!connected() || !control.enabled)
+      }
+    }
+    .padding({ top: 6, bottom: 6 })
+  }
+}
+
+struct SettingsEditor: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 6) {
+      Text(remote.value.settings.editor.label).fontSize(13)
+      HStack(spacing: 6) {
+        TextField(Binding(editorValue), remote.value.settings.editor.value)
+          .padding({ top: 6, bottom: 6, leading: 8, trailing: 8 })
+          .background(color.raised)
+          .style({ flex: "1", minWidth: "0" })
+          .style({ border: "0", outline: "none", borderRadius: "6px", font: "inherit", color: "inherit" })
+        Button("Save") { remoteStore.sendSettingsUi({ type: "submit_editor", value: editorValue.value }); editorValue.value = "" }
+        Button("Cancel") { remoteStore.sendSettingsUi({ type: "cancel_editor" }) }.foregroundStyle(color.muted)
+      }
+      Text(remote.value.settings.editor.hint).fontSize(12).foregroundStyle(color.faint)
+    }
+    .transition(Transition.opacity)
+  }
+}
+
+struct SettingsSheet: View {
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 18) {
+        if remote.value.settings?.notice {
+          Text(remote.value.settings.notice).fontSize(12).foregroundStyle(color.muted)
+        }
+        if remote.value.settings?.editor {
+          SettingsEditor()
+        }
+        ForEach(remote.value.settings?.sections ?? [], { id: section => section.id }) { section in
+          VStack(alignment: .stretch, spacing: 2) {
+            Text(section.label).fontSize(12).foregroundStyle(color.faint)
+            ForEach(section.controls, { id: control => control.id }) { control in
+              SettingControl(control: control)
+            }
+          }
+        }
+      }
+    }
+    .style({ maxHeight: "520px" })
+  }
+}
+
+export struct SheetLayer: View {
+  var body: some View {
+    ZStack(alignment: .center) {
+      Rectangle()
+        .style({ position: "absolute", inset: "0", background: "var(--scrim)" })
+        .onTapGesture(() => openSheet("none"))
+        .transition(Transition.opacity)
+      VStack(alignment: .stretch, spacing: 12) {
+        HStack(spacing: 0) {
+          Text(sheet.value === "model" ? "Model" : remote.value.settings?.title || "Settings").fontWeight("semibold")
+          Spacer()
+          Button("Done") { openSheet("none") }.foregroundStyle(color.muted)
+        }
+        if sheet.value === "model" {
+          ModelSheet()
+        } else {
+          SettingsSheet()
+        }
+      }
+      .padding(16)
+      .style({ width: "440px" })
+      .background(color.bg)
+      .border(color.line, 1)
+      .shadow("rgba(0, 0, 0, 0.18)", 24, 0, 8)
+      .style({ borderRadius: "14px", maxWidth: "calc(100vw - 24px)", position: "relative" })
+      .transition(Transition.opacity.combined(Transition.scale(0.97)))
+    }
+    .style({ position: "fixed", inset: "0", zIndex: "20" })
+  }
+}
