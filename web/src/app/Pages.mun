@@ -1,0 +1,92 @@
+import { remoteStore } from "@/store/remoteStore"
+import { remote } from "./state"
+
+function diffLineClass(line: string): string {
+  if (line.startsWith("@@")) return "line hunk"
+  if (line.startsWith("+")) return "line add"
+  if (line.startsWith("-")) return "line del"
+  return "line"
+}
+
+struct FileRow: View {
+  let entry: Any
+  let selected: Bool
+  var body: some View {
+    Button(action: {
+      if (entry.directory) remoteStore.requestFiles(entry.path)
+      else remoteStore.requestFiles(remote.value.workspaceFiles.path, entry.path)
+    }, label: {
+      HStack(spacing: 8) {
+        Text(entry.directory ? entry.name + "/" : entry.name)
+        Spacer()
+        Text(entry.status || "").className("muted")
+      }
+    })
+    .className(selected ? "row is-current" : "row")
+  }
+}
+
+export struct FilesPage: View {
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .leading, spacing: 0) {
+        if !remote.value.workspaceFiles {
+          Text("Loading…").className("empty")
+        } else {
+          HStack(spacing: 8) {
+            if remote.value.workspaceFiles.parent !== null {
+              Button("..") { remoteStore.requestFiles(remote.value.workspaceFiles.parent) }.className("link")
+            }
+            Text("/" + remote.value.workspaceFiles.path).className("muted mono")
+          }
+          .className("crumbs")
+          ForEach(remote.value.workspaceFiles.entries, { id: entry => entry.path }) { entry in
+            FileRow(entry: entry, selected: entry.path === remote.value.workspaceFiles.selected)
+          }
+        }
+      }
+      .className("page")
+    }
+    .className("scroll")
+  }
+}
+
+struct ChangeRow: View {
+  let file: Any
+  var body: some View {
+    Button(action: { remoteStore.requestChanges(file.path, remote.value.workspaceChanges.full) }, label: {
+      HStack(spacing: 8) {
+        Text(file.status).className("muted mono")
+        Text(file.path).className("mono")
+        Spacer()
+        Text(file.added === null ? "" : "+" + file.added + " −" + file.removed).className("muted mono")
+      }
+    })
+    .className(file.path === remote.value.workspaceChanges.selected ? "row is-current" : "row")
+  }
+}
+
+export struct DiffPage: View {
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .leading, spacing: 0) {
+        if !remote.value.workspaceChanges {
+          Text("Loading…").className("empty")
+        } else {
+          Text(remote.value.workspaceChanges.message || "").className("empty")
+          ForEach(remote.value.workspaceChanges.files, { id: file => file.path }) { file in
+            ChangeRow(file: file)
+          }
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(remote.value.workspaceChanges.patch.map((line, index) => ({ line, index })), { id: row => row.index }) { row in
+              Text(row.line || " ").className(diffLineClass(row.line))
+            }
+          }
+          .className("patch")
+        }
+      }
+      .className("page")
+    }
+    .className("scroll")
+  }
+}

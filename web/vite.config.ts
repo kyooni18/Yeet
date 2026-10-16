@@ -1,7 +1,9 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
+import { munPlugin } from '@mun/vite'
 
 export default defineConfig({
+  plugins: [munPlugin()],
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },

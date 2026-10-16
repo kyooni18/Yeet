@@ -1,4 +1,3 @@
-import { useSyncExternalStore } from 'react'
 import { RemoteStore } from '../../../frontend/shared/state/remoteStore'
 import { RemoteTransport } from '@/remote/transport'
 
@@ -18,7 +17,3 @@ export const remoteStore = new RemoteStore({
     }
   },
 })
-
-export function useRemote(store: RemoteStore = remoteStore) {
-  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot)
-}

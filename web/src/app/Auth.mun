@@ -1,0 +1,55 @@
+import { loginWithAccessKey, loginWithPasskey, registerPasskey } from "@/remote/auth"
+import { remoteStore } from "@/store/remoteStore"
+
+const key = State("")
+const error = State("")
+
+async function submitKey() {
+  error.value = ""
+  try { await loginWithAccessKey(key.value.trim()); key.value = ""; remoteStore.reconnectAfterAuth() }
+  catch (failure) { error.value = failure instanceof Error ? failure.message : String(failure) }
+}
+
+async function usePasskey() {
+  error.value = ""
+  try { await loginWithPasskey(); remoteStore.reconnectAfterAuth() }
+  catch (failure) { error.value = failure instanceof Error ? failure.message : String(failure) }
+}
+
+const params = new URLSearchParams(location.search)
+const enrollToken = location.pathname === "/enroll" ? params.get("token") || params.get("enroll") : null
+
+async function enroll() {
+  error.value = ""
+  try { await registerPasskey(enrollToken); location.replace("/") }
+  catch (failure) {
+    // Already registered on this device: sign in with it instead.
+    if (failure?.name === "InvalidStateError") {
+      try { await loginWithPasskey(enrollToken); location.replace("/"); return } catch (again) { failure = again }
+    }
+    error.value = failure instanceof Error ? failure.message : String(failure)
+  }
+}
+
+export struct AuthView: View {
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("Yeet").className("auth-title")
+      Text("Enter the access key printed by `yeet remote`, or use a passkey.").className("muted")
+      TextField(Binding(key), "Access key")
+        .className("input")
+        .withProps({ type: "password", autocomplete: "current-password", onKeyDown: event => { if (event.key === "Enter") submitKey() } })
+      if enrollToken {
+        Button("Register this device's passkey") { enroll() }.className("button primary")
+      }
+      HStack(spacing: 8) {
+        Button("Sign in") { submitKey() }.className("button primary").disabled(!key.value.trim())
+        Button("Use passkey") { usePasskey() }.className("button")
+      }
+      if error.value {
+        Text(error.value).className("error")
+      }
+    }
+    .className("auth")
+  }
+}

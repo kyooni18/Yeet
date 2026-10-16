@@ -4,25 +4,22 @@
   "version": "0.1.1",
   "type": "module",
   "scripts": {
+    "link:mun": "node scripts/link-mun.mjs",
+    "predev": "node scripts/link-mun.mjs",
     "dev": "vite --host 0.0.0.0",
+    "prebuild": "node scripts/link-mun.mjs",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@lobehub/icons-static-svg": "^1.95.0",
     "dompurify": "^3.2.6",
-    "markdown-it": "^14.1.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "markdown-it": "^14.1.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.5.0",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.1.1",
     "typescript": "^5.9.3",
     "vite": "^8.2.1"
   }

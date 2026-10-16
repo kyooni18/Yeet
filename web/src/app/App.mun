@@ -1,0 +1,41 @@
+import { remote, page, sidebarOpen } from "./state"
+import { AuthView } from "./Auth.mun"
+import { Sidebar } from "./Sidebar.mun"
+import { TopBar, Chat } from "./Chat.mun"
+import { FilesPage, DiffPage } from "./Pages.mun"
+
+struct Shell: View {
+  var body: some View {
+    HStack(spacing: 0) {
+      if sidebarOpen.value {
+        Sidebar()
+      }
+      VStack(spacing: 0) {
+        TopBar()
+        if page.value === "files" {
+          FilesPage()
+        } else if page.value === "diff" {
+          DiffPage()
+        } else {
+          Chat()
+        }
+      }
+      .className("main")
+    }
+    .className("shell")
+  }
+}
+
+struct App: View {
+  var body: some View {
+    Group() {
+      if remote.value.connection === "auth-required" || location.pathname === "/enroll" {
+        AuthView()
+      } else {
+        Shell()
+      }
+    }
+  }
+}
+
+export default App()

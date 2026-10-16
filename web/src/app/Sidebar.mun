@@ -1,0 +1,58 @@
+import { remoteStore } from "@/store/remoteStore"
+import { remote, page, openPage, connected, age } from "./state"
+
+struct NavItem: View {
+  let id: String
+  let label: String
+  var body: some View {
+    Button(label) { openPage(id) }
+      .className(page.value === id ? "nav-item is-current" : "nav-item")
+  }
+}
+
+struct SessionRow: View {
+  let session: Any
+  var body: some View {
+    Button(action: { remoteStore.loadSession(session.id); openPage("chat") }, label: {
+      HStack(spacing: 8) {
+        Text(session.title || "Untitled").className("session-title")
+        Spacer()
+        Text(age(session.updated_at)).className("session-age")
+      }
+    })
+    .className(session.id === remote.value.state.current_session_id ? "session is-current" : "session")
+    .disabled(!connected())
+  }
+}
+
+export struct Sidebar: View {
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text(remote.value.currentWorkspace?.display_name || remote.value.state.workspace_root || "Workspace")
+        .className("workspace")
+      VStack(alignment: .leading, spacing: 0) {
+        NavItem(id: "chat", label: "Chat")
+        NavItem(id: "files", label: "Files")
+        NavItem(id: "diff", label: "Changes")
+      }
+      .className("nav")
+      HStack(spacing: 0) {
+        Text("Sessions").className("section-label")
+        Spacer()
+        Button("New") { remoteStore.newSession(); openPage("chat") }
+          .className("link")
+          .disabled(!connected())
+      }
+      .className("section")
+      ScrollView() {
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(remote.value.currentWorkspaceSessions, { id: session => session.id }) { session in
+            SessionRow(session: session)
+          }
+        }
+      }
+      .className("sessions")
+    }
+    .className("sidebar")
+  }
+}

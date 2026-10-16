@@ -1,0 +1,177 @@
+import { remoteStore } from "@/store/remoteStore"
+import { remote, page, sidebarOpen, draft, send, connected } from "./state"
+
+function connectionLabel(): string {
+  switch (remote.value.connection) {
+    case "connected": return ""
+    case "failed": return remote.value.connectionError || "Connection failed"
+    case "offline": return "Offline"
+    case "reconnecting": return "Reconnecting…"
+    default: return "Connecting…"
+  }
+}
+
+export struct TopBar: View {
+  var body: some View {
+    HStack(spacing: 12) {
+      Button("☰") { sidebarOpen.value = !sidebarOpen.value }
+        .className("icon-button")
+        .accessibilityLabel("Toggle sidebar")
+      Text(page.value === "chat" ? (remote.value.currentSession?.title || "New session") : page.value === "files" ? "Files" : "Changes")
+        .className("title")
+      Spacer()
+      Text(connectionLabel()).className("status")
+    }
+    .className("topbar")
+  }
+}
+
+struct Detail: View {
+  let detail: Any
+  var body: some View {
+    Text(detail.content).className(detail.is_error ? "detail is-error" : detail.monospaced ? "detail mono" : "detail")
+  }
+}
+
+struct Trace: View {
+  let trace: Any
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) }, label: {
+        HStack(spacing: 8) {
+          Text(trace.title).className("trace-title")
+          Text(trace.summary || "").className("trace-summary")
+          Spacer()
+          Text(trace.status_label || "").className("trace-status")
+        }
+      })
+      .className(trace.active ? "trace is-active" : "trace")
+      if trace.expanded {
+        ForEach(trace.details, { id: detail => detail.title + detail.content.length }) { detail in
+          Detail(detail: detail)
+        }
+      }
+    }
+  }
+}
+
+struct Activity: View {
+  let group: Any
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button(group.summary + (group.active ? " …" : "")) {
+        remoteStore.sendConversationUi({ type: "toggle", value: group.id })
+      }
+      .className(group.failed ? "activity is-error" : "activity")
+      if group.expanded {
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(group.events, { id: event => event.key }) { event in
+            Trace(trace: event.trace)
+          }
+        }
+        .className("activity-events")
+      }
+    }
+  }
+}
+
+struct Entry: View {
+  let entry: Any
+  var body: some View {
+    Group() {
+      if entry.kind.type === "user" {
+        Element("yeet-markdown", { source: entry.kind.content, class: "msg user" })
+      } else if entry.kind.type === "assistant" {
+        Element("yeet-markdown", { source: entry.kind.content, class: "msg assistant" })
+      } else if entry.kind.type === "error" {
+        Text(entry.kind.content).className("msg error")
+      } else {
+        Text(entry.kind.content || "").className("msg system")
+      }
+    }
+  }
+}
+
+struct Item: View {
+  let item: Any
+  var body: some View {
+    Group() {
+      if item.type === "activity" {
+        Activity(group: item.group)
+      } else if item.type === "reasoning" {
+        Trace(trace: item.trace)
+      } else {
+        Entry(entry: item.entry)
+      }
+    }
+  }
+}
+
+struct Permission: View {
+  let request: Any
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(request.title).className("permission-title")
+      Text(request.operation || request.detail).className("permission-detail")
+      HStack(spacing: 8) {
+        ForEach(request.controls, { id: control => control.label }) { control in
+          Button(control.label) { remoteStore.sendComposerUi(control.action) }
+            .className(control.icon === "allow" ? "button primary" : "button")
+            .disabled(!control.enabled)
+        }
+      }
+    }
+    .className("permission")
+  }
+}
+
+struct Composer: View {
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      ForEach(remote.value.composer?.permissions ?? [], { id: request => request.target.id }) { request in
+        Permission(request: request)
+      }
+      HStack(alignment: .bottom, spacing: 8) {
+        TextEditor(Binding(draft), remote.value.composer?.placeholder || "Message", 1)
+          .className("input")
+          .withProps({ onKeyDown: event => {
+            if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send() }
+          } })
+        if remote.value.state.is_streaming {
+          Button("Stop") { remoteStore.interrupt() }.className("button")
+        } else {
+          Button("Send") { send() }
+            .className("button primary")
+            .disabled(!connected() || !draft.value.trim())
+        }
+      }
+      Text(remote.value.state.active_model + " · " + remote.value.state.active_reasoning_level)
+        .className("meta")
+    }
+    .className("composer")
+  }
+}
+
+export struct Chat: View {
+  var body: some View {
+    VStack(spacing: 0) {
+      ScrollView() {
+        VStack(alignment: .leading, spacing: 16) {
+          ForEach(remote.value.conversation?.items ?? [], { id: item => item.id }) { item in
+            Item(item: item)
+          }
+          if remote.value.conversation?.streaming_text {
+            Element("yeet-markdown", { source: remote.value.conversation.streaming_text, class: "msg assistant" })
+          }
+          if remote.value.conversation?.error {
+            Text(remote.value.conversation.error).className("msg error")
+          }
+        }
+        .className("thread")
+      }
+      .className("scroll")
+      Composer()
+    }
+    .className("chat")
+  }
+}
