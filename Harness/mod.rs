@@ -12,7 +12,6 @@ use anyhow::{Context, Result, bail};
 
 pub mod agent;
 pub mod agents;
-pub mod context_cache;
 pub mod core;
 pub mod model;
 pub mod permission;

@@ -57,7 +57,6 @@ impl AgentCoordinator {
             context_key: Uuid::new_v4().to_string(),
             context_memory: super::context::ContextMemory::default(),
             cache_continuity: super::cache::ContinuityTracker::default(),
-            observation_cache: super::cache::ObservationCache::default(),
             previous_turn_working_state: None,
             attached_skills: Default::default(),
             skill_instruction_history: Default::default(),
@@ -75,7 +74,6 @@ impl AgentCoordinator {
         self.cache_continuity
             .rebind_session(previous_session_id.as_deref(), active_session_id.as_deref());
         if session_changed {
-            self.observation_cache = Default::default();
             self.warm_tool_names.clear();
             self.warm_tool_search_enabled = false;
             self.context_key = active_session_id

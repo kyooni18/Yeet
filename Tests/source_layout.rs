@@ -130,7 +130,6 @@ fn extracted_modules_explain_their_responsibility() {
         "../Harness/agent/cache.rs",
         "../Harness/agent/policy.rs",
         "../Harness/agent/progress.rs",
-        "../Harness/agent/runaway.rs",
         "../Harness/agent/tool_protocol.rs",
         "../Harness/agents/group/budget.rs",
         "../Harness/agents/group/commands.rs",

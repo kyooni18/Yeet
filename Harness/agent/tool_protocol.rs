@@ -202,6 +202,12 @@ fn project_tool_json_for_model(value: &Value) -> Value {
                             | "snapshot"
                             | "duplicateReadBytesAvoided"
                             | "contentAlreadyReturned"
+                            | "fileFullyRead"
+                            | "filesScanned"
+                            | "anchors"
+                            | "supersedesSnapshot"
+                            | "observationAgeSeconds"
+                            | "updateHint"
                     )
                     || (synchronous_shell
                         && matches!(key.as_str(), "command" | "workingDirectory" | "succeeded"))
@@ -231,6 +237,164 @@ fn project_tool_json_for_model(value: &Value) -> Value {
     }
 }
 
+/// Renders the built-in tools' results as plain text: file reads as numbered
+/// lines, shell runs as output plus a non-zero exit code, searches as
+/// `path:line: text`, edits as diffs, and errors as one line.
+fn render_known_result(value: &Value) -> Option<String> {
+    if let Value::Array(items) = value {
+        let rendered = items
+            .iter()
+            .map(render_known_result)
+            .collect::<Option<Vec<_>>>()?;
+        return (!rendered.is_empty()).then(|| rendered.join("\n\n"));
+    }
+    let object = value.as_object()?;
+    let text = |key: &str| object.get(key).and_then(Value::as_str);
+    let number = |key: &str| object.get(key).and_then(Value::as_u64);
+
+    if let Some(error) = text("error")
+        && object.keys().all(|key| matches!(key.as_str(), "error" | "reason" | "hint"))
+    {
+        return Some(match text("hint") {
+            Some(hint) => format!("Error: {error}\n{hint}"),
+            None => format!("Error: {error}"),
+        });
+    }
+
+    if let (Some(path), Some(lines)) = (text("path"), text("lines")) {
+        let mut out = path.to_owned();
+        if let (Some(start), Some(end), Some(total)) =
+            (number("startLine"), number("endLine"), number("totalLines"))
+            && !(start <= 1 && end >= total)
+        {
+            out.push_str(&format!(" (lines {start}-{end} of {total})"));
+        }
+        for line in lines.lines() {
+            out.push('\n');
+            out.push_str(&strip_line_anchor(line));
+        }
+        if let Some(next) = number("nextStartLine") {
+            out.push_str(&format!("\n[more from line {next}]"));
+        }
+        return Some(out);
+    }
+
+    if let Some(code) = object.get("exitCode").and_then(Value::as_i64)
+        && !object.contains_key("status")
+    {
+        let mut out = String::new();
+        if let Some(stdout) = text("stdout") {
+            out.push_str(stdout.trim_end());
+        }
+        if let Some(stderr) = text("stderr").filter(|value| !value.trim().is_empty()) {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(stderr.trim_end());
+        }
+        if object.get("stdoutTruncated").and_then(Value::as_bool) == Some(true)
+            || object.get("stderrTruncated").and_then(Value::as_bool) == Some(true)
+        {
+            out.push_str("\n[output truncated]");
+        }
+        if code != 0 {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format!("[exit code {code}]"));
+        }
+        if object.get("timedOut").and_then(Value::as_bool) == Some(true) {
+            out.push_str("\n[timed out]");
+        }
+        return Some(if out.is_empty() { "(no output)".into() } else { out });
+    }
+
+    if let Some(matches) = object.get("matches").and_then(Value::as_array) {
+        let mut out = matches
+            .iter()
+            .filter_map(|item| {
+                Some(format!(
+                    "{}:{}: {}",
+                    item.get("path")?.as_str()?,
+                    item.get("line")?,
+                    item.get("text").and_then(Value::as_str).unwrap_or_default().trim()
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if out.is_empty() {
+            out.push_str("No matches.");
+        }
+        if object.get("truncated").and_then(Value::as_bool) == Some(true) {
+            out.push_str("\n[more matches not shown]");
+        }
+        return Some(out);
+    }
+
+    if let Some(files) = object.get("files").and_then(Value::as_array)
+        && files.iter().all(|file| file.get("operation").is_some())
+    {
+        let mut out = Vec::new();
+        for file in files {
+            let operation = file.get("operation").and_then(Value::as_str).unwrap_or("update");
+            let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
+            let mut section = match file.get("destination").and_then(Value::as_str) {
+                Some(destination) => format!("{operation} {path} -> {destination}"),
+                None => format!("{operation} {path}"),
+            };
+            let hunks = file
+                .pointer("/diff/hunks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten();
+            for hunk in hunks {
+                section.push_str(&format!(
+                    "\n@@ -{} +{} @@",
+                    hunk.get("oldStart").unwrap_or(&Value::Null),
+                    hunk.get("newStart").unwrap_or(&Value::Null)
+                ));
+                for line in hunk.get("lines").and_then(Value::as_array).into_iter().flatten() {
+                    section.push('\n');
+                    section.push_str(line.as_str().unwrap_or_default());
+                }
+            }
+            for warning in file.get("warnings").and_then(Value::as_array).into_iter().flatten() {
+                section.push_str(&format!("\nwarning: {}", render_inline(warning)));
+            }
+            out.push(section);
+        }
+        for diagnostic in object
+            .get("diagnostics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            out.push(format!("diagnostic: {}", render_inline(diagnostic)));
+        }
+        return Some(out.join("\n"));
+    }
+    None
+}
+
+fn render_inline(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string())
+}
+
+/// `12:af16|code` becomes `12|code`; edits address lines by number only.
+fn strip_line_anchor(line: &str) -> String {
+    if let Some((head, rest)) = line.split_once('|')
+        && let Some((number, hash)) = head.split_once(':')
+        && number.chars().all(|ch| ch.is_ascii_digit())
+        && hash.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return format!("{number}|{rest}");
+    }
+    line.to_owned()
+}
+
 /// Unwraps Yeet's legacy MCP structuredContent envelope when it contains no
 /// information beyond the actual result plus transport metadata.
 fn mcp_structured_payload<'a>(object: &'a serde_json::Map<String, Value>) -> Option<&'a Value> {
@@ -258,6 +422,9 @@ fn looks_like_synchronous_shell_result(object: &serde_json::Map<String, Value>) 
 
 fn render_model_value(value: &Value) -> String {
     let projected = project_tool_json_for_model(value);
+    if let Some(text) = render_known_result(&projected) {
+        return text;
+    }
     match projected {
         Value::Null => String::new(),
         Value::String(text) => text,
@@ -449,75 +616,33 @@ mod tests {
     }
 
     #[test]
-    fn shell_projection_keeps_output_and_drops_execution_bookkeeping() {
-        let payload = json!({
-            "route": "actor",
-            "command": "printf ok",
-            "workingDirectory": "/tmp/project",
-            "exitCode": 0,
-            "succeeded": true,
-            "durationMilliseconds": 12,
-            "stdoutBytes": 3,
-            "stderrBytes": 0,
-            "stdoutTruncated": false,
-            "stderrTruncated": false,
-            "stdout": "ok\n",
-            "stderr": null
-        })
-        .to_string();
-
-        let (text, _) = normalize_tool_output_for_model(&payload, false);
-        let projected: Value = serde_json::from_str(&text).unwrap();
-
-        assert_eq!(projected["exitCode"], json!(0));
-        assert_eq!(projected["stdout"], json!("ok\n"));
-        for key in [
-            "route",
-            "command",
-            "workingDirectory",
-            "succeeded",
-            "durationMilliseconds",
-            "stdoutBytes",
-            "stderrBytes",
-            "stdoutTruncated",
-            "stderrTruncated",
-            "stderr",
-        ] {
-            assert!(
-                projected.get(key).is_none(),
-                "{key} leaked into model output"
-            );
-        }
-    }
-
-    #[test]
-    fn structured_only_result_unwraps_yeet_transport_envelope() {
-        let payload = json!({
-            "content": [],
-            "structuredContent": {
-                "workspace": "/tmp/project",
-                "result": {
-                    "path": "src/main.rs",
-                    "snapshot": "opaque-cache-handle",
-                    "requestedStartLine": 1,
-                    "requestedEndLine": 5,
-                    "startLine": 1,
-                    "endLine": 5,
+    fn builtin_results_render_as_compact_text() {
+        let render = |value: Value| normalize_tool_output_for_model(&value.to_string(), false).0;
+        assert_eq!(
+            render(json!({
+                "route": "actor", "command": "printf ok", "workingDirectory": "/tmp",
+                "exitCode": 0, "succeeded": true, "durationMilliseconds": 12,
+                "stdoutBytes": 3, "stdoutTruncated": false, "stdout": "ok\n", "stderr": null
+            })),
+            "ok"
+        );
+        assert_eq!(render(json!({"exitCode": 2, "stdout": null, "stderr": "boom\n"})), "boom\n[exit code 2]");
+        assert_eq!(
+            render(json!({
+                "content": [],
+                "structuredContent": {"workspace": "/tmp", "result": {
+                    "path": "src/main.rs", "snapshot": "opaque", "requestedStartLine": 1,
+                    "startLine": 1, "endLine": 1, "totalLines": 9, "nextStartLine": 2,
                     "lines": "1:abcd|fn main() {}"
-                }
-            },
-            "isError": false
-        })
-        .to_string();
-
-        let (text, _) = normalize_tool_output_for_model(&payload, false);
-        let projected: Value = serde_json::from_str(&text).unwrap();
-
-        assert_eq!(projected["path"], json!("src/main.rs"));
-        assert_eq!(projected["lines"], json!("1:abcd|fn main() {}"));
-        assert!(projected.get("workspace").is_none());
-        assert!(projected.get("snapshot").is_none());
-        assert!(projected.get("requestedStartLine").is_none());
-        assert!(projected.get("requestedEndLine").is_none());
+                }},
+                "isError": false
+            })),
+            "src/main.rs (lines 1-1 of 9)\n1|fn main() {}\n[more from line 2]"
+        );
+        assert_eq!(
+            render(json!({"filesScanned": 3, "truncated": false, "matches": [{"path": "a.rs", "line": 2, "text": "  hit"}]})),
+            "a.rs:2: hit"
+        );
+        assert_eq!(render(json!({"error": "nope", "reason": "io"})), "Error: nope");
     }
 }

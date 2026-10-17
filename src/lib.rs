@@ -6,8 +6,6 @@ pub mod backend;
 pub mod background;
 pub mod cli;
 pub mod config;
-// Compatibility import; prompt cache planning lives in Harness.
-pub use harness::context_cache;
 // Compatibility import while runtime callers migrate to Harness ownership.
 pub use harness::core;
 pub mod debate;

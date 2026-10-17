@@ -62,127 +62,58 @@ pub(super) fn externalize_model_visible_tool_output_with_limit(
             "defaultModelVisibleBoundaryBytes": MAX_MODEL_VISIBLE_TOOL_OUTPUT_BYTES,
         }),
     )?;
-    let logical_source = logical_source_lines(tool_name, &content);
-    let (artifact_id, artifact_lines, exact_id, artifact_format) =
-        if let Some(logical_source) = logical_source.as_deref() {
-            let logical_id = artifacts.store_typed(
-                logical_source,
+    // Source reads also store their bare numbered lines so read_artifact
+    // ranges line up with the file rather than the JSON envelope.
+    let (artifact_id, artifact_lines) = match logical_source_lines(tool_name, &content) {
+        Some(lines) => (
+            artifacts.store_typed(
+                &lines,
                 "tool-output-lines",
                 "text/plain",
                 Some(tool_name),
-                json!({"tool":tool_name,"exactArtifactId":exact_artifact_id.clone()}),
-            )?;
-            (
-                logical_id,
-                logical_source.lines().count(),
-                Some(exact_artifact_id.as_str()),
-                "logical-source-lines",
-            )
-        } else {
-            (
-                exact_artifact_id.clone(),
-                content.lines().count(),
-                None,
-                "raw",
-            )
-        };
-    let rendered = render_externalized_tool_output(
-        tool_name,
-        &artifact_id,
-        &content,
-        max_visible_bytes,
-        artifact_lines,
-        exact_id,
-        artifact_format,
-    );
+                json!({"tool":tool_name,"exactArtifactId":exact_artifact_id}),
+            )?,
+            lines.lines().count(),
+        ),
+        None => (exact_artifact_id, content.lines().count()),
+    };
+    let rendered =
+        render_externalized_tool_output(&artifact_id, &content, max_visible_bytes, artifact_lines);
     Ok((rendered, true))
 }
 
 fn render_externalized_tool_output(
-    tool_name: &str,
     artifact_id: &str,
     content: &str,
     max_visible_bytes: usize,
     artifact_lines: usize,
-    exact_artifact_id: Option<&str>,
-    artifact_format: &str,
 ) -> String {
-    let mut preview_bytes = content
-        .len()
-        .min(MODEL_VISIBLE_TOOL_OUTPUT_PREVIEW_BYTES)
-        .min(max_visible_bytes);
-    loop {
-        let preview = if preview_bytes == 0 {
+    let note = format!(
+        "[output truncated; full {artifact_lines} lines in artifact {artifact_id}, use read_artifact to see more]"
+    );
+    let room = max_visible_bytes.saturating_sub(note.len() + 1);
+    if room == 0 {
+        return if note.len() <= max_visible_bytes {
+            note
+        } else {
             String::new()
-        } else {
-            bounded_utf8_bytes(content, preview_bytes)
         };
-        let hint = if exact_artifact_id.is_some() {
-            "artifactId contains directly readable source lines; startLine/endLine refer to those lines. exactArtifactId preserves the raw JSON tool result. Reuse the preview unless raw metadata is specifically needed."
-        } else {
-            "Exact tool output is stored in this artifact. Reuse the preview; use a narrow read_artifact range for a specific missing section, and search_artifact only when its location is unknown."
-        };
-        let rendered = json!({
-            "externalized": true,
-            "tool": tool_name,
-            "artifactId": artifact_id,
-            "exactArtifactId": exact_artifact_id,
-            "artifactFormat": artifact_format,
-            "originalBytes": content.len(),
-            "originalCharacters": content.chars().count(),
-            "originalLines": artifact_lines,
-            "rawOriginalLines": content.lines().count(),
-            "preview": preview,
-            "previewBytes": preview.len(),
-            "visibleBudgetBytes": max_visible_bytes,
-            "hint": hint
-        })
-        .to_string();
-        if rendered.len() <= max_visible_bytes {
-            return rendered;
-        }
-        if preview_bytes == 0 {
-            break;
-        }
-        let overflow = rendered.len().saturating_sub(max_visible_bytes);
-        preview_bytes = preview_bytes.saturating_sub(overflow.saturating_add(64));
     }
+    let preview = bounded_preview(content, room.min(MODEL_VISIBLE_TOOL_OUTPUT_PREVIEW_BYTES));
+    format!("{preview}\n{note}")
+}
 
-    let compact = json!({
-        "externalized": true,
-        "tool": tool_name,
-        "artifactId": artifact_id,
-        "exactArtifactId": exact_artifact_id,
-        "artifactFormat": artifact_format,
-        "originalLines": artifact_lines,
-        "originalBytes": content.len(),
-        "visibleBudgetBytes": max_visible_bytes,
-        "hint": if exact_artifact_id.is_some() {
-            "artifactId contains source lines; exactArtifactId preserves raw JSON."
-        } else {
-            "Exact output is in artifactId; inspect it only if needed."
-        }
-    })
-    .to_string();
-    if compact.len() <= max_visible_bytes {
-        return compact;
+/// Cuts at a line boundary within `max_bytes` when one exists.
+fn bounded_preview(content: &str, max_bytes: usize) -> &str {
+    if content.len() <= max_bytes {
+        return content;
     }
-
-    let locator = json!({"artifactId":artifact_id}).to_string();
-    if locator.len() <= max_visible_bytes {
-        return locator;
+    let mut end = max_bytes;
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
     }
-
-    // Pathological rounds with hundreds of simultaneous calls can make even a
-    // UUID locator too large for every individual fair share. The exact result
-    // remains durably externalized; emit only a bounded marker rather than
-    // violating the aggregate ceiling.
-    const EXTERNALIZED_MARKER: &str = "[externalized]";
-    if EXTERNALIZED_MARKER.len() <= max_visible_bytes {
-        EXTERNALIZED_MARKER.to_owned()
-    } else {
-        String::new()
-    }
+    let head = &content[..end];
+    head.rfind('\n').map_or(head, |index| &head[..index])
 }
 
 fn logical_source_lines(tool_name: &str, content: &str) -> Option<String> {

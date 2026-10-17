@@ -1,4 +1,4 @@
-//! Dispatch tool calls and insert cache-aware results into the model history.
+//! Dispatch tool calls and append their results to the model history.
 
 use std::{
     collections::HashSet,
@@ -7,10 +7,10 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::core::{BridgeClient, CallRequest, ImageAttachment, ToolCall, ToolDefinition};
+use crate::core::{ImageAttachment, ToolCall, ToolDefinition};
 
 use super::{
-    AgentCoordinator, AgentEvent, Message, Result, cache, context,
+    AgentCoordinator, AgentEvent, Message, Result, context,
     coordinator_support::{
         attached_web_search_capability_result, check_cancel,
         supports_anthropic_deferred_tool_references,
@@ -152,17 +152,12 @@ pub(super) fn load_activated_tools(call: &ToolCall, content: &str, discovery: &m
     discovery.load(activated.iter().filter_map(Value::as_str));
 }
 
-/// Inputs for the cache-aware insertion of one model-visible tool result.
+/// One model-visible tool result to append to history.
 pub(super) struct InsertionInput<'a> {
     pub call: &'a ToolCall,
     pub model_content: String,
     pub output_images: Vec<ImageAttachment>,
-    pub model: &'a str,
-    pub request: &'a CallRequest,
-    pub bridge: &'a BridgeClient,
     pub goal_mode: &'a AtomicBool,
-    pub succeeded: bool,
-    pub externally_bounded: bool,
 }
 
 pub(super) struct InsertedResult {
@@ -175,40 +170,7 @@ impl AgentCoordinator {
         &mut self,
         input: InsertionInput<'_>,
     ) -> Result<InsertedResult> {
-        let mut model_content = input.model_content;
-        if input.succeeded
-            && input.call.name == "read_file"
-            && !input.externally_bounded
-            && self.observation_cache.prepare_read_update(
-                &mut self.history,
-                &mut model_content,
-                input.model,
-                cache::ObservationPolicy {
-                    prefix_overhead_tokens: (serde_json::to_vec(&(
-                        &input.request.tools,
-                        &input.request.deferred_tools,
-                    ))?
-                    .len() as u64)
-                        .div_ceil(3),
-                    may_retire: !input.goal_mode.load(Ordering::Acquire),
-                },
-                || {
-                    let (provider, local_model) = input.model.split_once('/')?;
-                    input
-                        .bridge
-                        .list_model_info(provider)
-                        .ok()?
-                        .into_iter()
-                        .find(|entry| entry.id == local_model || entry.id == input.model)?
-                        .pricing
-                },
-            )
-        {
-            // A costed, deliberate prefix retirement starts a new local
-            // continuity baseline. Provider cache keys stay stable so
-            // the unchanged prefix before the retirement can still hit.
-            self.cache_continuity = Default::default();
-        }
+        let model_content = input.model_content;
         let recorded_content = model_content.clone();
         let goal_observation_item = self.history.len();
         self.history.push(Message::tool(

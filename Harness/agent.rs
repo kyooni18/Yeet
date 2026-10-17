@@ -64,7 +64,6 @@ pub struct AgentCoordinator {
     context_key: String,
     context_memory: context::ContextMemory,
     cache_continuity: cache::ContinuityTracker,
-    observation_cache: cache::ObservationCache,
     previous_turn_working_state: Option<String>,
     attached_skills: HashSet<String>,
     skill_instruction_history: HashSet<String>,
@@ -109,7 +108,6 @@ impl AgentCoordinator {
             mut last_context_updates,
         } = self.prepare_turn(request, goal_mode)?;
         let bridge = self.bridge.client()?;
-        self.observation_cache.start_turn();
         let mut execution_evidence = turn_state::TurnExecutionEvidence::default();
         let mut retry_instruction: Option<String> = None;
         let mut model_attempts = 0usize;
@@ -202,7 +200,6 @@ impl AgentCoordinator {
                 diagnostics: attempt_cache_diagnostics.clone(),
             });
 
-            self.observation_cache.mark_submitted();
             let model_stream::StreamedAttempt {
                 mut text,
                 mut emitted_text,
@@ -218,7 +215,6 @@ impl AgentCoordinator {
                 finish_usage.clone(),
             ));
             loop_budget.observe_usage(finish_usage.as_ref());
-            self.observation_cache.observe_usage(finish_usage.as_ref());
 
             let (mut calls, malformed_calls) = collect_tool_calls(decoded, partial);
             if !malformed_calls.is_empty() {
@@ -445,15 +441,10 @@ impl AgentCoordinator {
                     recorded_content,
                     goal_observation_item,
                 } = self.insert_tool_result(tool_round::InsertionInput {
-                    bridge: &bridge,
                     call,
                     model_content,
                     output_images,
-                    model,
-                    request: &request,
                     goal_mode,
-                    succeeded,
-                    externally_bounded,
                 })?;
                 self.observe_tool_evidence(tool_round::EvidenceInput {
                     call,

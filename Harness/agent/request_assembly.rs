@@ -92,7 +92,6 @@ impl AgentCoordinator {
         let capability_snapshot = self
             .registry
             .runtime_capability_snapshot(input.selected_tools);
-        self.observation_cache.bind_window(self.context_memory.id());
         let mut stable_request_overlays = input.turn_stable_overlays.to_vec();
         stable_request_overlays
             .push(Message::system(input.turn_context_orientation.to_owned()).request_only());
@@ -186,11 +185,7 @@ impl AgentCoordinator {
         request.attached_capabilities = input
             .attached_capabilities
             .map(session::runtime_attached_capabilities);
-        let mut attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
-        let update_plans = self.observation_cache.take_plans();
-        if !update_plans.is_empty() {
-            attempt_cache_diagnostics["contextCacheUpdates"] = json!(update_plans);
-        }
+        let attempt_cache_diagnostics = self.cache_continuity.diagnostics(&request);
         if attempt_cache_diagnostics["wireHistoryPrefixRewriteDetected"] == json!(true) {
             anyhow::bail!(
                 "Previously submitted context changed within this window; start an explicit context rollover instead of rewriting history."
