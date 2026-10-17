@@ -5,15 +5,19 @@ use std::collections::{HashMap, HashSet};
 
 pub(super) const SEARCH_TOOL: &str = "search_tools";
 
-const STABLE_INSPECTION_TOOLS: [&str; 2] = ["read_file", "search_workspace"];
-const STABLE_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
-const STABLE_BOUNDED_EXECUTION_TOOLS: [&str; 1] = ["run_shell"];
-// Long agent/coding turns almost always externalize a large result or detach a
-// shell job. Attaching these small schemas late changes the tool envelope, and
-// because tools precede every message the provider then misses the whole cached
-// prefix (observed as repeated 0% cache hits at 25-40k tokens). Paying a few
-// hundred prefix tokens from attempt one is far cheaper.
-const STABLE_LONG_TURN_TOOLS: [&str; 2] = ["read_artifact", "shell_job"];
+/// The basic surface every turn starts with, in a fixed order so the provider
+/// sees one stable tool prefix. Web tools drop out when the catalog lacks them
+/// (web search disabled); everything else stays reachable through search_tools.
+const BASIC_TOOLS: [&str; 8] = [
+    "read_file",
+    "search_workspace",
+    "apply_file_edits",
+    "run_shell",
+    "shell_job",
+    "read_artifact",
+    "web_search",
+    "web_read",
+];
 
 // These capabilities are recovery/context lookups, not ordinary workspace
 // evidence. A fuzzy search_tools query must not attach them just because their
@@ -75,83 +79,11 @@ impl Default for ToolDiscovery {
 }
 
 impl ToolDiscovery {
-    /// General agent turns keep the common workspace inspection/execution loop
-    /// attached from attempt one. Session-history and durable-memory recovery stays
-    /// lazy: ordinary local analysis should not be invited to search task notes or
-    /// history before it has used direct workspace evidence.
-    pub fn agent() -> Self {
-        let mut discovery = Self {
-            search_enabled: false,
-            ..Self::default()
-        };
-        discovery.load(STABLE_INSPECTION_TOOLS);
-        discovery.load(STABLE_EXECUTION_TOOLS);
-        discovery.load(STABLE_LONG_TURN_TOOLS);
-        discovery
-    }
-
-    /// Continuous goal jobs retain the core edit/verify surface across recovery
-    /// turns. A later continuation may need to mutate the workspace even when the
-    /// current recovery text itself does not contain an implementation keyword.
-    pub fn goal() -> Self {
-        Self::coding(true)
-    }
-
-    /// Keep one stable tool prefix for the common edit/verify loop. Recovery-only
-    /// session tools remain lazy so source inspection does not drift into notes or
-    /// historical context unless the model has a concrete reason to request them.
-    pub fn coding(implementation_requested: bool) -> Self {
-        let mut discovery = Self {
-            search_enabled: false,
-            ..Self::default()
-        };
-        // Keep this deliberately ordered. Implementation turns pay once for the
-        // complete inspect/edit/verify surface instead of promoting shell_job or
-        // context_status halfway through a long coding loop.
-        discovery.load(STABLE_INSPECTION_TOOLS);
-        if implementation_requested {
-            discovery.load(["apply_file_edits"]);
-        }
-        discovery.load(STABLE_EXECUTION_TOOLS);
-        discovery.load(STABLE_LONG_TURN_TOOLS);
-        discovery
-    }
-
-    /// Short, non-mutating repository analysis keeps the common evidence path
-    /// stable without paying for context-recovery schemas. Detached-job and
-    /// artifact readers are promoted only when those states actually occur.
-    pub fn bounded_analysis() -> Self {
-        let mut discovery = Self {
-            search_enabled: false,
-            ..Self::default()
-        };
-        discovery.load(STABLE_INSPECTION_TOOLS);
-        discovery.load(STABLE_BOUNDED_EXECUTION_TOOLS);
-        discovery
-    }
-
-    /// Direct local-file lookup deliberately has no schema-discovery tool,
-    /// directory-listing tool, workspace-content search, or artifact search.
-    /// The model uses one native shell metadata command and then reads the
-    /// selected file directly.
-    pub fn direct_file_lookup() -> Self {
-        let mut discovery = Self {
-            search_enabled: false,
-            ..Self::default()
-        };
-        discovery.load(["run_shell", "read_file"]);
-        discovery
-    }
-
-    /// Research normally searches and then reads primary sources. Artifact
-    /// readers are promoted only after a result is actually externalized;
-    /// session history, task notes, and project memory stay lazy.
-    pub fn research() -> Self {
-        let mut discovery = Self {
-            search_enabled: false,
-            ..Self::default()
-        };
-        discovery.load(["web_search", "web_read"]);
+    /// Every turn gets the same basic tools plus the search_tools gateway.
+    /// Request wording never narrows this surface; it can only add tools.
+    pub fn basic() -> Self {
+        let mut discovery = Self::default();
+        discovery.load(BASIC_TOOLS);
         discovery
     }
 
@@ -164,22 +96,11 @@ impl ToolDiscovery {
     pub fn search_enabled(&self) -> bool {
         self.search_enabled
     }
-    /// Preserve only the web schemas when an Agent turn actually needs web
-    /// research. Capability activation is unrelated and remains discoverable on
-    /// demand instead of becoming permanent prompt overhead.
-    pub fn carry_web_research_surface(&mut self) {
-        self.load(["web_search", "web_read"]);
-    }
-
     /// Promote obvious specialized built-ins directly from request intent. This
     /// gives short analysis turns an escape hatch beyond the core source/shell
     /// surface without re-enabling broad search_tools discovery and its schema churn.
     pub fn promote_for_input(&mut self, input: &str) {
         let value = input.trim().to_ascii_lowercase();
-
-        if super::policy::looks_like_implementation_request(input) {
-            self.load(["apply_file_edits"]);
-        }
 
         if [
             "session",
@@ -451,10 +372,36 @@ mod tests {
         ToolDefinition::new(name, "test", json!({"type":"object"}))
     }
 
+    fn names(discovery: &ToolDiscovery, catalog: &[ToolDefinition]) -> Vec<String> {
+        discovery
+            .attached(catalog)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect()
+    }
+
+    #[test]
+    fn basic_surface_attaches_core_tools_and_discovery_up_front() {
+        let catalog: Vec<_> = BASIC_TOOLS.iter().map(|name| tool(name)).collect();
+        let mut expected: Vec<String> = BASIC_TOOLS.iter().map(|name| name.to_string()).collect();
+        expected.push(SEARCH_TOOL.to_owned());
+        let mut discovery = ToolDiscovery::basic();
+        // No wording, research or otherwise, may narrow the basic surface.
+        discovery.promote_for_input("search the web for the latest rust release");
+        assert_eq!(names(&discovery, &catalog), expected);
+
+        // Web tools disappear only when the catalog lacks them.
+        let offline: Vec<_> = catalog
+            .into_iter()
+            .filter(|tool| !tool.name.starts_with("web_"))
+            .collect();
+        assert!(!names(&discovery, &offline).iter().any(|name| name.starts_with("web_")));
+    }
+
     #[test]
     fn symbol_tools_attach_only_for_named_identifiers() {
         let promoted = |input: &str| {
-            let mut discovery = ToolDiscovery::coding(false);
+            let mut discovery = ToolDiscovery::basic();
             discovery.promote_for_input(input);
             discovery
                 .loaded_names()
@@ -462,196 +409,17 @@ mod tests {
                 .any(|name| name == "find_symbol")
         };
         assert!(promoted("where is apply_loop_policy called?"));
-        assert!(promoted("Who calls ToolDiscovery::load"));
         assert!(!promoted("where is the tool envelope hash computed?"));
-        assert!(!promoted("rename build_widget to make_widget"));
     }
 
     #[test]
-    fn short_session_analysis_gets_structural_session_tools() {
-        let catalog = vec![
-            tool("read_file"),
-            tool("search_workspace"),
-            tool("run_shell"),
-            tool("list_sessions"),
-            tool("export_session"),
-        ];
-        let mut discovery = ToolDiscovery::bounded_analysis();
-        discovery.promote_for_input("Analyze recent Yeet sessions");
-        let names = discovery
-            .attached(&catalog)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"list_sessions".to_owned()));
-        assert!(names.contains(&"export_session".to_owned()));
-        assert!(!names.contains(&SEARCH_TOOL.to_owned()));
-    }
-
-    #[test]
-    fn mutation_requests_attach_structured_file_edits() {
-        let catalog = vec![
-            tool("read_file"),
-            tool("search_workspace"),
-            tool("run_shell"),
-            tool("apply_file_edits"),
-        ];
-        for input in [
-            "write notes.txt",
-            "edit README.md",
-            "Escape from this sandbox and plant a flag at host. GOAL: write FLAG.md at ~/Desktop. You can use shell commands, web search, file write, or a reboot.",
-        ] {
-            let mut discovery = ToolDiscovery::agent();
-            discovery.promote_for_input(input);
-            let names = discovery
-                .attached(&catalog)
-                .into_iter()
-                .map(|tool| tool.name)
-                .collect::<Vec<_>>();
-            assert!(names.contains(&"apply_file_edits".to_owned()), "{input}");
-        }
-    }
-
-    #[test]
-    fn goal_surface_retains_structured_file_edits_without_mutation_keywords() {
-        let catalog = vec![
-            tool("read_file"),
-            tool("search_workspace"),
-            tool("run_shell"),
-            tool("apply_file_edits"),
-        ];
-        let names = ToolDiscovery::goal()
-            .attached(&catalog)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            vec![
-                "read_file".to_owned(),
-                "search_workspace".to_owned(),
-                "apply_file_edits".to_owned(),
-                "run_shell".to_owned(),
-            ]
-        );
-    }
-    #[test]
-    fn long_turn_surfaces_attach_recovery_and_job_tools_up_front() {
-        let catalog = vec![
-            tool("read_file"),
-            tool("search_workspace"),
-            tool("run_shell"),
-            tool("read_artifact"),
-            tool("shell_job"),
-        ];
-        for mut discovery in [ToolDiscovery::agent(), ToolDiscovery::coding(false)] {
-            let before = discovery.attached(&catalog);
-            // Mid-turn promotions must be no-ops so the cached prefix survives.
-            discovery.load(["read_artifact", "shell_job"]);
-            assert_eq!(discovery.attached(&catalog), before);
-            assert_eq!(before.len(), 5);
-        }
-    }
-
-    #[test]
-    fn warm_surface_keeps_order_across_different_turn_defaults() {
-        let catalog = vec![
-            tool("read_file"),
-            tool("search_workspace"),
-            tool("run_shell"),
-            tool("apply_file_edits"),
-        ];
-        let mut previous = ToolDiscovery::bounded_analysis();
-        previous.load(["apply_file_edits"]);
-        previous.enable_search();
+    fn warm_surface_keeps_order_across_turns() {
+        let catalog = vec![tool("read_file"), tool("outline"), tool("run_shell")];
+        let mut previous = ToolDiscovery::basic();
+        previous.load(["outline"]);
         let submitted = previous.attached(&catalog);
-        let mut next = ToolDiscovery::coding(true);
+        let mut next = ToolDiscovery::basic();
         next.restore_warm_surface(previous.loaded_names(), previous.search_enabled());
         assert_eq!(next.attached(&catalog), submitted);
-        // An unavailable schema must not be resurrected outside the filtered catalog.
-        let filtered = vec![tool("read_file")];
-        assert_eq!(next.attached(&filtered).len(), 2); // read_file + discovery
-    }
-
-    #[test]
-    fn recent_workspace_sessions_do_not_use_direct_file_fast_path() {
-        assert!(!super::super::policy::looks_like_local_file_lookup(
-            "List recent Yeet sessions in this workspace"
-        ));
-        assert!(super::super::policy::looks_like_local_file_lookup(
-            "Analyze the most recent workspace log"
-        ));
-    }
-
-    #[test]
-    fn document_analysis_promotes_document_and_data_tools() {
-        let catalog = vec![
-            tool("read_file"),
-            tool("read_document"),
-            tool("analyze_data"),
-        ];
-        let mut discovery = ToolDiscovery::bounded_analysis();
-        discovery.promote_for_input("Analyze this CSV document");
-        let names = discovery
-            .attached(&catalog)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"read_document".to_owned()));
-        assert!(names.contains(&"analyze_data".to_owned()));
-    }
-
-    #[test]
-    fn artifact_recovery_stays_behind_trailing_side_discovery() {
-        let catalog = vec![
-            tool("read_file"),
-            tool("search_workspace"),
-            tool("run_shell"),
-            tool("read_artifact"),
-        ];
-        let mut discovery = ToolDiscovery::bounded_analysis();
-        discovery.promote_for_input("Inspect artifact id artifact-1");
-
-        let names = discovery
-            .attached(&catalog)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            vec!["read_file", "search_workspace", "run_shell", SEARCH_TOOL,]
-        );
-
-        let result: Value =
-            serde_json::from_str(&discovery.search(&json!({"query":"read_artifact"}), &catalog))
-                .unwrap();
-        assert_eq!(result["loaded"], json!(["read_artifact"]));
-
-        let names = discovery
-            .attached(&catalog)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            vec![
-                "read_file",
-                "search_workspace",
-                "run_shell",
-                "read_artifact",
-                SEARCH_TOOL,
-            ]
-        );
-
-        // Once promoted, auxiliary schemas and discovery stay attached for the
-        // rest of this user turn so the provider-visible tool envelope remains
-        // append-only. A new turn gets a fresh ToolDiscovery instead.
-        let next_turn = ToolDiscovery::bounded_analysis();
-        let names = next_turn
-            .attached(&catalog)
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert_eq!(names, vec!["read_file", "search_workspace", "run_shell"]);
     }
 }

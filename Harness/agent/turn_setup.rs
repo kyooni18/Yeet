@@ -198,56 +198,17 @@ impl AgentCoordinator {
         let call_counts: HashMap<String, usize> = HashMap::new();
         let workspace_generation = self.registry.workspace_generation();
         let workspace_write_generation = self.registry.workspace_write_generation();
-        let mut tool_discovery = match profile {
-            TaskProfile::Agent if local_file_lookup => {
-                tool_discovery::ToolDiscovery::direct_file_lookup()
-            }
-            TaskProfile::Agent if goal_mode.load(Ordering::Acquire) => {
-                tool_discovery::ToolDiscovery::goal()
-            }
-            TaskProfile::Agent if implementation_requested => {
-                tool_discovery::ToolDiscovery::coding(true)
-            }
-            TaskProfile::Agent if bounded_analysis => {
-                tool_discovery::ToolDiscovery::bounded_analysis()
-            }
-            TaskProfile::Agent if looks_like_coding_request(input) => {
-                tool_discovery::ToolDiscovery::coding(false)
-            }
-            TaskProfile::Agent => tool_discovery::ToolDiscovery::agent(),
-            TaskProfile::Research => tool_discovery::ToolDiscovery::research(),
-        };
-        if profile == TaskProfile::Agent && !local_file_lookup {
-            // Preserve the provider-visible tool envelope across ordinary turns. New
-            // tools may append, but a new user message must not shrink a warmed prefix.
-            tool_discovery
-                .restore_warm_surface(&self.warm_tool_names, self.warm_tool_search_enabled);
-        }
+        // One basic surface for every turn; request wording only adds tools.
+        let mut tool_discovery = tool_discovery::ToolDiscovery::basic();
+        // Preserve the provider-visible tool envelope across ordinary turns. New
+        // tools may append, but a new user message must not shrink a warmed prefix.
+        tool_discovery.restore_warm_surface(&self.warm_tool_names, self.warm_tool_search_enabled);
         promote_agent_orchestration_tool(
             &mut tool_discovery,
             self.registry.agent_group_tool_names(),
-            profile == TaskProfile::Agent && self.registry.agent_orchestration_enabled(),
+            self.registry.agent_orchestration_enabled(),
         );
-        if !local_file_lookup && profile == TaskProfile::Agent {
-            tool_discovery.promote_for_input(input);
-            if web_search_enabled && policy::looks_like_web_research_request(input) {
-                tool_discovery.carry_web_research_surface();
-            }
-        }
-        if capability_discovery_requested {
-            tool_discovery.enable_search();
-        }
-        if prior_context_requested && !local_file_lookup {
-            // Prior context is recoverable, but recovery schemas stay behind
-            // the trailing side-tool discovery gateway.
-            tool_discovery.enable_search();
-        }
-        if profile == TaskProfile::Agent && self.registry.has_shell_jobs() {
-            tool_discovery.load(["shell_job"]);
-        }
-        if profile == TaskProfile::Agent && should_preserve_web_tool_surface(input, &self.history) {
-            tool_discovery.carry_web_research_surface();
-        }
+        tool_discovery.promote_for_input(input);
         if !explicitly_activated_tools.is_empty() {
             tool_discovery.load(explicitly_activated_tools.iter().map(String::as_str));
         }
@@ -484,16 +445,14 @@ mod tests {
         )];
         catalog.extend(crate::agents::group::control_commands::tool_definitions());
 
-        let mut disabled = tool_discovery::ToolDiscovery::goal();
+        let mut disabled = tool_discovery::ToolDiscovery::basic();
         promote_agent_orchestration_tool(&mut disabled, &[], false);
-        assert!(
-            disabled
-                .attached(&catalog)
-                .iter()
-                .all(|tool| tool.name == "read_file")
-        );
+        let attached = disabled.attached(&catalog);
+        for name in crate::agents::group::control_commands::TOOL_NAMES {
+            assert!(attached.iter().all(|tool| tool.name != name));
+        }
 
-        let mut enabled = tool_discovery::ToolDiscovery::goal();
+        let mut enabled = tool_discovery::ToolDiscovery::basic();
         promote_agent_orchestration_tool(
             &mut enabled,
             &crate::agents::group::control_commands::TOOL_NAMES,

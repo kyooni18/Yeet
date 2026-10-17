@@ -204,19 +204,6 @@ fn implicit_followup_preserves_web_surface_only_after_actual_web_use() {
         task_profile_with_history(followup, true, &history, false),
         TaskProfile::Agent
     );
-    assert!(should_preserve_web_tool_surface(followup, &history));
-    assert!(!should_preserve_web_tool_surface(
-        "fix src/agent.rs",
-        &history
-    ));
-
-    let no_web = vec![
-        Message::system(SYSTEM_INSTRUCTION),
-        Message::user("Explain this source"),
-        Message::assistant("Explanation", None),
-        Message::user("and this?"),
-    ];
-    assert!(!should_preserve_web_tool_surface("and this?", &no_web));
 }
 
 #[test]

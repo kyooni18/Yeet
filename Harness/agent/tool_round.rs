@@ -88,7 +88,6 @@ pub(super) struct DispatchInput<'a> {
     pub call: &'a ToolCall,
     pub model: &'a str,
     pub cancel: &'a AtomicBool,
-    pub profile: TaskProfile,
     pub web_search_enabled: bool,
     pub local_file_lookup: bool,
     pub local_lookup_read_calls: usize,
@@ -567,9 +566,6 @@ impl AgentCoordinator {
             let execution = if context::is_context_tool(&call.name) {
                 self.context_memory.sync(&self.history)?;
                 self.context_memory.execute(call)
-            } else if input.profile == TaskProfile::Research {
-                self.registry
-                    .execute_research(call, input.model, input.cancel)
             } else {
                 self.registry.execute(call, input.model, input.cancel)
             };

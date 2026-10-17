@@ -41,7 +41,7 @@ use policy::{
     ResearchBudget, TaskProfile, looks_like_bounded_analysis, looks_like_bounded_explanation,
     looks_like_capability_request, looks_like_coding_implementation_request,
     looks_like_coding_request, looks_like_local_file_lookup, looks_like_planning_or_documentation,
-    looks_like_prior_context_request, should_preserve_web_tool_surface, task_guidance,
+    looks_like_prior_context_request, task_guidance,
     task_profile_with_history,
 };
 use progress::{round_semantic_fingerprint, tool_made_progress, tool_signature};
@@ -61,9 +61,11 @@ use std::{
 };
 
 use crate::{
-    core::{CallRequest, Message, MessageRole, ToolCall, ToolDefinition},
+    core::{CallRequest, Message, MessageRole, ToolCall},
     tools::{BridgeHandle, ToolRegistry},
 };
+#[cfg(test)]
+use crate::core::ToolDefinition;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
@@ -191,7 +193,6 @@ impl AgentCoordinator {
                 registry: &self.registry,
                 context_memory: &self.context_memory,
                 discovery: &tool_discovery,
-                profile,
                 web_search_enabled,
                 deferred_discovery: native_deferred_tools_supported
                     && capability_discovery_requested,
@@ -684,7 +685,6 @@ impl AgentCoordinator {
                     call,
                     model,
                     cancel,
-                    profile,
                     web_search_enabled,
                     local_file_lookup,
                     local_lookup_read_calls,

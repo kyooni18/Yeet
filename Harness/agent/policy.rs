@@ -50,32 +50,6 @@ pub(super) fn task_profile_with_history(
     }
 }
 
-/// Filters visible tools so each execution lane gets only appropriate capabilities.
-pub(super) fn select_tools_for_profile(
-    tools: Vec<ToolDefinition>,
-    profile: TaskProfile,
-) -> Vec<ToolDefinition> {
-    match profile {
-        TaskProfile::Research => tools
-            .into_iter()
-            .filter(|tool| {
-                matches!(
-                    tool.name.as_str(),
-                    "web_search"
-                        | "web_read"
-                        | "artifact_info"
-                        | "read_artifact"
-                        | "search_artifact"
-                        | "project_memory_recall"
-                        | "project_memory_get"
-                        | "project_memory_connections"
-                )
-            })
-            .collect(),
-        TaskProfile::Agent => tools,
-    }
-}
-
 /// Execution lanes restrict available tools, not previously submitted evidence.
 /// Lane-specific guidance is appended by the coordinator at the new turn.
 pub(super) fn request_history_for_profile_at(
@@ -578,35 +552,6 @@ fn follows_recent_web_research(input: &str, history: &[Message]) -> bool {
         .filter_map(|message| message.content.as_deref())
         .take(2)
         .any(looks_like_web_research_request)
-}
-
-/// Keeps an Agent-lane follow-up on the exact small web-research schema surface
-/// that the preceding turn actually used. This is intentionally evidence-based:
-/// a turn that never called web_search/web_read does not pay for those schemas,
-/// and a mutation request does not inherit them merely because it follows research.
-pub(super) fn should_preserve_web_tool_surface(input: &str, history: &[Message]) -> bool {
-    let input = input.trim();
-    if input.is_empty() || input.chars().count() > 320 || looks_like_implementation_request(input) {
-        return false;
-    }
-    let current_index = history
-        .iter()
-        .rposition(|message| {
-            message.role == MessageRole::User && message.content.as_deref() == Some(input)
-        })
-        .unwrap_or(history.len());
-    let Some(previous_user_index) = history[..current_index]
-        .iter()
-        .rposition(|message| message.role == MessageRole::User)
-    else {
-        return false;
-    };
-    history[previous_user_index + 1..current_index]
-        .iter()
-        .filter(|message| message.role == MessageRole::Assistant)
-        .filter_map(|message| message.tool_calls.as_ref())
-        .flatten()
-        .any(|call| matches!(call.name.as_str(), "web_search" | "web_read"))
 }
 
 /// Returns whether the user explicitly requested a broad/deep investigation

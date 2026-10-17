@@ -10,7 +10,6 @@ use super::{
     limits::MODEL_ATTEMPT_TIMEOUT_MS,
     policy::TaskProfile,
     policy::request_history_for_profile_at,
-    policy::select_tools_for_profile,
     session,
     tool_discovery::ToolDiscovery,
     turn_state,
@@ -22,7 +21,6 @@ pub(super) struct ToolSelectionInput<'a> {
     pub registry: &'a ToolRegistry,
     pub context_memory: &'a context::ContextMemory,
     pub discovery: &'a ToolDiscovery,
-    pub profile: TaskProfile,
     pub web_search_enabled: bool,
     pub deferred_discovery: bool,
 }
@@ -38,13 +36,8 @@ pub(super) struct ToolSelection {
 }
 
 pub(super) fn select_tools(input: ToolSelectionInput<'_>) -> ToolSelection {
-    let mut tool_catalog = match input.profile {
-        TaskProfile::Research => input.registry.research_tools(),
-        TaskProfile::Agent => select_tools_for_profile(
-            input.registry.tools(input.web_search_enabled),
-            input.profile,
-        ),
-    };
+    // The task profile shapes guidance only; it never narrows the catalog.
+    let mut tool_catalog = input.registry.tools(input.web_search_enabled);
     tool_catalog.extend(context::tools());
     let selected_tools = input.discovery.attached(&tool_catalog);
     let working_budget = input.context_memory.working_budget();
