@@ -55,16 +55,6 @@ impl HarnessService {
                     enabled: effective_harness.iter().any(|value| value == "web-search"),
                     source: Some("harness".into()),
                 });
-                items.push(CapabilityToggleItem {
-                    id: SKYLINE_CAPABILITY_ID.into(),
-                    kind: "builtin".into(),
-                    name: "Skyline".into(),
-                    description: "Explicit session-attached autonomy-first shared coordination through ~/.yeet/Skyline. Models choose work themselves; Skyline provides compact deltas, peer intent, evidence exchange, and scarce live-test serialization.".into(),
-                    enabled: effective_harness
-                        .iter()
-                        .any(|value| value == SKYLINE_CAPABILITY_ID),
-                    source: Some("session".into()),
-                });
                 items.extend(
                     crate::tools::builtin_capabilities()
                         .iter()
@@ -145,16 +135,14 @@ impl HarnessService {
                 .is_ok_and(|skills| skills.iter().any(|skill| skill.name == name))
         });
         let is_mcp = id.starts_with("mcp:");
-        let is_skyline = id == SKYLINE_CAPABILITY_ID;
         let is_builtin = crate::tools::builtin_capabilities()
             .iter()
             .any(|capability| capability.id == id);
-        if !is_harness && !is_skill && !is_mcp && !is_builtin && !is_skyline {
+        if !is_harness && !is_skill && !is_mcp && !is_builtin {
             return Err(anyhow!("Unknown capability: {id}"));
         }
 
         let mut skill_transition: Option<(String, bool)> = None;
-        let mut skyline_transition: Option<bool> = None;
         {
             let mut shared = self.shared.lock_or_recover();
             if shared.state.is_streaming {
@@ -163,7 +151,7 @@ impl HarnessService {
                 self.publish_state();
                 return Ok(false);
             }
-            if is_harness || is_skill || is_skyline {
+            if is_harness || is_skill {
                 let mut values = shared
                     .meta
                     .attached_capabilities
@@ -185,13 +173,6 @@ impl HarnessService {
                         .retain(|value| value != id);
                     skill_transition = Some((name.to_owned(), !was_attached));
                 }
-                if is_skyline {
-                    shared
-                        .meta
-                        .disabled_capabilities
-                        .retain(|value| value != id);
-                    skyline_transition = Some(!was_attached);
-                }
             } else if shared
                 .meta
                 .disabled_capabilities
@@ -208,7 +189,7 @@ impl HarnessService {
                 shared.meta.disabled_capabilities.dedup();
             }
         }
-        if skill_transition.is_some() || skyline_transition.is_some() {
+        if skill_transition.is_some() {
             let mut coordinator = self
                 .coordinator
                 .lock()
@@ -220,12 +201,9 @@ impl HarnessService {
                     coordinator.detach_skill_from_session(name);
                 }
             }
-            if let Some(attached) = skyline_transition {
-                coordinator.set_skyline_attachment(attached)?;
-            }
         }
         self.save_project_capabilities()?;
-        if skill_transition.is_some() || skyline_transition.is_some() {
+        if skill_transition.is_some() {
             let history = self
                 .coordinator
                 .lock()

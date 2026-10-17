@@ -78,7 +78,6 @@ impl AgentCoordinator {
         self.registry
             .set_disabled_capabilities(disabled_capabilities);
         self.sync_attached_skills(attached_capabilities.as_deref())?;
-        self.sync_attached_skyline(attached_capabilities.as_deref())?;
         self.registry.attach_enabled_mcp_servers()?;
         self.registry.begin_task(&task_id);
         let mut continuation = initial_continuation;

@@ -125,7 +125,6 @@ pub struct ToolRegistry {
     artifacts_enabled: bool,
     catalog: ToolCatalog,
     services: ToolServiceConfiguration,
-    skyline_handle: Option<String>,
     agent_group: Option<AgentGroupHandle>,
     evidence: ToolEvidence,
     shell_jobs: shell_jobs::ShellJobs,
@@ -168,7 +167,6 @@ impl ToolRegistry {
             artifacts_enabled: true,
             catalog: ToolCatalog::with_builtin_tools(),
             services: ToolServiceConfiguration::default(),
-            skyline_handle: None,
             agent_group: None,
             evidence: ToolEvidence::default(),
             shell_jobs: shell_jobs::ShellJobs::default(),
@@ -503,7 +501,6 @@ impl ToolRegistry {
                 let id = string_arg(&object, "capability")?;
                 self.activate(id)
             }
-            "skyline" => self.execute_skyline(&object),
             _ if self.agent_group.as_ref().is_some_and(|group| {
                 group.tool_names().contains(&call.name.as_str()) || call.name == LEGACY_PROPOSE_TOOL
             }) =>

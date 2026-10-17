@@ -99,14 +99,13 @@ use transport::{
 
 use crate::background::Wake;
 use autonomy::{AUTONOMOUS_IDLE_MARKER, AUTONOMOUS_NEXT_OBJECTIVE_PROMPT, GOAL_RESUME_PROMPT};
-const SKYLINE_CAPABILITY_ID: &str = crate::skyline::CAPABILITY_ID;
 const CAPABILITY_STREAMING_LOCK_ERROR: &str =
     "Capabilities cannot be changed while a response is running.";
 const SESSION_ENVIRONMENT_STREAMING_LOCK_ERROR: &str =
     "Session environment cannot be changed while a response is running.";
 
 fn session_only_capability(id: &str) -> bool {
-    id.starts_with("skill:") || id == SKYLINE_CAPABILITY_ID
+    id.starts_with("skill:")
 }
 
 fn default_attached_harness(capabilities: &[HarnessCapabilityDescriptor]) -> Vec<String> {

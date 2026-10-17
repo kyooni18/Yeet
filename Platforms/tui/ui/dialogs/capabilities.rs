@@ -25,7 +25,7 @@ fn capability_status(item: &CapabilityToggleItem) -> (&'static str, &'static str
         } else {
             ("◌", "LAZY", Style::default().fg(theme::accent_warm()))
         }
-    } else if item.kind == "capability" || item.id == "builtin:skyline" {
+    } else if item.kind == "capability" {
         if item.enabled {
             (
                 "●",
@@ -60,9 +60,6 @@ fn capability_behavior_hint(item: &CapabilityToggleItem) -> &'static str {
         }
         "capability" => "Space attaches or detaches this harness capability.",
         "mcp" => "Space enables or disables this MCP server for the project.",
-        "builtin" if item.id == "builtin:skyline" => {
-            "Space attaches or detaches Skyline for this session."
-        }
         "builtin" => "Space enables or disables this built-in capability.",
         _ => "Space toggles this capability.",
     }
@@ -351,14 +348,6 @@ mod capability_tests {
         assert_eq!(capability_status(&lazy).1, "LAZY");
         assert_eq!(capability_status(&attached).1, "ATTACHED");
         assert!(capability_behavior_hint(&lazy).contains("discoverable on demand"));
-    }
-
-    #[test]
-    fn skyline_uses_attachment_status_semantics() {
-        let detached = item("builtin", "builtin:skyline", false, Some("session"));
-        let attached = item("builtin", "builtin:skyline", true, Some("session"));
-        assert_eq!(capability_status(&detached).1, "DETACHED");
-        assert_eq!(capability_status(&attached).1, "ATTACHED");
     }
 
     #[test]

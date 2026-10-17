@@ -45,7 +45,7 @@ impl HarnessService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /skyline [on|off]  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /attach ID  /detach ID  /clear"),
+            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /attach ID  /detach ID  /clear"),
             "/new" => self.new_session(),
             "/model" => {
                 if arguments.is_empty() {
@@ -319,34 +319,6 @@ impl HarnessService {
                 drop(shared);
                 self.append_system(&format!("Queued {name} for the next turn ({count} total)."));
             }
-            "/skyline" => {
-                self.reload_project_capabilities()?;
-                let desired = match arguments.first().copied() {
-                    None | Some("on") | Some("attach") | Some("enable") => true,
-                    Some("off") | Some("detach") | Some("disable") => false,
-                    Some(_) => {
-                        self.append_system("Usage: /skyline [on|off]");
-                        return Ok(());
-                    }
-                };
-                let attached = self
-                    .shared
-                    .lock_or_recover()
-                    .meta
-                    .attached_capabilities
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|value| value == SKYLINE_CAPABILITY_ID);
-                if attached != desired && !self.toggle_capability(SKYLINE_CAPABILITY_ID)? {
-                    return Ok(());
-                }
-                self.append_system(if desired {
-                    "Skyline attached to this TUI session. The agent now has one compact `skyline` coordination tool."
-                } else {
-                    "Skyline detached from this TUI session."
-                });
-            }
             "/capabilities" => {
                 self.reload_project_capabilities()?;
                 let capabilities = self.bridge.list_harness_capabilities()?;
@@ -356,7 +328,6 @@ impl HarnessService {
                 let mut lines = capabilities.into_iter().map(|capability| format!("{} [{}] — {}", capability.id, if effective.contains(&capability.id) { "attached" } else { "detached" }, capability.description)).collect::<Vec<_>>();
                 lines.push(format!("web-search [{}] — Default-attached live web search through Agent-Reach/Exa with managed SearXNG fallback.", if effective.iter().any(|value| value == "web-search") { "attached" } else { "detached" }));
                 lines.push("vision [automatic] — Image inputs are handled automatically when present.".into());
-                lines.push(format!("{SKYLINE_CAPABILITY_ID} [{}] — Explicit session-attached Skyline coordination through ~/.yeet/Skyline.", if effective.iter().any(|value| value == SKYLINE_CAPABILITY_ID) { "attached" } else { "detached" }));
                 let text = lines.join("\n");
                 self.append_system(if text.is_empty() { "No harness capabilities are available." } else { &text });
             }
@@ -365,22 +336,6 @@ impl HarnessService {
                 self.reload_project_capabilities()?;
                 if *id == "vision" {
                     self.append_system("Vision is handled automatically when an image is present.");
-                    return Ok(());
-                }
-                if *id == SKYLINE_CAPABILITY_ID {
-                    let attached = self
-                        .shared
-                        .lock_or_recover()
-                        .meta
-                        .attached_capabilities
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|value| value == SKYLINE_CAPABILITY_ID);
-                    if !attached && !self.toggle_capability(SKYLINE_CAPABILITY_ID)? {
-                        return Ok(());
-                    }
-                    self.append_system("Attached builtin:skyline for this TUI session.");
                     return Ok(());
                 }
                 let capabilities = self.bridge.list_harness_capabilities()?;
@@ -404,22 +359,6 @@ impl HarnessService {
                 self.reload_project_capabilities()?;
                 if *id == "vision" {
                     self.append_system("Vision is handled automatically when an image is present.");
-                    return Ok(());
-                }
-                if *id == SKYLINE_CAPABILITY_ID {
-                    let attached = self
-                        .shared
-                        .lock_or_recover()
-                        .meta
-                        .attached_capabilities
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|value| value == SKYLINE_CAPABILITY_ID);
-                    if attached && !self.toggle_capability(SKYLINE_CAPABILITY_ID)? {
-                        return Ok(());
-                    }
-                    self.append_system("Detached builtin:skyline from this TUI session.");
                     return Ok(());
                 }
                 let capabilities = self.bridge.list_harness_capabilities()?;

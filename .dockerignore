@@ -16,8 +16,7 @@ web/test-results-*
 web/.e2e-config
 web/.e2e-workspace
 web/*.tsbuildinfo
-skyline/*
-!skyline/skyline.py
+skyline/
 third_party/open-computer-use
 __pycache__
 *.pyc

@@ -66,7 +66,6 @@ pub const HELP: &str = r#"Usage:
   yeet skill validate path
   yeet skill install path|git-url|zip
   yeet skill remove name
-  yeet skyline setup [--workspace PATH]
   yeet mcp list
   yeet mcp add-stdio name command [args...]
   yeet mcp add-http name url [--header Name=Value]...
@@ -152,7 +151,6 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             Ok(())
         }
         "skill" | "skills" => skill(rest),
-        "skyline" => skyline(rest),
         "mcp" => mcp(rest),
         "mcpserver" => {
             let output = crate::mcp_server::run_cli(rest)?;
@@ -186,22 +184,6 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             eprintln!("yeet: {error}");
             Ok(1)
         }
-    }
-}
-
-fn skyline(args: &[String]) -> Result<()> {
-    match args {
-        [command] if command == "setup" => {
-            let root = crate::skyline::setup_installation()?;
-            println!("Skyline runtime ready at {}", root.display());
-            Ok(())
-        }
-        [command, flag, workspace] if command == "setup" && flag == "--workspace" => {
-            let project = crate::skyline::setup_workspace(std::path::Path::new(workspace))?;
-            println!("Skyline workspace ready at {}", project.display());
-            Ok(())
-        }
-        _ => bail!("Usage: yeet skyline setup [--workspace PATH]"),
     }
 }
 

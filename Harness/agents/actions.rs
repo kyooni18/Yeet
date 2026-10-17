@@ -1,7 +1,6 @@
 //! Harness commands shared by run hosts and frontends.
 //!
-//! Independent of Skyline deployment and orchestration. Adapters interpret
-//! these intents; this module never renders UI or starts a Skyline service.
+//! Adapters interpret these intents; this module never renders UI.
 
 use crate::model::{AgentGroupSettings, AgentMode, AutonomyMode, SandboxAction};
 use serde::{Deserialize, Serialize};

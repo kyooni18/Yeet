@@ -97,25 +97,7 @@ yeet remote status
 yeet remote stop
 ```
 
-## Skyline
-
-Skyline is Yeet's opt-in shared coordination layer for parallel workers. It
-persists mission context, compact peer intent, evidence, messages, and
-exclusive test-run state under `~/.yeet/Skyline`. Its native `deploy_agent`
-operation can start another Yeet agent in an isolated background session and
-returns the child session ID for TUI/WebUI follow-up.
-
-Initialize its runtime and the current workspace with:
-
-```sh
-yeet skyline setup --workspace "$PWD"
-```
-
-In the TUI, use `/skyline on` or enable Skyline in Capabilities. MCP clients
-can explicitly activate `builtin:skyline` through `activate_capability`, then
-call the returned handle with `invoke_capability`. The standalone native
-`deploy_agent` tool is available to Yeet agent turns and is intentionally not
-exported as a direct MCP tool.
+## Maintenance
 
 Check the installation:
 

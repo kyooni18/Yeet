@@ -15,7 +15,6 @@ pub(super) fn runtime_attached_capabilities(values: &[String]) -> Vec<String> {
                 && value.as_str() != "lead"
                 && value.as_str() != "context-mode"
                 && value.as_str() != "builtin:artifacts"
-                && value.as_str() != crate::skyline::CAPABILITY_ID
                 && !value.starts_with("skill:")
         })
         .cloned()

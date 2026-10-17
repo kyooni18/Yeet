@@ -81,7 +81,6 @@ impl AgentCoordinator {
             }
         }
         let mut explicitly_activated_tools = self.registry.skill_tools_for(&self.attached_skills);
-        explicitly_activated_tools.extend(self.registry.skyline_tool_names());
         if let Some(skill_name) = explicit_skill_name(input) {
             let activation = self.registry.activate_explicit_skill(skill_name)?;
             let parsed: Value = serde_json::from_str(&activation)?;

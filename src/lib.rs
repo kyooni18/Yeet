@@ -30,7 +30,6 @@ pub mod sandbox_cli;
 // Compatibility import; persistent session ownership lives in Harness.
 pub use harness::session_store;
 pub mod shell;
-pub mod skyline;
 mod text_layout;
 pub mod theme;
 // Compatibility import; tool execution lives in Harness.

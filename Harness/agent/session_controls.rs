@@ -55,7 +55,6 @@ impl AgentCoordinator {
         for skill in attached_skills {
             self.registry.deactivate_skill(&skill);
         }
-        self.registry.detach_skyline();
         self.history = vec![Message::system(SYSTEM_INSTRUCTION)];
         self.history.extend(body);
         self.skill_instruction_history = self
@@ -122,32 +121,6 @@ impl AgentCoordinator {
             let _ = self.registry.activate_explicit_skill(skill)?;
         }
         self.attached_skills = requested;
-        Ok(())
-    }
-
-    pub(super) fn sync_attached_skyline(&mut self, attached: Option<&[String]>) -> Result<()> {
-        let requested = attached
-            .unwrap_or_default()
-            .iter()
-            .any(|value| value == crate::skyline::CAPABILITY_ID);
-        self.set_skyline_attachment(requested)
-    }
-
-    pub fn set_skyline_attachment(&mut self, attached: bool) -> Result<()> {
-        if attached {
-            let activation = self.registry.attach_skyline()?;
-            let parsed: Value = serde_json::from_str(&activation)?;
-            if parsed.get("alreadyActive").and_then(Value::as_bool) != Some(true)
-                && let Some(bootstrap) = parsed.get("bootstrap")
-            {
-                let bootstrap = serde_json::to_string(bootstrap)?;
-                self.history.push(Message::system(format!(
-                    "Attached Skyline:\n{bootstrap}\nUse this bootstrap as the initial shared situational-awareness snapshot. Choose work autonomously from the actual project state. Before the first project mutation after this attachment, publish one compact Skyline sync with assessment, intent, scope, and next action. After that, sync only for material changes or collision-sensitive work; do not poll unchanged state."
-                )));
-            }
-        } else {
-            self.registry.detach_skyline();
-        }
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 //! Process-wide runtime agent state, independent of providers and frontends.
 //! Identity is per coordinator, not per model attempt or conversation message.
-/// Agent-owned intents, independent of Skyline deployment and orchestration.
+/// Agent-owned intents.
 pub mod actions;
 pub(crate) mod group;
 mod handle;

@@ -45,12 +45,8 @@ coverage/
 .tmp_*
 .yeet-session-inspect/
 
-# The Skyline coordinator is generated at runtime, but its bundled source
-# must remain in the source distribution for include_bytes! builds.
+# Runtime data left by the removed Skyline coordinator.
 skyline/
-!skyline/
-skyline/*
-!skyline/skyline.py
 
 swiftly.pkg
 web/tests/*.tmp.spec.ts
