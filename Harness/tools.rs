@@ -531,8 +531,6 @@ impl ToolRegistry {
             "artifact_info" | "read_artifact" | "search_artifact" => {
                 self.execute_artifact_tool(&call.name, &object)
             }
-            "list_sessions" => self.list_sessions_tool(&object),
-            "export_session" => self.export_session_tool(&object),
             "request_shell_permission" => self.request_shell_permission_tool(&object),
             "run_shell" => self.run_shell_tool(&object, model, cancel),
             "shell_job" => self.shell_job_tool(&object, cancel),

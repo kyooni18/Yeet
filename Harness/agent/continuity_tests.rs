@@ -202,7 +202,7 @@ fn ordinary_turns_tool_results_and_tool_surface_changes_stay_append_only() {
 
     // A tool-surface change between turns (lazy activation / toggles change
     // the envelope) must not rewrite already-submitted history.
-    harness.disabled = vec!["builtin:sessions".to_owned()];
+    harness.disabled = vec!["builtin:document-read".to_owned()];
     harness.turn("Thanks.");
 
     // Adaptive agent tools becoming available mid-session.

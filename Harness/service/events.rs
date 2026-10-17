@@ -258,8 +258,6 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                 "read_file" => ("Read file", "File read failed"),
                 "apply_file_edits" => ("Applied file edits", "File edits failed"),
                 "run_shell" => ("Ran command", "Command failed"),
-                "list_sessions" => ("Listed sessions", "Session listing failed"),
-                "export_session" => ("Exported session", "Session export failed"),
                 "activate_capability" => ("Activated capability", "Capability activation failed"),
                 _ => ("Tool completed", "Tool failed"),
             };

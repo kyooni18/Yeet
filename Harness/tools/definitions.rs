@@ -60,12 +60,6 @@ pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
         description: "Analyze structured local data directly. Supports CSV, TSV, JSON arrays of objects, Excel workbooks, and ODS with summaries, value counts, grouped aggregates, and Pearson correlation.",
         tools: &["analyze_data"],
     },
-    BuiltinCapabilityDescriptor {
-        id: "builtin:sessions",
-        name: "Session Management",
-        description: "List Yeet sessions structurally and export a verified session archive without shell-based session discovery or deleting the active runtime state.",
-        tools: &["list_sessions", "export_session"],
-    },
 ];
 
 /// Returns the built-in tool definitions that exist independently of optional web search.
@@ -164,16 +158,6 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
             "search_artifact",
             "Search an artifact for bounded excerpts; use read_artifact on matching lines for full text.",
             json!({"type":"object","properties":{"id":{"type":"string"},"query":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":50}},"required":["id","query"],"additionalProperties":false}),
-        ),
-        ToolDefinition::new(
-            "list_sessions",
-            "List current-workspace Yeet sessions from metadata, newest first. Current session is excluded by default; debateOnly filters to sessions with a debate topic.",
-            json!({"type":"object","properties":{"debateOnly":{"type":"boolean"},"includeCurrent":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":100}},"additionalProperties":false}),
-        ),
-        ToolDefinition::new(
-            "export_session",
-            "Create and verify a clean tar archive of one Yeet session. Default destination is ~/.yeet/exports/<sessionId>.tar; deleteSource defaults false and never deletes the active session.",
-            json!({"type":"object","properties":{"sessionId":{"type":"string"},"destination":{"type":"string"},"deleteSource":{"type":"boolean"}},"required":["sessionId"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "run_shell",
