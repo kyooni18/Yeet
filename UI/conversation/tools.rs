@@ -290,6 +290,30 @@ fn details(
             }
         }
     }
+    // Preserve full arguments and output for inspection, even for tools whose
+    // compact presentation only uses a path, query, command or diff summary.
+    let raw = tool.arguments.trim();
+    if !raw.is_empty() && raw != "{}" && !sections.iter().any(|section| section.title == "Input") {
+        sections.push(section(
+            "Input",
+            args.and_then(|args| serde_json::to_string_pretty(args).ok())
+                .unwrap_or_else(|| raw.into()),
+            true,
+        ));
+    }
+    if let Some(result) = tool
+        .result
+        .as_deref()
+        .map(str::trim)
+        .filter(|result| !result.is_empty())
+    {
+        if !sections
+            .iter()
+            .any(|section| section.content.trim() == result)
+        {
+            sections.push(section("Output", result.into(), true));
+        }
+    }
     if let Some(error) = tool
         .error
         .as_deref()
@@ -305,7 +329,7 @@ fn details(
 pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
     use ConversationIcon::*;
     use ToolCallStatus::*;
-    let active = matches!(tool.status, Preparing | Running | AwaitingPermission);
+    let active = matches!(tool.status, Preparing | Running);
     let name = tool.name.trim();
     let title = match name {
         "web_search" => {
@@ -414,7 +438,7 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
         _ => Tool,
     };
     let status_label = match tool.status {
-        Completed => Some("✓"),
+        Completed => None,
         Failed => Some("Failed"),
         TimedOut => Some("Timed out"),
         AwaitingPermission => Some("Awaiting approval"),

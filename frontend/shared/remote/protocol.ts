@@ -668,7 +668,7 @@ export type ConversationIcon = 'terminal' | 'edit' | 'file' | 'search' | 'folder
 export interface ConversationDetail { title: string; content: string; monospaced: boolean; is_error: boolean; has_background: boolean }
 export interface ConversationTrace { id: string; title: string; summary: string | null; status_label: string | null; metadata: string | null; icon: ConversationIcon; active: boolean; expanded: boolean; details: ConversationDetail[] }
 export interface ConversationActivityEvent { type: 'activity' | 'tool' | 'skill' | 'mcp'; key: string; trace: ConversationTrace }
-export interface ConversationActivityGroup { id: string; events: ConversationActivityEvent[]; summary: string; active: boolean; failed: boolean; awaits_permission: boolean; expanded: boolean }
+export interface ConversationActivityGroup { id: string; events: ConversationActivityEvent[]; summary: string; status_label?: string | null; active: boolean; failed: boolean; awaits_permission: boolean; expanded: boolean }
 export interface ConversationControl { label: string; icon: ConversationIcon; action: ConversationAction; enabled: boolean }
 export type ConversationDisplayItem =
   | { type: 'entry'; id: string; entry: ConversationEntry; controls: ConversationControl[] }

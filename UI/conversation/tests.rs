@@ -150,3 +150,74 @@ fn failed_delivery_preserves_controller_state_and_runtime_refresh_keeps_disclosu
     assert!(session.refresh(&sparse).is_none());
     assert!(!session.conversation_projection().view.items.is_empty());
 }
+
+#[test]
+fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
+    let harness = HarnessState::default();
+    let mut state = ConversationState::default();
+    let make = |id: &str, status: &str| {
+        let mut call = tool(status);
+        call.id = id.into();
+        call.name = "run_shell".into();
+        call.arguments = serde_json::json!({"command": format!("check-{id}")}).to_string();
+        call.result = Some("literal **output**".into());
+        entry(id, ConversationKind::ToolCall { tool_call: call })
+    };
+    let entries = vec![make("first", "completed"), make("last", "completed")];
+    let view = state.project(&entries, &harness);
+    let DisplayItem::Activity { id, group } = &view.items[0] else {
+        panic!("tool group")
+    };
+    assert!(group.summary.contains("check-last"));
+    assert!(!group.expanded);
+    assert!(
+        group
+            .events
+            .iter()
+            .all(|event| event.trace().status_label.is_none())
+    );
+    state.apply(ConversationAction::Toggle(id.clone()), &view, &harness);
+    let view = state.project(&entries, &harness);
+    assert_eq!(
+        view.work_ids(),
+        ["activity-group:tool:first", "tool:first", "tool:last"]
+    );
+    state.apply(
+        ConversationAction::Select(Some("tool:first".into())),
+        &view,
+        &harness,
+    );
+    state.apply(
+        ConversationAction::Toggle("tool:first".into()),
+        &view,
+        &harness,
+    );
+    let view = state.project(&entries, &harness);
+    assert_eq!(view.selected.as_deref(), Some("tool:first"));
+    let DisplayItem::Activity { group, .. } = &view.items[0] else {
+        panic!("tool group")
+    };
+    assert!(group.events[0].trace().expanded);
+    assert!(
+        group.events[0]
+            .trace()
+            .details
+            .iter()
+            .any(|detail| detail.content == "literal **output**")
+    );
+
+    let waiting = vec![
+        make("first", "awaiting_permission"),
+        make("last", "running"),
+    ];
+    let view = state.project(&waiting, &harness);
+    let DisplayItem::Activity { group, .. } = &view.items[0] else {
+        panic!("tool group")
+    };
+    assert!(
+        group.summary.contains("check-first"),
+        "approval takes precedence over running work"
+    );
+    assert!(group.awaits_permission && group.active);
+    assert!(!group.events[0].trace().active, "waiting must not spin");
+}

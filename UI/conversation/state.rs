@@ -35,12 +35,7 @@ impl ConversationState {
         harness: &HarnessState,
     ) -> ConversationView {
         let view = self.view(entries, harness);
-        let ids: Vec<_> = view
-            .items
-            .iter()
-            .filter(|item| !matches!(item, DisplayItem::Entry { .. }))
-            .map(|item| item.id().to_owned())
-            .collect();
+        let ids = view.work_ids();
         if self
             .selected
             .as_ref()
@@ -73,19 +68,10 @@ impl ConversationState {
                 }
             }
             ConversationAction::Select(id) => {
-                self.selected = id.filter(|id| {
-                    view.items
-                        .iter()
-                        .any(|item| item.id() == id && !matches!(item, DisplayItem::Entry { .. }))
-                })
+                self.selected = id.filter(|id| view.work_ids().contains(id))
             }
             ConversationAction::MoveSelection(delta) => {
-                let ids: Vec<_> = view
-                    .items
-                    .iter()
-                    .filter(|item| !matches!(item, DisplayItem::Entry { .. }))
-                    .map(|item| item.id().to_owned())
-                    .collect();
+                let ids = view.work_ids();
                 if ids.is_empty() {
                     self.selected = None;
                 } else {
@@ -154,11 +140,10 @@ fn disclosure_expanded(view: &ConversationView, id: &str) -> Option<bool> {
                 if group_id == id {
                     return Some(group.expanded);
                 }
-                if let Some(event) = group
-                    .events
-                    .iter()
-                    .find(|event| event.key() == id && !event.trace().details.is_empty())
-                {
+                if let Some(event) = group.events.iter().find(|event| {
+                    event.key() == id
+                        && (!event.trace().details.is_empty() || event.trace().metadata.is_some())
+                }) {
                     return Some(event.trace().expanded);
                 }
             }

@@ -74,7 +74,6 @@ fn trace(
     icon: ConversationIcon,
     active: bool,
     sections: Vec<DetailSection>,
-    reasoning: bool,
 ) -> TraceView {
     TraceView {
         id: id.into(),
@@ -84,7 +83,7 @@ fn trace(
         metadata: None,
         icon,
         active,
-        expanded: state.expanded_for(id, reasoning),
+        expanded: state.expanded_for(id, false),
         details: sections,
     }
 }
@@ -129,35 +128,43 @@ fn flush(
     let active = pending.iter().any(|event| event.trace().active);
     let failed = pending.iter().any(ActivityEvent::failed);
     let awaits_permission = pending.iter().any(ActivityEvent::awaits_permission);
-    let summary = pending
+    // Prefer work requiring attention, then live work, then the latest event.
+    // Completed tool-only groups must not lose their action to an "Activity" label.
+    let lead = pending
         .iter()
         .rev()
-        .find(|event| {
-            event.trace().active
-                && matches!(
-                    event,
-                    ActivityEvent::Tool { .. } | ActivityEvent::Activity { .. }
-                )
-        })
+        .find(|event| event.awaits_permission())
+        .or_else(|| pending.iter().rev().find(|event| event.failed()))
         .or_else(|| {
             pending
                 .iter()
                 .rev()
-                .find(|event| matches!(event, ActivityEvent::Activity { .. }))
+                .find(|event| event.trace().attention_label().is_some())
         })
-        .map(|event| {
-            let trace = event.trace();
-            if let Some(summary) = trace.summary.as_deref().filter(|value| !value.is_empty()) {
-                format!("{} · {summary}", trace.title)
-            } else {
-                trace.title.clone()
-            }
-        })
-        .unwrap_or_else(|| "Activity".into());
+        .or_else(|| pending.iter().rev().find(|event| event.trace().active))
+        .unwrap_or_else(|| pending.last().expect("nonempty group"));
+    let trace = lead.trace();
+    let summary = match trace.summary.as_deref().filter(|value| !value.is_empty()) {
+        Some(summary) if summary != trace.title => format!("{} · {summary}", trace.title),
+        _ => trace.title.clone(),
+    };
     let expanded = state.expanded_for(
         &id,
         failed || awaits_permission || (state.inspect_work && active),
     );
+    let mut labels = Vec::new();
+    // Keep approval first when it coexists with a failed/background tool.
+    if awaits_permission {
+        labels.push("Awaiting approval");
+    }
+    for event in pending.iter() {
+        if let Some(label) = event.trace().attention_label() {
+            if !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+    }
+    let status_label = (!labels.is_empty()).then(|| labels.join(" · "));
     let events = std::mem::take(pending);
     items.push(DisplayItem::Activity {
         id: id.clone(),
@@ -165,6 +172,7 @@ fn flush(
             id,
             events,
             summary,
+            status_label,
             active,
             failed,
             awaits_permission,
@@ -229,7 +237,6 @@ pub fn project(
                     ConversationIcon::Activity,
                     active,
                     details("Activity", activity.detail.as_deref().unwrap_or_default()),
-                    false,
                 );
                 pending.push(ActivityEvent::Activity {
                     id: entry.id.clone(),
@@ -254,7 +261,6 @@ pub fn project(
                     ConversationIcon::Skill,
                     active,
                     details("Skill", content),
-                    false,
                 );
                 trace.status_label = status.clone();
                 pending.push(ActivityEvent::Skill {
@@ -285,7 +291,6 @@ pub fn project(
                     },
                     false,
                     details("MCP", content),
-                    false,
                 );
                 trace.status_label = is_error.then(|| "Failed".into());
                 for detail in &mut trace.details {
@@ -408,7 +413,6 @@ fn append_reasoning(
         ConversationIcon::Reasoning,
         active,
         sections,
-        true,
     );
     items.push(DisplayItem::Reasoning {
         id,

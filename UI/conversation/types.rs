@@ -55,6 +55,26 @@ pub struct TraceView {
     pub expanded: bool,
     pub details: Vec<DetailSection>,
 }
+impl TraceView {
+    /// Only exceptional states need visible status copy beside the action.
+    pub fn attention_label(&self) -> Option<&str> {
+        self.status_label.as_deref().filter(|label| {
+            let label = label.to_ascii_lowercase();
+            [
+                "permission",
+                "approv",
+                "fail",
+                "error",
+                "denied",
+                "timed",
+                "cancel",
+                "interrupt",
+            ]
+            .iter()
+            .any(|word| label.contains(word))
+        })
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityEvent {
@@ -122,10 +142,26 @@ pub struct ActivityGroup {
     pub id: String,
     pub events: Vec<ActivityEvent>,
     pub summary: String,
+    /// Compact exceptional-state copy, projected once for all adapters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_label: Option<String>,
     pub active: bool,
     pub failed: bool,
     pub awaits_permission: bool,
     pub expanded: bool,
+}
+impl ActivityGroup {
+    /// A singleton is one disclosure, not a group wrapped around the same row.
+    /// Keep the group's stable ID so expansion survives appended tool events.
+    pub fn single_trace(&self) -> Option<TraceView> {
+        if self.events.len() != 1 {
+            return None;
+        }
+        let mut trace = self.events[0].trace().clone();
+        trace.id = self.id.clone();
+        trace.expanded = self.expanded;
+        Some(trace)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
@@ -185,6 +221,34 @@ pub struct ConversationView {
     pub preparing_label: String,
     pub error: Option<String>,
     pub selected: Option<String>,
+}
+impl ConversationView {
+    /// Visible work disclosures, in the same order as native row geometry.
+    pub fn work_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        for item in &self.items {
+            match item {
+                DisplayItem::Entry { .. } => {}
+                DisplayItem::Reasoning { id, .. } => ids.push(id.clone()),
+                DisplayItem::Activity { id, group } => {
+                    ids.push(id.clone());
+                    if group.expanded && group.events.len() > 1 {
+                        ids.extend(
+                            group
+                                .events
+                                .iter()
+                                .filter(|event| {
+                                    !event.trace().details.is_empty()
+                                        || event.trace().metadata.is_some()
+                                })
+                                .map(|event| event.key().to_owned()),
+                        );
+                    }
+                }
+            }
+        }
+        ids
+    }
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConversationEffect {
