@@ -98,7 +98,11 @@ mod tool_summary_layout_tests {
         let failed = call("search_workspace", ToolCallStatus::Failed);
         for tool in [&running, &failed] {
             let lines = render(vec![tool_entry(tool)], 80, false);
-            assert!(lines.len() > 2, "active or failed groups stay expanded");
+            if matches!(tool.status, ToolCallStatus::Failed) {
+                assert!(lines.len() > 1, "failed tools open their details");
+            } else {
+                assert_eq!(lines.len(), 1, "running tools stay compact");
+            }
             for width in [24, 40, 60] {
                 assert!(
                     render(vec![tool_entry(tool)], width, false)
@@ -145,6 +149,41 @@ mod tool_summary_layout_tests {
         );
         assert!(render(vec![tool_entry(&hidden)], 80, false).is_empty());
     }
+    #[test]
+    fn adjacent_work_is_one_row_each_without_duplicate_labels_or_completion_badges() {
+        let reasoning = ConversationEntry {
+            id: "reasoning".into(),
+            kind: ConversationKind::Reasoning {
+                content: "Full reasoning details".into(),
+                summary: Some("Checking sources".into()),
+            },
+        };
+        let mut done = call("run_shell", ToolCallStatus::Completed);
+        done.duration_ms = Some(1200);
+        let lines = render(vec![reasoning, tool_entry(&done)], 80, false);
+        assert_eq!(lines.len(), 2);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Checking sources"), "{text}");
+        assert!(text.contains("cargo check"), "{text}");
+        for noise in ["Thinking", "Reasoning", "Activity", "✓", "1.2 s"] {
+            assert!(!text.contains(noise), "{text}");
+        }
+        let mut waiting = call("run_shell", ToolCallStatus::AwaitingPermission);
+        waiting.error = Some("Approval required".into());
+        let text = render(vec![tool_entry(&waiting)], 80, false)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.lines().next().unwrap().contains("Awaiting approval"),
+            "{text}"
+        );
+    }
 }
 
 pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {
@@ -155,174 +194,187 @@ pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {
     ["|", "/", "-", "\\"][(tick % 4) as usize]
 }
 
-/// Paint shared work descriptions using terminal glyphs, wrapping and styles.
+/// Paint a single disclosure per event; child IDs follow the shared work order.
 pub(super) fn activity_group_lines(
     group: &crate::shared_ui::conversation::ActivityGroup,
     width: u16,
-    selected: bool,
-) -> Vec<Line<'static>> {
-    use crate::shared_ui::conversation::ActivityEvent;
-    let width = usize::from(width);
-    let secondary = Style::default().fg(theme::secondary());
-    let muted = Style::default().fg(theme::muted());
-    let rail = Style::default().fg(theme::hairline());
-    let lead = if group.active {
-        format!(" {} ", spinner())
-    } else {
-        " ".into()
-    };
-    let mut glyphs = Vec::new();
-    for event in &group.events {
-        let glyph = conversation_icon(event.trace().icon);
-        if !glyphs.contains(&glyph) {
-            glyphs.push(glyph);
-        }
+    selected: Option<&str>,
+) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
+    let mut rows = vec![(0, group.id.clone())];
+    if let Some(trace) = group.single_trace() {
+        return (
+            trace_lines(&trace, width, selected == Some(&group.id)),
+            rows,
+        );
     }
-    let glyphs = glyphs.into_iter().take(3).collect::<Vec<_>>().join(" ");
-    let chevron = format!(" {}", icons::chevron(group.expanded));
-    let budget = width.saturating_sub(
-        Span::raw(&lead).width() + Span::raw(&glyphs).width() + 1 + Span::raw(&chevron).width(),
-    );
-    let mut lines = vec![Line::from(vec![
-        Span::styled(lead, Style::default().fg(theme::text())),
-        Span::styled(glyphs, secondary),
-        Span::raw(" "),
-        Span::styled(
-            task::fit(&group.summary, budget),
-            if group.active {
-                Style::default()
-                    .fg(theme::text())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                secondary
-            },
-        ),
-        Span::styled(chevron, muted),
-    ])];
+    // Only collapsed groups repeat the lead action; the open header is a count.
+    let count = group.events.len().to_string();
+    let title = if group.expanded {
+        format!("{count} actions")
+    } else {
+        group.summary.clone()
+    };
+    let status = if group.expanded {
+        None
+    } else {
+        group.status_label.as_deref()
+    };
+    let mut lines = vec![work_row(
+        &title,
+        if group.expanded { None } else { Some(&count) },
+        group.active && !group.expanded,
+        status,
+        Some(group.expanded),
+        width,
+        selected == Some(&group.id),
+    )];
     if group.expanded {
         for event in &group.events {
             let trace = event.trace();
-            let target = trace.summary.as_deref().unwrap_or_default();
-            let action = format!(" {}", trace.title);
-            let tail = if trace.active {
-                format!(" {}", spinner())
-            } else {
-                String::new()
-            };
-            let used = 5 + Span::raw(&action).width() + Span::raw(&tail).width() + 1;
-            lines.push(Line::from(vec![
-                Span::styled(" │   ", rail),
-                Span::styled(
-                    conversation_icon(trace.icon),
-                    if event.failed() {
-                        Style::default().fg(theme::error_subtle())
-                    } else {
-                        secondary
-                    },
-                ),
-                Span::styled(action, secondary),
-                Span::styled(task::fit(target, width.saturating_sub(used)), secondary),
-                Span::styled(tail, Style::default().fg(theme::text())),
-            ]));
-            // Skills and MCP responses already have native visible bodies. Tool
-            // details keep the compact trace presentation used by the terminal.
-            if !matches!(event, ActivityEvent::Tool { .. }) {
-                for detail in &trace.details {
-                    for line in session_markdown_lines(&detail.content, width.saturating_sub(5)) {
-                        lines.extend(prefixed_wrapped_line(
-                            Span::styled(" │   ", rail),
-                            line.style(muted),
-                            width as u16,
-                        ));
-                    }
-                }
+            if !trace.details.is_empty() || trace.metadata.is_some() {
+                rows.push((lines.len(), trace.id.clone()));
+            }
+            let indent = " ".repeat(usize::from(width.min(2)));
+            for line in trace_lines(trace, width.saturating_sub(2), selected == Some(&trace.id)) {
+                let style = line.style;
+                lines.push(
+                    Line::from(
+                        std::iter::once(Span::raw(indent.clone()))
+                            .chain(line.spans)
+                            .collect::<Vec<_>>(),
+                    )
+                    .style(style),
+                );
             }
         }
-        lines.push(Line::default());
     }
+    (lines, rows)
+}
+
+/// One line of meaningful copy, with space reserved for exceptional status first.
+fn work_row(
+    title: &str,
+    count: Option<&str>,
+    active: bool,
+    status: Option<&str>,
+    expanded: Option<bool>,
+    width: u16,
+    selected: bool,
+) -> Line<'static> {
+    let width = usize::from(width);
+    let status_style = Style::default().fg(if status.is_some_and(|s| s.contains("approval")) {
+        theme::text()
+    } else {
+        theme::error_subtle()
+    });
+    let mut suffix = String::new();
+    if let Some(status) = status {
+        suffix.push_str(&format!(" · {status}"));
+    }
+    if let Some(count) = count {
+        suffix.push_str(&format!(" · {count}"));
+    }
+    if active {
+        suffix.push_str(&format!(" {}", spinner()));
+    }
+    if let Some(expanded) = expanded {
+        suffix.push_str(&format!(" {}", icons::chevron(expanded)));
+    }
+    let suffix = if suffix.is_empty() || width == 0 {
+        String::new()
+    } else {
+        format!(" {}", task::fit(&suffix, width.saturating_sub(1)))
+    };
+    let budget = width.saturating_sub(Span::raw(&suffix).width());
+    let line = Line::from(vec![
+        Span::styled(
+            task::fit(title, budget),
+            Style::default().fg(theme::secondary()),
+        ),
+        Span::styled(
+            suffix,
+            if status.is_some() {
+                status_style
+            } else {
+                Style::default().fg(theme::muted())
+            },
+        ),
+    ]);
     if selected {
-        lines[0] = lines[0].clone().style(
+        line.style(
             Style::default()
                 .bg(theme::code_background())
                 .add_modifier(Modifier::REVERSED),
-        );
+        )
+    } else {
+        line
     }
-    lines
 }
 
-pub(super) fn reasoning_lines(
-    content: &str,
-    summary: Option<&str>,
+pub(super) fn trace_lines(
     trace: &crate::shared_ui::conversation::TraceView,
     width: u16,
     selected: bool,
 ) -> Vec<Line<'static>> {
-    let width = usize::from(width);
-    let text = summary
-        .filter(|text| !text.trim().is_empty())
-        .unwrap_or(content);
-    let lead = if trace.active {
-        format!(" {} ", spinner())
-    } else {
-        " ".into()
+    use crate::shared_ui::conversation::ConversationIcon;
+    let summary = trace
+        .summary
+        .as_deref()
+        .filter(|text| !text.trim().is_empty());
+    let title = match summary {
+        Some(summary) if trace.icon == ConversationIcon::Reasoning || summary == trace.title => {
+            summary.to_owned()
+        }
+        Some(summary) => format!("{} · {summary}", trace.title),
+        None => trace.title.clone(),
     };
-    let chevron = format!(" {}", icons::chevron(trace.expanded));
-    let title = format!(
-        "{} · {}",
-        if summary.is_some() {
-            "Thinking"
-        } else {
-            "Reasoning"
-        },
-        trace.title
-    );
-    let budget = width.saturating_sub(Span::raw(&lead).width() + Span::raw(&chevron).width());
-    let mut lines = vec![Line::from(vec![
-        Span::styled(lead, Style::default().fg(theme::text())),
-        Span::styled(
-            task::fit(&title, budget),
-            Style::default().fg(theme::secondary()),
-        ),
-        Span::styled(chevron, Style::default().fg(theme::muted())),
-    ])];
-    if trace.expanded {
-        for line in
-            session_markdown_lines(&text.replace("****", "**\n\n**"), width.saturating_sub(5))
-        {
+    // Completed status is intentionally empty; only waiting/error states add copy.
+    let status = trace.attention_label();
+    let expandable = !trace.details.is_empty() || trace.metadata.is_some();
+    let mut lines = vec![work_row(
+        &title,
+        None,
+        trace.active,
+        status,
+        expandable.then_some(trace.expanded),
+        width,
+        selected,
+    )];
+    if trace.expanded && expandable {
+        if let Some(metadata) = &trace.metadata {
             lines.extend(prefixed_wrapped_line(
-                Span::styled(" │   ", Style::default().fg(theme::hairline())),
-                line.style(Style::default().fg(theme::text())),
-                width as u16,
+                Span::raw("  "),
+                Line::styled(
+                    format!("Duration: {metadata}"),
+                    Style::default().fg(theme::muted()),
+                ),
+                width,
             ));
         }
-        lines.push(Line::default());
-    }
-    if selected {
-        lines[0] = lines[0].clone().style(
-            Style::default()
-                .bg(theme::code_background())
-                .add_modifier(Modifier::REVERSED),
-        );
+        for detail in &trace.details {
+            let style = Style::default().fg(if detail.is_error {
+                theme::error_subtle()
+            } else {
+                theme::secondary()
+            });
+            let body = if detail.monospaced {
+                // Tool output is literal text, not Markdown (preserve code and diffs).
+                detail
+                    .content
+                    .lines()
+                    .map(|line| Line::raw(line.to_owned()))
+                    .collect()
+            } else {
+                session_markdown_lines(&detail.content, usize::from(width.saturating_sub(2)))
+            };
+            for line in body {
+                lines.extend(prefixed_wrapped_line(
+                    Span::raw("  "),
+                    line.style(style),
+                    width,
+                ));
+            }
+        }
     }
     lines
-}
-
-fn conversation_icon(icon: crate::shared_ui::conversation::ConversationIcon) -> &'static str {
-    use crate::shared_ui::conversation::ConversationIcon::*;
-    match icon {
-        Terminal => "\u{f120}",
-        Edit => "\u{f040}",
-        File => "\u{f15c}",
-        Search => "\u{f002}",
-        Folder => "\u{f07b}",
-        Screen => "\u{f108}",
-        Web => "\u{f02d}",
-        Mcp | Tool => "\u{f013}",
-        Skill => "\u{f0e7}",
-        Reasoning => "\u{f0eb}",
-        Info | Activity => "·",
-        Error => "!",
-        Copy => "\u{f0c5}",
-        Refresh => "\u{f021}",
-    }
 }

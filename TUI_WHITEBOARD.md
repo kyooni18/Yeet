@@ -15,6 +15,18 @@ Session picker activity is daemon-owned: show `running` or `permission` for any
 live session, including detached sessions, independently of the current-session
 marker. Idle sessions retain their age. Activity is ephemeral, not saved to disk.
 
+## Compact conversation work status
+
+Tool use and reasoning use one summary row each, with no generic/repeated
+Thinking/Reasoning/Activity labels. Adjacent work rows have no blank separators.
+A single event has one disclosure directly into its details; multiple events
+keep a compact counted group, with individually selectable detail disclosures.
+Running work alone uses a spinner. Approval, failure, timeout and cancellation
+remain explicit even when other work is running. Ordinary completed work has no
+status badge, duration or empty status slot. Arguments, output, timing and full
+reasoning belong behind disclosure; reasoning and running work start collapsed.
+Selection and expansion retain stable shared IDs across status transitions.
+
 ## Non-negotiable mental model
 
 ### Views are peers, never children of Sessions

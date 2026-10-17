@@ -76,7 +76,7 @@ fn cached_viewport_matches_full_transcript_and_invalidates_on_updates() {
 }
 
 #[test]
-fn reasoning_details_are_visible_outside_tool_groups_and_toggle_independently() {
+fn reasoning_summaries_stay_compact_and_details_toggle_independently() {
     let mut app = App::default();
     app.input_focused = false;
     app.conversation = (0..2)
@@ -98,9 +98,10 @@ fn reasoning_details_are_visible_outside_tool_groups_and_toggle_independently() 
     app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Select(Some("reasoning:1".into())));
     app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Toggle("reasoning:1".into()));
     let (partially_collapsed, headers) = transcript_content(&app, 60);
-    assert!(partially_collapsed.lines.len() < visible.lines.len());
+    assert!(partially_collapsed.lines.len() > visible.lines.len());
     assert!(partially_collapsed.to_string().contains("Detail 0"));
-    assert!(!partially_collapsed.to_string().contains("Detail 1"));
+    assert!(partially_collapsed.to_string().contains("Step 1"));
+    assert!(!partially_collapsed.to_string().contains("Step 0"));
     assert!(
         partially_collapsed.lines[headers[1]]
             .style
@@ -166,9 +167,9 @@ fn reasoning_summary_stays_visible_separate_from_its_tool_dropdown() {
         "reasoning and tool work have separate rows"
     );
     let text = separate.to_string();
-    assert!(text.contains("Inspect the source"));
+    assert!(!text.contains("Inspect the source"));
     assert!(text.contains("Check the implementation"));
-    assert!(!text.contains("src/example.rs"));
+    assert!(text.contains("src/example.rs"));
 
     app.work_rows = headers.iter().map(|row| *row as u16).collect();
     let view = app.application.conversation_state().view(&app.conversation, &app.state);
@@ -178,12 +179,14 @@ fn reasoning_summary_stays_visible_separate_from_its_tool_dropdown() {
         assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
         let toggled = transcript_content(&app, 90).0.to_string();
         assert!(toggled.contains("src/example.rs"));
+        assert!(toggled.contains("\"path\""));
         assert!(toggled.contains("Check the implementation"));
         assert!(!app.input_focused);
         assert_eq!(app.input, "keep draft");
         assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
         let collapsed = transcript_content(&app, 90).0.to_string();
-        assert!(!collapsed.contains("src/example.rs"));
+        assert!(collapsed.contains("src/example.rs"));
+        assert!(!collapsed.contains("\"path\""));
         assert!(collapsed.contains("Check the implementation"));
     }
 }

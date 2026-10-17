@@ -1152,9 +1152,9 @@ fn unfocused_work_navigation_and_expansion_preserve_draft() {
     assert_eq!(app.selected_work, Some(1));
     assert_eq!(app.scroll_y, 11);
     app.handle_work_selection_key(&key(KeyCode::Enter));
-    assert_eq!(app.application.conversation_state().expanded.get("reasoning:1"), Some(&false));
-    app.handle_work_selection_key(&key(KeyCode::Char(' ')));
     assert_eq!(app.application.conversation_state().expanded.get("reasoning:1"), Some(&true));
+    app.handle_work_selection_key(&key(KeyCode::Char(' ')));
+    assert_eq!(app.application.conversation_state().expanded.get("reasoning:1"), Some(&false));
     assert_eq!(app.input, "keep this draft");
     assert_eq!(app.cursor, 4);
     app.input_focused = true;

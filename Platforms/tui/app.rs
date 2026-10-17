@@ -190,13 +190,9 @@ impl Default for App {
             input: String::new(),
             input_focused: true,
             cursor: 0,
-            application: {
-                let harness = BridgeState::default();
-                let mut application = crate::shared_ui::application_session::ApplicationSession::new(&harness);
-                let prepared = application.prepare_conversation(crate::shared_ui::conversation::ConversationAction::SetInspectWork(true), &harness);
-                application.commit_conversation(prepared, &harness);
-                application
-            },
+            application: crate::shared_ui::application_session::ApplicationSession::new(
+                &BridgeState::default(),
+            ),
             tab_targets: Vec::new(),
             view_targets: Vec::new(),
             popup_filter: String::new(),
