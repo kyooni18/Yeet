@@ -1,48 +1,66 @@
-/* Tokens and a minimal reset. Layout and component styling live in the
-   .mun Views as built-in modifiers that read these variables. */
+/* Tokens (from the Yeet desktop mockup) and a minimal reset. Layout and
+   component styling live in the .mun Views as built-in modifiers. */
 :root {
-  --bg: #1c1c1e;
-  --panel: #232325;
-  --raised: #2e2e31;
-  --text: #ececee;
-  --muted: #a1a1a6;
-  --faint: #6e6e73;
-  --line: rgba(255, 255, 255, 0.09);
-  --hover: rgba(255, 255, 255, 0.05);
-  --select: rgba(255, 255, 255, 0.09);
-  --accent: #ececee;
-  --accent-ink: #1c1c1e;
-  --add: #30d158;
-  --del: #ff6961;
-  --run: #4da3ff;
-  --scrim: rgba(0, 0, 0, 0.4);
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  color-scheme: dark;
-}
-:root[data-appearance="light"] {
-  --bg: #ffffff; --panel: #f5f5f7; --raised: #e9e9ed; --text: #1d1d1f; --muted: #5c5c63; --faint: #8e8e93;
-  --line: rgba(0, 0, 0, 0.1); --hover: rgba(0, 0, 0, 0.04); --select: rgba(0, 0, 0, 0.07);
-  --accent: #1d1d1f; --accent-ink: #ffffff; --add: #137a2e; --del: #c20012; --run: #0a6cff; --scrim: rgba(0, 0, 0, 0.2);
+  --bg: #fffbf9;
+  --sidebar: #eef2f5;
+  --field: #e6edf1;
+  --nav-hover: #e9eff3;
+  --nav-select: #e0e8ee;
+  --session-select: rgba(255, 255, 255, 0.6);
+  --row-hover: #f4efe6;
+  --row-select: #ede6d8;
+  --bubble: #ede6d8;
+  --rule: #e3dfd9;
+  --composer: #f5f3f1;
+  --panel: #f4f1ed;
+  --raised: #ebe6df;
+  --text: #1d1d1f;
+  --text2: #48484a;
+  --muted: #6e6e73;
+  --faint: #8a8a8e;
+  --line: rgba(0, 0, 0, 0.07);
+  --hover: rgba(0, 0, 0, 0.04);
+  --accent: #5b7c99;
+  --accent-hover: #4e6e8b;
+  --accent-ink: #ffffff;
+  --add: #3f6a33;
+  --add-bg: #e3eedc;
+  --del: #8f3b30;
+  --del-bg: #f6e2de;
+  --scrim: rgba(0, 0, 0, 0.18);
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --mono: Menlo, ui-monospace, "SF Mono", Consolas, monospace;
   color-scheme: light;
 }
-@media (prefers-color-scheme: light) {
-  :root:not([data-appearance="dark"]) {
-    --bg: #ffffff; --panel: #f5f5f7; --raised: #e9e9ed; --text: #1d1d1f; --muted: #5c5c63; --faint: #8e8e93;
-    --line: rgba(0, 0, 0, 0.1); --hover: rgba(0, 0, 0, 0.04); --select: rgba(0, 0, 0, 0.07);
-    --accent: #1d1d1f; --accent-ink: #ffffff; --add: #137a2e; --del: #c20012; --run: #0a6cff; --scrim: rgba(0, 0, 0, 0.2);
-    color-scheme: light;
+:root[data-appearance="dark"] {
+  --bg: #1e1d1c; --sidebar: #242628; --field: #2e3236; --nav-hover: #2b3034; --nav-select: #333a40;
+  --session-select: rgba(255, 255, 255, 0.07); --row-hover: #2a2725; --row-select: #36312b; --bubble: #36312b;
+  --rule: #3b3732; --composer: #272523; --panel: #262422; --raised: #33302c;
+  --text: #ecebe8; --text2: #c9c7c3; --muted: #9b9994; --faint: #78766f;
+  --line: rgba(255, 255, 255, 0.08); --hover: rgba(255, 255, 255, 0.05);
+  --accent: #7d9cb8; --accent-hover: #8eabc5; --accent-ink: #14191e;
+  --add: #a3c992; --add-bg: #25321f; --del: #e8a196; --del-bg: #3b2522; --scrim: rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-appearance="light"]) {
+    --bg: #1e1d1c; --sidebar: #242628; --field: #2e3236; --nav-hover: #2b3034; --nav-select: #333a40;
+    --session-select: rgba(255, 255, 255, 0.07); --row-hover: #2a2725; --row-select: #36312b; --bubble: #36312b;
+    --rule: #3b3732; --composer: #272523; --panel: #262422; --raised: #33302c;
+    --text: #ecebe8; --text2: #c9c7c3; --muted: #9b9994; --faint: #78766f;
+    --line: rgba(255, 255, 255, 0.08); --hover: rgba(255, 255, 255, 0.05);
+    --accent: #7d9cb8; --accent-hover: #8eabc5; --accent-ink: #14191e;
+    --add: #a3c992; --add-bg: #25321f; --del: #e8a196; --del-bg: #3b2522; --scrim: rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
   }
 }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; overflow: hidden; }
-body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+body { background: var(--bg); color: var(--text); font: 15px/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { border: 0; background: none; padding: 0; cursor: pointer; text-align: left; }
 button:disabled { cursor: default; opacity: 0.45; }
-:focus-visible { outline: 2px solid var(--muted); outline-offset: 1px; }
-progress:not([value]) { appearance: none; border: 1.5px solid var(--line); border-top-color: var(--run); border-radius: 50%; animation: spin 0.8s linear infinite; }
-progress:not([value])::-webkit-progress-bar { background: transparent; }
-@keyframes spin { to { transform: rotate(360deg); } }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: 0s !important; transition-duration: 0s !important; } }

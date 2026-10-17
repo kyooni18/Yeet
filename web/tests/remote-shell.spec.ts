@@ -12,11 +12,11 @@ test('remote shell sends, navigates and hides the sidebar', async ({ page }) => 
   await input.press('Enter')
   await expect(input).toHaveValue('')
 
-  await page.getByRole('button', { name: 'Files' }).click()
+  await page.getByRole('button', { name: 'Files', exact: true }).first().click()
   await expect(page.getByRole('button', { name: /README\.md/ })).toBeVisible()
-  await page.getByRole('button', { name: 'Changes' }).click()
+  await page.getByRole('button', { name: 'Diff', exact: true }).first().click()
   await expect(page.getByRole('button', { name: /src\/limiter\.ts/ })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Toggle sidebar' }).click()
-  await expect(page.getByRole('button', { name: 'Files' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Hide sidebar' }).click()
+  await expect(page.getByRole('button', { name: 'Toggle sidebar' })).toBeVisible()
 })

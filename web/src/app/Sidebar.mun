@@ -1,119 +1,141 @@
 import { Transition, withAnimation } from "@mun/core"
-import { remoteStore } from "@/store/remoteStore"
-import { color } from "./theme"
+import { color, mono } from "./theme"
 import {
   remote, page, workspaceMenu, isWide, ease, connected, openPage, openSheet, newSession, openSession,
-  chooseWorkspace, workspaces, toggleSidebar, age,
+  chooseWorkspace, workspaces, toggleSidebar, age, sessionQuery, filteredSessions, spinnerFrame,
 } from "./state"
 
-/** A full-width sidebar row with hover and selection feedback. */
-struct SidebarRow: View {
+/** Pill navigation item (mockup: 34pt tall, 17pt radius). */
+struct NavItem: View {
+  let id: String
   let title: String
-  let detail: String
-  let selected: Bool
-  let running: Bool
-  let action: () => void
+  let badge: String
   @State var hovering: Bool = false
-
   var body: some View {
-    Button(action: action, label: {
+    Button(action: { openPage(id) }, label: {
       HStack(spacing: 8) {
-        Text(title)
-          .lineLimit(1)
-          .foregroundStyle(selected ? color.text : color.muted)
+        Text(title).fontSize(15)
         Spacer()
-        if running {
-          Circle()
-            .frame(width: 6, height: 6)
-        .style({ borderRadius: "50%", flex: "none" })
-            .background(color.run)
-            .transition(Transition.opacity)
-        }
-        Text(detail)
-          .fontSize(12)
-          .foregroundStyle(color.faint)
+        Text(badge).fontSize(12).foregroundStyle(color.faint)
       }
     })
-    .padding({ top: 6, bottom: 6, leading: 10, trailing: 10 })
-    .background(selected ? color.select : hovering.value ? color.hover : "transparent")
-    .style({ borderRadius: "6px" })
+    .foregroundStyle(color.text2)
+    .padding({ top: 6, bottom: 6, leading: 14, trailing: 14 })
+    .background(page.value === id ? color.navSelect : hovering.value ? color.navHover : "transparent")
+    .style({ borderRadius: "17px" })
+    .animation(ease, value: page.value === id || hovering.value)
+    .onHover(inside => { hovering.value = inside })
+  }
+}
+
+/** Two-line session row; the running session shows the TUI spinner glyph. */
+struct SessionRow: View {
+  let session: Any
+  @State var hovering: Bool = false
+  var body: some View {
+    Button(action: { openSession(session.id) }, label: {
+      VStack(alignment: .stretch, spacing: 2) {
+        HStack(spacing: 6) {
+          if session.id === remote.value.state.current_session_id && remote.value.state.is_streaming {
+            Text(spinnerFrame())
+              .fontSize(12)
+              .foregroundStyle(color.accent)
+              .style({ fontFamily: mono, width: "8px", flex: "none" })
+              .transition(Transition.opacity)
+          }
+          Text(session.title || "Untitled").fontSize(14).lineLimit(1)
+          Spacer()
+        }
+        Text(age(session.updated_at)).fontSize(12).foregroundStyle(color.muted)
+      }
+    })
+    .foregroundStyle(color.text2)
+    .padding({ top: 7, bottom: 7, leading: 14, trailing: 14 })
+    .background(session.id === remote.value.state.current_session_id ? color.sessionSelect : hovering.value ? color.hover : "transparent")
+    .style({ borderRadius: "10px" })
     .animation(ease, value: hovering.value)
     .onHover(inside => { hovering.value = inside })
+    .disabled(!connected())
   }
 }
 
 struct WorkspaceMenu: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 2) {
+    VStack(alignment: .stretch, spacing: 1) {
       ForEach(workspaces(), { id: item => item.id }) { item in
-        SidebarRow(title: item.label, detail: "", selected: item.selected, running: false, action: { chooseWorkspace(item.path, item.id) })
+        Button(item.label) { chooseWorkspace(item.path, item.id) }
+          .fontSize(13)
+          .foregroundStyle(item.selected ? color.text : color.text2)
+          .padding({ top: 5, bottom: 5, leading: 14, trailing: 14 })
+          .background(item.selected ? color.sessionSelect : "transparent")
+          .style({ borderRadius: "8px" })
       }
     }
-    .padding({ top: 4, bottom: 8 })
-    .transition(Transition.opacity.combined(Transition.move("top", 8)))
+    .padding({ bottom: 6 })
+    .transition(Transition.opacity.combined(Transition.move("top", 6)))
   }
 }
 
-struct WorkspaceHeader: View {
+struct Header: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 0) {
-      Button(action: { withAnimation(ease) { workspaceMenu.value = !workspaceMenu.value } }, label: {
-        HStack(spacing: 6) {
-          Text(remote.value.currentWorkspace?.display_name || remote.value.state.workspace_root || "Workspace")
-            .fontWeight("semibold")
-            .lineLimit(1)
-          Text("⌄")
-            .foregroundStyle(color.faint)
-            .rotationEffect(workspaceMenu.value ? 180 : 0)
-            .animation(ease, value: workspaceMenu.value)
-          Spacer()
-        }
-      })
-      .padding({ top: 4, bottom: 10, leading: 10, trailing: 10 })
-      .disabled(!connected())
-      if workspaceMenu.value {
-        WorkspaceMenu()
-      }
+    HStack(spacing: 8) {
+      Spacer()
+      Button("New") { newSession() }
+        .fontSize(13)
+        .foregroundStyle(color.muted)
+        .disabled(!connected())
+      Button("⟨") { toggleSidebar(false) }
+        .accessibilityLabel("Hide sidebar")
+        .fontSize(14)
+        .foregroundStyle(color.muted)
+        .padding({ leading: 6, trailing: 6 })
     }
+    .style({ height: "30px", flex: "none" })
+  }
+}
+
+struct Search: View {
+  var body: some View {
+    TextField(Binding(sessionQuery), "Search sessions")
+      .accessibilityLabel("Search sessions")
+      .fontSize(14)
+      .padding({ top: 9, bottom: 9, leading: 14, trailing: 14 })
+      .background(color.field)
+      .style({ border: "0", outline: "none", borderRadius: "18px", width: "100%", color: "inherit" })
   }
 }
 
 struct Navigation: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 2) {
-      SidebarRow(title: "Chat", detail: "", selected: page.value === "chat", running: false, action: { openPage("chat") })
-      SidebarRow(title: "Files", detail: "", selected: page.value === "files", running: false, action: { openPage("files") })
-      SidebarRow(title: "Changes", detail: "", selected: page.value === "diff", running: false, action: { openPage("diff") })
-      SidebarRow(title: "Agents", detail: remote.value.agents?.active_count ? String(remote.value.agents.active_count) : "", selected: page.value === "agents", running: false, action: { openPage("agents") })
+    VStack(alignment: .stretch, spacing: 1) {
+      NavItem(id: "chat", title: "Code", badge: "")
+      NavItem(id: "diff", title: "Diff", badge: remote.value.workspaceChanges?.files.length ? String(remote.value.workspaceChanges.files.length) : "")
+      NavItem(id: "files", title: "Files", badge: "")
+      NavItem(id: "agents", title: "Agents", badge: remote.value.agents?.active_count ? String(remote.value.agents.active_count) : "")
     }
   }
 }
 
-struct SessionList: View {
+struct Sessions: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 2) {
-      HStack(spacing: 0) {
-        Text("Sessions")
-          .fontSize(12)
-          .foregroundStyle(color.faint)
-        Spacer()
-        Button("New") { newSession() }
-          .fontSize(12)
-          .foregroundStyle(color.muted)
-          .disabled(!connected())
+      Button(action: { withAnimation(ease) { workspaceMenu.value = !workspaceMenu.value } }, label: {
+        HStack(spacing: 4) {
+          Text(remote.value.currentWorkspace?.display_name || "Workspace").fontSize(12)
+          Text("›").fontSize(12).rotationEffect(workspaceMenu.value ? 270 : 90).animation(ease, value: workspaceMenu.value)
+          Spacer()
+        }
+      })
+      .foregroundStyle(color.muted)
+      .padding({ top: 4, bottom: 4, leading: 2 })
+      .disabled(!connected())
+      if workspaceMenu.value {
+        WorkspaceMenu()
       }
-      .padding({ top: 16, bottom: 6, leading: 10, trailing: 10 })
       ScrollView() {
         VStack(alignment: .stretch, spacing: 2) {
-          ForEach(remote.value.currentWorkspaceSessions, { id: session => session.id }) { session in
-            SidebarRow(
-              title: session.title || "Untitled",
-              detail: age(session.updated_at),
-              selected: session.id === remote.value.state.current_session_id,
-              running: session.id === remote.value.state.current_session_id && remote.value.state.is_streaming,
-              action: { openSession(session.id) }
-            )
-            .disabled(!connected())
+          ForEach(filteredSessions(), { id: session => session.id }) { session in
+            SessionRow(session: session)
           }
         }
       }
@@ -126,35 +148,31 @@ struct SessionList: View {
 struct Footer: View {
   var body: some View {
     HStack(spacing: 8) {
-      Circle()
-        .frame(width: 7, height: 7)
-        .style({ borderRadius: "50%", flex: "none" })
-        .background(connected() ? color.add : color.faint)
-        .animation(ease, value: connected())
-      Text(connected() ? "Connected" : remote.value.connection)
+      Text(connected() ? "" : remote.value.connection)
         .fontSize(12)
         .foregroundStyle(color.muted)
       Spacer()
       Button("Settings") { openSheet("settings") }
-        .fontSize(12)
+        .fontSize(13)
         .foregroundStyle(color.muted)
     }
-    .padding({ top: 10, leading: 10, trailing: 10 })
+    .padding({ top: 10, leading: 4, trailing: 4 })
   }
 }
 
 export struct Sidebar: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
-      WorkspaceHeader()
-      Navigation()
-      SessionList()
+      Header()
+      Search().padding({ top: 8, bottom: 16 })
+      Rectangle().style({ height: "1px", background: "var(--line)", flex: "none" })
+      Navigation().padding({ top: 12, bottom: 14 })
+      Sessions()
       Footer()
     }
-    .padding(10)
-    .style({ width: "260px", height: "100%", position: isWide.value ? "relative" : "fixed", top: "0", left: "0", zIndex: "10" })
-    .background(color.panel)
-    .style({ borderRight: "1px solid var(--line)", flex: "none" })
+    .padding({ top: 14, bottom: 16, leading: 20, trailing: 20 })
+    .background(color.sidebar)
+    .style({ width: "300px", height: "100%", flex: "none", position: isWide.value ? "relative" : "fixed", top: "0", left: "0", zIndex: "10" })
   }
 }
 

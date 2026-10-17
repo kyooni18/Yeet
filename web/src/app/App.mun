@@ -42,7 +42,7 @@ struct Shell: View {
       if sidebarOpen.value {
         Sidebar()
           .id("sidebar")
-          .transition(Transition.move("leading", 260))
+          .transition(Transition.move("leading", 300))
       }
       if sidebarOpen.value && !isWide.value {
         Scrim().id("scrim")

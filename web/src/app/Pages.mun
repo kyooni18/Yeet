@@ -1,13 +1,15 @@
 import { Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
-import { remote, ease } from "./state"
+import { remote, ease, displayPath, workspaceLine } from "./state"
+import { PageHeader, Chip } from "./Common.mun"
 
-function lineColor(line: string): string {
-  if (line.startsWith("@@")) return color.faint
-  if (line.startsWith("+") && !line.startsWith("+++")) return color.add
-  if (line.startsWith("-") && !line.startsWith("---")) return color.del
-  return color.text
+function lineKind(line: string): string {
+  if (line.startsWith("@@") || line.startsWith("diff ") || line.startsWith("index ")) return "meta"
+  if (line.startsWith("+++") || line.startsWith("---")) return "meta"
+  if (line.startsWith("+")) return "add"
+  if (line.startsWith("-")) return "del"
+  return "line"
 }
 
 function size(bytes: number): string {
@@ -16,44 +18,42 @@ function size(bytes: number): string {
   return (bytes / 1048576).toFixed(1) + " MB"
 }
 
-struct Row: View {
+function modified(seconds: number | null): string {
+  if (!seconds) return ""
+  const date = new Date(seconds * 1000)
+  const today = new Date()
+  if (date.toDateString() === today.toDateString()) return "Modified today"
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
+function changeTotals(): string {
+  const files = remote.value.workspaceChanges?.files ?? []
+  const added = files.reduce((sum, file) => sum + (file.added ?? 0), 0)
+  const removed = files.reduce((sum, file) => sum + (file.removed ?? 0), 0)
+  return files.length + (files.length === 1 ? " file" : " files") + " · +" + added + " −" + removed
+}
+
+/** Mockup list row: 38pt, 10pt radius, beige hover and selection. */
+struct ListRow: View {
   let title: String
   let detail: String
-  let status: String
   let selected: Bool
+  let mono: Bool
   let action: () => void
   @State var hovering: Bool = false
   var body: some View {
     Button(action: action, label: {
-      HStack(spacing: 10) {
-        Text(status).fontSize(12).foregroundStyle(color.faint).frame(width: 18, alignment: "leading").style({ fontFamily: mono })
-        Text(title).lineLimit(1)
+      HStack(spacing: 12) {
+        Text(title).fontSize(mono ? 13 : 15).lineLimit(1).style({ fontFamily: mono ? "var(--mono)" : "inherit", minWidth: "0" })
         Spacer()
-        Text(detail).fontSize(12).foregroundStyle(color.faint).style({ fontFamily: mono })
+        Text(detail).fontSize(13).foregroundStyle(color.faint).style({ whiteSpace: "nowrap" })
       }
     })
-    .padding({ top: 6, bottom: 6, leading: 10, trailing: 10 })
-    .background(selected ? color.select : hovering.value ? color.hover : "transparent")
-    .style({ borderRadius: "6px" })
-    .animation(ease, value: hovering.value)
+    .padding({ top: 9, bottom: 9, leading: 12, trailing: 12 })
+    .background(selected ? color.rowSelect : hovering.value ? color.rowHover : "transparent")
+    .style({ borderRadius: "10px" })
+    .animation(ease, value: hovering.value || selected)
     .onHover(inside => { hovering.value = inside })
-  }
-}
-
-struct Patch: View {
-  let lines: Any
-  var body: some View {
-    VStack(alignment: .stretch, spacing: 0) {
-      ForEach(lines.map((line, index) => ({ line, index })), { id: row => row.index }) { row in
-        Text(row.line || " ")
-          .foregroundStyle(lineColor(row.line))
-          .style({ whiteSpace: "pre" })
-      }
-    }
-    .padding(12)
-    .background(color.panel)
-    .style({ fontFamily: mono, fontSize: "12px", lineHeight: "1.55", borderRadius: "8px", overflowX: "auto" })
-    .transition(Transition.opacity)
   }
 }
 
@@ -61,121 +61,124 @@ struct FileInfo: View {
   let info: Any
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
-      Text(info.name).fontWeight("semibold")
-      Text(info.path).fontSize(12).foregroundStyle(color.muted).style({ fontFamily: mono })
-      Text([size(info.size), info.lines ? info.lines + " lines" : "", info.status || ""].filter(Boolean).join(" · "))
-        .fontSize(12)
+      Text(info.name).fontSize(15).fontWeight("medium")
+      Text([size(info.size), info.lines ? info.lines + " lines" : "", modified(info.modified), info.status ? "Changed" : ""].filter(Boolean).join(" · "))
+        .fontSize(13)
         .foregroundStyle(color.faint)
       if info.status {
-        Button("View changes") { remoteStore.requestChanges(info.path, false) }
-          .fontSize(12)
-          .foregroundStyle(color.muted)
-      }
-    }
-    .padding(12)
-    .border(color.line, 1)
-    .style({ borderRadius: "8px" })
-    .transition(Transition.opacity.combined(Transition.move("top", 6)))
-  }
-}
-
-struct Files: View {
-  var body: some View {
-    VStack(alignment: .stretch, spacing: 2) {
-      HStack(spacing: 8) {
-        if remote.value.workspaceFiles.parent !== null {
-          Button("← Up") { remoteStore.requestFiles(remote.value.workspaceFiles.parent) }
-            .fontSize(12)
-            .foregroundStyle(color.muted)
+        HStack(spacing: 0) {
+          Chip(title: "Review changes", action: { remoteStore.requestChanges(info.path, false) })
+          Spacer()
         }
-        Text("/" + remote.value.workspaceFiles.path).fontSize(12).foregroundStyle(color.muted).style({ fontFamily: mono })
-        Spacer()
-        Text(remote.value.workspaceFiles.branch).fontSize(12).foregroundStyle(color.faint)
-      }
-      .padding({ bottom: 10, leading: 10, trailing: 10 })
-      if remote.value.workspaceFiles.info {
-        FileInfo(info: remote.value.workspaceFiles.info)
-          .padding({ bottom: 10 })
-      }
-      ForEach(remote.value.workspaceFiles.entries, { id: entry => entry.path }) { entry in
-        Row(
-          title: entry.directory ? entry.name + "/" : entry.name,
-          detail: entry.directory ? (entry.items === null ? "" : entry.items + " items") : size(entry.size),
-          status: entry.status || "",
-          selected: entry.path === remote.value.workspaceFiles.selected,
-          action: { entry.directory ? remoteStore.requestFiles(entry.path) : remoteStore.requestFiles(remote.value.workspaceFiles.path, entry.path) }
-        )
+        .style({ marginLeft: "-8px" })
       }
     }
+    .padding(14)
+    .background(color.panel)
+    .style({ borderRadius: "12px" })
+    .transition(Transition.opacity.combined(Transition.move("top", 6)))
   }
 }
 
 export struct FilesPage: View {
   var body: some View {
     ScrollView() {
-      VStack(alignment: .stretch, spacing: 0) {
-        if remote.value.workspaceFiles {
-          Files()
-        } else {
-          Text("Loading…").foregroundStyle(color.muted)
+      VStack(alignment: .stretch, spacing: 16) {
+        HStack(spacing: 8) {
+          PageHeader(title: "Files", subtitle: displayPath(remote.value.workspaceFiles?.root) + (remote.value.workspaceFiles?.path ? "/" + remote.value.workspaceFiles.path : ""))
+          if remote.value.workspaceFiles?.parent !== null && remote.value.workspaceFiles?.parent !== undefined {
+            Chip(title: "Up", action: { remoteStore.requestFiles(remote.value.workspaceFiles.parent) })
+          }
         }
+        if remote.value.workspaceFiles?.info {
+          FileInfo(info: remote.value.workspaceFiles.info)
+        }
+        VStack(alignment: .stretch, spacing: 0) {
+          ForEach(remote.value.workspaceFiles?.entries ?? [], { id: entry => entry.path }) { entry in
+            ListRow(
+              title: entry.name,
+              detail: entry.directory ? (entry.items === null ? "" : entry.items + (entry.items === 1 ? " item" : " items")) : entry.status ? "Changed" : modified(entry.modified) || size(entry.size),
+              selected: entry.path === remote.value.workspaceFiles.selected || !!entry.status,
+              mono: false,
+              action: { entry.directory ? remoteStore.requestFiles(entry.path) : remoteStore.requestFiles(remote.value.workspaceFiles.path, entry.path) }
+            )
+          }
+        }
+        .style({ margin: "0 -12px" })
       }
-      .padding({ top: 20, bottom: 40, leading: 20, trailing: 20 })
-      .style({ maxWidth: "900px" })
-      .style({ margin: "0 auto" })
+      .padding({ top: 20, bottom: 40, leading: 32, trailing: 32 })
     }
     .style({ flex: "1", minHeight: "0", width: "100%" })
   }
 }
 
-struct Changes: View {
+struct PatchLine: View {
+  let line: String
   var body: some View {
-    VStack(alignment: .stretch, spacing: 12) {
-      HStack(spacing: 8) {
-        Text(remote.value.workspaceChanges.branch).fontSize(12).foregroundStyle(color.faint)
-        Spacer()
-        Button(remote.value.workspaceChanges.full ? "Changes only" : "Full file") {
-          remoteStore.requestChanges(remote.value.workspaceChanges.selected, !remote.value.workspaceChanges.full)
+    Text(line || " ")
+      .foregroundStyle(lineKind(line) === "add" ? color.add : lineKind(line) === "del" ? color.del : lineKind(line) === "meta" ? color.faint : color.text)
+      .background(lineKind(line) === "add" ? color.addBg : lineKind(line) === "del" ? color.delBg : "transparent")
+      .padding({ top: 3, bottom: 3, leading: 16, trailing: 16 })
+      .style({ whiteSpace: "pre", fontFamily: mono, fontSize: "13px", lineHeight: "17px", minWidth: "max-content" })
+  }
+}
+
+struct Patch: View {
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 0) {
+        Text(remote.value.workspaceChanges.selected || "").fontSize(12).foregroundStyle(color.faint)
+          .padding({ top: 4, bottom: 8, leading: 16 })
+          .style({ fontFamily: mono })
+        ForEach(remote.value.workspaceChanges.patch.map((line, index) => ({ line, index })), { id: row => row.index }) { row in
+          PatchLine(line: row.line)
         }
-        .fontSize(12)
-        .foregroundStyle(color.muted)
-      }
-      .padding({ leading: 10, trailing: 10 })
-      if remote.value.workspaceChanges.message {
-        Text(remote.value.workspaceChanges.message).foregroundStyle(color.muted).padding({ leading: 10 })
-      }
-      VStack(alignment: .stretch, spacing: 2) {
-        ForEach(remote.value.workspaceChanges.files, { id: file => file.path }) { file in
-          Row(
-            title: file.path,
-            detail: file.added === null ? "" : "+" + file.added + " −" + file.removed,
-            status: file.status,
-            selected: file.path === remote.value.workspaceChanges.selected,
-            action: { remoteStore.requestChanges(file.path, remote.value.workspaceChanges.full) }
-          )
-        }
-      }
-      if remote.value.workspaceChanges.patch.length {
-        Patch(lines: remote.value.workspaceChanges.patch)
       }
     }
+    .style({ flex: "1", minWidth: "0", minHeight: "0", overflow: "auto" })
+    .transition(Transition.opacity)
   }
 }
 
 export struct DiffPage: View {
   var body: some View {
-    ScrollView() {
-      VStack(alignment: .stretch, spacing: 0) {
-        if remote.value.workspaceChanges {
-          Changes()
-        } else {
-          Text("Loading…").foregroundStyle(color.muted)
+    VStack(alignment: .stretch, spacing: 16) {
+      HStack(spacing: 8) {
+        PageHeader(title: "Review changes", subtitle: remote.value.workspaceChanges ? changeTotals() : workspaceLine())
+        if remote.value.workspaceChanges?.selected {
+          Chip(title: remote.value.workspaceChanges.full ? "Changes only" : "Full file", action: {
+            remoteStore.requestChanges(remote.value.workspaceChanges.selected, !remote.value.workspaceChanges.full)
+          })
         }
       }
-      .padding({ top: 20, bottom: 40, leading: 20, trailing: 20 })
-      .style({ maxWidth: "900px" })
-      .style({ margin: "0 auto" })
+      .padding({ leading: 32, trailing: 32 })
+      if remote.value.workspaceChanges?.message {
+        Text(remote.value.workspaceChanges.message).foregroundStyle(color.faint).padding({ leading: 32 })
+      }
+      HStack(alignment: .stretch, spacing: 20) {
+        ScrollView() {
+          VStack(alignment: .stretch, spacing: 2) {
+            ForEach(remote.value.workspaceChanges?.files ?? [], { id: file => file.path }) { file in
+              ListRow(
+                title: file.path.split("/").pop(),
+                detail: file.added === null ? file.status : "+" + file.added + " −" + file.removed,
+                selected: file.path === remote.value.workspaceChanges.selected,
+                mono: false,
+                action: { remoteStore.requestChanges(file.path, remote.value.workspaceChanges.full) }
+              )
+              .accessibilityLabel(file.path)
+            }
+          }
+        }
+        .style({ width: "260px", flex: "none" })
+        if remote.value.workspaceChanges?.patch.length {
+          Patch()
+        }
+      }
+      .padding({ leading: 20 })
+      .style({ flex: "1", minHeight: "0" })
     }
+    .padding({ top: 20 })
     .style({ flex: "1", minHeight: "0", width: "100%" })
   }
 }

@@ -16,6 +16,34 @@ export const sidebarOpen = State(wide())
 export const isWide = State(wide())
 export const workspaceMenu = State(false)
 export const toast = State('')
+export const sessionQuery = State('')
+
+/** Spinner frames shared with the TUI (`| / - \` every 180 ms). */
+const FRAMES = ['|', '/', '-', '\\']
+export const tick = State(0)
+let runStartedAt = 0
+
+export function isWorking(): boolean {
+  const snapshot = remote.value
+  return snapshot.state.is_streaming || !!snapshot.conversation?.preparing || (snapshot.agents?.active_count ?? 0) > 0
+}
+
+export function spinnerFrame(): string {
+  return FRAMES[tick.value % FRAMES.length]
+}
+
+export function elapsed(): string {
+  if (!runStartedAt) return ''
+  const seconds = Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000))
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
+window.setInterval(() => {
+  const working = isWorking()
+  if (working && !runStartedAt) runStartedAt = Date.now()
+  if (!working) runStartedAt = 0
+  if (working) tick.value += 1
+}, 180)
 
 export const ease = Animation.snappy(0.28)
 
@@ -88,6 +116,24 @@ export function age(iso: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`
   return `${Math.floor(seconds / 86400)}d`
+}
+
+/** `/Users/name/Code/Yeet` → `~/Code/Yeet` for headers. */
+export function displayPath(path: string | null | undefined): string {
+  return (path ?? '').replace(/^\/(Users|home)\/[^/]+/, '~')
+}
+
+export function workspaceLine(): string {
+  const snapshot = remote.value
+  const path = displayPath(snapshot.currentWorkspace?.path || snapshot.state.workspace_root)
+  const branch = snapshot.workspaceFiles?.branch || snapshot.workspaceChanges?.branch || ''
+  return [path, branch].filter(Boolean).join(' · ')
+}
+
+export function filteredSessions() {
+  const needle = sessionQuery.value.trim().toLowerCase()
+  const sessions = remote.value.currentWorkspaceSessions
+  return needle ? sessions.filter(session => (session.title || '').toLowerCase().includes(needle)) : sessions
 }
 
 export function shortModel(model: string): string {

@@ -1,0 +1,62 @@
+import { color, mono } from "./theme"
+import { ease, spinnerFrame } from "./state"
+
+/** TUI-style text spinner: `| / - \` advancing every 180 ms while work runs. */
+export struct Spinner: View {
+  var body: some View {
+    Text(spinnerFrame())
+      .foregroundStyle(color.accent)
+      .style({ fontFamily: mono, display: "inline-block", width: "1ch", textAlign: "center", flex: "none" })
+      .accessibilityLabel("Working")
+  }
+}
+
+/** Page title with a muted subtitle (mockup: 20pt medium over 13pt). */
+export struct PageHeader: View {
+  let title: String
+  let subtitle: String
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 4) {
+      Text(title).fontSize(20).fontWeight("medium").lineLimit(1)
+      Text(subtitle).fontSize(13).foregroundStyle(color.faint).lineLimit(1)
+    }
+  }
+}
+
+/** Slate primary button with hover and pressed states. */
+export struct PrimaryButton: View {
+  let title: String
+  let enabled: Bool
+  let action: () => void
+  @State var hovering: Bool = false
+  var body: some View {
+    Button(title, action)
+      .fontSize(14)
+      .fontWeight("medium")
+      .foregroundStyle(color.accentInk)
+      .padding({ top: 8, bottom: 8, leading: 16, trailing: 16 })
+      .background(hovering.value && enabled ? color.accentHover : color.accent)
+      .opacity(enabled ? 1 : 0.4)
+      .style({ borderRadius: "10px", whiteSpace: "nowrap", flex: "none" })
+      .animation(ease, value: hovering.value)
+      .onHover(inside => { hovering.value = inside })
+      .disabled(!enabled)
+  }
+}
+
+/** Quiet text button used for toolbars and message actions. */
+export struct Chip: View {
+  let title: String
+  let action: () => void
+  @State var hovering: Bool = false
+  var body: some View {
+    Button(title, action)
+      .fontSize(13)
+      .foregroundStyle(hovering.value ? color.text : color.faint)
+      .padding({ top: 3, bottom: 3, leading: 8, trailing: 8 })
+      .background(hovering.value ? color.hover : "transparent")
+      .style({ borderRadius: "8px", whiteSpace: "nowrap" })
+      .animation(ease, value: hovering.value)
+      .onHover(inside => { hovering.value = inside })
+  }
+}
