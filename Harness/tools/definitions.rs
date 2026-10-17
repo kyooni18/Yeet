@@ -83,7 +83,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "read_file",
-            "Read one UTF-8 file or batch up to 8 file ranges with line/hash edit anchors and snapshots. Relative paths resolve from the session cwd; paths outside active context roots follow approval rules. Use path for one file or requests for a batch. Reuse covered ranges; refresh=true forces fresh contents/anchors.",
+            "Read a text file (or up to 8 ranges with requests) as numbered lines. Relative paths resolve from the cwd.",
             json!({
                 "type":"object",
                 "properties":{
@@ -112,7 +112,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "search_workspace",
-            "Search text from the session cwd or another active context root. Matching is literal unless regex=true; narrow path when possible.",
+            "Search file contents under the cwd. Literal unless regex=true.",
             json!({"type":"object","properties":{"query":{"type":"string"},"path":{"type":"string"},"maxResults":{"type":"integer","minimum":1,"maximum":100},"caseSensitive":{"type":"boolean"},"regex":{"type":"boolean"}},"required":["query"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
@@ -157,7 +157,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "read_artifact",
-            "Read artifact lines (default 160, max 8192 chars). endLine past EOF is clamped safely. For source-read artifacts, line ranges address the directly readable anchored source view; exactArtifactId in the externalization envelope preserves raw JSON. If truncated by characters, repeat the same line range with offset=nextOffset.",
+            "Read lines from a stored artifact, such as truncated tool output.",
             json!({"type":"object","properties":{"id":{"type":"string"},"startLine":{"type":"integer","minimum":1},"endLine":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"maxChars":{"type":"integer","minimum":1,"maximum":8192}},"required":["id"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
@@ -177,12 +177,12 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command from the session cwd. On macOS this is zsh -f: unmatched globs are errors, so optional glob paths need guarding or quoting. Broad recursive scans may exceed foreground timeouts. Use background=true for long work, then shell_job action=wait. mode=actor summarizes noisy output. Paths outside active roots follow approval rules.",
+            "Run a shell command (zsh) in the cwd. Use background=true for long-running work and shell_job to follow it.",
             json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "shell_job",
-            "Manage detached shell jobs: check, wait, list, stop, or forget. action=wait suspends until termination without polling. Set reportEverySeconds for periodic wakeups. Reuse jobId; forget only completed jobs.",
+            "Check, wait for, list, stop, or forget background shell jobs.",
             json!({"type":"object","properties":{"action":{"type":"string","enum":["check","wait","list","stop","forget"]},"jobId":{"type":"string"},"reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400}},"required":["action"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
@@ -211,7 +211,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "apply_file_edits",
-            "Apply snapshot-safe structured file edits. Prefer semantic edits for named declarations when supported: replaceNode/replaceBody/deleteNode/insertBefore/insertAfter use target:{name,kind?,container?,signature?} and resolve deterministically against the read snapshot. Semantic targeting is never fuzzy; ambiguous targets fail. Range replace/delete and line insert remain the fallback. replaceBody text replaces the language body node itself, including braces/delimiters where applicable. The runtime binds cached snapshots and validates stale edits/read coverage. Paths outside active context roots follow approval rules.",
+            "Create, edit, move, or delete files. Edit by line range (replace/delete/insert) or by named declaration (replaceNode/replaceBody/deleteNode/insertBefore/insertAfter). Read a file before editing it.",
             json!({
                 "type":"object",
                 "properties":{
