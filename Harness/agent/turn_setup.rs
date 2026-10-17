@@ -71,10 +71,13 @@ impl AgentCoordinator {
             self.history
                 .push(Message::system(GOAL_JOB_INSTRUCTION).request_only());
             if let Some(goal) = self.context_memory.goal() {
-                self.history.push(Message::system(format!(
-                    "Goal: {}\nStill missing: {:?}\nNext: {:?}",
-                    goal.objective, goal.remaining, goal.next_action
-                )).request_only());
+                self.history.push(
+                    Message::system(format!(
+                        "Goal: {}\nStill missing: {:?}\nNext: {:?}",
+                        goal.objective, goal.remaining, goal.next_action
+                    ))
+                    .request_only(),
+                );
             }
         }
         let mut explicitly_activated_tools = self.registry.skill_tools_for(&self.attached_skills);

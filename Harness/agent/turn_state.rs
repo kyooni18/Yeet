@@ -372,7 +372,6 @@ impl SessionExecutionProvenance {
             }
         })
     }
-
 }
 
 fn push_bounded_provenance(entries: &mut Vec<String>, omitted: &mut usize, value: String) {
@@ -491,7 +490,11 @@ fn rollover_handoff_message(
     };
     let mut text = format!(
         "Context was compacted; the task continues. Earlier tool output is no longer visible. Edits so far: {successful_mutations}{}; checks: {verification}.",
-        if unresolved_failed_mutation { " (last edit failed)" } else { "" }
+        if unresolved_failed_mutation {
+            " (last edit failed)"
+        } else {
+            ""
+        }
     );
     if let Some(validation) = last_validation_evidence {
         text.push_str("\nLast validation: ");

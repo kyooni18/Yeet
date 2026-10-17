@@ -451,10 +451,7 @@ pub(super) fn estimate_messages(messages: &[Message]) -> Result<u64> {
 }
 
 pub(super) fn is_context_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "context_status" | "new_context" | "context_history"
-    )
+    matches!(name, "context_status" | "new_context" | "context_history")
 }
 pub(super) fn tools() -> Vec<ToolDefinition> {
     vec![
@@ -682,5 +679,4 @@ mod goal_persistence_tests {
         assert_eq!(history[1].content.as_deref(), Some("bounded task"));
         Ok(())
     }
-
 }

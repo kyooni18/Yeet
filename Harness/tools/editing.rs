@@ -197,29 +197,6 @@ impl ToolRegistry {
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
-    /// Renders a compact response when a requested source range is already cached.
-    pub(super) fn duplicate_read_payload(&self, path: &str, start: usize, end: usize) -> Value {
-        let entries = self
-            .evidence
-            .read_cache
-            .get(path)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let total = entries.first().map(|entry| entry.total).unwrap_or(end);
-        json!({
-            "path": path,
-            "snapshot": self.cached_snapshot(path),
-            "duplicate": true,
-            "contentAlreadyReturned": true,
-            "startLine": start,
-            "endLine": end.min(total),
-            "totalLines": total,
-            "fileFullyRead": coverage_complete(total, entries),
-            "nextStartLine": next_uncovered(total, entries),
-            "hint": "This range is already covered by earlier reads. Reuse it or request only uncovered source."
-        })
-    }
-
     /// Converts one cached source range into the standard read-file payload.
     pub(super) fn read_payload(&self, entry: &ReadCacheEntry, replay: bool) -> Result<Value> {
         let entries = self

@@ -63,14 +63,13 @@ use evidence::{EditReadCoverage, MutationValidation, ToolEvidence};
 use paths::canonicalize_existing_ancestor;
 pub(crate) use paths::workspace_revision_for_path;
 use service_backends::ToolServiceConfiguration;
-use shell_runtime::shell_mentions_path;
 pub(crate) use support::canonical_web_source_key;
 use support::{
     ArtifactStore, McpServerIdentity, ReadCacheEntry, allocate_stable_tool_name,
     append_bounded_state_set, builtin_capability_for_tool, cache_read_result,
-    collect_web_source_urls, coverage_complete, covered_ranges_within,
-    mcp_result_text, merged_ranges, next_uncovered, shell_quote, string_arg, trim_cache_to_preview,
-    truncate_state_value, uncovered_ranges, usize_arg, web_search_queries,
+    collect_web_source_urls, coverage_complete, mcp_result_text, merged_ranges, next_uncovered,
+    shell_quote, string_arg, trim_cache_to_preview, truncate_state_value, usize_arg,
+    web_search_queries,
 };
 
 const DEFAULT_READ_LINES: usize = 160;
@@ -294,9 +293,7 @@ impl ToolRegistry {
     pub fn tools(&self, web_search_enabled: bool) -> Vec<ToolDefinition> {
         // Return the eligible catalog. The agent attaches schemas on demand
         // and retains loaded schemas for the rest of its turn.
-        let mut tools = self
-            .catalog
-            .enabled_definitions();
+        let mut tools = self.catalog.enabled_definitions();
         if web_search_enabled {
             tools.extend(self.configured_web_tool_definitions());
         }
@@ -711,38 +708,6 @@ impl ToolRegistry {
     }
 
     fn tool_enabled(&self, tool_name: &str) -> bool {
-        self.catalog
-            .tool_enabled(tool_name)
-    }
-
-    fn covered_shell_replay_reason(&self, command: &str) -> Option<String> {
-        let lower = command.to_ascii_lowercase();
-        let source_inspection = ["cat ", "head ", "tail ", "sed ", "awk ", "grep ", "rg "]
-            .iter()
-            .any(|needle| lower.contains(needle));
-        if source_inspection {
-            for path in self.evidence.read_cache.keys() {
-                if shell_mentions_path(command, path) {
-                    return Some(format!(
-                        "Source for {path} is already covered by structured reads. Reuse the prior read result or request only an uncovered range with read_file."
-                    ));
-                }
-            }
-        }
-        let directory_inspection = lower.contains("ls ")
-            || lower.starts_with("ls")
-            || lower.contains("find ")
-            || lower.contains("tree ");
-        if directory_inspection {
-            for listing in &self.evidence.listings {
-                let path = listing.split(':').next().unwrap_or(".");
-                if path == "." || shell_mentions_path(command, path) {
-                    return Some(format!(
-                        "Directory {path} was already covered by list_files. Reuse that listing or list a different subtree with list_files instead of replaying it through the shell."
-                    ));
-                }
-            }
-        }
-        None
+        self.catalog.tool_enabled(tool_name)
     }
 }

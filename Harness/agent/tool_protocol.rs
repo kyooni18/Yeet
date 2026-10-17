@@ -253,7 +253,9 @@ fn render_known_result(value: &Value) -> Option<String> {
     let number = |key: &str| object.get(key).and_then(Value::as_u64);
 
     if let Some(error) = text("error")
-        && object.keys().all(|key| matches!(key.as_str(), "error" | "reason" | "hint"))
+        && object
+            .keys()
+            .all(|key| matches!(key.as_str(), "error" | "reason" | "hint"))
     {
         return Some(match text("hint") {
             Some(hint) => format!("Error: {error}\n{hint}"),
@@ -292,10 +294,29 @@ fn render_known_result(value: &Value) -> Option<String> {
             }
             out.push_str(stderr.trim_end());
         }
-        if object.get("stdoutTruncated").and_then(Value::as_bool) == Some(true)
+        if let Some(summary) = text("summary") {
+            push_line(&mut out, summary);
+        }
+        for diagnostic in object
+            .get("diagnostics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            push_line(&mut out, diagnostic);
+        }
+        if let Some(artifact) = text("artifactId") {
+            push_line(
+                &mut out,
+                &format!(
+                    "[output truncated; full output in artifact {artifact}, use read_artifact]"
+                ),
+            );
+        } else if object.get("stdoutTruncated").and_then(Value::as_bool) == Some(true)
             || object.get("stderrTruncated").and_then(Value::as_bool) == Some(true)
         {
-            out.push_str("\n[output truncated]");
+            push_line(&mut out, "[output truncated]");
         }
         if code != 0 {
             if !out.is_empty() {
@@ -306,7 +327,11 @@ fn render_known_result(value: &Value) -> Option<String> {
         if object.get("timedOut").and_then(Value::as_bool) == Some(true) {
             out.push_str("\n[timed out]");
         }
-        return Some(if out.is_empty() { "(no output)".into() } else { out });
+        return Some(if out.is_empty() {
+            "(no output)".into()
+        } else {
+            out
+        });
     }
 
     if let Some(matches) = object.get("matches").and_then(Value::as_array) {
@@ -317,7 +342,10 @@ fn render_known_result(value: &Value) -> Option<String> {
                     "{}:{}: {}",
                     item.get("path")?.as_str()?,
                     item.get("line")?,
-                    item.get("text").and_then(Value::as_str).unwrap_or_default().trim()
+                    item.get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
                 ))
             })
             .collect::<Vec<_>>()
@@ -336,7 +364,10 @@ fn render_known_result(value: &Value) -> Option<String> {
     {
         let mut out = Vec::new();
         for file in files {
-            let operation = file.get("operation").and_then(Value::as_str).unwrap_or("update");
+            let operation = file
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or("update");
             let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
             let mut section = match file.get("destination").and_then(Value::as_str) {
                 Some(destination) => format!("{operation} {path} -> {destination}"),
@@ -353,12 +384,22 @@ fn render_known_result(value: &Value) -> Option<String> {
                     hunk.get("oldStart").unwrap_or(&Value::Null),
                     hunk.get("newStart").unwrap_or(&Value::Null)
                 ));
-                for line in hunk.get("lines").and_then(Value::as_array).into_iter().flatten() {
+                for line in hunk
+                    .get("lines")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     section.push('\n');
                     section.push_str(line.as_str().unwrap_or_default());
                 }
             }
-            for warning in file.get("warnings").and_then(Value::as_array).into_iter().flatten() {
+            for warning in file
+                .get("warnings")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 section.push_str(&format!("\nwarning: {}", render_inline(warning)));
             }
             out.push(section);
@@ -374,6 +415,13 @@ fn render_known_result(value: &Value) -> Option<String> {
         return Some(out.join("\n"));
     }
     None
+}
+
+fn push_line(out: &mut String, line: &str) {
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(line);
 }
 
 fn render_inline(value: &Value) -> String {
@@ -626,7 +674,10 @@ mod tests {
             })),
             "ok"
         );
-        assert_eq!(render(json!({"exitCode": 2, "stdout": null, "stderr": "boom\n"})), "boom\n[exit code 2]");
+        assert_eq!(
+            render(json!({"exitCode": 2, "stdout": null, "stderr": "boom\n"})),
+            "boom\n[exit code 2]"
+        );
         assert_eq!(
             render(json!({
                 "content": [],
@@ -640,9 +691,14 @@ mod tests {
             "src/main.rs (lines 1-1 of 9)\n1|fn main() {}\n[more from line 2]"
         );
         assert_eq!(
-            render(json!({"filesScanned": 3, "truncated": false, "matches": [{"path": "a.rs", "line": 2, "text": "  hit"}]})),
+            render(
+                json!({"filesScanned": 3, "truncated": false, "matches": [{"path": "a.rs", "line": 2, "text": "  hit"}]})
+            ),
             "a.rs:2: hit"
         );
-        assert_eq!(render(json!({"error": "nope", "reason": "io"})), "Error: nope");
+        assert_eq!(
+            render(json!({"error": "nope", "reason": "io"})),
+            "Error: nope"
+        );
     }
 }

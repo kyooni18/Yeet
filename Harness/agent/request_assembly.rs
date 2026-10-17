@@ -95,9 +95,8 @@ impl AgentCoordinator {
         let mut stable_request_overlays = input.turn_stable_overlays.to_vec();
         stable_request_overlays
             .push(Message::system(input.turn_context_orientation.to_owned()).request_only());
-        stable_request_overlays.push(
-            Message::system(capability_guidance(capability_snapshot)).request_only(),
-        );
+        stable_request_overlays
+            .push(Message::system(capability_guidance(capability_snapshot)).request_only());
         append_context_updates(
             &mut self.history,
             input.last_context_updates,

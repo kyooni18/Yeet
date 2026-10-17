@@ -90,29 +90,6 @@ impl ToolRegistry {
             allow_write = true;
         }
         let cache_safe_inspection = restricted.is_none() && shell_is_inspection(&command);
-        if !background && !allow_write && cache_safe_inspection {
-            let signature = normalize_shell_inspection(&command);
-            if !self.evidence.shell_inspections.insert(signature) {
-                return Ok(json!({
-                    "duplicate": true,
-                    "contentAlreadyReturned": true,
-                    "succeeded": true,
-                    "command": command,
-                    "hint": "This shell inspection was already executed in this task. Reuse its prior result instead of replaying it."
-                }).to_string());
-            }
-            if let Some(reason) = self.covered_shell_replay_reason(&command) {
-                return Ok(json!({
-                    "duplicate": true,
-                    "contentAlreadyReturned": true,
-                    "succeeded": true,
-                    "command": command,
-                    "blockedReplay": true,
-                    "hint": reason
-                })
-                .to_string());
-            }
-        }
         let requested_mode = object.get("mode").and_then(Value::as_str).unwrap_or("auto");
         if !matches!(requested_mode, "auto" | "direct" | "actor") {
             bail!("run_shell mode must be auto, direct, or actor");
@@ -177,12 +154,16 @@ impl ToolRegistry {
                     output.stderr.clone().unwrap_or_default()
                 );
                 let artifact = self.artifacts.store(&raw)?;
+                // Keep the end of the output inline (where errors and results
+                // usually are); the full text stays in the artifact.
                 return Ok(json!({
-                    "route":"direct","command":output.command,"workingDirectory":output.working_directory,"exitCode":output.exit_code,
-                    "succeeded":output.succeeded,"durationMilliseconds":output.duration_milliseconds,"stdoutBytes":output.stdout_bytes,
-                    "stderrBytes":output.stderr_bytes,"stdoutTruncated":output.stdout_truncated,"stderrTruncated":output.stderr_truncated,
-                "summary":"Large shell output was externalized. Use a narrow read_artifact range for specific missing evidence, and search_artifact only when its location is unknown.","artifactId":artifact
-                }).to_string());
+                    "exitCode": output.exit_code,
+                    "stdout": output.stdout.as_deref().map(|text| output_tail(text, 4 * 1024)),
+                    "stderr": output.stderr.as_deref().map(|text| output_tail(text, 2 * 1024)),
+                    "stdoutTruncated": true,
+                    "artifactId": artifact,
+                })
+                .to_string());
             }
             return Ok(value.to_string());
         }
@@ -240,6 +221,19 @@ impl ToolRegistry {
             "summary":summary,"diagnostics":diagnostics,"artifactId":artifact
         }).to_string())
     }
+}
+
+fn output_tail(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    let mut start = text.len() - max_bytes;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let tail = &text[start..];
+    let tail = tail.find('\n').map_or(tail, |index| &tail[index + 1..]);
+    format!("...\n{tail}")
 }
 
 fn shell_diagnostic_lines(output: &crate::shell::ShellResult, limit: usize) -> Vec<String> {
@@ -407,22 +401,6 @@ pub(super) fn shell_is_inspection(command: &str) -> bool {
             || lower.contains(&format!("| {prefix}"))
             || lower.contains(&format!("\n{prefix}"))
     })
-}
-
-/// Normalizes command whitespace for exact replay suppression.
-fn normalize_shell_inspection(command: &str) -> String {
-    command.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Detects simple shell references to a path already covered by structured tools.
-pub(super) fn shell_mentions_path(command: &str, path: &str) -> bool {
-    if path == "." {
-        return true;
-    }
-    command.contains(path)
-        || command.contains(&format!("./{path}"))
-        || command.contains(&format!("'{path}'"))
-        || command.contains(&format!("\"{path}\""))
 }
 
 impl ToolRegistry {

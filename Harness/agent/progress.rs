@@ -202,10 +202,7 @@ pub(super) fn tool_made_progress(call: &ToolCall, content: &str, succeeded: bool
                     .and_then(Value::as_array)
                     .is_some_and(|items| !items.is_empty())
         }
-        "artifact_info"
-        | "read_artifact"
-        | "search_artifact"
-        | "context_status"
+        "artifact_info" | "read_artifact" | "search_artifact" | "context_status"
         | "context_history" => false,
         "find_capabilities" => value.as_array().is_some_and(|values| !values.is_empty()),
         "activate_capability" => {

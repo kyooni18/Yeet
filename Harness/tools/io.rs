@@ -485,155 +485,32 @@ impl ToolRegistry {
         };
         let max_end = requested_start.saturating_add(limit - 1);
         let requested_end = explicit_end.unwrap_or(max_end).min(max_end);
-        let refresh = object
-            .get("refresh")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         let threshold = if explicit_end.is_some() {
             EXPLICIT_INLINE_BYTES
         } else {
             DEFAULT_INLINE_BYTES
         };
-        // Other sessions and external tools may mutate a previously read file.
-        // Verify its content before suppressing an apparently duplicate read.
-        if !refresh
-            && let Some(cached) = self
-                .evidence
-                .read_cache
-                .get(&cache_path)
-                .and_then(|entries| entries.first())
-            && local_snapshot_handle_for_path(Path::new(&path))? != cached.snapshot
+        // Always return the requested range; the cache only tracks read
+        // coverage and snapshots for edit validation.
+        let mut read =
+            read_file_in_process(Path::new(&path), Some(requested_start), Some(requested_end))?;
+        read.path = cache_path.clone();
+        if self
+            .evidence
+            .read_cache
+            .get(&cache_path)
+            .and_then(|entries| entries.first())
+            .is_some_and(|cached| cached.snapshot != read.snapshot)
         {
             self.invalidate_workspace_cache_for_paths(&HashSet::from([cache_path.clone()]));
         }
-        let cached_before = self
-            .evidence
-            .read_cache
-            .get(&cache_path)
-            .cloned()
-            .unwrap_or_default();
-        let cached_total = cached_before.first().map(|entry| entry.total);
-        let bounded_end = cached_total.map_or(requested_end, |total| requested_end.min(total));
-        let covered_before = covered_ranges_within(&cached_before, requested_start, bounded_end);
-
-        if refresh {
-            let mut read =
-                read_file_in_process(Path::new(&path), Some(requested_start), Some(requested_end))?;
-            read.path = cache_path.clone();
-            let refreshed_snapshot = read.snapshot.clone();
-            let refreshed_total = read.total_lines;
-            let actual_end = requested_end.min(refreshed_total);
-            let unchanged_and_covered = refresh_matches_cached_coverage(
-                &cached_before,
-                &refreshed_snapshot,
-                requested_start,
-                actual_end,
-            );
-            let entry = cache_read_result(&mut self.evidence.read_cache, read.clone());
-            let payload = self.read_payload(&entry, true)?;
-            if unchanged_and_covered {
-                let avoided_bytes = payload.to_string().len();
-                let mut duplicate =
-                    self.duplicate_read_payload(&cache_path, requested_start, actual_end);
-                if let Value::Object(object) = &mut duplicate {
-                    object.insert("refreshVerified".into(), json!(true));
-                    object.insert("snapshot".into(), json!(refreshed_snapshot));
-                    object.insert("duplicateReadBytesAvoided".into(), json!(avoided_bytes));
-                    object.insert("hint".into(), json!("Refresh verified the file snapshot is unchanged and this range was already returned. Reuse the earlier anchored source; no source text is repeated."));
-                }
-                return Ok(duplicate.to_string());
-            }
-            let result = self.externalize_if_large(payload, threshold, Some(&read))?;
-            if result.contains("\"externalized\":true") {
-                trim_cache_to_preview(&mut self.evidence.read_cache, &cache_path, &result);
-            }
-            self.record_edit_read_coverage(&cache_path, &read.snapshot);
-            return Ok(result);
-        }
-
-        let missing = uncovered_ranges(requested_start, bounded_end, &covered_before);
-        if missing.is_empty() {
-            return Ok(self
-                .duplicate_read_payload(&cache_path, requested_start, bounded_end)
-                .to_string());
-        }
-
-        let mut new_entries = Vec::new();
-        let mut total = cached_total;
-        for (start, mut end) in missing {
-            if let Some(total) = total {
-                if start > total {
-                    break;
-                }
-                end = end.min(total);
-            }
-            let mut read = read_file_in_process(Path::new(&path), Some(start), Some(end))?;
-            read.path = cache_path.clone();
-            total = Some(read.total_lines);
-            new_entries.push(cache_read_result(&mut self.evidence.read_cache, read));
-        }
-        if new_entries.is_empty() {
-            return Ok(self
-                .duplicate_read_payload(&cache_path, requested_start, bounded_end)
-                .to_string());
-        }
-
-        let total = total.unwrap_or_else(|| new_entries[0].total);
-        let actual_requested_end = bounded_end.min(total);
-        let reused_ranges =
-            covered_ranges_within(&cached_before, requested_start, actual_requested_end);
-        if new_entries.len() == 1 {
-            let entry = &new_entries[0];
-            let mut payload = self.read_payload(entry, false)?;
-            if let Value::Object(object) = &mut payload {
-                object.insert("requestedStartLine".into(), json!(requested_start));
-                object.insert("requestedEndLine".into(), json!(actual_requested_end));
-                if !reused_ranges.is_empty() {
-                    object.insert("incremental".into(), json!(true));
-                    object.insert("reusedCoveredRanges".into(), json!(reused_ranges));
-                    object.insert("hint".into(), json!("Only previously unseen source is returned. Reuse the covered ranges already present in context."));
-                }
-            }
-            let result = self.externalize_if_large(payload, threshold, None)?;
-            if result.contains("\"externalized\":true") {
-                trim_cache_to_preview(&mut self.evidence.read_cache, &cache_path, &result);
-            }
-            self.record_edit_read_coverage(&cache_path, &entry.snapshot);
-            return Ok(result);
-        }
-
-        let entries = self
-            .evidence
-            .read_cache
-            .get(&cache_path)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let segments = new_entries
-            .iter()
-            .map(
-                |entry| json!({"startLine":entry.start,"endLine":entry.end,"lines":entry.anchored}),
-            )
-            .collect::<Vec<_>>();
-        let payload = json!({
-            "path": cache_path,
-            "snapshot": new_entries.last().map(|entry| entry.snapshot.as_str()),
-            "requestedStartLine": requested_start,
-            "requestedEndLine": actual_requested_end,
-            "totalLines": total,
-            "incremental": true,
-            "reusedCoveredRanges": reused_ranges,
-            "segments": segments,
-            "fileFullyRead": coverage_complete(total, entries),
-            "nextStartLine": next_uncovered(total, entries),
-            "hint": "Only previously unseen source segments are returned. Reuse covered ranges already present in context."
-        });
-        let result = self.externalize_if_large(payload, threshold, None)?;
+        let entry = cache_read_result(&mut self.evidence.read_cache, read.clone());
+        let payload = self.read_payload(&entry, false)?;
+        let result = self.externalize_if_large(payload, threshold, Some(&read))?;
         if result.contains("\"externalized\":true") {
             trim_cache_to_preview(&mut self.evidence.read_cache, &cache_path, &result);
         }
-        if let Some(snapshot) = new_entries.last().map(|entry| entry.snapshot.clone()) {
-            self.record_edit_read_coverage(&cache_path, &snapshot);
-        }
+        self.record_edit_read_coverage(&cache_path, &read.snapshot);
         Ok(result)
     }
 
@@ -686,9 +563,7 @@ impl ToolRegistry {
         let max_results = usize_arg(object, "maxResults").unwrap_or(50).clamp(1, 500);
         let max_depth = usize_arg(object, "maxDepth").unwrap_or(2).min(12);
         let key = format!("{cache_path}:{max_results}:{max_depth}");
-        if !self.evidence.listings.insert(key) {
-            return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This directory listing was already returned. Reuse it or expand a different subtree."}).to_string());
-        }
+        self.evidence.listings.insert(key);
         let result = list_files_in_process(
             &self.context.workspace_root,
             Path::new(&path),
@@ -728,9 +603,7 @@ impl ToolRegistry {
             .unwrap_or(false);
         let key =
             workspace_search_cache_key(&cache_path, max_results, case_sensitive, regex, query);
-        if !self.evidence.searches.insert(key) {
-            return Ok(json!({"duplicate":true,"contentAlreadyReturned":true,"hint":"This search was already returned. Reuse it or change query/path."}).to_string());
-        }
+        self.evidence.searches.insert(key);
         let result = search_workspace_in_process(
             &self.context.workspace_root,
             Path::new(&path),
@@ -776,13 +649,7 @@ impl ToolRegistry {
                 safe_search.unwrap_or(0),
                 page.unwrap_or(1)
             );
-            if self.evidence.web_searches.contains(&key) {
-                slots[index] = Some(
-                    json!({"query":query,"duplicate":true,"contentAlreadyReturned":true,"hint":"This web search was already returned. Reuse it or materially change the query/filters."}),
-                );
-            } else {
-                pending.push((index, query.clone(), key));
-            }
+            pending.push((index, query.clone(), key));
         }
         if !pending.is_empty() {
             let client = &self.web_search;
@@ -864,10 +731,7 @@ impl ToolRegistry {
             cancel,
         )?;
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
-            bail!(
-                "Web MCP {server}/web_search: {}",
-                mcp_result_text(&result)
-            );
+            bail!("Web MCP {server}/web_search: {}", mcp_result_text(&result));
         }
         collect_web_source_urls(&result, &mut self.evidence.web_sources);
         let text = mcp_result_text(&result);
@@ -892,17 +756,6 @@ impl ToolRegistry {
             bail!("web_read requires a non-empty URL");
         }
         let source_key = canonical_web_source_key(url);
-        if !self.evidence.web_sources.contains(&source_key) {
-            let message = if self.artifacts_enabled {
-                "web_read may only open URLs returned by web_search in the current research task; search for this source first"
-            } else {
-                "web action=read may only open URLs returned by web action=search in the current research task; search for this source first"
-            };
-            bail!("{message}");
-        }
-        if self.evidence.web_reads.contains(&source_key) {
-            return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the evidence already returned instead of reopening it."}).to_string());
-        }
         let max_chars = usize_arg(object, "maxChars")
             .unwrap_or(3_000)
             .clamp(2_000, 4_000);
@@ -922,17 +775,6 @@ impl ToolRegistry {
         }
         crate::web_search::validate_public_http_url(url)?;
         let source_key = canonical_web_source_key(url);
-        if !self.evidence.web_sources.contains(&source_key) {
-            let message = if self.artifacts_enabled {
-                "web_read may only open URLs returned by web_search in the current research task; search for this source first"
-            } else {
-                "web action=read may only open URLs returned by web action=search in the current research task; search for this source first"
-            };
-            bail!("{message}");
-        }
-        if self.evidence.web_reads.contains(&source_key) {
-            return Ok(json!({"url":url,"duplicate":true,"contentAlreadyReturned":true,"hint":"This source page was already read. Reuse the evidence already returned instead of reopening it."}).to_string());
-        }
         let server = self
             .services
             .web_server
@@ -945,10 +787,7 @@ impl ToolRegistry {
             .bridge_client()?
             .call_mcp_tool_cancellable(&server, "web_read", object, cancel)?;
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
-            bail!(
-                "Web MCP {server}/web_read: {}",
-                mcp_result_text(&result)
-            );
+            bail!("Web MCP {server}/web_read: {}", mcp_result_text(&result));
         }
         let text = mcp_result_text(&result);
         let max_chars = usize_arg(object, "maxChars")
@@ -1175,19 +1014,6 @@ fn workspace_search_cache_key(
         query.to_ascii_lowercase()
     };
     format!("{cache_path}:{max_results}:{case_sensitive}:{regex}:{query}")
-}
-
-fn refresh_matches_cached_coverage(
-    entries: &[ReadCacheEntry],
-    snapshot: &str,
-    start: usize,
-    end: usize,
-) -> bool {
-    if !entries.iter().any(|entry| entry.snapshot == snapshot) {
-        return false;
-    }
-    let covered = covered_ranges_within(entries, start, end);
-    uncovered_ranges(start, end, &covered).is_empty()
 }
 
 fn effective_web_search_max_results(requested: usize, query_count: usize) -> usize {

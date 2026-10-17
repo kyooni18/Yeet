@@ -46,12 +46,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use crate::core::ToolDefinition;
 use crate::{
     core::{CallRequest, Message, MessageRole, ToolCall},
     tools::{BridgeHandle, ToolRegistry},
 };
-#[cfg(test)]
-use crate::core::ToolDefinition;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
@@ -119,13 +119,15 @@ impl AgentCoordinator {
             check_cancel(cancel)?;
             self.context_memory.sync(&self.history)?;
             if self.context_memory.rollover_requested {
-                let handoff = execution_evidence.rollover_handoff(retry_instruction.take().as_deref());
+                let handoff =
+                    execution_evidence.rollover_handoff(retry_instruction.take().as_deref());
                 self.rollover(&current_request, handoff, &mut loop_budget)?;
                 turn_context_orientation = self.context_memory.orientation();
                 last_context_updates.clear();
             }
             if let Some(instruction) = retry_instruction.take() {
-                self.history.push(Message::system(instruction).request_only());
+                self.history
+                    .push(Message::system(instruction).request_only());
             }
             model_attempts += 1;
             let request_assembly::ToolSelection {

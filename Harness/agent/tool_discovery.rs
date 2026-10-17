@@ -241,7 +241,11 @@ mod tests {
             .into_iter()
             .filter(|tool| !tool.name.starts_with("web_"))
             .collect();
-        assert!(!names(&discovery, &offline).iter().any(|name| name.starts_with("web_")));
+        assert!(
+            !names(&discovery, &offline)
+                .iter()
+                .any(|name| name.starts_with("web_"))
+        );
     }
 
     #[test]

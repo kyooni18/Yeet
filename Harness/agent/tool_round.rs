@@ -35,8 +35,7 @@ impl AgentCoordinator {
     where
         F: FnMut(AgentEvent),
     {
-        let results = if calls.len() > 1 && self.registry.can_parallel_read_only_mcp_batch(calls)
-        {
+        let results = if calls.len() > 1 && self.registry.can_parallel_read_only_mcp_batch(calls) {
             for call in calls {
                 emit(AgentEvent::ToolExecutionStarted(call.clone()));
             }
@@ -65,7 +64,10 @@ pub(super) struct DispatchInput<'a> {
 impl AgentCoordinator {
     /// Executes one call and returns its content and transport success. Any
     /// catalog tool may be called; calling one attaches its schema from then on.
-    pub(super) fn dispatch_tool_call(&mut self, input: DispatchInput<'_>) -> Result<(String, bool)> {
+    pub(super) fn dispatch_tool_call(
+        &mut self,
+        input: DispatchInput<'_>,
+    ) -> Result<(String, bool)> {
         let call = input.call;
         if call.name == tool_discovery::SEARCH_TOOL {
             let content = if supports_anthropic_deferred_tool_references(input.model) {

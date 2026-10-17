@@ -330,54 +330,6 @@ pub(super) fn merged_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usiz
     merged
 }
 
-pub(super) fn covered_ranges_within(
-    entries: &[ReadCacheEntry],
-    start: usize,
-    end: usize,
-) -> Vec<(usize, usize)> {
-    if end < start {
-        return Vec::new();
-    }
-    merged_ranges(
-        entries
-            .iter()
-            .filter_map(|entry| {
-                let overlap_start = entry.start.max(start);
-                let overlap_end = entry.end.min(end);
-                (overlap_start <= overlap_end).then_some((overlap_start, overlap_end))
-            })
-            .collect(),
-    )
-}
-
-pub(super) fn uncovered_ranges(
-    start: usize,
-    end: usize,
-    covered: &[(usize, usize)],
-) -> Vec<(usize, usize)> {
-    if end < start {
-        return Vec::new();
-    }
-    let mut missing = Vec::new();
-    let mut cursor = start;
-    for &(covered_start, covered_end) in covered {
-        if covered_end < cursor {
-            continue;
-        }
-        if covered_start > cursor {
-            missing.push((cursor, covered_start - 1));
-        }
-        cursor = cursor.max(covered_end.saturating_add(1));
-        if cursor > end {
-            break;
-        }
-    }
-    if cursor <= end {
-        missing.push((cursor, end));
-    }
-    missing
-}
-
 pub(super) fn cache_read_result(
     cache: &mut HashMap<String, Vec<ReadCacheEntry>>,
     read: ReadResult,
@@ -567,5 +519,4 @@ mod tests {
         visible.clear();
         assert!(visible.is_empty());
     }
-
 }
