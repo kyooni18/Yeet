@@ -866,11 +866,11 @@ impl ToolRegistry {
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
             bail!(
                 "Web MCP {server}/web_search: {}",
-                foundation_tool_result_text(&result)
+                mcp_result_text(&result)
             );
         }
         collect_web_source_urls(&result, &mut self.evidence.web_sources);
-        let text = foundation_tool_result_text(&result);
+        let text = mcp_result_text(&result);
         if let Ok(payload) = serde_json::from_str::<Value>(&text) {
             collect_web_source_urls(&payload, &mut self.evidence.web_sources);
             return self.externalize_if_large(payload, 16 * 1024, None);
@@ -947,10 +947,10 @@ impl ToolRegistry {
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
             bail!(
                 "Web MCP {server}/web_read: {}",
-                foundation_tool_result_text(&result)
+                mcp_result_text(&result)
             );
         }
-        let text = foundation_tool_result_text(&result);
+        let text = mcp_result_text(&result);
         let max_chars = usize_arg(object, "maxChars")
             .unwrap_or(3_000)
             .clamp(2_000, 4_000);

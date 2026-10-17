@@ -141,9 +141,6 @@ pub enum FrontendCommand {
     SetOpenAiFlex {
         enabled: bool,
     },
-    SetFoundationMemory {
-        enabled: bool,
-    },
     SetServiceBackend {
         service: String,
         backend: String,

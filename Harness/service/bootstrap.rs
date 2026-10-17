@@ -49,9 +49,6 @@ pub(super) fn initial_session(
         .ok()
         .map(|policy| sandbox_settings_state(&policy));
     session.state.openai_flex = project.openai_flex;
-    session.state.foundation_memory_enabled = project.foundation_memory.enabled;
-    session.state.foundation_memory_backend = project.foundation_memory.backend.as_str().into();
-    session.state.foundation_memory_server = project.foundation_memory.server.clone();
     session.state.web_backend = project.web.backend.as_str().into();
     session.state.web_server = project.web.server.clone();
     session.meta.attached_capabilities = project.capabilities.attached.map(|values| {

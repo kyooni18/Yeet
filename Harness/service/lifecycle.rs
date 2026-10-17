@@ -187,9 +187,6 @@ impl HarnessService {
         session.state.model_catalog = previous.model_catalog;
         session.state.active_model_context_length = previous.active_model_context_length;
         session.state.openai_flex = previous.openai_flex;
-        session.state.foundation_memory_enabled = previous.foundation_memory_enabled;
-        session.state.foundation_memory_backend = previous.foundation_memory_backend;
-        session.state.foundation_memory_server = previous.foundation_memory_server;
         session.state.web_backend = previous.web_backend;
         session.state.web_server = previous.web_server;
         session.meta.working_directory = Some(self.workspace_root.display().to_string());

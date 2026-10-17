@@ -18,7 +18,6 @@ use crate::{
     },
     harness::Harness,
     model::{ConversationKind, FrontendCommand, SandboxAction},
-    project_settings::{ProjectSettingsStore, ServiceBackend},
     sandbox_cli,
     session_store::SessionStore,
     web_search,
@@ -34,8 +33,8 @@ pub const HELP: &str = r#"Usage:
   yeet remote auth key generate|set|clear
   yeet remote auth passkey add|clear
   yeet doctor
-  yeet install [binary|runtime|foundation|web|mcp|remote|all]...
-  yeet uninstall [binary|runtime|foundation|web|mcp|remote|all]...
+  yeet install [binary|runtime|web|mcp|remote|all]...
+  yeet uninstall [binary|runtime|web|mcp|remote|all]...
   yeet install status
   yeet update [check]
   yeet model get
@@ -90,10 +89,6 @@ pub const HELP: &str = r#"Usage:
   yeet mcpserver external [--port PORT]
   yeet mcpserver auth [status|mode|key] ...
   yeet mcpserver stdio [WORKSPACE|--workspace PATH] [--restrict-workspace]
-  yeet memory status
-  yeet memory recall <query>
-  yeet memory on|off
-  yeet memory backend [builtin|mcp [SERVER]]
   yeet sandbox [show|path|reset|scratch|workspace|network|env|secret|limits] ...
   yeet search [backend [builtin|mcp [SERVER]]|install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]
 
@@ -166,7 +161,6 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             }
             Ok(())
         }
-        "foundation" | "memory" => foundation(rest),
         "search" => {
             let output = web_search::run_cli(rest)?;
             if !output.is_empty() {
@@ -209,140 +203,6 @@ fn skyline(args: &[String]) -> Result<()> {
         }
         _ => bail!("Usage: yeet skyline setup [--workspace PATH]"),
     }
-}
-
-fn foundation(args: &[String]) -> Result<()> {
-    let workspace = std::env::current_dir()?.canonicalize()?;
-    let settings = ProjectSettingsStore::new(&workspace)?;
-    let sub = args.first().map(String::as_str).unwrap_or("status");
-    match sub {
-        "status" => {
-            let project = settings.load()?;
-            let bridge = BridgeClient::start()?;
-            let mut status = match project.foundation_memory.backend {
-                ServiceBackend::Builtin => {
-                    bail!("Built-in project memory has been removed; configure memory.backend=mcp")
-                }
-                ServiceBackend::Mcp => {
-                    let result = bridge.list_mcp_tools(Some(&project.foundation_memory.server));
-                    let connected = result.is_ok();
-                    let tools = result.unwrap_or_default();
-                    let project_scoped_memory =
-                        crate::foundation_backend::has_required_project_scoped_tools(&tools);
-                    let visible =
-                        crate::foundation_backend::project_scoped_model_tool_names(&tools);
-                    json!({
-                        "storage":"external-mcp",
-                        "connected":connected,
-                        "projectScopedMemory":project_scoped_memory,
-                        "availableToolCount":tools.len(),
-                        "tools":visible,
-                    })
-                }
-            };
-            bridge.shutdown();
-            status["enabled"] = json!(project.foundation_memory.enabled);
-            status["backend"] = json!(project.foundation_memory.backend.as_str());
-            status["server"] = json!(project.foundation_memory.server);
-            status["project"] = json!(settings.project_identity()?);
-            println!("{}", serde_json::to_string_pretty(&status)?);
-        }
-        "backend" => {
-            let project = settings.load()?;
-            match args.get(1).map(String::as_str) {
-                None => println!(
-                    "{}{}",
-                    project.foundation_memory.backend.as_str(),
-                    if project.foundation_memory.backend == ServiceBackend::Mcp {
-                        format!(" {}", project.foundation_memory.server)
-                    } else {
-                        String::new()
-                    }
-                ),
-                Some(value) => {
-                    let backend = ServiceBackend::parse(value)?;
-                    let server = args.get(2).map(String::as_str);
-                    if args.len() > 3 {
-                        bail!("Usage: yeet memory backend [builtin|mcp [SERVER]]");
-                    }
-                    settings.save_foundation_backend(backend, server)?;
-                    let saved = settings.load()?;
-                    println!(
-                        "memory backend={}{}",
-                        saved.foundation_memory.backend.as_str(),
-                        if saved.foundation_memory.backend == ServiceBackend::Mcp {
-                            format!(" server={}", saved.foundation_memory.server)
-                        } else {
-                            String::new()
-                        }
-                    );
-                }
-            }
-        }
-        "on" | "off" => {
-            if args.len() > 1 {
-                bail!("Usage: yeet memory on|off");
-            }
-            if sub == "on" {
-                let output = crate::install::run_cli(&["foundation".into()], false)?;
-                if !output.is_empty() {
-                    println!("{output}");
-                }
-            } else {
-                settings.save_foundation_memory(false, None)?;
-                println!("disabled");
-            }
-        }
-        "recall" => {
-            let query = args
-                .get(1)
-                .ok_or_else(|| anyhow!("Usage: yeet memory recall <query>"))?;
-            if args.len() > 2 {
-                bail!("Usage: yeet memory recall <query>");
-            }
-            let project = settings.load()?;
-            let bridge = BridgeClient::start()?;
-            let cancel = std::sync::atomic::AtomicBool::new(false);
-            let result = (|| -> Result<Value> {
-                let server = crate::foundation_backend::server_for_backend(
-                    &bridge,
-                    project.foundation_memory.backend,
-                    &project.foundation_memory.server,
-                )?;
-                let tools = bridge.list_mcp_tools(Some(&server))?;
-                crate::foundation_backend::validate_project_scoped_tools(
-                    &tools,
-                    &format!("Foundation backend {server}"),
-                )?;
-                let arguments = Map::from_iter([
-                    ("project".into(), json!(settings.project_identity()?)),
-                    ("query".into(), json!(query)),
-                    ("limit".into(), json!(8)),
-                ]);
-                let result = bridge.call_mcp_tool_cancellable(
-                    &server,
-                    "memory_recall",
-                    &arguments,
-                    &cancel,
-                )?;
-                if result.get("isError").and_then(Value::as_bool) == Some(true) {
-                    bail!("Foundation {server}/memory_recall returned an error: {result}");
-                }
-                Ok(result)
-            })();
-            bridge.shutdown();
-            println!("{}", serde_json::to_string_pretty(&result?)?);
-        }
-        "models" | "model" | "reindex" | "import-foundation" | "export-foundation" => {
-            bail!(
-                "yeet memory {sub} belonged to the removed built-in memory store. Use your external Foundation MCP server's administration tools instead."
-            )
-        }
-        _ => bail!(
-            "Usage: yeet memory [status|on|off|backend [builtin|mcp [SERVER]]|recall <query>]"
-        ),
-    }
-    Ok(())
 }
 
 fn doctor() -> Result<()> {

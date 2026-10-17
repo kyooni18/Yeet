@@ -147,7 +147,6 @@ impl SettingsState {
                 };
                 effect.command = Some(match id.as_str() {
                     "openai_flex" => HarnessCommand::SetOpenAiFlex { enabled },
-                    "foundation_memory" => HarnessCommand::SetFoundationMemory { enabled },
                     _ => {
                         let Some(capability) = id.strip_prefix("capability:").and_then(|id| {
                             harness
@@ -177,11 +176,6 @@ impl SettingsState {
                 };
                 effect.command = Some(match id.as_str() {
                     "appearance" => HarnessCommand::SetAppearance { appearance: value },
-                    "memory_backend" => HarnessCommand::SetServiceBackend {
-                        service: "memory".into(),
-                        backend: value,
-                        server: Some(harness.foundation_memory_server.clone()),
-                    },
                     "web_backend" => HarnessCommand::SetServiceBackend {
                         service: "web".into(),
                         backend: value,

@@ -9,7 +9,7 @@ pub(in crate::platforms::tui::ui) fn tool_icon(name: &str) -> &'static str {
     // Font Awesome's Nerd Font codepoints cover the mockup's pixel icons in a
     // terminal cell. The active terminal font controls their final shape.
     match name {
-        "apply_file_edits" | "task_notes" => "\u{f040}",
+        "apply_file_edits" => "\u{f040}",
         "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "\u{f002}",
         "read_file" | "read_files" | "read_artifact" | "read_document" => "\u{f15c}",
         "web_read" => "\u{f02d}",

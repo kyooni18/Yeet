@@ -81,12 +81,6 @@ impl HarnessService {
         let shared = self.shared.clone();
         let coordinator = self.coordinator.clone();
         let bridge = self.bridge.clone();
-        let foundation_capability = self
-            .project_settings
-            .load()
-            .ok()
-            .filter(|project| project.foundation_memory.backend == ServiceBackend::Mcp)
-            .map(|project| format!("mcp:{}", project.foundation_memory.server));
         let store = self.store.clone();
         let workspace = self.workspace_root.clone();
         let tx = self.tx.clone();
@@ -227,12 +221,10 @@ impl HarnessService {
                                     WorkerRegistry::new(Vec::new())?,
                                     PermissionBroker::default(),
                                 )?;
-                                let mut disabled =
-                                    vec!["builtin:file-write".into(), "builtin:shell".into()];
-                                if let Some(capability) = foundation_capability.as_ref() {
-                                    disabled.push(capability.clone());
-                                }
-                                registry.set_disabled_capabilities(disabled);
+                                registry.set_disabled_capabilities(vec![
+                                    "builtin:file-write".into(),
+                                    "builtin:shell".into(),
+                                ]);
                                 let result = registry.attach_enabled_mcp_servers().and_then(|_| {
                                     crate::debate::research::run(&snapshot, stage, pro, &bridge_client, &mut registry, &cancel, |kind, detail| {
                                         let mut s = shared.lock_or_recover();

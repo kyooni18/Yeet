@@ -174,18 +174,6 @@ pub(super) fn project(
                     harness.openai_flex,
                     enabled && flex,
                 ),
-                toggle(
-                    "foundation_memory",
-                    "Foundation Memory",
-                    if harness.foundation_memory_connected {
-                        "Connected".into()
-                    } else {
-                        harness.foundation_memory_backend.clone()
-                    },
-                    SettingsIcon::Memory,
-                    harness.foundation_memory_enabled,
-                    enabled,
-                ),
             ],
         ),
     ];
@@ -196,15 +184,6 @@ pub(super) fn project(
         .supported_features
         .contains(&SettingsFeature::ServiceBackends)
     {
-        services.push(choice(
-            "memory_backend",
-            "Memory Backend",
-            &harness.foundation_memory_server,
-            SettingsIcon::Memory,
-            &harness.foundation_memory_backend,
-            &[("mcp", "MCP")],
-            enabled,
-        ));
         services.push(choice(
             "web_backend",
             "Web Backend",

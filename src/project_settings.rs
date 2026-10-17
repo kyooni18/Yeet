@@ -46,27 +46,6 @@ impl ServiceBackend {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FoundationMemorySettings {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "external_memory_backend")]
-    pub backend: ServiceBackend,
-    #[serde(default = "default_foundation_server")]
-    pub server: String,
-}
-
-impl Default for FoundationMemorySettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            backend: ServiceBackend::Mcp,
-            server: default_foundation_server(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct WebBackendSettings {
     #[serde(default)]
     pub backend: ServiceBackend,
@@ -134,14 +113,10 @@ pub struct ProjectSettings {
     pub capabilities: ProjectCapabilities,
     #[serde(default)]
     pub openai_flex: bool,
-    #[serde(default, rename = "memory", alias = "foundationMemory")]
-    pub foundation_memory: FoundationMemorySettings,
     #[serde(default)]
     pub web: WebBackendSettings,
     #[serde(default)]
     pub context: ContextSettings,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
     // Project settings are intentionally extensible. Capability toggles are
     // owned by this Rust store, but other project-scoped features may persist
     // their own keys in the same document. Preserve those keys whenever the
@@ -156,10 +131,8 @@ impl Default for ProjectSettings {
             version: 1,
             capabilities: ProjectCapabilities::default(),
             openai_flex: true,
-            foundation_memory: FoundationMemorySettings::default(),
             context: ContextSettings::default(),
             web: WebBackendSettings::default(),
-            project_id: None,
             extra: BTreeMap::new(),
         }
     }
@@ -167,14 +140,6 @@ impl Default for ProjectSettings {
 
 fn version_one() -> u64 {
     1
-}
-
-fn external_memory_backend() -> ServiceBackend {
-    ServiceBackend::Mcp
-}
-
-fn default_foundation_server() -> String {
-    "foundation".into()
 }
 
 fn default_web_server() -> String {
@@ -243,7 +208,9 @@ impl ProjectSettingsStore {
             settings.version = 1;
         }
         normalize_capabilities(&mut settings.capabilities);
-        normalize_foundation_memory(&mut settings.foundation_memory);
+        // Retired built-in memory settings.
+        settings.extra.remove("memory");
+        settings.extra.remove("foundationMemory");
         normalize_web_backend(&mut settings.web);
         settings.context.validate()?;
         Ok(settings)
@@ -258,7 +225,6 @@ impl ProjectSettingsStore {
         let mut normalized = settings.clone();
         normalized.version = 1;
         normalize_capabilities(&mut normalized.capabilities);
-        normalize_foundation_memory(&mut normalized.foundation_memory);
         normalize_web_backend(&mut normalized.web);
         normalized.context.validate()?;
         let tmp = self.directory().join(format!(
@@ -291,34 +257,6 @@ impl ProjectSettingsStore {
         self.save(&settings)
     }
 
-    pub fn save_foundation_memory(&self, enabled: bool, server: Option<&str>) -> Result<()> {
-        let mut settings = self.load()?;
-        settings.foundation_memory.enabled = enabled;
-        if let Some(server) = server {
-            settings.foundation_memory.server = server.to_owned();
-        }
-        normalize_foundation_memory(&mut settings.foundation_memory);
-        self.save(&settings)
-    }
-
-    pub fn save_foundation_backend(
-        &self,
-        backend: ServiceBackend,
-        server: Option<&str>,
-    ) -> Result<()> {
-        anyhow::ensure!(
-            backend == ServiceBackend::Mcp,
-            "Built-in project memory has been removed; use an external MCP server"
-        );
-        let mut settings = self.load()?;
-        settings.foundation_memory.backend = backend;
-        if let Some(server) = server {
-            settings.foundation_memory.server = server.to_owned();
-        }
-        normalize_foundation_memory(&mut settings.foundation_memory);
-        self.save(&settings)
-    }
-
     pub fn save_web_backend(&self, backend: ServiceBackend, server: Option<&str>) -> Result<()> {
         let mut settings = self.load()?;
         settings.web.backend = backend;
@@ -327,22 +265,6 @@ impl ProjectSettingsStore {
         }
         normalize_web_backend(&mut settings.web);
         self.save(&settings)
-    }
-
-    pub fn project_identity(&self) -> Result<String> {
-        let mut settings = self.load()?;
-        if let Some(existing) = settings
-            .project_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty() && !value.contains('\n') && value.len() <= 200)
-        {
-            return Ok(existing.to_owned());
-        }
-        let id = format!("yeet-project:{}", Uuid::new_v4());
-        settings.project_id = Some(id.clone());
-        self.save(&settings)?;
-        Ok(id)
     }
 
     fn ensure_directory(&self) -> Result<()> {
@@ -371,13 +293,6 @@ fn normalize_capabilities(capabilities: &mut ProjectCapabilities) {
 
 fn retired_capability(value: &str) -> bool {
     matches!(value, "lead" | "context-mode" | "builtin:artifacts")
-}
-
-fn normalize_foundation_memory(settings: &mut FoundationMemorySettings) {
-    settings.server = settings.server.trim().to_owned();
-    if settings.server.is_empty() {
-        settings.server = default_foundation_server();
-    }
 }
 
 fn normalize_web_backend(settings: &mut WebBackendSettings) {
@@ -443,31 +358,9 @@ mod tests {
         .unwrap();
 
         let settings = store.load().unwrap();
-        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Mcp);
-        assert_eq!(settings.foundation_memory.server, "foundation");
+        assert!(!settings.extra.contains_key("foundationMemory"));
         assert_eq!(settings.web.backend, ServiceBackend::Builtin);
         assert_eq!(settings.web.server, "web");
-    }
-
-    #[test]
-    fn memory_is_opt_in_external_only_and_rejects_builtin_without_writing() {
-        let directory = tempdir().unwrap();
-        let store = ProjectSettingsStore::new(directory.path()).unwrap();
-        store.ensure().unwrap();
-        let before = fs::read(store.path()).unwrap();
-        let settings = store.load().unwrap();
-        assert!(!settings.foundation_memory.enabled);
-        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Mcp);
-        let partial: FoundationMemorySettings =
-            serde_json::from_value(json!({"server": "foundation"})).unwrap();
-        assert!(!partial.enabled);
-        assert_eq!(partial.backend, ServiceBackend::Mcp);
-        assert!(
-            store
-                .save_foundation_backend(ServiceBackend::Builtin, None)
-                .is_err()
-        );
-        assert_eq!(fs::read(store.path()).unwrap(), before);
     }
 
     #[test]
@@ -483,15 +376,10 @@ mod tests {
         store.save(&initial).unwrap();
 
         store
-            .save_foundation_backend(ServiceBackend::Mcp, Some(" foundation-external "))
-            .unwrap();
-        store
             .save_web_backend(ServiceBackend::Mcp, Some(" web-external "))
             .unwrap();
 
         let settings = store.load().unwrap();
-        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Mcp);
-        assert_eq!(settings.foundation_memory.server, "foundation-external");
         assert_eq!(settings.web.backend, ServiceBackend::Mcp);
         assert_eq!(settings.web.server, "web-external");
         assert_eq!(

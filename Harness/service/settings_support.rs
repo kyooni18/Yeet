@@ -1,6 +1,6 @@
 //! Pure configuration adapters used by backend settings commands.
 //!
-//! Authentication/provider refresh, Foundation readiness, and sandbox policy
+//! Authentication/provider refresh and sandbox policy
 //! conversions live here so the command-facing settings module stays small.
 
 use super::*;
@@ -109,24 +109,6 @@ pub(super) fn finish_provider_action(
             (Ok(message), Err(error)) => format!("{message} Refresh failed: {error}"),
         });
         let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
-    }
-}
-
-/// Reports whether the configured Foundation memory backend is ready.
-pub(super) fn foundation_server_ready(
-    bridge: &BridgeHandle,
-    backend: ServiceBackend,
-    server: &str,
-) -> bool {
-    let Ok(client) = bridge.client() else {
-        return false;
-    };
-    match backend {
-        ServiceBackend::Builtin => false,
-        ServiceBackend::Mcp => client
-            .list_mcp_tools(Some(server))
-            .map(|tools| crate::foundation_backend::has_required_project_scoped_tools(&tools))
-            .unwrap_or(false),
     }
 }
 

@@ -144,19 +144,11 @@ test('Settings sheet sends Remote-backed settings mutations', async ({ page }) =
   await expect(dialog).toBeVisible()
 
   const flex = dialog.getByRole('switch', { name: 'OpenAI Flex' })
-  const memory = dialog.getByRole('switch', { name: 'Foundation Memory' })
   await expect(flex).toBeEnabled()
-  await expect(memory).toBeEnabled()
 
   const flexWasEnabled = await flex.getAttribute('aria-checked') === 'true'
   await flex.click()
   await expect.poll(async () => (await sentCommands(page))
     .filter((command) => command.type === 'set_open_ai_flex')
     .at(-1)?.enabled).toBe(!flexWasEnabled)
-
-  const memoryWasEnabled = await memory.getAttribute('aria-checked') === 'true'
-  await memory.click()
-  await expect.poll(async () => (await sentCommands(page))
-    .filter((command) => command.type === 'set_foundation_memory')
-    .at(-1)?.enabled).toBe(!memoryWasEnabled)
 })

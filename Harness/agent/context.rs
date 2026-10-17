@@ -1,5 +1,5 @@
-//! Recoverable session memory. Window files retain exact model messages; notes
-//! and the active window are committed atomically in one manifest.
+//! Recoverable session context. Window files retain exact model messages; the
+//! active window is committed atomically in one manifest.
 use crate::{
     core::{Message, MessageRole, ToolCall, ToolDefinition},
     platform::{replace_file, set_private_directory, set_private_file, sync_directory},
@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
+use std::{fs, io::Write, path::PathBuf};
 use uuid::Uuid;
 
 const CONTEXT_COMPACTION_RESERVE_TOKENS: u64 = 16_384;
@@ -18,27 +18,11 @@ struct Window {
     number: usize,
 }
 #[derive(Clone, Serialize, Deserialize)]
-struct AgentCheckpoint {
-    objective: String,
-    phase: String,
-    successful_mutations: usize,
-    unresolved_failed_mutation: bool,
-    verification_attempted: bool,
-    verification_succeeded: bool,
-    last_validation: Option<String>,
-    recent_evidence: Vec<String>,
-    workspace_state: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
 struct State {
     windows: Vec<Window>,
-    notes: BTreeMap<String, String>,
     active: Vec<Message>,
     #[serde(default)]
     goal: Option<super::goal::GoalJob>,
-    #[serde(default)]
-    agent_checkpoint: Option<AgentCheckpoint>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -47,10 +31,8 @@ impl Default for State {
                 id: Uuid::new_v4().to_string(),
                 number: 1,
             }],
-            notes: BTreeMap::new(),
             active: Vec::new(),
             goal: None,
-            agent_checkpoint: None,
         }
     }
 }
@@ -233,22 +215,8 @@ impl ContextMemory {
     pub fn orientation(&self) -> String {
         let windows = &self.state.windows;
         let budget = self.working_budget();
-        let mut hint = String::new();
-        for (name, text) in &self.state.notes {
-            let line = format!("{name}: {text}\n");
-            let remaining = 4096usize.saturating_sub(hint.len());
-            hint.push_str(&bounded(&line, remaining));
-            if hint.len() >= 4096 {
-                break;
-            }
-        }
-        let hint_section = if !hint.is_empty() {
-            format!("\nTask notes snapshot:\n{hint}")
-        } else {
-            String::new()
-        };
         format!(
-            "Context window: previous={}; current={}; window={}; budget={budget}. Archived windows are immutable. Continue from the current handoff and evidence already visible in this window; context history and task notes are side recovery paths, so open older state only for a specific missing detail.{hint_section}",
+            "Context window: previous={}; current={}; window={}; budget={budget}. Earlier windows can be read with context_history if a specific detail is missing.",
             windows
                 .iter()
                 .rev()
@@ -290,54 +258,7 @@ impl ContextMemory {
             "new_context" => {
                 ensure!(self.root.is_some(), "Save a session before rollover");
                 self.rollover_requested = true;
-                json!({"scheduled":true,"after":"current tool batch","hint":"Execution state is carried into the next window automatically. Save task_notes before this batch finishes when exact constraints or long evidence must remain easy to recover."})
-            }
-            "task_notes" => {
-                let op = arg(a, "operation")?;
-                if op == "list" {
-                    json!({"notes": self.state.notes.keys().collect::<Vec<_>>()})
-                } else if op == "search" {
-                    let query = arg(a, "query")?;
-                    ensure!(!query.is_empty(), "query must not be empty");
-                    json!({"matches": self.state.notes.iter().filter(|(n,t)| n.contains(query) || t.contains(query)).take(20).map(|(n,t)| json!({"name":n,"excerpt":bounded(t,512)})).collect::<Vec<_>>()})
-                } else {
-                    let name = arg(a, "name")?;
-                    ensure!(!name.is_empty() && name.len() <= 128, "Invalid note name");
-                    if op == "read" {
-                        page(
-                            self.state
-                                .notes
-                                .get(name)
-                                .ok_or_else(|| anyhow::anyhow!("Unknown note"))?,
-                            a,
-                        )
-                    } else {
-                        ensure!(op == "append" || op == "replace", "Unknown notes operation");
-                        ensure!(self.root.is_some(), "Durable notes require a saved session");
-                        let content = arg(a, "content")?;
-                        let old = self.state.notes.clone();
-                        let text = if op == "append" {
-                            format!(
-                                "{}{content}",
-                                old.get(name).map(String::as_str).unwrap_or("")
-                            )
-                        } else {
-                            content.to_owned()
-                        };
-                        ensure!(text.len() <= 64 * 1024, "Note exceeds 64 KiB");
-                        ensure!(
-                            old.contains_key(name) || old.len() < 64,
-                            "At most 64 task notes"
-                        );
-                        self.state.notes.insert(name.to_owned(), text);
-                        if let Err(e) = self.persist() {
-                            self.state.notes = old;
-                            return Err(e);
-                        }
-                        self.dirty = false;
-                        json!({"saved":name})
-                    }
-                }
+                json!({"scheduled":true,"after":"current tool batch","hint":"Execution state is carried into the next window automatically."})
             }
             "context_history" => {
                 let op = arg(a, "operation")?;
@@ -532,7 +453,7 @@ pub(super) fn estimate_messages(messages: &[Message]) -> Result<u64> {
 pub(super) fn is_context_tool(name: &str) -> bool {
     matches!(
         name,
-        "context_status" | "new_context" | "task_notes" | "context_history"
+        "context_status" | "new_context" | "context_history"
     )
 }
 pub(super) fn tools() -> Vec<ToolDefinition> {
@@ -546,11 +467,6 @@ pub(super) fn tools() -> Vec<ToolDefinition> {
             "new_context",
             "Side context control: roll after this tool batch. The archived window becomes immutable; the coordinator carries execution state into the new window.",
             json!({"type":"object","properties":{}}),
-        ),
-        ToolDefinition::new(
-            "task_notes",
-            "Side session scratchpad for list/read/search/append/replace of constraints, decisions, failures, and next steps. Reads page by character offset (8192 chars).",
-            json!({"type":"object","properties":{"operation":{"type":"string","enum":["list","read","search","append","replace"]},"name":{"type":"string"},"content":{"type":"string"},"query":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["operation"]}),
         ),
         ToolDefinition::new(
             "context_history",
@@ -738,14 +654,14 @@ mod goal_persistence_tests {
         Ok(())
     }
     #[test]
-    fn legacy_context_without_goal_or_agent_checkpoint_remains_loadable() -> Result<()> {
+    fn legacy_context_with_notes_and_checkpoint_remains_loadable() -> Result<()> {
         let mut value = serde_json::to_value(State::default())?;
         let object = value.as_object_mut().unwrap();
         object.remove("goal");
-        object.remove("agent_checkpoint");
+        object.insert("notes".into(), json!({"state": "old"}));
+        object.insert("agent_checkpoint".into(), json!({"objective": "old"}));
         let state: State = serde_json::from_value(value)?;
         assert!(state.goal.is_none());
-        assert!(state.agent_checkpoint.is_none());
         Ok(())
     }
 

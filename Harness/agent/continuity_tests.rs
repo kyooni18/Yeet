@@ -92,7 +92,6 @@ impl Harness {
             WorkerRegistry::new(Vec::new()).unwrap(),
             PermissionBroker::default(),
             settings,
-            "test-project".into(),
             crate::session_store::SessionStore::new(&config),
         );
         let supervisor = crate::agents::AgentGroupSupervisor::new(factory, Default::default());

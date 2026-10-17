@@ -1,4 +1,4 @@
-//! Request-local schema loading. Catalogs are already filtered by task policy.
+//! Which tool schemas are attached to a request.
 use crate::core::ToolDefinition;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -18,31 +18,6 @@ const BASIC_TOOLS: [&str; 8] = [
     "web_search",
     "web_read",
 ];
-
-// These capabilities are recovery/context lookups, not ordinary workspace
-// evidence. A fuzzy search_tools query must not attach them just because their
-// descriptions contain generic words such as "project", "source", or
-// "history". Exact tool-name queries remain allowed for genuine recovery.
-const FUZZY_DISCOVERY_BLOCKED_TOOLS: [&str; 10] = [
-    "context_status",
-    "new_context",
-    "context_history",
-    "task_notes",
-    "project_memory_recall",
-    "project_memory_get",
-    "project_memory_connections",
-    "artifact_info",
-    "read_artifact",
-    "search_artifact",
-];
-
-pub(super) fn is_side_tool(name: &str) -> bool {
-    FUZZY_DISCOVERY_BLOCKED_TOOLS.contains(&name)
-}
-
-fn blocked_from_fuzzy_discovery(name: &str) -> bool {
-    is_side_tool(name)
-}
 
 pub(super) struct ToolDiscovery {
     loaded: HashSet<String>,
@@ -121,11 +96,9 @@ impl ToolDiscovery {
             .cloned()
             .collect::<Vec<_>>();
         if self.search_enabled {
-            // Keep discovery behind the foreground tools. Recovery/context
-            // schemas are side tools: attach them only after an exact request.
             tools.push(ToolDefinition::new(
                 SEARCH_TOOL,
-                "Side-tool discovery. Load an auxiliary schema only for a concrete missing capability or recovery need. Recovery tools such as read_artifact, context_history, task_notes, and project_memory_recall are intentionally outside the foreground tool order; request them by exact name and reuse current evidence first. For Skills/MCP/Workers, load find_capabilities and activate_capability first.",
+                "Find and attach more tools by name or keyword (e.g. MCP, Skills, context_history, find_capabilities).",
                 json!({"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
             ));
         }
@@ -170,9 +143,6 @@ impl ToolDiscovery {
                 let name = tool.name.to_lowercase();
                 let description = tool.description.as_deref().unwrap_or("").to_lowercase();
                 if exact_list && !words.contains(name.as_str()) {
-                    return None;
-                }
-                if !exact_list && blocked_from_fuzzy_discovery(&name) && name != query {
                     return None;
                 }
                 let (score, strong_match) =

@@ -61,13 +61,6 @@ fn tool_activity_title_with_style(
                 "Found tools"
             }
         }
-        "task_notes" => {
-            if active {
-                "Updating notes"
-            } else {
-                "Updated notes"
-            }
-        }
         "context_history" => {
             if active {
                 "Reading context"
@@ -227,7 +220,7 @@ fn tool_target_with_style(
             "list_files" => tool_json_string(call, &["path"])
                 .map(|value| short_tool_path(&value))
                 .or_else(|| tool_argument_summary(&call.arguments, 88)),
-            "search_tools" | "task_notes" | "context_history" => None,
+            "search_tools" | "context_history" => None,
             _ => tool_argument_summary(&call.arguments, 88),
         })
         .filter(|value| !value.trim().is_empty())
@@ -568,7 +561,6 @@ pub fn reasoning_summary_items(summary: &str) -> Vec<String> {
 pub fn tool_action_label(name: &str, active: bool) -> String {
     let (past, present) = match name {
         "apply_file_edits" => ("Edited Files", "Editing Files"),
-        "task_notes" => ("Updated Notes", "Updating Notes"),
         "search_workspace" => ("Searched Files", "Searching Files"),
         "search_artifact" => ("Searched Output", "Searching Output"),
         "search_tools" => ("Searched Tools", "Searching Tools"),

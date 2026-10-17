@@ -359,10 +359,6 @@ export interface BridgeState {
   providers_notice?: string | null
   providers_working: boolean
   openai_flex: boolean
-  foundation_memory_enabled: boolean
-  foundation_memory_backend: string
-  foundation_memory_server: string
-  foundation_memory_connected: boolean
   web_backend: string
   web_server: string
   settings_notice?: string | null
@@ -410,10 +406,6 @@ export const emptyBridgeState = (): BridgeState => ({
   provider_configurations: [],
   providers_working: false,
   openai_flex: false,
-  foundation_memory_enabled: false,
-  foundation_memory_backend: 'builtin',
-  foundation_memory_server: 'foundation',
-  foundation_memory_connected: false,
   web_backend: 'builtin',
   web_server: 'web',
   settings_working: false,
@@ -473,7 +465,6 @@ export type FrontendCommand =
   | { type: 'remove_provider'; id: string }
   | { type: 'request_settings' }
   | { type: 'set_open_ai_flex'; enabled: boolean }
-  | { type: 'set_foundation_memory'; enabled: boolean }
   | { type: 'set_service_backend'; service: string; backend: string; server?: string | null }
   | { type: 'set_appearance'; appearance: string }
   | { type: 'set_theme'; mode: 'dark' | 'light' | 'both'; value: string }

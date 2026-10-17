@@ -83,7 +83,7 @@ use persistence::{
 };
 use settings_support::{
     apply_sandbox_action, auth_login_options, finish_auth_action, finish_provider_action,
-    foundation_server_ready, load_auth_providers, load_provider_configurations,
+    load_auth_providers, load_provider_configurations,
     runtime_settings_state, sandbox_settings_state,
 };
 use state::SharedSession;
@@ -154,7 +154,6 @@ pub(crate) struct HarnessService {
     bridge: BridgeHandle,
     config: ConfigStore,
     project_settings: ProjectSettingsStore,
-    project_identity: String,
     store: SessionStore,
     workspace_root: PathBuf,
     permission: PermissionBroker,
@@ -186,7 +185,6 @@ impl HarnessService {
         let project_settings = ProjectSettingsStore::new(&workspace_root)?;
         project_settings.ensure()?;
         let project = project_settings.load()?;
-        let project_identity = project_settings.project_identity()?;
         let bridge = BridgeHandle::lazy_for_workspace(workspace_root.clone());
         bridge.set_openai_flex(project.openai_flex);
         let permission = PermissionBroker::default();
@@ -199,7 +197,6 @@ impl HarnessService {
             workers,
             permission.clone(),
             project_settings.clone(),
-            project_identity.clone(),
             store.clone(),
         );
         let run_manager = RunManager::default();
@@ -245,7 +242,6 @@ impl HarnessService {
             bridge,
             config,
             project_settings,
-            project_identity,
             store,
             workspace_root,
             permission,
@@ -450,10 +446,6 @@ impl HarnessService {
             }
             FrontendCommand::SetOpenAiFlex { enabled } => {
                 self.set_openai_flex(enabled);
-                Ok(())
-            }
-            FrontendCommand::SetFoundationMemory { enabled } => {
-                self.set_foundation_memory(enabled);
                 Ok(())
             }
             FrontendCommand::SetServiceBackend {

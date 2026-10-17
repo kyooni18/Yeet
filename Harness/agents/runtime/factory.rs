@@ -21,7 +21,6 @@ pub(crate) struct AgentRuntimeFactory {
     workers: WorkerRegistry,
     permission: PermissionBroker,
     project_settings: ProjectSettingsStore,
-    project_identity: String,
     store: SessionStore,
 }
 
@@ -32,7 +31,6 @@ impl AgentRuntimeFactory {
         workers: WorkerRegistry,
         permission: PermissionBroker,
         project_settings: ProjectSettingsStore,
-        project_identity: String,
         store: SessionStore,
     ) -> Self {
         Self {
@@ -41,7 +39,6 @@ impl AgentRuntimeFactory {
             workers,
             permission,
             project_settings,
-            project_identity,
             store,
         }
     }
@@ -49,7 +46,7 @@ impl AgentRuntimeFactory {
     /// Builds a coordinator with independent history and tool state.
     ///
     /// Project-backed service settings are loaded for each build so workers
-    /// created later do not inherit stale Foundation/Web configuration.
+    /// created later do not inherit stale Web configuration.
     pub(crate) fn build(&self, active_session_id: Option<String>) -> Result<AgentCoordinator> {
         self.build_with_session(active_session_id, false)
     }
@@ -77,12 +74,6 @@ impl AgentRuntimeFactory {
             self.workers.clone(),
             self.permission.clone(),
         )?;
-        registry.configure_foundation_memory(
-            project.foundation_memory.enabled,
-            project.foundation_memory.backend,
-            project.foundation_memory.server,
-            self.project_identity.clone(),
-        );
         registry.configure_web_backend(project.web.backend, project.web.server);
 
         let mut coordinator = AgentCoordinator::new(self.bridge.clone(), registry);

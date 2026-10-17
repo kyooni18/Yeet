@@ -14,7 +14,6 @@ pub(super) struct ToolCatalog {
     pub(super) skill_tool_map: HashMap<String, String>,
     pub(super) skill_script_tool_map: HashMap<String, String>,
     pub(super) mcp_tool_map: HashMap<String, (String, String)>,
-    pub(super) foundation_tool_map: HashMap<String, FoundationToolTarget>,
     pub(super) worker_tool_map: HashMap<String, (String, String)>,
     pub(super) active_skills: HashSet<String>,
     pub(super) active_mcp: HashSet<String>,
@@ -28,7 +27,6 @@ pub(super) struct ToolCatalog {
 
 /// Where a non-built-in tool name is executed.
 pub(super) enum ExternalRoute {
-    Foundation(FoundationToolTarget),
     SkillScript(String),
     SkillFile(String),
     Mcp {
@@ -53,7 +51,6 @@ impl ToolCatalog {
             skill_tool_map: HashMap::new(),
             skill_script_tool_map: HashMap::new(),
             mcp_tool_map: HashMap::new(),
-            foundation_tool_map: HashMap::new(),
             worker_tool_map: HashMap::new(),
             active_skills: HashSet::new(),
             active_mcp: HashSet::new(),
@@ -69,9 +66,8 @@ impl ToolCatalog {
             .contains(&format!("{kind}:{name}"))
     }
 
-    /// Whether `tool_name` may be listed or executed. Project-memory tools
-    /// additionally depend on the memory service being active.
-    pub(super) fn tool_enabled(&self, tool_name: &str, foundation_active: bool) -> bool {
+    /// Whether `tool_name` may be listed or executed.
+    pub(super) fn tool_enabled(&self, tool_name: &str) -> bool {
         if builtin_capability_for_tool(tool_name)
             .is_some_and(|capability| self.disabled_capabilities.contains(capability.id))
         {
@@ -83,26 +79,21 @@ impl ToolCatalog {
         if let Some((server, _)) = self.mcp_tool_map.get(tool_name) {
             return !self.capability_disabled("mcp", server);
         }
-        if self.foundation_tool_map.contains_key(tool_name) {
-            return foundation_active;
-        }
         true
     }
 
     /// Enabled active schemas, with descriptions labelled by their source.
-    pub(super) fn enabled_definitions(&self, foundation_active: bool) -> Vec<ToolDefinition> {
+    pub(super) fn enabled_definitions(&self) -> Vec<ToolDefinition> {
         let mut tools: Vec<_> = self
             .active_tools
             .values()
-            .filter(|tool| self.tool_enabled(&tool.name, foundation_active))
+            .filter(|tool| self.tool_enabled(&tool.name))
             .cloned()
             .collect();
         for tool in &mut tools {
             // Built-in descriptions already contain their execution contract.
             // Capability summaries belong in settings, not in every model tool.
-            let label = if self.foundation_tool_map.contains_key(&tool.name) {
-                Some("Project memory".to_owned())
-            } else if let Some((server, _)) = self.mcp_tool_map.get(&tool.name) {
+            let label = if let Some((server, _)) = self.mcp_tool_map.get(&tool.name) {
                 Some(format!("MCP {server}"))
             } else if let Some(skill) = self
                 .skill_tool_map
@@ -140,9 +131,6 @@ impl ToolCatalog {
                 | "artifact_info"
                 | "read_artifact"
                 | "search_artifact"
-                | FOUNDATION_RECALL_TOOL
-                | "project_memory_get"
-                | "project_memory_connections"
         ) || self.skill_tool_map.contains_key(name)
             || self.read_only_mcp_tools.contains(name)
     }
@@ -158,12 +146,9 @@ impl ToolCatalog {
     }
 
     /// Resolves an activated external tool name. Lookup order matters when
-    /// stable-name allocation ever collides: project memory, Skill scripts,
+    /// stable-name allocation ever collides: Skill scripts,
     /// Skill files, MCP, then Workers.
     pub(super) fn external_route(&self, name: &str) -> Option<ExternalRoute> {
-        if let Some(target) = self.foundation_tool_map.get(name) {
-            return Some(ExternalRoute::Foundation(target.clone()));
-        }
         if let Some(skill) = self.skill_script_tool_map.get(name) {
             return Some(ExternalRoute::SkillScript(skill.clone()));
         }
@@ -202,12 +187,12 @@ mod tests {
             name: "mcp_docs_search".into(),
             arguments: json!({}),
         };
-        assert!(catalog.tool_enabled("mcp_docs_search", false));
+        assert!(catalog.tool_enabled("mcp_docs_search"));
         assert!(catalog.read_only_mcp_target(&call).is_some());
         assert!(catalog.research_tool_allowed("mcp_docs_search"));
 
         catalog.disabled_capabilities.insert("mcp:docs".into());
-        assert!(!catalog.tool_enabled("mcp_docs_search", false));
+        assert!(!catalog.tool_enabled("mcp_docs_search"));
         assert!(catalog.read_only_mcp_target(&call).is_none());
     }
 }

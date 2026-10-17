@@ -205,16 +205,6 @@ impl AgentCoordinator {
         self.registry
             .restore_session_environment(working_directory, context_roots)
     }
-    pub fn configure_foundation_memory(
-        &mut self,
-        enabled: bool,
-        backend: crate::project_settings::ServiceBackend,
-        server: impl Into<String>,
-        project: impl Into<String>,
-    ) {
-        self.registry
-            .configure_foundation_memory(enabled, backend, server, project);
-    }
 
     pub fn configure_web_backend(
         &mut self,

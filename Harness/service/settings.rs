@@ -213,22 +213,8 @@ impl HarnessService {
         if let Ok(project) = project.as_ref()
             && let Ok(mut coordinator) = self.coordinator.lock()
         {
-            coordinator.configure_foundation_memory(
-                project.foundation_memory.enabled,
-                project.foundation_memory.backend,
-                project.foundation_memory.server.clone(),
-                self.project_identity.clone(),
-            );
             coordinator.configure_web_backend(project.web.backend, project.web.server.clone());
         }
-        let foundation_connected = project.as_ref().ok().is_some_and(|project| {
-            project.foundation_memory.enabled
-                && foundation_server_ready(
-                    &self.bridge,
-                    project.foundation_memory.backend,
-                    &project.foundation_memory.server,
-                )
-        });
         {
             let mut shared = self.shared.lock_or_recover();
             shared.state.settings_working = false;
@@ -236,12 +222,6 @@ impl HarnessService {
             match project {
                 Ok(project) => {
                     shared.state.openai_flex = project.openai_flex;
-                    shared.state.foundation_memory_enabled = project.foundation_memory.enabled;
-                    shared.state.foundation_memory_backend =
-                        project.foundation_memory.backend.as_str().into();
-                    shared.state.foundation_memory_server =
-                        project.foundation_memory.server.clone();
-                    shared.state.foundation_memory_connected = foundation_connected;
                     shared.state.web_backend = project.web.backend.as_str().into();
                     shared.state.web_server = project.web.server.clone();
                     shared.state.settings_notice = None;
@@ -344,60 +324,6 @@ impl HarnessService {
         self.publish_state();
     }
 
-    /// Enables or disables Foundation memory for this workspace.
-    pub(super) fn set_foundation_memory(&self, enabled: bool) {
-        {
-            let mut shared = self.shared.lock_or_recover();
-            shared.state.settings_working = true;
-            shared.state.settings_notice = None;
-        }
-        self.publish_state();
-
-        let result = self.project_settings.save_foundation_memory(enabled, None);
-        let refreshed = result.and_then(|()| self.project_settings.load());
-        if let Ok(project) = refreshed.as_ref()
-            && let Ok(mut coordinator) = self.coordinator.lock()
-        {
-            coordinator.configure_foundation_memory(
-                project.foundation_memory.enabled,
-                project.foundation_memory.backend,
-                project.foundation_memory.server.clone(),
-                self.project_identity.clone(),
-            );
-            coordinator.configure_web_backend(project.web.backend, project.web.server.clone());
-        }
-        {
-            let mut shared = self.shared.lock_or_recover();
-            shared.state.settings_working = false;
-            match refreshed {
-                Ok(project) => {
-                    shared.state.foundation_memory_enabled = project.foundation_memory.enabled;
-                    shared.state.foundation_memory_backend =
-                        project.foundation_memory.backend.as_str().into();
-                    shared.state.foundation_memory_server =
-                        project.foundation_memory.server.clone();
-                    shared.state.foundation_memory_connected = project.foundation_memory.enabled
-                        && foundation_server_ready(
-                            &self.bridge,
-                            project.foundation_memory.backend,
-                            &project.foundation_memory.server,
-                        );
-                    shared.state.web_backend = project.web.backend.as_str().into();
-                    shared.state.web_server = project.web.server.clone();
-                    shared.state.settings_notice = Some(format!(
-                        "Foundation memory {}.",
-                        if enabled { "enabled" } else { "disabled" }
-                    ));
-                }
-                Err(error) => {
-                    shared.state.settings_notice =
-                        Some(format!("Unable to save Foundation memory setting: {error}"));
-                }
-            }
-        }
-        self.publish_state();
-    }
-
     pub(super) fn set_service_backend(
         &self,
         service: String,
@@ -413,13 +339,10 @@ impl HarnessService {
         self.publish_state();
 
         let result = ServiceBackend::parse(&backend).and_then(|backend| match service.as_str() {
-            "memory" | "foundation" => self
-                .project_settings
-                .save_foundation_backend(backend, server.as_deref()),
             "web" | "search" => self
                 .project_settings
                 .save_web_backend(backend, server.as_deref()),
-            other => Err(anyhow!("Unknown service '{other}'; expected memory or web")),
+            other => Err(anyhow!("Unknown service '{other}'; expected web")),
         });
         if let Err(error) = result {
             let mut shared = self.shared.lock_or_recover();
@@ -432,17 +355,8 @@ impl HarnessService {
 
         self.request_settings();
         let mut shared = self.shared.lock_or_recover();
-        let selected = if matches!(service.as_str(), "memory" | "foundation") {
-            shared.state.foundation_memory_backend.clone()
-        } else {
-            shared.state.web_backend.clone()
-        };
-        let label = if matches!(service.as_str(), "memory" | "foundation") {
-            "Memory"
-        } else {
-            "Web"
-        };
-        shared.state.settings_notice = Some(format!("{label} backend set to {selected}."));
+        let selected = shared.state.web_backend.clone();
+        shared.state.settings_notice = Some(format!("Web backend set to {selected}."));
         drop(shared);
         self.publish_state();
     }

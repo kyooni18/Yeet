@@ -1,5 +1,4 @@
-//! Executor for activated external tools: project memory, Skills, MCP and
-//! Workers.
+//! Executor for activated external tools: Skills, MCP and Workers.
 //!
 //! Routing comes from `ToolCatalog::external_route`. Every path re-checks its
 //! capability toggle at execution time, and any tool that may have changed
@@ -18,13 +17,6 @@ impl ToolRegistry {
         cancel: &AtomicBool,
     ) -> Result<String> {
         match route {
-            ExternalRoute::Foundation(target) => {
-                if !self.services.foundation_enabled {
-                    bail!("Project memory is disabled");
-                }
-                let result = self.call_foundation_target(&target, object, cancel)?;
-                Ok(foundation_tool_result_text(&result))
-            }
             ExternalRoute::SkillScript(skill) => {
                 if self.catalog.capability_disabled("skill", &skill) {
                     bail!("Skill {skill} is disabled for this session");

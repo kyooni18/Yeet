@@ -21,7 +21,6 @@ async function openSettings(page: Parameters<typeof installMockRemote>[0]) {
 test('Settings keeps dismissal available but disables Remote mutations offline', async ({ page }) => {
   let dialog = await openSettings(page)
   await expect(dialog.getByRole('switch', { name: 'OpenAI Flex' })).toBeDisabled()
-  await expect(dialog.getByRole('switch', { name: 'Foundation Memory' })).toBeEnabled()
   await dialog.getByRole('button', { name: 'Close' }).click()
   await expect(dialog).toHaveCount(0)
 
@@ -33,7 +32,6 @@ test('Settings keeps dismissal available but disables Remote mutations offline',
   await expect(dialog.getByRole('button', { name: 'Light', exact: true })).toBeDisabled()
   await expect(dialog.getByRole('button', { name: 'Dark', exact: true })).toBeDisabled()
   await expect(dialog.getByRole('switch', { name: 'OpenAI Flex' })).toBeDisabled()
-  await expect(dialog.getByRole('switch', { name: 'Foundation Memory' })).toBeDisabled()
 
   const capabilitySwitches = dialog.locator('.settings-section').filter({ hasText: 'Capabilities' }).getByRole('switch')
   for (let index = 0; index < await capabilitySwitches.count(); index += 1) {
@@ -56,8 +54,7 @@ test('Settings honors shared working state and Flex billing eligibility', async 
   await emit({ active_model: 'openai/gpt-5.6-sol', auth_providers: [{ provider: 'openai', authenticated: true, method: 'api-key', expires_at: null, error: null }] })
   await expect(dialog.getByRole('switch', { name: 'OpenAI Flex' })).toBeEnabled()
   await emit({ settings_working: true })
-  await expect(dialog.getByRole('switch', { name: 'Foundation Memory' })).toBeDisabled()
   await expect(dialog.getByRole('button', { name: 'Light', exact: true })).toBeDisabled()
   await emit({ settings_working: false })
-  await expect(dialog.getByRole('switch', { name: 'Foundation Memory' })).toBeEnabled()
+  await expect(dialog.getByRole('button', { name: 'Light', exact: true })).toBeEnabled()
 })

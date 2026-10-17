@@ -343,7 +343,6 @@ struct WorkspaceRuntime {
     bridge: BridgeHandle,
     config: ConfigStore,
     project_settings: ProjectSettingsStore,
-    project_identity: String,
     permission_was_denied: Arc<AtomicBool>,
 }
 
@@ -357,7 +356,6 @@ impl WorkspaceRuntime {
         config.ensure()?;
         let project_settings = ProjectSettingsStore::new(&workspace)?;
         project_settings.ensure()?;
-        let project_identity = project_settings.project_identity()?;
         let project = project_settings.load()?;
 
         let permission = PermissionBroker::default();
@@ -381,12 +379,6 @@ impl WorkspaceRuntime {
         registry.set_hard_access_root(hard_access_root)?;
         registry.set_artifacts_enabled(false);
         registry.set_disabled_capabilities(project.capabilities.disabled.clone());
-        registry.configure_foundation_memory(
-            project.foundation_memory.enabled,
-            project.foundation_memory.backend,
-            project.foundation_memory.server.clone(),
-            project_identity.clone(),
-        );
         registry.configure_web_backend(project.web.backend, project.web.server.clone());
         let sessions = SessionStore::new(&config.directory);
         sessions.prepare()?;
@@ -397,7 +389,6 @@ impl WorkspaceRuntime {
             bridge,
             config,
             project_settings,
-            project_identity,
             permission_was_denied,
         })
     }
@@ -406,12 +397,6 @@ impl WorkspaceRuntime {
         let project = self.project_settings.load()?;
         self.registry
             .set_disabled_capabilities(project.capabilities.disabled);
-        self.registry.configure_foundation_memory(
-            project.foundation_memory.enabled,
-            project.foundation_memory.backend,
-            project.foundation_memory.server,
-            self.project_identity.clone(),
-        );
         self.registry
             .configure_web_backend(project.web.backend, project.web.server);
         Ok(())

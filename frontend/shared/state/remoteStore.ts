@@ -732,10 +732,6 @@ export class RemoteStore {
     return this.send({ type: 'set_open_ai_flex', enabled })
   }
 
-  setFoundationMemory(enabled: boolean): boolean {
-    return this.send({ type: 'set_foundation_memory', enabled })
-  }
-
   authLogin(provider: string): boolean {
     return this.send({ type: 'auth_login', provider })
   }

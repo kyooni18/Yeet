@@ -1,37 +1,25 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result, bail, ensure};
 
-use crate::{
-    config::ConfigStore,
-    core::{BridgeClient, McpServerConfiguration, node_executable},
-    platform::replace_file,
-    project_settings::{ProjectSettingsStore, ServiceBackend},
-    web_search,
-};
-
-const FOUNDATION_SERVER: &str = "foundation";
-const DEFAULT_FOUNDATION_REPO: &str = "https://github.com/kyooni18/Foundation.git";
+use crate::{platform::replace_file, web_search};
 
 pub const HELP: &str = r#"Yeet component installer
 
 Usage:
-  yeet install [binary|runtime|foundation|web|mcp|remote|all]...
-  yeet uninstall [binary|runtime|foundation|web|mcp|remote|all]...
+  yeet install [binary|runtime|web|mcp|remote|all]...
+  yeet uninstall [binary|runtime|web|mcp|remote|all]...
   yeet install status
 
-The main Yeet source build uses Rust plus Node.js/npm. Foundation is optional:
-`yeet install foundation` clones and builds it only when requested. Yeet Remote is built
-into the main binary and has no separate installation or service lifecycle.
+The main Yeet source build uses Rust plus Node.js/npm. Yeet Remote is built into the
+main binary and has no separate installation or service lifecycle.
 
 Environment:
   YEET_PREFIX             installation prefix (default: ~/.local)
   YEET_SOURCE_ROOT        Yeet source checkout for binary/runtime installs
-  YEET_FOUNDATION_REPO    Foundation Git repository override
 "#;
 
 pub fn run_cli(args: &[String], uninstall: bool) -> Result<String> {
@@ -68,12 +56,12 @@ fn expand_targets<'a>(targets: &[&'a str], uninstall: bool) -> Result<Vec<&'a st
     let mut out = Vec::new();
     for target in targets {
         match *target {
-            "all" if uninstall => out.extend(["mcp", "foundation", "web", "runtime", "binary"]),
-            "all" => out.extend(["binary", "runtime", "web", "foundation", "mcp"]),
-            "binary" | "runtime" | "foundation" | "web" | "web-search" | "search" | "mcp"
+            "all" if uninstall => out.extend(["mcp", "web", "runtime", "binary"]),
+            "all" => out.extend(["binary", "runtime", "web", "mcp"]),
+            "binary" | "runtime" | "web" | "web-search" | "search" | "mcp"
             | "remote" => out.push(target),
             other => bail!(
-                "unknown component '{other}'; expected binary, runtime, foundation, web, mcp, remote, or all"
+                "unknown component '{other}'; expected binary, runtime, web, mcp, remote, or all"
             ),
         }
     }
@@ -84,7 +72,6 @@ fn install_target(target: &str) -> Result<String> {
     match target {
         "binary" => install_binary(),
         "runtime" => install_runtime(),
-        "foundation" => install_foundation(),
         "web" | "web-search" | "search" => web_search::run_cli(&["install".into(), "all".into()]),
         "mcp" => crate::mcp_server::run_cli(&["start".into()]),
         "remote" => {
@@ -98,7 +85,6 @@ fn uninstall_target(target: &str) -> Result<String> {
     match target {
         "binary" => uninstall_binary(),
         "runtime" => uninstall_runtime(),
-        "foundation" => uninstall_foundation(),
         "web" | "web-search" | "search" => web_search::run_cli(&["remove".into(), "all".into()]),
         "mcp" => crate::mcp_server::run_cli(&["stop".into()]),
         "remote" => {
@@ -195,121 +181,12 @@ fn uninstall_runtime() -> Result<String> {
     }
 }
 
-fn install_foundation() -> Result<String> {
-    command_available("git")?;
-    command_available("npm")?;
-    let config = ConfigStore::default();
-    config.ensure()?;
-    let root = config.directory.join("services/foundation");
-    let repo = env::var("YEET_FOUNDATION_REPO").unwrap_or_else(|_| DEFAULT_FOUNDATION_REPO.into());
-
-    if root.join(".git").is_dir() {
-        run(
-            Command::new("git")
-                .arg("-C")
-                .arg(&root)
-                .args(["pull", "--ff-only"]),
-            "update Foundation",
-        )?;
-    } else {
-        if root.exists() {
-            bail!(
-                "Foundation install path exists but is not a Git checkout: {}",
-                root.display()
-            );
-        }
-        if let Some(parent) = root.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        run(
-            Command::new("git")
-                .args(["clone", "--depth", "1"])
-                .arg(&repo)
-                .arg(&root),
-            "clone Foundation",
-        )?;
-    }
-
-    let npm_install = if root.join("package-lock.json").is_file() {
-        "ci"
-    } else {
-        "install"
-    };
-    run(
-        Command::new("npm")
-            .arg("--prefix")
-            .arg(&root)
-            .arg(npm_install),
-        "install Foundation dependencies",
-    )?;
-    run(
-        Command::new("npm")
-            .arg("--prefix")
-            .arg(&root)
-            .args(["run", "build"]),
-        "build Foundation",
-    )?;
-
-    let stdio = root.join("dist/stdio.js");
-    ensure!(
-        stdio.is_file(),
-        "Foundation build did not produce {}",
-        stdio.display()
-    );
-    let bridge = BridgeClient::start()?;
-    let registration = bridge.set_mcp_server(&McpServerConfiguration {
-        name: FOUNDATION_SERVER.into(),
-        transport: "stdio".into(),
-        command: Some(node_executable()?.to_string_lossy().into_owned()),
-        args: Some(vec![stdio.to_string_lossy().into_owned()]),
-        env: None,
-        cwd: Some(root.to_string_lossy().into_owned()),
-        url: None,
-        headers: None,
-    });
-    bridge.shutdown();
-    registration?;
-
-    let workspace = env::current_dir()?.canonicalize()?;
-    let settings = ProjectSettingsStore::new(workspace)?;
-    settings.save_foundation_backend(ServiceBackend::Mcp, Some(FOUNDATION_SERVER))?;
-    settings.save_foundation_memory(true, Some(FOUNDATION_SERVER))?;
-
-    Ok(format!(
-        "Foundation installed and enabled from {repo} at {}",
-        root.display()
-    ))
-}
-
-fn uninstall_foundation() -> Result<String> {
-    let workspace = env::current_dir()?.canonicalize()?;
-    let settings = ProjectSettingsStore::new(workspace)?;
-    settings.save_foundation_memory(false, Some(FOUNDATION_SERVER))?;
-
-    if let Ok(bridge) = BridgeClient::start() {
-        let _ = bridge.remove_mcp_server(FOUNDATION_SERVER);
-        bridge.shutdown();
-    }
-
-    let root = ConfigStore::default().directory.join("services/foundation");
-    if root.exists() {
-        fs::remove_dir_all(&root).with_context(|| format!("remove {}", root.display()))?;
-        Ok(format!(
-            "Foundation disabled and removed from {}",
-            root.display()
-        ))
-    } else {
-        Ok("Foundation disabled; no managed checkout was installed".into())
-    }
-}
-
 fn status() -> Result<String> {
     let prefix = install_prefix()?;
     let binary = binary_destination()?;
     let runtime = runtime_destination()?;
-    let foundation = ConfigStore::default().directory.join("services/foundation");
     Ok(format!(
-        "prefix={}\nbinary={}\nruntime={}\nfoundation={}",
+        "prefix={}\nbinary={}\nruntime={}",
         prefix.display(),
         if binary.is_file() {
             "installed"
@@ -317,11 +194,6 @@ fn status() -> Result<String> {
             "missing"
         },
         if runtime.join("dist/bridge.js").is_file() {
-            "installed"
-        } else {
-            "missing"
-        },
-        if foundation.join("dist/stdio.js").is_file() {
             "installed"
         } else {
             "missing"
@@ -408,21 +280,3 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn command_available(command: &str) -> Result<()> {
-    let status = Command::new(command)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    ensure!(
-        status.is_ok_and(|status| status.success()),
-        "required command is unavailable: {command}"
-    );
-    Ok(())
-}
-
-fn run(command: &mut Command, label: &str) -> Result<()> {
-    let status = command.status().with_context(|| label.to_owned())?;
-    ensure!(status.success(), "{label} failed with {status}");
-    Ok(())
-}

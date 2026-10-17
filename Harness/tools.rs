@@ -69,8 +69,7 @@ use support::{
     ArtifactStore, McpServerIdentity, ReadCacheEntry, allocate_stable_tool_name,
     append_bounded_state_set, builtin_capability_for_tool, cache_read_result,
     collect_web_source_urls, coverage_complete, covered_ranges_within,
-    foundation_context_from_tool_result, foundation_tool_result_text, foundation_wrapper_schema,
-    merged_ranges, next_uncovered, shell_quote, string_arg, trim_cache_to_preview,
+    mcp_result_text, merged_ranges, next_uncovered, shell_quote, string_arg, trim_cache_to_preview,
     truncate_state_value, uncovered_ranges, usize_arg, web_search_queries,
 };
 
@@ -78,7 +77,6 @@ const DEFAULT_READ_LINES: usize = 160;
 const EXPLICIT_READ_LINES: usize = 480;
 const DEFAULT_INLINE_BYTES: usize = 12 * 1024;
 const EXPLICIT_INLINE_BYTES: usize = 16 * 1024;
-const FOUNDATION_RECALL_TOOL: &str = "project_memory_recall";
 const MAX_CAPABILITY_SEARCH_RESULTS: usize = 8;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityDescriptor {
@@ -118,11 +116,6 @@ fn capability_search_values(descriptors: &[CapabilityDescriptor], query: &str) -
         .collect()
 }
 
-#[derive(Debug, Clone)]
-struct FoundationToolTarget {
-    server: String,
-    tool: String,
-}
 pub struct ToolRegistry {
     bridge: BridgeHandle,
     context: ToolExecutionContext,
@@ -303,7 +296,7 @@ impl ToolRegistry {
         // and retains loaded schemas for the rest of its turn.
         let mut tools = self
             .catalog
-            .enabled_definitions(self.foundation_memory_active());
+            .enabled_definitions();
         if web_search_enabled {
             tools.extend(self.configured_web_tool_definitions());
         }
@@ -411,19 +404,6 @@ impl ToolRegistry {
             self.deactivate_mcp(&server);
         }
         for server in servers {
-            // Foundation memory owns this server through the canonical
-            // project_memory_* surface. In MCP mode retry activation here so a
-            // server that was unavailable at session startup can recover later;
-            // in builtin mode keep it hidden to avoid duplicate memory surfaces.
-            if self.services.foundation_server.as_deref() == Some(server.name.as_str()) {
-                if self.services.foundation_backend == ServiceBackend::Mcp
-                    && self.services.foundation_enabled
-                    && !self.catalog.capability_disabled("mcp", &server.name)
-                {
-                    let _ = self.activate(&format!("mcp:{}", server.name));
-                }
-                continue;
-            }
             if self.catalog.capability_disabled("mcp", &server.name) {
                 continue;
             }
@@ -732,7 +712,7 @@ impl ToolRegistry {
 
     fn tool_enabled(&self, tool_name: &str) -> bool {
         self.catalog
-            .tool_enabled(tool_name, self.foundation_memory_active())
+            .tool_enabled(tool_name)
     }
 
     fn covered_shell_replay_reason(&self, command: &str) -> Option<String> {

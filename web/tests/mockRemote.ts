@@ -133,9 +133,6 @@ export async function installMockRemote(page: Page): Promise<void> {
       providers_notice: null,
       providers_working: false,
       openai_flex: false,
-      foundation_memory_enabled: true,
-      foundation_memory_server: 'foundation',
-      foundation_memory_connected: true,
       settings_notice: null,
       settings_working: false,
       sandbox_settings: {

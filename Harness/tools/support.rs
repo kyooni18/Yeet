@@ -250,18 +250,7 @@ pub(super) fn string_arg<'a>(object: &'a Map<String, Value>, key: &str) -> Resul
         .ok_or_else(|| anyhow!("missing string argument {key}"))
 }
 
-pub(super) fn foundation_wrapper_schema(schema: &Map<String, Value>) -> Map<String, Value> {
-    let mut schema = schema.clone();
-    if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
-        properties.remove("project");
-    }
-    if let Some(required) = schema.get_mut("required").and_then(Value::as_array_mut) {
-        required.retain(|value| value.as_str() != Some("project"));
-    }
-    schema
-}
-
-pub(super) fn foundation_tool_result_text(value: &Value) -> String {
+pub(super) fn mcp_result_text(value: &Value) -> String {
     if let Some(text) = value
         .get("content")
         .and_then(Value::as_array)
@@ -276,16 +265,6 @@ pub(super) fn foundation_tool_result_text(value: &Value) -> String {
         return text.to_owned();
     }
     value.to_string()
-}
-
-pub(super) fn foundation_context_from_tool_result(value: &Value) -> Option<String> {
-    if value.get("isError").and_then(Value::as_bool) == Some(true) {
-        return None;
-    }
-    let text = foundation_tool_result_text(value);
-    let payload: Value = serde_json::from_str(&text).ok()?;
-    let context = payload.get("context")?.as_str()?.trim();
-    (!context.is_empty()).then(|| context.to_owned())
 }
 
 pub(super) fn shell_quote(value: &str) -> String {
@@ -589,30 +568,4 @@ mod tests {
         assert!(visible.is_empty());
     }
 
-    #[test]
-    fn foundation_wrapper_schema_hides_project_identity() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "project": { "type": "string" },
-                "query": { "type": "string" }
-            },
-            "required": ["project", "query"]
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        let wrapped = foundation_wrapper_schema(&schema);
-        assert!(
-            wrapped
-                .get("properties")
-                .and_then(Value::as_object)
-                .is_some_and(|properties| !properties.contains_key("project"))
-        );
-        assert_eq!(
-            wrapped.get("required").and_then(Value::as_array),
-            Some(&vec![json!("query")])
-        );
-    }
 }

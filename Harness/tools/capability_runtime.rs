@@ -1,4 +1,4 @@
-//! Runtime activation and deactivation for Skills, MCP servers, workers, and project memory.
+//! Runtime activation and deactivation for Skills, MCP servers, and workers.
 
 use super::*;
 
@@ -14,34 +14,6 @@ impl ToolRegistry {
             return self.activate_skill(name, false);
         }
         if let Some(server) = id.strip_prefix("mcp:") {
-            if self.services.foundation_backend == ServiceBackend::Mcp
-                && self.services.foundation_server.as_deref() == Some(server)
-            {
-                if !self.services.foundation_enabled {
-                    bail!("Foundation memory is disabled in this project's settings");
-                }
-                let tools = self.bridge_client()?.list_mcp_tools(Some(server))?;
-                if crate::foundation_backend::has_required_project_scoped_tools(&tools) {
-                    let already_active = self.foundation_memory_active();
-                    if !already_active {
-                        self.activate_foundation()?;
-                    }
-                    let mut names = self
-                        .catalog
-                        .foundation_tool_map
-                        .keys()
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    names.sort();
-                    return Ok(json!({
-                        "activated": id,
-                        "alreadyActive": already_active,
-                        "projectScoped": true,
-                        "tools": names
-                    })
-                    .to_string());
-                }
-            }
             if self.catalog.active_mcp.contains(server) {
                 return Ok(json!({"activated":id,"alreadyActive":true}).to_string());
             }
@@ -118,48 +90,6 @@ impl ToolRegistry {
             return Ok(json!({"activated":id,"tools":names}).to_string());
         }
         bail!("Unknown capability: {id}")
-    }
-
-    pub(super) fn activate_foundation(&mut self) -> Result<()> {
-        let (server, mut tools) = match self.services.foundation_backend {
-            ServiceBackend::Builtin => bail!(
-                "Built-in project memory has been removed; configure an external Foundation MCP server"
-            ),
-            ServiceBackend::Mcp => {
-                let server = self
-                    .services
-                    .foundation_server
-                    .clone()
-                    .ok_or_else(|| anyhow!("Foundation MCP server is not configured"))?;
-                let tools = self.bridge_client()?.list_mcp_tools(Some(&server))?;
-                (server, tools)
-            }
-        };
-        crate::foundation_backend::validate_project_scoped_tools(
-            &tools,
-            &format!("Foundation backend {server}"),
-        )?;
-        tools.sort_by(|left, right| left.name.cmp(&right.name));
-        for tool in tools {
-            if !crate::foundation_backend::is_model_tool(&tool.name) {
-                continue;
-            }
-            let canonical = format!("project_{}", tool.name);
-            let definition = ToolDefinition {
-                name: canonical.clone(),
-                description: tool.description,
-                input_schema: foundation_wrapper_schema(&tool.input_schema),
-            };
-            self.catalog.foundation_tool_map.insert(
-                canonical.clone(),
-                FoundationToolTarget {
-                    server: server.clone(),
-                    tool: tool.name,
-                },
-            );
-            self.catalog.active_tools.insert(canonical, definition);
-        }
-        Ok(())
     }
 
     pub(super) fn activate_skill(&mut self, name: &str, explicit: bool) -> Result<String> {
@@ -278,17 +208,4 @@ impl ToolRegistry {
         self.catalog.active_mcp_identity.remove(server);
     }
 
-    pub(super) fn deactivate_foundation(&mut self) {
-        let tool_names = self
-            .catalog
-            .foundation_tool_map
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        for name in tool_names {
-            self.catalog.foundation_tool_map.remove(&name);
-            self.catalog.active_tools.remove(&name);
-            self.catalog.read_only_mcp_tools.remove(&name);
-        }
-    }
 }

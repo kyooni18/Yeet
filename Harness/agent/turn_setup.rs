@@ -152,9 +152,6 @@ impl AgentCoordinator {
         ) {
             turn_stable_overlays.push(Message::system(memory).request_only());
         }
-        if let Some(guidance) = self.registry.foundation_memory_guidance() {
-            turn_stable_overlays.push(Message::system(guidance.to_owned()).request_only());
-        }
         if let Some(guidance) = self.registry.agent_group_guidance() {
             turn_stable_overlays.push(Message::system(guidance).request_only());
         }

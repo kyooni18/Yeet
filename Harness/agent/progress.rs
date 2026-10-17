@@ -206,16 +206,7 @@ pub(super) fn tool_made_progress(call: &ToolCall, content: &str, succeeded: bool
         | "read_artifact"
         | "search_artifact"
         | "context_status"
-        | "context_history"
-        | "project_memory_recall"
-        | "project_memory_get"
-        | "project_memory_connections" => false,
-        "task_notes" => {
-            matches!(
-                call.arguments.get("operation").and_then(Value::as_str),
-                Some("append" | "replace")
-            ) && value.get("saved").is_some()
-        }
+        | "context_history" => false,
         "find_capabilities" => value.as_array().is_some_and(|values| !values.is_empty()),
         "activate_capability" => {
             value.get("alreadyActive").and_then(Value::as_bool) != Some(true)
@@ -317,9 +308,6 @@ mod tests {
             "search_artifact",
             "context_status",
             "context_history",
-            "project_memory_recall",
-            "project_memory_get",
-            "project_memory_connections",
         ] {
             assert!(!tool_made_progress(
                 &call(tool, json!({"operation":"read"})),
@@ -327,23 +315,6 @@ mod tests {
                 true,
             ));
         }
-        assert!(!tool_made_progress(
-            &call("task_notes", json!({"operation":"read","name":"state"})),
-            r#"{"text":"note"}"#,
-            true,
-        ));
-    }
-
-    #[test]
-    fn task_note_write_still_counts_as_progress() {
-        assert!(tool_made_progress(
-            &call(
-                "task_notes",
-                json!({"operation":"replace","name":"state","content":"next"}),
-            ),
-            r#"{"saved":"state"}"#,
-            true,
-        ));
     }
 
     #[test]

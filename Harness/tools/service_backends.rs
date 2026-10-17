@@ -2,12 +2,8 @@
 
 use super::*;
 
-/// Runtime routing choices for the Foundation and web semantic services.
+/// Runtime routing choice for the web semantic service.
 pub(super) struct ToolServiceConfiguration {
-    pub(super) foundation_enabled: bool,
-    pub(super) foundation_backend: ServiceBackend,
-    pub(super) foundation_server: Option<String>,
-    pub(super) foundation_project: Option<String>,
     pub(super) web_backend: ServiceBackend,
     pub(super) web_server: Option<String>,
 }
@@ -15,10 +11,6 @@ pub(super) struct ToolServiceConfiguration {
 impl Default for ToolServiceConfiguration {
     fn default() -> Self {
         Self {
-            foundation_enabled: false,
-            foundation_backend: ServiceBackend::Mcp,
-            foundation_server: Some("foundation".into()),
-            foundation_project: None,
             web_backend: ServiceBackend::Builtin,
             web_server: Some("web".into()),
         }
@@ -26,27 +18,6 @@ impl Default for ToolServiceConfiguration {
 }
 
 impl ToolRegistry {
-    pub fn configure_foundation_memory(
-        &mut self,
-        enabled: bool,
-        backend: ServiceBackend,
-        server: impl Into<String>,
-        project: impl Into<String>,
-    ) {
-        let server = server.into();
-        let project = project.into();
-        let changed = self.services.foundation_backend != backend
-            || self.services.foundation_server.as_deref() != Some(server.as_str())
-            || self.services.foundation_project.as_deref() != Some(project.as_str())
-            || self.services.foundation_enabled != enabled;
-        if changed {
-            self.deactivate_foundation();
-        }
-        self.services.foundation_enabled = enabled;
-        self.services.foundation_backend = backend;
-        self.services.foundation_server = Some(server);
-        self.services.foundation_project = Some(project);
-    }
 
     pub fn configure_web_backend(&mut self, backend: ServiceBackend, server: impl Into<String>) {
         let server = server.into();
@@ -76,85 +47,6 @@ impl ToolRegistry {
 
         self.services.web_backend = backend;
         self.services.web_server = Some(server);
-    }
-
-    pub(super) fn foundation_memory_active(&self) -> bool {
-        let backend_available = match self.services.foundation_backend {
-            ServiceBackend::Builtin => false,
-            ServiceBackend::Mcp => self
-                .services
-                .foundation_server
-                .as_deref()
-                .is_some_and(|server| !self.catalog.capability_disabled("mcp", server)),
-        };
-        self.services.foundation_enabled
-            && backend_available
-            && self.services.foundation_project.is_some()
-            && self
-                .catalog
-                .foundation_tool_map
-                .contains_key(FOUNDATION_RECALL_TOOL)
-    }
-
-    pub fn foundation_memory_guidance(&self) -> Option<&'static str> {
-        self.foundation_memory_active().then_some(
-            "Yeet project memory uses the configured Foundation backend alongside session-local task_notes and context_history. Keep task progress and exact evidence in those local stores; promote only durable knowledge to project memory. Available memory operations depend on the selected backend. Give mutable current-state facts a stable key so newer values supersede older ones while preserving history. Do not store secrets, credentials, raw transcripts, transient progress chatter, build output, or facts that are cheap to rediscover from the repository. Fresh source evidence overrides stale memory.",
-        )
-    }
-
-    pub(super) fn call_foundation_target(
-        &self,
-        target: &FoundationToolTarget,
-        object: &Map<String, Value>,
-        cancel: &AtomicBool,
-    ) -> Result<Value> {
-        let project = self
-            .services
-            .foundation_project
-            .as_deref()
-            .ok_or_else(|| anyhow!("Project identity is unavailable"))?;
-        if self.catalog.capability_disabled("mcp", &target.server) {
-            bail!("MCP server {} is disabled for this session", target.server);
-        }
-        let mut arguments = object.clone();
-        arguments.insert("project".into(), json!(project));
-        let result = self.bridge_client()?.call_mcp_tool_cancellable(
-            &target.server,
-            &target.tool,
-            &arguments,
-            cancel,
-        )?;
-        if result.get("isError").and_then(Value::as_bool) == Some(true) {
-            bail!(
-                "Foundation {}/{}: {}",
-                target.server,
-                target.tool,
-                foundation_tool_result_text(&result)
-            );
-        }
-        Ok(result)
-    }
-
-    pub fn recall_foundation_memory(
-        &self,
-        query: &str,
-        cancel: &AtomicBool,
-    ) -> Result<Option<String>> {
-        if !self.foundation_memory_active() || query.trim().is_empty() {
-            return Ok(None);
-        }
-        let target = self
-            .catalog
-            .foundation_tool_map
-            .get(FOUNDATION_RECALL_TOOL)
-            .ok_or_else(|| anyhow!("Project memory recall is unavailable"))?;
-        let query = query.chars().take(20_000).collect::<String>();
-        let value = self.call_foundation_target(
-            target,
-            &Map::from_iter([("query".into(), json!(query)), ("limit".into(), json!(8))]),
-            cancel,
-        )?;
-        Ok(foundation_context_from_tool_result(&value))
     }
 
     pub(super) fn configured_web_tool_definitions(&self) -> Vec<ToolDefinition> {
@@ -252,44 +144,8 @@ mod tests {
         assert!(registry.evidence.web_sources.is_empty());
         assert!(registry.evidence.web_reads.is_empty());
 
-        // Seed an active Foundation alias; changing its route removes it first.
-        let alias = "project_old_recall".to_owned();
-        registry.catalog.foundation_tool_map.insert(
-            alias.clone(),
-            FoundationToolTarget {
-                server: "foundation-old".into(),
-                tool: "recall".into(),
-            },
-        );
-        registry.catalog.active_tools.insert(
-            alias.clone(),
-            ToolDefinition {
-                name: alias.clone(),
-                description: None,
-                input_schema: Map::from_iter([("type".into(), json!("object"))]),
-            },
-        );
-        registry.configure_foundation_memory(
-            true,
-            ServiceBackend::Mcp,
-            "foundation-new",
-            "project-new",
-        );
-        assert!(!registry.catalog.foundation_tool_map.contains_key(&alias));
-        assert!(!registry.catalog.active_tools.contains_key(&alias));
-
         registry.begin_task("task");
         registry.finish_task("task");
-        assert!(registry.services.foundation_enabled);
-        assert_eq!(registry.services.foundation_backend, ServiceBackend::Mcp);
-        assert_eq!(
-            registry.services.foundation_server.as_deref(),
-            Some("foundation-new")
-        );
-        assert_eq!(
-            registry.services.foundation_project.as_deref(),
-            Some("project-new")
-        );
         assert_eq!(registry.services.web_backend, ServiceBackend::Mcp);
         assert_eq!(
             registry.services.web_server.as_deref(),
