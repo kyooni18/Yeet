@@ -10,12 +10,12 @@ use serde_json::{Value, json};
 use crate::core::{BridgeClient, CallRequest, ImageAttachment, ToolCall, ToolDefinition};
 
 use super::{
-    AgentCoordinator, AgentEvent, LoopBudget, Message, Result, cache, context,
+    AgentCoordinator, AgentEvent, Message, Result, cache, context,
     coordinator_support::{
         attached_web_search_capability_result, check_cancel,
         supports_anthropic_deferred_tool_references,
     },
-    goal, jev,
+    goal,
     policy::{TaskProfile, is_mutation_tool},
     progress::{
         self, classify_tool_error, content_fingerprint, is_inspection_tool,
@@ -598,62 +598,21 @@ impl AgentCoordinator {
     }
 }
 
-/// Per-round failure fingerprints and the once-per-turn Jev advisory budget.
+/// Per-round failure and inspection fingerprints.
 pub(super) struct FailureObservationInput<'a> {
     pub call: &'a ToolCall,
     pub content: &'a str,
     pub succeeded: bool,
     pub inspection_progress: bool,
-    pub bridge: &'a BridgeClient,
-    pub cancel: &'a AtomicBool,
-    pub goal_input: &'a str,
-    pub execution_evidence: &'a TurnExecutionEvidence,
-    pub jev_attempted: &'a mut bool,
-    pub loop_budget: &'a mut LoopBudget,
-    pub retry_instruction: &'a mut Option<String>,
     pub round_failure_fingerprints: &'a mut Vec<String>,
     pub round_output_fingerprints: &'a mut Vec<u64>,
 }
 
-pub(super) fn record_failure_or_inspection<F>(input: FailureObservationInput<'_>, emit: &mut F)
-where
-    F: FnMut(AgentEvent),
-{
+pub(super) fn record_failure_or_inspection(input: FailureObservationInput<'_>) {
     if !input.succeeded {
         input
             .round_failure_fingerprints
             .push(tool_failure_fingerprint(input.call, input.content));
-        if !*input.jev_attempted {
-            *input.jev_attempted = true;
-            let evaluation = jev::advise(
-                input.bridge,
-                input.cancel,
-                input.goal_input,
-                &input.call.name,
-                input.content,
-                input.execution_evidence.recent_evidence(),
-            );
-            if evaluation.attempted {
-                input
-                    .loop_budget
-                    .record_sent_request(evaluation.request_chars);
-                emit(AgentEvent::AuxiliaryUsage {
-                    usage: crate::core::Usage {
-                        model_calls: Some(1),
-                        ..crate::core::Usage::default()
-                    },
-                    already_counted_calls: 0,
-                });
-            }
-            if let Some(advice) = evaluation.advice {
-                *input.retry_instruction = Some(format!(
-                    "Jev advisory: {} (confidence {:.0}%, probability {:.0}%). This is auxiliary model advice, not an execution directive.",
-                    advice.decision,
-                    advice.confidence * 100.0,
-                    advice.probability * 100.0,
-                ));
-            }
-        }
     } else if input.inspection_progress {
         input
             .round_output_fingerprints

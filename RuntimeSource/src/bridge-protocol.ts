@@ -60,7 +60,6 @@ export type BridgeCommand =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "unregister-provider"; provider: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "complete"; request: BridgeRequest }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "stream"; request: BridgeRequest }
-  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "jev-evaluate"; provider?: "typesafe" | "openrouter"; model?: string; state: unknown; questions: Record<string, unknown> }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-list" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-load"; skill: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-read"; skill: string; path: string }
@@ -118,7 +117,6 @@ export type BridgeMessage =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "unregistered"; provider: string; removed: boolean }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "result"; result: CallResult }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "event"; event: StreamEvent }
-  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "jev-result"; result: unknown }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skills"; skills: SkillSummary[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill"; skill: Skill }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill-file"; content: string }

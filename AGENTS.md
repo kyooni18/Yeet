@@ -8,6 +8,6 @@ The `.ui` notation is an AI-readable design document. Never add a parser, compil
 
 Primary frontend: `frontend/react-native` (React Native / Expo). Desktop: React Native Web in Tauri 2. Keep `web` as the working compatibility client until migration parity is verified. Keep Rust core and existing Remote protocol authoritative; do not reimplement agent, tool, filesystem, or session business logic in TypeScript. Read `docs/FRONTEND_ARCHITECTURE.md` for migration boundaries.
 
-Use Foundation Memory to recall and preserve durable project knowledge, with project tags and context. Use Jev for focused investigation and verification when available. Do not use Yeet-MCP for this frontend migration.
+Use Foundation Memory to recall and preserve durable project knowledge, with project tags and context. Do not use Yeet-MCP for this frontend migration.
 
 Make incremental changes, verify relevant behavior, and commit meaningful checkpoints. Preserve unrelated work in the checkout. Add only tests that validate important behavior or prevent meaningful regressions; avoid excessive compile-time tests.

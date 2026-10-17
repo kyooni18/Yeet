@@ -248,7 +248,6 @@ export interface RuntimeSettingsState {
   themeDarkWarning?: string | null
   themeLightWarning?: string | null
   contextLengthOverride?: number | null
-  jevLoopMode: string
 }
 
 export type AgentMode = 'single' | 'adaptive'

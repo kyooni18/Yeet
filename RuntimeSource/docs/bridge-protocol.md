@@ -114,6 +114,5 @@ model for an existing index.
 It returns `{ type: "embedding-result", result: { model, resolvedModel, source,
 vectors } }`. `source` fingerprints the provider protocol and endpoint without
 including credentials. `cancel` applies to embedding calls. The same CallCore
-provider adapters and credentials are used as for generation. Native Rust memory
-owns index binding, validation, locking and atomic full re-indexing; embeddings
-never pass through the conversation compactor.
+provider adapters and credentials are used as for generation. Consumers own any index binding, validation, locking and re-indexing. Yeet no
+longer includes a built-in project memory store.

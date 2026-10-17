@@ -122,13 +122,9 @@ impl ToolRegistry {
 
     pub(super) fn activate_foundation(&mut self) -> Result<()> {
         let (server, mut tools) = match self.services.foundation_backend {
-            ServiceBackend::Builtin => {
-                let bridge = self.bridge_client()?;
-                (
-                    crate::foundation_backend::BUILTIN_FOUNDATION_SERVER.to_owned(),
-                    crate::foundation_backend::ensure_builtin_foundation(&bridge)?,
-                )
-            }
+            ServiceBackend::Builtin => bail!(
+                "Built-in project memory has been removed; configure an external Foundation MCP server"
+            ),
             ServiceBackend::Mcp => {
                 let server = self
                     .services

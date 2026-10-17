@@ -122,9 +122,7 @@ pub(super) fn foundation_server_ready(
         return false;
     };
     match backend {
-        ServiceBackend::Builtin => {
-            crate::foundation_backend::ensure_builtin_foundation(&client).is_ok()
-        }
+        ServiceBackend::Builtin => false,
         ServiceBackend::Mcp => client
             .list_mcp_tools(Some(server))
             .map(|tools| crate::foundation_backend::has_required_project_scoped_tools(&tools))
@@ -156,7 +154,6 @@ pub(super) fn runtime_settings_state(
         } else {
             config.context_length_override(active_model)?
         },
-        jev_loop_mode: config.jev_loop_mode()?,
         agent_group: config.agent_group_settings()?,
     })
 }

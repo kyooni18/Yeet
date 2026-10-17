@@ -128,10 +128,7 @@ impl App {
         self.application.configure_settings(
             SettingsEnvironment {
                 available: true,
-                supported_features: vec![
-                    SettingsFeature::ServiceBackends,
-                    SettingsFeature::JevLoop,
-                ],
+                supported_features: vec![SettingsFeature::ServiceBackends],
                 supported_destinations: vec![
                     SettingsDestination::Models,
                     SettingsDestination::Reasoning,

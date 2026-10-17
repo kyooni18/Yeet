@@ -467,30 +467,6 @@ impl BridgeClient {
         })
     }
 
-    pub fn jev_evaluate_cancellable(
-        &self,
-        provider: Option<&str>,
-        model: Option<&str>,
-        state: Value,
-        questions: Value,
-        cancel: &AtomicBool,
-    ) -> Result<Value> {
-        let mut fields = Map::new();
-        if let Some(provider) = provider {
-            fields.insert("provider".into(), json!(provider));
-        }
-        if let Some(model) = model {
-            fields.insert("model".into(), json!(model));
-        }
-        fields.insert("state".into(), state);
-        fields.insert("questions".into(), questions);
-        let frame = self.request_cancellable("jev-evaluate", fields, cancel)?;
-        frame
-            .get("result")
-            .cloned()
-            .ok_or_else(|| anyhow!("bridge response missing Jev result"))
-    }
-
     pub fn complete(&self, request: &CallRequest) -> Result<CallResult> {
         let request = apply_openai_flex(request, self.inner.openai_flex.load(Ordering::Acquire));
         let mut fields = Map::new();
@@ -520,23 +496,6 @@ impl BridgeClient {
         self.inner.openai_flex.store(enabled, Ordering::Release);
     }
 
-    pub fn embedding_models(&self, cancel: &AtomicBool) -> Result<Vec<String>> {
-        let frame = self.request_cancellable("embedding-models", Map::new(), cancel)?;
-        serde_json::from_value(frame.get("models").cloned().unwrap_or(Value::Null))
-            .context("Invalid embedding model list")
-    }
-    pub fn embeddings(
-        &self,
-        model: &str,
-        input: &[String],
-        cancel: &AtomicBool,
-    ) -> Result<crate::memory::EmbeddingResult> {
-        let mut fields = field("model", model);
-        fields.insert("input".into(), json!(input));
-        let frame = self.request_cancellable("embed", fields, cancel)?;
-        serde_json::from_value(frame.get("result").cloned().unwrap_or(Value::Null))
-            .context("Invalid embedding result")
-    }
     pub fn list_providers(&self) -> Result<Vec<String>> {
         self.request_typed("list-providers", Map::new(), "providers")
     }

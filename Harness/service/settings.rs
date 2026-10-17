@@ -313,12 +313,6 @@ impl HarnessService {
         );
     }
 
-    pub(super) fn set_jev_loop_mode(&self, mode: String) {
-        let result = self.config.set_jev_loop_mode(&mode).map(|_| ());
-        let active_model = self.shared.lock_or_recover().state.active_model.clone();
-        self.finish_runtime_setting(result, &active_model, "Jev loop policy updated.");
-    }
-
     /// Saves Group Agent settings and applies them to the live group.
     pub(super) fn set_agent_group_settings(&self, settings: crate::model::AgentGroupSettings) {
         let result = self

@@ -444,10 +444,6 @@ impl HarnessService {
                 self.set_context_length(length);
                 Ok(())
             }
-            FrontendCommand::SetJevLoopMode { mode } => {
-                self.set_jev_loop_mode(mode);
-                Ok(())
-            }
             FrontendCommand::SetAgentGroupSettings { settings } => {
                 self.set_agent_group_settings(settings);
                 Ok(())

@@ -47,9 +47,9 @@ impl ServiceBackend {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FoundationMemorySettings {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
     #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "external_memory_backend")]
     pub backend: ServiceBackend,
     #[serde(default = "default_foundation_server")]
     pub server: String,
@@ -59,7 +59,7 @@ impl Default for FoundationMemorySettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            backend: ServiceBackend::Builtin,
+            backend: ServiceBackend::Mcp,
             server: default_foundation_server(),
         }
     }
@@ -169,8 +169,8 @@ fn version_one() -> u64 {
     1
 }
 
-fn default_true() -> bool {
-    true
+fn external_memory_backend() -> ServiceBackend {
+    ServiceBackend::Mcp
 }
 
 fn default_foundation_server() -> String {
@@ -306,6 +306,10 @@ impl ProjectSettingsStore {
         backend: ServiceBackend,
         server: Option<&str>,
     ) -> Result<()> {
+        anyhow::ensure!(
+            backend == ServiceBackend::Mcp,
+            "Built-in project memory has been removed; use an external MCP server"
+        );
         let mut settings = self.load()?;
         settings.foundation_memory.backend = backend;
         if let Some(server) = server {
@@ -439,10 +443,31 @@ mod tests {
         .unwrap();
 
         let settings = store.load().unwrap();
-        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Builtin);
+        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Mcp);
         assert_eq!(settings.foundation_memory.server, "foundation");
         assert_eq!(settings.web.backend, ServiceBackend::Builtin);
         assert_eq!(settings.web.server, "web");
+    }
+
+    #[test]
+    fn memory_is_opt_in_external_only_and_rejects_builtin_without_writing() {
+        let directory = tempdir().unwrap();
+        let store = ProjectSettingsStore::new(directory.path()).unwrap();
+        store.ensure().unwrap();
+        let before = fs::read(store.path()).unwrap();
+        let settings = store.load().unwrap();
+        assert!(!settings.foundation_memory.enabled);
+        assert_eq!(settings.foundation_memory.backend, ServiceBackend::Mcp);
+        let partial: FoundationMemorySettings =
+            serde_json::from_value(json!({"server": "foundation"})).unwrap();
+        assert!(!partial.enabled);
+        assert_eq!(partial.backend, ServiceBackend::Mcp);
+        assert!(
+            store
+                .save_foundation_backend(ServiceBackend::Builtin, None)
+                .is_err()
+        );
+        assert_eq!(fs::read(store.path()).unwrap(), before);
     }
 
     #[test]

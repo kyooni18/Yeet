@@ -676,17 +676,6 @@ pub(super) fn research_source_target(input: &str) -> usize {
 const RESEARCH_INSPECTION_THRESHOLD: usize = 6;
 const DEEP_RESEARCH_INSPECTION_THRESHOLD: usize = 10;
 
-#[derive(Debug, Clone, Copy, serde::Serialize)]
-pub(super) struct ResearchLoopState {
-    source_target: usize,
-    source_reads: usize,
-    search_target: usize,
-    search_calls: usize,
-    discovered_sources: usize,
-    unread_sources: usize,
-    evidence_ready: bool,
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct ResearchBudget {
     source_target: usize,
@@ -751,24 +740,6 @@ impl ResearchBudget {
 
     fn search_exhausted(&self) -> bool {
         self.search_calls >= self.round_target
-    }
-
-    pub(super) fn loop_state(&self) -> ResearchLoopState {
-        let source_reads = self.source_reads();
-        let unread_sources = self
-            .discovered_sources
-            .difference(&self.read_sources)
-            .count();
-        ResearchLoopState {
-            source_target: self.source_target,
-            source_reads,
-            search_target: self.round_target,
-            search_calls: self.search_calls,
-            discovered_sources: self.discovered_sources.len(),
-            unread_sources,
-            evidence_ready: source_reads >= self.source_target
-                || (unread_sources == 0 && self.search_exhausted()),
-        }
     }
 
     pub(super) fn completion_blocker(&self) -> Option<String> {

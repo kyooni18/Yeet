@@ -363,7 +363,6 @@ pub struct RuntimeSettingsState {
     pub theme_dark_warning: Option<String>,
     pub theme_light_warning: Option<String>,
     pub context_length_override: Option<u64>,
-    pub jev_loop_mode: String,
     #[serde(alias = "\u{73}\u{77}\u{61}\u{72}\u{6d}")]
     pub agent_group: AgentGroupSettings,
 }
@@ -382,7 +381,6 @@ impl Default for RuntimeSettingsState {
             theme_dark_warning: None,
             theme_light_warning: None,
             context_length_override: None,
-            jev_loop_mode: "off".into(),
             agent_group: AgentGroupSettings::default(),
         }
     }

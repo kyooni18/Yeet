@@ -6,7 +6,6 @@ mod continuity_tests;
 mod coordinator_support;
 mod goal;
 mod history;
-mod jev;
 mod job;
 mod limits;
 mod loop_budget;
@@ -156,8 +155,6 @@ impl AgentCoordinator {
         } = self.prepare_turn(request, goal_mode)?;
         let bridge = self.bridge.client()?;
         self.observation_cache.start_turn();
-        let mut jev_attempted = false;
-        let mut last_jev_instruction: Option<String> = None;
         loop {
             check_cancel(cancel)?;
             self.context_memory.sync(&self.history)?;
@@ -174,7 +171,6 @@ impl AgentCoordinator {
                 loop_budget.record_rollover();
                 turn_context_orientation = self.context_memory.orientation();
                 last_context_updates.clear();
-                last_jev_instruction = None;
             }
             append_dynamic_turn_checkpoints(
                 &mut self.history,
@@ -185,72 +181,21 @@ impl AgentCoordinator {
             );
             model_attempts += 1;
             let request_assembly::ToolSelection {
-                policy: jev_loop,
-                catalog: tool_catalog,
-                working_budget,
-            } = request_assembly::select_tools(
-                request_assembly::ToolSelectionInput {
-                    bridge: &bridge,
-                    registry: &self.registry,
-                    context_memory: &self.context_memory,
-                    discovery: &tool_discovery,
-                    profile,
-                    web_search_enabled,
-                    cancel,
-                    deferred_discovery: native_deferred_tools_supported
-                        && capability_discovery_requested,
-                },
-                jev::LoopInput {
-                    goal: goal_input,
-                    profile: match profile {
-                        TaskProfile::Agent => "agent",
-                        TaskProfile::Research => "research",
-                    },
-                    model_attempts,
-                    tool_rounds,
-                    consecutive_no_progress,
-                    progressful_inspection_rounds,
-                    implementation_requested,
-                    successful_mutations: execution_evidence.successful_mutations(),
-                    verification_attempted: execution_evidence.verification_attempted(),
-                    verification_succeeded: execution_evidence.verification_succeeded(),
-                    unresolved_failed_mutation: execution_evidence.unresolved_failed_mutation(),
-                    planning_or_documentation,
-                    bounded_analysis,
-                    bounded_explanation,
-                    local_file_lookup,
-                    research: (profile == TaskProfile::Research)
-                        .then(|| research_budget.loop_state()),
-                    retry_instruction: retry_instruction.as_deref(),
-                    recent_evidence: execution_evidence.recent_evidence(),
-                    consult_jev: !local_file_lookup,
-                },
-            );
-            let jev::LoopPolicy {
                 selected_tools,
                 deferred_tools,
                 deferred_names,
                 callable_names,
-                instruction: jev_loop_instruction,
-                advice: jev_loop_advice,
-                jev_attempted: jev_attempted_this_round,
-                jev_request_chars,
-            } = jev_loop;
-            if jev_attempted_this_round {
-                loop_budget.record_sent_request(jev_request_chars);
-                emit(AgentEvent::AuxiliaryUsage {
-                    usage: crate::core::Usage {
-                        model_calls: Some(1),
-                        ..crate::core::Usage::default()
-                    },
-                    already_counted_calls: 0,
-                });
-            }
-            jev::append_loop_instruction(
-                &mut self.history,
-                jev_loop_instruction.as_deref(),
-                &mut last_jev_instruction,
-            );
+                catalog: tool_catalog,
+                working_budget,
+            } = request_assembly::select_tools(request_assembly::ToolSelectionInput {
+                registry: &self.registry,
+                context_memory: &self.context_memory,
+                discovery: &tool_discovery,
+                profile,
+                web_search_enabled,
+                deferred_discovery: native_deferred_tools_supported
+                    && capability_discovery_requested,
+            });
 
             let request_assembly::PreparedHistory {
                 request_messages,
@@ -285,7 +230,6 @@ impl AgentCoordinator {
                 loop_budget.record_rollover();
                 turn_context_orientation = self.context_memory.orientation();
                 last_context_updates.clear();
-                last_jev_instruction = None;
                 continue;
             }
             if self.context_memory.estimated_tokens > rollover_budget && has_rolloverable_trace {
@@ -300,7 +244,6 @@ impl AgentCoordinator {
                 loop_budget.record_rollover();
                 turn_context_orientation = self.context_memory.orientation();
                 last_context_updates.clear();
-                last_jev_instruction = None;
                 continue;
             }
             if self.context_memory.estimated_tokens > rollover_budget {
@@ -317,7 +260,6 @@ impl AgentCoordinator {
                 profile,
                 selected_tools,
                 deferred_tools,
-                jev_loop_advice: jev_loop_advice.as_ref(),
                 execution_evidence: &execution_evidence,
                 implementation_requested,
                 planning_or_documentation,
@@ -329,8 +271,6 @@ impl AgentCoordinator {
                 tool_discovery: &tool_discovery,
                 turn_start_pruned_request_only_messages,
                 turn_start_pruned_request_only_chars,
-                jev_attempted_this_round,
-                jev_request_chars,
                 workspace_revision: workspace_revision.as_deref(),
                 reasoning_level,
                 attached_capabilities: attached_capabilities.as_deref(),
@@ -800,12 +740,12 @@ impl AgentCoordinator {
                     recorded_content,
                     goal_observation_item,
                 } = self.insert_tool_result(tool_round::InsertionInput {
+                    bridge: &bridge,
                     call,
                     model_content,
                     output_images,
                     model,
                     request: &request,
-                    bridge: &bridge,
                     goal_mode,
                     succeeded,
                     externally_bounded,
@@ -840,24 +780,14 @@ impl AgentCoordinator {
                     final_consistency_used: &mut final_consistency_used,
                     round_failed_mutation: &mut round_failed_mutation,
                 });
-                tool_round::record_failure_or_inspection(
-                    tool_round::FailureObservationInput {
-                        call,
-                        content: &content,
-                        succeeded,
-                        inspection_progress,
-                        bridge: &bridge,
-                        cancel,
-                        goal_input,
-                        execution_evidence: &execution_evidence,
-                        jev_attempted: &mut jev_attempted,
-                        loop_budget: &mut loop_budget,
-                        retry_instruction: &mut retry_instruction,
-                        round_failure_fingerprints: &mut round_failure_fingerprints,
-                        round_output_fingerprints: &mut round_output_fingerprints,
-                    },
-                    emit,
-                );
+                tool_round::record_failure_or_inspection(tool_round::FailureObservationInput {
+                    call,
+                    content: &content,
+                    succeeded,
+                    inspection_progress,
+                    round_failure_fingerprints: &mut round_failure_fingerprints,
+                    round_output_fingerprints: &mut round_output_fingerprints,
+                });
                 round_progress |=
                     workspace_mutated || tool_made_progress(call, &content, succeeded);
                 if let Some(usage) = self.registry.consume_auxiliary_usage() {

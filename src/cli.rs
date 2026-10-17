@@ -220,7 +220,9 @@ fn foundation(args: &[String]) -> Result<()> {
             let project = settings.load()?;
             let bridge = BridgeClient::start()?;
             let mut status = match project.foundation_memory.backend {
-                ServiceBackend::Builtin => crate::foundation_backend::builtin_status(&bridge)?,
+                ServiceBackend::Builtin => {
+                    bail!("Built-in project memory has been removed; configure memory.backend=mcp")
+                }
                 ServiceBackend::Mcp => {
                     let result = bridge.list_mcp_tools(Some(&project.foundation_memory.server));
                     let connected = result.is_ok();
@@ -333,7 +335,7 @@ fn foundation(args: &[String]) -> Result<()> {
         }
         "models" | "model" | "reindex" | "import-foundation" | "export-foundation" => {
             bail!(
-                "yeet memory {sub} belonged to the retired native Rust memory store; builtin now runs the managed Foundation backend. Use Foundation's admin/configuration tools instead."
+                "yeet memory {sub} belonged to the removed built-in memory store. Use your external Foundation MCP server's administration tools instead."
             )
         }
         _ => bail!(

@@ -20,7 +20,6 @@ pub mod harness;
 pub mod harness_ffi;
 pub mod install;
 pub mod mcp_server;
-pub mod memory;
 // Compatibility import; runtime state and event schema belongs to Harness.
 pub use harness::model;
 // Compatibility import; runtime approval arbitration lives in Harness.

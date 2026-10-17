@@ -202,7 +202,7 @@ pub(super) fn project(
             &harness.foundation_memory_server,
             SettingsIcon::Memory,
             &harness.foundation_memory_backend,
-            &[("builtin", "Built-in"), ("mcp", "MCP")],
+            &[("mcp", "MCP")],
             enabled,
         ));
         services.push(choice(
@@ -215,17 +215,7 @@ pub(super) fn project(
             enabled,
         ));
     }
-    if env.supported_features.contains(&SettingsFeature::JevLoop) {
-        services.push(choice(
-            "jev_loop",
-            "Jev loop policy",
-            "Execution verification policy",
-            SettingsIcon::Policy,
-            &runtime.jev_loop_mode,
-            &[("off", "Off"), ("shadow", "Shadow"), ("enforce", "Enforce")],
-            enabled,
-        ));
-    }
+
     if !services.is_empty() {
         sections.push(section(
             "services",

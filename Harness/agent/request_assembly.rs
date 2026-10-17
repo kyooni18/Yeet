@@ -1,15 +1,12 @@
 //! Per-attempt tool envelope selection and loop policy before request assembly.
 
-use std::sync::atomic::AtomicBool;
-
-use crate::core::{BridgeClient, CallRequest, ToolDefinition};
+use crate::core::{CallRequest, ToolDefinition};
 use crate::tools::ToolRegistry;
 
 use super::{
     AgentCoordinator, LoopBudget, Message, MessageRole, Result, cache, context,
     coordinator_support::{capability_guidance, configure_tool_access},
     history::append_context_updates,
-    jev,
     limits::MODEL_ATTEMPT_TIMEOUT_MS,
     policy::TaskProfile,
     policy::request_history_for_profile_at,
@@ -22,27 +19,25 @@ use serde_json::{Value, json};
 
 /// Read-only inputs for selecting the provider-visible tool surface of one attempt.
 pub(super) struct ToolSelectionInput<'a> {
-    pub bridge: &'a BridgeClient,
     pub registry: &'a ToolRegistry,
     pub context_memory: &'a context::ContextMemory,
     pub discovery: &'a ToolDiscovery,
     pub profile: TaskProfile,
     pub web_search_enabled: bool,
-    pub cancel: &'a AtomicBool,
     pub deferred_discovery: bool,
 }
 
 /// The active catalog also serves lazy tool discovery during the ensuing round.
 pub(super) struct ToolSelection {
-    pub policy: jev::LoopPolicy,
+    pub selected_tools: Vec<ToolDefinition>,
+    pub deferred_tools: Vec<ToolDefinition>,
+    pub deferred_names: std::collections::HashSet<String>,
+    pub callable_names: std::collections::HashSet<String>,
     pub catalog: Vec<ToolDefinition>,
     pub working_budget: u64,
 }
 
-pub(super) fn select_tools(
-    input: ToolSelectionInput<'_>,
-    loop_input: jev::LoopInput<'_>,
-) -> ToolSelection {
+pub(super) fn select_tools(input: ToolSelectionInput<'_>) -> ToolSelection {
     let mut tool_catalog = match input.profile {
         TaskProfile::Research => input.registry.research_tools(),
         TaskProfile::Agent => select_tools_for_profile(
@@ -53,18 +48,32 @@ pub(super) fn select_tools(
     tool_catalog.extend(context::tools());
     let selected_tools = input.discovery.attached(&tool_catalog);
     let working_budget = input.context_memory.working_budget();
-    let policy = jev::apply_loop_policy(
-        input.bridge,
-        input.cancel,
-        selected_tools,
-        &tool_catalog,
-        input.deferred_discovery,
-        |name| input.registry.is_provider_defer_candidate(name),
-        |name| input.registry.is_read_only_extension_tool(name),
-        loop_input,
-    );
+    let attached_names = selected_tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let deferred_tools = if input.deferred_discovery {
+        tool_catalog
+            .iter()
+            .filter(|tool| {
+                !attached_names.contains(&tool.name)
+                    && input.registry.is_provider_defer_candidate(&tool.name)
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let deferred_names = deferred_tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let callable_names = attached_names.union(&deferred_names).cloned().collect();
     ToolSelection {
-        policy,
+        selected_tools,
+        deferred_tools,
+        deferred_names,
+        callable_names,
         catalog: tool_catalog,
         working_budget,
     }
@@ -149,7 +158,6 @@ pub(super) struct FinalizationInput<'a> {
     pub profile: TaskProfile,
     pub selected_tools: Vec<ToolDefinition>,
     pub deferred_tools: Vec<ToolDefinition>,
-    pub jev_loop_advice: Option<&'a jev::LoopAdvice>,
     pub execution_evidence: &'a turn_state::TurnExecutionEvidence,
     pub implementation_requested: bool,
     pub planning_or_documentation: bool,
@@ -161,8 +169,6 @@ pub(super) struct FinalizationInput<'a> {
     pub tool_discovery: &'a ToolDiscovery,
     pub turn_start_pruned_request_only_messages: usize,
     pub turn_start_pruned_request_only_chars: usize,
-    pub jev_attempted_this_round: bool,
-    pub jev_request_chars: usize,
     pub workspace_revision: Option<&'a str>,
     pub reasoning_level: &'a str,
     pub attached_capabilities: Option<&'a [String]>,
@@ -187,9 +193,6 @@ impl AgentCoordinator {
         request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
         request.deferred_tools = (!input.deferred_tools.is_empty()).then_some(input.deferred_tools);
         configure_tool_access(&mut request, input.selected_tools, false);
-        if jev::forces_tool_free(input.jev_loop_advice) {
-            request.tool_choice = Some(json!("none"));
-        }
         let execution_phase = input.execution_evidence.recommended_phase(
             input.implementation_requested,
             input.planning_or_documentation,
@@ -213,12 +216,6 @@ impl AgentCoordinator {
             turn_start_pruned_request_only_messages: input.turn_start_pruned_request_only_messages,
             turn_start_pruned_request_only_chars: input.turn_start_pruned_request_only_chars,
         });
-        jev::write_loop_metadata(
-            &mut request_metadata,
-            input.jev_loop_advice,
-            input.jev_attempted_this_round,
-            input.jev_request_chars,
-        );
         if let Some(revision) = input.workspace_revision {
             request_metadata.insert("workspaceRevision".into(), revision.to_owned());
         }

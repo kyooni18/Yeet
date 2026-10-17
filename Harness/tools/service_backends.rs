@@ -16,7 +16,7 @@ impl Default for ToolServiceConfiguration {
     fn default() -> Self {
         Self {
             foundation_enabled: false,
-            foundation_backend: ServiceBackend::Builtin,
+            foundation_backend: ServiceBackend::Mcp,
             foundation_server: Some("foundation".into()),
             foundation_project: None,
             web_backend: ServiceBackend::Builtin,
@@ -80,7 +80,7 @@ impl ToolRegistry {
 
     pub(super) fn foundation_memory_active(&self) -> bool {
         let backend_available = match self.services.foundation_backend {
-            ServiceBackend::Builtin => true,
+            ServiceBackend::Builtin => false,
             ServiceBackend::Mcp => self
                 .services
                 .foundation_server
@@ -113,9 +113,7 @@ impl ToolRegistry {
             .foundation_project
             .as_deref()
             .ok_or_else(|| anyhow!("Project identity is unavailable"))?;
-        if target.server != crate::foundation_backend::BUILTIN_FOUNDATION_SERVER
-            && self.catalog.capability_disabled("mcp", &target.server)
-        {
+        if self.catalog.capability_disabled("mcp", &target.server) {
             bail!("MCP server {} is disabled for this session", target.server);
         }
         let mut arguments = object.clone();

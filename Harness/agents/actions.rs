@@ -135,9 +135,6 @@ pub enum FrontendCommand {
     SetContextLength {
         length: Option<u64>,
     },
-    SetJevLoopMode {
-        mode: String,
-    },
     SetAgentGroupSettings {
         settings: AgentGroupSettings,
     },

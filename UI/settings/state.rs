@@ -177,7 +177,6 @@ impl SettingsState {
                 };
                 effect.command = Some(match id.as_str() {
                     "appearance" => HarnessCommand::SetAppearance { appearance: value },
-                    "jev_loop" => HarnessCommand::SetJevLoopMode { mode: value },
                     "memory_backend" => HarnessCommand::SetServiceBackend {
                         service: "memory".into(),
                         backend: value,

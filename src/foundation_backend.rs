@@ -1,12 +1,11 @@
 use anyhow::{Result, bail, ensure};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     core::{BridgeClient, McpTool},
     project_settings::ServiceBackend,
 };
 
-pub(crate) const BUILTIN_FOUNDATION_SERVER: &str = "yeet.foundation.builtin";
 pub(crate) const MODEL_TOOLS: [&str; 5] = [
     "memory_recall",
     "memory_remember",
@@ -65,24 +64,9 @@ pub(crate) fn server_for_backend(
     match backend {
         ServiceBackend::Builtin => {
             bail!(
-                "Yeet's built-in Foundation runtime is not available yet; configure an external Foundation MCP server"
+                "Built-in project memory has been removed; configure an external Foundation MCP server"
             )
         }
         ServiceBackend::Mcp => Ok(external_server.to_owned()),
     }
-}
-
-pub(crate) fn ensure_builtin_foundation(_bridge: &BridgeClient) -> Result<Vec<McpTool>> {
-    bail!(
-        "Yeet's built-in Foundation runtime is not available yet; configure memory.backend=mcp and point memory.server at an external Foundation MCP server"
-    )
-}
-
-pub(crate) fn builtin_status(_bridge: &BridgeClient) -> Result<Value> {
-    Ok(json!({
-        "storage": "foundation",
-        "runtime": "not-yet-embedded",
-        "connected": false,
-        "message": "Configure an external Foundation MCP server; Yeet does not start Foundation through Docker Compose.",
-    }))
 }

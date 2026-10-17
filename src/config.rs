@@ -29,8 +29,6 @@ struct ConfigDocument {
     context_lengths: std::collections::BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     context_length_overrides: std::collections::BTreeMap<String, u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    jev_loop_mode: Option<String>,
     #[serde(
         default,
         alias = "\u{73}\u{77}\u{61}\u{72}\u{6d}",
@@ -232,26 +230,6 @@ impl ConfigStore {
             document.context_length_overrides.remove(model);
         }
         self.write(&document)
-    }
-
-    pub fn jev_loop_mode(&self) -> Result<String> {
-        Ok(self
-            .read()?
-            .jev_loop_mode
-            .filter(|mode| matches!(mode.as_str(), "shadow" | "enforce"))
-            .unwrap_or_else(|| "off".into()))
-    }
-
-    pub fn set_jev_loop_mode(&self, mode: &str) -> Result<String> {
-        let mode = mode.trim().to_ascii_lowercase();
-        if !matches!(mode.as_str(), "off" | "shadow" | "enforce") {
-            bail!("Jev loop mode must be off, shadow, or enforce");
-        }
-        let mut document = self.read()?;
-        document.version = 1;
-        document.jev_loop_mode = (mode != "off").then_some(mode.clone());
-        self.write(&document)?;
-        Ok(mode)
     }
 
     pub fn agent_group_settings(&self) -> Result<AgentGroupSettings> {

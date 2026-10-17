@@ -2,6 +2,9 @@
 
 Status: living design whiteboard, not a frozen specification.
 
+Simplification: Jev loop-policy settings and built-in project memory are removed.
+Project memory, when enabled, uses an external Foundation MCP server only.
+
 1. Top tabs: What view state do I have open?
 2. Context rail: What nearby/recent things are relevant to this view?
 3. Main surface: What am I looking at or working on right now?

@@ -141,5 +141,4 @@ pub struct SettingsEffect {
 #[serde(rename_all = "snake_case")]
 pub enum SettingsFeature {
     ServiceBackends,
-    JevLoop,
 }
