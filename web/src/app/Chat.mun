@@ -51,12 +51,12 @@ struct Detail: View {
       .fontSize(detail.monospaced ? 12 : 14)
       .foregroundStyle(detail.is_error ? color.del : detail.monospaced ? color.text : color.muted)
       .withProps({ className: "trace-detail__content" })
-      .style({ width: "100%", borderRadius: "8px", whiteSpace: "pre-wrap", fontFamily: detail.monospaced ? mono : "inherit", maxHeight: "320px", overflow: "auto" })
+      .style({ width: "100%", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: detail.monospaced ? mono : "inherit" })
   }
 }
 
 function traceLabel(trace: Any): string {
-  if (trace.icon === "reasoning" && trace.summary) return trace.summary
+  if (trace.details.length) return trace.title
   return trace.summary && trace.summary !== trace.title ? trace.title + " · " + trace.summary : trace.title
 }
 
@@ -64,19 +64,8 @@ function traceStatus(trace: Any): string {
   return /permission|approv|fail|error|denied|timed|cancel|interrupt/i.test(trace.status_label || "") ? trace.status_label : ""
 }
 
-function expandable(trace: Any): boolean {
-  return !!(trace.details.length || trace.metadata)
-}
 
-function singleTrace(group: Any): Any {
-  return { ...group.events[0].trace, id: group.id, expanded: group.expanded }
-}
-
-function groupStatus(group: Any): string {
-  return group.status_label || (group.awaits_permission ? "Awaiting approval" : group.failed ? "Failed" : "")
-}
-
-/** Readable, wrapping work labels with a stable tool icon. */
+/** Work content is visible inline, with its tool or reasoning icon. */
 struct TraceLabel: View {
   let trace: Any
   let groupHeader: Bool
@@ -101,11 +90,6 @@ struct TraceLabel: View {
       if trace.active && /approv|permission/i.test(traceStatus(trace)) === false {
         Spinner().withProps({ role: "img", "aria-label": "Running" })
       }
-      if expandable(trace) === true {
-        Text("›").fontSize(13).foregroundStyle(color.faint).rotationEffect(trace.expanded ? 90 : 0)
-          .withProps({ "aria-hidden": "true", className: "trace-disclosure__chevron" })
-          .style({ flex: "none" })
-      }
     }
     .style({ minWidth: "0", width: "100%" })
   }
@@ -115,28 +99,19 @@ struct Trace: View {
   let trace: Any
   let groupHeader: Bool
   var body: some View {
-    VStack(alignment: .stretch, spacing: 0) {
-      if expandable(trace) === true {
-        Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) }, label: {
-          TraceLabel(trace: trace, groupHeader: groupHeader)
-        })
-        .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row", "aria-expanded": trace.expanded ? "true" : "false" })
-      } else {
-        TraceLabel(trace: trace, groupHeader: groupHeader)
-          .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row" })
-      }
-      if trace.expanded && expandable(trace) === true {
-        VStack(alignment: .stretch, spacing: 4) {
-          ForEach(trace.details, { id: detail => detail.title + ":" + detail.content.length }) { detail in
-            Detail(detail: detail)
-          }
-          if trace.metadata {
-            Text("Duration: " + trace.metadata).fontSize(12).foregroundStyle(color.faint)
-          }
+    VStack(alignment: .stretch, spacing: 4) {
+      TraceLabel(trace: trace, groupHeader: groupHeader)
+        .withProps({ className: "trace-disclosure__row" })
+      VStack(alignment: .stretch, spacing: 6) {
+        ForEach(trace.details, { id: detail => detail.title + ":" + detail.content.length }) { detail in
+          Detail(detail: detail)
         }
-        .padding({ leading: 12, bottom: 2 })
-        .withProps({ className: "trace-disclosure__details" })
+        if trace.metadata {
+          Text("Duration: " + trace.metadata).fontSize(12).foregroundStyle(color.faint)
+        }
       }
+      .padding({ leading: 20, bottom: 6 })
+      .withProps({ className: "trace-disclosure__details" })
     }
     .withProps({ className: "trace-disclosure" })
   }
@@ -145,51 +120,13 @@ struct Trace: View {
 struct Activity: View {
   let group: Any
   var body: some View {
-    VStack(alignment: .stretch, spacing: 0) {
-      if group.events.length === 1 {
-        Trace(trace: singleTrace(group), groupHeader: true)
-      } else {
-        Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: group.id }) }, label: {
-          HStack(spacing: 6) {
-            Icon(workIcon(group.events[group.events.length - 1]?.trace.icon || "tool"), { width: 14, height: 14, strokeWidth: 1.8 })
-              .foregroundStyle(color.faint)
-              .withProps({ "aria-hidden": "true" })
-              .style({ flex: "none" })
-            Text(group.expanded ? group.events.length + " actions" : group.summary)
-              .fontSize(13)
-              .foregroundStyle(color.faint)
-              .withProps({ className: group.active ? "activity-group__summary is-active" : "activity-group__summary" })
-              .style({ flex: "1", minWidth: "0", whiteSpace: "pre-wrap", overflowWrap: "anywhere", textAlign: "left" })
-            if !group.expanded {
-              Text(group.events.length).fontSize(12).foregroundStyle(color.faint)
-                .accessibilityLabel(group.events.length + " actions")
-              if groupStatus(group) !== "" {
-                Text(groupStatus(group)).fontSize(12).foregroundStyle(group.awaits_permission ? color.text2 : color.del)
-                  .withProps({ className: "trace-disclosure__status" })
-                  .style({ whiteSpace: "nowrap", flex: "none" })
-              }
-              if group.active {
-                Spinner().withProps({ role: "img", "aria-label": "Running" })
-              }
-            }
-            Text("›").fontSize(13).rotationEffect(group.expanded ? 90 : 0).foregroundStyle(color.faint)
-              .withProps({ "aria-hidden": "true" })
-          }
-          .style({ minWidth: "0", width: "100%" })
-        })
-        .withProps({ className: "activity-group__header", "aria-expanded": group.expanded ? "true" : "false" })
-        if group.expanded {
-          VStack(alignment: .stretch, spacing: 0) {
-            ForEach(group.events, { id: event => event.key }) { event in
-              Trace(trace: event.trace, groupHeader: false)
-                .withProps({ className: "activity-group__event" })
-            }
-          }
-          .padding({ leading: 12 })
-          .withProps({ className: "activity-group__events" })
-        }
+    VStack(alignment: .stretch, spacing: 8) {
+      ForEach(group.events, { id: event => event.key }) { event in
+        Trace(trace: event.trace, groupHeader: false)
+          .withProps({ className: "activity-group__event" })
       }
     }
+    .withProps({ className: "activity-group__events" })
   }
 }
 
