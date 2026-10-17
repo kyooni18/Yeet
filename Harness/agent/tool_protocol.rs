@@ -414,16 +414,6 @@ fn tool_call_from_json(value: &Value) -> Option<ToolCall> {
     })
 }
 
-/// Detects provider text that looks like an unexecuted textual tool call.
-pub(super) fn looks_like_malformed_tool_call(text: &str) -> bool {
-    let value = text.trim().to_ascii_lowercase();
-    value.starts_with("<tool_call")
-        || value.starts_with("<function=")
-        || value.starts_with("```tool_call")
-        || value.starts_with("<|tool_call|>")
-        || (value.contains("<tool_call>") && value.contains("<function="))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

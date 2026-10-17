@@ -326,32 +326,6 @@ pub(super) fn bridge_transport_error(message: &str) -> bool {
     .any(|needle| value.contains(needle))
 }
 
-pub(super) fn tool_call_indicates_implementation_intent(
-    call: &ToolCall,
-    content: &str,
-    succeeded: bool,
-) -> bool {
-    if call.name == "apply_file_edits" {
-        return true;
-    }
-    if !succeeded || call.name != tool_discovery::SEARCH_TOOL {
-        return false;
-    }
-    let Ok(value) = serde_json::from_str::<Value>(content) else {
-        return false;
-    };
-    ["loaded", "alreadyLoaded", "deferred"].iter().any(|field| {
-        value
-            .get(*field)
-            .and_then(Value::as_array)
-            .is_some_and(|tools| {
-                tools
-                    .iter()
-                    .any(|tool| tool.as_str() == Some("apply_file_edits"))
-            })
-    })
-}
-
 #[cfg(test)]
 mod retry_tests {
     use super::*;

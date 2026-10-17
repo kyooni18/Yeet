@@ -3,7 +3,7 @@
 //! deleting it; ContextMemory rollover handles durable-history compaction.
 use crate::core::{Message, MessageRole};
 
-pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user-turn context boundary. Earlier turn-local Skill instructions, retry/finalization directives, goal checkpoints, execution provenance, runtime/environment updates, capability guidance, and project instruction overlays are historical context, not active instructions for this turn. Apply only this turn's explicitly activated Skills and current runtime/project guidance. Newer updates supersede older ones. Preserve prior evidence; do not execute stale directives.";
+pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user turn. Earlier system notes are history, not instructions for this turn.";
 
 /// Keep the first full instruction; a repeat is a new, small activation record.
 /// Never delete an earlier copy to save tokens.
@@ -49,26 +49,6 @@ pub(super) fn append_context_updates(
 #[cfg(test)]
 mod append_only_tests {
     use super::*;
-    use crate::agent::policy::{TaskProfile, request_history_for_profile_at};
-
-    #[test]
-    fn completed_turns_and_lane_changes_preserve_all_submitted_messages() {
-        let mut history = vec![Message::system("base"), Message::user("first")];
-        append_skill_instruction(&mut history, "example", "skill instructions");
-        history.push(Message::system("retry directive").request_only());
-        history.push(Message::tool(
-            "large result".repeat(20_000),
-            "call",
-            Some("read_file".into()),
-        ));
-        let submitted = request_history_for_profile_at(&history, TaskProfile::Agent, 1);
-        history.push(Message::user("next"));
-        history.push(Message::system(TURN_CONTEXT_BOUNDARY).request_only());
-        for profile in [TaskProfile::Agent, TaskProfile::Research] {
-            let next = request_history_for_profile_at(&history, profile, submitted.len());
-            assert_eq!(&next[..submitted.len()], submitted.as_slice());
-        }
-    }
 
     #[test]
     fn runtime_changes_append_and_identical_updates_do_not_grow_history() {
@@ -126,8 +106,6 @@ mod append_only_tests {
         history.push(Message::user("next"));
         history.push(Message::system(TURN_CONTEXT_BOUNDARY).request_only());
         assert!(history.starts_with(&submitted));
-        assert!(TURN_CONTEXT_BOUNDARY.contains("not active instructions"));
-        assert!(TURN_CONTEXT_BOUNDARY.contains("Newer updates supersede older ones"));
     }
 
     #[test]

@@ -36,21 +36,6 @@ const FUZZY_DISCOVERY_BLOCKED_TOOLS: [&str; 10] = [
     "search_artifact",
 ];
 
-/// A backticked token, a path (`a::b`), snake_case, or an inner-capital
-/// CamelCase word: the request names something find_symbol can look up.
-fn names_code_identifier(input: &str) -> bool {
-    input.contains('`')
-        || input.contains("::")
-        || input
-            .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
-            .any(|word| {
-                let inner_capital = word.chars().skip(1).any(|ch| ch.is_ascii_uppercase())
-                    && word.chars().any(|ch| ch.is_ascii_lowercase());
-                (word.contains('_') && word.len() > 2 && word.trim_matches('_').len() > 1)
-                    || inner_capital
-            })
-}
-
 pub(super) fn is_side_tool(name: &str) -> bool {
     FUZZY_DISCOVERY_BLOCKED_TOOLS.contains(&name)
 }
@@ -87,115 +72,8 @@ impl ToolDiscovery {
         discovery
     }
 
-    /// Enable one inference of schema discovery after the request has
-    /// established a concrete reason to use a non-core capability.
-    pub fn enable_search(&mut self) {
-        self.search_enabled = true;
-    }
-
     pub fn search_enabled(&self) -> bool {
         self.search_enabled
-    }
-    /// Promote obvious specialized built-ins directly from request intent. This
-    /// gives short analysis turns an escape hatch beyond the core source/shell
-    /// surface without re-enabling broad search_tools discovery and its schema churn.
-    pub fn promote_for_input(&mut self, input: &str) {
-        let value = input.trim().to_ascii_lowercase();
-
-        if [
-            "session",
-            "sessions",
-            "session history",
-            "conversation history",
-            "recent runs",
-            "run history",
-            "세션",
-        ]
-        .iter()
-        .any(|term| value.contains(term))
-        {
-            self.load(["list_sessions", "export_session"]);
-        }
-
-        if [
-            "artifact",
-            "artifacts",
-            "artifact id",
-            "externalized",
-            "externalised",
-            "아티팩트",
-        ]
-        .iter()
-        .any(|term| value.contains(term))
-        {
-            // Artifact recovery is a side path. Make the discovery gateway
-            // available, but do not place readers in the foreground tool set.
-            self.enable_search();
-        }
-
-        // Symbol navigation stays out of the default envelope. Attach it before
-        // the first attempt only when the request asks to locate a named code
-        // identifier: for concept questions ("where is the hash computed") the
-        // model used text search in 3/3 runs and the schemas were dead weight.
-        let navigation = [
-            "where is",
-            "where's",
-            "where are",
-            "defined",
-            "definition",
-            "references to",
-            "callers",
-            "call sites",
-            "who calls",
-            "usages",
-            "outline",
-            "find_symbol",
-            "정의",
-            "어디",
-        ]
-        .iter()
-        .any(|term| value.contains(term));
-        if navigation && names_code_identifier(input) {
-            self.load(["outline", "find_symbol"]);
-        }
-
-        let document_request = [
-            "document",
-            "pdf",
-            "docx",
-            "xlsx",
-            "spreadsheet",
-            "csv",
-            "tsv",
-            "ods",
-            "문서",
-            "스프레드시트",
-        ]
-        .iter()
-        .any(|term| value.contains(term));
-        if document_request {
-            self.load(["read_document"]);
-        }
-
-        if document_request
-            && [
-                "analyze",
-                "analyse",
-                "analysis",
-                "summarize",
-                "summarise",
-                "statistics",
-                "correlation",
-                "group by",
-                "aggregate",
-                "분석",
-                "통계",
-            ]
-            .iter()
-            .any(|term| value.contains(term))
-        {
-            self.load(["analyze_data"]);
-        }
     }
 
     pub fn load<I, S>(&mut self, names: I)
@@ -385,9 +263,7 @@ mod tests {
         let catalog: Vec<_> = BASIC_TOOLS.iter().map(|name| tool(name)).collect();
         let mut expected: Vec<String> = BASIC_TOOLS.iter().map(|name| name.to_string()).collect();
         expected.push(SEARCH_TOOL.to_owned());
-        let mut discovery = ToolDiscovery::basic();
-        // No wording, research or otherwise, may narrow the basic surface.
-        discovery.promote_for_input("search the web for the latest rust release");
+        let discovery = ToolDiscovery::basic();
         assert_eq!(names(&discovery, &catalog), expected);
 
         // Web tools disappear only when the catalog lacks them.
@@ -396,20 +272,6 @@ mod tests {
             .filter(|tool| !tool.name.starts_with("web_"))
             .collect();
         assert!(!names(&discovery, &offline).iter().any(|name| name.starts_with("web_")));
-    }
-
-    #[test]
-    fn symbol_tools_attach_only_for_named_identifiers() {
-        let promoted = |input: &str| {
-            let mut discovery = ToolDiscovery::basic();
-            discovery.promote_for_input(input);
-            discovery
-                .loaded_names()
-                .iter()
-                .any(|name| name == "find_symbol")
-        };
-        assert!(promoted("where is apply_loop_policy called?"));
-        assert!(!promoted("where is the tool envelope hash computed?"));
     }
 
     #[test]

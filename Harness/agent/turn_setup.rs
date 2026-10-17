@@ -1,4 +1,4 @@
-//! One-turn request classification and mutable execution-state initialization.
+//! Per-turn setup: record the user message and assemble the stable context.
 
 use super::*;
 
@@ -13,49 +13,13 @@ pub(super) struct TurnSetup<'a> {
     pub(super) request_input: String,
     pub(super) vision_enabled: bool,
     pub(super) web_search_enabled: bool,
-    pub(super) profile: TaskProfile,
-    pub(super) local_file_lookup: bool,
-    pub(super) capability_discovery_requested: bool,
-    pub(super) implementation_requested: bool,
-    pub(super) planning_or_documentation: bool,
-    pub(super) bounded_explanation: bool,
-    pub(super) bounded_analysis: bool,
     pub(super) native_deferred_tools_supported: bool,
-    pub(super) research_budget: ResearchBudget,
-    pub(super) model_attempts: usize,
-    pub(super) tool_rounds: usize,
-    pub(super) malformed_repairs: usize,
-    pub(super) empty_repairs: usize,
-    pub(super) length_continuations: usize,
-    pub(super) implementation_repairs: usize,
-    pub(super) execution_evidence: turn_state::TurnExecutionEvidence,
-    pub(super) consecutive_no_progress: usize,
-    pub(super) progressful_inspection_rounds: usize,
-    pub(super) implementation_inspection_checkpoint_used: bool,
-    pub(super) retry_instruction: Option<String>,
-    pub(super) final_consistency_pending: bool,
-    pub(super) final_consistency_used: bool,
-    pub(super) completion_gate_repairs: usize,
-    pub(super) local_lookup_read_calls: usize,
-    pub(super) local_lookup_read_externalized: bool,
-    pub(super) local_lookup_recovery_calls: usize,
-    pub(super) local_lookup_shell_calls: usize,
-    pub(super) call_counts: HashMap<String, usize>,
-    pub(super) workspace_generation: u64,
-    pub(super) workspace_write_generation: u64,
     pub(super) tool_discovery: tool_discovery::ToolDiscovery,
     pub(super) loop_budget: LoopBudget,
-    pub(super) research_stop_grace_used: bool,
-    pub(super) analysis_stop_grace_used: bool,
-    pub(super) runaway_detector: RunawayDetector,
-    pub(super) last_provenance_checkpoint: Option<String>,
     pub(super) workspace_revision: Option<String>,
     pub(super) turn_stable_overlays: Vec<Message>,
     pub(super) turn_context_orientation: String,
     pub(super) last_context_updates: Vec<Message>,
-    pub(super) turn_start_pruned_request_only_messages: usize,
-    pub(super) turn_start_pruned_request_only_chars: usize,
-    pub(super) verification: verify::VerificationMonitor,
 }
 
 impl AgentCoordinator {
@@ -78,8 +42,6 @@ impl AgentCoordinator {
         // guidance is superseded by TURN_CONTEXT_BOUNDARY and newer overlays, but
         // remains on the wire so the provider can reuse the already-cached prefix.
         // Physical pruning is reserved for explicit history replacement/rollover.
-        let turn_start_pruned_request_only_messages = 0usize;
-        let turn_start_pruned_request_only_chars = 0usize;
         let goal_epoch = self.context_memory.goal().map_or(0, |goal| goal.epoch);
         let goal_progress = self
             .context_memory
@@ -91,7 +53,7 @@ impl AgentCoordinator {
             Message::user(format!(
                 "{GOAL_CONTINUATION_PROMPT}{}",
                 goal_retry_reason
-                    .map(|reason| format!(" Strict judge feedback: {reason}"))
+                    .map(|reason| format!(" Judge feedback: {reason}"))
                     .unwrap_or_default()
             ))
             .request_only()
@@ -110,7 +72,7 @@ impl AgentCoordinator {
                 .push(Message::system(GOAL_JOB_INSTRUCTION).request_only());
             if let Some(goal) = self.context_memory.goal() {
                 self.history.push(Message::system(format!(
-                    "Durable goal objective: {}\nOutstanding requirements (judge assessments, not proof): {:?}\nNext action: {:?}\nUse retained tool observations and exact context-history references for verification.",
+                    "Goal: {}\nStill missing: {:?}\nNext: {:?}",
                     goal.objective, goal.remaining, goal.next_action
                 )).request_only());
             }
@@ -135,37 +97,8 @@ impl AgentCoordinator {
         }
         explicitly_activated_tools.sort();
         explicitly_activated_tools.dedup();
-        let (vision_enabled, web_search_enabled, _web_search_explicitly_attached) =
+        let (vision_enabled, web_search_enabled, _) =
             attached_harness_flags(attached_capabilities.as_deref());
-        let profile = task_profile_with_history(
-            input,
-            web_search_enabled,
-            &self.history,
-            goal_mode.load(Ordering::Acquire),
-        );
-        if profile == TaskProfile::Research {
-            self.history
-                .push(Message::system(policy::RESEARCH_SYSTEM_INSTRUCTION).request_only());
-        }
-        let local_file_lookup = profile == TaskProfile::Agent
-            && !goal_mode.load(Ordering::Acquire)
-            && looks_like_local_file_lookup(input);
-        let capability_discovery_requested =
-            !local_file_lookup && looks_like_capability_request(input);
-        let prior_context_requested = looks_like_prior_context_request(input);
-        let foundation_guidance = (prior_context_requested && !local_file_lookup)
-            .then(|| {
-                self.registry
-                    .foundation_memory_guidance()
-                    .map(str::to_owned)
-            })
-            .flatten();
-        let inherited_implementation = should_inherit_implementation_turn(input, &self.history);
-        let implementation_requested =
-            looks_like_coding_implementation_request(input) || inherited_implementation;
-        let planning_or_documentation = looks_like_planning_or_documentation(input);
-        let bounded_explanation = looks_like_bounded_explanation(input);
-        let bounded_analysis = bounded_explanation || looks_like_bounded_analysis(input);
         let native_deferred_tools_supported = if model.starts_with("openai/") {
             supports_native_deferred_tools(model)
                 && self.bridge.auth_status("openai").is_ok_and(|status| {
@@ -175,48 +108,19 @@ impl AgentCoordinator {
         } else {
             supports_native_deferred_tools(model)
         };
-        let research_budget = ResearchBudget::for_input(input);
-        let task_guidance = task_guidance(input);
-        let model_attempts = 0usize;
-        let tool_rounds = 0usize;
-        let malformed_repairs = 0usize;
-        let empty_repairs = 0usize;
-        let length_continuations = 0usize;
-        let implementation_repairs = 0usize;
-        let execution_evidence = turn_state::TurnExecutionEvidence::default();
-        let consecutive_no_progress = 0usize;
-        let progressful_inspection_rounds = 0usize;
-        let implementation_inspection_checkpoint_used = false;
-        let retry_instruction: Option<String> = None;
-        let final_consistency_pending = false;
-        let final_consistency_used = false;
-        let completion_gate_repairs = 0usize;
-        let local_lookup_read_calls = 0usize;
-        let local_lookup_read_externalized = false;
-        let local_lookup_recovery_calls = 0usize;
-        let local_lookup_shell_calls = 0usize;
-        let call_counts: HashMap<String, usize> = HashMap::new();
-        let workspace_generation = self.registry.workspace_generation();
-        let workspace_write_generation = self.registry.workspace_write_generation();
-        // One basic surface for every turn; request wording only adds tools.
+        // One basic surface for every turn. Tools only ever append, so the
+        // provider-visible prefix stays warm across turns.
         let mut tool_discovery = tool_discovery::ToolDiscovery::basic();
-        // Preserve the provider-visible tool envelope across ordinary turns. New
-        // tools may append, but a new user message must not shrink a warmed prefix.
         tool_discovery.restore_warm_surface(&self.warm_tool_names, self.warm_tool_search_enabled);
         promote_agent_orchestration_tool(
             &mut tool_discovery,
             self.registry.agent_group_tool_names(),
             self.registry.agent_orchestration_enabled(),
         );
-        tool_discovery.promote_for_input(input);
-        if !explicitly_activated_tools.is_empty() {
-            tool_discovery.load(explicitly_activated_tools.iter().map(String::as_str));
-        }
-        let loop_budget = LoopBudget::default();
-        let research_stop_grace_used = false;
-        let analysis_stop_grace_used = false;
-        let runaway_detector = RunawayDetector::default();
-        let last_provenance_checkpoint: Option<String> = None;
+        tool_discovery.load(explicitly_activated_tools.iter().map(String::as_str));
+        self.warm_tool_names = tool_discovery.loaded_names().to_vec();
+        self.warm_tool_search_enabled = tool_discovery.search_enabled();
+
         let (workspace_root, workspace_revision) = self.registry.workspace_identity();
         self.context_memory.policy =
             crate::project_settings::ProjectSettingsStore::new(&workspace_root)?
@@ -226,15 +130,8 @@ impl AgentCoordinator {
         if let Some(project_instructions) = load_project_instructions(&workspace_root) {
             turn_stable_overlays.push(Message::system(project_instructions).request_only());
         }
-        if profile == TaskProfile::Agent
-            && !local_file_lookup
-            && self.context_memory.policy.repo_map
-            && let Some(repo_map) = repo_context::repo_map_overlay(
-                &self.history,
-                &workspace_root,
-                input,
-                implementation_requested || looks_like_coding_request(input),
-            )
+        if self.context_memory.policy.repo_map
+            && let Some(repo_map) = repo_context::repo_map_overlay(&self.history, &workspace_root)
         {
             turn_stable_overlays.push(repo_map);
         }
@@ -242,69 +139,11 @@ impl AgentCoordinator {
         if session_cwd != workspace_root || context_roots.len() > 1 {
             turn_stable_overlays.push(
                 Message::system(format!(
-                    "Session filesystem environment: primary workspace={workspace_root}; cwd={session_cwd}; context roots={}. Relative file and shell paths resolve from cwd. The primary workspace remains the project/settings identity, not a filesystem access boundary.",
+                    "Workspace: {workspace_root}; cwd: {session_cwd}; context roots: {}. Relative paths resolve from cwd.",
                     context_roots.join(", ")
                 ))
                 .request_only(),
             );
-        }
-        let project_checks = verify::ProjectChecks::detect(std::path::Path::new(&workspace_root));
-        if profile == TaskProfile::Agent
-            && let Some(environment) = project_checks.describe()
-            && let Some(overlay) = repo_context::unsent_overlay(&self.history, environment)
-        {
-            turn_stable_overlays.push(overlay);
-        }
-        let verification = verify::VerificationMonitor::new(
-            project_checks,
-            profile == TaskProfile::Agent && !local_file_lookup && !planning_or_documentation,
-        );
-        let turn_context_orientation = self.context_memory.orientation();
-        let last_context_updates = Vec::new();
-        if prior_context_requested && !local_file_lookup {
-            turn_stable_overlays.push(
-                Message::system(
-                    "Prior-context recovery is a side path, not the foreground action order. Reuse evidence already visible in the current window first. If one exact historical detail is missing, use trailing search_tools with an exact recovery tool name such as context_history, task_notes, or project_memory_recall, retrieve only that detail, then return to the task.",
-                )
-                .request_only(),
-            );
-        }
-        let padded_input = format!(" {} ", input.trim().to_ascii_lowercase());
-        let refers_to_previous_turn = inherited_implementation
-            || [
-                " it ",
-                " this ",
-                " that ",
-                " them ",
-                " those ",
-                " same ",
-                " again ",
-                " previous ",
-                " earlier ",
-            ]
-            .iter()
-            .any(|needle| padded_input.contains(needle));
-        if profile == TaskProfile::Agent && !refers_to_previous_turn {
-            self.context_memory.clear_agent_checkpoint();
-        }
-        if profile == TaskProfile::Agent && refers_to_previous_turn {
-            let durable_checkpoint = self.context_memory.agent_checkpoint_summary();
-            if self.previous_turn_working_state.is_some() || durable_checkpoint.is_some() {
-                let mut state = String::new();
-                if let Some(checkpoint) = durable_checkpoint.as_deref() {
-                    state.push_str(checkpoint);
-                }
-                if let Some(workspace) = self.previous_turn_working_state.as_deref() {
-                    if !state.is_empty() {
-                        state.push_str("\n\n");
-                    }
-                    state.push_str("Immediate previous-turn workspace evidence:\n");
-                    state.push_str(workspace);
-                }
-                turn_stable_overlays.push(Message::system(format!(
-                    "Coordinator continuation state from recent work in this session. This is historical observed state and may be stale.\n{state}"
-                )).request_only());
-            }
         }
         if let Some(memory) = render_matching_debate_memory(
             &self.retained_debate_knowledge,
@@ -313,23 +152,11 @@ impl AgentCoordinator {
         ) {
             turn_stable_overlays.push(Message::system(memory).request_only());
         }
-        if let Some(guidance) = foundation_guidance.as_deref() {
+        if let Some(guidance) = self.registry.foundation_memory_guidance() {
+            turn_stable_overlays.push(Message::system(guidance.to_owned()).request_only());
+        }
+        if let Some(guidance) = self.registry.agent_group_guidance() {
             turn_stable_overlays.push(Message::system(guidance).request_only());
-        }
-        if profile == TaskProfile::Agent
-            && let Some(guidance) = self.registry.agent_group_guidance()
-        {
-            turn_stable_overlays.push(Message::system(guidance).request_only());
-        }
-        if profile == TaskProfile::Agent
-            && let Some(guidance) = &task_guidance
-        {
-            turn_stable_overlays.push(Message::system(guidance.clone()).request_only());
-        }
-
-        if profile == TaskProfile::Agent && !local_file_lookup {
-            self.warm_tool_names = tool_discovery.loaded_names().to_vec();
-            self.warm_tool_search_enabled = tool_discovery.search_enabled();
         }
 
         Ok(TurnSetup {
@@ -343,50 +170,13 @@ impl AgentCoordinator {
             request_input,
             vision_enabled,
             web_search_enabled,
-            profile,
-            local_file_lookup,
-            capability_discovery_requested,
-            implementation_requested,
-            planning_or_documentation,
-            bounded_explanation,
-            bounded_analysis,
             native_deferred_tools_supported,
-            research_budget,
-            model_attempts,
-            tool_rounds,
-            malformed_repairs,
-            empty_repairs,
-            length_continuations,
-            implementation_repairs,
-            execution_evidence,
-            consecutive_no_progress,
-            progressful_inspection_rounds,
-            implementation_inspection_checkpoint_used,
-            retry_instruction,
-            final_consistency_pending,
-            final_consistency_used,
-            completion_gate_repairs,
-            local_lookup_read_calls,
-            local_lookup_read_externalized,
-            local_lookup_recovery_calls,
-            local_lookup_shell_calls,
-            call_counts,
-            workspace_generation,
-            workspace_write_generation,
             tool_discovery,
-            loop_budget,
-
-            research_stop_grace_used,
-            analysis_stop_grace_used,
-            runaway_detector,
-            last_provenance_checkpoint,
+            loop_budget: LoopBudget::default(),
             workspace_revision,
             turn_stable_overlays,
-            turn_context_orientation,
-            last_context_updates,
-            turn_start_pruned_request_only_messages,
-            turn_start_pruned_request_only_chars,
-            verification,
+            turn_context_orientation: self.context_memory.orientation(),
+            last_context_updates: Vec::new(),
         })
     }
 }

@@ -1,4 +1,4 @@
-//! Per-attempt tool envelope selection and loop policy before request assembly.
+//! Per-attempt tool envelope selection and request assembly.
 
 use crate::core::{CallRequest, ToolDefinition};
 use crate::tools::ToolRegistry;
@@ -8,8 +8,6 @@ use super::{
     coordinator_support::{capability_guidance, configure_tool_access},
     history::append_context_updates,
     limits::MODEL_ATTEMPT_TIMEOUT_MS,
-    policy::TaskProfile,
-    policy::request_history_for_profile_at,
     session,
     tool_discovery::ToolDiscovery,
     turn_state,
@@ -30,7 +28,6 @@ pub(super) struct ToolSelection {
     pub selected_tools: Vec<ToolDefinition>,
     pub deferred_tools: Vec<ToolDefinition>,
     pub deferred_names: std::collections::HashSet<String>,
-    pub callable_names: std::collections::HashSet<String>,
     pub catalog: Vec<ToolDefinition>,
     pub working_budget: u64,
 }
@@ -61,12 +58,10 @@ pub(super) fn select_tools(input: ToolSelectionInput<'_>) -> ToolSelection {
         .iter()
         .map(|tool| tool.name.clone())
         .collect::<std::collections::HashSet<_>>();
-    let callable_names = attached_names.union(&deferred_names).cloned().collect();
     ToolSelection {
         selected_tools,
         deferred_tools,
         deferred_names,
-        callable_names,
         catalog: tool_catalog,
         working_budget,
     }
@@ -77,10 +72,8 @@ pub(super) struct HistoryInput<'a> {
     pub selected_tools: &'a [ToolDefinition],
     pub turn_stable_overlays: &'a [Message],
     pub turn_context_orientation: &'a str,
-    pub tool_discovery: &'a ToolDiscovery,
     pub last_context_updates: &'a mut Vec<Message>,
     pub request_input: &'a str,
-    pub profile: TaskProfile,
     pub loop_budget: &'a mut LoopBudget,
 }
 
@@ -104,19 +97,14 @@ impl AgentCoordinator {
         stable_request_overlays
             .push(Message::system(input.turn_context_orientation.to_owned()).request_only());
         stable_request_overlays.push(
-            Message::system(capability_guidance(
-                capability_snapshot,
-                input.tool_discovery.search_enabled(),
-            ))
-            .request_only(),
+            Message::system(capability_guidance(capability_snapshot)).request_only(),
         );
         append_context_updates(
             &mut self.history,
             input.last_context_updates,
             &stable_request_overlays,
         );
-        let mut request_messages =
-            request_history_for_profile_at(&self.history, input.profile, self.history.len());
+        let mut request_messages = self.history.clone();
         cache::advance_turn_cache_breakpoints(&mut request_messages, input.request_input);
         let request_context_chars = serde_json::to_string(&request_messages)
             .map(|serialized| serialized.len())
@@ -148,20 +136,14 @@ impl AgentCoordinator {
 pub(super) struct FinalizationInput<'a> {
     pub model: &'a str,
     pub request_messages: Vec<Message>,
-    pub profile: TaskProfile,
     pub selected_tools: Vec<ToolDefinition>,
     pub deferred_tools: Vec<ToolDefinition>,
-    pub execution_evidence: &'a turn_state::TurnExecutionEvidence,
-    pub implementation_requested: bool,
-    pub planning_or_documentation: bool,
     pub model_attempts: usize,
     pub tool_rounds: usize,
     pub loop_budget: &'a LoopBudget,
     pub working_budget: u64,
     pub native_deferred_tools_supported: bool,
     pub tool_discovery: &'a ToolDiscovery,
-    pub turn_start_pruned_request_only_messages: usize,
-    pub turn_start_pruned_request_only_chars: usize,
     pub workspace_revision: Option<&'a str>,
     pub reasoning_level: &'a str,
     pub attached_capabilities: Option<&'a [String]>,
@@ -178,20 +160,12 @@ impl AgentCoordinator {
         input: FinalizationInput<'_>,
     ) -> Result<PreparedRequest> {
         let mut request = CallRequest::simple(input.model, input.request_messages);
-        request.context_key = Some(match input.profile {
-            TaskProfile::Agent => self.context_key.clone(),
-            TaskProfile::Research => format!("{}:research", self.context_key),
-        });
+        request.context_key = Some(self.context_key.clone());
         request.prompt_cache = Some(true);
         request.timeout_ms = Some(MODEL_ATTEMPT_TIMEOUT_MS);
         request.deferred_tools = (!input.deferred_tools.is_empty()).then_some(input.deferred_tools);
-        configure_tool_access(&mut request, input.selected_tools, false);
-        let execution_phase = input.execution_evidence.recommended_phase(
-            input.implementation_requested,
-            input.planning_or_documentation,
-        );
+        configure_tool_access(&mut request, input.selected_tools);
         let mut request_metadata = turn_state::request_metadata(turn_state::RequestMetadataInput {
-            profile: input.profile,
             context_key: request.context_key.as_deref(),
             context_memory: &self.context_memory,
             model_attempts: input.model_attempts,
@@ -201,13 +175,6 @@ impl AgentCoordinator {
             deferred_tool_count: request.deferred_tools.as_ref().map(Vec::len).unwrap_or(0),
             native_deferred_tools_supported: input.native_deferred_tools_supported,
             search_loaded_tool_count: input.tool_discovery.loaded_count(),
-            execution_phase: execution_phase.as_str(),
-            successful_mutations: input.execution_evidence.successful_mutations(),
-            unresolved_failed_mutation: input.execution_evidence.unresolved_failed_mutation(),
-            verification_attempted: input.execution_evidence.verification_attempted(),
-            verification_succeeded: input.execution_evidence.verification_succeeded(),
-            turn_start_pruned_request_only_messages: input.turn_start_pruned_request_only_messages,
-            turn_start_pruned_request_only_chars: input.turn_start_pruned_request_only_chars,
         });
         if let Some(revision) = input.workspace_revision {
             request_metadata.insert("workspaceRevision".into(), revision.to_owned());

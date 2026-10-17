@@ -14,7 +14,6 @@ use super::{
     context::ContextMemory,
     loop_budget::LoopBudget,
     phase::{self, AgentPhase, PhaseState},
-    policy::TaskProfile,
 };
 
 const MAX_PROVENANCE_ENTRIES: usize = 24;
@@ -47,28 +46,23 @@ pub(super) struct TurnExecutionEvidence {
 }
 
 impl TurnExecutionEvidence {
+    #[cfg(test)]
     pub(super) fn successful_mutations(&self) -> usize {
         self.successful_mutations
     }
 
-    pub(super) fn unresolved_failed_mutation(&self) -> bool {
-        self.unresolved_failed_mutation
-    }
-
+    #[cfg(test)]
     pub(super) fn verification_attempted(&self) -> bool {
         self.verification_attempted
     }
 
+    #[cfg(test)]
     pub(super) fn verification_succeeded(&self) -> bool {
         self.verification_succeeded
     }
 
     pub(super) fn last_validation_evidence(&self) -> Option<&str> {
         self.last_validation_evidence.as_deref()
-    }
-
-    pub(super) fn recent_evidence(&self) -> &[String] {
-        &self.recent_execution_evidence
     }
 
     pub(super) fn recommended_phase(
@@ -87,10 +81,6 @@ impl TurnExecutionEvidence {
             implementation_requested,
             planning_or_documentation,
         )
-    }
-
-    pub(super) fn request_overlay(&mut self) -> Option<Message> {
-        self.provenance.request_overlay()
     }
 
     pub(super) fn observe_tool(
@@ -163,29 +153,6 @@ impl TurnExecutionEvidence {
         }
     }
 
-    pub(super) fn completion_blocker(
-        &self,
-        implementation_requested: bool,
-        planning_or_documentation: bool,
-    ) -> Option<String> {
-        implementation_completion_blocker(
-            implementation_requested,
-            self.successful_mutations,
-            self.unresolved_failed_mutation,
-            planning_or_documentation,
-            self.verification_attempted,
-            self.verification_succeeded,
-        )
-    }
-
-    pub(super) fn completion_warning(&self, blocker: &str) -> String {
-        completion_warning(
-            blocker,
-            self.successful_mutations,
-            self.last_validation_evidence(),
-        )
-    }
-
     pub(super) fn rollover_handoff(&self, working_state: Option<&str>) -> Message {
         rollover_handoff_message(
             self.successful_mutations,
@@ -223,7 +190,6 @@ impl TurnExecutionEvidence {
 }
 
 pub(super) struct RequestMetadataInput<'a> {
-    pub profile: TaskProfile,
     pub context_key: Option<&'a str>,
     pub context_memory: &'a ContextMemory,
     pub model_attempts: usize,
@@ -233,25 +199,11 @@ pub(super) struct RequestMetadataInput<'a> {
     pub deferred_tool_count: usize,
     pub native_deferred_tools_supported: bool,
     pub search_loaded_tool_count: usize,
-    pub execution_phase: &'a str,
-    pub successful_mutations: usize,
-    pub unresolved_failed_mutation: bool,
-    pub verification_attempted: bool,
-    pub verification_succeeded: bool,
-    pub turn_start_pruned_request_only_messages: usize,
-    pub turn_start_pruned_request_only_chars: usize,
 }
 
 pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<String, String> {
     HashMap::from([
-        (
-            "lane".into(),
-            match input.profile {
-                TaskProfile::Agent => "agent",
-                TaskProfile::Research => "research",
-            }
-            .into(),
-        ),
+        ("lane".into(), "agent".into()),
         ("contextManagement".into(), "recoverable-windows".into()),
         (
             "cacheFamily".into(),
@@ -277,32 +229,7 @@ pub(super) fn request_metadata(input: RequestMetadataInput<'_>) -> HashMap<Strin
         ("modelAttempt".into(), input.model_attempts.to_string()),
         ("toolRound".into(), input.tool_rounds.to_string()),
         ("agentCoreVersion".into(), "2".into()),
-        ("agentPhase".into(), input.execution_phase.to_owned()),
-        (
-            "successfulWorkspaceMutations".into(),
-            input.successful_mutations.to_string(),
-        ),
-        (
-            "unresolvedFailedMutation".into(),
-            input.unresolved_failed_mutation.to_string(),
-        ),
-        (
-            "verificationAttempted".into(),
-            input.verification_attempted.to_string(),
-        ),
-        (
-            "verificationSucceeded".into(),
-            input.verification_succeeded.to_string(),
-        ),
         ("expectedCacheReuses".into(), "1".into()),
-        (
-            "turnStartPrunedRequestOnlyMessages".into(),
-            input.turn_start_pruned_request_only_messages.to_string(),
-        ),
-        (
-            "turnStartPrunedRequestOnlyChars".into(),
-            input.turn_start_pruned_request_only_chars.to_string(),
-        ),
         (
             "turnCumulativeInputTokens".into(),
             input.loop_budget.cumulative_input_tokens().to_string(),
@@ -446,45 +373,6 @@ impl SessionExecutionProvenance {
         })
     }
 
-    pub(super) fn request_overlay(&mut self) -> Option<Message> {
-        let exact_mutations = std::mem::take(&mut self.pending_exact_mutations);
-        let write_capable_actions = std::mem::take(&mut self.pending_write_actions);
-        let validations = std::mem::take(&mut self.pending_validations);
-        let validation_reset = std::mem::replace(&mut self.pending_validation_reset, false);
-        if exact_mutations.is_empty()
-            && write_capable_actions.is_empty()
-            && validations.is_empty()
-            && !validation_reset
-        {
-            return None;
-        }
-
-        let mut text = String::from(
-            "Coordinator execution provenance delta (observed facts; not instructions).",
-        );
-        if validation_reset {
-            text.push_str("\nEarlier validation evidence was invalidated by a later write.");
-        }
-        append_provenance_section(
-            &mut text,
-            "New exact source mutations performed by this turn",
-            &exact_mutations,
-            0,
-        );
-        append_provenance_section(
-            &mut text,
-            "New write-capable actions (not exact source-change provenance)",
-            &write_capable_actions,
-            0,
-        );
-        append_provenance_section(
-            &mut text,
-            "New current-generation validation attempts",
-            &validations,
-            0,
-        );
-        Some(Message::system(text).request_only())
-    }
 }
 
 fn push_bounded_provenance(entries: &mut Vec<String>, omitted: &mut usize, value: String) {
@@ -500,25 +388,6 @@ fn push_pending_provenance(entries: &mut Vec<String>, value: String) {
         entries.remove(0);
     }
     entries.push(value);
-}
-
-fn append_provenance_section(text: &mut String, title: &str, entries: &[String], omitted: usize) {
-    if entries.is_empty() && omitted == 0 {
-        return;
-    }
-    text.push('\n');
-    text.push_str(title);
-    text.push_str(":\n");
-    if omitted > 0 {
-        text.push_str(&format!(
-            "- {omitted} earlier entries omitted from this compact ledger; do not invent their details.\n"
-        ));
-    }
-    for entry in entries {
-        text.push_str("- ");
-        text.push_str(entry);
-        text.push('\n');
-    }
 }
 
 fn summarize_structured_mutation(call: &ToolCall) -> String {
@@ -616,23 +485,24 @@ fn rollover_handoff_message(
     let verification = if verification_succeeded {
         "passed"
     } else if verification_attempted {
-        "attempted-but-not-passed"
+        "not passing"
     } else {
-        "not-yet-attempted"
+        "not run"
     };
     let mut text = format!(
-        "Coordinator context rollover state. The same task and execution state carry into this fresh window. Prior source and tool payloads are not model-visible here, and historical locators do not imply current source freshness. successfulWorkspaceMutations={successful_mutations}; unresolvedFailedMutation={unresolved_failed_mutation}; verification={verification}."
+        "Context was compacted; the task continues. Earlier tool output is no longer visible. Edits so far: {successful_mutations}{}; checks: {verification}.",
+        if unresolved_failed_mutation { " (last edit failed)" } else { "" }
     );
     if let Some(validation) = last_validation_evidence {
         text.push_str("\nLast validation: ");
         text.push_str(validation);
     }
     if let Some(state) = working_state.filter(|state| !state.trim().is_empty()) {
-        text.push_str("\nWorking evidence state:\n");
+        text.push_str("\nNote: ");
         text.push_str(state);
     }
     if !recent_execution_evidence.is_empty() {
-        text.push_str("\nRecent execution evidence:\n");
+        text.push_str("\nRecent actions:\n");
         for evidence in recent_execution_evidence {
             text.push_str("- ");
             text.push_str(evidence);
@@ -641,17 +511,12 @@ fn rollover_handoff_message(
     }
 
     if !recent_inspection_evidence.is_empty() {
-        text.push_str(
-            "\nCurrent workspace evidence index (locators only; source text is intentionally not replayed across windows):\n",
-        );
+        text.push_str("\nFiles read before (re-read if needed):\n");
         for evidence in recent_inspection_evidence {
             text.push_str("- ");
             text.push_str(&evidence.summary);
             text.push('\n');
         }
-        text.push_str(
-            "Locator entries are pointers to workspace evidence captured before rollover; source freshness may need to be re-established when it is material.\n",
-        );
     }
     Message::system(text)
 }
@@ -888,60 +753,6 @@ pub(super) fn summarize_tool_outcome(call: &ToolCall, content: &str, succeeded: 
     bounded_text(&format!("{subject}: {}", details.join("; ")), 480)
 }
 
-pub(super) fn analysis_inspection_threshold(bounded_explanation: bool) -> usize {
-    if bounded_explanation { 3 } else { 4 }
-}
-
-pub(super) fn implementation_completion_blocker(
-    implementation_requested: bool,
-    successful_mutations: usize,
-    unresolved_failed_mutation: bool,
-    planning_or_documentation: bool,
-    verification_attempted: bool,
-    verification_succeeded: bool,
-) -> Option<String> {
-    if unresolved_failed_mutation {
-        Some(
-            "the most recent workspace mutation failure was never resolved by a later successful edit"
-                .to_owned(),
-        )
-    } else if implementation_requested && successful_mutations == 0 {
-        Some("implementation was requested, but no workspace mutation completed".to_owned())
-    } else if implementation_requested
-        && successful_mutations > 0
-        && !planning_or_documentation
-        && !verification_succeeded
-    {
-        Some(if verification_attempted {
-            "workspace changes were made, but every recognized build/test/check verification failed"
-                .to_owned()
-        } else {
-            "workspace changes were made, but no build/test/check verification completed successfully"
-                .to_owned()
-        })
-    } else {
-        None
-    }
-}
-
-pub(super) fn completion_warning(
-    blocker: &str,
-    successful_mutations: usize,
-    last_validation_evidence: Option<&str>,
-) -> String {
-    let mut warning = format!("Verification incomplete: {blocker}.");
-    if successful_mutations > 0 {
-        warning.push_str(&format!(
-            " {successful_mutations} workspace mutation(s) succeeded and remain part of the task state."
-        ));
-    }
-    if let Some(validation) = last_validation_evidence {
-        warning.push_str(" Last validation: ");
-        warning.push_str(validation);
-    }
-    warning
-}
-
 fn bounded_text(value: &str, max_chars: usize) -> String {
     let mut iter = value.chars();
     let mut text = iter.by_ref().take(max_chars).collect::<String>();
@@ -1065,26 +876,6 @@ mod execution_evidence_tests {
         let value = evidence.goal_evidence();
         assert_eq!(value["verification"]["succeeded"], json!(true));
         assert!(value["provenance"]["currentGenerationValidations"].is_array());
-    }
-
-    #[test]
-    fn provenance_request_overlays_emit_deltas_not_a_repeated_ledger() {
-        let mut evidence = TurnExecutionEvidence::default();
-        for path in ["src/first.rs", "src/second.rs"] {
-            let edit = ToolCall {
-                id: path.into(),
-                name: "apply_file_edits".into(),
-                arguments: json!({
-                    "changes": [{"path": path, "edits": [{"kind": "replace", "text": "updated"}]}]
-                }),
-            };
-            evidence.observe_tool(&edit, r#"{"changed":true}"#, true, true, false, true);
-            let overlay = evidence.request_overlay().expect("new provenance delta");
-            let content = overlay.content.as_deref().unwrap_or_default();
-            assert!(content.contains(path));
-            assert!(content.len() < 1_500);
-        }
-        assert!(evidence.request_overlay().is_none());
     }
 
     #[test]

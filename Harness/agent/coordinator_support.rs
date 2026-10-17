@@ -147,110 +147,12 @@ pub(super) fn attached_harness_flags(attached: Option<&[String]>) -> (bool, bool
     )
 }
 
-pub(super) fn capability_guidance(mut snapshot: Value, discovery_enabled: bool) -> String {
+pub(super) fn capability_guidance(mut snapshot: Value) -> String {
     if let Some(object) = snapshot.as_object_mut() {
         object.remove("visibleTools");
         object.remove("activeSessionId");
     }
-    let discovery_hint = if discovery_enabled {
-        "Missing schema? use search_tools."
-    } else {
-        "Only the currently attached tools are available; use them directly and finish when the evidence is sufficient."
-    };
-    format!(
-        "Runtime: {snapshot}. {discovery_hint} Current tool results and sandbox/approval state override stale assumptions."
-    )
-}
-
-pub(super) fn append_dynamic_turn_checkpoints(
-    history: &mut Vec<Message>,
-    provenance: Option<Message>,
-    last_provenance_checkpoint: &mut Option<String>,
-    retry_instruction: &mut Option<String>,
-    final_consistency_pending: &mut bool,
-) {
-    if let Some(provenance) = provenance
-        && let Some(content) = provenance.content.as_deref()
-        && last_provenance_checkpoint.as_deref() != Some(content)
-    {
-        *last_provenance_checkpoint = Some(content.to_owned());
-        history.push(provenance);
-    }
-    if let Some(correction) = retry_instruction.take() {
-        let duplicate = history.iter().rev().any(|message| {
-            message.request_only == Some(true)
-                && message.content.as_deref() == Some(correction.as_str())
-        });
-        if !duplicate {
-            history.push(Message::system(correction).request_only());
-        }
-    }
-    if *final_consistency_pending {
-        history.push(Message::system("Coordinator state: the requested workspace write succeeded and write validation passed. The current result is eligible for a final consistency review against the user's request and the evidence already collected.").request_only());
-        *final_consistency_pending = false;
-    }
-}
-
-pub(super) fn should_inherit_implementation_turn(input: &str, history: &[Message]) -> bool {
-    let value = input.trim().to_ascii_lowercase();
-    if value.is_empty() || value.chars().count() > 160 {
-        return false;
-    }
-    if super::policy::looks_like_web_research_request(input)
-        || super::policy::looks_like_planning_or_documentation(input)
-        || super::policy::looks_like_bounded_explanation(input)
-        || super::policy::looks_like_bounded_analysis(input)
-    {
-        return false;
-    }
-    let continuation = [
-        "continue",
-        "continue it",
-        "continue fixing",
-        "proceed",
-        "go on",
-        "keep going",
-        "do it",
-        "finish it",
-        "finish this",
-        "make it better",
-        "make this better",
-        "again",
-        "same thing",
-        "계속",
-        "계속해",
-        "계속 진행",
-        "진행해",
-        "마저 해",
-        "마저해",
-    ]
-    .iter()
-    .any(|phrase| value == *phrase || value.starts_with(&format!("{phrase} ")));
-    if !continuation {
-        return false;
-    }
-    let current_index = history
-        .iter()
-        .rposition(|message| {
-            message.role == MessageRole::User && message.content.as_deref() == Some(input)
-        })
-        .unwrap_or(history.len());
-    let Some(previous_user_index) = history[..current_index].iter().rposition(|message| {
-        message.role == MessageRole::User && message.request_only != Some(true)
-    }) else {
-        return false;
-    };
-    let previous_requested_implementation = history[previous_user_index]
-        .content
-        .as_deref()
-        .is_some_and(super::policy::looks_like_coding_implementation_request);
-    let previous_structured_edit = history[previous_user_index + 1..current_index]
-        .iter()
-        .filter(|message| message.role == MessageRole::Assistant)
-        .filter_map(|message| message.tool_calls.as_ref())
-        .flatten()
-        .any(|call| call.name == "apply_file_edits");
-    previous_requested_implementation || previous_structured_edit
+    format!("Runtime: {snapshot}. Use search_tools for capabilities not attached yet.")
 }
 
 pub(super) fn settle_interrupted_context_batch(history: &mut Vec<Message>) {
@@ -286,15 +188,7 @@ pub(super) fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn configure_tool_access(
-    request: &mut CallRequest,
-    tools: Vec<ToolDefinition>,
-    _decision_requested: bool,
-) {
-    // Finalization is enforced by the coordinator after the response. Keep the
-    // provider-visible tool envelope and tool-choice shape unchanged so a final
-    // synthesis call can reuse the same prompt prefix instead of forcing a cold
-    // request merely to prevent another tool call.
+pub(super) fn configure_tool_access(request: &mut CallRequest, tools: Vec<ToolDefinition>) {
     request.tools = (!tools.is_empty()).then_some(tools);
     request.tool_choice = None;
 }
@@ -339,47 +233,4 @@ pub(super) fn attached_web_search_capability_result(
         _ => {}
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn identical_retry_directives_are_not_replayed_in_one_window() {
-        let mut history = Vec::new();
-        let mut provenance = None;
-        let mut retry = Some("same correction".to_owned());
-        let mut final_consistency = false;
-
-        append_dynamic_turn_checkpoints(
-            &mut history,
-            None,
-            &mut provenance,
-            &mut retry,
-            &mut final_consistency,
-        );
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].role, MessageRole::System);
-
-        retry = Some("same correction".to_owned());
-        append_dynamic_turn_checkpoints(
-            &mut history,
-            None,
-            &mut provenance,
-            &mut retry,
-            &mut final_consistency,
-        );
-        assert_eq!(history.len(), 1);
-
-        retry = Some("different correction".to_owned());
-        append_dynamic_turn_checkpoints(
-            &mut history,
-            None,
-            &mut provenance,
-            &mut retry,
-            &mut final_consistency,
-        );
-        assert_eq!(history.len(), 2);
-    }
 }
