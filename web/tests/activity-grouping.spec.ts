@@ -39,7 +39,9 @@ test('short completed activity stays collapsed until requested', async ({ page }
   const group = page.locator('.activity-group')
   const header = group.locator('.activity-group__header')
   await expect(group).toHaveCount(1)
-  await expect(header).toContainText('Activity')
+  await expect(header).toContainText('Read file')
+  await expect(header).toContainText('src/file-tool-3.rs')
+  await expect(header).not.toContainText('Activity')
   await expect(header).toHaveAttribute('aria-expanded', 'false')
   await expect(group.locator('.activity-group__events')).toHaveCount(0)
 
@@ -104,10 +106,14 @@ test('reasoning displays separately from tool groups and preserves transcript or
   await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
   await expect(transcriptItems.nth(0)).toHaveClass(/reasoning-trace/)
   await expect(transcriptItems.nth(0)).toContainText('Checking sources')
+  await expect(reasoning.nth(0).locator('.trace-disclosure__details')).toHaveCount(0)
+  await reasoning.nth(0).getByRole('button').click()
   await expect(transcriptItems.nth(0)).toContainText('First full reasoning details')
   await expect(transcriptItems.nth(1)).toHaveClass(/activity-group/)
   await expect(transcriptItems.nth(2)).toHaveClass(/reasoning-trace/)
   await expect(transcriptItems.nth(2)).toContainText('Cross-checking claims')
+  await expect(reasoning.nth(1).locator('.trace-disclosure__details')).toHaveCount(0)
+  await reasoning.nth(1).getByRole('button').click()
   await expect(transcriptItems.nth(2)).toContainText('Second full reasoning details')
   await expect(page.locator('.conversation-content')).not.toContainText('**')
 
@@ -130,7 +136,75 @@ test('current tool activity remains separate from the full reasoning trace', asy
   const reasoning = page.locator('.reasoning-trace')
   await expect(reasoning).toHaveCount(1)
   await expect(reasoning).toContainText('Checking constraints')
+  await expect(reasoning.locator('.trace-disclosure__details')).toHaveCount(0)
+  await reasoning.getByRole('button').click()
   await expect(reasoning).toContainText('Inspecting inputs')
   await expect(reasoning).toContainText('Raw provider reasoning details')
   await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
+})
+
+
+test('single tools have one compact row, with output and timing behind disclosure', async ({ page }) => {
+  await resetConversation(page, [
+    { id: 'density-reasoning', kind: { type: 'reasoning', content: 'Full explanation', summary: 'Checking the relevant sources without taking up multiple lines in the transcript' } },
+    { id: 'density-tool', kind: { type: 'toolCall', toolCall: {
+      id: 'density-tool', name: 'run_shell', arguments: JSON.stringify({ command: 'cargo check' }),
+      status: 'completed', durationMs: 1200, result: 'literal **output**',
+    } } },
+  ])
+  const group = page.locator('.activity-group')
+  const header = group.locator('.activity-group__header')
+  const reasoning = page.locator('.reasoning-trace')
+  await expect(group.locator('.trace-disclosure__row')).toHaveCount(1)
+  await expect(header).toContainText('cargo check')
+  await expect(header).not.toContainText(/Activity|✓|1.2 s/)
+  await expect(header.locator('.trace-disclosure__status, .trace-disclosure__chevron-gap')).toHaveCount(0)
+  await expect(reasoning).not.toContainText(/Thinking|Reasoning/)
+  await expect(reasoning.locator('.trace-disclosure__details')).toHaveCount(0)
+  const metrics = await page.locator('.conversation-content').evaluate(node => {
+    const reasoning = node.querySelector('.reasoning-trace')!
+    const group = node.querySelector('.activity-group')!
+    const label = reasoning.querySelector('.trace-disclosure__label')!
+    return {
+      gap: group.getBoundingClientRect().top - reasoning.getBoundingClientRect().bottom,
+      nowrap: getComputedStyle(label).whiteSpace,
+      overflow: node.scrollWidth > node.clientWidth,
+    }
+  })
+  expect(metrics.gap).toBeLessThanOrEqual(2)
+  expect(metrics.gap).toBeGreaterThanOrEqual(0)
+  expect(metrics.nowrap).toBe('nowrap')
+  expect(metrics.overflow).toBe(false)
+  await header.click()
+  await expect(group.locator('.trace-disclosure__row')).toHaveCount(1)
+  await expect(group.locator('.trace-disclosure__details')).toContainText('literal **output**')
+  await expect(group.locator('.trace-disclosure__details')).toContainText('1.2 s')
+
+  await resetConversation(page, [{ id: 'no-details', kind: { type: 'toolCall', toolCall: {
+    id: 'no-details', name: 'read_file', arguments: '{}', status: 'completed',
+  } } }])
+  await expect(group.locator('.trace-disclosure__row')).toHaveCount(1)
+  await expect(group.getByRole('button')).toHaveCount(0)
+  await expect(group.locator('.trace-disclosure__chevron, .trace-disclosure__status')).toHaveCount(0)
+})
+
+test('approval never spins, and exceptional status stays explicit', async ({ page }) => {
+  for (const [status, label] of [['awaiting_permission', 'Awaiting approval'], ['timed_out', 'Timed out'], ['cancelled', 'Cancelled']] as const) {
+    await resetConversation(page, [{ id: status, kind: { type: 'toolCall', toolCall: {
+      id: status, name: 'run_shell', arguments: JSON.stringify({ command: 'cargo check' }), status,
+    } } }])
+    const header = page.locator('.activity-group__header')
+    await expect(header).toContainText(label)
+    await expect(header.getByRole('img', { name: 'Running' })).toHaveCount(0)
+  }
+
+  await resetConversation(page, [
+    { id: 'cancelled-first', kind: { type: 'toolCall', toolCall: {
+      id: 'cancelled-first', name: 'run_shell', arguments: '{"command":"check"}', status: 'cancelled',
+    } } },
+    toolEntry('completed-last', 'completed'),
+  ])
+  const groupHeader = page.locator('.activity-group__header')
+  await expect(groupHeader).toHaveAttribute('aria-expanded', 'false')
+  await expect(groupHeader).toContainText('Cancelled')
 })

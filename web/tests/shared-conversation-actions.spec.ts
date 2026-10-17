@@ -6,7 +6,7 @@ test('shared message controls deliver edits and regeneration through the UI host
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
   await page.getByRole('button', { name: 'Edit message' }).click()
-  await expect(page.locator('.composer-input')).toHaveText('Inspect the **remote UI** and keep it responsive.')
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Inspect the **remote UI** and keep it responsive.')
   await page.getByRole('button', { name: 'Regenerate response' }).click()
   await expect.poll(() => page.evaluate(() => {
     const messages = (window as unknown as { __yeetSent: Array<{ type: string; command?: { type: string } }> }).__yeetSent

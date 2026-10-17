@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText('Interface ready')).toBeVisible()
 })
 
-test('live reasoning stays compact in the activity header and shows full reasoning below', async ({ page }) => {
+test('live reasoning shows only its summary until expanded', async ({ page }) => {
   await emit(page, {
     type: 'conversation_entry',
     version: 1,
@@ -47,9 +47,12 @@ test('live reasoning stays compact in the activity header and shows full reasoni
   const reasoning = page.locator('.reasoning-trace').last()
   const row = reasoning.locator('.trace-disclosure__row')
   await expect(reasoning).toBeVisible()
-  await expect(row).toContainText('Thinking')
+  await expect(row).not.toContainText('Thinking')
+  await expect(row.getByRole('img', { name: 'Running' })).toHaveCount(1)
   await expect(row).toContainText('Comparing the responsive layout')
   const details = reasoning.locator('.trace-disclosure__details')
+  await expect(details).toHaveCount(0)
+  await row.click()
   await expect(details).toBeVisible()
   await expect(details.locator('.trace-detail__content')).toHaveText('Comparing the responsive layout')
   await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
@@ -85,10 +88,13 @@ test('incomplete streamed reasoning markdown never leaks formatting markers', as
   const reasoning = page.locator('.reasoning-trace').last()
   const row = reasoning.locator('.trace-disclosure__row')
   await expect(reasoning).toBeVisible()
-  await expect(row).toContainText('Thinking')
+  await expect(row).not.toContainText('Thinking')
+  await expect(row.getByRole('img', { name: 'Running' })).toHaveCount(1)
   await expect(row).toContainText('Checking live sources')
   await expect(row).not.toContainText('**')
   const details = reasoning.locator('.trace-disclosure__details')
+  await expect(details).toHaveCount(0)
+  await row.click()
   await expect(details).toBeVisible()
   await expect(details).toContainText('Checking live sources')
   await expect(details).not.toContainText('**')
