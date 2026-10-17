@@ -65,9 +65,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: 0s !important; transition-duration: 0s !important; } }
 
-/* Work rows share the same compact summary on every viewport. Touch changes
-   target height only; full reasoning, output and timing stay behind disclosure. */
-.trace-disclosure__row, .activity-group__header { min-height: 24px; width: 100%; padding: 0; }
+/* Work summaries wrap naturally; full output stays behind disclosure. */
+.trace-disclosure__row, .activity-group__header { min-height: 24px; width: 100%; padding: 4px 0; }
 .trace-disclosure__row > *, .activity-group__header > * { min-width: 0; }
 @media (hover: none), (pointer: coarse) {
   .trace-disclosure__row, .activity-group__header { min-height: 32px; }

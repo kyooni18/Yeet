@@ -1,4 +1,5 @@
-import { Transition, withAnimation } from "@mun/core"
+import { Icon, Transition, withAnimation } from "@mun/core"
+import { workIcon } from "./workIcons"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
@@ -75,17 +76,21 @@ function groupStatus(group: Any): string {
   return group.status_label || (group.awaits_permission ? "Awaiting approval" : group.failed ? "Failed" : "")
 }
 
-/** One meaningful line; ordinary completion has no badge, timing or empty slot. */
+/** Readable, wrapping work labels with a stable tool icon. */
 struct TraceLabel: View {
   let trace: Any
   let groupHeader: Bool
   var body: some View {
     HStack(spacing: 6) {
+      Icon(workIcon(trace.icon), { width: 14, height: 14, strokeWidth: 1.8 })
+        .foregroundStyle(color.faint)
+        .withProps({ "aria-hidden": "true", className: "trace-disclosure__icon" })
+        .style({ flex: "none", alignSelf: "flex-start", marginTop: "3px" })
       Text(traceLabel(trace))
         .fontSize(13)
         .foregroundStyle(color.faint)
         .withProps({ className: groupHeader ? (trace.active ? "trace-disclosure__label activity-group__summary is-active" : "trace-disclosure__label activity-group__summary") : "trace-disclosure__label" })
-        .style({ flex: "1", minWidth: "0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })
+        .style({ flex: "1", minWidth: "0", whiteSpace: "pre-wrap", overflowWrap: "anywhere", textAlign: "left" })
       if traceStatus(trace) !== "" {
         Text(traceStatus(trace))
           .fontSize(12)
@@ -146,11 +151,15 @@ struct Activity: View {
       } else {
         Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: group.id }) }, label: {
           HStack(spacing: 6) {
+            Icon(workIcon(group.events[group.events.length - 1]?.trace.icon || "tool"), { width: 14, height: 14, strokeWidth: 1.8 })
+              .foregroundStyle(color.faint)
+              .withProps({ "aria-hidden": "true" })
+              .style({ flex: "none" })
             Text(group.expanded ? group.events.length + " actions" : group.summary)
               .fontSize(13)
               .foregroundStyle(color.faint)
               .withProps({ className: group.active ? "activity-group__summary is-active" : "activity-group__summary" })
-              .style({ flex: "1", minWidth: "0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" })
+              .style({ flex: "1", minWidth: "0", whiteSpace: "pre-wrap", overflowWrap: "anywhere", textAlign: "left" })
             if !group.expanded {
               Text(group.events.length).fontSize(12).foregroundStyle(color.faint)
                 .accessibilityLabel(group.events.length + " actions")
