@@ -124,22 +124,6 @@ function mapTools(tools: ToolDefinition[] | undefined): ToolMapping[] {
   });
 }
 
-function toolChoice(request: ProviderCallRequest, mappings: ToolMapping[]): unknown {
-  if (request.toolChoice === "none" || mappings.length === 0) return "none";
-  const names = mappings.map((mapping) => mapping.providerName);
-  if (request.toolChoice === "required") {
-    return { allowed_tools: { mode: "any", tools: names } };
-  }
-  if (request.toolChoice && typeof request.toolChoice === "object") {
-    const choice = request.toolChoice;
-    const selected = mappings.find((mapping) => mapping.originalName === choice.name);
-    return selected
-      ? { allowed_tools: { mode: "any", tools: [selected.providerName] } }
-      : { allowed_tools: { mode: "any", tools: names } };
-  }
-  return { allowed_tools: { mode: "auto", tools: names } };
-}
-
 function imageBlocks(message: Message): Record<string, unknown>[] {
   return (message.images ?? []).map((image) => ({
     type: "image",
@@ -245,8 +229,9 @@ function requestBody(request: ProviderCallRequest, provider: string, stream: boo
     environment: state?.environmentId ?? "remote",
     ...(state?.interactionId ? { previous_interaction_id: state.interactionId } : {}),
     system_instruction: systemInstruction(request),
-    tools: mappings.map((mapping) => mapping.definition),
-    tool_choice: toolChoice(request, mappings),
+    // Agent interactions accept no tool_choice (the API rejects it); a "none"
+    // choice is expressed by withholding the caller's function tools.
+    tools: request.toolChoice === "none" ? [] : mappings.map((mapping) => mapping.definition),
     ...(request.providerMetadata && Object.keys(request.providerMetadata).length
       ? { labels: request.providerMetadata }
       : {}),

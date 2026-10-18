@@ -91,8 +91,12 @@ function toolProtocol(tools: ToolDefinition[], choice: ProviderCallRequest["tool
 
 function promptFor(request: ProviderCallRequest): string {
   const transcript = request.messages.map(messageLine).join("\n\n");
-  const system = request.system ? `System: ${request.system}\n\n` : "";
-  return `${system}${transcript}${toolProtocol(request.tools ?? [], request.toolChoice)}`;
+  // The protocol belongs to the system preamble. Appended after the transcript
+  // it trails the latest tool result, and Claude models treat it as text
+  // injected into that result and ignore it.
+  const protocol = toolProtocol(request.tools ?? [], request.toolChoice).trim();
+  const system = [request.system, protocol].filter(Boolean).join("\n\n");
+  return `${system ? `System: ${system}\n\nCONVERSATION\n\n` : ""}${transcript}`;
 }
 
 function parseEnvelope(raw: string): ToolEnvelope | undefined {

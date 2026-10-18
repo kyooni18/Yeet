@@ -79,8 +79,8 @@ test("Antigravity maps Yeet requests and native function calls", async () => {
   assert.match(sent.system_instruction, /Yeet harness/);
   assert.equal(sent.tools[0].type, "function");
   assert.match(sent.tools[0].name, /^yeet_[0-9a-f]{12}_read_file$/);
-  assert.equal(sent.tool_choice.allowed_tools.mode, "auto");
-  assert.deepEqual(sent.tool_choice.allowed_tools.tools, [sent.tools[0].name]);
+  // The Interactions API rejects tool_choice on agent requests.
+  assert.equal(sent.tool_choice, undefined);
 
   assert.equal(result.finishReason, "tool_call");
   assert.equal(result.reasoningSummary, "Need the local file.");
