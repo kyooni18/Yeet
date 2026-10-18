@@ -65,8 +65,20 @@ struct Detail: View {
   }
 }
 
-function traceLabel(trace: Any): string {
+function rawTraceLabel(trace: Any): string {
   return trace.summary && trace.summary !== trace.title ? trace.title + " · " + trace.summary : trace.title
+}
+
+/** Some providers expose only a count and a generic phase (e.g. "6 · Running").
+ * Neither is a useful work description; never present them as an action. */
+function isOpaqueWorkLabel(label: string): boolean {
+  const parts = (label || "").trim().split(/\s*(?:[·•]|\.)\s*/).filter(Boolean)
+  return !parts.length || parts.every(part => /^(?:\d+(?:\s+(?:actions?|activities|tools?|calls?|events?))?|running|working|preparing|pending|in progress)$/i.test(part.trim()))
+}
+
+function traceLabel(trace: Any): string {
+  const label = rawTraceLabel(trace)
+  return isOpaqueWorkLabel(label) ? "Working" : label
 }
 
 function traceStatus(trace: Any): string {
@@ -153,7 +165,23 @@ function singleTrace(group: Any): Any {
 }
 
 function groupTrace(group: Any): Any {
-  return { title: group.summary, summary: null, details: [], icon: group.events[group.events.length - 1]?.trace.icon, active: group.active, status_label: group.status_label }
+  const events = group.events || []
+  const reversed = [...events].reverse()
+  // Keep the backend's semantic summary where possible. If it is only a count
+  // and a phase, surface the latest actual action from the same group instead.
+  const opaque = isOpaqueWorkLabel(group.summary || "")
+  const preferred = opaque
+    ? (reversed.find(event => event.type !== "activity" && !isOpaqueWorkLabel(rawTraceLabel(event.trace)))
+      || reversed.find(event => !isOpaqueWorkLabel(rawTraceLabel(event.trace))))
+    : reversed.find(event => rawTraceLabel(event.trace) === group.summary)
+  return {
+    title: opaque ? (preferred ? rawTraceLabel(preferred.trace) : "Working") : group.summary,
+    summary: null,
+    details: [],
+    icon: preferred?.trace.icon || events[events.length - 1]?.trace.icon,
+    active: group.active,
+    status_label: group.status_label,
+  }
 }
 
 struct Activity: View {

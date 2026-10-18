@@ -55,6 +55,41 @@ test('short completed activity stays collapsed until requested', async ({ page }
   await expect(group.locator('.activity-group__events')).toHaveCount(0)
 })
 
+test('generic count and Running do not replace the latest meaningful action', async ({ page }) => {
+  await resetConversation(page, [
+    toolEntry('first', 'completed'),
+    toolEntry('last', 'completed'),
+    { id: 'opaque-phase', kind: { type: 'activity', activity: { phase: 'provider-tool', title: '6', detail: 'Running' } } },
+  ])
+  await page.evaluate(() => {
+    ;(window as unknown as TestHooks).__yeetEmit({
+      type: 'state_update', version: 1, sequence: 3, revision: 3,
+      patch: { is_streaming: true, active_activity_entry_id: 'opaque-phase' },
+    })
+  })
+
+  const group = page.locator('.activity-group')
+  const header = group.locator('.activity-group__header')
+  await expect(header).toContainText('Read file')
+  await expect(header).toContainText('src/file-last.rs')
+  await expect(header).not.toContainText(/6\s*[·.]\s*Running/)
+  await expect(group.locator('.activity-group__summary')).toHaveClass(/is-active/)
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
+
+  await header.click()
+  await expect(group.locator('.activity-group__event')).toHaveCount(3)
+  await expect(group).toContainText('Working')
+})
+
+test('a standalone count-and-phase activity is not shown as a fake action', async ({ page }) => {
+  await resetConversation(page, [
+    { id: 'numeric-phase', kind: { type: 'activity', activity: { phase: 'provider-tool', title: '6', detail: 'Running' } } },
+  ])
+  const header = page.locator('.activity-group__header')
+  await expect(header).toContainText('Working')
+  await expect(header).not.toContainText(/6\s*[·.]\s*Running/)
+})
+
 test('failures auto-open while running activity remains visibly active', async ({ page }) => {
   await resetConversation(page, [
     toolEntry('tool-4', 'running'),
