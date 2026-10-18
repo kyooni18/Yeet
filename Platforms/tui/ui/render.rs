@@ -49,7 +49,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     app.toasts.paint(frame, theme::surface());
 }
 
-// Auxiliary workbench surfaces are peers, not dialogs painted on a transcript.
+// Compatibility fallback; current auxiliary panels are projected as overlays.
 fn draw_auxiliary(frame: &mut Frame<'_>, app: &mut App, application: &ApplicationView) {
     frame.render_widget(Block::default().style(theme::base()), frame.area());
     if !(application.surfaces == [Mode::Sessions]

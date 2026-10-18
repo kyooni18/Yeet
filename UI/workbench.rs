@@ -15,7 +15,6 @@ pub enum WorkbenchTab {
     CloseDiff(SurfaceId),
     NewDiff,
     Agents,
-    Auxiliary(super::navigation::Screen),
     Launcher,
 }
 
@@ -58,7 +57,6 @@ impl Tab {
                 Some(WorkbenchTab::CloseDiff(id)),
             ),
             WorkbenchTab::NewDiff => ("Diff".into(), Icon::Changes, None),
-            WorkbenchTab::Auxiliary(screen) => (format!("{screen:?}"), Icon::File, None),
             WorkbenchTab::Launcher => ("Open a view".into(), Icon::Add, None),
             WorkbenchTab::CloseFile(_) | WorkbenchTab::CloseDiff(_) => {
                 (resource_label, Icon::File, None)
@@ -94,9 +92,6 @@ pub fn header(
             tab
         })
         .collect();
-    if matches!(active, WorkbenchTab::Auxiliary(_)) {
-        controls.push(Tab::new(active, String::new()));
-    }
     controls.push(Tab::new(WorkbenchTab::Launcher, String::new()));
     controls
 }

@@ -92,7 +92,7 @@ impl App {
         }
         if let Some(destination) = prepared.effect.ui.destination {
             match destination {
-                ComposerDestination::Help => self.mode = Mode::Help,
+                ComposerDestination::Help => self.set_mode(Mode::Help),
                 ComposerDestination::Models => self.open_models(backend)?,
                 ComposerDestination::Sessions => self.open_sessions(backend)?,
                 ComposerDestination::Settings => self.open_settings(backend)?,

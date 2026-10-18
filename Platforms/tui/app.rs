@@ -573,7 +573,7 @@ impl App {
                     event.code,
                     KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?')
                 ) {
-                    self.activate_workbench_tab(WorkbenchTab::Home);
+                    self.close_popup();
                 }
                 Ok(())
             }
@@ -1051,7 +1051,7 @@ impl App {
     }
 
     fn open_debate(&mut self) {
-        self.mode = Mode::Debate;
+        self.set_mode(Mode::Debate);
         self.popup_filter.clear();
         self.popup_index = 0;
         self.debate_field = 0;
@@ -1071,7 +1071,7 @@ impl App {
             KeyCode::Tab => self.debate_field = (self.debate_field + 1) % 4,
             KeyCode::Enter if self.debate_field > 0 => {
                 self.debate_model_picker = true;
-                self.mode = Mode::Models;
+                self.set_mode(Mode::Models);
                 self.debate_topic_draft = std::mem::take(&mut self.popup_filter);
                 self.popup_index = 0;
             }
@@ -1204,7 +1204,7 @@ impl App {
             KeyCode::Esc | KeyCode::F(2) => {
                 if self.debate_model_picker {
                     self.debate_model_picker = false;
-                    self.mode = Mode::Debate;
+                    self.set_mode(Mode::Debate);
                     self.popup_filter = std::mem::take(&mut self.debate_topic_draft);
                     self.popup_index = 0;
                 } else {
@@ -1231,7 +1231,7 @@ impl App {
                             _ => {}
                         }
                         self.debate_model_picker = false;
-                        self.mode = Mode::Debate;
+                        self.set_mode(Mode::Debate);
                         self.popup_filter = std::mem::take(&mut self.debate_topic_draft);
                         self.popup_index = 0;
                         return Ok(());
@@ -1339,7 +1339,7 @@ impl App {
                 let items = self.filtered_capabilities();
                 if let Some(item) = items.get(self.popup_index) {
                     self.capability_detail_id = Some(item.id.clone());
-                    self.mode = Mode::CapabilityDetail;
+                    self.set_mode(Mode::CapabilityDetail);
                 }
             }
             KeyCode::Char(' ') if self.capability_toggle_available() => {
@@ -1379,7 +1379,7 @@ impl App {
         backend: &mut Backend,
     ) -> anyhow::Result<()> {
         match event.code {
-            KeyCode::Esc | KeyCode::Enter => self.mode = Mode::Capabilities,
+            KeyCode::Esc | KeyCode::Enter => self.set_mode(Mode::Capabilities),
             KeyCode::F(5) => self.close_popup(),
             KeyCode::Char(' ') if self.capability_toggle_available() => {
                 if let Some(id) = self.capability_detail_id.clone() {
@@ -1417,7 +1417,7 @@ impl App {
                     self.active_auth_provider = Some(provider);
                     self.editor_fields = vec![String::new()];
                     self.editor_index = 0;
-                    self.mode = Mode::AuthKey;
+                    self.set_mode(Mode::AuthKey);
                 }
             }
             _ => {}
@@ -1433,7 +1433,7 @@ impl App {
         match event.code {
             KeyCode::Esc => {
                 self.editor_fields.clear();
-                self.mode = Mode::Auth;
+                self.set_mode(Mode::Auth);
             }
             KeyCode::Enter => {
                 if let (Some(provider), Some(key)) = (
@@ -1445,7 +1445,7 @@ impl App {
                     } else {
                         backend.send(FrontendCommand::AuthSetApiKey { provider, key })?;
                         self.editor_fields.clear();
-                        self.mode = Mode::Auth;
+                        self.set_mode(Mode::Auth);
                     }
                 }
             }
@@ -1481,7 +1481,7 @@ impl App {
     }
 
     fn close_popup(&mut self) {
-        self.activate_workbench_tab(WorkbenchTab::Home);
+        self.application.navigation_mut().dismiss_panel();
         self.debate_model_picker = false;
         self.popup_filter.clear();
         self.popup_index = 0;

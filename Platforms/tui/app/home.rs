@@ -324,7 +324,7 @@ impl App {
                 } else {
                     self.files = Some(FilesState::open(path));
                 }
-                self.mode = Mode::Files;
+                self.set_mode(Mode::Files);
             }
             ResourceTarget::Diff(path) => self.open_diff(Some(path)),
             ResourceTarget::File(path) => {
@@ -338,10 +338,10 @@ impl App {
                 if let Some(files) = &mut self.files {
                     files.open_path(path, false);
                 }
-                self.mode = Mode::Files;
+                self.set_mode(Mode::Files);
             }
             ResourceTarget::Status => {
-                self.mode = Mode::Status;
+                self.set_mode(Mode::Status);
                 self.workbench_command = Some(FrontendCommand::RequestAuth);
             }
         }

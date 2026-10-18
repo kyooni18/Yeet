@@ -74,7 +74,7 @@ impl App {
         match event.code {
             KeyCode::Esc => {
                 self.clear_editor();
-                self.mode = Mode::Providers;
+                self.set_mode(Mode::Providers);
             }
             KeyCode::Tab | KeyCode::Down => self.editor_index = (self.editor_index + 1) % 3,
             KeyCode::BackTab | KeyCode::Up => self.editor_index = (self.editor_index + 2) % 3,
@@ -93,7 +93,7 @@ impl App {
                         require_api_key: self.editor_toggle,
                     })?;
                     self.clear_editor();
-                    self.mode = Mode::Providers;
+                    self.set_mode(Mode::Providers);
                 }
             }
             KeyCode::Backspace if self.provider_field_editable() => {
@@ -195,7 +195,7 @@ impl App {
         let (_, effect) = self.application.commit_settings(prepared, &self.state);
         if effect.ui.accepted_editor.is_some() && self.editor_fields == editor_fields {
             self.clear_editor();
-            self.mode = Mode::Settings;
+            self.set_mode(Mode::Settings);
         } else if let Some(editor) = self.application.settings_projection().view.editor {
             let kind = match editor.kind {
                 SettingsEditorKind::ContextLength => SettingsEditKind::ContextLength,
@@ -240,10 +240,7 @@ impl App {
         backend: &mut Backend,
     ) -> anyhow::Result<()> {
         match event.code {
-            KeyCode::Esc => {
-                self.mode = Mode::Chat;
-                self.popup_index = 0;
-            }
+            KeyCode::Esc => self.close_popup(),
             KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down => {
                 let count = self
@@ -290,7 +287,7 @@ impl App {
         match event.code {
             KeyCode::Esc => {
                 self.popup_index = 3;
-                self.mode = Mode::SandboxPresets;
+                self.set_mode(Mode::SandboxPresets);
             }
             KeyCode::Tab | KeyCode::Right => self.cycle_settings_section(1),
             KeyCode::BackTab | KeyCode::Left => self.cycle_settings_section(-1),
@@ -392,11 +389,11 @@ impl App {
                     )?;
                 }
                 self.clear_editor();
-                self.mode = if runtime_editor {
+                self.set_mode(if runtime_editor {
                     Mode::Settings
                 } else {
                     Mode::SandboxPolicy
-                };
+                });
             }
             KeyCode::Tab | KeyCode::Down if self.editor_fields.len() > 1 => {
                 self.editor_index = (self.editor_index + 1) % self.editor_fields.len();
@@ -431,7 +428,7 @@ impl App {
 
     pub(super) fn open_models(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         backend.send(FrontendCommand::RequestModels)?;
-        self.mode = Mode::Models;
+        self.set_mode(Mode::Models);
         self.popup_filter.clear();
         self.popup_index = self.active_model_picker_index();
         Ok(())
@@ -445,7 +442,7 @@ impl App {
     }
 
     pub(super) fn open_goal(&mut self) {
-        self.mode = Mode::Goal;
+        self.set_mode(Mode::Goal);
         self.popup_filter.clear();
         self.popup_index = self
             .toolbar_control("goal")
@@ -461,7 +458,7 @@ impl App {
 
     pub(super) fn open_sessions(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         backend.send(FrontendCommand::RequestSessions)?;
-        self.mode = Mode::Sessions;
+        self.set_mode(Mode::Sessions);
         self.popup_filter.clear();
         self.popup_index = self
             .session_picker_items()
@@ -474,7 +471,7 @@ impl App {
     }
 
     pub(super) fn open_reasoning(&mut self) {
-        self.mode = Mode::Reasoning;
+        self.set_mode(Mode::Reasoning);
         self.popup_filter.clear();
         self.popup_index = self
             .toolbar_control("reasoning")
@@ -490,7 +487,7 @@ impl App {
 
     pub(super) fn open_capabilities(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         backend.send(FrontendCommand::RequestCapabilities)?;
-        self.mode = Mode::Capabilities;
+        self.set_mode(Mode::Capabilities);
         self.popup_filter.clear();
         self.popup_index = 0;
         self.capability_detail_id = None;
@@ -498,7 +495,7 @@ impl App {
     }
 
     pub(super) fn open_auth(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Auth;
+        self.set_mode(Mode::Auth);
         self.popup_filter.clear();
         self.popup_index = 0;
         self.active_auth_provider = None;
@@ -506,7 +503,7 @@ impl App {
     }
 
     pub(super) fn open_providers(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Providers;
+        self.set_mode(Mode::Providers);
         self.popup_filter.clear();
         self.popup_index = 0;
         self.pending_provider_delete_id = None;
@@ -529,7 +526,7 @@ impl App {
         self.editor_index = if existing.is_some() { 1 } else { 0 };
         self.editor_toggle = require_api_key;
         self.editing_provider_id = existing;
-        self.mode = Mode::ProviderEdit;
+        self.set_mode(Mode::ProviderEdit);
     }
 
     pub(super) fn provider_field_editable(&self) -> bool {
@@ -537,7 +534,7 @@ impl App {
     }
 
     pub(super) fn open_settings(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Settings;
+        self.set_mode(Mode::Settings);
         self.popup_filter.clear();
         self.popup_index = 0;
         self.settings_section = None;
@@ -547,14 +544,14 @@ impl App {
     }
 
     pub(super) fn open_status(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
-        self.mode = Mode::Status;
+        self.set_mode(Mode::Status);
         self.popup_filter.clear();
         self.popup_index = 0;
         backend.send(FrontendCommand::RequestAuth)
     }
 
     pub(super) fn open_sandbox_presets(&mut self) {
-        self.mode = Mode::SandboxPresets;
+        self.set_mode(Mode::SandboxPresets);
         self.popup_index = self.sandbox_preset_picker_index();
     }
 
@@ -580,7 +577,7 @@ impl App {
         self.settings_edit_kind = None;
         self.pending_sandbox_reset = false;
         self.popup_index = 0;
-        self.mode = Mode::SandboxPolicy;
+        self.set_mode(Mode::SandboxPolicy);
     }
 
     pub(super) fn confirm_sandbox_reset(&mut self) -> bool {
@@ -597,7 +594,7 @@ impl App {
         self.settings_edit_kind = Some(kind);
         self.editor_fields = fields;
         self.editor_index = 0;
-        self.mode = Mode::SettingsEdit;
+        self.set_mode(Mode::SettingsEdit);
     }
 
     pub(super) fn selected_auth_provider(&self) -> Option<String> {
@@ -829,7 +826,7 @@ impl App {
         };
         backend.send(FrontendCommand::UpdateSandbox { action })?;
         self.clear_editor();
-        self.mode = Mode::SandboxPolicy;
+        self.set_mode(Mode::SandboxPolicy);
         Ok(())
     }
 }

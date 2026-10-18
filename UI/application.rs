@@ -27,34 +27,31 @@ pub struct ApplicationView {
 }
 impl ApplicationView {
     pub fn from_navigation(navigation: &NavigationState) -> Self {
-        let mode = if navigation.mode == Screen::Views {
-            navigation.views_origin
-        } else {
-            navigation.mode
-        };
-        let content = match mode {
+        let content = match navigation.primary_mode() {
             Screen::Chat if navigation.home_visible() => Content::Home,
             Screen::Chat => Content::Session,
             Screen::Files => Content::Files,
             Screen::Diff => Content::Diff,
             Screen::Agents => Content::Agents,
-            _ => Content::Auxiliary,
+            _ => unreachable!("primary mode is a workbench view"),
         };
-        let surfaces = if mode == Screen::SettingsEdit {
-            vec![Screen::SandboxPolicy, Screen::SettingsEdit]
-        } else if content == Content::Auxiliary {
-            vec![mode]
+        let panel = if navigation.mode == Screen::Views {
+            navigation.views_origin
         } else {
-            Vec::new()
+            navigation.mode
         };
+        let mut overlays = match panel {
+            Screen::Chat | Screen::Files | Screen::Diff | Screen::Agents => Vec::new(),
+            Screen::SettingsEdit => vec![Screen::SandboxPolicy, Screen::SettingsEdit],
+            _ => vec![panel],
+        };
+        if navigation.mode == Screen::Views {
+            overlays.push(Screen::Views);
+        }
         Self {
             content,
-            surfaces,
-            overlays: if navigation.mode == Screen::Views {
-                vec![Screen::Views]
-            } else {
-                Vec::new()
-            },
+            surfaces: Vec::new(),
+            overlays,
             workspace_children: workspace_children(),
         }
     }
@@ -96,13 +93,13 @@ mod tests {
             assert_eq!(view.content, content);
             assert_eq!(view.overlays, vec![Screen::Views]);
         }
-        navigation.mode = Screen::SettingsEdit;
+        navigation.set_mode(Screen::SettingsEdit);
         let view = ApplicationView::from_navigation(&navigation);
-        assert_eq!(view.content, Content::Auxiliary);
+        assert_eq!(view.content, Content::Agents);
         assert_eq!(
-            view.surfaces,
+            view.overlays,
             vec![Screen::SandboxPolicy, Screen::SettingsEdit]
         );
-        assert!(view.overlays.is_empty());
+        assert!(view.surfaces.is_empty());
     }
 }

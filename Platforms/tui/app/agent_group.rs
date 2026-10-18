@@ -26,7 +26,7 @@ impl App {
     /// Opens the panel; `Esc` returns to the mode it was opened from.
     pub(crate) fn open_agent_group(&mut self) -> FrontendCommand {
         self.agents.agent_group_origin = Some(self.mode);
-        self.mode = Mode::AgentGroup;
+        self.set_mode(Mode::AgentGroup);
         self.popup_index = 0;
         self.input_focused = false;
         FrontendCommand::RequestSettings
@@ -36,7 +36,7 @@ impl App {
         match self.agents.agent_group_origin.take() {
             Some(Mode::Agents) => self.open_agents(),
             Some(Mode::Settings) => {
-                self.mode = Mode::Settings;
+                self.set_mode(Mode::Settings);
                 let prepared = self.application.prepare_settings(
                     crate::shared_ui::settings::SettingsAction::Select(Some("agents".into())),
                     &self.state,

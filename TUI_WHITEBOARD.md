@@ -46,6 +46,8 @@ Settings, Models, Help, session pickers, and other auxiliary panels are floating
 views over the current workbench view, not replacement tabs. Opening or closing
 one preserves the underlying tab, content and local state (including File/Diff/
 Agents). Panels own input while open; Esc dismisses to the unchanged workbench.
+A floating panel does not allocate a header tab: the highlighted tab stays on
+its underlying view, including while opening nested pickers or editors.
 This floating-panel behavior supersedes auxiliary-as-peer-screen notes below;
 Files, Diff and Agents remain primary resource views.
 

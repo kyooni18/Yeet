@@ -5,6 +5,36 @@ use super::*;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 #[test]
+fn closing_floating_panels_restores_the_same_file_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keep-open.rs");
+    std::fs::write(&path, "one\ntwo\n").unwrap();
+    let mut app = App::default();
+    let mut files = files::FilesState::open(dir.path().to_path_buf());
+    files.open_path(path, false);
+    let id = files.active_tab().unwrap();
+    app.files = Some(files);
+    app.activate_workbench_tab(WorkbenchTab::File(id));
+    app.input = "draft".into();
+    for panel in [
+        Mode::Settings,
+        Mode::Models,
+        Mode::Help,
+        Mode::Sessions,
+        Mode::Providers,
+        Mode::Status,
+    ] {
+        app.set_mode(panel);
+        assert_eq!(app.active_workbench_tab(), WorkbenchTab::File(id));
+        app.close_popup();
+        assert_eq!(app.mode, Mode::Files);
+        assert_eq!(app.active_workbench_tab(), WorkbenchTab::File(id));
+        assert_eq!(app.files.as_ref().unwrap().dir, dir.path());
+        assert_eq!(app.input, "draft");
+    }
+}
+
+#[test]
 fn debate_form_selects_each_role_independently_and_restores_saved_models() {
     let mut app = App::default();
     app.state.active_model = "p/default".into();

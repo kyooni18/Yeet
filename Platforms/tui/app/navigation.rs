@@ -127,7 +127,6 @@ impl App {
 
     pub(crate) fn apply_navigation(&mut self, tab: WorkbenchTab) {
         match tab {
-            WorkbenchTab::Auxiliary(screen) => self.mode = screen,
             WorkbenchTab::Home | WorkbenchTab::Session => {
                 self.report_navigation(tab);
                 self.sidebar_focus = false;

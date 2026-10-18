@@ -1,4 +1,4 @@
-//! Full-screen session picker for portrait terminals.
+//! Floating, grouped session picker for portrait terminals.
 use super::super::{components::status, support::theme, task::fit};
 use crate::tui::app::App;
 use ratatui::{
@@ -30,11 +30,14 @@ enum Row {
 }
 
 pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
-    let area = frame.area();
-    frame.render_widget(Block::default().style(theme::base()), area);
-    if area.width == 0 || area.height < 3 {
+    let bounds = super::super::support::responsive::modal_rect(frame.area(), 94, 90);
+    if bounds.width < 3 || bounds.height < 5 {
         return;
     }
+    theme::modal_backdrop(frame, bounds);
+    let block = theme::modal_block("Sessions · Esc close");
+    let area = block.inner(bounds);
+    frame.render_widget(block, bounds);
     let top = Rect::new(area.x, area.y, area.width, 1);
     frame.render_widget(
         Block::default().style(theme::base().bg(theme::code_background())),

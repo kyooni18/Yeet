@@ -25,6 +25,57 @@ fn render(app: &mut App, width: u16, height: u16) -> (String, ratatui::buffer::B
 }
 
 #[test]
+fn floating_settings_preserves_the_rendered_workbench_and_tab() {
+    use crate::tui::app::WorkbenchTab;
+    use ratatui::layout::Rect;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("keep-open.rs"), "original content\n").unwrap();
+    for tab in [
+        WorkbenchTab::Home,
+        WorkbenchTab::Session,
+        WorkbenchTab::Files,
+        WorkbenchTab::Agents,
+    ] {
+        let mut app = App::default();
+        app.conversation.push(ConversationEntry {
+            id: "background".into(),
+            kind: ConversationKind::User {
+                content: "Keep this conversation visible".into(),
+            },
+        });
+        app.files = Some(crate::tui::app::files::FilesState::open(
+            dir.path().to_path_buf(),
+        ));
+        app.activate_workbench_tab(tab);
+        app.input = "keep this draft".into();
+        let (_, before) = render(&mut app, 144, 44);
+        app.set_mode(Mode::Settings);
+        let (text, after) = render(&mut app, 144, 44);
+        assert!(text.contains("Settings"), "{text}");
+        assert_eq!(app.active_workbench_tab(), tab);
+        assert_eq!(app.input, "keep this draft");
+        let panel = super::support::responsive::modal_rect(Rect::new(0, 0, 144, 44), 84, 72);
+        // Compare actual background content, not only the navigation projection.
+        for y in 0..44 {
+            for x in 0..panel.x {
+                assert_eq!(
+                    before[(x, y)].symbol(),
+                    after[(x, y)].symbol(),
+                    "{tab:?} at {x},{y}"
+                );
+            }
+        }
+        for x in 0..144 {
+            assert_eq!(
+                before[(x, 0)].symbol(),
+                after[(x, 0)].symbol(),
+                "header for {tab:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn welcome_preserves_composer_and_adapts_shortcut_cards() {
     for (width, height) in [(32, 8), (60, 14), (80, 24), (100, 36), (140, 38), (200, 50)] {
         let mut app = App::default();
@@ -51,7 +102,7 @@ fn views_switcher_renders_vertical_choices() {
 }
 
 #[test]
-fn portrait_session_picker_is_a_grouped_full_screen_list() {
+fn portrait_session_picker_is_a_floating_grouped_list() {
     let mut app = App::default();
     app.mode = Mode::Sessions;
     app.state.saved_sessions.push(SessionSummary {
@@ -64,6 +115,7 @@ fn portrait_session_picker_is_a_grouped_full_screen_list() {
     app.state.current_session_id = Some("selected".into());
     let (text, _) = render(&mut app, 58, 48);
     assert!(text.contains("Selected conversation"), "{text}");
+    assert!(text.lines().next().unwrap().contains("Home"), "{text}");
     assert!(text.contains("New session"), "{text}");
     assert!(text.contains("1 session"), "{text}");
     assert!(!text.contains("Enter open"), "{text}");
