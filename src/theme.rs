@@ -93,7 +93,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
         cache.invalidate();
         cache.hydrate(&mut settings);
-        assert_eq!(settings.theme_dark_resolved, "kanagawa");
+        assert_eq!(settings.theme_dark_resolved, "yeet");
         assert!(settings.theme_dark_warning.is_some());
     }
     #[test]
@@ -112,29 +112,6 @@ mod tests {
             palette_for_settings(&settings, Appearance::Light),
             Palette::adwaita()
         );
-    }
-
-    #[test]
-    fn kanagawa_matches_barklan_vscode_theme_roles() {
-        let palette = Palette::kanagawa();
-        assert_eq!(palette.background, Rgb::new(31, 31, 40)); // editor.background
-        assert_eq!(palette.surface, Rgb::new(42, 42, 55)); // activityBar.background
-        assert_eq!(palette.surface_raised, Rgb::new(54, 54, 70)); // list.hoverBackground
-        assert_eq!(palette.code_background, Rgb::new(22, 22, 29)); // input.background
-        assert_eq!(palette.selected, Rgb::new(34, 50, 73)); // editor.selectionBackground
-        assert_eq!(palette.muted, Rgb::new(114, 113, 105)); // editorInlayHint.foreground
-        assert_eq!(palette.border, Rgb::new(84, 84, 109)); // editorBracketMatch.border
-        assert_eq!(palette.border_dim, Rgb::new(22, 22, 29)); // editorGroup.border
-        assert_eq!(palette.accent, Rgb::new(126, 156, 216)); // list.highlightForeground
-        assert_eq!(palette.accent_hot, Rgb::new(127, 180, 202)); // terminal.ansiBrightBlue
-        assert_eq!(palette.accent_warm, Rgb::new(255, 160, 102)); // warm bracket accent
-        assert_eq!(palette.warning, Rgb::new(255, 158, 59)); // editorWarning.foreground
-        assert_eq!(palette.success, Rgb::new(152, 187, 108)); // terminal.ansiBrightGreen
-        assert_eq!(palette.text, Rgb::new(220, 215, 186)); // editor.foreground
-        assert_eq!(palette.text_dim, Rgb::new(200, 192, 147)); // statusBar.foreground
-        assert_eq!(palette.user, Rgb::new(230, 195, 132)); // terminal.ansiBrightYellow
-        assert_eq!(palette.user_surface, Rgb::new(45, 79, 103)); // remote background
-        assert_eq!(palette.error, Rgb::new(232, 36, 36)); // editorError.foreground
     }
 
     #[test]
@@ -178,7 +155,7 @@ mod tests {
         let resolved = resolve_palette(Appearance::Dark, Some("yeet"));
         assert_eq!(resolved.resolved, "yeet");
         assert_eq!(resolved.palette, Palette::yeet());
-        assert_ne!(resolved.palette, Palette::kanagawa());
+        assert_ne!(resolved.palette, Palette::quiet_night());
         assert!(resolved.warning.is_none());
     }
 
@@ -188,11 +165,11 @@ mod tests {
             r##"{"colors":{"editor.background":"#112233","editor.foreground":"#ddeeff","focusBorder":"#6699cc"}}"##,
         )
         .unwrap();
-        let palette = apply_resource(&theme, Palette::kanagawa());
+        let palette = apply_resource(&theme, Palette::yeet());
         assert_eq!(palette.background, Rgb::new(17, 34, 51));
         assert_eq!(palette.text, Rgb::new(221, 238, 255));
         assert_eq!(palette.accent, Rgb::new(102, 153, 204));
-        assert_ne!(palette.surface, Palette::kanagawa().surface);
+        assert_ne!(palette.surface, Palette::yeet().surface);
     }
 
     #[test]
@@ -218,7 +195,7 @@ M.dark = {
 "##,
         )
         .unwrap();
-        let palette = apply_resource(&theme, Palette::kanagawa());
+        let palette = apply_resource(&theme, Palette::yeet());
         assert_eq!(palette.background, Rgb::new(17, 17, 19));
         assert_eq!(palette.surface, Rgb::new(26, 26, 29));
         assert_eq!(palette.surface_raised, Rgb::new(39, 39, 44));
@@ -269,7 +246,7 @@ return M
         .unwrap();
 
         let theme = ThemeFile::load(root.path()).unwrap();
-        let palette = apply_resource(&theme, Palette::kanagawa());
+        let palette = apply_resource(&theme, Palette::yeet());
         assert_eq!(palette.background, Rgb::new(17, 17, 19));
         assert_eq!(palette.accent_warm, Rgb::new(220, 154, 108));
         assert_eq!(palette.accent, Rgb::new(124, 167, 223));
@@ -282,7 +259,7 @@ return M
             r##"{"yeet":{"background":"#101010","surfaceRaised":"#222222","borderDim":"#333333"}}"##,
         )
         .unwrap();
-        let palette = apply_resource(&theme, Palette::kanagawa());
+        let palette = apply_resource(&theme, Palette::yeet());
         assert_eq!(palette.surface_raised, Rgb::new(34, 34, 34));
         assert_eq!(palette.border_dim, Rgb::new(51, 51, 51));
     }

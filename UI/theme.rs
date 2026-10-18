@@ -81,32 +81,6 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub const fn kanagawa() -> Self {
-        // Source of truth: barklan/kanagawa.vscode
-        // themes/kanagawa-color-theme.json. Yeet semantic roles are mapped
-        // directly from the extension's editor/chrome/token colors.
-        Self {
-            background: rgb(31, 31, 40),      // editor.background #1F1F28
-            surface: rgb(42, 42, 55),         // activityBar.background #2A2A37
-            surface_raised: rgb(54, 54, 70),  // list.hoverBackground #363646
-            code_background: rgb(22, 22, 29), // input/statusBar.background #16161D
-            selected: rgb(34, 50, 73),        // editor.selectionBackground #223249
-            muted: rgb(114, 113, 105),        // editorInlayHint.foreground #727169
-            border: rgb(84, 84, 109),         // editorBracketMatch.border #54546D
-            border_dim: rgb(22, 22, 29),      // editorGroup.border #16161D
-            accent: rgb(126, 156, 216),       // list.highlightForeground #7E9CD8
-            accent_hot: rgb(127, 180, 202),   // terminal.ansiBrightBlue #7FB4CA
-            accent_warm: rgb(255, 160, 102),  // editorBracketHighlight.foreground2 #FFA066
-            warning: rgb(255, 158, 59),       // editorWarning.foreground #FF9E3B
-            success: rgb(152, 187, 108),      // terminal.ansiBrightGreen #98BB6C
-            text: rgb(220, 215, 186),         // editor.foreground #DCD7BA
-            text_dim: rgb(200, 192, 147),     // statusBar.foreground #C8C093
-            user: rgb(230, 195, 132),         // terminal.ansiBrightYellow #E6C384
-            user_surface: rgb(45, 79, 103),   // statusBarItem.remoteBackground #2D4F67
-            error: rgb(232, 36, 36),          // editorError.foreground #E82424
-        }
-    }
-
     pub const fn quiet_night() -> Self {
         // Copied from ~/.config/nvim-custom/quiet-night.nvim/lua/quiet-night/palette.lua
         // dark palette and mapped into Yeet semantic UI roles. This is a
@@ -134,25 +108,26 @@ impl Palette {
     }
 
     pub const fn yeet() -> Self {
+        // Minimal: neutral grays, one coral accent, quiet semantic colors.
         Self {
-            background: rgb(20, 18, 18),
-            surface: rgb(29, 25, 25),
-            surface_raised: rgb(40, 33, 33),
-            code_background: rgb(14, 12, 12),
-            selected: rgb(75, 38, 35),
-            muted: rgb(147, 129, 125),
-            border: rgb(87, 61, 58),
-            border_dim: rgb(57, 42, 40),
-            accent: rgb(255, 109, 88),
-            accent_hot: rgb(255, 139, 113),
-            accent_warm: rgb(224, 168, 106),
-            warning: rgb(231, 185, 92),
-            success: rgb(145, 194, 145),
-            text: rgb(244, 235, 230),
-            text_dim: rgb(202, 180, 170),
-            user: rgb(232, 168, 126),
-            user_surface: rgb(54, 35, 31),
-            error: rgb(255, 95, 90),
+            background: rgb(18, 18, 18),
+            surface: rgb(24, 24, 24),
+            surface_raised: rgb(32, 32, 32),
+            code_background: rgb(14, 14, 14),
+            selected: rgb(40, 40, 40),
+            muted: rgb(120, 120, 120),
+            border: rgb(48, 48, 48),
+            border_dim: rgb(32, 32, 32),
+            accent: rgb(232, 122, 104),
+            accent_hot: rgb(240, 146, 130),
+            accent_warm: rgb(200, 170, 130),
+            warning: rgb(214, 186, 120),
+            success: rgb(150, 186, 150),
+            text: rgb(228, 228, 228),
+            text_dim: rgb(170, 170, 170),
+            user: rgb(212, 212, 212),
+            user_surface: rgb(30, 30, 30),
+            error: rgb(224, 108, 108),
         }
     }
 
@@ -327,13 +302,7 @@ pub fn catalog() -> Vec<ThemeCatalogItem> {
             Appearance::Dark,
             Palette::quiet_night(),
         ),
-        catalog_item(
-            "kanagawa",
-            "Kanagawa",
-            Appearance::Dark,
-            Palette::kanagawa(),
-        ),
-        catalog_item("yeet", "Yeet Ember", Appearance::Dark, Palette::yeet()),
+        catalog_item("yeet", "Yeet", Appearance::Dark, Palette::yeet()),
         catalog_item("nord", "Nord", Appearance::Dark, Palette::nord()),
         catalog_item(
             "catppuccin-mocha",
@@ -367,7 +336,7 @@ pub struct ResolvedTheme {
 
 pub fn default_theme_id(appearance: Appearance) -> &'static str {
     match appearance {
-        Appearance::Dark => "kanagawa",
+        Appearance::Dark => "yeet",
         Appearance::Light => "adwaita",
     }
 }
@@ -407,7 +376,7 @@ pub fn resolve_palette(
 }
 fn default_palette(appearance: Appearance) -> Palette {
     match appearance {
-        Appearance::Dark => Palette::kanagawa(),
+        Appearance::Dark => Palette::yeet(),
         Appearance::Light => Palette::adwaita(),
     }
 }
@@ -415,7 +384,6 @@ fn default_palette(appearance: Appearance) -> Palette {
 fn builtin_palette(value: &str) -> Option<(&'static str, Palette)> {
     match crate::harness::theme_resources::builtin_id(value)? {
         "quiet-night" => Some(("quiet-night", Palette::quiet_night())),
-        "kanagawa" => Some(("kanagawa", Palette::kanagawa())),
         "yeet" => Some(("yeet", Palette::yeet())),
         "nord" => Some(("nord", Palette::nord())),
         "catppuccin-mocha" => Some(("catppuccin-mocha", Palette::catppuccin_mocha())),

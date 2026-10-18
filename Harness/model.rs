@@ -363,9 +363,9 @@ impl Default for RuntimeSettingsState {
     fn default() -> Self {
         Self {
             appearance: "auto".into(),
-            theme_dark: "kanagawa".into(),
+            theme_dark: "yeet".into(),
             theme_light: "adwaita".into(),
-            theme_dark_resolved: "kanagawa".into(),
+            theme_dark_resolved: "yeet".into(),
             theme_light_resolved: "adwaita".into(),
             theme_dark_palette: Default::default(),
             theme_light_palette: Default::default(),

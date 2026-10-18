@@ -219,7 +219,7 @@ fn theme(args: &[String]) -> Result<()> {
                 "appearance: {}",
                 settings.appearance.as_deref().unwrap_or("auto")
             );
-            println!("dark: {}", settings.dark.as_deref().unwrap_or("kanagawa"));
+            println!("dark: {}", settings.dark.as_deref().unwrap_or("yeet"));
             println!("light: {}", settings.light.as_deref().unwrap_or("adwaita"));
             Ok(())
         }

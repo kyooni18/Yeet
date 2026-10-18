@@ -1941,7 +1941,7 @@ mod tests {
                 _ => None,
             })
             .expect("theme preference patch");
-        assert_eq!(patch["runtime_settings"]["themeDarkResolved"], "kanagawa");
+        assert_eq!(patch["runtime_settings"]["themeDarkResolved"], "yeet");
         assert!(patch["runtime_settings"]["themeDarkWarning"].is_string());
         assert!(
             !patch["runtime_settings"]["themeDarkPalette"]["background"]

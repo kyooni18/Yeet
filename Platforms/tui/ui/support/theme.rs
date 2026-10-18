@@ -21,7 +21,7 @@ pub(in crate::platforms::tui::ui) fn active_palette() -> Palette {
 }
 
 fn active() -> Palette {
-    let lock = ACTIVE.get_or_init(|| RwLock::new(Palette::kanagawa()));
+    let lock = ACTIVE.get_or_init(|| RwLock::new(Palette::yeet()));
     *lock.read().expect("theme lock poisoned")
 }
 
@@ -205,7 +205,7 @@ pub fn initialize_theme() {
         .unwrap_or_default();
     let runtime = crate::model::RuntimeSettingsState {
         appearance: settings.appearance.unwrap_or_else(|| "auto".into()),
-        theme_dark: settings.dark.unwrap_or_else(|| "kanagawa".into()),
+        theme_dark: settings.dark.unwrap_or_else(|| "yeet".into()),
         theme_light: settings.light.unwrap_or_else(|| "adwaita".into()),
         ..Default::default()
     };

@@ -60,7 +60,6 @@ pub struct ThemeCatalogItem {
 pub fn builtin_id(value: &str) -> Option<&'static str> {
     Some(match value.trim().to_ascii_lowercase().as_str() {
         "quiet-night" | "quietnight" | "quiet_night" => "quiet-night",
-        "kanagawa" | "kanagawa-wave" | "wave" => "kanagawa",
         "yeet" | "ember" | "yeet-ember" => "yeet",
         "nord" => "nord",
         "catppuccin" | "catppuccin-mocha" | "mocha" => "catppuccin-mocha",

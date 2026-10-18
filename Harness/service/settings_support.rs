@@ -118,7 +118,7 @@ pub(super) fn runtime_settings_state(
     active_model: &str,
 ) -> Result<RuntimeSettingsState> {
     let theme = config.theme_settings()?;
-    let dark = theme.dark.unwrap_or_else(|| "kanagawa".into());
+    let dark = theme.dark.unwrap_or_else(|| "yeet".into());
     let light = theme.light.unwrap_or_else(|| "adwaita".into());
     Ok(RuntimeSettingsState {
         appearance: theme.appearance.unwrap_or_else(|| "auto".into()),
