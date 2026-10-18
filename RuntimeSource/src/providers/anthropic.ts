@@ -22,6 +22,8 @@ export interface AnthropicProviderOptions {
   accessToken?: string;
   baseUrl?: string;
   version?: string;
+  /** Installed Claude Code version reported with subscription OAuth requests. */
+  clientVersion?: string;
   fetch?: FetchLike;
   apiCallLogger?: ProviderFetchLogger;
 }
@@ -41,6 +43,9 @@ function mapToolChoice(choice: ToolChoice | undefined, model: string): unknown {
 
 const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
 const CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
+// Newer models reject subscription requests from Claude Code clients older than
+// the version they launched with. Used only when no local Claude Code is found.
+const FALLBACK_CLAUDE_CODE_VERSION = "2.1.296";
 
 function contextManagementForRequest(request: ProviderCallRequest): unknown | undefined {
   // Recoverable windows own their capacity and immutable history. Provider-side
@@ -71,14 +76,24 @@ function markLastCacheableBlock(
   return content;
 }
 
+// Claude subscription OAuth tokens only serve non-Haiku models when the system
+// prompt opens with Claude Code's identity as its own text block; otherwise the
+// API answers with an opaque 429 rate_limit_error.
+const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+
 function mapSystem(
   system: string | undefined,
   promptCacheEnabled: boolean,
   cacheControl: Record<string, unknown>,
+  claudeCodeIdentity = false,
 ): unknown | undefined {
-  if (!system) return undefined;
-  if (!promptCacheEnabled) return system;
-  return [{ type: "text", text: system, cache_control: cacheControl }];
+  const identity = claudeCodeIdentity ? [{ type: "text", text: CLAUDE_CODE_IDENTITY }] : [];
+  if (!system) return identity.length > 0 ? identity : undefined;
+  if (!promptCacheEnabled && identity.length === 0) return system;
+  return [
+    ...identity,
+    { type: "text", text: system, ...(promptCacheEnabled ? { cache_control: cacheControl } : {}) },
+  ];
 }
 
 function anthropicToolSchema(input: Record<string, unknown>): Record<string, unknown> {
@@ -233,7 +248,12 @@ function mapMessages(
   return output;
 }
 
-function requestBody(request: ProviderCallRequest, stream: boolean, providerId = "anthropic"): Record<string, unknown> {
+function requestBody(
+  request: ProviderCallRequest,
+  stream: boolean,
+  providerId = "anthropic",
+  claudeCodeIdentity = false,
+): Record<string, unknown> {
   // Only the immutable leading system prefix belongs in Anthropic's top-level
   // system field. Request-local coordinator overlays intentionally remain at
   // the tail, where mapMessages represents them as user guidance. Hoisting
@@ -285,7 +305,9 @@ function requestBody(request: ProviderCallRequest, stream: boolean, providerId =
       request.model,
     ),
     stream,
-    ...(split.system ? { system: mapSystem(split.system, promptCacheEnabled, explicitCacheControl) } : {}),
+    ...(split.system || claudeCodeIdentity
+      ? { system: mapSystem(split.system, promptCacheEnabled, explicitCacheControl, claudeCodeIdentity) }
+      : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(mappedTools.length > 0 ? { tools: mappedTools } : {}),
     ...(request.toolChoice ? { tool_choice: mapToolChoice(request.toolChoice, request.model) } : {}),
@@ -321,6 +343,7 @@ export class AnthropicProvider implements ProviderAdapter {
   readonly #accessToken: string | undefined;
   readonly #baseUrl: string;
   readonly #version: string;
+  readonly #clientVersion: string;
   readonly #fetch: FetchLike | undefined;
   readonly #apiCallLogger: ProviderFetchLogger | undefined;
 
@@ -330,6 +353,7 @@ export class AnthropicProvider implements ProviderAdapter {
     this.#accessToken = options.accessToken;
     this.#baseUrl = (options.baseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
     this.#version = options.version ?? "2023-06-01";
+    this.#clientVersion = options.clientVersion ?? FALLBACK_CLAUDE_CODE_VERSION;
     this.#fetch = options.fetch;
     this.#apiCallLogger = options.apiCallLogger;
   }
@@ -353,10 +377,14 @@ export class AnthropicProvider implements ProviderAdapter {
       // Claude subscription OAuth credentials are Claude Code credentials, not
       // general Anthropic API tokens. The service validates the Claude Code
       // client identity in addition to the OAuth beta and bearer token.
-      ...(this.id === "claude" && this.#accessToken ? { "user-agent": "claude-cli/1.0.0", "x-app": "cli" } : {}),
+      ...(this.id === "claude" && this.#accessToken ? { "user-agent": `claude-cli/${this.#clientVersion} (external, cli)`, "x-app": "cli" } : {}),
       "anthropic-version": this.#version,
       "content-type": "application/json",
     };
+  }
+
+  get #claudeSubscription(): boolean {
+    return this.id === "claude" && this.#accessToken !== undefined;
   }
 
   async listModels(): Promise<string[]> {
@@ -398,7 +426,7 @@ export class AnthropicProvider implements ProviderAdapter {
   async complete(request: ProviderCallRequest): Promise<CallResult> {
     const response = await providerFetch(
       `${this.#baseUrl}/v1/messages`,
-      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, false, this.id)) },
+      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, false, this.id, this.#claudeSubscription)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
@@ -458,7 +486,7 @@ export class AnthropicProvider implements ProviderAdapter {
   async *stream(request: ProviderCallRequest): AsyncIterable<StreamEvent> {
     const response = await providerFetch(
       `${this.#baseUrl}/v1/messages`,
-      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, true, this.id)) },
+      { method: "POST", headers: this.#headers(request), body: JSON.stringify(requestBody(request, true, this.id, this.#claudeSubscription)) },
       {
         provider: this.id,
         ...(this.#fetch ? { fetch: this.#fetch } : {}),

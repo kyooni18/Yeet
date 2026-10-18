@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import type { ProviderUsageStatus, ProviderUsageWindow } from "./auth.js";
+import { claudeCodeExecutable } from "./claude-version.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -89,7 +90,9 @@ export function claudeUsageLabel(id: string): string {
   return labels[id] ?? id.replaceAll("_", " ");
 }
 
-function claudeTokenFromPayload(value: unknown): string | undefined {
+type ClaudeStoredToken = { token?: string; expired: boolean };
+
+function claudeTokenFromPayload(value: unknown): ClaudeStoredToken {
   const payload = asObject(value);
   const oauth = asObject(payload.claudeAiOauth);
   const token = typeof oauth.accessToken === "string"
@@ -103,8 +106,11 @@ function claudeTokenFromPayload(value: unknown): string | undefined {
     : typeof expiresAt === "string" && expiresAt.trim()
       ? (Number.isFinite(Number(expiresAt)) ? Number(expiresAt) : Date.parse(expiresAt))
       : undefined;
-  if (expiry !== undefined && Number.isFinite(expiry) && expiry <= Date.now()) return undefined;
-  return token || undefined;
+  // Keep a minute of headroom so a request does not start with a dying token.
+  if (expiry !== undefined && Number.isFinite(expiry) && expiry <= Date.now() + 60_000) {
+    return { expired: Boolean(token) };
+  }
+  return { ...(token ? { token } : {}), expired: false };
 }
 
 /**
@@ -117,11 +123,21 @@ export async function resolveClaudeOAuthToken(): Promise<string | undefined> {
   const environment = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
   if (environment) return environment;
 
+  const stored = await readStoredClaudeToken();
+  if (stored.token || !stored.expired) return stored.token;
+  if (process.env.YEET_CLAUDE_CODE_AUTO_REFRESH === "0") return undefined;
+  await refreshClaudeCodeCredential();
+  return (await readStoredClaudeToken()).token;
+}
+
+async function readStoredClaudeToken(): Promise<ClaudeStoredToken> {
   const configuredPath = process.env.CLAUDE_CREDENTIALS_PATH?.trim();
   const credentialPath = configuredPath || join(homedir(), ".claude", ".credentials.json");
+  let expired = false;
   try {
-    const token = claudeTokenFromPayload(JSON.parse(await readFile(credentialPath, "utf8")));
-    if (token) return token;
+    const stored = claudeTokenFromPayload(JSON.parse(await readFile(credentialPath, "utf8")));
+    if (stored.token) return stored;
+    expired ||= stored.expired;
   } catch {
     // Native macOS installs normally use Keychain instead of this file.
   }
@@ -133,11 +149,30 @@ export async function resolveClaudeOAuthToken(): Promise<string | undefined> {
         ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
         { encoding: "utf8", timeout: 2_000, maxBuffer: 64 * 1024 },
       );
-      return claudeTokenFromPayload(JSON.parse(stdout));
+      const stored = claudeTokenFromPayload(JSON.parse(stdout));
+      if (stored.token) return stored;
+      expired ||= stored.expired;
     } catch {
       // No subscription login is available to query directly.
     }
   }
+  return { expired };
+}
 
-  return undefined;
+let claudeRefresh: Promise<void> | undefined;
+
+/**
+ * Claude Code owns its subscription credential and rotates the refresh token
+ * whenever it refreshes, so Yeet never refreshes it directly. A minimal Claude
+ * Code run lets Claude Code refresh and persist its own credential instead.
+ */
+async function refreshClaudeCodeCredential(): Promise<void> {
+  claudeRefresh ??= execFileAsync(
+    claudeCodeExecutable(),
+    ["-p", "--model", "haiku", "--max-turns", "1", "--tools", "", "Reply with OK."],
+    { encoding: "utf8", timeout: 90_000, maxBuffer: 1024 * 1024, cwd: homedir() },
+  ).then(() => undefined, () => undefined).finally(() => {
+    claudeRefresh = undefined;
+  });
+  await claudeRefresh;
 }

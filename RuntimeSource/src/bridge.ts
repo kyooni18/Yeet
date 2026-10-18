@@ -7,6 +7,7 @@ import { AuthManager, type ResolvedCredential } from "./auth.js";
 import { AntigravityLocalClient } from "./antigravity-local.js";
 import { createDefaultCore } from "./defaults.js";
 import { CodexComputerUse } from "./codex-computer-use.js";
+import { claudeCodeVersion } from "./claude-version.js";
 import { codexCliVersion } from "./codex-version.js";
 import type { ProviderFetchLog } from "./http.js";
 import { McpManager } from "./mcp.js";
@@ -267,6 +268,7 @@ async function refreshProvider(providerId: string): Promise<void> {
       core.register(new AnthropicProvider({
         id: "claude",
         ...(credential?.kind === "oauth" ? { accessToken: credential.accessToken } : {}),
+        ...(credential?.kind === "oauth" && claudeCodeVersion() ? { clientVersion: claudeCodeVersion()! } : {}),
         apiCallLogger: writeApiCallLog,
       }));
       return;

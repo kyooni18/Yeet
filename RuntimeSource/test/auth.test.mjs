@@ -428,19 +428,31 @@ test("Claude web login uses Claude Code auth and stays separate from the Anthrop
   assert.deepEqual(credential, { kind: "oauth", accessToken: "claude-oauth-token", source: "browser" });
 
   let requestHeaders;
+  let requestBody;
   const provider = new AnthropicProvider({
     id: "claude",
     accessToken: credential.accessToken,
+    clientVersion: "2.1.296",
     fetch: async (_input, init) => {
       requestHeaders = new Headers(init?.headers);
+      if (init?.body) {
+        requestBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }), { status: 200 });
+      }
       return new Response(JSON.stringify({ data: [{ id: "claude-test" }] }), { status: 200 });
     },
   });
   assert.deepEqual(await provider.listModels(), ["claude-test"]);
   assert.equal(requestHeaders.get("authorization"), "Bearer claude-oauth-token");
   assert.equal(requestHeaders.get("anthropic-beta"), "oauth-2025-04-20");
-  assert.equal(requestHeaders.get("user-agent"), "claude-cli/1.0.0");
+  // Anthropic gates newer models on the reported Claude Code version.
+  assert.equal(requestHeaders.get("user-agent"), "claude-cli/2.1.296 (external, cli)");
   assert.equal(requestHeaders.get("x-app"), "cli");
+
+  // Subscription tokens serve Sonnet/Opus only behind Claude Code's identity block.
+  await provider.complete({ model: "claude-opus-5-5", system: "Yeet system", messages: [{ role: "user", content: "hi" }] });
+  assert.equal(requestBody.system[0].text, "You are Claude Code, Anthropic's official CLI for Claude.");
+  assert.equal(requestBody.system[1].text, "Yeet system");
 });
 
 test("OpenAI plan usage comes directly from the ChatGPT WHAM usage API", async () => {
