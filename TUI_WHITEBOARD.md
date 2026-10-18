@@ -40,6 +40,9 @@ Closing a resource view returns to the workbench Overview, not implicitly to a
 conversation. Overview has its own mixed recent-object rail, not a sessions menu.
 These rules supersede the historical conversation-centric migration notes below.
 
+Auxiliary surfaces (Settings, Models, Help, and peers) identify their own active
+header tab; they must not fall back to highlighting Home or Session.
+
 ### Tabs are stateful view instances
 
 Tabs are NOT view-type buttons.

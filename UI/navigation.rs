@@ -91,8 +91,9 @@ impl NavigationState {
             Screen::Files => resources
                 .active_file
                 .map_or(WorkbenchTab::Files, WorkbenchTab::File),
-            _ if self.home_visible() => WorkbenchTab::Home,
-            _ => WorkbenchTab::Session,
+            Screen::Chat if self.home_visible() => WorkbenchTab::Home,
+            Screen::Chat => WorkbenchTab::Session,
+            _ => WorkbenchTab::Auxiliary(mode),
         }
     }
     /// Apply only after the adapter has accepted any associated resource operation.
@@ -105,6 +106,7 @@ impl NavigationState {
             WorkbenchTab::Files | WorkbenchTab::File(_) => self.mode = Screen::Files,
             WorkbenchTab::Diff(_) | WorkbenchTab::NewDiff => self.mode = Screen::Diff,
             WorkbenchTab::Agents => self.mode = Screen::Agents,
+            WorkbenchTab::Auxiliary(screen) => self.mode = screen,
             WorkbenchTab::Launcher => self.open_launcher(),
             WorkbenchTab::CloseFile(_) | WorkbenchTab::CloseDiff(_) => {}
         }
@@ -162,6 +164,18 @@ impl NavigationState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auxiliary_views_do_not_select_home_or_session() {
+        let resources = WorkbenchResources::default();
+        for screen in [Screen::Settings, Screen::Models, Screen::Help, Screen::Sessions, Screen::Providers] {
+            let mut state = NavigationState::default();
+            state.mode = screen;
+            let active = state.active_tab(&resources);
+            assert_eq!(active, WorkbenchTab::Auxiliary(screen));
+            let header = crate::shared_ui::workbench::header(&resources, |_| String::new(), None, active);
+            assert!(header.iter().any(|tab| tab.action == active));
+        }
+    }
     use crate::shared_ui::surfaces::Tabs;
     #[test]
     fn launcher_and_resource_closure_preserve_shared_navigation() {
