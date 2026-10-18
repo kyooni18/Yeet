@@ -229,7 +229,7 @@ impl ConversationView {
         for item in &self.items {
             match item {
                 DisplayItem::Entry { .. } => {}
-                DisplayItem::Reasoning { id, .. } => ids.push(id.clone()),
+                DisplayItem::Reasoning { .. } => {}
                 DisplayItem::Activity { id, group } => {
                     ids.push(id.clone());
                     if group.expanded && group.events.len() > 1 {

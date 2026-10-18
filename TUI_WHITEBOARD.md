@@ -23,8 +23,10 @@ A single event has one disclosure directly into its details; multiple events
 keep a compact counted group, with individually selectable detail disclosures.
 Running work alone uses a spinner. Approval, failure, timeout and cancellation
 remain explicit even when other work is running. Ordinary completed work has no
-status badge, duration or empty status slot. Arguments, output, timing and full
-reasoning belong behind disclosure; reasoning and running work start collapsed.
+status badge, duration or empty status slot. Arguments, output and timing belong behind tool disclosure; running tools start collapsed.
+Provider reasoning summaries are non-interactive plain text, indented two cells,
+wrapped without truncation, with active summaries slightly brighter. Private
+reasoning remains in the projection but is not exposed by summary rows.
 Selection and expansion retain stable shared IDs across status transitions.
 
 ## Non-negotiable mental model
@@ -40,8 +42,12 @@ Closing a resource view returns to the workbench Overview, not implicitly to a
 conversation. Overview has its own mixed recent-object rail, not a sessions menu.
 These rules supersede the historical conversation-centric migration notes below.
 
-Auxiliary surfaces (Settings, Models, Help, and peers) identify their own active
-header tab; they must not fall back to highlighting Home or Session.
+Settings, Models, Help, session pickers, and other auxiliary panels are floating
+views over the current workbench view, not replacement tabs. Opening or closing
+one preserves the underlying tab, content and local state (including File/Diff/
+Agents). Panels own input while open; Esc dismisses to the unchanged workbench.
+This floating-panel behavior supersedes auxiliary-as-peer-screen notes below;
+Files, Diff and Agents remain primary resource views.
 
 ### Tabs are stateful view instances
 

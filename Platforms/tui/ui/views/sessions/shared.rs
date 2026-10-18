@@ -27,12 +27,19 @@ pub(super) fn content_with_entries(
     let mut ids = Vec::new();
     let mut entry_ranges = Vec::new();
     let mut previous_was_entry = false;
+    let mut previous_was_reasoning = None;
     for item in &view.items {
         let is_entry = matches!(item, DisplayItem::Entry { .. });
-        if !lines.is_empty() && (is_entry || previous_was_entry) {
+        let is_reasoning = matches!(item, DisplayItem::Reasoning { .. });
+        if !lines.is_empty()
+            && (is_entry
+                || previous_was_entry
+                || previous_was_reasoning.is_some_and(|previous| previous != is_reasoning))
+        {
             lines.push(Line::default());
         }
         previous_was_entry = is_entry;
+        previous_was_reasoning = Some(is_reasoning);
         match item {
             DisplayItem::Entry { entry, .. } => {
                 let start = lines.len();
@@ -61,13 +68,23 @@ pub(super) fn content_with_entries(
                 }
                 lines.extend(work_lines);
             }
-            DisplayItem::Reasoning { id, trace, .. } => {
-                rows.push(lines.len());
-                ids.push(id.clone());
-                let selected = view.selected.as_deref() == Some(id.as_str())
-                    && !app.input_focused
-                    && !app.sidebar_focus;
-                lines.extend(tools::trace_lines(trace, width, selected));
+            DisplayItem::Reasoning {
+                summary, is_active, ..
+            } => {
+                if let Some(summary) = summary {
+                    let style = Style::default().fg(if *is_active {
+                        theme::secondary()
+                    } else {
+                        theme::muted()
+                    });
+                    for line in summary.lines() {
+                        lines.extend(prefixed_wrapped_line(
+                            Span::raw("  "),
+                            Line::styled(line.to_owned(), style),
+                            width,
+                        ));
+                    }
+                }
             }
         }
     }
@@ -83,8 +100,8 @@ mod tests {
         app.conversation = vec![ConversationEntry {
             id: "reasoning-1".into(),
             kind: ConversationKind::Reasoning {
-                content: "Inspect the provider logs".into(),
-                summary: None,
+                content: "Private reasoning".into(),
+                summary: Some("Inspect the provider logs".into()),
             },
         }];
         let view = app
@@ -92,18 +109,26 @@ mod tests {
             .conversation_state()
             .view(&app.conversation, &app.state);
         let (text, rows, ids) = content(&app, &view, 60);
-        assert_eq!(ids, vec!["reasoning:reasoning-1"]);
-        assert_eq!(rows, vec![0]);
+        assert!(ids.is_empty());
+        assert!(rows.is_empty());
         assert!(text.to_string().contains("Inspect the provider logs"));
+        for width in [0, 1, 2, 8, 24, 80] {
+            let (text, rows, ids) = content(&app, &view, width);
+            assert!(rows.is_empty() && ids.is_empty());
+            assert!(
+                text.lines
+                    .iter()
+                    .all(|line| line.width() <= usize::from(width))
+            );
+        }
+
         app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Toggle(
             "reasoning:reasoning-1".into(),
         ));
         let view = app.application.conversation_projection().view;
         let (text, _, _) = content(&app, &view, 60);
-        assert!(
-            text.lines.len() > 1,
-            "full reasoning is behind the disclosure"
-        );
+        assert_eq!(text.lines.len(), 1);
+        assert!(!text.to_string().contains("Private reasoning"));
         assert!(text.to_string().contains("Inspect the provider logs"));
     }
 

@@ -396,7 +396,7 @@ fn append_reasoning(
 ) {
     let content = readable(content);
     let summary = summary.map(readable).filter(|value| !value.is_empty());
-    if content.is_empty() && summary.is_none() {
+    if summary.is_none() {
         return;
     }
     let id = format!("reasoning:{entry_id}");
@@ -405,15 +405,16 @@ fn append_reasoning(
         sections.extend(details("Model summary", summary));
     }
     sections.extend(details("Reasoning", &content));
-    let trace = trace(
+    let mut trace = trace(
         state,
         &id,
-        if active { "Thinking" } else { "Reasoning" },
-        Some(useful_line(summary.as_deref().unwrap_or(&content), true)),
+        "",
+        summary.clone(),
         ConversationIcon::Reasoning,
         active,
         sections,
     );
+    trace.expanded = false;
     items.push(DisplayItem::Reasoning {
         id,
         content,

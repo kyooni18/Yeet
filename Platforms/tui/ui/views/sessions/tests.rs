@@ -76,47 +76,24 @@ fn cached_viewport_matches_full_transcript_and_invalidates_on_updates() {
 }
 
 #[test]
-fn reasoning_summaries_stay_compact_and_details_toggle_independently() {
+fn reasoning_summaries_are_plain_noninteractive_provider_text() {
     let mut app = App::default();
-    app.input_focused = false;
-    app.conversation = (0..2)
-        .map(|index| ConversationEntry {
-            id: index.to_string(),
-            kind: ConversationKind::Reasoning {
-                content: format!("Step {index}\n\nDetail {index}"),
-                summary: None,
-            },
-        })
-        .collect();
+    app.conversation = vec![ConversationEntry {
+        id: "summary".into(),
+        kind: ConversationKind::Reasoning {
+            content: "private reasoning".into(),
+            summary: Some("Inspect sources\nCompare results".into()),
+        },
+    }];
     let (visible, headers) = transcript_content(&app, 60);
-    assert_eq!(headers.len(), 2);
-    let visible_text = visible.to_string();
-    assert!(visible_text.contains("Detail 0"));
-    assert!(visible_text.contains("Detail 1"));
-
-    app.selected_work = Some(1);
-    app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Select(Some("reasoning:1".into())));
-    app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Toggle("reasoning:1".into()));
-    let (partially_collapsed, headers) = transcript_content(&app, 60);
-    assert!(partially_collapsed.lines.len() > visible.lines.len());
-    assert!(partially_collapsed.to_string().contains("Detail 0"));
-    assert!(partially_collapsed.to_string().contains("Step 1"));
-    assert!(!partially_collapsed.to_string().contains("Step 0"));
-    assert!(
-        partially_collapsed.lines[headers[1]]
-            .style
-            .add_modifier
-            .contains(Modifier::REVERSED)
-    );
-
-    app.input_focused = true;
-    let (focused, headers) = transcript_content(&app, 60);
-    assert!(
-        !focused.lines[headers[1]]
-            .style
-            .add_modifier
-            .contains(Modifier::REVERSED)
-    );
+    assert!(headers.is_empty());
+    assert!(visible.to_string().contains("  Inspect sources"));
+    assert!(visible.to_string().contains("  Compare results"));
+    assert!(!visible.to_string().contains("private reasoning"));
+    app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::SetExpandAll(true));
+    let (expanded, headers) = transcript_content(&app, 60);
+    assert_eq!(expanded, visible);
+    assert!(headers.is_empty());
 }
 
 #[test]

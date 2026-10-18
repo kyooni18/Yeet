@@ -166,7 +166,7 @@ fn summary(
                 }
             })
             .or_else(fallback),
-        "read_file" | "read_files" => {
+        "read_file" | "read_files" | "read_artifact" | "read_document" => {
             let paths = read_paths(args);
             paths
                 .first()
@@ -179,7 +179,7 @@ fn summary(
                 })
                 .or_else(fallback)
         }
-        "web_search" | "search_workspace" => {
+        "web_search" | "search_workspace" | "search_artifact" | "search_tools" => {
             field(args, &["query", "q", "search", "text", "pattern"]).or_else(fallback)
         }
         "web_read" => field(args, &["url", "href", "ref_id", "refId"]).or_else(fallback),
@@ -260,7 +260,7 @@ fn details(
                 }
             }
         }
-        "read_file" | "read_files" => {
+        "read_file" | "read_files" | "read_artifact" | "read_document" => {
             let paths = read_paths(args);
             if !paths.is_empty() {
                 sections.push(section(
@@ -332,83 +332,17 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
     let active = matches!(tool.status, Preparing | Running);
     let name = tool.name.trim();
     let title = match name {
-        "web_search" => {
-            if active {
-                "Searching web"
-            } else {
-                "Web search"
-            }
-        }
-        "web_read" => {
-            if active {
-                "Reading web page"
-            } else {
-                "Web page"
-            }
-        }
-        "run_shell" => {
-            if active {
-                "Running command"
-            } else {
-                "Command"
-            }
-        }
-        "shell_job" => {
-            if active {
-                "Checking command"
-            } else {
-                "Command"
-            }
-        }
-        "read_file" | "read_files" => {
-            if active {
-                "Reading file"
-            } else {
-                "Read file"
-            }
-        }
-        "apply_file_edits" => {
-            if active {
-                "Editing files"
-            } else {
-                "Edit files"
-            }
-        }
-        "search_workspace" => {
-            if active {
-                "Searching code"
-            } else {
-                "Code search"
-            }
-        }
-        "list_files" => {
-            if active {
-                "Reading file list"
-            } else {
-                "File list"
-            }
-        }
-        "computer_use" | "desktop_control" => {
-            if active {
-                "Controlling screen"
-            } else {
-                "Screen control"
-            }
-        }
-        _ if name.starts_with("mcp_") => {
-            if active {
-                "Running MCP"
-            } else {
-                "MCP"
-            }
-        }
-        _ if name.starts_with("skill_") => {
-            if active {
-                "Running Skill"
-            } else {
-                "Skill"
-            }
-        }
+        "web_search" => "Web search",
+        "web_read" => "Web page",
+        "run_shell" => "Command",
+        "shell_job" => "Command",
+        "read_file" | "read_files" | "read_artifact" | "read_document" => "Read file",
+        "apply_file_edits" => "Edit files",
+        "search_workspace" | "search_artifact" | "search_tools" => "Code search",
+        "list_files" => "File list",
+        "computer_use" | "desktop_control" => "Screen control",
+        _ if name.starts_with("mcp_") => "MCP",
+        _ if name.starts_with("skill_") => "Skill",
         _ => "",
     };
     let title = if title.is_empty() {
@@ -428,8 +362,8 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
     let icon = match name {
         "run_shell" | "shell_job" => Terminal,
         "apply_file_edits" => Edit,
-        "read_file" | "read_files" => File,
-        "search_workspace" => Search,
+        "read_file" | "read_files" | "read_artifact" | "read_document" => File,
+        "search_workspace" | "search_artifact" | "search_tools" => Search,
         "list_files" => Folder,
         "computer_use" | "desktop_control" => Screen,
         "web_search" | "web_read" => Web,

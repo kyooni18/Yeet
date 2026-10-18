@@ -119,3 +119,21 @@ pub(in crate::platforms::tui::ui) fn semantic(
         Icon::Add => "+",
     }
 }
+
+/// Action glyphs share the global Nerd Font opt-out and remain monochrome.
+pub(in crate::platforms::tui::ui) fn conversation(
+    icon: crate::shared_ui::conversation::ConversationIcon,
+) -> &'static str {
+    use crate::shared_ui::conversation::ConversationIcon::*;
+    let (glyph, fallback) = match icon {
+        Terminal => ("\u{f120}", ">"),
+        File => ("\u{f15c}", "≡"),
+        Edit => ("\u{f040}", "✎"),
+        Search => ("\u{f002}", "⌕"),
+        Web => ("\u{f0ac}", "◎"),
+        Folder => ("\u{f07b}", "▣"),
+        Screen => ("\u{f108}", "▤"),
+        _ => ("\u{f013}", "◇"),
+    };
+    if nerd() { glyph } else { fallback }
+}

@@ -147,11 +147,6 @@ fn disclosure_expanded(view: &ConversationView, id: &str) -> Option<bool> {
                     return Some(event.trace().expanded);
                 }
             }
-            DisplayItem::Reasoning {
-                id: reasoning_id,
-                trace,
-                ..
-            } if reasoning_id == id => return Some(trace.expanded),
             _ => {}
         }
     }

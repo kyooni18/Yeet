@@ -103,7 +103,7 @@ mod tool_summary_layout_tests {
             } else {
                 assert_eq!(lines.len(), 1, "running tools stay compact");
             }
-            for width in [24, 40, 60] {
+            for width in [0, 1, 2, 8, 24, 40, 60] {
                 assert!(
                     render(vec![tool_entry(tool)], width, false)
                         .iter()
@@ -161,7 +161,7 @@ mod tool_summary_layout_tests {
         let mut done = call("run_shell", ToolCallStatus::Completed);
         done.duration_ms = Some(1200);
         let lines = render(vec![reasoning, tool_entry(&done)], 80, false);
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 3);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -212,7 +212,11 @@ pub(super) fn activity_group_lines(
     let title = if group.expanded {
         format!("{count} actions")
     } else {
-        group.summary.clone()
+        format!(
+            "{} {}",
+            icons::conversation(group.events.last().unwrap().trace().icon),
+            group.summary
+        )
     };
     let status = if group.expanded {
         None
@@ -275,7 +279,7 @@ fn work_row(
         suffix.push_str(&format!(" · {count}"));
     }
     if active {
-        suffix.push_str(&format!(" {}", spinner()));
+        suffix.push_str(" · running");
     }
     if let Some(expanded) = expanded {
         suffix.push_str(&format!(" {}", icons::chevron(expanded)));
@@ -286,11 +290,17 @@ fn work_row(
         format!(" {}", task::fit(&suffix, width.saturating_sub(1)))
     };
     let budget = width.saturating_sub(Span::raw(&suffix).width());
+    let (action, target) = title.split_once(" · ").unwrap_or((title, ""));
+    let action = task::fit(action, budget);
+    let remaining = budget.saturating_sub(Span::raw(&action).width());
+    let target = if target.is_empty() {
+        String::new()
+    } else {
+        task::fit(&format!(" · {target}"), remaining)
+    };
     let line = Line::from(vec![
-        Span::styled(
-            task::fit(title, budget),
-            Style::default().fg(theme::secondary()),
-        ),
+        Span::styled(action, Style::default().fg(theme::secondary())),
+        Span::styled(target, Style::default().fg(theme::muted())),
         Span::styled(
             suffix,
             if status.is_some() {
@@ -329,6 +339,7 @@ pub(super) fn trace_lines(
         None => trace.title.clone(),
     };
     // Completed status is intentionally empty; only waiting/error states add copy.
+    let title = format!("{} {title}", icons::conversation(trace.icon));
     let status = trace.attention_label();
     let expandable = !trace.details.is_empty() || trace.metadata.is_some();
     let mut lines = vec![work_row(
