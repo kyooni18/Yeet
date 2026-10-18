@@ -223,9 +223,18 @@ pub(crate) fn apply_runtime_theme(settings: &crate::model::RuntimeSettingsState)
     if let Ok(appearance) = std::env::var("YEET_THEME_MODE") {
         projected.appearance = appearance;
     }
-    let palette = crate::shared_ui::theme::palette_for_settings(&projected, Appearance::Dark);
+    let palette = crate::shared_ui::theme::palette_for_settings(&projected, system_appearance());
     let lock = ACTIVE.get_or_init(|| RwLock::new(palette));
     *lock.write().expect("theme lock poisoned") = palette;
+}
+
+/// The OS light/dark setting (macOS, Windows, Linux portal/GNOME/KDE).
+/// Falls back to dark when the platform does not report one.
+fn system_appearance() -> Appearance {
+    match dark_light::detect() {
+        Ok(dark_light::Mode::Light) => Appearance::Light,
+        _ => Appearance::Dark,
+    }
 }
 
 pub(crate) fn refresh_runtime_theme(settings: &crate::model::RuntimeSettingsState) {
