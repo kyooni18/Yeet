@@ -108,7 +108,7 @@ impl Palette {
     }
 
     pub const fn yeet() -> Self {
-        // Minimal: neutral grays, one coral accent, quiet semantic colors.
+        // Minimal: neutral grays, one blue accent, quiet semantic colors.
         Self {
             background: rgb(18, 18, 18),
             surface: rgb(24, 24, 24),
@@ -118,8 +118,8 @@ impl Palette {
             muted: rgb(120, 120, 120),
             border: rgb(48, 48, 48),
             border_dim: rgb(32, 32, 32),
-            accent: rgb(232, 122, 104),
-            accent_hot: rgb(240, 146, 130),
+            accent: rgb(110, 160, 230),
+            accent_hot: rgb(140, 182, 240),
             accent_warm: rgb(200, 170, 130),
             warning: rgb(214, 186, 120),
             success: rgb(150, 186, 150),
