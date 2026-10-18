@@ -1,12 +1,13 @@
 import { color, mono } from "./theme"
-import { ease, spinnerFrame } from "./state"
+import { ease, tick } from "./state"
 
-/** TUI-style text spinner: `| / - \` advancing every 180 ms while work runs. */
+/** A small, neutral activity ring; never attached to provider narration. */
 export struct Spinner: View {
   var body: some View {
-    Text(spinnerFrame())
-      .foregroundStyle(color.accent)
-      .style({ fontFamily: mono, display: "inline-block", width: "1ch", textAlign: "center", flex: "none" })
+    Circle()
+      .style({ width: "12px", height: "12px", border: "1.5px solid var(--line)", borderTopColor: "var(--muted)", borderRadius: "50%", flex: "none" })
+      .rotationEffect(tick.value * 45)
+      .animation(ease, value: tick.value)
       .accessibilityLabel("Working")
   }
 }

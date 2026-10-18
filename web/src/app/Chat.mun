@@ -3,7 +3,7 @@ import { workIcon } from "./workIcons"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
-  remote, ease, isWide, sidebarOpen, connected, toggleSidebar, openSheet, contextLabel, shortModel,
+  remote, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
   toolbarControl, pinToBottom, workspaceLine, elapsed,
 } from "./state"
 import {
@@ -31,6 +31,13 @@ export struct TopBar: View {
           .accessibilityLabel("Toggle sidebar")
           .transition(Transition.opacity)
       }
+      if page.value === "chat" {
+        Text(remote.value.currentSession?.title || "New session")
+          .fontSize(13)
+          .foregroundStyle(color.muted)
+          .lineLimit(1)
+          .style({ minWidth: "0" })
+      }
       Spacer()
       Text(connectionLabel())
         .fontSize(12)
@@ -40,23 +47,25 @@ export struct TopBar: View {
         .foregroundStyle(color.faint)
     }
     .padding({ top: 8, leading: 12, trailing: 18 })
-    .style({ height: "36px", flex: "none" })
+    .style({ height: "44px", flex: "none", paddingTop: "max(8px, env(safe-area-inset-top))" })
   }
 }
 
 struct Detail: View {
   let detail: Any
   var body: some View {
-    Text(detail.content)
-      .fontSize(detail.monospaced ? 12 : 14)
-      .foregroundStyle(detail.is_error ? color.del : detail.monospaced ? color.text : color.muted)
-      .withProps({ className: "trace-detail__content" })
-      .style({ width: "100%", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: detail.monospaced ? mono : "inherit" })
+    VStack(alignment: .stretch, spacing: 4) {
+      Text(detail.title).fontSize(11).foregroundStyle(color.faint)
+      Text(detail.content)
+        .fontSize(detail.monospaced ? 12 : 14)
+        .foregroundStyle(detail.is_error ? color.del : detail.monospaced ? color.text : color.muted)
+        .withProps({ className: "trace-detail__content" })
+        .style({ width: "100%", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: detail.monospaced ? mono : "inherit" })
+    }
   }
 }
 
 function traceLabel(trace: Any): string {
-  if (trace.details.length) return trace.title
   return trace.summary && trace.summary !== trace.title ? trace.title + " · " + trace.summary : trace.title
 }
 
@@ -100,33 +109,78 @@ struct Trace: View {
   let groupHeader: Bool
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
-      TraceLabel(trace: trace, groupHeader: groupHeader)
-        .withProps({ className: "trace-disclosure__row" })
-      VStack(alignment: .stretch, spacing: 6) {
-        ForEach(trace.details, { id: detail => detail.title + ":" + detail.content.length }) { detail in
-          Detail(detail: detail)
-        }
-        if trace.metadata {
-          Text("Duration: " + trace.metadata).fontSize(12).foregroundStyle(color.faint)
-        }
+      if trace.details.length || trace.metadata {
+        Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) }, label: {
+          TraceLabel(trace: trace, groupHeader: groupHeader)
+        })
+        .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row", "aria-expanded": trace.expanded })
+      } else {
+        TraceLabel(trace: trace, groupHeader: groupHeader)
+          .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row" })
       }
-      .padding({ leading: 20, bottom: 6 })
-      .withProps({ className: "trace-disclosure__details" })
+      if trace.expanded {
+        VStack(alignment: .stretch, spacing: 10) {
+          ForEach(trace.details, { id: detail => detail.title + ":" + detail.content.length }) { detail in
+            Detail(detail: detail)
+          }
+          if trace.metadata {
+            Text("Duration: " + trace.metadata).fontSize(12).foregroundStyle(color.faint)
+          }
+        }
+        .padding({ leading: 20, bottom: 10 })
+        .withProps({ className: "trace-disclosure__details" })
+        .transition(Transition.opacity.combined(Transition.move("top", 4)))
+      }
     }
     .withProps({ className: "trace-disclosure" })
   }
 }
 
+/** Provider narration is intentionally not a disclosure or a tool record. */
+struct Reasoning: View {
+  let trace: Any
+  var body: some View {
+    Element("yeet-markdown", { source: trace.summary || "" })
+      .fontSize(13)
+      .foregroundStyle(trace.active ? color.muted : color.faint)
+      .style({ whiteSpace: "pre-wrap", overflowWrap: "anywhere", lineHeight: "1.65" })
+      .padding({ top: 8, bottom: 12, leading: 20 })
+  }
+}
+
+function singleTrace(group: Any): Any {
+  return { ...group.events[0].trace, id: group.id, expanded: group.expanded }
+}
+
+function groupTrace(group: Any): Any {
+  return { title: group.summary, summary: null, details: [], icon: group.events[group.events.length - 1]?.trace.icon, active: group.active, status_label: group.status_label }
+}
+
 struct Activity: View {
   let group: Any
   var body: some View {
-    VStack(alignment: .stretch, spacing: 8) {
-      ForEach(group.events, { id: event => event.key }) { event in
-        Trace(trace: event.trace, groupHeader: false)
-          .withProps({ className: "activity-group__event" })
+    Group() {
+      if group.events.length === 1 {
+        Trace(trace: singleTrace(group), groupHeader: true)
+      } else {
+        VStack(alignment: .stretch, spacing: 4) {
+          Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: group.id }) }, label: {
+            TraceLabel(trace: groupTrace(group), groupHeader: true)
+          })
+          .withProps({ className: "activity-group__header", "aria-expanded": group.expanded })
+          if group.expanded {
+            VStack(alignment: .stretch, spacing: 4) {
+              ForEach(group.events, { id: event => event.key }) { event in
+                Trace(trace: event.trace, groupHeader: false)
+                  .withProps({ className: "activity-group__event" })
+              }
+            }
+            .withProps({ className: "activity-group__events" })
+            .transition(Transition.opacity.combined(Transition.move("top", 4)))
+          }
+        }
       }
     }
-    .withProps({ className: "activity-group__events" })
   }
 }
 
@@ -200,7 +254,7 @@ struct Item: View {
       if item.type === "activity" {
         Activity(group: item.group)
       } else if item.type === "reasoning" {
-        Trace(trace: item.trace, groupHeader: false)
+        Reasoning(trace: item.trace)
       } else {
         Message(item: item)
       }
@@ -243,8 +297,6 @@ struct Thread: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
       if hasConversation() === true {
-        PageHeader(title: remote.value.currentSession?.title || "New session", subtitle: workspaceLine())
-          .padding({ bottom: 24 })
         ForEach(remote.value.conversation?.items ?? [], { id: item => item.id }) { item in
           Item(item: item)
         }
@@ -417,6 +469,7 @@ struct Composer: View {
       .style({ borderRadius: "21px" })
     }
     .padding({ top: 4, bottom: 16, leading: 16, trailing: 16 })
+    .withProps({ className: "composer" })
     .style({ maxWidth: "840px", margin: "0 auto", width: "100%" })
   }
 }

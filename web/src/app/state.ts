@@ -191,6 +191,12 @@ function consumeEffects(onEditDraft: (text: string) => void) {
 }
 
 export function startRemote(onEditDraft: (text: string) => void) {
+  // Follow the visible viewport rather than placing the composer under the iOS keyboard.
+  const viewport = window.visualViewport
+  const sizeViewport = () => document.documentElement.style.setProperty('--app-height', `${viewport?.height ?? window.innerHeight}px`)
+  viewport?.addEventListener('resize', sizeViewport)
+  window.addEventListener('resize', sizeViewport)
+  sizeViewport()
   remoteStore.subscribe(() => {
     remote.value = remoteStore.getSnapshot()
     consumeEffects(onEditDraft)

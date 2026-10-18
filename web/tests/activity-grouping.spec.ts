@@ -107,14 +107,14 @@ test('reasoning displays separately from tool groups and preserves transcript or
   await expect(transcriptItems.nth(0)).toHaveClass(/reasoning-trace/)
   await expect(transcriptItems.nth(0)).toContainText('Checking sources')
   await expect(reasoning.nth(0).locator('.trace-disclosure__details')).toHaveCount(0)
-  await reasoning.nth(0).getByRole('button').click()
-  await expect(transcriptItems.nth(0)).toContainText('First full reasoning details')
+  await expect(reasoning.nth(0).getByRole('button')).toHaveCount(0)
+  await expect(transcriptItems.nth(0)).not.toContainText('First full reasoning details')
   await expect(transcriptItems.nth(1)).toHaveClass(/activity-group/)
   await expect(transcriptItems.nth(2)).toHaveClass(/reasoning-trace/)
   await expect(transcriptItems.nth(2)).toContainText('Cross-checking claims')
   await expect(reasoning.nth(1).locator('.trace-disclosure__details')).toHaveCount(0)
-  await reasoning.nth(1).getByRole('button').click()
-  await expect(transcriptItems.nth(2)).toContainText('Second full reasoning details')
+  await expect(reasoning.nth(1).getByRole('button')).toHaveCount(0)
+  await expect(transcriptItems.nth(2)).not.toContainText('Second full reasoning details')
   await expect(page.locator('.conversation-content')).not.toContainText('**')
 
   await groups.nth(0).locator('.activity-group__header').click()
@@ -137,9 +137,9 @@ test('current tool activity remains separate from the full reasoning trace', asy
   await expect(reasoning).toHaveCount(1)
   await expect(reasoning).toContainText('Checking constraints')
   await expect(reasoning.locator('.trace-disclosure__details')).toHaveCount(0)
-  await reasoning.getByRole('button').click()
+  await expect(reasoning.getByRole('button')).toHaveCount(0)
   await expect(reasoning).toContainText('Inspecting inputs')
-  await expect(reasoning).toContainText('Raw provider reasoning details')
+  await expect(reasoning).not.toContainText('Raw provider reasoning details')
   await expect(page.locator('.activity-group .reasoning-trace')).toHaveCount(0)
 })
 
@@ -164,7 +164,7 @@ test('single tools have one compact row, with output and timing behind disclosur
   const metrics = await page.locator('.conversation-content').evaluate(node => {
     const reasoning = node.querySelector('.reasoning-trace')!
     const group = node.querySelector('.activity-group')!
-    const label = reasoning.querySelector('.trace-disclosure__label')!
+    const label = reasoning.querySelector('yeet-markdown')!
     return {
       gap: group.getBoundingClientRect().top - reasoning.getBoundingClientRect().bottom,
       nowrap: getComputedStyle(label).whiteSpace,
@@ -173,7 +173,7 @@ test('single tools have one compact row, with output and timing behind disclosur
   })
   expect(metrics.gap).toBeLessThanOrEqual(2)
   expect(metrics.gap).toBeGreaterThanOrEqual(0)
-  expect(metrics.nowrap).toBe('nowrap')
+  expect(metrics.nowrap).toBe('pre-wrap')
   expect(metrics.overflow).toBe(false)
   await header.click()
   await expect(group.locator('.trace-disclosure__row')).toHaveCount(1)

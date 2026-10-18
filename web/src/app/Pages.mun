@@ -73,9 +73,7 @@ struct FileInfo: View {
         .style({ marginLeft: "-8px" })
       }
     }
-    .padding(14)
-    .background(color.panel)
-    .style({ borderRadius: "12px" })
+    .padding({ top: 8, bottom: 16 })
     .transition(Transition.opacity.combined(Transition.move("top", 6)))
   }
 }
@@ -170,12 +168,14 @@ export struct DiffPage: View {
             }
           }
         }
+        .withProps({ className: "diff-files" })
         .style({ width: "260px", flex: "none" })
         if remote.value.workspaceChanges?.patch.length {
           Patch()
         }
       }
       .padding({ leading: 20 })
+      .withProps({ className: "diff-layout" })
       .style({ flex: "1", minHeight: "0" })
     }
     .padding({ top: 20 })

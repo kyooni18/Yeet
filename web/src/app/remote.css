@@ -1,56 +1,56 @@
 /* Tokens (from the Yeet desktop mockup) and a minimal reset. Layout and
    component styling live in the .mun Views as built-in modifiers. */
 :root {
-  --bg: #fffbf9;
-  --sidebar: #eef2f5;
-  --field: #e6edf1;
-  --nav-hover: #e9eff3;
-  --nav-select: #e0e8ee;
+  --bg: #fcfcfc;
+  --sidebar: #f3f3f3;
+  --field: #eaeaea;
+  --nav-hover: #e9e9e9;
+  --nav-select: #e3e3e3;
   --session-select: rgba(255, 255, 255, 0.6);
-  --row-hover: #f4efe6;
-  --row-select: #ede6d8;
-  --bubble: #ede6d8;
+  --row-hover: #f2f2f2;
+  --row-select: #eeeeee;
+  --bubble: #eeeeee;
   --rule: #e3dfd9;
-  --composer: #f5f3f1;
-  --panel: #f4f1ed;
-  --raised: #ebe6df;
+  --composer: #f2f2f2;
+  --panel: #f6f6f6;
+  --raised: #e9e9e9;
   --text: #1d1d1f;
   --text2: #48484a;
   --muted: #6e6e73;
-  --faint: #8a8a8e;
+  --faint: #77777c;
   --line: rgba(0, 0, 0, 0.07);
   --hover: rgba(0, 0, 0, 0.04);
-  --accent: #5b7c99;
-  --accent-hover: #4e6e8b;
+  --accent: #343438;
+  --accent-hover: #202024;
   --accent-ink: #ffffff;
   --add: #3f6a33;
-  --add-bg: #e3eedc;
+  --add-bg: #edf3eb;
   --del: #8f3b30;
-  --del-bg: #f6e2de;
+  --del-bg: #f8eeee;
   --scrim: rgba(0, 0, 0, 0.18);
   --sans: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --mono: Menlo, ui-monospace, "SF Mono", Consolas, monospace;
   color-scheme: light;
 }
 :root[data-appearance="dark"] {
-  --bg: #1e1d1c; --sidebar: #242628; --field: #2e3236; --nav-hover: #2b3034; --nav-select: #333a40;
-  --session-select: rgba(255, 255, 255, 0.07); --row-hover: #2a2725; --row-select: #36312b; --bubble: #36312b;
-  --rule: #3b3732; --composer: #272523; --panel: #262422; --raised: #33302c;
-  --text: #ecebe8; --text2: #c9c7c3; --muted: #9b9994; --faint: #78766f;
+  --bg: #1b1b1d; --sidebar: #222224; --field: #2b2b2e; --nav-hover: #2b2b2e; --nav-select: #343437;
+  --session-select: rgba(255, 255, 255, 0.07); --row-hover: #252528; --row-select: #303033; --bubble: #303033;
+  --rule: #3b3732; --composer: #262629; --panel: #232326; --raised: #323235;
+  --text: #ecebe8; --text2: #c9c7c3; --muted: #9b9994; --faint: #919198;
   --line: rgba(255, 255, 255, 0.08); --hover: rgba(255, 255, 255, 0.05);
-  --accent: #7d9cb8; --accent-hover: #8eabc5; --accent-ink: #14191e;
-  --add: #a3c992; --add-bg: #25321f; --del: #e8a196; --del-bg: #3b2522; --scrim: rgba(0, 0, 0, 0.4);
+  --accent: #dedee3; --accent-hover: #f4f4f6; --accent-ink: #202024;
+  --add: #a3c992; --add-bg: #242e26; --del: #e8a196; --del-bg: #322527; --scrim: rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-appearance="light"]) {
-    --bg: #1e1d1c; --sidebar: #242628; --field: #2e3236; --nav-hover: #2b3034; --nav-select: #333a40;
-    --session-select: rgba(255, 255, 255, 0.07); --row-hover: #2a2725; --row-select: #36312b; --bubble: #36312b;
-    --rule: #3b3732; --composer: #272523; --panel: #262422; --raised: #33302c;
-    --text: #ecebe8; --text2: #c9c7c3; --muted: #9b9994; --faint: #78766f;
+    --bg: #1b1b1d; --sidebar: #222224; --field: #2b2b2e; --nav-hover: #2b2b2e; --nav-select: #343437;
+    --session-select: rgba(255, 255, 255, 0.07); --row-hover: #252528; --row-select: #303033; --bubble: #303033;
+    --rule: #3b3732; --composer: #262629; --panel: #232326; --raised: #323235;
+    --text: #ecebe8; --text2: #c9c7c3; --muted: #9b9994; --faint: #919198;
     --line: rgba(255, 255, 255, 0.08); --hover: rgba(255, 255, 255, 0.05);
-    --accent: #7d9cb8; --accent-hover: #8eabc5; --accent-ink: #14191e;
-    --add: #a3c992; --add-bg: #25321f; --del: #e8a196; --del-bg: #3b2522; --scrim: rgba(0, 0, 0, 0.4);
+    --accent: #dedee3; --accent-hover: #f4f4f6; --accent-ink: #202024;
+    --add: #a3c992; --add-bg: #242e26; --del: #e8a196; --del-bg: #322527; --scrim: rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
 }
@@ -71,3 +71,29 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 @media (hover: none), (pointer: coarse) {
   .trace-disclosure__row, .activity-group__header { min-height: 32px; }
 }
+
+/* Platform behavior; composition and transitions remain Mün Views. */
+html { overscroll-behavior: none; }
+#main, #sidebar { min-height: 0; }
+#sidebar { padding-top: max(14px, env(safe-area-inset-top)) !important; padding-bottom: max(16px, env(safe-area-inset-bottom)) !important; }
+.composer { padding-bottom: max(16px, env(safe-area-inset-bottom)) !important; flex-shrink: 0; }
+.trace-disclosure__row, .activity-group__header { border-radius: 6px; }
+.trace-disclosure__details { max-height: 420px; overflow: auto; overscroll-behavior: contain; }
+.trace-detail__content { min-width: 0; }
+@media (hover: none), (pointer: coarse) {
+ button { min-height: 44px; }
+ .trace-disclosure__row, .activity-group__header { min-height: 44px; }
+}
+@media (max-width: 599px) {
+ .composer { padding-left: 12px !important; padding-right: 12px !important; }
+ .composer select { max-width: 100px !important; }
+}
+
+@media (max-width: 699px) {
+  .diff-layout { flex-direction: column !important; padding-right: 20px; gap: 12px !important; }
+  .diff-files { width: 100% !important; max-height: 28vh; }
+}
+
+/* Disclosure output is secondary to the action, not another card. */
+.trace-disclosure__details { color: var(--muted); }
+#main { isolation: isolate; }
