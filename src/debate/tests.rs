@@ -9,7 +9,7 @@
 
 use super::research::{ResearchTools, run_with};
 use super::*;
-use crate::core::{CallResult, ToolCall};
+use crate::core::{CallRequest, CallResult, ToolCall, ToolDefinition};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -102,10 +102,11 @@ impl ProviderCache {
         for index in explicit {
             blocks[index].2 = true;
         }
-        if cache && !blocks[prefix_blocks..].iter().any(|block| block.2) {
-            if let Some(last) = blocks.last_mut() {
-                last.2 = true;
-            }
+        if cache
+            && !blocks[prefix_blocks..].iter().any(|block| block.2)
+            && let Some(last) = blocks.last_mut()
+        {
+            last.2 = true;
         }
 
         let mut hasher = Sha256::new();
@@ -335,7 +336,9 @@ pub(super) fn scripted_debate_requests() -> Vec<(&'static str, CallRequest)> {
     log
 }
 
-pub(super) fn replay(requests: &[(&'static str, CallRequest)]) -> BTreeMap<&'static str, CacheTally> {
+pub(super) fn replay(
+    requests: &[(&'static str, CallRequest)],
+) -> BTreeMap<&'static str, CacheTally> {
     let mut cache = ProviderCache::default();
     let mut phases: BTreeMap<&str, CacheTally> = BTreeMap::new();
     for (phase, request) in requests {
@@ -347,7 +350,8 @@ pub(super) fn replay(requests: &[(&'static str, CallRequest)]) -> BTreeMap<&'sta
 }
 
 fn report(phases: &BTreeMap<&str, CacheTally>) -> String {
-    let mut out = String::from("phase       calls   input    read   write uncached   hit%   cost\n");
+    let mut out =
+        String::from("phase       calls   input    read   write uncached   hit%   cost\n");
     for (phase, t) in phases {
         out.push_str(&format!(
             "{phase:<10} {:>5} {:>7} {:>7} {:>7} {:>7} {:>6.1} {:>7.0}\n",
@@ -367,4 +371,201 @@ fn report(phases: &BTreeMap<&str, CacheTally>) -> String {
 fn simulated_debate_prompt_cache_report() {
     let phases = replay(&scripted_debate_requests());
     println!("{}", report(&phases));
+}
+
+fn report_tally(phases: &BTreeMap<&str, CacheTally>, phase: &str) -> CacheTally {
+    phases.get(phase).copied().unwrap_or_default()
+}
+
+#[test]
+fn debate_requests_reuse_provider_cache() {
+    let phases = replay(&scripted_debate_requests());
+    // Baseline before the cache-aware layout: 44.8% overall, 0% for
+    // advocates and jury, 73.5% for research.
+    assert!(
+        report_tally(&phases, "TOTAL").hit_rate() > 0.70,
+        "{}",
+        report(&phases)
+    );
+    assert!(
+        report_tally(&phases, "research").hit_rate() > 0.85,
+        "{}",
+        report(&phases)
+    );
+    assert!(
+        report_tally(&phases, "advocate").hit_rate() > 0.5,
+        "{}",
+        report(&phases)
+    );
+    assert!(
+        report_tally(&phases, "jury").hit_rate() >= 0.5,
+        "{}",
+        report(&phases)
+    );
+}
+
+fn system_and_messages(request: &CallRequest) -> Vec<String> {
+    request
+        .messages
+        .iter()
+        .map(|m| m.content.clone().unwrap_or_default())
+        .collect()
+}
+
+#[test]
+fn advocate_context_is_append_only_and_isolated() {
+    let requests = scripted_debate_requests();
+    let advocates: Vec<_> = requests
+        .iter()
+        .filter(|(phase, _)| *phase == "advocate")
+        .map(|(_, request)| request)
+        .collect();
+    let (pro, con): (Vec<_>, Vec<_>) = advocates.iter().enumerate().partition(|(i, _)| i % 2 == 0);
+    for side in [&pro, &con] {
+        for pair in side.windows(2) {
+            let (earlier, later) = (
+                system_and_messages(pair[0].1),
+                system_and_messages(pair[1].1),
+            );
+            // Everything but the trailing stage instruction must be reused verbatim.
+            assert_eq!(earlier[..earlier.len() - 1], later[..earlier.len() - 1]);
+        }
+    }
+    // Pro and Con share the role-neutral system prompt and contract.
+    assert_eq!(
+        system_and_messages(pro[0].1)[..2],
+        system_and_messages(con[0].1)[..2]
+    );
+    // Neither side ever receives the other's private research.
+    for (_, request) in &pro {
+        let text = system_and_messages(request).join("\n");
+        assert!(!text.contains("src/c0_") && !text.contains("Private CON"));
+    }
+    for (_, request) in &con {
+        let text = system_and_messages(request).join("\n");
+        assert!(!text.contains("src/p0_") && !text.contains("Private PRO"));
+    }
+}
+
+#[test]
+fn jury_ballots_share_neutral_prefix_and_retry_is_bounded() {
+    let requests = scripted_debate_requests();
+    let jury: Vec<_> = requests
+        .iter()
+        .filter(|(p, _)| *p == "jury")
+        .map(|(_, r)| r)
+        .collect();
+    let forward = system_and_messages(jury[0]);
+    let reversed = system_and_messages(jury[1]);
+    assert_eq!(forward[..2], reversed[..2], "order-neutral prefix differs");
+    assert_ne!(forward[2], reversed[2], "presentation order must differ");
+    assert!(reversed[2].contains("reversed for order-bias control"));
+
+    let mut debate = DebateState {
+        topic: "t".into(),
+        contract: Some(DebateContract::minimal("t")),
+        closing_stage: Some(0),
+        ..DebateState::default()
+    };
+    let mut requests_sent = 0;
+    while !debate.jury_settled() {
+        let reversed = debate.next_jury_reversed();
+        let _ = debate.jury_request(reversed);
+        debate.record_jury_response(reversed, &text_result("not a ballot"));
+        requests_sent += 1;
+        assert!(
+            requests_sent <= JURY_MAX_ATTEMPTS,
+            "jury retried without bound"
+        );
+    }
+    assert!(debate.jury_unavailable_reason().is_some());
+}
+
+/// Model that never stops calling new tools, plus cancellation.
+#[test]
+fn research_keeps_tool_envelope_stable_enforces_grounding_and_terminates() {
+    let mut debate = DebateState {
+        topic: "t".into(),
+        models: DebateModels::same("m"),
+        subject: DebateSubject {
+            workspace_bound: true,
+            ..DebateSubject::default()
+        },
+        ..DebateState::default()
+    };
+    debate.contract = Some(DebateContract::minimal("t"));
+    let cancel = AtomicBool::new(false);
+    let mut tools = FakeTools::new();
+    let mut envelopes = HashSet::new();
+    let mut calls = 0;
+    let record = run_with(
+        &debate,
+        0,
+        true,
+        &mut tools,
+        &cancel,
+        |_, _| Ok(()),
+        |request| {
+            envelopes.insert(serde_json::to_string(&request.tools).unwrap());
+            calls += 1;
+            Ok(match calls {
+                // Ungrounded web access is refused until local evidence exists.
+                1 => tool_result("web_read", json!({"url": "https://example.com"})),
+                _ if request
+                    .messages
+                    .last()
+                    .and_then(|m| m.content.as_deref())
+                    .is_some_and(|c| c.contains("round limit")) =>
+                {
+                    text_result("Directly observed: file evidence. Unresolved: more.")
+                }
+                n => tool_result("read_file", json!({"path": format!("src/f{n}.rs")})),
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(envelopes.len(), 1, "tool envelope changed mid-research");
+    assert!(
+        calls <= 6 * 3 + 2,
+        "research did not hit its hard round ceiling: {calls}"
+    );
+    assert!(record.evidence.iter().all(|e| e.tool != "web_read"));
+    assert!(!record.evidence.is_empty());
+    let executed = tools.calls;
+    assert_eq!(
+        executed,
+        calls - 2,
+        "refused or synthesis calls must not execute tools"
+    );
+
+    cancel.store(true, std::sync::atomic::Ordering::Release);
+    let interrupted = run_with(
+        &debate,
+        0,
+        true,
+        &mut tools,
+        &cancel,
+        |_, _| Ok(()),
+        |_| panic!("no model call after cancellation"),
+    );
+    assert!(interrupted.is_err());
+}
+
+#[test]
+fn legacy_debate_state_still_builds_requests() {
+    // Shape persisted before contracts, checkpoints and jury attempts existed.
+    let legacy: DebateState = serde_json::from_value(json!({
+        "topic": "Legacy topic",
+        "status": "Opening · Pro",
+        "speeches": [{"stage": 0, "pro": true, "text": "Opening argument"}],
+        "ballots": [],
+        "verdict": null,
+        "research": [{"stage": 0, "pro": false, "notes": "con dossier", "successful_reads": 1,
+            "evidence": [{"tool": "read_file", "input": {"path": "a.rs"}, "excerpt": "fn a() {}"}]}]
+    }))
+    .unwrap();
+    let request = legacy.advocate_request(0, false);
+    let text = system_and_messages(&request).join("\n");
+    assert!(text.contains("con dossier") && text.contains("legacy:read_file"));
+    assert!(legacy.jury_request(false).prompt_cache == Some(true));
 }

@@ -55,6 +55,15 @@ use crate::{
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
+/// Cache diagnostics for a model call made outside the agent loop, such as a
+/// debate stage, in the same shape as `agent-model-attempt-finished`.
+pub(crate) fn model_call_cache_diagnostics(
+    request: &CallRequest,
+    usage: Option<&crate::core::Usage>,
+) -> Value {
+    turn_state::usage_diagnostics(&cache::diagnostics(request), usage)
+}
+
 pub struct AgentCoordinator {
     runtime_agent_id: Option<crate::agents::AgentId>,
     bridge: BridgeHandle,
