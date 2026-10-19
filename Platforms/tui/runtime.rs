@@ -172,45 +172,13 @@ fn event_loop(
 ) -> Result<()> {
     let terminal_events = spawn_terminal_event_reader();
     let mut rendered_session = None;
+    // A first frame establishes hit targets before mouse events arrive.
+    draw_tui_frame(terminal, app, &mut rendered_session)?;
     let mut last_frame = Instant::now();
-    let mut input_changed = true;
+    let mut input_changed = false;
     let mut backend_changed = false;
 
     loop {
-        let backend_started = Instant::now();
-        for _ in 0..MAX_BACKEND_EVENTS_PER_FRAME {
-            let Some(event) = backend.try_recv() else {
-                break;
-            };
-            backend_changed = true;
-            apply_backend_event(app, event);
-            if backend_started.elapsed() >= BACKEND_FRAME_BUDGET {
-                break;
-            }
-        }
-
-        // Crossterm 0.28 can spin inside its Unix event reader when a PTY read
-        // returns EOF. Keep that reader off the UI thread so this liveness check
-        // can still terminate the process when the terminal peer disappears.
-        if terminal_input_disconnected().context("failed to check terminal input state")? {
-            return Ok(());
-        }
-
-        if frame_due(
-            last_frame.elapsed(),
-            app.state.is_streaming,
-            input_changed,
-            backend_changed,
-        ) {
-            draw_tui_frame(terminal, app, &mut rendered_session)?;
-            last_frame = Instant::now();
-            input_changed = false;
-            backend_changed = false;
-        }
-        if app.quit {
-            return Ok(());
-        }
-
         let mut input = terminal_events.recv_timeout(Duration::from_millis(16));
         for input_index in 0..MAX_INPUT_EVENTS_PER_FRAME {
             match input {
@@ -272,6 +240,43 @@ fn event_loop(
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
                 }
             };
+        }
+
+        // Present typed input before doing any potentially expensive backend
+        // projection work. Backend messages remain bounded by the same budget,
+        // but can no longer block a just-processed keystroke's paint.
+        // Crossterm 0.28 can spin inside its Unix event reader when a PTY read
+        // returns EOF. Keep that reader off the UI thread so this liveness check
+        // can still terminate the process when the terminal peer disappears.
+        if terminal_input_disconnected().context("failed to check terminal input state")? {
+            return Ok(());
+        }
+
+        if frame_due(
+            last_frame.elapsed(),
+            app.state.is_streaming,
+            input_changed,
+            backend_changed,
+        ) {
+            draw_tui_frame(terminal, app, &mut rendered_session)?;
+            last_frame = Instant::now();
+            input_changed = false;
+            backend_changed = false;
+        }
+        if app.quit {
+            return Ok(());
+        }
+
+        let backend_started = Instant::now();
+        for _ in 0..MAX_BACKEND_EVENTS_PER_FRAME {
+            let Some(event) = backend.try_recv() else {
+                break;
+            };
+            backend_changed = true;
+            apply_backend_event(app, event);
+            if backend_started.elapsed() >= BACKEND_FRAME_BUDGET {
+                break;
+            }
         }
     }
 }

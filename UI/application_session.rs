@@ -577,10 +577,20 @@ impl ApplicationSession {
         prepared: PreparedComposerAction,
         harness: &HarnessState,
     ) -> (ApplicationProjection, ComposerEffect) {
+        let effect = self.commit_composer_without_projection(prepared, harness);
+        (self.projection(), effect)
+    }
+    /// Terminal editors do not need an eagerly cloned application projection
+    /// after each character. Remote clients can still use `commit_composer`.
+    pub fn commit_composer_without_projection(
+        &mut self,
+        prepared: PreparedComposerAction,
+        harness: &HarnessState,
+    ) -> ComposerEffect {
         let (_, effect) = self.composer.commit(prepared, harness);
         self.toolbar.update(harness);
         self.advance();
-        (self.projection(), effect)
+        effect
     }
     pub fn observe_composer_new_session(&mut self, harness: &HarnessState) {
         let mut environment = self.composer.environment().clone();
@@ -824,7 +834,10 @@ impl ApplicationSession {
             &self.navigation,
             &self.shell,
             self.agents.projection().view,
-            self.conversation.projection().view,
+            // The conversation session maintains its own serialized view and
+            // monotonically increasing revision. Do not serialize all past tool
+            // calls again on every editor keystroke.
+            self.conversation.revision(),
             self.composer.projection().view,
             self.settings.projection().view,
             self.home.project(true),
@@ -842,6 +855,38 @@ mod tests {
         home::{ResourceItem, ResourceKind},
         surfaces::Tabs,
     };
+    #[test]
+    fn terminal_editor_updates_preserve_conversation_revision_and_remote_projection() {
+        let mut harness = HarnessState::default();
+        let mut app = ApplicationSession::new_tui(&harness);
+        let baseline = app.conversation_projection().conversation_revision;
+        let editor = super::super::composer::EditorSnapshot {
+            text: "new draft".into(),
+            revision: 1,
+            ..Default::default()
+        };
+        let prepared = app.prepare_composer(ComposerAction::UpdateEditor(editor), &harness);
+        let effect = app.commit_composer_without_projection(prepared, &harness);
+        assert!(effect.command.is_none());
+        assert_eq!(app.composer_projection().view.editor.text, "new draft");
+        assert_eq!(
+            app.conversation_projection().conversation_revision,
+            baseline
+        );
+
+        harness.conversation = Some(vec![crate::model::ConversationEntry {
+            id: "new-message".into(),
+            kind: crate::model::ConversationKind::User {
+                content: "hello".into(),
+            },
+        }]);
+        let result = app
+            .refresh(&harness)
+            .expect("conversation must advance app revision");
+        assert!(result.conversation.conversation_revision > baseline);
+        assert_eq!(result.conversation.view.items.len(), 1);
+    }
+
     #[test]
     fn home_content_projects_and_advances_only_when_the_view_changes() {
         let mut session = ApplicationSession::default();

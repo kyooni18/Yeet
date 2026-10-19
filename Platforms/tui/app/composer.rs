@@ -73,7 +73,8 @@ impl App {
             let prepared = self
                 .application
                 .prepare_composer(ComposerAction::UpdateEditor(editor), &self.state);
-            self.application.commit_composer(prepared, &self.state);
+            self.application
+                .commit_composer_without_projection(prepared, &self.state);
         }
     }
     pub(crate) fn send_composer_action(
@@ -118,7 +119,9 @@ impl App {
                 }
             }
         }
-        let (_, effect) = self.application.commit_composer(prepared, &self.state);
+        let effect = self
+            .application
+            .commit_composer_without_projection(prepared, &self.state);
         self.apply_composer_effect(effect.ui);
         if new_session {
             self.application.observe_composer_new_session(&self.state);

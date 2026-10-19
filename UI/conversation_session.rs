@@ -38,6 +38,11 @@ impl ConversationSession {
             serialized,
         }
     }
+    /// Changes whenever the shared conversation projection changes. This is
+    /// cheaper to fingerprint than the potentially enormous transcript view.
+    pub fn revision(&self) -> u64 {
+        self.projection.conversation_revision
+    }
     pub fn state(&self) -> &ConversationState {
         &self.state
     }
