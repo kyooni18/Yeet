@@ -49,15 +49,16 @@ impl HomeState {
         }
     }
     pub fn select_next(&mut self, delta: isize) {
-        let mut targets = Vec::new();
-        for item in self.content.items() {
-            if !targets.contains(&item.target) {
-                targets.push(item.target.clone());
-            }
-        }
+        let mut seen = std::collections::HashSet::new();
+        let targets: Vec<&ResourceTarget> = self
+            .content
+            .items()
+            .map(|item| &item.target)
+            .filter(|target| seen.insert(*target))
+            .collect();
         let current = targets
             .iter()
-            .position(|target| Some(target) == self.selected.as_ref())
+            .position(|target| Some(*target) == self.selected.as_ref())
             .unwrap_or(0);
         self.selected = targets
             .get(
@@ -65,7 +66,7 @@ impl HomeState {
                     .saturating_add_signed(delta)
                     .min(targets.len().saturating_sub(1)),
             )
-            .cloned();
+            .map(|target| (*target).clone());
     }
     pub fn view(&self, include_sessions: bool) -> HomeProjection<'_> {
         let c = &self.content;
@@ -92,6 +93,7 @@ impl HomeState {
             }
         }
         let mut recent: Vec<&ResourceItem> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for item in c
             .recent_views
             .iter()
@@ -99,7 +101,7 @@ impl HomeState {
             .chain(&c.diffs)
             .chain(&c.sessions)
         {
-            if !recent.iter().any(|old| old.target == item.target) {
+            if seen.insert(&item.target) {
                 recent.push(item);
             }
         }

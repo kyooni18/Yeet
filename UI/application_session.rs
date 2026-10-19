@@ -337,6 +337,10 @@ impl ApplicationSession {
     pub fn agents_projection(&self) -> AgentProjection {
         self.agents.projection()
     }
+    /// Cached Home view; cheap enough to read on every frame.
+    pub fn home_view(&self) -> &HomeView {
+        &self.home_serialized
+    }
     pub fn projection(&self) -> ApplicationProjection {
         ApplicationProjection {
             toolbar: self.toolbar_view(),
@@ -347,7 +351,7 @@ impl ApplicationSession {
             state: self.shell.clone(),
             view: self.shell.view(),
             application: self.application_view(),
-            home: self.home.project(true),
+            home: self.home_serialized.clone(),
             diff_views: self.diff_views.clone(),
             agents: self.agents.projection(),
             conversation: self.conversation.projection(),
@@ -419,7 +423,6 @@ impl ApplicationSession {
         prepared: PreparedHomeAction,
         harness: &HarnessState,
     ) -> (ApplicationProjection, HomeEffect) {
-        let home_changed = self.home.project(true) != prepared.state.project(true);
         let new_session = matches!(
             prepared.effect.command,
             Some(crate::harness::HarnessCommand::NewSession)
@@ -428,6 +431,7 @@ impl ApplicationSession {
             self.commit_composer(composer, harness);
         }
         self.home = prepared.state;
+        let home_changed = self.sync_home();
         if new_session {
             self.observe_composer_new_session(harness);
         } else if home_changed {
@@ -442,6 +446,7 @@ impl ApplicationSession {
         content: WorkspaceContent,
     ) -> Option<ApplicationProjection> {
         self.home.replace_content(content);
+        self.sync_home();
         if self.fingerprint() != self.serialized {
             self.advance();
             Some(self.projection())
@@ -478,6 +483,7 @@ impl ApplicationSession {
         } else {
             self.diff_views.push(view);
         }
+        self.sync_diffs();
         if self.fingerprint() != self.serialized {
             self.advance();
             Some(self.projection())
@@ -510,6 +516,7 @@ impl ApplicationSession {
         let changed = self.diff_views[index] != updated;
         if changed {
             self.diff_views[index] = updated;
+            self.sync_diffs();
             self.advance();
         }
         (self.projection(), changed)
@@ -536,6 +543,7 @@ impl ApplicationSession {
     ) -> Option<ApplicationProjection> {
         let index = self.diff_views.iter().position(|view| view.id == id)?;
         self.diff_views.remove(index);
+        self.sync_diffs();
         self.advance();
         Some(self.projection())
     }
@@ -804,6 +812,24 @@ impl ApplicationSession {
             None
         }
     }
+    /// Re-project Home after its state changed. Projection walks every
+    /// session and changed file, so it must stay off keystroke and streaming
+    /// paths. Returns whether the projected view changed.
+    fn sync_home(&mut self) -> bool {
+        let home = self.home.project(true);
+        if home == self.home_serialized {
+            return false;
+        }
+        self.home_revision = self.home_revision.saturating_add(1);
+        self.home_serialized = home;
+        true
+    }
+    fn sync_diffs(&mut self) {
+        if self.diff_views != self.diff_serialized {
+            self.diff_revision = self.diff_revision.saturating_add(1);
+            self.diff_serialized = self.diff_views.clone();
+        }
+    }
     fn leave_agents(&mut self) {
         if self.navigation.mode == super::navigation::Screen::Agents {
             self.navigation.activated(WorkbenchTab::Home);
@@ -816,15 +842,6 @@ impl ApplicationSession {
     /// Reuse the already computed view fingerprint instead of serializing the
     /// entire conversation again in the same refresh.
     fn advance_with_fingerprint(&mut self, fingerprint: serde_json::Value) {
-        let home = self.home.project(true);
-        if home != self.home_serialized {
-            self.home_revision = self.home_revision.saturating_add(1);
-            self.home_serialized = home;
-        }
-        if self.diff_views != self.diff_serialized {
-            self.diff_revision = self.diff_revision.saturating_add(1);
-            self.diff_serialized = self.diff_views.clone();
-        }
         self.revision = self.revision.saturating_add(1);
         self.serialized = fingerprint;
     }
@@ -840,8 +857,10 @@ impl ApplicationSession {
             self.conversation.revision(),
             self.composer.projection().view,
             self.settings.projection().view,
-            self.home.project(true),
-            &self.diff_views,
+            // Home and Diff are re-projected only where they mutate; their
+            // revisions stand in for the full views on every keystroke.
+            self.home_revision,
+            self.diff_revision,
         ))
         .expect("serialize application UI")
     }
@@ -885,6 +904,42 @@ mod tests {
             .expect("conversation must advance app revision");
         assert!(result.conversation.conversation_revision > baseline);
         assert_eq!(result.conversation.view.items.len(), 1);
+    }
+
+    // Regression: Home projection is O(sessions + changed files) and once ran
+    // on every keystroke and streaming snapshot, starving TUI input.
+    #[test]
+    fn editor_updates_do_not_reproject_large_home_content() {
+        let harness = HarnessState::default();
+        let mut app = ApplicationSession::new_tui(&harness);
+        let mut content = WorkspaceContent::default();
+        for index in 0..20_000 {
+            let path =
+                std::path::PathBuf::from(format!("/workspace/src/dir{}/file{index}.rs", index % 9));
+            content.diffs.push(ResourceItem::new(
+                ResourceTarget::Diff(path),
+                ResourceKind::Diff,
+                format!("file{index}.rs"),
+            ));
+        }
+        app.update_home_content(content);
+        let home_revision = app.projection().home_revision;
+        let started = std::time::Instant::now();
+        for revision in 1..=50 {
+            let editor = super::super::composer::EditorSnapshot {
+                text: "x".repeat(revision as usize),
+                revision,
+                ..Default::default()
+            };
+            let prepared = app.prepare_composer(ComposerAction::UpdateEditor(editor), &harness);
+            app.commit_composer_without_projection(prepared, &harness);
+        }
+        assert_eq!(app.projection().home_revision, home_revision);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "50 editor updates took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

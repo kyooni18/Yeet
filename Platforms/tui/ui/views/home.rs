@@ -59,7 +59,7 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
     frame.render_widget(Block::default().style(theme::base()), area);
     let button = Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1);
-    let projection = app.application.projection().home;
+    let projection = app.application.home_view();
     frame.render_widget(
         Paragraph::new(projection.new_session_label.clone())
             .style(theme::surface())
@@ -76,7 +76,7 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let offset = crate::tui::kit::visible_start(selected, count);
     if items.is_empty() {
         frame.render_widget(
-            Paragraph::new(projection.recent_empty)
+            Paragraph::new(projection.recent_empty.as_str())
                 .style(Style::default().fg(theme::muted()))
                 .wrap(Wrap { trim: true }),
             Rect::new(area.x + 1, area.y + 3, area.width.saturating_sub(2), 2),
@@ -133,11 +133,12 @@ fn draw_recent_rail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn draw_workspace_summary(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let projection = app.application.projection().home;
+    let projection = app.application.home_view();
     let summary = &projection.summary;
     let content = Rect::new(area.x + 2, area.y, area.width.saturating_sub(4), 1);
     frame.render_widget(
-        Paragraph::new(projection.overview_label).style(Style::default().fg(theme::text()).add_modifier(ACTIVE)),
+        Paragraph::new(projection.overview_label.as_str())
+            .style(Style::default().fg(theme::text()).add_modifier(ACTIVE)),
         content,
     );
     frame.render_widget(
@@ -156,7 +157,7 @@ fn draw_activity(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let usage_height = if area.height >= 16 { 4 } else { 0 };
     let capacity = area.height.saturating_sub(usage_height + 3) as usize;
     app.reveal_home_selection(compact, capacity);
-    let projection = app.application.projection().home;
+    let projection = app.application.home_view();
     let start = if compact {
         0
     } else {
@@ -294,7 +295,7 @@ fn draw_resource(frame: &mut Frame<'_>, item: &ResourceView, area: Rect, selecte
 
 fn draw_provider_usage(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let muted = Style::default().fg(theme::muted());
-    let projection = app.application.projection().home;
+    let projection = app.application.home_view();
     if projection.providers.is_empty() {
         frame.render_widget(
             Paragraph::new(projection.usage_empty_label.clone()).style(muted),
@@ -339,7 +340,10 @@ fn draw_provider_usage(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         );
     }
     let button = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-    frame.render_widget(Paragraph::new(projection.usage_label).style(muted), button);
+    frame.render_widget(
+        Paragraph::new(projection.usage_label.as_str()).style(muted),
+        button,
+    );
     app.home_targets
         .push((button, HomeAction::Open(ResourceTarget::Status)));
 }
@@ -348,9 +352,22 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     if area.width == 0 || area.height < 5 {
         return;
     }
-    let projection = app.application.projection().home;
-    let Some(item) = projection.inspector else {
-        frame.render_widget(Paragraph::new(format!("{}\n\n{}\n\nEsc  Browse Home\ni    Write a prompt", projection.workspace, projection.inspector_empty)).style(Style::default().fg(theme::text_dim())).wrap(Wrap { trim: true }), Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
+    let projection = app.application.home_view();
+    let Some(item) = &projection.inspector else {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{}\n\n{}\n\nEsc  Browse Home\ni    Write a prompt",
+                projection.workspace, projection.inspector_empty
+            ))
+            .style(Style::default().fg(theme::text_dim()))
+            .wrap(Wrap { trim: true }),
+            Rect::new(
+                area.x,
+                area.y + 2,
+                area.width,
+                area.height.saturating_sub(2),
+            ),
+        );
         return;
     };
     let title = Paragraph::new(item.title.clone())
@@ -383,7 +400,7 @@ fn draw_inspector(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         detail,
         Rect::new(area.x, detail_y, area.width, detail_height),
     );
-    let label = projection.open_label;
+    let label = projection.open_label.as_str();
     let button = Rect::new(area.x, button_y, area.width, 1);
     frame.render_widget(
         Paragraph::new(label).style(Style::default().fg(theme::text())),
