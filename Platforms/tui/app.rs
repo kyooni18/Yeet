@@ -72,6 +72,24 @@ enum PermissionPromptAction {
     Interrupt,
 }
 
+/// Identity of the transcript projection already published to the native UI.
+/// A frame may change layout or selection without changing these semantic
+/// inputs, so it must not serialize a long conversation all over again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectedConversationSource {
+    revision: u64,
+    entries_ptr: usize,
+    entries_len: usize,
+    streaming: bool,
+    assistant_id: Option<String>,
+    assistant_text: String,
+    reasoning_id: Option<String>,
+    reasoning_text: String,
+    reasoning_summary: String,
+    activity_id: Option<String>,
+    error: Option<String>,
+}
+
 pub struct App {
     pub files: Option<files::FilesState>,
     pub agents: agents::AgentsState,
@@ -124,6 +142,7 @@ pub struct App {
     pub transcript_cells: Vec<Vec<String>>,
     pub(crate) transcript_cache: Option<crate::tui::ui::TranscriptCache>,
     pub(crate) transcript_revision: u64,
+    pub(crate) projected_conversation: Option<ProjectedConversationSource>,
     pub(crate) work_ids: Vec<String>,
     pub(crate) selected_work: Option<usize>,
     pub(crate) work_rows: Vec<u16>,
@@ -221,6 +240,7 @@ impl Default for App {
             transcript_cells: Vec::new(),
             transcript_cache: None,
             transcript_revision: 0,
+            projected_conversation: None,
             work_ids: Vec::new(),
             selected_work: None,
             work_rows: Vec::new(),
@@ -251,6 +271,22 @@ impl Default for App {
 }
 
 impl App {
+    pub(crate) fn conversation_projection_source(&self) -> ProjectedConversationSource {
+        ProjectedConversationSource {
+            revision: self.transcript_revision,
+            entries_ptr: self.conversation.as_ptr() as usize,
+            entries_len: self.conversation.len(),
+            streaming: self.state.is_streaming,
+            assistant_id: self.state.active_assistant_entry_id.clone(),
+            assistant_text: self.state.active_assistant_text.clone(),
+            reasoning_id: self.state.active_reasoning_entry_id.clone(),
+            reasoning_text: self.state.active_reasoning_text.clone(),
+            reasoning_summary: self.state.active_reasoning_summary.clone(),
+            activity_id: self.state.active_activity_entry_id.clone(),
+            error: self.state.error_message.clone(),
+        }
+    }
+
     pub fn sync_activity_label(&mut self, label: &str) {
         if self.activity_label_to == label {
             return;
@@ -284,10 +320,31 @@ impl App {
             self.state.provider_configurations != next.provider_configurations;
         let sandbox_settings_changed = self.state.sandbox_settings != next.sandbox_settings;
         let runtime_settings_changed = self.state.runtime_settings != next.runtime_settings;
+        // Full state snapshots include the entire conversation even when only
+        // usage or settings changed. Trust the service's monotonically updated
+        // transcript revision and avoid reparsing unchanged, potentially huge
+        // histories. Revision zero retains legacy/replay replacement behavior.
+        let same_transcript = next.conversation_revision != 0
+            && self.state.current_session_id == next.current_session_id
+            && self.state.conversation_revision == next.conversation_revision
+            && !self.conversation.is_empty();
+        let replaced_transcript = next.conversation.is_some() && !same_transcript;
+        let projection_changed = replaced_transcript
+            || self.state.current_session_id != next.current_session_id
+            || self.state.is_streaming != next.is_streaming
+            || self.state.active_assistant_entry_id != next.active_assistant_entry_id
+            || self.state.active_assistant_text != next.active_assistant_text
+            || self.state.active_activity_entry_id != next.active_activity_entry_id
+            || self.state.active_reasoning_entry_id != next.active_reasoning_entry_id
+            || self.state.active_reasoning_text != next.active_reasoning_text
+            || self.state.active_reasoning_summary != next.active_reasoning_summary
+            || self.state.error_message != next.error_message;
         if let Some(conversation) = next.conversation.take() {
-            self.transcript_revision = self.transcript_revision.wrapping_add(1);
-            self.conversation = conversation;
-            self.clear_transcript_selection();
+            if replaced_transcript {
+                self.transcript_revision = self.transcript_revision.wrapping_add(1);
+                self.conversation = conversation;
+                self.clear_transcript_selection();
+            }
         }
         if self.state.current_session_id != next.current_session_id {
             self.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Reset);
@@ -296,7 +353,15 @@ impl App {
             self.work_rows.clear();
         }
         self.state = next;
-        self.application.refresh_with_conversation_entries(&self.conversation, &self.state);
+        if projection_changed {
+            self.application
+                .refresh_with_conversation_entries(&self.conversation, &self.state);
+        } else {
+            // Preserve model, permission and settings updates while skipping
+            // an unchanged conversation projection and its full serialization.
+            self.application.refresh(&self.state);
+        }
+        self.projected_conversation = Some(self.conversation_projection_source());
         if provider_configurations_changed {
             self.pending_provider_delete_id = None;
         }

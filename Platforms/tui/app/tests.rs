@@ -1196,9 +1196,15 @@ fn unfocused_work_navigation_and_expansion_preserve_draft() {
     assert_eq!(app.selected_work, Some(1));
     assert_eq!(app.scroll_y, 11);
     app.handle_work_selection_key(&key(KeyCode::Enter));
-    assert_eq!(app.application.conversation_state().expanded.get("tool:1"), Some(&true));
+    assert_eq!(
+        app.application.conversation_state().expanded.get("tool:1"),
+        Some(&true)
+    );
     app.handle_work_selection_key(&key(KeyCode::Char(' ')));
-    assert_eq!(app.application.conversation_state().expanded.get("tool:1"), Some(&false));
+    assert_eq!(
+        app.application.conversation_state().expanded.get("tool:1"),
+        Some(&false)
+    );
     assert_eq!(app.input, "keep this draft");
     assert_eq!(app.cursor, 4);
     app.input_focused = true;
@@ -1206,4 +1212,69 @@ fn unfocused_work_navigation_and_expansion_preserve_draft() {
     app.input_focused = false;
     app.sidebar_focus = true;
     assert!(!app.handle_work_selection_key(&key(KeyCode::Down)));
+}
+
+#[test]
+fn unchanged_conversation_revision_keeps_native_transcript_cache_valid() {
+    let mut app = App::default();
+    let entry = crate::model::ConversationEntry {
+        id: "stable".into(),
+        kind: crate::model::ConversationKind::User {
+            content: "Hello".into(),
+        },
+    };
+    let base = crate::model::BridgeState {
+        current_session_id: Some("first".into()),
+        conversation_revision: 42,
+        conversation: Some(vec![entry.clone()]),
+        ..Default::default()
+    };
+    app.merge_state(base.clone());
+    let revision = app.transcript_revision;
+    let projection = app
+        .application
+        .conversation_projection()
+        .conversation_revision;
+
+    let mut status = base.clone();
+    status.active_model = "next-model".into();
+    app.merge_state(status);
+    assert_eq!(app.transcript_revision, revision);
+    assert_eq!(
+        app.application
+            .conversation_projection()
+            .conversation_revision,
+        projection
+    );
+    assert_eq!(app.state.active_model, "next-model");
+
+    let mut reasoning = base.clone();
+    reasoning.active_reasoning_summary = "Checking files".into();
+    reasoning.is_streaming = true;
+    app.merge_state(reasoning);
+    assert_eq!(app.transcript_revision, revision);
+    assert!(
+        app.application
+            .conversation_projection()
+            .conversation_revision
+            > projection
+    );
+
+    let mut edited = base.clone();
+    edited.conversation_revision = 43;
+    edited.conversation = Some(vec![crate::model::ConversationEntry {
+        id: "updated".into(),
+        kind: crate::model::ConversationKind::User {
+            content: "Changed".into(),
+        },
+    }]);
+    app.merge_state(edited);
+    assert!(app.transcript_revision > revision);
+    assert_eq!(app.conversation[0].id, "updated");
+
+    let mut switched = base;
+    switched.current_session_id = Some("other".into());
+    switched.conversation_revision = 43;
+    app.merge_state(switched);
+    assert_eq!(app.conversation[0].id, "stable");
 }

@@ -237,8 +237,12 @@ fn draw_desktop(
         .as_ref()
         .is_none_or(|cache| !cache.key.matches(app, area.width))
     {
-        app.application
-            .refresh_conversation_entries(&app.conversation, &app.state);
+        let projection_source = app.conversation_projection_source();
+        if app.projected_conversation.as_ref() != Some(&projection_source) {
+            app.application
+                .refresh_conversation_entries(&app.conversation, &app.state);
+            app.projected_conversation = Some(projection_source);
+        }
         let view = app.application.conversation_projection().view;
         let (text, work_lines, work_ids, entry_ranges) =
             shared::content_with_entries(app, &view, area.width);
@@ -258,7 +262,11 @@ fn draw_desktop(
         .map(|line| cache.starts[*line].min(u16::MAX as usize) as u16)
         .collect();
     // Native index is a geometry cache; semantic selection remains a stable UI ID.
-    app.selected_work = app.application.conversation_state().selected.as_ref()
+    app.selected_work = app
+        .application
+        .conversation_state()
+        .selected
+        .as_ref()
         .and_then(|selected| app.work_ids.iter().position(|id| id == selected));
     app.max_scroll = cache.rows.min(u16::MAX as usize) as u16;
     app.max_scroll = app.max_scroll.saturating_sub(area.height);

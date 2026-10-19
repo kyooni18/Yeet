@@ -100,6 +100,28 @@ const TUI_STARTUP_NOTICE: &str = "YEET // STARTING RUNTIME...";
 const MAX_BACKEND_EVENTS_PER_FRAME: usize = 128;
 const MAX_INPUT_EVENTS_PER_FRAME: usize = 64;
 const BACKEND_FRAME_BUDGET: Duration = Duration::from_millis(4);
+// Terminal output is cell-based. An unchanged screen does not need the 60 FPS
+// cadence used for keyboard polling; that previously wasted a CPU core on
+// sufficiently large transcripts. Streaming indicators still get a timely tick.
+const IDLE_REDRAW_INTERVAL: Duration = Duration::from_millis(250);
+const ACTIVE_REDRAW_INTERVAL: Duration = Duration::from_millis(100);
+const MIN_BACKEND_REDRAW_INTERVAL: Duration = Duration::from_millis(60);
+
+fn frame_due(
+    since_last: Duration,
+    streaming: bool,
+    input_changed: bool,
+    backend_changed: bool,
+) -> bool {
+    input_changed
+        || since_last
+            >= if streaming {
+                ACTIVE_REDRAW_INTERVAL
+            } else {
+                IDLE_REDRAW_INTERVAL
+            }
+        || (backend_changed && since_last >= MIN_BACKEND_REDRAW_INTERVAL)
+}
 
 pub fn run() -> Result<()> {
     let mut stdout = io::stdout();
@@ -150,6 +172,9 @@ fn event_loop(
 ) -> Result<()> {
     let terminal_events = spawn_terminal_event_reader();
     let mut rendered_session = None;
+    let mut last_frame = Instant::now();
+    let mut input_changed = true;
+    let mut backend_changed = false;
 
     loop {
         let backend_started = Instant::now();
@@ -157,6 +182,7 @@ fn event_loop(
             let Some(event) = backend.try_recv() else {
                 break;
             };
+            backend_changed = true;
             apply_backend_event(app, event);
             if backend_started.elapsed() >= BACKEND_FRAME_BUDGET {
                 break;
@@ -170,7 +196,17 @@ fn event_loop(
             return Ok(());
         }
 
-        draw_tui_frame(terminal, app, &mut rendered_session)?;
+        if frame_due(
+            last_frame.elapsed(),
+            app.state.is_streaming,
+            input_changed,
+            backend_changed,
+        ) {
+            draw_tui_frame(terminal, app, &mut rendered_session)?;
+            last_frame = Instant::now();
+            input_changed = false;
+            backend_changed = false;
+        }
         if app.quit {
             return Ok(());
         }
@@ -179,6 +215,7 @@ fn event_loop(
         for input_index in 0..MAX_INPUT_EVENTS_PER_FRAME {
             match input {
                 Ok(Ok(event)) => {
+                    input_changed = true;
                     match event {
                         Event::Key(key) => app.handle_key(key, backend)?,
                         Event::Mouse(mouse) => {
@@ -484,4 +521,27 @@ fn copy_via_osc52(text: &str) -> Result<()> {
     write!(stdout, "\x1b]52;c;{payload}\x07")?;
     stdout.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod frame_pacer_tests {
+    use super::*;
+
+    #[test]
+    fn input_redraws_immediately_but_idle_frames_are_throttled() {
+        assert!(frame_due(Duration::ZERO, false, true, false));
+        assert!(!frame_due(Duration::from_millis(16), false, false, false));
+        assert!(!frame_due(Duration::from_millis(220), false, false, false));
+        assert!(frame_due(Duration::from_millis(250), false, false, false));
+        assert!(!frame_due(Duration::from_millis(50), true, false, false));
+        assert!(frame_due(Duration::from_millis(100), true, false, false));
+    }
+
+    #[test]
+    fn backend_updates_and_permission_transitions_remain_timely() {
+        assert!(!frame_due(Duration::from_millis(40), false, false, true));
+        assert!(frame_due(Duration::from_millis(60), false, false, true));
+        assert!(frame_due(Duration::from_millis(60), true, false, true));
+        assert!(frame_due(Duration::from_millis(1), true, true, true));
+    }
 }

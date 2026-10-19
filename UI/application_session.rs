@@ -768,9 +768,9 @@ impl ApplicationSession {
         self.agents.refresh(harness);
         self.composer.refresh(harness);
         self.settings.refresh(harness);
-        if self.fingerprint() != self.serialized {
-            self.toolbar.update(harness);
-            self.advance();
+        let fingerprint = self.fingerprint();
+        if fingerprint != self.serialized {
+            self.advance_with_fingerprint(fingerprint);
             Some(self.projection())
         } else {
             None
@@ -786,9 +786,9 @@ impl ApplicationSession {
         self.composer.refresh(harness);
         self.settings.refresh(harness);
         self.conversation.refresh_entries(entries, harness);
-        if self.fingerprint() != self.serialized {
-            self.toolbar.update(harness);
-            self.advance();
+        let fingerprint = self.fingerprint();
+        if fingerprint != self.serialized {
+            self.advance_with_fingerprint(fingerprint);
             Some(self.projection())
         } else {
             None
@@ -800,6 +800,12 @@ impl ApplicationSession {
         }
     }
     fn advance(&mut self) {
+        let fingerprint = self.fingerprint();
+        self.advance_with_fingerprint(fingerprint);
+    }
+    /// Reuse the already computed view fingerprint instead of serializing the
+    /// entire conversation again in the same refresh.
+    fn advance_with_fingerprint(&mut self, fingerprint: serde_json::Value) {
         let home = self.home.project(true);
         if home != self.home_serialized {
             self.home_revision = self.home_revision.saturating_add(1);
@@ -810,7 +816,7 @@ impl ApplicationSession {
             self.diff_serialized = self.diff_views.clone();
         }
         self.revision = self.revision.saturating_add(1);
-        self.serialized = self.fingerprint();
+        self.serialized = fingerprint;
     }
     fn fingerprint(&self) -> serde_json::Value {
         serde_json::to_value((
@@ -1025,9 +1031,11 @@ mod tests {
             active_diff: Some(second),
             ..Default::default()
         };
-        assert!(session
-            .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
-            .is_none());
+        assert!(
+            session
+                .accepted_navigation(WorkbenchTab::Diff(first), &resources, &harness)
+                .is_none()
+        );
         let projection = session
             .accepted_navigation(WorkbenchTab::Diff(second), &resources, &harness)
             .unwrap();
