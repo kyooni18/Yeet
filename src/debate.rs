@@ -2,6 +2,8 @@
 mod general;
 mod knowledge;
 pub mod research;
+#[cfg(test)]
+mod cache_tests;
 use crate::core::{CallRequest, CallResult, Message, ToolDefinition};
 use anyhow::{Result, ensure};
 pub use general::*;

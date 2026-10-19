@@ -45,7 +45,7 @@ pub fn run(
     })
 }
 
-trait ResearchTools {
+pub(crate) trait ResearchTools {
     fn definitions(&self) -> Vec<ToolDefinition>;
     fn execute(&mut self, call: &ToolCall, model: &str, cancel: &AtomicBool) -> Result<String>;
 }
@@ -69,7 +69,7 @@ fn debate_research_cache_key(debate: &DebateState, pro: bool, model: &str) -> Re
     Ok(format!("debate-research-v1-{digest:x}"))
 }
 
-fn run_with(
+pub(crate) fn run_with(
     debate: &DebateState,
     stage: usize,
     pro: bool,
