@@ -108,26 +108,26 @@ impl Palette {
     }
 
     pub const fn yeet() -> Self {
-        // Minimal: neutral grays, one blue accent, quiet semantic colors.
+        // Minimal: neutral grays, one clear blue accent, crisp semantic colors.
         Self {
-            background: rgb(18, 18, 18),
-            surface: rgb(24, 24, 24),
-            surface_raised: rgb(32, 32, 32),
-            code_background: rgb(14, 14, 14),
-            selected: rgb(40, 40, 40),
-            muted: rgb(120, 120, 120),
-            border: rgb(48, 48, 48),
-            border_dim: rgb(32, 32, 32),
-            accent: rgb(110, 160, 230),
-            accent_hot: rgb(140, 182, 240),
-            accent_warm: rgb(200, 170, 130),
-            warning: rgb(214, 186, 120),
-            success: rgb(150, 186, 150),
-            text: rgb(228, 228, 228),
-            text_dim: rgb(170, 170, 170),
-            user: rgb(212, 212, 212),
-            user_surface: rgb(30, 30, 30),
-            error: rgb(224, 108, 108),
+            background: rgb(16, 16, 18),
+            surface: rgb(24, 24, 27),
+            surface_raised: rgb(34, 34, 38),
+            code_background: rgb(12, 12, 14),
+            selected: rgb(30, 48, 78),
+            muted: rgb(132, 132, 140),
+            border: rgb(52, 52, 58),
+            border_dim: rgb(34, 34, 38),
+            accent: rgb(82, 156, 255),
+            accent_hot: rgb(122, 182, 255),
+            accent_warm: rgb(255, 176, 92),
+            warning: rgb(250, 196, 82),
+            success: rgb(108, 210, 140),
+            text: rgb(240, 240, 244),
+            text_dim: rgb(184, 184, 192),
+            user: rgb(150, 200, 255),
+            user_surface: rgb(26, 36, 54),
+            error: rgb(255, 102, 102),
         }
     }
 
