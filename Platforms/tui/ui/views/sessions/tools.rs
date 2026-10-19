@@ -113,6 +113,58 @@ mod tool_summary_layout_tests {
         }
     }
     #[test]
+    fn active_commands_show_a_bounded_multiline_preview() {
+        let command = "PYTHONPATH=. .venv/bin/python scripts/fly_revised_ais.py --checkpoint startup --validation aero --live-stream yes";
+        let mut tool = call("run_shell", ToolCallStatus::Running);
+        tool.arguments = serde_json::json!({ "command": command }).to_string();
+        let running = render(vec![tool_entry(&tool)], 60, false);
+        assert!(running.len() > 1 && running.len() <= 4, "{running:?}");
+        assert!(running[0].to_string().contains("Command"));
+        assert!(!running[0].to_string().contains("PYTHONPATH"));
+        assert!(running[1].to_string().contains("PYTHONPATH"));
+        assert!(running.iter().all(|line| line.width() <= 60));
+        tool.status = ToolCallStatus::Completed;
+        assert_eq!(render(vec![tool_entry(&tool)], 60, false).len(), 1);
+
+        tool.status = ToolCallStatus::Running;
+        tool.arguments =
+            serde_json::json!({ "command": "very-long-command ".repeat(100) }).to_string();
+        for width in [0, 1, 2, 8, 24, 35, 80] {
+            let preview = render(vec![tool_entry(&tool)], width, false);
+            assert!(preview.len() <= 4, "width {width}");
+            assert!(
+                preview
+                    .iter()
+                    .all(|line| line.width() <= usize::from(width))
+            );
+            if width >= 24 {
+                assert!(preview.last().unwrap().to_string().ends_with('…'));
+            }
+        }
+    }
+
+    #[test]
+    fn running_multi_tool_group_shows_current_command_below_its_compact_header() {
+        let mut previous = call("read_file", ToolCallStatus::Completed);
+        previous.id = "previous".into();
+        let mut current = call("run_shell", ToolCallStatus::Running);
+        current.id = "current".into();
+        current.arguments = serde_json::json!({
+            "command": "PYTHONPATH=. .venv/bin/python scripts/fly_revised_ais.py --checkpoint latest --validate controls"
+        }).to_string();
+        let running = render(vec![tool_entry(&previous), tool_entry(&current)], 64, false);
+        assert!(running.len() >= 2, "{running:?}");
+        assert!(!running[0].to_string().contains("PYTHONPATH"));
+        assert!(running[1].to_string().contains("PYTHONPATH"));
+        assert!(running.iter().all(|line| line.width() <= 64));
+        current.status = ToolCallStatus::Completed;
+        assert_eq!(
+            render(vec![tool_entry(&previous), tool_entry(&current)], 64, false).len(),
+            1
+        );
+    }
+
+    #[test]
     fn model_summaries_expand_independently_and_suppressed_calls_vanish() {
         let read = call("read_file", ToolCallStatus::Completed);
         let hidden = call("run_shell", ToolCallStatus::Suppressed);
@@ -231,7 +283,11 @@ pub(super) fn activity_group_lines(
             rows,
         );
     }
-    // Only collapsed groups repeat the lead action; the open header is a count.
+    // While a grouped command is running, do not squeeze its command into an
+    // abbreviated header. Give the actual command a few wrapped rows instead.
+    let running_summary = (group.active && !group.expanded && group.status_label.is_none())
+        .then(|| group.summary.split_once(" · "))
+        .flatten();
     let count = group.events.len().to_string();
     let title = if group.expanded {
         format!("{count} actions")
@@ -239,7 +295,7 @@ pub(super) fn activity_group_lines(
         format!(
             "{} {}",
             icons::conversation(group.events.last().unwrap().trace().icon),
-            group.summary
+            running_summary.map_or(group.summary.as_str(), |(action, _)| action)
         )
     };
     let status = if group.expanded {
@@ -256,6 +312,9 @@ pub(super) fn activity_group_lines(
         width,
         selected == Some(&group.id),
     )];
+    if let Some((_, summary)) = running_summary {
+        lines.extend(active_summary_lines(summary, width));
+    }
     if group.expanded {
         for event in &group.events {
             let trace = event.trace();
@@ -345,6 +404,41 @@ fn work_row(
     }
 }
 
+/// Running commands are the user's current focus. Wrap a bounded preview
+/// beneath their header instead of throwing away the command behind an ellipsis.
+/// The disclosure still owns the full, unabridged arguments and output.
+fn active_summary_lines(summary: &str, width: u16) -> Vec<Line<'static>> {
+    const MAX_PREVIEW_ROWS: usize = 3;
+    if width < 24 || summary.trim().is_empty() {
+        return Vec::new();
+    }
+    let max_chars = usize::from(width) * MAX_PREVIEW_ROWS;
+    let sample = summary.chars().take(max_chars + 1).collect::<String>();
+    let clipped = sample.chars().count() > max_chars;
+    let normalized = sample
+        .chars()
+        .take(max_chars)
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let style = Style::default().fg(theme::muted());
+    let mut rows = prefixed_wrapped_line(Span::raw("    "), Line::styled(normalized, style), width);
+    let truncated = clipped || rows.len() > MAX_PREVIEW_ROWS;
+    rows.truncate(MAX_PREVIEW_ROWS);
+    if truncated {
+        if let Some(last) = rows.last_mut() {
+            let text = last.to_string();
+            let content = crate::tui::ui::support::text::truncate_end(
+                text.trim_end(),
+                usize::from(width.saturating_sub(1)),
+            );
+            *last = Line::styled(format!("{content}…"), style);
+        }
+    }
+    rows
+}
+
 pub(super) fn trace_lines(
     trace: &crate::shared_ui::conversation::TraceView,
     width: u16,
@@ -362,8 +456,20 @@ pub(super) fn trace_lines(
         Some(summary) => format!("{} · {summary}", trace.title),
         None => trace.title.clone(),
     };
-    // Completed status is intentionally empty; only waiting/error states add copy.
-    let title = format!("{} {title}", icons::conversation(trace.icon));
+    // Keep historical rows compact, but show the active command itself below
+    // its heading. Do not duplicate it when the full disclosure is already open.
+    let active_preview = trace.active
+        && !trace.expanded
+        && width >= 24
+        && summary.is_some_and(|text| {
+            trace.icon == ConversationIcon::Terminal
+                || Span::raw(text).width() > usize::from(width.saturating_sub(20))
+        });
+    let title = format!(
+        "{} {}",
+        icons::conversation(trace.icon),
+        if active_preview { &trace.title } else { &title }
+    );
     let status = trace.attention_label();
     let expandable = !trace.details.is_empty() || trace.metadata.is_some();
     let mut lines = vec![work_row(
@@ -375,6 +481,9 @@ pub(super) fn trace_lines(
         width,
         selected,
     )];
+    if active_preview {
+        lines.extend(active_summary_lines(summary.unwrap_or_default(), width));
+    }
     if trace.expanded && expandable {
         if let Some(metadata) = &trace.metadata {
             lines.extend(prefixed_wrapped_line(
