@@ -38,6 +38,40 @@ pub fn should_display_activity(activity: &ModelActivity) -> bool {
     ) && !detail.is_empty()
         && terminal_label(detail))
 }
+/// Routine tool progress mirrors a real tool call, not a separate action.
+/// Failures and suppressed calls remain explicit exceptional state even when
+/// the session also contains other tools.
+fn routine_tool_phase(activity: &ModelActivity) -> bool {
+    matches!(activity.phase.as_str(), Some("tool" | "tool-complete"))
+}
+
+/// A provider can update the first activity row throughout a turn, while
+/// appending the actual tool calls later. Find those real calls once per turn
+/// so the projection remains linear even for long-running sessions.
+fn turns_with_visible_tools(entries: &[ConversationEntry]) -> Vec<bool> {
+    let mut has_tool = vec![false; entries.len()];
+    let mut turn_start = 0;
+    let mut any_tool = false;
+    for (index, entry) in entries.iter().enumerate() {
+        if matches!(entry.kind, ConversationKind::User { .. }) {
+            has_tool[turn_start..index].fill(any_tool);
+            turn_start = index;
+            any_tool = false;
+        }
+        any_tool |= match &entry.kind {
+            ConversationKind::ToolCall { tool_call } => {
+                !matches!(tool_call.status, ToolCallStatus::Suppressed)
+            }
+            ConversationKind::Assistant { tool_calls, .. } => tool_calls
+                .iter()
+                .any(|tool| !matches!(tool.status, ToolCallStatus::Suppressed)),
+            _ => false,
+        };
+    }
+    has_tool[turn_start..].fill(any_tool);
+    has_tool
+}
+
 fn readable(text: &str) -> String {
     text.trim().replace("****", "\n\n").replace("**", "")
 }
@@ -198,7 +232,8 @@ pub fn project(
     let mut items = Vec::new();
     let mut pending = Vec::new();
     let mut seen = HashSet::new();
-    for entry in entries {
+    let tool_backed_turn = turns_with_visible_tools(entries);
+    for (index, entry) in entries.iter().enumerate() {
         if harness.is_streaming
             && (harness.active_assistant_entry_id.as_deref() == Some(entry.id.as_str())
                 || harness.active_reasoning_entry_id.as_deref() == Some(entry.id.as_str()))
@@ -222,7 +257,10 @@ pub fn project(
             ConversationKind::ToolCall { tool_call } => {
                 append_tool(&mut pending, &mut seen, tool_call, state)
             }
-            ConversationKind::Activity { activity } if should_display_activity(activity) => {
+            ConversationKind::Activity { activity }
+                if should_display_activity(activity)
+                    && !(routine_tool_phase(activity) && tool_backed_turn[index]) =>
+            {
                 let key = format!("activity:{}", entry.id);
                 let active = harness.is_streaming
                     && harness.active_activity_entry_id.as_deref() == Some(entry.id.as_str());

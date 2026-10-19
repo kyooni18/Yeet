@@ -221,3 +221,86 @@ fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
     assert!(group.awaits_permission && group.active);
     assert!(!group.events[0].trace().active, "waiting must not spin");
 }
+
+#[test]
+fn active_tool_progress_does_not_repeat_real_tool_calls() {
+    let mut harness = HarnessState::default();
+    harness.is_streaming = true;
+    harness.active_activity_entry_id = Some("progress".into());
+    let progress = entry(
+        "progress",
+        ConversationKind::Activity {
+            activity: crate::model::ModelActivity {
+                phase: serde_json::json!("tool"),
+                title: "Running command".into(),
+                detail: Some("cargo check".into()),
+                run_id: Some("run-1".into()),
+            },
+        },
+    );
+    let user = entry(
+        "user",
+        ConversationKind::User {
+            content: "Check".into(),
+        },
+    );
+    let mut command = tool("running");
+    command.name = "run_shell".into();
+    command.arguments = r#"{"command":"cargo check"}"#.into();
+    let real_tool = entry("call", ConversationKind::ToolCall { tool_call: command });
+    let state = ConversationState::default();
+    let with_tool = state.view(
+        &[user.clone(), progress.clone(), real_tool.clone()],
+        &harness,
+    );
+    assert!(with_tool.items.iter().all(|item| {
+        !matches!(item, DisplayItem::Activity { group, .. } if group.events.iter().any(|event| matches!(event, ActivityEvent::Activity { .. })))
+    }));
+    assert!(with_tool.items.iter().any(|item| {
+        matches!(item, DisplayItem::Activity { group, .. } if group.summary.contains("cargo check") && group.active)
+    }));
+
+    // Before a real call arrives, progress must remain visible.
+    let preparing = state.view(&[user.clone(), progress.clone()], &harness);
+    assert!(preparing.items.iter().any(|item| {
+        matches!(item, DisplayItem::Activity { group, .. } if group.summary.contains("Running command"))
+    }));
+
+    // A previous user's tool cannot suppress a later user's current progress.
+    let next_turn = state.view(
+        &[
+            user,
+            real_tool,
+            entry(
+                "next",
+                ConversationKind::User {
+                    content: "Again".into(),
+                },
+            ),
+            progress.clone(),
+        ],
+        &harness,
+    );
+    assert!(next_turn.items.iter().any(|item| {
+        matches!(item, DisplayItem::Activity { group, .. } if group.summary.contains("Running command"))
+    }));
+
+    // Provider-managed work has no equivalent tool trace and must remain visible.
+    let provider = entry(
+        "provider",
+        ConversationKind::Activity {
+            activity: crate::model::ModelActivity {
+                phase: serde_json::json!("provider-tool"),
+                title: "Searching web".into(),
+                detail: None,
+                run_id: Some("run-1".into()),
+            },
+        },
+    );
+    let provider_view = state.view(&[progress, provider], &harness);
+    assert!(provider_view.items.iter().any(|item| {
+        matches!(item, DisplayItem::Activity { group, .. } if group.events.iter().any(|event|
+            matches!(event, ActivityEvent::Activity { trace, .. } if trace.title == "Searching web")
+        ))
+    }));
+}

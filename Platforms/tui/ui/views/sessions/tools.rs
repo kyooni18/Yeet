@@ -150,6 +150,30 @@ mod tool_summary_layout_tests {
         assert!(render(vec![tool_entry(&hidden)], 80, false).is_empty());
     }
     #[test]
+    fn real_shell_call_replaces_redundant_live_activity_row() {
+        let activity = ConversationEntry {
+            id: "progress".into(),
+            kind: ConversationKind::Activity {
+                activity: crate::model::ModelActivity {
+                    phase: serde_json::json!("tool"),
+                    title: "Running command".into(),
+                    detail: Some("cargo check".into()),
+                    run_id: None,
+                },
+            },
+        };
+        let command = call("run_shell", ToolCallStatus::Running);
+        let transcript = render(vec![activity, tool_entry(&command)], 80, false)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!transcript.contains("Running command"), "{transcript}");
+        assert!(transcript.contains("cargo check"), "{transcript}");
+        assert!(transcript.contains("running"), "{transcript}");
+    }
+
+    #[test]
     fn adjacent_work_is_one_row_each_without_duplicate_labels_or_completion_badges() {
         let reasoning = ConversationEntry {
             id: "reasoning".into(),
