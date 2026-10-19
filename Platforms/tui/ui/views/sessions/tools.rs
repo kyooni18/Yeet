@@ -144,23 +144,31 @@ mod tool_summary_layout_tests {
     }
 
     #[test]
-    fn running_multi_tool_group_shows_current_command_below_its_compact_header() {
+    fn consecutive_function_calls_are_separate_rows_even_after_completion() {
         let mut previous = call("read_file", ToolCallStatus::Completed);
         previous.id = "previous".into();
+        previous.arguments = serde_json::json!({ "path": "src/previous.rs" }).to_string();
         let mut current = call("run_shell", ToolCallStatus::Running);
         current.id = "current".into();
         current.arguments = serde_json::json!({
             "command": "PYTHONPATH=. .venv/bin/python scripts/fly_revised_ais.py --checkpoint latest --validate controls"
         }).to_string();
         let running = render(vec![tool_entry(&previous), tool_entry(&current)], 64, false);
-        assert!(running.len() >= 2, "{running:?}");
-        assert!(!running[0].to_string().contains("PYTHONPATH"));
-        assert!(running[1].to_string().contains("PYTHONPATH"));
+        assert!(running.len() >= 3, "{running:?}");
+        assert!(running[0].to_string().contains("Read file"));
+        assert!(running[0].to_string().contains("src/previous.rs"));
+        assert!(running[1].to_string().contains("Command"));
+        assert!(running[2].to_string().contains("PYTHONPATH"));
         assert!(running.iter().all(|line| line.width() <= 64));
         current.status = ToolCallStatus::Completed;
-        assert_eq!(
-            render(vec![tool_entry(&previous), tool_entry(&current)], 64, false).len(),
-            1
+        let completed = render(vec![tool_entry(&previous), tool_entry(&current)], 64, false);
+        assert_eq!(completed.len(), 2);
+        assert!(completed[0].to_string().contains("Read file"));
+        assert!(completed[1].to_string().contains("Command"));
+        assert!(
+            completed
+                .iter()
+                .all(|line| !line.to_string().contains("actions"))
         );
     }
 

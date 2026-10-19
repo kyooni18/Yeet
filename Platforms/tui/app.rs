@@ -190,7 +190,7 @@ impl Default for App {
             input: String::new(),
             input_focused: true,
             cursor: 0,
-            application: crate::shared_ui::application_session::ApplicationSession::new(
+            application: crate::shared_ui::application_session::ApplicationSession::new_tui(
                 &BridgeState::default(),
             ),
             tab_targets: Vec::new(),

@@ -10,6 +10,10 @@ pub struct ConversationState {
     pub selected: Option<String>,
     pub expanded: BTreeMap<String, bool>,
     pub expand_all: bool,
+    /// Native TUI shows every operation as an individual, independently expandable row.
+    /// Web/Remote retains compact multi-call groups by default.
+    #[serde(default)]
+    pub individual_work_rows: bool,
     /// Existing inspect-work workflow opens running tools and reasoning blocks.
     /// This is a shared preference, not a platform branch.
     pub inspect_work: bool,
@@ -123,8 +127,10 @@ impl ConversationState {
             }
             ConversationAction::Reset => {
                 let inspect = self.inspect_work;
+                let individual = self.individual_work_rows;
                 *self = Self::default();
                 self.inspect_work = inspect;
+                self.individual_work_rows = individual;
             }
         }
         effect

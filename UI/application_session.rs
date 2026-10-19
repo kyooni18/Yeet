@@ -118,6 +118,14 @@ impl ApplicationSession {
         session.serialized = session.fingerprint();
         session
     }
+    /// Native terminal presentation: show every tool, MCP and skill call as
+    /// its own selectable row without changing Web Remote grouping semantics.
+    pub fn new_tui(harness: &HarnessState) -> Self {
+        let mut session = Self::new(harness);
+        session.conversation = ConversationSession::new_with_individual_work_rows(harness, true);
+        session.serialized = session.fingerprint();
+        session
+    }
     pub fn toolbar_view(&self) -> ToolbarView {
         self.toolbar.view(
             &self.shell,

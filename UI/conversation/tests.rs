@@ -152,6 +152,83 @@ fn failed_delivery_preserves_controller_state_and_runtime_refresh_keeps_disclosu
 }
 
 #[test]
+fn native_tool_rows_stay_separate_and_toggle_independently() {
+    let harness = HarnessState::default();
+    let make = |id: &str| {
+        let mut call = tool("completed");
+        call.id = id.to_owned();
+        call.name = "run_shell".into();
+        call.arguments = serde_json::json!({ "command": format!("check-{id}") }).to_string();
+        call.result = Some(format!("result-{id}"));
+        entry(id, ConversationKind::ToolCall { tool_call: call })
+    };
+    let entries = vec![make("one"), make("two"), make("three")];
+    let mut native = ConversationState::default();
+    native.individual_work_rows = true;
+    let view = native.project(&entries, &harness);
+    assert_eq!(view.items.len(), 3);
+    assert_eq!(view.work_ids(), ["tool:one", "tool:two", "tool:three"]);
+    assert!(view.items.iter().all(|item| {
+        matches!(item, DisplayItem::Activity { group, .. } if group.events.len() == 1 && !group.expanded)
+    }));
+    native.apply(
+        ConversationAction::Select(Some("tool:two".into())),
+        &view,
+        &harness,
+    );
+    native.apply(
+        ConversationAction::Toggle("tool:two".into()),
+        &view,
+        &harness,
+    );
+    let view = native.project(&entries, &harness);
+    assert_eq!(view.selected.as_deref(), Some("tool:two"));
+    assert!(matches!(&view.items[1], DisplayItem::Activity { group, .. } if group.expanded));
+    assert!(matches!(&view.items[0], DisplayItem::Activity { group, .. } if !group.expanded));
+    assert!(matches!(&view.items[2], DisplayItem::Activity { group, .. } if !group.expanded));
+    native.apply(ConversationAction::Reset, &view, &harness);
+    assert!(
+        native.individual_work_rows,
+        "reset preserves native presentation"
+    );
+    assert_eq!(native.project(&entries, &harness).items.len(), 3);
+
+    // Web/Remote still groups consecutive calls into one expandable disclosure.
+    let mut remote = ConversationState::default();
+    let remote_view = remote.project(&entries, &harness);
+    assert_eq!(remote_view.items.len(), 1);
+    assert!(
+        matches!(&remote_view.items[0], DisplayItem::Activity { group, .. } if group.events.len() == 3)
+    );
+}
+
+#[test]
+fn native_application_session_is_configured_to_show_individual_calls() {
+    use crate::shared_ui::application_session::ApplicationSession;
+    let mut harness = HarnessState::default();
+    let mut second = tool("completed");
+    second.id = "call-2".into();
+    harness.conversation = Some(vec![
+        entry(
+            "first",
+            ConversationKind::ToolCall {
+                tool_call: tool("completed"),
+            },
+        ),
+        entry("second", ConversationKind::ToolCall { tool_call: second }),
+    ]);
+    let native = ApplicationSession::new_tui(&harness);
+    assert!(native.conversation_state().individual_work_rows);
+    assert_eq!(
+        native.conversation_projection().view.work_ids(),
+        ["tool:call-1", "tool:call-2"]
+    );
+    let remote = ApplicationSession::new(&harness);
+    assert!(!remote.conversation_state().individual_work_rows);
+    assert_eq!(remote.conversation_projection().view.items.len(), 1);
+}
+
+#[test]
 fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
     let harness = HarnessState::default();
     let mut state = ConversationState::default();

@@ -22,7 +22,11 @@ pub struct ConversationSession {
 }
 impl ConversationSession {
     pub fn new(harness: &HarnessState) -> Self {
+        Self::new_with_individual_work_rows(harness, false)
+    }
+    pub fn new_with_individual_work_rows(harness: &HarnessState, individual: bool) -> Self {
         let mut state = ConversationState::default();
+        state.individual_work_rows = individual;
         let view = state.project(harness.conversation.as_deref().unwrap_or_default(), harness);
         let serialized = serde_json::to_value(&view).expect("serialize conversation UI");
         Self {

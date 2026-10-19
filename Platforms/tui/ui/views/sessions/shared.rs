@@ -150,17 +150,14 @@ mod tests {
                 },
             })
             .collect();
-        app.apply_conversation_action(ConversationAction::Toggle(
-            "activity-group:tool:first".into(),
-        ));
         app.apply_conversation_action(ConversationAction::Select(Some("tool:second".into())));
         app.apply_conversation_action(ConversationAction::Toggle("tool:second".into()));
         let view = app.application.conversation_projection().view;
         let (text, rows, ids) = content(&app, &view, 40);
         assert_eq!(ids, view.work_ids());
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 2);
         assert!(
-            text.lines[rows[2]]
+            text.lines[rows[1]]
                 .style
                 .add_modifier
                 .contains(Modifier::REVERSED)

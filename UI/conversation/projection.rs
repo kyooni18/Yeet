@@ -158,6 +158,40 @@ fn flush(
     let Some(first) = pending.first() else {
         return;
     };
+    if state.individual_work_rows {
+        for event in pending.drain(..) {
+            let id = event.key().to_owned();
+            let trace = event.trace();
+            let active = trace.active;
+            let failed = event.failed();
+            let awaits_permission = event.awaits_permission();
+            let summary = match trace.summary.as_deref().filter(|value| !value.is_empty()) {
+                Some(summary) if summary != trace.title => {
+                    format!("{} · {summary}", trace.title)
+                }
+                _ => trace.title.clone(),
+            };
+            let status_label = trace.attention_label().map(str::to_owned);
+            let expanded = state.expanded_for(
+                &id,
+                failed || awaits_permission || (state.inspect_work && active),
+            );
+            items.push(DisplayItem::Activity {
+                id: id.clone(),
+                group: ActivityGroup {
+                    id,
+                    events: vec![event],
+                    summary,
+                    status_label,
+                    active,
+                    failed,
+                    awaits_permission,
+                    expanded,
+                },
+            });
+        }
+        return;
+    }
     let id = format!("activity-group:{}", first.key());
     let active = pending.iter().any(|event| event.trace().active);
     let failed = pending.iter().any(ActivityEvent::failed);
