@@ -136,6 +136,11 @@ impl SessionStore {
         let path = event_directory.join("events.jsonl");
         let seq = self.next_event_sequence(&root)?;
         let mut file = options.open(&path)?;
+        // A crash mid-append leaves a line without its newline; terminate it so
+        // this record does not fuse onto (and corrupt along with) that fragment.
+        if ends_with_partial_line(&path)? {
+            file.write_all(b"\n")?;
+        }
         let event_type = event
             .get("type")
             .and_then(serde_json::Value::as_str)
@@ -192,4 +197,16 @@ impl SessionStore {
         write_private_replace(&counter_path, next.to_string().as_bytes())?;
         Ok(next)
     }
+}
+
+fn ends_with_partial_line(path: &Path) -> Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path)?;
+    if file.metadata()?.len() == 0 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)?;
+    Ok(last[0] != b'\n')
 }

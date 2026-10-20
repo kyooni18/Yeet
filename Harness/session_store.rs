@@ -756,6 +756,14 @@ mod tests {
         let events = store.read_events("session-events").unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["seq"], 1);
+
+        // The next append must not fuse onto the torn fragment.
+        store
+            .append_event("session-events", None, &serde_json::json!({"type": "task"}))
+            .unwrap();
+        let events = store.read_events("session-events").unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["seq"], 3);
     }
 
     #[test]
