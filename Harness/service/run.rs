@@ -468,6 +468,7 @@ impl RunWorker {
             match coordinator.compact_model_history() {
                 Ok((before, after)) => {
                     state.meta.pending_compaction = false;
+                    state.state.current_context_tokens = None;
                     state.append(ConversationKind::System {
                         content: format!(
                             "New context window: {before} working messages to {after}. Original history is retrievable."

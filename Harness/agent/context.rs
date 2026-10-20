@@ -155,8 +155,16 @@ impl ContextMemory {
         objective: Option<&Message>,
         handoff: Option<&Message>,
     ) -> Result<()> {
-        let active_skill_instructions = objective
-            .and_then(|objective| history.iter().rposition(|message| message == objective))
+        // Skills invoked for the current request follow its user message; a
+        // manual compaction has no objective, so anchor on the last user turn.
+        let anchor = match objective {
+            Some(objective) => history.iter().rposition(|message| message == objective),
+            None => history
+                .iter()
+                .rposition(|message| message.role == MessageRole::User),
+        };
+        let carryover = conversation_carryover(history, objective);
+        let active_skill_instructions = anchor
             .map(|index| {
                 history[index + 1..]
                     .iter()
@@ -195,6 +203,7 @@ impl ContextMemory {
             number: self.number() + 1,
         });
         let mut next = vec![Message::system(super::SYSTEM_INSTRUCTION)];
+        next.extend(carryover);
         if let Some(objective) = objective {
             next.push(objective.clone());
         }
@@ -473,6 +482,80 @@ pub(super) fn tools() -> Vec<ToolDefinition> {
     ]
 }
 
+const CARRYOVER_MAX_MESSAGES: usize = 8;
+const CARRYOVER_MAX_MESSAGE_CHARS: usize = 2_000;
+const CARRYOVER_MAX_TOTAL_CHARS: usize = 12_000;
+const CARRYOVER_HEADER: &str = "Earlier conversation (carried over from the archived context window; tool output omitted, use context_history for exact details):";
+
+/// Recent user requests and final assistant replies from the window being
+/// archived, so a rollover keeps the thread of the conversation. Messages from
+/// the current request onward are excluded because they are carried verbatim.
+fn conversation_carryover(history: &[Message], objective: Option<&Message>) -> Option<Message> {
+    let end = objective
+        .and_then(|objective| history.iter().rposition(|message| message == objective))
+        .unwrap_or(history.len());
+    let mut entries = Vec::new();
+    let mut total = 0usize;
+    for message in history[..end].iter().rev() {
+        let budget = CARRYOVER_MAX_TOTAL_CHARS.saturating_sub(total);
+        if entries.len() >= CARRYOVER_MAX_MESSAGES || budget == 0 {
+            break;
+        }
+        if message.request_only == Some(true) {
+            continue;
+        }
+        let Some(content) = message.content.as_deref().map(str::trim) else {
+            continue;
+        };
+        let label = match message.role {
+            MessageRole::User => "User",
+            MessageRole::Assistant
+                if message.tool_calls.as_ref().is_none_or(|calls| calls.is_empty()) =>
+            {
+                "Assistant"
+            }
+            // Chain the previous window's carryover so repeated rollovers keep
+            // older turns. It sits at the window start, so nothing older remains.
+            MessageRole::System if content.starts_with(CARRYOVER_HEADER) => {
+                let body = content[CARRYOVER_HEADER.len()..].trim();
+                if !body.is_empty() {
+                    entries.push(truncate_chars(body, budget));
+                }
+                break;
+            }
+            _ => continue,
+        };
+        if content.is_empty() {
+            continue;
+        }
+        let entry = format!(
+            "[{label}] {}",
+            truncate_chars(content, CARRYOVER_MAX_MESSAGE_CHARS.min(budget))
+        );
+        total += entry.len();
+        entries.push(entry);
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    entries.reverse();
+    Some(Message::system(format!(
+        "{CARRYOVER_HEADER}\n\n{}",
+        entries.join("\n\n")
+    )))
+}
+
+fn truncate_chars(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    let mut cut = max_bytes;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…", &text[..cut])
+}
+
 #[cfg(test)]
 mod goal_persistence_tests {
     use super::*;
@@ -677,6 +760,49 @@ mod goal_persistence_tests {
         memory.flush()?;
         assert!(!owner_context.exists());
         assert_eq!(history[1].content.as_deref(), Some("bounded task"));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod carryover_tests {
+    use super::*;
+
+    #[test]
+    fn rollover_carries_recent_conversation_across_repeated_windows() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut memory = ContextMemory::default();
+        memory.bind(Some(directory.path().join("context")));
+        let mut history = vec![
+            Message::system("system"),
+            Message::user("compare option A and option B"),
+            Message::assistant("", Some(vec![ToolCall {
+                id: "call-1".into(),
+                name: "read_file".into(),
+                arguments: json!({"path": "src/lib.rs"}),
+            }])),
+            Message::tool("large tool payload", "call-1", Some("read_file".into())),
+            Message::assistant("Option B is better because it avoids locking.", None),
+        ];
+        memory.load(&mut history)?;
+
+        // Manual compaction: no objective, the whole exchange carries over.
+        memory.rollover(&mut history, None)?;
+        let carried = history[1].content.as_deref().unwrap_or_default();
+        assert!(carried.starts_with(CARRYOVER_HEADER));
+        assert!(carried.contains("[User] compare option A and option B"));
+        assert!(carried.contains("[Assistant] Option B is better"));
+        assert!(!carried.contains("large tool payload"));
+
+        // A later automatic rollover keeps the older turn and the objective.
+        history.push(Message::user("implement option B"));
+        let objective = history.last().unwrap().clone();
+        history.push(Message::assistant("Starting with the lock removal.", None));
+        memory.rollover(&mut history, Some(&objective))?;
+        let carried = history[1].content.as_deref().unwrap_or_default();
+        assert!(carried.contains("compare option A and option B"));
+        assert!(!carried.contains("implement option B"));
+        assert_eq!(history[2], objective);
         Ok(())
     }
 }

@@ -174,7 +174,8 @@ impl AgentCoordinator {
             if has_rolloverable_trace
                 && (proactive.is_some() || self.context_memory.estimated_tokens > rollover_budget)
             {
-                let handoff = execution_evidence.rollover_handoff(proactive.as_deref());
+                // The proactive reason is runtime telemetry, not model guidance.
+                let handoff = execution_evidence.rollover_handoff(None);
                 self.rollover(&current_request, handoff, &mut loop_budget)?;
                 turn_context_orientation = self.context_memory.orientation();
                 last_context_updates.clear();
