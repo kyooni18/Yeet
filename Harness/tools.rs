@@ -472,7 +472,7 @@ impl ToolRegistry {
 
     pub fn execute(&mut self, call: &ToolCall, model: &str, cancel: &AtomicBool) -> Result<String> {
         self.sync_edit_state();
-        if self.shell_jobs.has_jobs() {
+        if self.shell_jobs.take_workspace_refresh() {
             // Refresh evidence without treating every poll/read as agent progress.
             let generation = self.evidence.workspace_generation;
             self.invalidate_workspace_cache();

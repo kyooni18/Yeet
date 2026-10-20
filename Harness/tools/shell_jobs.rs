@@ -32,6 +32,8 @@ struct ShellJob {
     state: Arc<(Mutex<ShellJobState>, Condvar)>,
     progress: ShellProgress,
     started_at: Instant,
+    /// Set once the workspace was refreshed after this job finished.
+    settled: bool,
 }
 
 impl Drop for ShellJobs {
@@ -45,6 +47,24 @@ impl Drop for ShellJobs {
 impl ShellJobs {
     pub(super) fn has_jobs(&self) -> bool {
         !self.jobs.is_empty()
+    }
+
+    /// True while a job may still be changing the workspace, and once more
+    /// after each job finishes so its final writes are observed. Completed
+    /// jobs kept for inspection do not keep invalidating the workspace cache.
+    pub(super) fn take_workspace_refresh(&mut self) -> bool {
+        let mut refresh = false;
+        for job in self.jobs.values_mut().filter(|job| !job.settled) {
+            let (lock, _) = &*job.state;
+            let finished = lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .result
+                .is_some();
+            job.settled = finished;
+            refresh = true;
+        }
+        refresh
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -105,6 +125,7 @@ impl ShellJobs {
                 state,
                 progress,
                 started_at: Instant::now(),
+                settled: false,
             },
         );
         Ok(id)
@@ -302,5 +323,36 @@ impl ToolRegistry {
                 json!("Output stored as an artifact; use search_artifact or read_artifact.");
         }
         Ok(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finished_jobs_stop_requesting_workspace_refresh() {
+        let root = tempfile::tempdir().unwrap();
+        let mut jobs = ShellJobs::default();
+        jobs.start(
+            "true".into(),
+            root.path().to_path_buf(),
+            None,
+            30,
+            false,
+            true,
+            false,
+        )
+        .unwrap();
+        let started = Instant::now();
+        while jobs.take_workspace_refresh() {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "job never settled"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(jobs.has_jobs());
+        assert!(!jobs.take_workspace_refresh());
     }
 }
