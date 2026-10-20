@@ -58,14 +58,17 @@ impl ContextMemory {
     }
 
     pub fn start_goal(&mut self, objective: &str, continuation: bool) -> String {
-        if !continuation
-            || !self
-                .state
-                .goal
-                .as_ref()
-                .is_some_and(|goal| goal.resumable())
-        {
-            self.state.goal = Some(super::goal::GoalJob::new(objective));
+        use super::goal::GoalStatus;
+        match self.state.goal.as_mut() {
+            // A message sent to a live goal corrects it rather than discarding
+            // the original request; a cancelled or finished goal starts fresh.
+            Some(goal) if goal.resumable() && goal.status != GoalStatus::Cancelled => {
+                if !continuation {
+                    goal.amend(objective);
+                }
+            }
+            Some(goal) if continuation && goal.resumable() => {}
+            _ => self.state.goal = Some(super::goal::GoalJob::new(objective)),
         }
         self.dirty = true;
         let goal = self.state.goal.as_mut().unwrap();
@@ -78,7 +81,7 @@ impl ContextMemory {
             goal.progress = super::goal::GoalProgress::default();
         }
         goal.status = super::goal::GoalStatus::Running;
-        goal.objective.clone()
+        goal.brief()
     }
 
     pub fn bind(&mut self, root: Option<PathBuf>) {
@@ -804,5 +807,28 @@ mod carryover_tests {
         assert!(!carried.contains("implement option B"));
         assert_eq!(history[2], objective);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod goal_amendment_tests {
+    use super::*;
+    use crate::agent::goal::GoalStatus;
+
+    #[test]
+    fn user_messages_amend_a_live_goal_and_cancelled_goals_start_fresh() {
+        let mut memory = ContextMemory::default();
+        memory.start_goal("validate the model; do not fly the interceptor", false);
+        memory.goal_mut().unwrap().remaining = vec!["stale judge item".into()];
+
+        let brief = memory.start_goal("now fly the interceptor", false);
+        assert!(brief.starts_with("validate the model"));
+        assert!(brief.ends_with("- now fly the interceptor"));
+        assert!(memory.goal().unwrap().remaining.is_empty());
+        // Resuming keeps the amended goal instead of re-reading the prompt.
+        assert_eq!(memory.start_goal("Resume the goal job", true), brief);
+
+        memory.goal_mut().unwrap().status = GoalStatus::Cancelled;
+        assert_eq!(memory.start_goal("new task", false), "new task");
     }
 }

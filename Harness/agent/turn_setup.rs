@@ -64,21 +64,22 @@ impl AgentCoordinator {
             .content
             .clone()
             .unwrap_or_else(|| input.to_owned());
+        let goal_block = goal_mode
+            .load(Ordering::Acquire)
+            .then(|| self.context_memory.goal().map(goal_block))
+            .flatten();
+        // A goal block whose objective no longer matches (goal ended or the
+        // user amended it) would keep presenting superseded wording with
+        // system authority, so drop it even though that costs a cache miss.
+        let current_brief = goal_block.as_ref().map(|(brief, _)| brief.as_str());
+        self.history.retain(|message| !is_stale_goal_block(message, current_brief));
         self.history.push(current_request.clone());
         self.history
             .push(Message::system(TURN_CONTEXT_BOUNDARY).request_only());
-        if goal_mode.load(Ordering::Acquire) {
+        if let Some((_, block)) = goal_block {
             self.history
                 .push(Message::system(GOAL_JOB_INSTRUCTION).request_only());
-            if let Some(goal) = self.context_memory.goal() {
-                self.history.push(
-                    Message::system(format!(
-                        "Goal: {}\nStill missing: {:?}\nNext: {:?}",
-                        goal.objective, goal.remaining, goal.next_action
-                    ))
-                    .request_only(),
-                );
-            }
+            self.history.push(Message::system(block).request_only());
         }
         let mut explicitly_activated_tools = self.registry.skill_tools_for(&self.attached_skills);
         if let Some(skill_name) = explicit_skill_name(input) {
@@ -175,7 +176,17 @@ impl AgentCoordinator {
             workspace_revision,
             turn_stable_overlays,
             turn_context_orientation: self.context_memory.orientation(),
-            last_context_updates: Vec::new(),
+            // Trust the record only while those messages are still in the
+            // window; rollover, compaction, or a session swap replaces history.
+            last_context_updates: if self
+                .submitted_context_updates
+                .iter()
+                .all(|update| self.history.contains(update))
+            {
+                self.submitted_context_updates.clone()
+            } else {
+                Vec::new()
+            },
         })
     }
 }
@@ -252,4 +263,36 @@ mod tests {
             assert!(attached.iter().any(|tool| tool.name == name));
         }
     }
+}
+
+const GOAL_BLOCK_HEADER: &str = "Goal (the user's request; their newer messages take precedence):\n";
+
+/// Renders the per-turn goal block, returning the objective part separately so
+/// later turns can tell whether an older block is stale.
+fn goal_block(goal: &goal::GoalJob) -> (String, String) {
+    let brief = format!("{GOAL_BLOCK_HEADER}{}", goal.brief());
+    let mut block = brief.clone();
+    if !goal.remaining.is_empty() {
+        block.push_str("\n\nJudge says still missing:");
+        for item in &goal.remaining {
+            block.push_str("\n- ");
+            block.push_str(item);
+        }
+    }
+    (brief, block)
+}
+
+fn is_stale_goal_block(message: &Message, current_brief: Option<&str>) -> bool {
+    if message.role != MessageRole::System || message.request_only != Some(true) {
+        return false;
+    }
+    let Some(content) = message.content.as_deref() else {
+        return false;
+    };
+    if content.starts_with("This is a goal job:") {
+        return current_brief.is_none() || content != GOAL_JOB_INSTRUCTION;
+    }
+    // Blocks from before this format used a bare "Goal: " prefix.
+    let is_goal_block = content.starts_with(GOAL_BLOCK_HEADER) || content.starts_with("Goal: ");
+    is_goal_block && current_brief.is_none_or(|brief| !content.starts_with(brief))
 }

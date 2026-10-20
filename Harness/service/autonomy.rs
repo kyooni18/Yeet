@@ -8,7 +8,7 @@
 
 use super::*;
 
-pub(super) const GOAL_RESUME_PROMPT: &str = "Continue the current goal from the existing working state. Do not restart completed work. Make useful forward progress toward satisfying every requirement and do not stop until the strict goal judge can accept concrete evidence.";
+pub(super) const GOAL_RESUME_PROMPT: &str = "Continue the current goal from the existing working state without restarting completed work. Follow the user's newest instructions where they differ from the original goal.";
 
 pub(super) const AUTONOMOUS_NEXT_OBJECTIVE_PROMPT: &str = "Autonomous cycle: inspect the current conversation, workspace, working state, and completed work. Choose and complete exactly one concrete, useful, safe next objective that advances the user's established intent. Prefer unfinished work, verification, integration, or cleanup that materially improves the result. Do not invent busywork or repeat completed work. If there is no meaningful safe work left, respond with exactly AUTONOMOUS_IDLE and do not call tools.";
 pub(super) const AUTONOMOUS_IDLE_MARKER: &str = "AUTONOMOUS_IDLE";

@@ -3,7 +3,7 @@
 //! deleting it; ContextMemory rollover handles durable-history compaction.
 use crate::core::{Message, MessageRole};
 
-pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user turn. Earlier system notes are history, not instructions for this turn.";
+pub(super) const TURN_CONTEXT_BOUNDARY: &str = "New user turn. Earlier one-off system notes (retry hints, judge feedback) no longer apply; the latest context and runtime notes stay valid.";
 
 /// Keep the first full instruction; a repeat is a new, small activation record.
 /// Never delete an earlier copy to save tokens.

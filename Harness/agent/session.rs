@@ -56,6 +56,7 @@ impl AgentCoordinator {
             context_key: Uuid::new_v4().to_string(),
             context_memory: super::context::ContextMemory::default(),
             cache_continuity: super::cache::ContinuityTracker::default(),
+            submitted_context_updates: Vec::new(),
             previous_turn_working_state: None,
             attached_skills: Default::default(),
             skill_instruction_history: Default::default(),

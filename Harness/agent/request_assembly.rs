@@ -102,6 +102,7 @@ impl AgentCoordinator {
             input.last_context_updates,
             &stable_request_overlays,
         );
+        self.submitted_context_updates = input.last_context_updates.clone();
         let mut request_messages = self.history.clone();
         cache::advance_turn_cache_breakpoints(&mut request_messages, input.request_input);
         let request_context_chars = serde_json::to_string(&request_messages)

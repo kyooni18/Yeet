@@ -73,6 +73,9 @@ pub struct AgentCoordinator {
     context_key: String,
     context_memory: context::ContextMemory,
     cache_continuity: cache::ContinuityTracker,
+    /// Context updates last submitted in the active window, so a new turn does
+    /// not re-append identical runtime notes.
+    submitted_context_updates: Vec<Message>,
     previous_turn_working_state: Option<String>,
     attached_skills: HashSet<String>,
     skill_instruction_history: HashSet<String>,
