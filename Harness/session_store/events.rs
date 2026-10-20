@@ -169,9 +169,16 @@ impl SessionStore {
     pub(super) fn next_event_sequence(&self, root: &Path) -> Result<u64> {
         use std::io::{BufRead, BufReader};
         let counter_path = root.join(EVENT_SEQUENCE_FILE);
-        let current = match fs::read_to_string(&counter_path) {
-            Ok(value) => value.trim().parse::<u64>().unwrap_or(0),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        let stored = match fs::read_to_string(&counter_path) {
+            Ok(value) => value.trim().parse::<u64>().ok(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        // A missing or corrupt counter is rebuilt from the logs; restarting at
+        // zero would reuse sequence numbers and reorder history on read.
+        let current = match stored {
+            Some(value) => value,
+            None => {
                 let mut parsed_max = 0u64;
                 let mut total_lines = 0u64;
                 for stream in [TASKS_DIR, DEBATES_DIR] {
@@ -191,7 +198,6 @@ impl SessionStore {
                 }
                 parsed_max.max(total_lines)
             }
-            Err(error) => return Err(error.into()),
         };
         let next = current.saturating_add(1);
         write_private_replace(&counter_path, next.to_string().as_bytes())?;

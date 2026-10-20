@@ -767,6 +767,22 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_event_counter_resumes_after_logged_sequence() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(temp.path());
+        store.prepare().unwrap();
+        let event = serde_json::json!({"type": "task"});
+        store.append_event("session-seq", None, &event).unwrap();
+        store.append_event("session-seq", None, &event).unwrap();
+        let root = store.directory.join("session-seq");
+        fs::write(root.join(EVENT_SEQUENCE_FILE), b"").unwrap();
+
+        store.append_event("session-seq", None, &event).unwrap();
+        let events = store.read_events("session-seq").unwrap();
+        assert_eq!(events.last().unwrap()["seq"], 3);
+    }
+
+    #[test]
     fn group_checkpoint_round_trips() {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::new(temp.path());
