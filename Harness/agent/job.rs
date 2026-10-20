@@ -188,7 +188,11 @@ impl AgentCoordinator {
                 }
             }
         };
-        if running_goal && let Some(goal) = self.context_memory.goal_mut() {
+        // Goal mode can be toggled during the run, so settle the goal if it was
+        // on at either end.
+        if (running_goal || goal_mode.load(Ordering::Acquire))
+            && let Some(goal) = self.context_memory.goal_mut()
+        {
             match &result {
                 Ok(AgentRunOutcome::Completed) if goal.status == goal::GoalStatus::Succeeded => {}
                 Ok(AgentRunOutcome::GoalPaused { reason })

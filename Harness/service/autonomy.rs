@@ -83,12 +83,9 @@ impl HarnessService {
     }
 
     pub(super) fn set_autonomy_mode(&mut self, mode: AutonomyMode) -> Result<()> {
+        // The running turn reads goal mode at each stop point, so switching it
+        // mid-run takes effect when the model next stops calling tools.
         let is_streaming = self.shared.lock_or_recover().state.is_streaming;
-        if is_streaming && mode != AutonomyMode::Manual {
-            return Err(anyhow!(
-                "Autonomy mode cannot be enabled while a response is running."
-            ));
-        }
 
         let goal_enabled = mode != AutonomyMode::Manual;
         self.goal_mode.store(goal_enabled, Ordering::Release);

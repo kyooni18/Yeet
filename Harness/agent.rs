@@ -352,8 +352,19 @@ impl AgentCoordinator {
                 }
 
                 // A Goal job keeps working until the independent judge accepts it.
+                // Goal mode may have been switched on mid-run; the current request
+                // then becomes (or amends) the goal at this first checkpoint.
+                if !self.context_memory.goal().is_some_and(|goal| {
+                    matches!(goal.status, goal::GoalStatus::Running | goal::GoalStatus::Recovering)
+                }) {
+                    self.context_memory.start_goal(goal_input, false);
+                }
+                let goal_brief = self
+                    .context_memory
+                    .goal()
+                    .map_or_else(|| goal_input.to_owned(), goal::GoalJob::brief);
                 let (verdict, judge_usage, judge_request_chars) = self.judge_goal(
-                    goal_input,
+                    &goal_brief,
                     model,
                     reasoning_level,
                     &execution_evidence,

@@ -738,7 +738,7 @@ export function Composer({
               onClick={() => remoteStore.setGoal(!remote.state.goal_mode)}
               disabled={remote.connection !== 'connected'}
               aria-pressed={remote.state.goal_mode}
-              title={remote.state.is_streaming ? 'Goal changes apply to the next response.' : 'Goal mode'}
+              title={remote.state.is_streaming ? 'Goal changes apply when the model next stops.' : 'Goal mode'}
             >
               <Flag size={14} fill={remote.state.goal_mode ? 'currentColor' : 'none'} />
               <span>Goal</span>
