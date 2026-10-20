@@ -184,7 +184,6 @@ pub fn read_workspace_id(root: &Path) -> Option<String> {
 
 /// Returns the workspace's identity, creating `.yeet/workspace.json` on first use.
 pub fn ensure_workspace_id(root: &Path) -> Result<String> {
-    use std::io::Write;
     if let Some(id) = read_workspace_id(root) {
         return Ok(id);
     }
@@ -198,17 +197,22 @@ pub fn ensure_workspace_id(root: &Path) -> Result<String> {
     create_private_dir(directory)?;
     let id = Uuid::new_v4().to_string();
     let data = serde_json::to_vec_pretty(&serde_json::json!({ "id": id }))?;
-    // create_new so concurrent first opens agree on one identity.
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    match options.open(&marker) {
-        Ok(mut file) => {
-            file.write_all(&data)?;
-            file.sync_all()?;
-            Ok(id)
-        }
+    // Write a complete temp file, then hard-link it into place: the link fails
+    // if another opener won, and readers never observe a partial marker.
+    let tmp = directory.join(format!(".{WORKSPACE_MARKER_FILE}.{}.tmp", Uuid::new_v4()));
+    write_private_replace(&tmp, &data)?;
+    let linked = fs::hard_link(&tmp, &marker);
+    let _ = fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(id),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            read_workspace_id(root).context("workspace marker exists but is unreadable")
+            if let Some(existing) = read_workspace_id(root) {
+                return Ok(existing);
+            }
+            // Only a crash in the old non-atomic writer leaves an unreadable
+            // marker; replace it rather than leave the workspace unopenable.
+            write_private_replace(&marker, &data)?;
+            read_workspace_id(root).context("workspace marker is unreadable")
         }
         Err(error) => Err(error).context("create workspace marker"),
     }

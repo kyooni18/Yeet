@@ -701,6 +701,17 @@ mod tests {
     }
 
     #[test]
+    fn empty_workspace_marker_left_by_crash_is_replaced() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = workspace::workspace_marker_path(temp.path());
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::write(&marker, b"").unwrap();
+
+        let id = ensure_workspace_id(temp.path()).unwrap();
+        assert_eq!(ensure_workspace_id(temp.path()).unwrap(), id);
+    }
+
+    #[test]
     fn read_events_merges_streams_in_sequence_order() {
         let temp = tempfile::tempdir().unwrap();
         let store = SessionStore::new(temp.path());
