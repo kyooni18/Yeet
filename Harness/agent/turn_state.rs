@@ -390,10 +390,11 @@ fn push_pending_provenance(entries: &mut Vec<String>, value: String) {
 }
 
 fn summarize_structured_mutation(call: &ToolCall) -> String {
-    let Some(changes) = call.arguments.get("changes").and_then(Value::as_array) else {
+    let changes = crate::tools::file_edit_changes(&call.arguments);
+    if changes.is_empty() {
         return "apply_file_edits: structured mutation succeeded; exact change arguments unavailable"
             .into();
-    };
+    }
     let mut details = changes
         .iter()
         .take(MAX_PROVENANCE_CHANGE_DETAILS)
@@ -672,8 +673,8 @@ fn mutation_paths(call: &ToolCall) -> Vec<String> {
     }
 
     let mut paths = Vec::new();
-    if let Some(changes) = call.arguments.get("changes").and_then(Value::as_array) {
-        for change in changes.iter().take(16) {
+    {
+        for change in crate::tools::file_edit_changes(&call.arguments).iter().take(16) {
             if let Some(path) = change.get("path").and_then(Value::as_str) {
                 paths.push(path.to_owned());
             }
@@ -716,12 +717,9 @@ pub(super) fn summarize_tool_outcome(call: &ToolCall, content: &str, succeeded: 
             .map(|command| format!("run_shell `{}`", bounded_text(command, 120)))
             .unwrap_or_else(|| "run_shell".into()),
         "apply_file_edits" => {
-            let paths = call
-                .arguments
-                .get("changes")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
+            let changes = crate::tools::file_edit_changes(&call.arguments);
+            let paths = changes
+                .iter()
                 .filter_map(|change| change.get("path").and_then(Value::as_str))
                 .take(8)
                 .collect::<Vec<_>>();

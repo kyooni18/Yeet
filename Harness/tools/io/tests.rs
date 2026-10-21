@@ -180,3 +180,60 @@ fn large_shell_output_keeps_real_head_and_tail() {
         assert!(value["artifactId"].is_string(), "{mode}");
     }
 }
+
+#[test]
+fn text_replacements_and_patches_edit_files_without_line_numbers() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::write(
+        root.join("lib.rs"),
+        "fn a() {\n    let x = 1;\n}\n\nfn b() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    fs::write(root.join("old.txt"), "gone\n").unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root.clone(),
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    registry.begin_task("task");
+    let read = |registry: &mut ToolRegistry, path: &str| {
+        let request = json!({"path": path});
+        registry.read_file(request.as_object().unwrap()).unwrap();
+    };
+    read(&mut registry, "lib.rs");
+    let replace = |old: &str, new: &str| {
+        json!({"diagnostics": false, "changes": [{"path": "lib.rs", "edits": [
+            {"kind": "replaceText", "oldText": old, "newText": new}
+        ]}]})
+    };
+    let ambiguous = registry
+        .apply_file_edits(&replace("let x = 1;", "let x = 2;"))
+        .unwrap_err();
+    assert!(
+        ambiguous.to_string().contains("matches 2 places"),
+        "{ambiguous}"
+    );
+    registry
+        .apply_file_edits(&replace(
+            "fn a() {\n    let x = 1;",
+            "fn a() {\n    let x = 2;",
+        ))
+        .unwrap();
+
+    read(&mut registry, "lib.rs");
+    read(&mut registry, "old.txt");
+    let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@ fn b() {\n-    let x = 1;\n+    let y = 3;\n+    let z = 4;\n }\n*** Add File: new.txt\n+hello\n*** Delete File: old.txt\n*** End Patch\n";
+    registry
+        .apply_file_edits(&json!({"diagnostics": false, "patch": patch}))
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("lib.rs")).unwrap(),
+        "fn a() {\n    let x = 2;\n}\n\nfn b() {\n    let y = 3;\n    let z = 4;\n}\n"
+    );
+    assert_eq!(fs::read_to_string(root.join("new.txt")).unwrap(), "hello\n");
+    assert!(!root.join("old.txt").exists());
+    registry.finish_task("task");
+}

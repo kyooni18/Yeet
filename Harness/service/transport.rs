@@ -154,7 +154,7 @@ pub(crate) fn tool_detail(call: &ToolCall) -> Option<String> {
     }
     match call.name.as_str() {
         "apply_file_edits" => {
-            let changes = args.get("changes")?.as_array()?;
+            let changes = crate::tools::file_edit_changes(args);
             let first = changes.first()?.get("path")?.as_str()?;
             Some(if changes.len() > 1 {
                 let extra = changes.len() - 1;

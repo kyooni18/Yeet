@@ -46,7 +46,7 @@ pub(super) fn overlays_for_round(
     overlays
 }
 
-fn touched_paths(call: &ToolCall) -> Vec<&str> {
+fn touched_paths(call: &ToolCall) -> Vec<String> {
     let arguments = &call.arguments;
     let path = || arguments.get("path").and_then(Value::as_str);
     let nested = |list: &str| {
@@ -56,12 +56,21 @@ fn touched_paths(call: &ToolCall) -> Vec<&str> {
             .into_iter()
             .flatten()
             .filter_map(|item| item.get("path").and_then(Value::as_str))
+            .map(str::to_owned)
             .collect::<Vec<_>>()
     };
     match call.name.as_str() {
-        "read_file" => path().into_iter().chain(nested("requests")).collect(),
-        "apply_file_edits" => nested("changes"),
-        "outline" => path().into_iter().collect(),
+        "read_file" => path()
+            .map(str::to_owned)
+            .into_iter()
+            .chain(nested("requests"))
+            .collect(),
+        "apply_file_edits" => crate::tools::file_edit_changes(arguments)
+            .iter()
+            .filter_map(|change| change.get("path").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect(),
+        "outline" => path().map(str::to_owned).into_iter().collect(),
         _ => Vec::new(),
     }
 }

@@ -195,10 +195,11 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "apply_file_edits",
-            "Create, edit, move, or delete files. Edit by line range (replace/delete/insert) or by named declaration (replaceNode/replaceBody/deleteNode/insertBefore/insertAfter). Read a file before editing it.",
+            "Create, edit, move, or delete files. Read a file before editing it. Pass either `patch` or `changes`. `patch` takes a patch document: `*** Begin Patch`, then file sections `*** Add File: PATH` (every line prefixed `+`), `*** Delete File: PATH`, or `*** Update File: PATH` (optionally followed by `*** Move to: NEW_PATH`) with hunks introduced by `@@` or `@@ <line near the change>`, where ` ` lines are unchanged context, `-` lines are removed and `+` lines are added; include about 3 context lines around each change; end with `*** End Patch`. In `changes`, edit with exact text (replaceText: oldText must match once unless replaceAll), by line range (replace/delete/insert), or by named declaration (replaceNode/replaceBody/deleteNode/insertBefore/insertAfter).",
             json!({
                 "type":"object",
                 "properties":{
+                    "patch":{"type":"string"},
                     "changes":{
                         "type":"array","minItems":1,
                         "items":{
@@ -208,16 +209,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                                 "edits":{
                                     "type":"array","minItems":1,
                                     "items":{
-                                        "oneOf":[
-                                            {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"replaceNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"replaceBody"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"deleteNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false}},"required":["kind","target"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insertBefore"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insertAfter"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false}
-                                        ]
+                                        "oneOf": file_edit_variants()
                                     }
                                 },
                                 "fileOp":{
@@ -235,10 +227,28 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "diagnostics":{"type":"boolean"}
                 },
-                "required":["changes"],"additionalProperties":false
+                "additionalProperties":false
             }),
         ),
     ]
+}
+
+fn file_edit_variants() -> serde_json::Value {
+    json!([
+                                            replace_text_edit_schema(),
+                                            {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"replaceNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"replaceBody"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"deleteNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false}},"required":["kind","target"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"insertBefore"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+                                            {"type":"object","properties":{"kind":{"const":"insertAfter"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false}
+                                        ])
+}
+
+fn replace_text_edit_schema() -> serde_json::Value {
+    json!({"type":"object","properties":{"kind":{"const":"replaceText"},"oldText":{"type":"string","minLength":1},"newText":{"type":"string"},"replaceAll":{"type":"boolean"}},"required":["kind","oldText","newText"],"additionalProperties":false})
 }
 
 /// Returns whether a built-in tool is primarily useful for general document/data tasks.

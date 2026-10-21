@@ -50,6 +50,7 @@ mod support;
 mod symbol_tools;
 pub mod symbols;
 mod syntax_edit;
+mod text_edit;
 mod token_efficiency;
 
 pub(crate) use bridge_handle::BridgeHandle;
@@ -90,6 +91,18 @@ pub struct BuiltinCapabilityDescriptor {
     pub name: &'static str,
     pub description: &'static str,
     tools: &'static [&'static str],
+}
+
+/// Returns apply_file_edits change objects whether the call used `changes` or `patch`.
+pub fn file_edit_changes(arguments: &Value) -> Vec<Value> {
+    if let Some(changes) = arguments.get("changes").and_then(Value::as_array) {
+        return changes.clone();
+    }
+    arguments
+        .get("patch")
+        .and_then(Value::as_str)
+        .and_then(|patch| text_edit::parse_patch(patch).ok())
+        .unwrap_or_default()
 }
 
 pub fn builtin_capabilities() -> &'static [BuiltinCapabilityDescriptor] {

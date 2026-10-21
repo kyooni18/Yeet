@@ -32,6 +32,17 @@ impl ToolRegistry {
         )?;
         self.sync_edit_state();
         let mut request = arguments.clone();
+        if let Some(patch) = request.get("patch").and_then(Value::as_str) {
+            if request.get("changes").is_some() {
+                bail!("apply_file_edits takes either patch or changes, not both");
+            }
+            let changes = super::text_edit::parse_patch(patch)?;
+            let object = request
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("apply_file_edits arguments must be an object"))?;
+            object.remove("patch");
+            object.insert("changes".into(), json!(changes));
+        }
         normalize_legacy_edit_shapes(&mut request);
         let unlimited = SandboxStore::new(&self.context.workspace_root)?
             .load()?
@@ -98,7 +109,7 @@ impl ToolRegistry {
                 let has_file_operation = object.get("fileOp").and_then(Value::as_object).is_some();
                 if !has_edits && !has_file_operation {
                     bail!(
-                        "File change for {path} has no operation. For an existing file use edits:[{{kind:\"replace\",range:{{start:LINE,end:LINE}},text:\"...\"}}] (or another structured edit); for a new file use fileOp:{{kind:\"create\",text:\"...\"}}."
+                        "File change for {path} has no operation. For an existing file use edits:[{{kind:\"replaceText\",oldText:\"...\",newText:\"...\"}}] (or a line-range edit); for a new file use fileOp:{{kind:\"create\",text:\"...\"}}."
                     );
                 }
                 if !unlimited
@@ -127,11 +138,16 @@ impl ToolRegistry {
                         "Editing existing file {path} requires fresh read coverage. Call read_file first, then retry apply_file_edits; the runtime attaches the cached snapshot automatically."
                     );
                 }
-                let has_semantic_edits = object
+                let (has_text_edits, has_semantic_edits) = object
                     .get("edits")
                     .and_then(Value::as_array)
-                    .is_some_and(|edits| super::syntax_edit::has_semantic_edits(edits));
-                if has_semantic_edits {
+                    .map_or((false, false), |edits| {
+                        (
+                            super::text_edit::has_text_edits(edits),
+                            super::syntax_edit::has_semantic_edits(edits),
+                        )
+                    });
+                if has_text_edits || has_semantic_edits {
                     let snapshot_text = if let Some(snapshot) = object
                         .get("snapshot")
                         .and_then(Value::as_str)
@@ -148,6 +164,7 @@ impl ToolRegistry {
                         .get_mut("edits")
                         .and_then(Value::as_array_mut)
                         .expect("semantic edit array exists");
+                    super::text_edit::concretize_text_edits(&path, &snapshot_text, edits)?;
                     super::syntax_edit::concretize_semantic_edits(
                         Path::new(&path),
                         &snapshot_text,
