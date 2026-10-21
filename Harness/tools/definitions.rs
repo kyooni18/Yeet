@@ -161,7 +161,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command (zsh) in the cwd. Use background=true for long-running work and shell_job to follow it.",
+            "Run a shell command (zsh). The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. Use background=true for long-running work and shell_job to follow it.",
             json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
         ),
         ToolDefinition::new(

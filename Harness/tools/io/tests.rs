@@ -93,3 +93,47 @@ fn read_only_workspace_tools_do_not_start_sidecars() {
     let generated = json!({"path":"node_modules"});
     assert!(registry.list_files(generated.as_object().unwrap()).is_err());
 }
+
+#[test]
+fn shell_directory_persists_between_commands_within_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::create_dir(root.join("sub")).unwrap();
+    let store = crate::harness::sandbox::SandboxStore::new(&root).unwrap();
+    let mut policy = store.load().unwrap();
+    policy.workspace_read = crate::harness::sandbox::WorkspaceRead::All;
+    store.save(&policy).unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root.clone(),
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    let cancel = AtomicBool::new(false);
+    let mut run = |command: &str| {
+        let args = json!({ "command": command, "mode": "direct" });
+        registry
+            .run_shell_tool(args.as_object().unwrap(), "", &cancel)
+            .unwrap()
+    };
+
+    let moved = run("cd sub");
+    assert!(moved.contains("shellCwd"), "{moved}");
+    let inside = run("pwd -P");
+    let value: Value = serde_json::from_str(&inside).unwrap();
+    assert_eq!(
+        value["stdout"].as_str().unwrap().trim(),
+        root.join("sub").display().to_string()
+    );
+    assert!(!inside.contains("__YEET_SHELL_CWD__"), "{inside}");
+
+    // Leaving the context roots does not persist.
+    run("cd /");
+    let reset = run("pwd -P");
+    let value: Value = serde_json::from_str(&reset).unwrap();
+    assert_eq!(
+        value["stdout"].as_str().unwrap().trim(),
+        root.display().to_string()
+    );
+}

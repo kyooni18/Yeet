@@ -22,13 +22,18 @@ impl ToolRegistry {
         let command = string_arg(object, "command")?.trim().to_owned();
         let has_permit = self.permitted_shell_commands.remove(&command);
         let restricted = restricted_operation(&command);
-        let requested_working_directory = object
-            .get("workingDirectory")
-            .and_then(Value::as_str)
-            .unwrap_or(".");
-        let effective_cwd = self
-            .context
-            .resolve_session_path(requested_working_directory)?;
+        let requested_working_directory = object.get("workingDirectory").and_then(Value::as_str);
+        let persisted_cwd = self
+            .shell_cwd
+            .clone()
+            .filter(|_| requested_working_directory.is_none())
+            .filter(|path| path.is_dir());
+        let effective_cwd = match persisted_cwd {
+            Some(path) => path,
+            None => self
+                .context
+                .resolve_session_path(requested_working_directory.unwrap_or("."))?,
+        };
         if !effective_cwd.is_dir() {
             bail!(
                 "Invalid shell working directory: {}",
@@ -126,8 +131,9 @@ impl ToolRegistry {
                 json!({"jobId":id,"status":"running","command":command,"hint":hint}).to_string(),
             );
         }
-        let output = run_shell_cancellable(ShellExecutionRequest {
-            command: &command,
+        let wrapped = with_cwd_report(&command);
+        let mut output = run_shell_cancellable(ShellExecutionRequest {
+            command: &wrapped,
             workspace_root: &shell_root,
             working_directory: Some(&effective_working_directory),
             timeout_seconds: timeout,
@@ -137,8 +143,89 @@ impl ToolRegistry {
             force_sandboxed: hard_confined,
             cancel: Some(cancel),
         })?;
+        output.command = command.clone();
+        let cwd_note = self.track_shell_cwd(&mut output, &effective_cwd);
+        let result = self.shell_result(
+            &command,
+            output,
+            actor,
+            allow_write,
+            restricted.is_some(),
+            unrestricted,
+            cache_safe_inspection,
+        )?;
+        Ok(match cwd_note {
+            Some(note) => {
+                let mut value: Value = serde_json::from_str(&result)?;
+                value["shellCwd"] = json!(note);
+                value.to_string()
+            }
+            None => result,
+        })
+    }
+
+    /// Records where the command left the shell. Only directories inside the
+    /// session's context roots persist; anything else falls back to the
+    /// session cwd so a stray `cd /` cannot widen later commands' scope.
+    fn track_shell_cwd(
+        &mut self,
+        output: &mut crate::shell::ShellResult,
+        started_in: &Path,
+    ) -> Option<String> {
+        let reported = output.stdout.as_mut().and_then(take_cwd_report)?;
+        output.stdout_bytes = output.stdout.as_ref().map_or(0, String::len);
+        let ended_in = PathBuf::from(reported);
+        let ended_in = ended_in.canonicalize().unwrap_or(ended_in);
+        if ended_in == started_in {
+            return None;
+        }
+        if ended_in.is_dir() && self.shell_may_start_in(&ended_in) {
+            let note = ended_in.display().to_string();
+            self.shell_cwd = Some(ended_in);
+            Some(note)
+        } else {
+            self.shell_cwd = None;
+            Some(format!(
+                "{} is outside the session context; next command starts in {}",
+                ended_in.display(),
+                self.context.working_directory.display()
+            ))
+        }
+    }
+
+    /// Whether a later command could launch in `directory` without approval:
+    /// inside a context root, and readable under that root's sandbox policy.
+    fn shell_may_start_in(&self, directory: &Path) -> bool {
+        let Some(root) = self.context.context_root_for_path(directory) else {
+            return false;
+        };
+        let Ok(policy) = SandboxStore::new(root).and_then(|store| store.load()) else {
+            return false;
+        };
+        if directory == root || policy.mode == SandboxMode::Unlimited {
+            return true;
+        }
+        directory.strip_prefix(root).is_ok_and(|relative| {
+            policy
+                .workspace_read
+                .allows(&relative.to_string_lossy().replace('\\', "/"))
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn shell_result(
+        &mut self,
+        command: &str,
+        output: crate::shell::ShellResult,
+        actor: bool,
+        allow_write: bool,
+        restricted: bool,
+        unrestricted: bool,
+        cache_safe_inspection: bool,
+    ) -> Result<String> {
+        let command = command.to_owned();
         if allow_write || (unrestricted && !cache_safe_inspection) {
-            if allow_write || restricted.is_some() {
+            if allow_write || restricted {
                 self.evidence.workspace_write_generation =
                     self.evidence.workspace_write_generation.wrapping_add(1);
             }
@@ -325,6 +412,32 @@ fn inline_shell_result(output: &crate::shell::ShellResult, artifact: &str) -> Op
         })
         .to_string(),
     )
+}
+
+const CWD_REPORT_MARKER: &str = "__YEET_SHELL_CWD__=";
+
+/// Appends a trailer that prints the shell's final directory, preserving the
+/// command's exit status. Commands that `exit` early simply report nothing.
+fn with_cwd_report(command: &str) -> String {
+    if cfg!(windows) {
+        return command.to_owned();
+    }
+    format!(
+        "{command}\n__yeet_status=$?\nprintf '\\n{CWD_REPORT_MARKER}%s\\n' \"$PWD\"\nexit $__yeet_status"
+    )
+}
+
+/// Removes the cwd trailer from captured stdout and returns the directory.
+fn take_cwd_report(stdout: &mut String) -> Option<String> {
+    let start = stdout.rfind(CWD_REPORT_MARKER)?;
+    let path = stdout[start + CWD_REPORT_MARKER.len()..]
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let cut = stdout[..start].strip_suffix('\n').map_or(start, str::len);
+    stdout.truncate(cut);
+    (!path.is_empty()).then_some(path)
 }
 
 /// Returns whether a command should default to actor-mode evaluation.

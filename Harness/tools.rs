@@ -128,6 +128,9 @@ pub struct ToolRegistry {
     agent_group: Option<AgentGroupHandle>,
     evidence: ToolEvidence,
     shell_jobs: shell_jobs::ShellJobs,
+    /// Directory the last foreground shell command ended in; later commands
+    /// without an explicit workingDirectory start there, like one live shell.
+    shell_cwd: Option<PathBuf>,
     permitted_shell_commands: HashSet<String>,
     web_search: WebSearchClient,
 }
@@ -170,6 +173,7 @@ impl ToolRegistry {
             agent_group: None,
             evidence: ToolEvidence::default(),
             shell_jobs: shell_jobs::ShellJobs::default(),
+            shell_cwd: None,
             permitted_shell_commands: HashSet::new(),
             web_search: WebSearchClient::default(),
         })

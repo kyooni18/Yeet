@@ -327,6 +327,9 @@ fn render_known_result(value: &Value) -> Option<String> {
         if object.get("timedOut").and_then(Value::as_bool) == Some(true) {
             out.push_str("\n[timed out]");
         }
+        if let Some(cwd) = text("shellCwd") {
+            push_line(&mut out, &format!("[shell cwd: {cwd}]"));
+        }
         return Some(if out.is_empty() {
             "(no output)".into()
         } else {
