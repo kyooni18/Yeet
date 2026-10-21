@@ -77,10 +77,10 @@ impl ToolEvidence {
     }
 
     /// Invalidates workspace evidence after a mutation with unknown scope.
+    /// Edit snapshots are content hashes re-checked against the file before
+    /// every edit, so they survive; a changed file fails that check instead.
     pub(super) fn invalidate_workspace(&mut self) {
         self.read_cache.clear();
-        self.edit_snapshots.clear();
-        self.edit_read_coverage.clear();
         self.searches.clear();
         self.listings.clear();
         self.shell_inspections.clear();
@@ -160,8 +160,7 @@ mod tests {
         assert_eq!(evidence.workspace_generation, 8);
         evidence.invalidate_workspace();
         assert!(evidence.read_cache.is_empty());
-        assert!(evidence.edit_snapshots.is_empty());
-        assert!(evidence.edit_read_coverage.is_empty());
+        assert!(evidence.edit_snapshots.contains_key("b.rs"));
         assert!(evidence.web_sources.contains("https://example.com"));
         assert!(evidence.web_reads.contains("https://example.com"));
         assert_eq!(evidence.workspace_generation, 9);

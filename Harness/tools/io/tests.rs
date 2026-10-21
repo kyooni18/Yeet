@@ -237,3 +237,44 @@ fn text_replacements_and_patches_edit_files_without_line_numbers() {
     assert!(!root.join("old.txt").exists());
     registry.finish_task("task");
 }
+
+#[test]
+fn edits_chain_without_rereads_until_the_file_changes_elsewhere() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root.clone(),
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    registry.begin_task("task");
+    let read = json!({"path": "a.txt"});
+    registry.read_file(read.as_object().unwrap()).unwrap();
+    let replace = |old: &str, new: &str| {
+        json!({"diagnostics": false, "changes": [{"path": "a.txt", "edits": [
+            {"kind": "replaceText", "oldText": old, "newText": new}
+        ]}]})
+    };
+    registry.apply_file_edits(&replace("one", "ONE")).unwrap();
+    // Our own edit and an unknown-scope shell mutation keep the snapshot.
+    registry.invalidate_workspace_cache();
+    registry.apply_file_edits(&replace("two", "TWO")).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt")).unwrap(),
+        "ONE\nTWO\nthree\n"
+    );
+
+    fs::write(root.join("a.txt"), "ONE\nTWO\nchanged\n").unwrap();
+    registry.invalidate_workspace_cache();
+    let stale = registry
+        .apply_file_edits(&replace("ONE", "uno"))
+        .unwrap_err();
+    assert!(
+        stale.to_string().contains("changed after it was read"),
+        "{stale}"
+    );
+    registry.finish_task("task");
+}

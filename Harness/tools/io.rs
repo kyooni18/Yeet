@@ -75,6 +75,13 @@ pub(super) fn is_local_snapshot(snapshot: &str) -> bool {
     snapshot.starts_with("r_")
 }
 
+/// Returns the local snapshot handle and addressable line count of a file.
+pub(super) fn local_snapshot_for_path(path: &Path) -> Result<(String, usize)> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let text = normalize_edit_text(&bytes);
+    Ok((local_snapshot_handle(&text), addressable_lines(&text).len()))
+}
+
 pub(super) fn local_snapshot_handle_for_path(path: &Path) -> Result<String> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     Ok(local_snapshot_handle(&normalize_edit_text(&bytes)))

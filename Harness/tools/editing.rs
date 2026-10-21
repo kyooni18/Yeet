@@ -205,6 +205,7 @@ impl ToolRegistry {
         let mut changed_paths = changed_path_set.iter().cloned().collect::<Vec<_>>();
         changed_paths.sort();
         self.invalidate_workspace_cache_for_paths(&changed_path_set);
+        self.record_post_edit_snapshots(&request);
         self.evidence.latest_mutation = Some(MutationValidation {
             error_count,
             changed_paths,
@@ -340,11 +341,46 @@ impl ToolRegistry {
                 None => daemon_snapshot = Some(read.snapshot),
             }
         }
-        let daemon_snapshot = daemon_snapshot.expect("read coverage is non-empty");
-        self.evidence
-            .edit_snapshots
-            .insert(cache_path.to_owned(), daemon_snapshot.clone());
-        Ok(daemon_snapshot)
+        // edit_snapshots keeps the local content hash: daemon handles do not
+        // survive a daemon restart and cannot be re-checked against the file.
+        Ok(daemon_snapshot.expect("read coverage is non-empty"))
+    }
+
+    /// The agent just wrote these files, so the next edit can bind to their
+    /// new contents without another read_file round trip.
+    fn record_post_edit_snapshots(&mut self, request: &Value) {
+        let changes = request.get("changes").and_then(Value::as_array);
+        for change in changes.into_iter().flatten() {
+            let operation = change.get("fileOp").and_then(|op| op.get("kind"));
+            let target = match operation.and_then(Value::as_str) {
+                Some("delete") => continue,
+                Some("move") => change["fileOp"].get("destination"),
+                _ => change.get("path"),
+            };
+            let Some(target) = target.and_then(Value::as_str) else {
+                continue;
+            };
+            let Ok((snapshot, lines)) = super::io::local_snapshot_for_path(Path::new(target))
+            else {
+                continue;
+            };
+            let Ok(cache_path) =
+                super::paths::stable_workspace_path_key(&self.context.workspace_root, target)
+            else {
+                continue;
+            };
+            if lines == 0 {
+                continue;
+            }
+            self.evidence.edit_read_coverage.insert(
+                cache_path.clone(),
+                EditReadCoverage {
+                    snapshot: snapshot.clone(),
+                    ranges: vec![(1, lines)],
+                },
+            );
+            self.evidence.edit_snapshots.insert(cache_path, snapshot);
+        }
     }
 
     /// Returns the newest snapshot identifier established by read_file.
