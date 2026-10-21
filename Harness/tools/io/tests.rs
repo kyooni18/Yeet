@@ -137,3 +137,21 @@ fn shell_directory_persists_between_commands_within_context() {
         root.display().to_string()
     );
 }
+
+#[test]
+fn complete_actor_output_is_not_marked_truncated() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root,
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    let args = json!({ "command": "echo hi", "mode": "actor" });
+    let result = registry
+        .run_shell_tool(args.as_object().unwrap(), "", &AtomicBool::new(false))
+        .unwrap();
+    assert!(!result.contains("artifactId"), "{result}");
+}

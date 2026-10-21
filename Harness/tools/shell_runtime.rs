@@ -295,10 +295,12 @@ impl ToolRegistry {
             output.stdout.clone().unwrap_or_default(),
             output.stderr.clone().unwrap_or_default()
         );
-        let artifact = self.artifacts.store(&raw)?;
-        if let Some(result) = inline_shell_result(&output, &artifact) {
+        // Complete output needs no artifact; attaching one made the model
+        // think it was truncated and re-read it with read_artifact.
+        if let Some(result) = inline_shell_result(&output) {
             return Ok(result);
         }
+        let artifact = self.artifacts.store(&raw)?;
         let diagnostics = shell_diagnostic_lines(&output, 8);
         let summary = deterministic_shell_summary(&output, &diagnostics);
         Ok(json!({
@@ -397,7 +399,7 @@ fn deterministic_shell_summary(
 }
 
 /// Small diagnostics cost less to forward intact than to summarize with another call.
-fn inline_shell_result(output: &crate::shell::ShellResult, artifact: &str) -> Option<String> {
+fn inline_shell_result(output: &crate::shell::ShellResult) -> Option<String> {
     let bytes = output.stdout.as_ref().map_or(0, String::len)
         + output.stderr.as_ref().map_or(0, String::len);
     if bytes > 2048 || output.stdout_truncated || output.stderr_truncated {
@@ -407,8 +409,7 @@ fn inline_shell_result(output: &crate::shell::ShellResult, artifact: &str) -> Op
         json!({
             "route":"actor", "command":output.command,
             "workingDirectory":output.working_directory, "exitCode":output.exit_code,
-            "succeeded":output.succeeded, "stdout":output.stdout, "stderr":output.stderr,
-            "artifactId":artifact
+            "succeeded":output.succeeded, "stdout":output.stdout, "stderr":output.stderr
         })
         .to_string(),
     )
