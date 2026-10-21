@@ -356,7 +356,10 @@ impl AgentCoordinator {
                 // Goal mode may have been switched on mid-run; the current request
                 // then becomes (or amends) the goal at this first checkpoint.
                 if !self.context_memory.goal().is_some_and(|goal| {
-                    matches!(goal.status, goal::GoalStatus::Running | goal::GoalStatus::Recovering)
+                    matches!(
+                        goal.status,
+                        goal::GoalStatus::Running | goal::GoalStatus::Recovering
+                    )
                 }) {
                     self.context_memory.start_goal(goal_input, false);
                 }
@@ -387,6 +390,15 @@ impl AgentCoordinator {
                     goal_mode.store(false, Ordering::Release);
                     return Ok(AgentRunOutcome::Completed);
                 }
+                if self
+                    .context_memory
+                    .goal()
+                    .is_some_and(goal::GoalJob::needs_user)
+                {
+                    return Ok(AgentRunOutcome::GoalPaused {
+                        reason: format!("Goal needs user input: {}", verdict.reason),
+                    });
+                }
                 goal_epoch = goal_epoch.saturating_add(1);
                 emit(AgentEvent::GoalCheckpoint {
                     epoch: goal_epoch,
@@ -410,10 +422,17 @@ impl AgentCoordinator {
                         reason: verdict.reason,
                     });
                 }
-                retry_instruction = Some(format!(
-                    "Goal not yet met (checkpoint {goal_epoch}): {}. Keep working.",
-                    verdict.reason
-                ));
+                retry_instruction = Some(if verdict.blocked {
+                    format!(
+                        "Goal checkpoint {goal_epoch}: the judge reports an external blocker ({}). If you can resolve or work around it yourself, do so now. Otherwise stop and state exactly what you need from the user; the goal will pause.",
+                        verdict.reason
+                    )
+                } else {
+                    format!(
+                        "Goal not yet met (checkpoint {goal_epoch}): {}. Keep working.",
+                        verdict.reason
+                    )
+                });
                 continue;
             }
 
