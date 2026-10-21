@@ -364,3 +364,37 @@ fn rollover_and_rewind_are_explicit_window_changes() {
     assert!(!rendered.contains("Draft question."));
     assert!(rendered.contains("Edited question."));
 }
+
+#[test]
+fn stalled_model_stream_times_out_into_api_retry() {
+    let Some(mut harness) = Harness::start() else {
+        return;
+    };
+    harness.coordinator.stream_idle_timeout = std::time::Duration::from_millis(300);
+    harness.script(json!([{"stall": true}]));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut retry_error = None;
+    let started = std::time::Instant::now();
+    let _ = harness.coordinator.run(
+        AgentRunRequest {
+            input: "Say hello.",
+            images: Vec::new(),
+            model: "openai/test-model",
+            reasoning_level: "auto",
+            attached_capabilities: None,
+            disabled_capabilities: Vec::new(),
+            goal_mode: Arc::new(AtomicBool::new(false)),
+            cancel: cancel.clone(),
+            continuation: false,
+        },
+        |event| {
+            if let AgentEvent::GoalRetry { error, .. } = event {
+                retry_error = Some(error);
+                cancel.store(true, Ordering::Release);
+            }
+        },
+    );
+    let error = retry_error.expect("a stalled stream must surface as a retryable error");
+    assert!(error.contains("timed out"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+}

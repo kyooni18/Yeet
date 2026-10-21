@@ -10,7 +10,7 @@
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Result, bail};
@@ -37,6 +37,7 @@ pub(super) fn consume<F>(
     bridge: &BridgeClient,
     request: &CallRequest,
     cancel: &AtomicBool,
+    idle_timeout: Duration,
     emit: &mut F,
 ) -> Result<StreamedAttempt>
 where
@@ -53,6 +54,7 @@ where
         finish_provider_state: None,
     };
     let mut tool_call_seen = false;
+    let mut last_event = Instant::now();
 
     loop {
         if cancel.load(Ordering::Acquire) {
@@ -61,9 +63,20 @@ where
         }
         let event = match stream.poll(Duration::from_millis(50))? {
             StreamPoll::Event(event) => event,
-            StreamPoll::Timeout => continue,
+            StreamPoll::Timeout => {
+                if last_event.elapsed() >= idle_timeout {
+                    stream.cancel();
+                    // "timed out" makes the turn's API recovery retry it.
+                    bail!(
+                        "model stream timed out: no provider data for {}s",
+                        idle_timeout.as_secs_f32()
+                    );
+                }
+                continue;
+            }
             StreamPoll::Done => break,
         };
+        last_event = Instant::now();
         match event {
             StreamEvent::Start => emit(AgentEvent::Start),
             StreamEvent::ReasoningStart => emit(AgentEvent::ReasoningStart),

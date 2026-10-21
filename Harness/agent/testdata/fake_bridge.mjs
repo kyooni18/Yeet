@@ -46,6 +46,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (log) appendFileSync(log, `${JSON.stringify(command.request)}\n`);
   const response = nextResponse() ?? { text: "ok" };
   write({ id, type: "event", event: { type: "start" } });
+  if (response.stall) return;
   if (response.text) write({ id, type: "event", event: { type: "text-delta", delta: response.text } });
   (response.toolCalls ?? []).forEach((toolCall, index) =>
     write({ id, type: "event", event: { type: "tool-call", index, toolCall } }));

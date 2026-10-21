@@ -84,6 +84,7 @@ pub struct AgentCoordinator {
     // prefixes, so remember the warmed surface until an explicit session/history reset.
     warm_tool_names: Vec<String>,
     warm_tool_search_enabled: bool,
+    stream_idle_timeout: std::time::Duration,
 }
 
 impl AgentCoordinator {
@@ -223,7 +224,7 @@ impl AgentCoordinator {
                 finish_reason,
                 finish_usage,
                 finish_provider_state,
-            } = model_stream::consume(&bridge, &request, cancel, emit)?;
+            } = model_stream::consume(&bridge, &request, cancel, self.stream_idle_timeout, emit)?;
             check_cancel(cancel)?;
             emit(AgentEvent::ModelAttemptFinished(
                 turn_state::usage_diagnostics(&attempt_cache_diagnostics, finish_usage.as_ref()),

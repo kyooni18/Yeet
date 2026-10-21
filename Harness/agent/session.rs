@@ -62,6 +62,7 @@ impl AgentCoordinator {
             skill_instruction_history: Default::default(),
             warm_tool_names: Vec::new(),
             warm_tool_search_enabled: false,
+            stream_idle_timeout: super::limits::MODEL_STREAM_IDLE_TIMEOUT,
         }
     }
     pub fn set_session_runtime(
