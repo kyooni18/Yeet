@@ -310,17 +310,15 @@ impl ToolRegistry {
         let generation = self.evidence.workspace_generation;
         self.invalidate_workspace_cache();
         self.evidence.workspace_generation = generation;
-        let stdout = value["stdout"].as_str().unwrap_or_default();
-        let stderr = value["stderr"].as_str().unwrap_or_default();
-        if stdout.len() + stderr.len() > 6 * 1024 {
+        let stdout = value["stdout"].as_str().unwrap_or_default().to_owned();
+        let stderr = value["stderr"].as_str().unwrap_or_default().to_owned();
+        if stdout.len() + stderr.len() > 16 * 1024 {
             let artifact = self
                 .artifacts
                 .store(&format!("STDOUT:\n{stdout}\nSTDERR:\n{stderr}"))?;
-            value.as_object_mut().unwrap().remove("stdout");
-            value.as_object_mut().unwrap().remove("stderr");
+            value["stdout"] = json!(super::shell_runtime::output_window(&stdout, 12 * 1024));
+            value["stderr"] = json!(super::shell_runtime::output_window(&stderr, 4 * 1024));
             value["artifactId"] = json!(artifact);
-            value["summary"] =
-                json!("Output stored as an artifact; use search_artifact or read_artifact.");
         }
         Ok(value.to_string())
     }

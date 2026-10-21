@@ -155,3 +155,28 @@ fn complete_actor_output_is_not_marked_truncated() {
         .unwrap();
     assert!(!result.contains("artifactId"), "{result}");
 }
+
+#[test]
+fn large_shell_output_keeps_real_head_and_tail() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root,
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    for mode in ["direct", "actor"] {
+        let args = json!({ "command": "seq 1 20000", "mode": mode });
+        let result = registry
+            .run_shell_tool(args.as_object().unwrap(), "", &AtomicBool::new(false))
+            .unwrap();
+        let value: Value = serde_json::from_str(&result).unwrap();
+        let stdout = value["stdout"].as_str().unwrap();
+        assert!(stdout.starts_with("1\n2\n"), "{mode}: {stdout:.80}");
+        assert!(stdout.ends_with("19999\n20000\n"), "{mode}");
+        assert!(stdout.contains("bytes omitted"), "{mode}");
+        assert!(value["artifactId"].is_string(), "{mode}");
+    }
+}

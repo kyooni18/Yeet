@@ -231,98 +231,96 @@ impl ToolRegistry {
             }
             self.invalidate_workspace_cache();
         }
-        if !actor {
-            let value = serde_json::to_value(&output)?;
-            if self.artifacts_enabled && output.stdout_bytes + output.stderr_bytes > 6 * 1024 {
-                let raw = format!(
-                    "$ {}\n{}{}",
-                    command,
-                    output.stdout.clone().unwrap_or_default(),
-                    output.stderr.clone().unwrap_or_default()
-                );
-                let artifact = self.artifacts.store(&raw)?;
-                // Keep the end of the output inline (where errors and results
-                // usually are); the full text stays in the artifact.
-                return Ok(json!({
-                    "exitCode": output.exit_code,
-                    "stdout": output.stdout.as_deref().map(|text| output_tail(text, 4 * 1024)),
-                    "stderr": output.stderr.as_deref().map(|text| output_tail(text, 2 * 1024)),
-                    "stdoutTruncated": true,
-                    "artifactId": artifact,
-                })
-                .to_string());
-            }
-            return Ok(value.to_string());
-        }
-        self.evaluate_shell_output(&command, output)
+        self.shell_output_result(&command, output, actor)
     }
 
-    /// Summarizes noisy shell output locally and retains raw output only when artifacts are enabled.
-    ///
-    /// Actor mode used to make a second provider request here. Besides spending
-    /// tokens on data we already had, that request could fail when the selected
-    /// endpoint was batch-only. Exit status plus deterministic diagnostic
-    /// extraction is authoritative and provider-independent.
-    fn evaluate_shell_output(
+    /// Shows the model the real output: whole when it fits, otherwise a head
+    /// and tail window with the full text kept as an artifact. Replacing large
+    /// output with a keyword-matched summary hid results (a grep reported as
+    /// "Command succeeded" plus an unrelated line), so the summary is gone and
+    /// diagnostics are added only to failures whose middle was omitted.
+    pub(super) fn shell_output_result(
         &mut self,
         command: &str,
         output: crate::shell::ShellResult,
+        actor: bool,
     ) -> Result<String> {
-        if !self.artifacts_enabled {
-            let bytes = output.stdout.as_ref().map_or(0, String::len)
-                + output.stderr.as_ref().map_or(0, String::len);
-            if bytes <= 2048 && !output.stdout_truncated && !output.stderr_truncated {
-                return Ok(json!({
-                    "route":"actor", "command":output.command,
-                    "workingDirectory":output.working_directory, "exitCode":output.exit_code,
-                    "succeeded":output.succeeded, "stdout":output.stdout, "stderr":output.stderr
-                })
-                .to_string());
+        let stdout = output.stdout.clone().unwrap_or_default();
+        let stderr = output.stderr.clone().unwrap_or_default();
+        let complete = !output.stdout_truncated && !output.stderr_truncated;
+        if complete && stdout.len() + stderr.len() <= SHELL_INLINE_OUTPUT_BYTES {
+            let mut value = serde_json::to_value(&output)?;
+            if actor {
+                value["route"] = json!("actor");
             }
-            let diagnostics = shell_diagnostic_lines(&output, 8);
-            let summary = deterministic_shell_summary(&output, &diagnostics);
-            return Ok(json!({
-                "route":"actor","command":command,"workingDirectory":output.working_directory,"exitCode":output.exit_code,
-                "succeeded":output.succeeded,"durationMilliseconds":output.duration_milliseconds,"stdoutBytes":output.stdout_bytes,
-                "stderrBytes":output.stderr_bytes,"stdoutTruncated":output.stdout_truncated,"stderrTruncated":output.stderr_truncated,
-                "summary":summary,"diagnostics":diagnostics
-            }).to_string());
+            return Ok(value.to_string());
         }
-
-        let raw = format!(
-            "COMMAND: {command}\nEXIT: {}\nSTDOUT:\n{}\nSTDERR:\n{}",
-            output.exit_code,
-            output.stdout.clone().unwrap_or_default(),
-            output.stderr.clone().unwrap_or_default()
-        );
-        // Complete output needs no artifact; attaching one made the model
-        // think it was truncated and re-read it with read_artifact.
-        if let Some(result) = inline_shell_result(&output) {
-            return Ok(result);
+        let diagnostics = if output.succeeded {
+            Vec::new()
+        } else {
+            shell_diagnostic_lines(&output, 8)
+        };
+        let mut value = json!({
+            "command": command,
+            "workingDirectory": output.working_directory,
+            "exitCode": output.exit_code,
+            "succeeded": output.succeeded,
+            "durationMilliseconds": output.duration_milliseconds,
+            "stdoutBytes": output.stdout_bytes,
+            "stderrBytes": output.stderr_bytes,
+            "stdout": output_window(&stdout, SHELL_STDOUT_WINDOW_BYTES),
+            "stderr": output_window(&stderr, SHELL_STDERR_WINDOW_BYTES),
+            "diagnostics": diagnostics,
+        });
+        if actor {
+            value["route"] = json!("actor");
         }
-        let artifact = self.artifacts.store(&raw)?;
-        let diagnostics = shell_diagnostic_lines(&output, 8);
-        let summary = deterministic_shell_summary(&output, &diagnostics);
-        Ok(json!({
-            "route":"actor","command":command,"workingDirectory":output.working_directory,"exitCode":output.exit_code,
-            "succeeded":output.succeeded,"durationMilliseconds":output.duration_milliseconds,"stdoutBytes":output.stdout_bytes,
-            "stderrBytes":output.stderr_bytes,"stdoutTruncated":output.stdout_truncated,"stderrTruncated":output.stderr_truncated,
-            "summary":summary,"diagnostics":diagnostics,"artifactId":artifact
-        }).to_string())
+        if self.artifacts_enabled {
+            let raw = format!(
+                "$ {command}\nEXIT: {}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}",
+                output.exit_code
+            );
+            value["artifactId"] = json!(self.artifacts.store(&raw)?);
+        } else {
+            value["stdoutTruncated"] = json!(true);
+        }
+        Ok(value.to_string())
     }
 }
 
-fn output_tail(text: &str, max_bytes: usize) -> String {
+const SHELL_INLINE_OUTPUT_BYTES: usize = 16 * 1024;
+const SHELL_STDOUT_WINDOW_BYTES: usize = 12 * 1024;
+const SHELL_STDERR_WINDOW_BYTES: usize = 4 * 1024;
+
+/// Keeps the first quarter and last three quarters of `max_bytes`, cut at
+/// line boundaries where possible, and marks what was omitted in between.
+pub(super) fn output_window(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {
         return text.to_owned();
     }
-    let mut start = text.len() - max_bytes;
-    while !text.is_char_boundary(start) {
-        start += 1;
+    let mut head_end = max_bytes / 4;
+    while !text.is_char_boundary(head_end) {
+        head_end -= 1;
     }
-    let tail = &text[start..];
-    let tail = tail.find('\n').map_or(tail, |index| &tail[index + 1..]);
-    format!("...\n{tail}")
+    let head_end = text[..head_end]
+        .rfind('\n')
+        .filter(|index| *index >= head_end / 2)
+        .map_or(head_end, |index| index + 1);
+    let mut tail_start = text.len() - (max_bytes - max_bytes / 4);
+    while !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let tail_len = text.len() - tail_start;
+    let tail_start = text[tail_start..]
+        .find('\n')
+        .filter(|index| *index < tail_len / 4)
+        .map_or(tail_start, |index| tail_start + index + 1);
+    let omitted = tail_start.saturating_sub(head_end);
+    format!(
+        "{}... [{omitted} bytes omitted] ...\n{}",
+        &text[..head_end],
+        &text[tail_start..]
+    )
 }
 
 fn shell_diagnostic_lines(output: &crate::shell::ShellResult, limit: usize) -> Vec<String> {
@@ -375,44 +373,6 @@ fn shell_diagnostic_lines(output: &crate::shell::ShellResult, limit: usize) -> V
         }
     }
     diagnostics
-}
-
-fn deterministic_shell_summary(
-    output: &crate::shell::ShellResult,
-    diagnostics: &[String],
-) -> String {
-    let status = if output.succeeded {
-        "Command succeeded".to_owned()
-    } else {
-        format!("Command failed with exit code {}", output.exit_code)
-    };
-    if diagnostics.is_empty() {
-        return format!("{status} without error or warning diagnostics.");
-    }
-    let excerpt = diagnostics
-        .iter()
-        .take(3)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" | ");
-    format!("{status}. {excerpt}")
-}
-
-/// Small diagnostics cost less to forward intact than to summarize with another call.
-fn inline_shell_result(output: &crate::shell::ShellResult) -> Option<String> {
-    let bytes = output.stdout.as_ref().map_or(0, String::len)
-        + output.stderr.as_ref().map_or(0, String::len);
-    if bytes > 2048 || output.stdout_truncated || output.stderr_truncated {
-        return None;
-    }
-    Some(
-        json!({
-            "route":"actor", "command":output.command,
-            "workingDirectory":output.working_directory, "exitCode":output.exit_code,
-            "succeeded":output.succeeded, "stdout":output.stdout, "stderr":output.stderr
-        })
-        .to_string(),
-    )
 }
 
 const CWD_REPORT_MARKER: &str = "__YEET_SHELL_CWD__=";
