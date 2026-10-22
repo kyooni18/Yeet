@@ -22,6 +22,13 @@ Frontend / host (Ratatui TUI, Remote web client, desktop host, CLI)
 `Harness::embedded` skips the daemon and owns a `HarnessService` in-process for
 native hosts, the one-shot `yeet agent` command and tests.
 
+The semantic Remote web gateway attaches through `BackgroundConnection` to the
+same unscoped workspace daemon as the TUI. Browser clients own their UI state
+and replay cursors, while the daemon routes `LoadSession` to the existing live
+session runtime. Opening a live session must never restore a second copy from
+disk: orphan recovery would incorrectly mark its running turn interrupted.
+Closing or expiring a browser client only disconnects its daemon attachment.
+
 Two transports are deliberately named differently:
 
 - **Harness state transport**: `HarnessCommand` in, `HarnessEvent` /

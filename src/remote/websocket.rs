@@ -13,9 +13,8 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    background::Wake,
+    background::{BackgroundConnection, Wake},
     core::ImageAttachment,
-    harness::{HarnessService, ServiceEvent},
     model::{BridgeEnvelope, BridgeState, ConversationEntry, ConversationKind, FrontendCommand},
 };
 
@@ -314,12 +313,13 @@ struct RemoteClientRuntime {
 
 impl RemoteClientRuntime {
     fn spawn(workspace: &Path) -> Result<Self> {
-        // Remote is itself the long-lived owner. Keep each client backend inside
-        // this PID; external provider/edit/MCP sidecars remain lazy and appear
-        // only when that client actually invokes a capability that needs one.
+        // Use the same workspace daemon as the TUI. An independent service
+        // would restore a live session from disk and mark its running turn
+        // orphaned, potentially overwriting the actual owner's transcript.
         let wake = Wake::new();
-        let service = HarnessService::spawn(workspace.to_path_buf(), Some(wake.clone()))?;
-        let mut initial_state = service.state_snapshot();
+        let mut service =
+            BackgroundConnection::connect_with_wake(workspace, None, Some(wake.clone()))?;
+        let mut initial_state = await_initial_state(&mut service, &wake)?;
         let mut theme_cache = crate::theme::ThemeProjectionCache::default();
         theme_cache.hydrate(&mut initial_state.runtime_settings);
         let mut application =
@@ -599,7 +599,7 @@ impl RemoteClientRuntime {
                 "semantic Remote runtime stopped before confirming command delivery"
             )),
             Err(_) => Err(anyhow!(
-                "timed out delivering Remote command to the in-process backend"
+                "timed out delivering Remote command to the shared workspace runtime"
             )),
         }
     }
@@ -704,8 +704,33 @@ impl Drop for RemoteClientRuntime {
     }
 }
 
+// Initialize projections from the daemon's snapshot rather than a separate
+// embedded runtime. The reader wakes us for state/error events during startup.
+fn await_initial_state(service: &mut BackgroundConnection, wake: &Wake) -> Result<BridgeState> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        while let Some(event) = service.try_recv() {
+            if event.kind == "error" {
+                bail!(
+                    "{}",
+                    event
+                        .message
+                        .unwrap_or_else(|| "background startup failed".into())
+                );
+            }
+            if let Some(state) = event.state {
+                return Ok(state);
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for the shared workspace runtime");
+        }
+        wake.wait_timeout(RUNTIME_LOOP_IDLE_WAIT);
+    }
+}
+
 fn runtime_loop(
-    mut service: HarnessService,
+    mut service: BackgroundConnection,
     commands: mpsc::Receiver<RuntimeControl>,
     shared: Arc<Mutex<RuntimeShared>>,
     events: broadcast::Sender<ServerMessage>,
@@ -728,7 +753,7 @@ fn runtime_loop(
                     }
                     let new_session = matches!(command, FrontendCommand::NewSession);
                     let theme_command = command.clone();
-                    let result = service.send(command).map_err(|error| format!("{error:#}"));
+                    let result = service.send(&command).map_err(|error| format!("{error:#}"));
                     if result.is_ok() {
                         if let Ok(mut state) = shared.lock() {
                             state.theme_cache.invalidate_for_command(&theme_command);
@@ -781,7 +806,7 @@ fn runtime_loop(
                         if let Some(command) = prepared.effect.command.clone() {
                             let theme_command = command.clone();
                             service
-                                .send(command)
+                                .send(&command)
                                 .map_err(|error| format!("{error:#}"))?;
                             state.theme_cache.invalidate_for_command(&theme_command);
                         }
@@ -812,7 +837,7 @@ fn runtime_loop(
                         if let Some(command) = prepared.effect.command.clone() {
                             let theme_command = command.clone();
                             service
-                                .send(command)
+                                .send(&command)
                                 .map_err(|error| format!("{error:#}"))?;
                             state.theme_cache.invalidate_for_command(&theme_command);
                         }
@@ -845,7 +870,7 @@ fn runtime_loop(
                         if let Some(command) = prepared.effect.command.clone() {
                             let theme_command = command.clone();
                             service
-                                .send(command)
+                                .send(&command)
                                 .map_err(|error| format!("{error:#}"))?;
                             state.theme_cache.invalidate_for_command(&theme_command);
                         }
@@ -898,7 +923,7 @@ fn runtime_loop(
                         if let Some(command) = prepared.effect.command.clone() {
                             let theme_command = command.clone();
                             service
-                                .send(command)
+                                .send(&command)
                                 .map_err(|error| format!("{error:#}"))?;
                             state.theme_cache.invalidate_for_command(&theme_command);
                         }
@@ -929,7 +954,7 @@ fn runtime_loop(
                         if let Some(command) = prepared.effect.command.clone() {
                             let theme_command = command.clone();
                             service
-                                .send(command)
+                                .send(&command)
                                 .map_err(|error| format!("{error:#}"))?;
                             state.theme_cache.invalidate_for_command(&theme_command);
                         }
@@ -990,8 +1015,7 @@ fn runtime_loop(
             }
         }
         while let Some(event) = service.try_recv() {
-            let ServiceEvent::Envelope(envelope) = event;
-            process_envelope(&shared, &events, envelope);
+            process_envelope(&shared, &events, event);
             // Harness snapshots may omit unchanged history. Project the accumulated
             // transport state after applying the envelope, preserving its transcript.
             let projection = shared.lock().ok().and_then(|state| {
@@ -1903,6 +1927,108 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
 #[cfg(test)]
 mod tests {
     use super::RemoteHub;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn opening_a_tui_session_routes_to_its_live_daemon_and_keeps_streaming() {
+        use super::*;
+        use std::{
+            collections::hash_map::DefaultHasher,
+            hash::{Hash, Hasher},
+            io::{BufRead, BufReader, Write},
+        };
+
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace = workspace.path().canonicalize().unwrap();
+        // Bind the workspace daemon endpoint before attaching Remote. This
+        // fixture represents an already-running TUI daemon, without a provider.
+        let mut key = DefaultHasher::new();
+        workspace.to_string_lossy().hash(&mut key);
+        let directory = crate::config::ConfigStore::default()
+            .directory
+            .join("background");
+        fs::create_dir_all(&directory).unwrap();
+        let endpoint = directory.join(format!("{:016x}.sock", key.finish()));
+        let listener = crate::platform::bind_local(&endpoint).unwrap();
+        let (advance, continued) = mpsc::channel();
+        let daemon = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let ready = crate::background::protocol::ready_frame(
+                &crate::background::protocol::DaemonHandshake::current(),
+            )
+            .unwrap();
+            stream.write_all(&ready).unwrap();
+            stream.write_all(b"\n").unwrap();
+            let publish = |stream: &mut crate::platform::LocalStream, state| {
+                serde_json::to_writer(
+                    &mut *stream,
+                    &BridgeEnvelope {
+                        kind: "state".into(),
+                        state: Some(state),
+                        message: None,
+                    },
+                )
+                .unwrap();
+                stream.write_all(b"\n").unwrap();
+            };
+            publish(&mut stream, BridgeState::default());
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut command = String::new();
+            reader.read_line(&mut command).unwrap();
+            assert!(
+                matches!(serde_json::from_str::<FrontendCommand>(&command).unwrap(),
+                FrontendCommand::LoadSession { session_id } if session_id == "tui-live")
+            );
+            let mut state = BridgeState {
+                current_session_id: Some("tui-live".into()),
+                is_streaming: true,
+                active_run_id: Some("tui-run".into()),
+                active_assistant_text: "Still working".into(),
+                ..Default::default()
+            };
+            publish(&mut stream, state.clone());
+            continued.recv_timeout(Duration::from_secs(10)).unwrap();
+            state.active_assistant_text.push_str(" from the TUI");
+            publish(&mut stream, state);
+            // Closing Remote must detach rather than cancel the TUI's run.
+            command.clear();
+            assert_eq!(reader.read_line(&mut command).unwrap(), 0);
+        });
+        let runtime = RemoteClientRuntime::spawn(&workspace).unwrap();
+        runtime.ensure_session(Some("tui-live")).await.unwrap();
+        assert!(runtime.is_streaming());
+        assert_eq!(
+            runtime
+                .shared
+                .lock()
+                .unwrap()
+                .state
+                .active_run_id
+                .as_deref(),
+            Some("tui-run")
+        );
+        advance.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if runtime.shared.lock().unwrap().state.active_assistant_text
+                == "Still working from the TUI"
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "live TUI updates did not reach Remote"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(runtime.is_streaming());
+        drop(runtime);
+        daemon.join().unwrap();
+        fs::remove_file(endpoint).unwrap();
+    }
 
     #[test]
     fn transport_hydrates_theme_snapshots_and_changed_preference_patches() {

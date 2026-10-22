@@ -135,7 +135,7 @@ pub(super) fn configure_composer_host(
 pub(super) fn run_toolbar_action(
     shared: &std::sync::Arc<std::sync::Mutex<super::websocket::RuntimeShared>>,
     ui: &std::sync::Arc<std::sync::Mutex<ApplicationSession>>,
-    service: &mut crate::harness::HarnessService,
+    service: &mut crate::background::BackgroundConnection,
     events: &tokio::sync::broadcast::Sender<ServerMessage>,
     action: crate::shared_ui::toolbar::ToolbarAction,
     request_id: Option<String>,
@@ -149,7 +149,7 @@ pub(super) fn run_toolbar_action(
     if let Some(command) = prepared.effect.command.clone() {
         let theme_command = command.clone();
         service
-            .send(command)
+            .send(&command)
             .map_err(|error| format!("{error:#}"))?;
         state.theme_cache.invalidate_for_command(&theme_command);
     }
