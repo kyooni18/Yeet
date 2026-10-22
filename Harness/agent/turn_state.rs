@@ -522,6 +522,7 @@ fn rollover_handoff_message(
             text.push('\n');
         }
     }
+    text.push_str("\nFor anything read or found earlier in this task, re-read the paths above or check context_history before searching again or using web_search.");
     Message::system(text)
 }
 
@@ -653,7 +654,9 @@ fn invalidate_inspection_evidence(
 ) {
     let changed_paths = mutation_paths(mutation);
     if changed_paths.is_empty() {
-        evidence.clear();
+        // A shell write has unknown targets. Keep path locators: they say
+        // where things are, and the handoff already asks for a re-read.
+        evidence.retain(|locator| !locator.paths.is_empty());
         return;
     }
 
@@ -674,7 +677,10 @@ fn mutation_paths(call: &ToolCall) -> Vec<String> {
 
     let mut paths = Vec::new();
     {
-        for change in crate::tools::file_edit_changes(&call.arguments).iter().take(16) {
+        for change in crate::tools::file_edit_changes(&call.arguments)
+            .iter()
+            .take(16)
+        {
             if let Some(path) = change.get("path").and_then(Value::as_str) {
                 paths.push(path.to_owned());
             }
@@ -972,5 +978,35 @@ mod execution_evidence_tests {
                 .unwrap_or_default()
                 .contains("src/cache.rs:10-20")
         );
+    }
+
+    #[test]
+    fn rollover_handoff_keeps_root_file_read_across_shell_and_edit_writes() {
+        // Replays session 7ee73c73: a root document read early in the run was
+        // dropped by a later write-capable shell command before rollover.
+        let mut evidence = TurnExecutionEvidence::default();
+        let read = ToolCall {
+            id: "read".into(),
+            name: "read_file".into(),
+            arguments: json!({"path": "General Interface Guideline.md", "startLine": 1, "endLine": 250}),
+        };
+        evidence.observe_tool(&read, "guideline body", true, false, false, false);
+        let shell = ToolCall {
+            id: "shell".into(),
+            name: "run_shell".into(),
+            arguments: json!({"command": "python3 rewrite.py"}),
+        };
+        evidence.observe_tool(&shell, "", true, true, false, true);
+        let edit = ToolCall {
+            id: "edit".into(),
+            name: "apply_file_edits".into(),
+            arguments: json!({"changes":[{"path":"src/style.scss","edits":[]}]}),
+        };
+        evidence.observe_tool(&edit, r#"{"changed":true}"#, true, true, false, true);
+
+        let handoff = evidence.rollover_handoff(None);
+        let handoff = handoff.content.as_deref().unwrap_or_default();
+        assert!(handoff.contains("General Interface Guideline.md:1-250"));
+        assert!(handoff.contains("context_history before"));
     }
 }

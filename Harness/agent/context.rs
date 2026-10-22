@@ -167,6 +167,9 @@ impl ContextMemory {
                 .rposition(|message| message.role == MessageRole::User),
         };
         let carryover = conversation_carryover(history, objective);
+        let progress = objective
+            .and(anchor)
+            .and_then(|index| current_run_progress(&history[index + 1..]));
         let active_skill_instructions = anchor
             .map(|index| {
                 history[index + 1..]
@@ -211,6 +214,7 @@ impl ContextMemory {
             next.push(objective.clone());
         }
         next.extend(active_skill_instructions);
+        next.extend(progress);
         if let Some(handoff) = handoff {
             next.push(handoff.clone());
         }
@@ -555,6 +559,39 @@ fn truncate_chars(text: &str, max_bytes: usize) -> String {
     let mut cut = max_bytes;
     while !text.is_char_boundary(cut) {
         cut -= 1;
+/// Assistant prose from the current request, so the new window knows what
+/// this task already found instead of only what earlier turns concluded.
+fn current_run_progress(messages: &[Message]) -> Option<Message> {
+    let mut entries = Vec::new();
+    let mut total = 0usize;
+    for message in messages.iter().rev() {
+        let budget = CARRYOVER_MAX_TOTAL_CHARS.saturating_sub(total);
+        if entries.len() >= CARRYOVER_MAX_MESSAGES || budget == 0 {
+            break;
+        }
+        if message.role != MessageRole::Assistant || message.request_only == Some(true) {
+            continue;
+        }
+        let Some(content) = message.content.as_deref().map(str::trim) else {
+            continue;
+        };
+        if content.is_empty() {
+            continue;
+        }
+        let entry = truncate_chars(content, CARRYOVER_MAX_MESSAGE_CHARS.min(budget));
+        total += entry.len();
+        entries.push(format!("- {entry}"));
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    entries.reverse();
+    Some(Message::system(format!(
+        "Progress on the current request before compaction (your own notes):\n{}",
+        entries.join("\n")
+    )))
+}
+
     }
     format!("{}…", &text[..cut])
 }
