@@ -144,7 +144,17 @@ impl ToolRegistry {
             cancel: Some(cancel),
         })?;
         output.command = command.clone();
+        let previous_cwd = self.shell_cwd.clone();
         let cwd_note = self.track_shell_cwd(&mut output, &effective_cwd);
+        if requested_working_directory.is_some() {
+            self.shell_cwd = previous_cwd;
+        }
+        let shell_cwd = self
+            .shell_cwd
+            .as_deref()
+            .unwrap_or(&self.context.working_directory)
+            .display()
+            .to_string();
         let result = self.shell_result(
             &command,
             output,

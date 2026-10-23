@@ -139,15 +139,13 @@ impl AgentCoordinator {
             turn_stable_overlays.push(repo_map);
         }
         let (session_cwd, context_roots) = self.registry.session_environment();
-        if session_cwd != workspace_root || context_roots.len() > 1 {
-            turn_stable_overlays.push(
-                Message::system(format!(
-                    "Workspace: {workspace_root}; cwd: {session_cwd}; context roots: {}. Relative paths resolve from cwd.",
-                    context_roots.join(", ")
-                ))
-                .request_only(),
-            );
-        }
+        turn_stable_overlays.push(
+            Message::system(format!(
+                "Workspace: {workspace_root}; session cwd: {session_cwd}; context roots: {}. File-tool relative paths resolve from session cwd. Shell commands initially start there and remember directory changes across calls; consult shellCwd in shell results. Do not prepend a redundant cd to commands. Use workingDirectory for an explicit per-call directory override.",
+                context_roots.join(", ")
+            ))
+            .request_only(),
+        );
         if let Some(memory) = render_matching_debate_memory(
             &self.retained_debate_knowledge,
             &workspace_root,
