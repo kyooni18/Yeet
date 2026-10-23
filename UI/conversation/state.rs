@@ -49,7 +49,7 @@ impl ConversationState {
         }
         for item in &view.items {
             if let DisplayItem::Activity { id, group } = item {
-                let attention = group.failed || group.awaits_permission;
+                let attention = group.awaits_permission;
                 if attention && self.attention.get(id) == Some(&false) {
                     self.expanded.insert(id.clone(), true);
                 }

@@ -29,11 +29,21 @@ A single event has one disclosure directly into its details; multiple events
 keep a compact counted group, with individually selectable detail disclosures.
 Running work alone uses a spinner. Approval, failure, timeout and cancellation
 remain explicit even when other work is running. Ordinary completed work has no
-status badge, duration or empty status slot. Arguments, output and timing belong behind tool disclosure; running tools start collapsed.
+status badge, duration or empty status slot. Arguments, output and timing belong behind tool disclosure; running and failed tools start collapsed. Failure keeps its visible status but never automatically expands details or overrides a user's disclosure choice.
 Provider reasoning summaries are non-interactive plain text, indented two cells,
 wrapped without truncation, with active summaries slightly brighter. Private
 reasoning remains in the projection but is not exposed by summary rows.
 Selection and expansion retain stable shared IDs across status transitions.
+
+## Agent questions
+
+The main agent (never Group/swarm agents) may call `ask_user` with one question,
+1-3 suggested options and an optional custom answer. The pending question is
+global workbench attention like permissions: a floating "Question from agent"
+modal owns input (↑/↓ or Tab select, 1-3 pick, typing fills the custom row,
+Enter answers, Esc dismisses, Ctrl+C stops). Remote shows the same composer
+projection as a card with option buttons, a custom answer field and Dismiss.
+Permission prompts take precedence when both are pending.
 
 ## Non-negotiable mental model
 

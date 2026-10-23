@@ -14,7 +14,31 @@ fn entry(id: &str, kind: ConversationKind) -> ConversationEntry {
     }
 }
 #[test]
-fn grouped_identity_survives_completion_and_attention_overrides_prior_collapse() {
+fn failed_tools_start_collapsed_and_can_be_opened_manually() {
+    let harness = HarnessState::default();
+    let entries = vec![entry(
+        "failed-tool",
+        ConversationKind::ToolCall {
+            tool_call: tool("failed"),
+        },
+    )];
+    for individual_work_rows in [false, true] {
+        let mut state = ConversationState::default();
+        state.individual_work_rows = individual_work_rows;
+        let view = state.project(&entries, &harness);
+        assert!(matches!(&view.items[0], DisplayItem::Activity { group, .. }
+            if group.failed && !group.expanded && group.status_label.is_some()));
+        state.apply(
+            ConversationAction::Toggle(view.items[0].id().to_owned()),
+            &view,
+            &harness,
+        );
+        let view = state.project(&entries, &harness);
+        assert!(matches!(&view.items[0], DisplayItem::Activity { group, .. } if group.expanded));
+    }
+}
+#[test]
+fn grouped_identity_and_prior_collapse_survive_failure() {
     let mut harness = HarnessState::default();
     let entries = vec![entry(
         "tool-entry",
@@ -44,7 +68,7 @@ fn grouped_identity_survives_completion_and_attention_overrides_prior_collapse()
     )];
     let view = state.project(&failed, &harness);
     assert!(
-        matches!(&view.items[0], DisplayItem::Activity{group,..} if group.expanded && group.failed)
+        matches!(&view.items[0], DisplayItem::Activity{group,..} if !group.expanded && group.failed)
     );
     harness.is_streaming = true;
     let suppressed = vec![entry(

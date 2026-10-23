@@ -172,10 +172,8 @@ fn flush(
                 _ => trace.title.clone(),
             };
             let status_label = trace.attention_label().map(str::to_owned);
-            let expanded = state.expanded_for(
-                &id,
-                failed || awaits_permission || (state.inspect_work && active),
-            );
+            let expanded =
+                state.expanded_for(&id, awaits_permission || (state.inspect_work && active));
             items.push(DisplayItem::Activity {
                 id: id.clone(),
                 group: ActivityGroup {
@@ -216,10 +214,7 @@ fn flush(
         Some(summary) if summary != trace.title => format!("{} · {summary}", trace.title),
         _ => trace.title.clone(),
     };
-    let expanded = state.expanded_for(
-        &id,
-        failed || awaits_permission || (state.inspect_work && active),
-    );
+    let expanded = state.expanded_for(&id, awaits_permission || (state.inspect_work && active));
     let mut labels = Vec::new();
     // Keep approval first when it coexists with a failed/background tool.
     if awaits_permission {
