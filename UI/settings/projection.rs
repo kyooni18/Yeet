@@ -278,11 +278,7 @@ pub(super) fn project(
         .auth_providers
         .iter()
         .map(|provider| {
-            let display = if provider.provider.eq_ignore_ascii_case("antigravity") {
-                "Google Antigravity"
-            } else {
-                &provider.provider
-            };
+            let display = crate::shared_ui::presentation::provider_name(&provider.provider);
             let mut control = control(
                 &format!("provider:{}", provider.provider),
                 display,

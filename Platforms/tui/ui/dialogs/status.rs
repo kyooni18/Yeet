@@ -212,7 +212,10 @@ fn usage_status_lines(app: &App, width: usize, height: usize) -> Vec<Line<'stati
         lines.push(Line::from(vec![
             Span::styled("Quota   ", Style::default().fg(theme::muted())),
             Span::styled(
-                format!("{marker} {}{plan}", item.provider),
+                format!(
+                    "{marker} {}{plan}",
+                    crate::shared_ui::presentation::provider_name(&item.provider)
+                ),
                 Style::default().fg(if active_provider == Some(item.provider.as_str()) {
                     theme::accent()
                 } else {
@@ -256,7 +259,12 @@ fn usage_status_lines(app: &App, width: usize, height: usize) -> Vec<Line<'stati
             let reset = window
                 .resets_at
                 .as_deref()
-                .map(|value| format!(" · reset {value}"))
+                .map(|value| {
+                    format!(
+                        " · {}",
+                        crate::shared_ui::presentation::reset_countdown(value, chrono::Utc::now())
+                    )
+                })
                 .unwrap_or_default();
             lines.push(Line::from(vec![
                 Span::raw("        "),

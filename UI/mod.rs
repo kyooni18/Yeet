@@ -18,6 +18,7 @@ pub mod conversation_session;
 pub mod diff;
 pub mod home;
 pub mod navigation;
+pub mod presentation;
 pub mod settings;
 pub mod settings_session;
 pub mod shell;

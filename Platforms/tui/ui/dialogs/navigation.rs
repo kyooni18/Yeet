@@ -36,15 +36,7 @@ pub(super) fn model_picker_rows(app: &App) -> Vec<ModelPickerRow> {
                 String::new()
             } else {
                 previous_provider = provider.clone();
-                match provider.as_str() {
-                    "codex-cli" => "Codex CLI".to_owned(),
-                    "antigravity" => "Antigravity".to_owned(),
-                    "gemini" => "Gemini".to_owned(),
-                    "gemini-web" => "Gemini Web".to_owned(),
-                    "anthropic" => "Claude (Anthropic)".to_owned(),
-                    "claude" => "Claude Web".to_owned(),
-                    _ => provider.clone(),
-                }
+                crate::shared_ui::presentation::provider_name(&provider).to_owned()
             };
             ModelPickerRow {
                 id: id.to_owned(),
