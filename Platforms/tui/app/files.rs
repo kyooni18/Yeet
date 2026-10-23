@@ -425,7 +425,6 @@ pub enum FilesOutcome {
     Close,
 }
 
-
 impl App {
     pub(crate) fn open_files(&mut self) {
         let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

@@ -539,7 +539,10 @@ impl App {
         self.popup_index = 0;
         self.settings_section = None;
         self.settings_edit_kind = None;
-        self.send_settings_action(backend, crate::shared_ui::settings::SettingsAction::CancelEditor)?;
+        self.send_settings_action(
+            backend,
+            crate::shared_ui::settings::SettingsAction::CancelEditor,
+        )?;
         self.send_settings_action(backend, crate::shared_ui::settings::SettingsAction::Refresh)
     }
 

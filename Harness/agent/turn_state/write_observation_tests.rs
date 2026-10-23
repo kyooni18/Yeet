@@ -36,4 +36,3 @@ fn later_mutation_invalidates_previous_validation() {
     assert!(!evidence.verification_succeeded());
     assert!(evidence.last_validation_evidence().is_none());
 }
-

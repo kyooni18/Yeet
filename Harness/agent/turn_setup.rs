@@ -72,7 +72,8 @@ impl AgentCoordinator {
         // user amended it) would keep presenting superseded wording with
         // system authority, so drop it even though that costs a cache miss.
         let current_brief = goal_block.as_ref().map(|(brief, _)| brief.as_str());
-        self.history.retain(|message| !is_stale_goal_block(message, current_brief));
+        self.history
+            .retain(|message| !is_stale_goal_block(message, current_brief));
         self.history.push(current_request.clone());
         self.history
             .push(Message::system(TURN_CONTEXT_BOUNDARY).request_only());
@@ -263,7 +264,8 @@ mod tests {
     }
 }
 
-const GOAL_BLOCK_HEADER: &str = "Goal (the user's request; their newer messages take precedence):\n";
+const GOAL_BLOCK_HEADER: &str =
+    "Goal (the user's request; their newer messages take precedence):\n";
 
 /// Renders the per-turn goal block, returning the objective part separately so
 /// later turns can tell whether an older block is stale.

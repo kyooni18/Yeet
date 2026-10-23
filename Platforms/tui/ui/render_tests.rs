@@ -47,6 +47,8 @@ fn floating_settings_preserves_the_rendered_workbench_and_tab() {
             dir.path().to_path_buf(),
         ));
         app.activate_workbench_tab(tab);
+        // Session opens a concrete conversation tab.
+        let tab = app.active_workbench_tab();
         app.input = "keep this draft".into();
         let (_, before) = render(&mut app, 144, 44);
         app.set_mode(Mode::Settings);

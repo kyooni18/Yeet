@@ -207,5 +207,4 @@ impl ToolRegistry {
         self.catalog.active_mcp.remove(server);
         self.catalog.active_mcp_identity.remove(server);
     }
-
 }

@@ -4,14 +4,14 @@ use super::super::{
     support::{icons, theme},
 };
 use crate::tui::app::{
-    diff::{DiffAction, DiffState},
     App,
+    diff::{DiffAction, DiffState},
 };
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     prelude::{Color, Line, Modifier, Span, Style},
     widgets::{Block, Paragraph},
-    Frame,
 };
 use std::path::PathBuf;
 
@@ -506,7 +506,7 @@ fn text(frame: &mut Frame<'_>, area: Rect, value: &str, style: Style) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn review_rows_hide_headers_keep_numbers_and_fill_change_bands() {

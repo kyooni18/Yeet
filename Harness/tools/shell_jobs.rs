@@ -244,10 +244,8 @@ impl ToolRegistry {
         object: &Map<String, Value>,
         cancel: &AtomicBool,
     ) -> Result<String> {
+        // reportEverySeconds only affects wait; other actions ignore it.
         let action = string_arg(object, "action")?;
-        if action != "wait" && object.contains_key("reportEverySeconds") {
-            bail!("reportEverySeconds is only valid with shell_job action=wait");
-        }
         if action == "list" {
             let jobs = self
                 .shell_jobs

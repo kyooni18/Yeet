@@ -41,8 +41,14 @@ pub enum QuickSection {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ToolbarAction {
     Activate(String),
-    Choose { id: String, value: String },
-    ChooseWorkspace { id: String, source_workspace: String },
+    Choose {
+        id: String,
+        value: String,
+    },
+    ChooseWorkspace {
+        id: String,
+        source_workspace: String,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceChoice {

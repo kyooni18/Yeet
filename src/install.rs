@@ -58,8 +58,9 @@ fn expand_targets<'a>(targets: &[&'a str], uninstall: bool) -> Result<Vec<&'a st
         match *target {
             "all" if uninstall => out.extend(["mcp", "web", "runtime", "binary"]),
             "all" => out.extend(["binary", "runtime", "web", "mcp"]),
-            "binary" | "runtime" | "web" | "web-search" | "search" | "mcp"
-            | "remote" => out.push(target),
+            "binary" | "runtime" | "web" | "web-search" | "search" | "mcp" | "remote" => {
+                out.push(target)
+            }
             other => bail!(
                 "unknown component '{other}'; expected binary, runtime, web, mcp, remote, or all"
             ),
@@ -279,4 +280,3 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     }
     Ok(())
 }
-

@@ -8,8 +8,8 @@ mod task;
 mod views;
 
 pub use render::draw;
-pub(crate) use support::theme::{apply_runtime_theme, refresh_runtime_theme};
 pub use support::theme::initialize_theme;
+pub(crate) use support::theme::{apply_runtime_theme, refresh_runtime_theme};
 
 #[cfg(test)]
 mod render_tests;

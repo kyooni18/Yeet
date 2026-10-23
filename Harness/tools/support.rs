@@ -131,14 +131,20 @@ impl ArtifactStore {
         Uuid::parse_str(id)?;
         let text = fs::read_to_string(self.path(id))?;
         let lines: Vec<_> = text.lines().collect();
-        let start = start.unwrap_or(1);
+        let start = start.unwrap_or(1).max(1);
         let requested_end = end.unwrap_or_else(|| start.saturating_add(159));
-        if start == 0 || start > lines.len() || requested_end < start {
-            bail!(
-                "artifact range {start}-{requested_end} is out of bounds (1-{})",
+        if start > lines.len() {
+            return Ok(format!(
+                "[artifact has {} lines; startLine {start} is past the end]",
                 lines.len()
-            );
+            ));
         }
+        // An end before the start is a line count, as in read_file.
+        let requested_end = if requested_end < start {
+            start.saturating_add(requested_end.max(1) - 1)
+        } else {
+            requested_end
+        };
         // Treat an oversized end bound as a request for "through EOF". This keeps
         // model-generated source ranges robust when the artifact is shorter than
         // the source read that produced it, while still rejecting invalid starts.

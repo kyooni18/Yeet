@@ -64,7 +64,11 @@ impl ToolRegistry {
                 let requested_path = object
                     .get("path")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow!("change requires path"))?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Each change needs its own path: changes:[{{path:\"FILE\",edits:[...]}}]"
+                        )
+                    })?
                     .to_owned();
                 let path = self
                     .context
@@ -410,6 +414,7 @@ fn normalize_legacy_edit_shapes(request: &mut Value) {
     let Some(changes) = request.get_mut("changes").and_then(Value::as_array_mut) else {
         return;
     };
+    merge_same_path_edits(changes);
     for change in changes {
         let Some(edits) = change.get_mut("edits").and_then(Value::as_array_mut) else {
             continue;
@@ -418,6 +423,18 @@ fn normalize_legacy_edit_shapes(request: &mut Value) {
             let Some(object) = edit.as_object_mut() else {
                 continue;
             };
+            // `insert` takes `at`; a range here means "insert at this line".
+            if object.get("kind").and_then(Value::as_str) == Some("insert")
+                && !object.contains_key("at")
+                && let Some(line) = object
+                    .remove("range")
+                    .and_then(|range| range.get("start").cloned())
+                    .or_else(|| object.get("line").cloned())
+            {
+                object.remove("line");
+                object.insert("at".into(), json!({"kind": "before", "line": line}));
+                continue;
+            }
             if object.contains_key("range")
                 || !matches!(
                     object.get("kind").and_then(Value::as_str),
@@ -447,4 +464,32 @@ fn normalize_legacy_edit_shapes(request: &mut Value) {
             object.insert("range".into(), Value::Object(range));
         }
     }
+}
+
+/// Folds several edit-only change objects for one path into the first, since
+/// the daemon rejects multiple changes that target the same file.
+fn merge_same_path_edits(changes: &mut Vec<Value>) {
+    let edit_only =
+        |value: &Value| value.get("fileOp").is_none() && value.get("snapshot").is_none();
+    let mut merged: Vec<Value> = Vec::with_capacity(changes.len());
+    for change in changes.drain(..) {
+        let edits = change.get("edits").and_then(Value::as_array).cloned();
+        let path = change
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let (Some(edits), Some(path)) = (edits, path)
+            && edit_only(&change)
+            && let Some(existing) = merged.iter_mut().find(|candidate| {
+                candidate.get("path").and_then(Value::as_str) == Some(path.as_str())
+                    && edit_only(candidate)
+            })
+            && let Some(list) = existing.get_mut("edits").and_then(Value::as_array_mut)
+        {
+            list.extend(edits);
+            continue;
+        }
+        merged.push(change);
+    }
+    *changes = merged;
 }

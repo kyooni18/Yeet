@@ -2,8 +2,8 @@ mod assets;
 pub mod protocol;
 mod render;
 mod server;
-mod websocket;
 mod ui_host;
+mod websocket;
 mod workspace_views;
 use render::render_buffer;
 

@@ -18,7 +18,6 @@ impl Default for ToolServiceConfiguration {
 }
 
 impl ToolRegistry {
-
     pub fn configure_web_backend(&mut self, backend: ServiceBackend, server: impl Into<String>) {
         let server = server.into();
         if self.services.web_backend != backend

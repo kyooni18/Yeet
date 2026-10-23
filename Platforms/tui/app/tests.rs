@@ -1278,3 +1278,48 @@ fn unchanged_conversation_revision_keeps_native_transcript_cache_valid() {
     app.merge_state(switched);
     assert_eq!(app.conversation[0].id, "stable");
 }
+
+#[test]
+fn question_prompt_picks_options_and_types_custom_answers() {
+    use crate::shared_ui::composer::{ComposerAction, QuestionView};
+    let question = QuestionView {
+        id: "q".into(),
+        question: "Which target?".into(),
+        options: vec!["macOS".into(), "Linux".into()],
+        allow_custom: true,
+        enabled: true,
+    };
+    let key = |code, modifiers| KeyEvent::new(code, modifiers);
+    let mut prompt = QuestionPrompt::default();
+    assert!(matches!(
+        prompt.handle_key(&key(KeyCode::Char('1'), KeyModifiers::NONE), &question),
+        Some(ComposerAction::AnswerQuestion { answer: Some(answer), .. }) if answer == "macOS"
+    ));
+    assert_eq!(
+        prompt.handle_key(&key(KeyCode::Down, KeyModifiers::NONE), &question),
+        None
+    );
+    assert!(matches!(
+        prompt.handle_key(&key(KeyCode::Enter, KeyModifiers::NONE), &question),
+        Some(ComposerAction::AnswerQuestion { answer: Some(answer), .. }) if answer == "Linux"
+    ));
+    for character in "wsl".chars() {
+        assert_eq!(
+            prompt.handle_key(
+                &key(KeyCode::Char(character), KeyModifiers::NONE),
+                &question
+            ),
+            None
+        );
+    }
+    assert!(prompt.on_custom_row(&question));
+    assert_eq!(prompt.custom, "wsl");
+    assert!(matches!(
+        prompt.handle_key(&key(KeyCode::Enter, KeyModifiers::NONE), &question),
+        Some(ComposerAction::AnswerQuestion { answer: Some(answer), .. }) if answer == "wsl"
+    ));
+    assert!(matches!(
+        prompt.handle_key(&key(KeyCode::Esc, KeyModifiers::NONE), &question),
+        Some(ComposerAction::AnswerQuestion { answer: None, .. })
+    ));
+}

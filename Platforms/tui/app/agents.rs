@@ -35,8 +35,7 @@ impl App {
     }
 
     pub(crate) fn close_agents(&mut self) {
-        self.apply_agent_action(AgentAction::Close);
-        self.activate_workbench_tab(WorkbenchTab::Home);
+        self.activate_workbench_tab(WorkbenchTab::CloseAgents);
     }
 
     fn select_agent_row(&mut self, delta: isize) {

@@ -160,21 +160,19 @@ pub(super) fn project(
             "runtime",
             "Runtime",
             SettingsIcon::Settings,
-            vec![
-                toggle(
-                    "openai_flex",
-                    "OpenAI Flex",
-                    if flex {
-                        "Use flex processing when available"
-                    } else {
-                        "Requires OpenAI API billing authentication"
-                    }
-                    .into(),
-                    SettingsIcon::Settings,
-                    harness.openai_flex,
-                    enabled && flex,
-                ),
-            ],
+            vec![toggle(
+                "openai_flex",
+                "OpenAI Flex",
+                if flex {
+                    "Use flex processing when available"
+                } else {
+                    "Requires OpenAI API billing authentication"
+                }
+                .into(),
+                SettingsIcon::Settings,
+                harness.openai_flex,
+                enabled && flex,
+            )],
         ),
     ];
     // Advanced destination support describes available host capabilities, not a

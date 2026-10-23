@@ -147,7 +147,11 @@ pub(in crate::platforms::tui::ui) fn shape(area: Rect) -> Shape {
     Shape::Standard
 }
 
-pub(in crate::platforms::tui::ui) fn modal_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+pub(in crate::platforms::tui::ui) fn modal_rect(
+    area: Rect,
+    percent_x: u16,
+    percent_y: u16,
+) -> Rect {
     if area.width == 0 || area.height == 0 {
         return area;
     }

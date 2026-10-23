@@ -1,6 +1,10 @@
 //! Nonblocking resource refresh. No application selection or presentation policy.
 use super::GitSnapshot;
-use std::{path::Path, sync::mpsc::{self, Receiver}, time::{Duration, Instant}};
+use std::{
+    path::Path,
+    sync::mpsc::{self, Receiver},
+    time::{Duration, Instant},
+};
 #[derive(Debug, Default)]
 pub struct GitRefresh {
     pub snapshot: GitSnapshot,

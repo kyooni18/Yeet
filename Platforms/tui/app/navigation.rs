@@ -58,7 +58,8 @@ impl App {
 
     pub(crate) fn workbench_resources(&self) -> crate::shared_ui::navigation::WorkbenchResources {
         crate::shared_ui::navigation::WorkbenchResources {
-            agents: self.application.agent_state().open || !self.agent_members().is_empty(),
+            agents: self.application.agent_state().open
+                || (!self.agents_dismissed && !self.agent_members().is_empty()),
             files: self
                 .files
                 .as_ref()
@@ -74,6 +75,8 @@ impl App {
                 .collect(),
             active_session: self.session_tabs.active_id(),
             order: self.tab_order.clone(),
+            files_browser_closed: self.files_browser_closed,
+            sessions_managed: true,
         }
     }
 
@@ -154,6 +157,8 @@ impl App {
                 | WorkbenchTab::CloseFile(_)
                 | WorkbenchTab::CloseDiff(_)
                 | WorkbenchTab::CloseConversation(_)
+                | WorkbenchTab::CloseFiles
+                | WorkbenchTab::CloseAgents
         )
     }
 
@@ -176,7 +181,8 @@ impl App {
             WorkbenchTab::Conversation(id) => {
                 self.activate_workbench_tab(WorkbenchTab::CloseConversation(id))
             }
-            WorkbenchTab::Agents => self.close_agents(),
+            WorkbenchTab::Agents => self.activate_workbench_tab(WorkbenchTab::CloseAgents),
+            WorkbenchTab::Files => self.activate_workbench_tab(WorkbenchTab::CloseFiles),
             _ => self.activate_workbench_tab(WorkbenchTab::Home),
         }
     }
@@ -198,7 +204,37 @@ impl App {
     }
 
     pub fn activate_workbench_tab(&mut self, tab: WorkbenchTab) {
+        let owner = match tab {
+            WorkbenchTab::CloseFile(id) => WorkbenchTab::File(id),
+            WorkbenchTab::CloseDiff(id) => WorkbenchTab::Diff(id),
+            WorkbenchTab::CloseConversation(id) => WorkbenchTab::Conversation(id),
+            WorkbenchTab::CloseFiles => WorkbenchTab::Files,
+            WorkbenchTab::CloseAgents => WorkbenchTab::Agents,
+            _ => return self.apply_navigation(tab),
+        };
+        // Every tab closes like an IDE tab: the displayed one hands focus to
+        // its right neighbor (or left at the end of the strip).
+        let before = self.workbench_tabs();
+        let displayed = self.active_workbench_tab() == owner;
+        let index = before.iter().position(|t| *t == owner);
         self.apply_navigation(tab);
+        self.tab_order.retain(|t| *t != owner);
+        let after = self.workbench_tabs();
+        if after.contains(&owner) {
+            return;
+        }
+        if displayed {
+            let next = index
+                .and_then(|index| after.get(index.min(after.len().saturating_sub(1))))
+                .copied()
+                .unwrap_or(WorkbenchTab::Home);
+            self.apply_navigation(next);
+        } else if let WorkbenchTab::Conversation(_) = owner
+            && let Some(next) = self.session_tabs.active_id()
+        {
+            // Keep the runtime on the session of the remaining active tab.
+            self.switch_session_tab(next);
+        }
     }
 
     pub(crate) fn apply_shared_navigation(
@@ -257,31 +293,41 @@ impl App {
                 self.clear_transcript_selection();
             }
             WorkbenchTab::CloseConversation(id) => {
-                let displayed = self.active_workbench_tab() == WorkbenchTab::Conversation(id);
                 if self.session_tabs.close(id).is_some() {
-                    self.tab_order
-                        .retain(|tab| *tab != WorkbenchTab::Conversation(id));
                     self.report_navigation(tab);
-                    match self.session_tabs.active_id() {
-                        Some(next) if displayed => {
-                            return self.apply_navigation(WorkbenchTab::Conversation(next));
-                        }
-                        Some(next) => {
-                            self.switch_session_tab(next);
-                        }
-                        None if displayed => {
-                            return self.apply_navigation(WorkbenchTab::Home);
-                        }
-                        None => {}
-                    }
                 }
             }
-            WorkbenchTab::Home | WorkbenchTab::Session => {
+            WorkbenchTab::CloseFiles => {
+                if self
+                    .files
+                    .as_ref()
+                    .is_some_and(|files| files.tabs.is_empty())
+                {
+                    self.files = None;
+                } else if let Some(files) = &mut self.files {
+                    self.files_browser_closed = true;
+                    if let Some(id) = files.tabs.active_id() {
+                        files.activate_tab(id);
+                    }
+                }
+                self.report_navigation(tab);
+            }
+            WorkbenchTab::CloseAgents => {
+                self.agents_dismissed = true;
+                self.apply_agent_action(crate::shared_ui::agents::AgentAction::Close);
+            }
+            WorkbenchTab::Session => {
+                self.ensure_session_tab();
+                let id = self.session_tabs.active_id().expect("session tab");
+                return self.apply_navigation(WorkbenchTab::Conversation(id));
+            }
+            WorkbenchTab::Home => {
                 self.report_navigation(tab);
                 self.sidebar_focus = false;
                 self.clear_transcript_selection();
             }
             WorkbenchTab::Files => {
+                self.files_browser_closed = false;
                 if self.files.is_none() {
                     self.open_files();
                 }
@@ -300,10 +346,17 @@ impl App {
             WorkbenchTab::CloseFile(index) => {
                 if let Some(files) = &mut self.files {
                     files.close_tab(index);
+                    if self.files_browser_closed && files.tabs.is_empty() {
+                        self.files = None;
+                        self.files_browser_closed = false;
+                    }
                 }
             }
             WorkbenchTab::NewDiff => self.open_diff(None),
-            WorkbenchTab::Agents => self.open_agents(),
+            WorkbenchTab::Agents => {
+                self.agents_dismissed = false;
+                self.open_agents()
+            }
             WorkbenchTab::Diff(id) => {
                 if self.diff_tabs.activate(id) {
                     self.report_navigation(tab);
@@ -312,9 +365,7 @@ impl App {
             WorkbenchTab::CloseDiff(id) => {
                 if self.diff_tabs.close(id).is_some() {
                     self.application.remove_diff_view(id);
-                    self.application
-                        .navigation_mut()
-                        .diff_closed(self.diff_tabs.len());
+                    self.report_navigation(tab);
                 }
             }
             WorkbenchTab::Launcher => self.open_views(),
@@ -463,6 +514,34 @@ mod tests {
         );
         assert!(matches!(app.take_workbench_command(),
             Some(FrontendCommand::LoadSession { session_id }) if session_id == "b"));
+    }
+
+    #[test]
+    fn every_workbench_tab_closes_like_an_ide_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "a").unwrap();
+        let mut app = App::default();
+        app.files = Some(super::super::files::FilesState::open(
+            dir.path().to_path_buf(),
+        ));
+        app.files.as_mut().unwrap().open_path(file, false);
+        let file_id = app.files.as_ref().unwrap().active_tab().unwrap();
+        app.activate_workbench_tab(WorkbenchTab::Files);
+        app.activate_workbench_tab(WorkbenchTab::CloseFiles);
+        // The browser tab is gone; focus moves to its neighbor, the file tab.
+        assert!(!app.workbench_tabs().contains(&WorkbenchTab::Files));
+        assert_eq!(app.active_workbench_tab(), WorkbenchTab::File(file_id));
+        app.activate_workbench_tab(WorkbenchTab::CloseFile(file_id));
+        assert!(app.files.is_none());
+        let session = app.session_tabs.active_id().unwrap();
+        app.activate_workbench_tab(WorkbenchTab::Agents);
+        assert!(app.workbench_tabs().contains(&WorkbenchTab::Agents));
+        app.activate_workbench_tab(WorkbenchTab::CloseAgents);
+        assert!(!app.workbench_tabs().contains(&WorkbenchTab::Agents));
+        app.activate_workbench_tab(WorkbenchTab::CloseConversation(session));
+        assert_eq!(app.workbench_tabs(), vec![WorkbenchTab::Home]);
+        assert_eq!(app.active_workbench_tab(), WorkbenchTab::Home);
     }
 
     #[test]

@@ -353,7 +353,7 @@ impl App {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn git_review_is_wired_to_launcher_files_tabs_and_mouse() {
@@ -394,22 +394,24 @@ mod tests {
             .unwrap()
             .state
             .select_path(&root.join("alpha.rs"));
-        assert!(app
-            .diff_tabs
-            .active_mut()
-            .unwrap()
-            .state
-            .lines
-            .iter()
-            .any(|l| l == "+unstaged"));
-        assert!(app
-            .diff_tabs
-            .active_mut()
-            .unwrap()
-            .state
-            .lines
-            .iter()
-            .any(|l| l == "-old"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "+unstaged")
+        );
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "-old")
+        );
         let mut terminal = Terminal::new(TestBackend::new(144, 44)).unwrap();
         terminal
             .draw(|f| crate::tui::ui::draw(f, &mut app))
@@ -456,27 +458,29 @@ mod tests {
             .unwrap()
             .state
             .select_path(&root.join("space name.txt"));
-        assert!(app
-            .diff_tabs
-            .active_mut()
-            .unwrap()
-            .state
-            .lines
-            .iter()
-            .any(|l| l == "+untracked"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "+untracked")
+        );
         app.diff_tabs
             .active_mut()
             .unwrap()
             .state
             .select_path(&root.join("gone.txt"));
-        assert!(app
-            .diff_tabs
-            .active_mut()
-            .unwrap()
-            .state
-            .lines
-            .iter()
-            .any(|l| l == "-removed"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "-removed")
+        );
         std::fs::write(root.join("binary.bin"), [0, 1, 2, 3]).unwrap();
         app.diff_tabs.active_mut().unwrap().state.reload();
         app.diff_tabs
@@ -484,14 +488,15 @@ mod tests {
             .unwrap()
             .state
             .select_path(&root.join("binary.bin"));
-        assert!(app
-            .diff_tabs
-            .active_mut()
-            .unwrap()
-            .state
-            .lines
-            .iter()
-            .any(|l| l.contains("Binary files")));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l.contains("Binary files"))
+        );
         run(&["mv", "alpha.rs", "renamed.rs"]);
         app.diff_tabs.active_mut().unwrap().state.reload();
         app.diff_tabs
@@ -499,14 +504,15 @@ mod tests {
             .unwrap()
             .state
             .select_path(&root.join("renamed.rs"));
-        assert!(app
-            .diff_tabs
-            .active_mut()
-            .unwrap()
-            .state
-            .lines
-            .iter()
-            .any(|l| l == "+unstaged"));
+        assert!(
+            app.diff_tabs
+                .active_mut()
+                .unwrap()
+                .state
+                .lines
+                .iter()
+                .any(|l| l == "+unstaged")
+        );
         std::fs::write(root.join("clean.txt"), "unchanged\n").unwrap();
         run(&["add", "clean.txt"]);
         run(&[
@@ -537,7 +543,8 @@ mod tests {
             app.activate_workbench_tab(super::super::WorkbenchTab::CloseDiff(id));
         }
         assert!(app.diff_tabs.is_empty());
-        assert_eq!(app.mode, Mode::Chat);
+        // Closing hands focus to a neighboring tab, like an IDE.
+        assert_ne!(app.mode, Mode::Diff);
     }
     #[test]
     fn clean_unborn_and_non_repository_are_explicit() {

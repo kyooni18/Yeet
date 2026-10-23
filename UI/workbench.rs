@@ -14,6 +14,8 @@ pub enum WorkbenchTab {
     /// Open another conversation tab backed by a fresh session.
     NewConversation,
     Files,
+    CloseFiles,
+    CloseAgents,
     File(SurfaceId),
     CloseFile(SurfaceId),
     Diff(SurfaceId),
@@ -55,8 +57,12 @@ impl Tab {
                 Some(WorkbenchTab::CloseConversation(id)),
             ),
             WorkbenchTab::NewConversation => ("New session".into(), Icon::Conversation, None),
-            WorkbenchTab::Files => ("Files".into(), Icon::Folder, None),
-            WorkbenchTab::Agents => ("Agents".into(), Icon::Agents, None),
+            WorkbenchTab::Files => ("Files".into(), Icon::Folder, Some(WorkbenchTab::CloseFiles)),
+            WorkbenchTab::Agents => (
+                "Agents".into(),
+                Icon::Agents,
+                Some(WorkbenchTab::CloseAgents),
+            ),
             WorkbenchTab::File(id) => (
                 resource_label,
                 Icon::File,
@@ -71,7 +77,9 @@ impl Tab {
             WorkbenchTab::Launcher => ("Open a view".into(), Icon::Add, None),
             WorkbenchTab::CloseFile(_)
             | WorkbenchTab::CloseDiff(_)
-            | WorkbenchTab::CloseConversation(_) => (resource_label, Icon::File, None),
+            | WorkbenchTab::CloseConversation(_)
+            | WorkbenchTab::CloseFiles
+            | WorkbenchTab::CloseAgents => (resource_label, Icon::File, None),
         };
         Self {
             action,

@@ -460,6 +460,23 @@ impl ToolRegistry {
     /// Reads one bounded file range or dispatches a small batch of independent reads.
     pub(super) fn read_file(&mut self, object: &Map<String, Value>) -> Result<String> {
         self.sync_edit_state();
+        let mut object = object.clone();
+        // Drop placeholder fields models send alongside the real request shape.
+        if object
+            .get("requests")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+            && object.contains_key("path")
+        {
+            object.remove("requests");
+        }
+        if object.contains_key("requests") && object.get("path").and_then(Value::as_str) == Some("")
+        {
+            for key in ["path", "startLine", "endLine", "refresh"] {
+                object.remove(key);
+            }
+        }
+        let object = &object;
         if object.contains_key("requests") {
             if object.contains_key("path")
                 || object.contains_key("startLine")
@@ -481,10 +498,15 @@ impl ToolRegistry {
         let cache_path =
             super::paths::stable_workspace_path_key(&self.context.workspace_root, &path)?;
         let requested_start = usize_arg(object, "startLine").unwrap_or(1).max(1);
-        let explicit_end = usize_arg(object, "endLine");
-        if explicit_end.is_some_and(|end| end < requested_start) {
-            bail!("read_file endLine must be greater than or equal to startLine");
-        }
+        // An endLine below startLine is almost always a line count
+        // (offset/limit habit), so read that many lines.
+        let explicit_end = usize_arg(object, "endLine").map(|end| {
+            if end < requested_start {
+                requested_start.saturating_add(end.max(1) - 1)
+            } else {
+                end
+            }
+        });
         let limit = if explicit_end.is_some() {
             EXPLICIT_READ_LINES
         } else {

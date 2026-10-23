@@ -3,7 +3,6 @@
 use super::*;
 
 impl ToolRegistry {
-
     pub fn activate_explicit_skill(&mut self, name: &str) -> Result<String> {
         let id = format!("skill:{name}");
         if self.catalog.disabled_capabilities.contains(&id) {

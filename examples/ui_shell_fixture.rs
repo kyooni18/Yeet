@@ -5,8 +5,18 @@ use yeet::shared_ui::shell::{Layout, ShellAction, ShellState};
 
 fn main() {
     let actions = [
-        ("set_layout:compact", ShellAction::SetLayout { layout: Layout::Compact }),
-        ("set_layout:expanded", ShellAction::SetLayout { layout: Layout::Expanded }),
+        (
+            "set_layout:compact",
+            ShellAction::SetLayout {
+                layout: Layout::Compact,
+            },
+        ),
+        (
+            "set_layout:expanded",
+            ShellAction::SetLayout {
+                layout: Layout::Expanded,
+            },
+        ),
         ("open_navigation", ShellAction::OpenNavigation),
         ("close_navigation", ShellAction::CloseNavigation),
         ("toggle_inspector", ShellAction::ToggleInspector),
@@ -30,7 +40,10 @@ fn main() {
             next.apply(action);
             let target = match states.iter().position(|candidate| *candidate == next) {
                 Some(target) => target,
-                None => { states.push(next); states.len() - 1 }
+                None => {
+                    states.push(next);
+                    states.len() - 1
+                }
             };
             transitions.insert(key.into(), json!(target));
         }

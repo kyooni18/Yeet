@@ -90,7 +90,9 @@ fn reasoning_summaries_are_plain_noninteractive_provider_text() {
     assert!(visible.to_string().contains("  Inspect sources"));
     assert!(visible.to_string().contains("  Compare results"));
     assert!(!visible.to_string().contains("private reasoning"));
-    app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::SetExpandAll(true));
+    app.apply_conversation_action(
+        crate::shared_ui::conversation::ConversationAction::SetExpandAll(true),
+    );
     let (expanded, headers) = transcript_content(&app, 60);
     assert_eq!(expanded, visible);
     assert!(headers.is_empty());
@@ -138,20 +140,19 @@ fn reasoning_summary_stays_visible_separate_from_its_tool_dropdown() {
         },
     ];
     let (separate, headers) = transcript_content(&app, 90);
-    assert_eq!(
-        headers.len(),
-        2,
-        "reasoning and tool work have separate rows"
-    );
+    assert_eq!(headers.len(), 1, "only tool work has selectable rows");
     let text = separate.to_string();
-    assert!(!text.contains("Inspect the source"));
+    assert!(text.contains("Inspect the source"));
     assert!(text.contains("Check the implementation"));
     assert!(text.contains("src/example.rs"));
 
     app.work_rows = headers.iter().map(|row| *row as u16).collect();
-    let view = app.application.conversation_state().view(&app.conversation, &app.state);
-    app.work_ids = view.items.iter().filter(|item| !matches!(item, crate::shared_ui::conversation::DisplayItem::Entry { .. })).map(|item| item.id().to_owned()).collect();
-    app.selected_work = Some(1); // Toggle the tool row, not the reasoning block.
+    let view = app
+        .application
+        .conversation_state()
+        .view(&app.conversation, &app.state);
+    app.work_ids = view.work_ids();
+    app.selected_work = Some(0); // Only the tool row is interactive.
     for key in [KeyCode::Char(' '), KeyCode::Enter] {
         assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
         let toggled = transcript_content(&app, 90).0.to_string();

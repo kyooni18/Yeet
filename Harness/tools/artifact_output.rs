@@ -1,6 +1,6 @@
 //! Bounds artifact text sent to the model, including single-line data files.
 
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use serde_json::{Map, Value, json};
 
 use super::support::ArtifactStore;
@@ -156,10 +156,16 @@ pub(super) fn page(text: &str, arguments: &Map<String, Value>) -> Result<String>
         .unwrap_or(PAGE_CHARS)
         .clamp(1, PAGE_CHARS);
     let total = text.chars().count();
-    ensure!(
-        offset <= total,
-        "artifact offset {offset} exceeds range length {total}"
-    );
+    if offset >= total && offset > 0 {
+        return Ok(json!({
+            "content": "",
+            "offset": offset,
+            "totalChars": total,
+            "truncated": false,
+            "hint": "offset is past the end of this range; all of it has been read."
+        })
+        .to_string());
+    }
     let content: String = text.chars().skip(offset).take(limit).collect();
     let end = offset + content.chars().count();
     if offset == 0 && end == total {

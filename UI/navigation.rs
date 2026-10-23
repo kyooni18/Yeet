@@ -69,12 +69,18 @@ pub struct WorkbenchResources {
     /// User-arranged order (drag/move). Unlisted tabs keep their natural order
     /// after the listed ones; Home always stays first.
     pub order: Vec<WorkbenchTab>,
+    /// The Files browser tab was closed while file tabs stay open.
+    pub files_browser_closed: bool,
+    /// The host owns conversation tabs; no implicit session tab is listed.
+    pub sessions_managed: bool,
 }
 impl WorkbenchResources {
     pub fn tabs(&self) -> Vec<WorkbenchTab> {
         let mut tabs = vec![WorkbenchTab::Home];
         if self.sessions.is_empty() {
-            tabs.push(WorkbenchTab::Session);
+            if !self.sessions_managed {
+                tabs.push(WorkbenchTab::Session);
+            }
         } else {
             tabs.extend(
                 self.sessions
@@ -87,7 +93,9 @@ impl WorkbenchResources {
             tabs.push(WorkbenchTab::Agents);
         }
         if let Some(files) = &self.files {
-            tabs.push(WorkbenchTab::Files);
+            if !self.files_browser_closed {
+                tabs.push(WorkbenchTab::Files);
+            }
             tabs.extend(files.iter().copied().map(WorkbenchTab::File));
         }
         tabs.extend(self.diffs.iter().copied().map(WorkbenchTab::Diff));
@@ -186,7 +194,9 @@ impl NavigationState {
             WorkbenchTab::Launcher => self.open_launcher(),
             WorkbenchTab::CloseFile(_)
             | WorkbenchTab::CloseDiff(_)
-            | WorkbenchTab::CloseConversation(_) => {}
+            | WorkbenchTab::CloseConversation(_)
+            | WorkbenchTab::CloseFiles
+            | WorkbenchTab::CloseAgents => {}
         }
     }
     pub fn diff_closed(&mut self, remaining: usize) {

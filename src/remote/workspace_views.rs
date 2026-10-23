@@ -221,7 +221,10 @@ pub fn changes_view(workspace: &Path, file: Option<&str>, full: bool) -> Result<
     let mut patch = Vec::new();
     let mut message = snapshot.message.clone();
     if let Some(path) = &selected
-        && let Some(change) = snapshot.changes.iter().find(|c| wire_path(&c.path) == *path)
+        && let Some(change) = snapshot
+            .changes
+            .iter()
+            .find(|c| wire_path(&c.path) == *path)
     {
         let has_base = !resources::git_identity(&snapshot.root).1.is_empty();
         match resources::review_patch(

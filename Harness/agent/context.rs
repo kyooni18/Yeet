@@ -317,11 +317,15 @@ impl ContextMemory {
                     let offset = a.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
                     let mut found = Vec::new();
                     let mut skipped = 0;
+                    let window_filter = a
+                        .get("windowId")
+                        .and_then(Value::as_str)
+                        .map(|id| {
+                            resolve_window_id(self.state.windows.iter().map(|w| w.id.as_str()), id)
+                        })
+                        .transpose()?;
                     'windows: for window in &self.state.windows {
-                        if a.get("windowId")
-                            .and_then(Value::as_str)
-                            .is_some_and(|id| id != window.id)
-                        {
+                        if window_filter.as_ref().is_some_and(|id| *id != window.id) {
                             continue;
                         }
 
@@ -517,7 +521,10 @@ fn conversation_carryover(history: &[Message], objective: Option<&Message>) -> O
         let label = match message.role {
             MessageRole::User => "User",
             MessageRole::Assistant
-                if message.tool_calls.as_ref().is_none_or(|calls| calls.is_empty()) =>
+                if message
+                    .tool_calls
+                    .as_ref()
+                    .is_none_or(|calls| calls.is_empty()) =>
             {
                 "Assistant"
             }
@@ -552,13 +559,6 @@ fn conversation_carryover(history: &[Message], objective: Option<&Message>) -> O
     )))
 }
 
-fn truncate_chars(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_owned();
-    }
-    let mut cut = max_bytes;
-    while !text.is_char_boundary(cut) {
-        cut -= 1;
 /// Assistant prose from the current request, so the new window knows what
 /// this task already found instead of only what earlier turns concluded.
 fn current_run_progress(messages: &[Message]) -> Option<Message> {
@@ -592,6 +592,13 @@ fn current_run_progress(messages: &[Message]) -> Option<Message> {
     )))
 }
 
+fn truncate_chars(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    let mut cut = max_bytes;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
     }
     format!("{}…", &text[..cut])
 }
@@ -816,11 +823,14 @@ mod carryover_tests {
         let mut history = vec![
             Message::system("system"),
             Message::user("compare option A and option B"),
-            Message::assistant("", Some(vec![ToolCall {
-                id: "call-1".into(),
-                name: "read_file".into(),
-                arguments: json!({"path": "src/lib.rs"}),
-            }])),
+            Message::assistant(
+                "",
+                Some(vec![ToolCall {
+                    id: "call-1".into(),
+                    name: "read_file".into(),
+                    arguments: json!({"path": "src/lib.rs"}),
+                }]),
+            ),
             Message::tool("large tool payload", "call-1", Some("read_file".into())),
             Message::assistant("Option B is better because it avoids locking.", None),
         ];
@@ -868,4 +878,36 @@ mod goal_amendment_tests {
         memory.goal_mut().unwrap().status = GoalStatus::Cancelled;
         assert_eq!(memory.start_goal("new task", false), "new task");
     }
+}
+
+/// Models often copy long window UUIDs with dropped or altered characters.
+/// Accept the window sharing the longest prefix when that match is unique
+/// and covers at least the first UUID group.
+fn resolve_window_id<'a>(
+    windows: impl Iterator<Item = &'a str>,
+    requested: &str,
+) -> Result<String> {
+    let windows: Vec<&str> = windows.collect();
+    if windows.contains(&requested) {
+        return Ok(requested.to_owned());
+    }
+    let shared = |id: &str| -> usize {
+        id.chars()
+            .zip(requested.chars())
+            .take_while(|(left, right)| left == right)
+            .count()
+    };
+    let best = windows.iter().map(|id| shared(id)).max().unwrap_or(0);
+    let matches: Vec<&str> = windows
+        .iter()
+        .copied()
+        .filter(|id| shared(id) == best)
+        .collect();
+    if best >= 8 && matches.len() == 1 {
+        return Ok(matches[0].to_owned());
+    }
+    bail!(
+        "Unknown windowId {requested}. Known windows: {}",
+        windows.join(", ")
+    )
 }
