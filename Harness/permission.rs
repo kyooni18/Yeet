@@ -1,8 +1,14 @@
-use std::sync::{Arc, Condvar, Mutex};
+use std::{
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use uuid::Uuid;
 
-use crate::model::{NativeAppPermission, ShellPermission};
+use crate::model::{NativeAppPermission, ShellPermission, UserQuestion};
 
 type PermissionNotifier = Arc<dyn Fn() + Send + Sync>;
 type NotifierSlot = Arc<Mutex<Option<PermissionNotifier>>>;
@@ -18,6 +24,9 @@ struct PermissionState {
     pending: Option<PermissionRequest>,
     decision: Option<bool>,
     closed: bool,
+    question: Option<UserQuestion>,
+    /// `Some(None)` means the user dismissed the question.
+    answer: Option<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -118,6 +127,80 @@ impl PermissionBroker {
         true
     }
 
+    /// Blocks until the user answers, dismisses, or `cancel` is raised.
+    /// Returns `None` when dismissed/cancelled.
+    pub fn ask(&self, question: UserQuestion, cancel: &AtomicBool) -> Option<String> {
+        let (lock, condition) = &*self.inner;
+        let mut state = lock.lock().ok()?;
+        while state.question.is_some() && !state.closed {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            state = condition
+                .wait_timeout(state, Duration::from_millis(200))
+                .ok()?
+                .0;
+        }
+        if state.closed {
+            return None;
+        }
+        state.question = Some(question);
+        state.answer = None;
+        condition.notify_all();
+        drop(state);
+        self.notify();
+        let mut state = lock.lock().ok()?;
+        while state.answer.is_none() && !state.closed && !cancel.load(Ordering::Relaxed) {
+            state = condition
+                .wait_timeout(state, Duration::from_millis(200))
+                .ok()?
+                .0;
+        }
+        let answer = state.answer.take().flatten();
+        state.question = None;
+        condition.notify_all();
+        drop(state);
+        self.notify();
+        answer
+    }
+
+    pub fn pending_question(&self) -> Option<UserQuestion> {
+        self.inner
+            .0
+            .lock()
+            .ok()
+            .and_then(|state| state.question.clone())
+    }
+
+    /// Answers only the question the caller displayed; `None` dismisses it.
+    pub fn answer_question(&self, request_id: &str, answer: Option<String>) -> bool {
+        let (lock, condition) = &*self.inner;
+        let Ok(mut state) = lock.lock() else {
+            return false;
+        };
+        if state.answer.is_some()
+            || !state
+                .question
+                .as_ref()
+                .is_some_and(|question| question.id == request_id)
+        {
+            return false;
+        }
+        state.answer = Some(answer);
+        condition.notify_all();
+        drop(state);
+        self.notify();
+        true
+    }
+
+    /// Dismisses any pending question (used by interrupts).
+    pub fn dismiss_question(&self) {
+        let id = self.pending_question().map(|question| question.id);
+        if let Some(id) = id {
+            self.answer_question(&id, None);
+        }
+    }
+
     pub fn close(&self) {
         let (lock, condition) = &*self.inner;
         if let Ok(mut state) = lock.lock() {
@@ -203,5 +286,29 @@ mod tests {
             assert_eq!(broker.inner.0.lock().unwrap().decision, Some(false));
             assert!(!broker.resolve_request(&id, true));
         }
+    }
+
+    #[test]
+    fn question_answers_only_the_displayed_request() {
+        let broker = PermissionBroker::default();
+        let asker = broker.clone();
+        let handle = std::thread::spawn(move || {
+            asker.ask(
+                UserQuestion {
+                    id: "q1".into(),
+                    question: "Which?".into(),
+                    options: vec!["A".into(), "B".into()],
+                    allow_custom: true,
+                },
+                &AtomicBool::new(false),
+            )
+        });
+        while broker.pending_question().is_none() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!broker.answer_question("stale", Some("A".into())));
+        assert!(broker.answer_question("q1", Some("custom".into())));
+        assert_eq!(handle.join().unwrap().as_deref(), Some("custom"));
+        assert!(broker.pending_question().is_none());
     }
 }

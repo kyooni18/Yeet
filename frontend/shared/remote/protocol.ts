@@ -342,6 +342,7 @@ export interface BridgeState {
   credit_usage: number
   pending_shell_permission?: ShellPermission | null
   pending_native_app_permission?: NativeAppPermission | null
+  pending_user_question?: { id: string; question: string; options: string[]; allow_custom: boolean } | null
   available_models: string[]
   model_catalog: ModelCatalogItem[]
   is_loading_models: boolean
@@ -688,10 +689,12 @@ export type ComposerAction =
   | { type: 'interrupt' | 'new_session' }
   | { type: 'select_suggestion'; value: { editor: EditorSnapshot; command: string } }
   | { type: 'respond_permission'; value: { target: ComposerPermissionTarget; allow: boolean } }
+  | { type: 'answer_question'; value: { id: string; answer: string | null } }
 export type ComposerIcon = 'send' | 'stop' | 'edit' | 'close' | 'terminal' | 'application' | 'allow' | 'deny'
 export interface ComposerControl { label: string; icon: ComposerIcon; action: ComposerAction; enabled: boolean }
 export interface ComposerPermissionView { target: ComposerPermissionTarget; title: string; detail: string; operation: string; reason: string; icon: ComposerIcon; controls: ComposerControl[] }
-export interface ComposerView { context: ComposerContext; editor: EditorSnapshot; placeholder: string; editable: boolean; can_submit: boolean; primary_control: ComposerControl; edit_banner: string | null; cancel_edit_control: ComposerControl | null; permissions: ComposerPermissionView[]; suggestions: ComposerSuggestion[] }
+export interface ComposerQuestionView { id: string; question: string; options: string[]; allow_custom: boolean; enabled: boolean }
+export interface ComposerView { context: ComposerContext; editor: EditorSnapshot; placeholder: string; editable: boolean; can_submit: boolean; primary_control: ComposerControl; edit_banner: string | null; cancel_edit_control: ComposerControl | null; permissions: ComposerPermissionView[]; question?: ComposerQuestionView | null; suggestions: ComposerSuggestion[] }
 export interface ComposerSuggestion { command: string; description: string; destination: ComposerDestination | null; arguments?: string | null }
 export interface ComposerUiEffect { accepted_editor: EditorSnapshot | null; cancel_edit: EditorSnapshot | null; destination: ComposerDestination | null; replace_editor: { editor: EditorSnapshot; text: string } | null }
 

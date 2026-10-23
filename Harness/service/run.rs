@@ -412,6 +412,7 @@ impl RunWorker {
             state.state.agent_group = self.agent_groups.group_item();
             state.state.pending_shell_permission = self.permission.pending_shell();
             state.state.pending_native_app_permission = self.permission.pending_native_app();
+            state.state.pending_user_question = self.permission.pending_question();
             let envelope = if omit_conversation {
                 state_envelope_without_conversation(&state.state)
             } else {

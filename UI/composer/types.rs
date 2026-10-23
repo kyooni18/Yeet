@@ -102,6 +102,11 @@ pub enum ComposerAction {
         target: PermissionTarget,
         allow: bool,
     },
+    /// Answers the displayed agent question; `None` dismisses it.
+    AnswerQuestion {
+        id: String,
+        answer: Option<String>,
+    },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -132,6 +137,16 @@ pub struct PermissionView {
     pub icon: ComposerIcon,
     pub controls: Vec<ComposerControl>,
 }
+/// A main-agent question; options are suggested answers, `allow_custom`
+/// permits a typed answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionView {
+    pub id: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub allow_custom: bool,
+    pub enabled: bool,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComposerView {
     pub context: ComposerContext,
@@ -143,6 +158,8 @@ pub struct ComposerView {
     pub edit_banner: Option<String>,
     pub cancel_edit_control: Option<ComposerControl>,
     pub permissions: Vec<PermissionView>,
+    #[serde(default)]
+    pub question: Option<QuestionView>,
     pub suggestions: Vec<ComposerSuggestion>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

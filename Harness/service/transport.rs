@@ -126,6 +126,7 @@ pub(super) fn tool_activity_title(name: &str) -> String {
         "activate_capability" => "Loading",
         "run_shell" => "Running command",
         "request_shell_permission" => "Requesting permission",
+        "ask_user" => "Asking you",
         _ if name.starts_with("mcp_") => "Using MCP",
         _ if name.starts_with("worker_") => "Running worker",
         _ if name.starts_with("skill_") => "Reading skill",

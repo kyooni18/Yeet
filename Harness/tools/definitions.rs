@@ -235,20 +235,38 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
 
 fn file_edit_variants() -> serde_json::Value {
     json!([
-                                            replace_text_edit_schema(),
-                                            {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"replaceNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"replaceBody"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"deleteNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false}},"required":["kind","target"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insertBefore"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
-                                            {"type":"object","properties":{"kind":{"const":"insertAfter"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false}
-                                        ])
+        replace_text_edit_schema(),
+        {"type":"object","properties":{"kind":{"const":"replace"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","range","text"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"delete"},"range":{"type":"object","properties":{"start":{"type":"integer","minimum":1},"end":{"type":"integer","minimum":1}},"required":["start","end"],"additionalProperties":false}},"required":["kind","range"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"insert"},"at":{"oneOf":[{"type":"object","properties":{"kind":{"const":"start"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"end"}},"required":["kind"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"before"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"after"},"line":{"type":"integer","minimum":1}},"required":["kind","line"],"additionalProperties":false}]},"text":{"type":"string"}},"required":["kind","at","text"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"replaceNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"replaceBody"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"deleteNode"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false}},"required":["kind","target"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"insertBefore"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"insertAfter"},"target":{"type":"object","properties":{"kind":{"type":"string","enum":["function","method","type"]},"name":{"type":"string","minLength":1},"container":{"oneOf":[{"type":"string","minLength":1},{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}]},"signature":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false},"text":{"type":"string"}},"required":["kind","target","text"],"additionalProperties":false}
+    ])
 }
 
 fn replace_text_edit_schema() -> serde_json::Value {
     json!({"type":"object","properties":{"kind":{"const":"replaceText"},"oldText":{"type":"string","minLength":1},"newText":{"type":"string"},"replaceAll":{"type":"boolean"}},"required":["kind","oldText","newText"],"additionalProperties":false})
+}
+
+/// Main-agent-only question tool; registered by `ToolRegistry::enable_user_questions`.
+pub(super) fn ask_user_tool_definition() -> ToolDefinition {
+    ToolDefinition::new(
+        "ask_user",
+        "Ask the user one question and wait for the answer. Use only when a decision genuinely needs the user (ambiguous requirements, risky or irreversible choices, preferences); do not ask what you can discover yourself. Provide 1-3 short suggested options, most recommended first; the user may also type a custom answer unless allowCustom=false.",
+        json!({
+            "type":"object",
+            "properties":{
+                "question":{"type":"string","minLength":1},
+                "options":{"type":"array","items":{"type":"string","minLength":1},"minItems":1,"maxItems":3},
+                "allowCustom":{"type":"boolean"}
+            },
+            "required":["question","options"],
+            "additionalProperties":false
+        }),
+    )
 }
 
 /// Returns whether a built-in tool is primarily useful for general document/data tasks.

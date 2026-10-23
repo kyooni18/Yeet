@@ -146,6 +146,8 @@ pub struct ToolRegistry {
     shell_cwd: Option<PathBuf>,
     permitted_shell_commands: HashSet<String>,
     web_search: WebSearchClient,
+    /// Only the main agent may interrupt the user with questions.
+    user_questions_enabled: bool,
 }
 
 impl ToolRegistry {
@@ -189,6 +191,7 @@ impl ToolRegistry {
             shell_cwd: None,
             permitted_shell_commands: HashSet::new(),
             web_search: WebSearchClient::default(),
+            user_questions_enabled: false,
         })
     }
 
@@ -256,6 +259,15 @@ impl ToolRegistry {
         if let Some(group) = &self.agent_group {
             group.prestart(calls, model, self.context.active_session_id.clone());
         }
+    }
+
+    /// Exposes `ask_user` to this registry. Called only for the main agent.
+    pub(crate) fn enable_user_questions(&mut self) {
+        self.user_questions_enabled = true;
+        let definition = definitions::ask_user_tool_definition();
+        self.catalog
+            .active_tools
+            .insert(definition.name.clone(), definition);
     }
 
     pub(crate) fn set_permission_label(&mut self, label: String) {
@@ -549,6 +561,7 @@ impl ToolRegistry {
                 self.execute_artifact_tool(&call.name, &object)
             }
             "request_shell_permission" => self.request_shell_permission_tool(&object),
+            "ask_user" if self.user_questions_enabled => self.ask_user_tool(&object, cancel),
             "run_shell" => self.run_shell_tool(&object, model, cancel),
             "shell_job" => self.shell_job_tool(&object, cancel),
             "computer_use" => self.computer_use_tool(&object, cancel),

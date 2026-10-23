@@ -187,6 +187,7 @@ impl RuntimeProcess {
         let state = &self.last_state;
         let status = if state.pending_shell_permission.is_some()
             || state.pending_native_app_permission.is_some()
+            || state.pending_user_question.is_some()
         {
             SessionActivity::WaitingForPermission
         } else if state.is_streaming {

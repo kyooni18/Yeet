@@ -83,8 +83,8 @@ use persistence::{
 };
 use settings_support::{
     apply_sandbox_action, auth_login_options, finish_auth_action, finish_provider_action,
-    load_auth_providers, load_provider_configurations,
-    runtime_settings_state, sandbox_settings_state,
+    load_auth_providers, load_provider_configurations, runtime_settings_state,
+    sandbox_settings_state,
 };
 use state::SharedSession;
 pub(crate) use sync::{EventSender, SessionCatalog};
@@ -231,6 +231,7 @@ impl HarnessService {
                     state.state.pending_shell_permission = permission_for_notify.pending_shell();
                     state.state.pending_native_app_permission =
                         permission_for_notify.pending_native_app();
+                    state.state.pending_user_question = permission_for_notify.pending_question();
                     let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
                 }
             }));
@@ -284,6 +285,11 @@ impl HarnessService {
                 granted,
             } => {
                 self.permission.resolve_request(&request_id, granted);
+                self.publish_state();
+                Ok(())
+            }
+            FrontendCommand::AnswerQuestion { request_id, answer } => {
+                self.permission.answer_question(&request_id, answer);
                 self.publish_state();
                 Ok(())
             }
@@ -521,6 +527,7 @@ impl HarnessService {
             if let Ok(mut state) = shared.lock() {
                 state.state.pending_shell_permission = permission.pending_shell();
                 state.state.pending_native_app_permission = permission.pending_native_app();
+                state.state.pending_user_question = permission.pending_question();
                 let _ = tx.send(ServiceEvent::Envelope(state_envelope(&state.state)));
             }
         });

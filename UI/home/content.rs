@@ -114,6 +114,7 @@ impl WorkspaceContent {
             if state.current_session_id.as_ref() == Some(&session.id) && item.context.is_empty() {
                 if state.pending_shell_permission.is_some()
                     || state.pending_native_app_permission.is_some()
+                    || state.pending_user_question.is_some()
                 {
                     item.context = "permission".into();
                 } else if state.is_streaming {

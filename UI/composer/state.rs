@@ -60,6 +60,16 @@ impl ComposerState {
                 )
             }),
             permissions: permissions(harness, env.available),
+            question: harness
+                .pending_user_question
+                .as_ref()
+                .map(|question| QuestionView {
+                    id: question.id.clone(),
+                    question: question.question.clone(),
+                    options: question.options.clone(),
+                    allow_custom: question.allow_custom,
+                    enabled: env.available,
+                }),
             suggestions: suggestions(&editor.text, harness),
             editor,
         }
@@ -178,6 +188,27 @@ impl ComposerState {
                     effect.command = Some(HarnessCommand::ResolvePermission {
                         request_id: target.id,
                         granted: allow,
+                    });
+                }
+            }
+            ComposerAction::AnswerQuestion { id, answer } if env.available => {
+                let Some(question) = harness
+                    .pending_user_question
+                    .as_ref()
+                    .filter(|question| question.id == id)
+                else {
+                    return effect;
+                };
+                let answer = answer
+                    .map(|answer| answer.trim().to_owned())
+                    .filter(|answer| !answer.is_empty());
+                let valid = answer.as_ref().is_none_or(|answer| {
+                    question.allow_custom || question.options.contains(answer)
+                });
+                if valid {
+                    effect.command = Some(HarnessCommand::AnswerQuestion {
+                        request_id: id,
+                        answer,
                     });
                 }
             }

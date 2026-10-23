@@ -8,7 +8,7 @@ pub(super) const SEARCH_TOOL: &str = "search_tools";
 /// The basic surface every turn starts with, in a fixed order so the provider
 /// sees one stable tool prefix. Web tools drop out when the catalog lacks them
 /// (web search disabled); everything else stays reachable through search_tools.
-const BASIC_TOOLS: [&str; 8] = [
+const BASIC_TOOLS: [&str; 9] = [
     "read_file",
     "search_workspace",
     "apply_file_edits",
@@ -17,6 +17,7 @@ const BASIC_TOOLS: [&str; 8] = [
     "read_artifact",
     "web_search",
     "web_read",
+    "ask_user",
 ];
 
 pub(super) struct ToolDiscovery {

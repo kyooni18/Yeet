@@ -93,9 +93,8 @@ impl HarnessService {
         shared.meta.working_directory = stored_working_directory.clone();
         shared.meta.context_roots = stored_context_roots.clone();
         shared.state.error_message = None;
-        let reconciled = shared.reconcile_orphaned_runs(
-            "The app stopped before this run finished.",
-        );
+        let reconciled =
+            shared.reconcile_orphaned_runs("The app stopped before this run finished.");
         if reconciled {
             persist_locked(
                 &mut shared,
@@ -153,7 +152,9 @@ impl HarnessService {
             shared.state.is_streaming || shared.meta.current_turn.is_some()
         } || self.agent_groups.group_item().status == "running";
         if busy {
-            anyhow::bail!("A run is still active in this session. Stop it explicitly before replacing the session.");
+            anyhow::bail!(
+                "A run is still active in this session. Stop it explicitly before replacing the session."
+            );
         }
         Ok(())
     }
@@ -266,6 +267,7 @@ impl HarnessService {
                 shared.state.is_streaming = false;
                 shared.state.pending_shell_permission = None;
                 shared.state.pending_native_app_permission = None;
+                shared.state.pending_user_question = None;
                 shared.state.current_session_id.clone()
             }
         };
@@ -299,6 +301,7 @@ impl HarnessService {
         {
             self.permission.resolve(false);
         }
+        self.permission.dismiss_question();
     }
 
     /// Marks an unresponsive interrupted run terminal without waiting on the
@@ -329,6 +332,7 @@ impl HarnessService {
                 shared.state.active_reasoning_summary.clear();
                 shared.state.pending_shell_permission = None;
                 shared.state.pending_native_app_permission = None;
+                shared.state.pending_user_question = None;
                 shared.append(ConversationKind::System {
                     content: reason.to_owned(),
                 });
@@ -376,6 +380,7 @@ impl HarnessService {
         state.state.agent_group = self.agent_groups.group_item();
         state.state.pending_shell_permission = self.permission.pending_shell();
         state.state.pending_native_app_permission = self.permission.pending_native_app();
+        state.state.pending_user_question = self.permission.pending_question();
         let _ = self
             .tx
             .send(ServiceEvent::Envelope(state_envelope(&state.state)));

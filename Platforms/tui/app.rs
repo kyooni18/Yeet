@@ -205,6 +205,10 @@ pub struct App {
     pub(crate) tab_order: Vec<WorkbenchTab>,
     /// Tab picked up by a left-button press on the tab strip.
     pub(crate) tab_drag: Option<WorkbenchTab>,
+    /// Files browser tab closed while its file tabs stay open.
+    pub(crate) files_browser_closed: bool,
+    /// Agents tab closed by the user despite running members.
+    pub(crate) agents_dismissed: bool,
     pub(crate) diff_frame: diff::DiffFrame,
     pub keymap: keymap::Keymap,
     pub debate_models: crate::debate::DebateModels,
@@ -303,7 +307,13 @@ impl Default for App {
             workbench_command: None,
             pending_home: None,
             diff_tabs: Default::default(),
-            session_tabs: Default::default(),
+            session_tabs: {
+                let mut tabs = crate::tui::kit::Tabs::default();
+                tabs.open("", None);
+                tabs
+            },
+            files_browser_closed: false,
+            agents_dismissed: false,
             session_switch_from: None,
             tab_order: Vec::new(),
             tab_drag: None,

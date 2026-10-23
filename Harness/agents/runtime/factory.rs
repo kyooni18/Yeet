@@ -75,6 +75,10 @@ impl AgentRuntimeFactory {
             self.permission.clone(),
         )?;
         registry.configure_web_backend(project.web.backend, project.web.server);
+        if !volatile_group_context {
+            // Questions are a main-agent capability; Group agents never prompt.
+            registry.enable_user_questions();
+        }
 
         let mut coordinator = AgentCoordinator::new(self.bridge.clone(), registry);
         if let Some(session_id) = active_session_id.as_ref() {

@@ -226,6 +226,8 @@ pub struct BridgeState {
     pub credit_usage: u64,
     pub pending_shell_permission: Option<ShellPermission>,
     pub pending_native_app_permission: Option<NativeAppPermission>,
+    /// Main-agent question awaiting a user answer (never raised by Group agents).
+    pub pending_user_question: Option<UserQuestion>,
     pub extension_commands: Vec<ExtensionCommandItem>,
     pub available_models: Vec<String>,
     pub model_catalog: Vec<ModelCatalogItem>,
@@ -283,6 +285,7 @@ impl BridgeState {
             credit_usage: self.credit_usage,
             pending_shell_permission: self.pending_shell_permission.clone(),
             pending_native_app_permission: self.pending_native_app_permission.clone(),
+            pending_user_question: self.pending_user_question.clone(),
             extension_commands: self.extension_commands.clone(),
             available_models: self.available_models.clone(),
             model_catalog: self.model_catalog.clone(),
@@ -469,6 +472,22 @@ pub struct ShellPermission {
     pub command: String,
     pub operation: String,
     pub reason: String,
+}
+
+/// A question the main agent asks the user, with 1-3 suggested answers.
+/// `allow_custom` lets the user type a free-form answer instead.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserQuestion {
+    pub id: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default = "default_true")]
+    pub allow_custom: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

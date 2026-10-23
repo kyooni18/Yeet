@@ -488,6 +488,58 @@ pub(super) fn shell_is_inspection(command: &str) -> bool {
 
 impl ToolRegistry {
     /// Requests a one-time, exact-command shell permit from the user.
+    pub(super) fn ask_user_tool(
+        &mut self,
+        object: &Map<String, Value>,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let question = string_arg(object, "question")?.trim().to_owned();
+        if question.is_empty() {
+            bail!("ask_user requires a question");
+        }
+        let mut options: Vec<String> = object
+            .get("options")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        options.dedup();
+        options.truncate(3);
+        let allow_custom = object
+            .get("allowCustom")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+            || options.is_empty();
+        let answer = self.context.permission.ask(
+            crate::model::UserQuestion {
+                id: uuid::Uuid::new_v4().to_string(),
+                question: question.clone(),
+                options: options.clone(),
+                allow_custom,
+            },
+            cancel,
+        );
+        Ok(match answer {
+            Some(answer) => {
+                let custom = !options.contains(&answer);
+                json!({"question": question, "answer": answer, "custom": custom})
+            }
+            None => json!({
+                "question": question,
+                "answer": null,
+                "dismissed": true,
+                "note": "The user dismissed the question. Proceed with your best judgment or stop and explain."
+            }),
+        }
+        .to_string())
+    }
+
     pub(super) fn request_shell_permission_tool(
         &mut self,
         object: &Map<String, Value>,

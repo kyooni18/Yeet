@@ -32,6 +32,12 @@ pub enum FrontendCommand {
         request_id: String,
         granted: bool,
     },
+    /// Answers the pending main-agent question; `None` dismisses it.
+    AnswerQuestion {
+        request_id: String,
+        #[serde(default)]
+        answer: Option<String>,
+    },
     AllowShell,
     DenyShell,
     AllowNativeApp,

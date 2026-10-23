@@ -13,9 +13,9 @@ use crate::tui::app::{App, Mode};
 use composer::draw as draw_input;
 use dialogs::{
     draw_auth, draw_auth_key, draw_capabilities, draw_capability_detail, draw_goal, draw_help,
-    draw_models, draw_permission, draw_provider_edit, draw_providers, draw_reasoning,
-    draw_sandbox_policy, draw_sandbox_presets, draw_sessions, draw_settings, draw_settings_edit,
-    draw_status_dialog,
+    draw_models, draw_permission, draw_provider_edit, draw_providers, draw_question,
+    draw_reasoning, draw_sandbox_policy, draw_sandbox_presets, draw_sessions, draw_settings,
+    draw_settings_edit, draw_status_dialog,
 };
 use ratatui::{
     Frame,
@@ -31,8 +31,22 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     app.toasts.expire(std::time::Instant::now());
     draw_content(frame, app);
     // Global runtime attention is workbench chrome and never selects a view.
-    if !app.application.composer_projection().view.permissions.is_empty() {
+    if !app
+        .application
+        .composer_projection()
+        .view
+        .permissions
+        .is_empty()
+    {
         draw_permission(frame, app);
+    } else if app
+        .application
+        .composer_projection()
+        .view
+        .question
+        .is_some()
+    {
+        draw_question(frame, app);
     }
     chrome::draw(frame, app);
     if let Some(error) = &app.state.error_message {

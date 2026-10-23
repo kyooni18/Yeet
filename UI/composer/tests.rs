@@ -165,3 +165,43 @@ fn stale_permission_target_cannot_resolve_replacement() {
     capturing.freeze_editor_for_permissions = true;
     assert!(!state.view(&capturing, &harness).editable);
 }
+#[test]
+fn question_answers_target_current_question_and_respect_custom_policy() {
+    let mut harness = HarnessState::default();
+    harness.pending_user_question = Some(crate::model::UserQuestion {
+        id: "q".into(),
+        question: "Which?".into(),
+        options: vec!["A".into(), "B".into()],
+        allow_custom: false,
+    });
+    let mut state = ComposerState::default();
+    let env = environment();
+    let answer = |id: &str, text: Option<&str>| ComposerAction::AnswerQuestion {
+        id: id.into(),
+        answer: text.map(str::to_owned),
+    };
+    assert!(
+        state
+            .apply(answer("old", Some("A")), &env, &harness)
+            .command
+            .is_none()
+    );
+    assert!(
+        state
+            .apply(answer("q", Some("free")), &env, &harness)
+            .command
+            .is_none()
+    );
+    assert!(matches!(
+        state.apply(answer("q", Some("B")), &env, &harness).command,
+        Some(HarnessCommand::AnswerQuestion { answer: Some(value), .. }) if value == "B"
+    ));
+    assert!(matches!(
+        state.apply(answer("q", None), &env, &harness).command,
+        Some(HarnessCommand::AnswerQuestion { answer: None, .. })
+    ));
+    assert_eq!(
+        state.view(&env, &harness).question.unwrap().options.len(),
+        2
+    );
+}
