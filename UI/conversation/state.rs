@@ -139,6 +139,13 @@ impl ConversationState {
 fn disclosure_expanded(view: &ConversationView, id: &str) -> Option<bool> {
     for item in &view.items {
         match item {
+            DisplayItem::Entry {
+                id: entry_id,
+                prompt: Some(prompt),
+                ..
+            } if entry_id == id => {
+                return Some(prompt.expanded);
+            }
             DisplayItem::Activity {
                 id: group_id,
                 group,

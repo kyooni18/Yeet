@@ -286,6 +286,22 @@ impl App {
                     let end = self.clamp_to_transcript(event.column, event.row);
                     if end == start {
                         self.clear_transcript_selection();
+                        let clicked_row = self
+                            .scroll_y
+                            .saturating_add(event.row.saturating_sub(self.transcript_area.1));
+                        if let Some(id) = self
+                            .work_rows
+                            .iter()
+                            .position(|row| *row == clicked_row)
+                            .and_then(|index| self.work_ids.get(index))
+                            .filter(|id| id.starts_with("entry:"))
+                            .cloned()
+                        {
+                            self.apply_conversation_action(
+                                crate::shared_ui::conversation::ConversationAction::Toggle(id),
+                            );
+                            self.follow_tail = false;
+                        }
                         if !self.input_focused {
                             let row = self
                                 .scroll_y

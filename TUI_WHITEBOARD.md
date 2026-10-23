@@ -918,3 +918,12 @@ The initial Sessions view uses the shared Yeet brand welcome renderer
 or screen-specific input behavior. Normal composer submission and Esc focus
 handling apply. The welcome remains separate from the workbench Overview and the
 saved-session picker.
+
+## Long user prompts
+
+TUI and Remote default to a compact preview for user messages exceeding 400
+characters or six source lines. A visible Show full prompt / Show less disclosure
+uses shared per-entry conversation state; the original prompt stays intact for
+Copy, Edit, storage and model context. In TUI click the disclosure (even while
+editing), or Esc then select it with Up/Down and Enter/Space/e. Short messages
+remain unchanged. Remote keeps the disclosure visible independently of hover.

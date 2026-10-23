@@ -671,7 +671,7 @@ export interface ConversationActivityEvent { type: 'activity' | 'tool' | 'skill'
 export interface ConversationActivityGroup { id: string; events: ConversationActivityEvent[]; summary: string; status_label?: string | null; active: boolean; failed: boolean; awaits_permission: boolean; expanded: boolean }
 export interface ConversationControl { label: string; icon: ConversationIcon; action: ConversationAction; enabled: boolean }
 export type ConversationDisplayItem =
-  | { type: 'entry'; id: string; entry: ConversationEntry; controls: ConversationControl[] }
+  | { type: 'entry'; id: string; entry: ConversationEntry; controls: ConversationControl[]; prompt?: { preview: string; expanded: boolean } }
   | { type: 'activity'; id: string; group: ConversationActivityGroup }
   | { type: 'reasoning'; id: string; content: string; summary: string | null; is_active: boolean; trace: ConversationTrace }
 export interface ConversationView { items: ConversationDisplayItem[]; last_user_id: string | null; last_assistant_id: string | null; streaming_text: string; streaming: boolean; preparing: boolean; preparing_label: string; error: string | null; selected: string | null }

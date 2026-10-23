@@ -240,7 +240,7 @@ struct Message: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
       if item.entry.kind.type === "user" {
-        Element("yeet-markdown", { source: item.entry.kind.content })
+        Element("yeet-markdown", { source: item.prompt && !item.prompt.expanded ? item.prompt.preview : item.entry.kind.content })
           .padding({ top: 12, bottom: 12, leading: 16, trailing: 16 })
           .background(color.bubble)
           .style({ borderRadius: "14px", maxWidth: "min(460px, 85%)" })
@@ -253,6 +253,10 @@ struct Message: View {
         Text(item.entry.kind.content || item.entry.kind.name || "")
           .fontSize(13)
           .foregroundStyle(color.faint)
+      }
+      if item.prompt {
+        Chip(title: item.prompt.expanded ? "Show less" : "Show full prompt", action: { remoteStore.sendConversationUi({ type: "toggle", value: item.id }) })
+          .accessibilityLabel(item.prompt.expanded ? "Collapse prompt" : "Expand prompt")
       }
       MessageControls(controls: item.controls, trailing: item.entry.kind.type === "user")
         .opacity(hovering.value || !isWide.value ? 1 : 0)

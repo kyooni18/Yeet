@@ -498,7 +498,7 @@ fn append_reasoning(
 fn append_entry(
     items: &mut Vec<DisplayItem>,
     entry: &ConversationEntry,
-    _state: &ConversationState,
+    state: &ConversationState,
     harness: &HarnessState,
     last_user: Option<&str>,
     last_assistant: Option<&str>,
@@ -537,9 +537,35 @@ fn append_entry(
             });
         }
     }
+    let prompt = match &entry.kind {
+        ConversationKind::User { content } => {
+            prompt_preview(content).map(|preview| PromptDisclosure {
+                preview,
+                expanded: state.expanded_for(&format!("entry:{}", entry.id), false),
+            })
+        }
+        _ => None,
+    };
     items.push(DisplayItem::Entry {
         id: format!("entry:{}", entry.id),
         entry: entry.clone(),
         controls,
+        prompt,
     });
+}
+
+/// Bound previews by both characters and lines, independent of client viewport.
+fn prompt_preview(content: &str) -> Option<String> {
+    let mut end = content.len();
+    let mut lines = 1;
+    for (count, (offset, ch)) in content.char_indices().enumerate() {
+        if count == 400 || (ch == '\n' && lines == 6) {
+            end = offset;
+            break;
+        }
+        if ch == '\n' {
+            lines += 1;
+        }
+    }
+    (end < content.len()).then(|| format!("{}…", content[..end].trim_end()))
 }

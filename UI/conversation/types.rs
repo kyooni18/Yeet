@@ -190,6 +190,8 @@ pub enum DisplayItem {
         id: String,
         entry: ConversationEntry,
         controls: Vec<MessageControl>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<PromptDisclosure>,
     },
     Activity {
         id: String,
@@ -202,6 +204,11 @@ pub enum DisplayItem {
         is_active: bool,
         trace: TraceView,
     },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptDisclosure {
+    pub preview: String,
+    pub expanded: bool,
 }
 impl DisplayItem {
     pub fn id(&self) -> &str {
@@ -228,6 +235,11 @@ impl ConversationView {
         let mut ids = Vec::new();
         for item in &self.items {
             match item {
+                DisplayItem::Entry {
+                    id,
+                    prompt: Some(_),
+                    ..
+                } => ids.push(id.clone()),
                 DisplayItem::Entry { .. } => {}
                 DisplayItem::Reasoning { .. } => {}
                 DisplayItem::Activity { id, group } => {

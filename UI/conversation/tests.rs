@@ -381,3 +381,55 @@ fn active_tool_progress_does_not_repeat_real_tool_calls() {
         ))
     }));
 }
+
+#[test]
+fn long_prompts_default_to_preview_and_toggle_without_truncating_copy() {
+    let harness = HarnessState::default();
+    for content in [
+        "🦀".repeat(450),
+        "one\ntwo\nthree\nfour\nfive\nsix\nseven".into(),
+    ] {
+        let entries = vec![entry(
+            "prompt",
+            ConversationKind::User {
+                content: content.clone(),
+            },
+        )];
+        let mut state = ConversationState::default();
+        let view = state.project(&entries, &harness);
+        assert_eq!(view.work_ids(), vec!["entry:prompt"]);
+        assert!(
+            matches!(&view.items[0], DisplayItem::Entry { prompt: Some(p), .. } if !p.expanded && p.preview.ends_with('…') && p.preview.len() < content.len())
+        );
+        let effect = state.apply(ConversationAction::Copy("prompt".into()), &view, &harness);
+        assert_eq!(effect.copy.unwrap().text, content);
+        state.apply(
+            ConversationAction::Toggle("entry:prompt".into()),
+            &view,
+            &harness,
+        );
+        let view = state.project(&entries, &harness);
+        assert!(matches!(&view.items[0], DisplayItem::Entry { prompt: Some(p), .. } if p.expanded));
+        state.apply(
+            ConversationAction::Toggle("entry:prompt".into()),
+            &view,
+            &harness,
+        );
+        assert!(
+            matches!(&state.project(&entries, &harness).items[0], DisplayItem::Entry { prompt: Some(p), .. } if !p.expanded)
+        );
+    }
+    let view = ConversationState::default().view(
+        &[entry(
+            "short",
+            ConversationKind::User {
+                content: "hello".into(),
+            },
+        )],
+        &harness,
+    );
+    assert!(matches!(
+        &view.items[0],
+        DisplayItem::Entry { prompt: None, .. }
+    ));
+}

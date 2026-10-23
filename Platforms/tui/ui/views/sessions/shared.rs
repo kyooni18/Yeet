@@ -41,12 +41,35 @@ pub(super) fn content_with_entries(
         previous_was_entry = is_entry;
         previous_was_reasoning = Some(is_reasoning);
         match item {
-            DisplayItem::Entry { entry, .. } => {
+            DisplayItem::Entry {
+                id, entry, prompt, ..
+            } => {
                 let start = lines.len();
                 // Shared projection already resolves streaming content and embedded tools.
                 match &entry.kind {
                     ConversationKind::User { content } => {
-                        lines.extend(user_message_lines(content, width))
+                        let visible = prompt
+                            .as_ref()
+                            .filter(|p| !p.expanded)
+                            .map_or(content.as_str(), |p| p.preview.as_str());
+                        if let Some(prompt) = prompt {
+                            rows.push(lines.len());
+                            ids.push(id.clone());
+                            let label = if prompt.expanded {
+                                "▾ Show less"
+                            } else {
+                                "▸ Show full prompt"
+                            };
+                            let style = Style::default().fg(theme::muted());
+                            let style = if !app.input_focused && view.selected.as_ref() == Some(id)
+                            {
+                                style.add_modifier(Modifier::REVERSED)
+                            } else {
+                                style
+                            };
+                            lines.push(Line::styled(truncate_end(label, width as usize), style));
+                        }
+                        lines.extend(user_message_lines(visible, width))
                     }
                     ConversationKind::Assistant { content, .. } => {
                         lines.extend(session_markdown_lines(content, width as usize))
@@ -94,6 +117,33 @@ pub(super) fn content_with_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn long_prompt_disclosure_has_clickable_and_keyboard_geometry() {
+        let mut app = App::default();
+        app.conversation = vec![ConversationEntry {
+            id: "long-prompt".into(),
+            kind: ConversationKind::User {
+                content: format!("{}HIDDEN_END", "x".repeat(500)),
+            },
+        }];
+        let view = app
+            .application
+            .conversation_state()
+            .view(&app.conversation, &app.state);
+        let (text, rows, ids) = content(&app, &view, 80);
+        assert_eq!(ids, view.work_ids());
+        assert_eq!(rows.len(), 1);
+        assert!(text.lines[rows[0]].to_string().contains("Show full prompt"));
+        assert!(!text.to_string().contains("HIDDEN_END"));
+        app.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Toggle(
+            ids[0].clone(),
+        ));
+        let view = app.application.conversation_projection().view;
+        let (text, _, _) = content(&app, &view, 80);
+        assert!(text.to_string().contains("Show less"));
+        assert!(text.to_string().contains("HIDDEN_END"));
+    }
+
     #[test]
     fn work_geometry_uses_shared_stable_ids_and_disclosure() {
         let mut app = App::default();
