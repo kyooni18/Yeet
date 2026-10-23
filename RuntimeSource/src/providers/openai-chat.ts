@@ -705,6 +705,7 @@ export class OpenAIChatProvider implements ProviderAdapter {
       model: fallback.model,
       ...(fallback.id ? { id: fallback.id } : {}),
     };
+    if (fallback.reasoning || fallback.reasoningSummary) yield { type: "reasoning-start" };
     if (fallback.reasoning) yield { type: "reasoning-delta", delta: fallback.reasoning };
     if (fallback.reasoningSummary) yield { type: "reasoning-summary-delta", delta: fallback.reasoningSummary };
     if (fallback.text) yield { type: "text-delta", delta: fallback.text };
@@ -796,6 +797,9 @@ export class OpenAIChatProvider implements ProviderAdapter {
     const reasoningDetails: any[] = [];
     let reasoningContent: string | undefined;
     let summaryDetailKey: string | number | undefined;
+    // Mirror Responses reasoning items: each contiguous reasoning run is its
+    // own phase, so interleaved text or tool calls start a fresh segment.
+    let inReasoning = false;
 
     for await (const message of parseSSE(response)) {
       if (message.data === "[DONE]") break;
@@ -835,10 +839,15 @@ export class OpenAIChatProvider implements ProviderAdapter {
       appendReasoningDetails(reasoningDetails, delta.reasoning_details);
       if (typeof delta.reasoning_content === "string") reasoningContent = `${reasoningContent ?? ""}${delta.reasoning_content}`;
       const reasoning = reasoningText(delta);
+      const summary = reasoningSummary(delta);
+      if ((reasoning || summary) && !inReasoning) {
+        inReasoning = true;
+        summaryDetailKey = undefined;
+        yield { type: "reasoning-start" };
+      }
       if (reasoning) {
         yield { type: "reasoning-delta", delta: reasoning };
       }
-      const summary = reasoningSummary(delta);
       if (summary) {
         const detail = Array.isArray(delta.reasoning_details)
           ? delta.reasoning_details.find((part: any) => typeof part?.summary === "string" && part.summary) : undefined;
@@ -850,10 +859,12 @@ export class OpenAIChatProvider implements ProviderAdapter {
         yield { type: "reasoning-summary-delta", delta: summary };
       }
       if (typeof delta.content === "string" && delta.content) {
+        inReasoning = false;
         yield { type: "text-delta", delta: delta.content };
       }
 
       for (const toolDelta of delta.tool_calls ?? []) {
+        inReasoning = false;
         const index = toolDelta.index ?? 0;
         const current = tools.get(index) ?? { argumentsText: "" };
         if (toolDelta.id) current.id = toolDelta.id;

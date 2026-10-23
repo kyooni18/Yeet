@@ -697,6 +697,9 @@ export class GeminiProvider implements ProviderAdapter {
     let toolIndex = 0;
     let textThoughtSignature: string | undefined;
     const turnFunctionMetadata: Record<string, GeminiFunctionMetadata> = {};
+    // Contiguous thought parts form one reasoning phase, like a Responses
+    // reasoning item; answer text or a function call ends the phase.
+    let inReasoning = false;
 
     for await (const event of parseSSE(response)) {
       let raw: any;
@@ -723,8 +726,14 @@ export class GeminiProvider implements ProviderAdapter {
       let hasTools = false;
       for (const part of parts) {
         if (typeof part.text === "string" && part.text) {
-          if (part.thought === true) yield { type: "reasoning-summary-delta", delta: part.text };
-          else {
+          if (part.thought === true) {
+            if (!inReasoning) {
+              inReasoning = true;
+              yield { type: "reasoning-start" };
+            }
+            yield { type: "reasoning-summary-delta", delta: part.text };
+          } else {
+            inReasoning = false;
             if (typeof part.thoughtSignature === "string" && part.thoughtSignature) {
               textThoughtSignature = part.thoughtSignature;
             }
@@ -732,6 +741,7 @@ export class GeminiProvider implements ProviderAdapter {
           }
         }
         if (part.functionCall) {
+          inReasoning = false;
           hasTools = true;
           const index = toolIndex++;
           const toolCall = normalizeGeminiTool(part, index);

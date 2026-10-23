@@ -59,6 +59,15 @@ test('Claude signed thinking and native chat reasoning survive a streamed tool r
     return sse([{ choices: [{ delta: { reasoning_content: 'Inspect ' } }] }, { choices: [{ delta: { reasoning_content: 'inputs', content: 'done' }, finish_reason: 'stop' }] }]);
   } });
   const chatEvents = await collect(chat.stream({ model: 'deepseek-test', messages }));
+  assert.equal(chatEvents.filter((event) => event.type === 'reasoning-start').length, 1);
+  const interleaved = new OpenAIChatProvider({ id: 'openrouter', baseUrl: 'https://example.invalid/v1', fetch: async () => sse([
+    { choices: [{ delta: { reasoning: 'Plan' } }] },
+    { choices: [{ delta: { content: 'Reading the file.' } }] },
+    { choices: [{ delta: { reasoning: 'Verify' } }] },
+    { choices: [{ delta: { content: 'Done' }, finish_reason: 'stop' }] },
+  ]) });
+  const phases = (await collect(interleaved.stream({ model: 'x', messages }))).filter((event) => ['reasoning-start', 'text-delta'].includes(event.type)).map((event) => event.type);
+  assert.deepEqual(phases, ['reasoning-start', 'text-delta', 'reasoning-start', 'text-delta']);
   const state = chatEvents.at(-1).providerState;
   assert.equal(state.data.reasoningContent, 'Inspect inputs');
   await collect(chat.stream({ model: 'deepseek-test', messages: [...messages, { role: 'assistant', content: '', toolCalls: [{ id: 'call', name: 'read_file', arguments: {} }], providerState: state }, { role: 'tool', toolCallId: 'call', content: 'ok' }] }));
@@ -85,7 +94,9 @@ test('provider streams expose hidden reasoning phases, managed operations, and s
   ]) });
   assert.equal((await collect(doneOnly.stream({ model: 'gpt-test', messages }))).filter((event) => event.type === 'reasoning-summary-delta').map((event) => event.delta).join(''), 'Completed summary');
   const gemini = new GeminiProvider({ apiKey: 'test', fetch: async () => sse([{ candidates: [{ content: { parts: [{ thought: true, text: 'Comparing options' }, { text: 'Answer' }] }, finishReason: 'STOP' }] }]) });
-  assert.deepEqual((await collect(gemini.stream({ model: 'gemini-test', messages }))).filter((event) => event.type === 'reasoning-summary-delta'), [{ type: 'reasoning-summary-delta', delta: 'Comparing options' }]);
+  const geminiEvents = await collect(gemini.stream({ model: 'gemini-test', messages }));
+  assert.deepEqual(geminiEvents.filter((event) => event.type === 'reasoning-summary-delta'), [{ type: 'reasoning-summary-delta', delta: 'Comparing options' }]);
+  assert.equal(geminiEvents.filter((event) => event.type === 'reasoning-start').length, 1);
   const broken = new AnthropicProvider({ apiKey: 'test', fetch: async () => sse([{ type: 'error', error: { type: 'overloaded_error', message: 'Retry later' } }]) });
   await assert.rejects(() => collect(broken.stream({ model: 'claude-test', messages })), (error) => error.message === 'Retry later' && error.retryable);
 });
