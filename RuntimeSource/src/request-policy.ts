@@ -105,12 +105,35 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
 
   if (anthropicRoute) {
     const outputConfig = record(existing.output_config);
-    if (outputConfig.effort !== undefined) return request;
     const effort = anthropicEffort(routedModel, requested ?? (auxiliary ? "low" : "high"));
-    if (!effort || (!requested && !auxiliary)) return request;
+    const adaptive = effort !== undefined || /^claude-mythos-preview(?:-|$)/.test(routedModel);
+    const manual = /^claude-(?:sonnet|opus|haiku)-4(?:[.-](?:1|5))?(?:-|$)/.test(routedModel)
+      || /^claude-3[.-]7-sonnet(?:-|$)/.test(routedModel);
+    // Effort alone does not turn on Claude thinking. Both subscription OAuth
+    // (Claude Code) and API-key routes need the native thinking option.
+    // Forced tool choices and explicit temperatures must retain their execution
+    // semantics rather than being silently rewritten to enable thinking.
+    let thinking = existing.thinking;
+    const compatible = request.toolChoice !== "required" && typeof request.toolChoice !== "object"
+      && (request.temperature === undefined || request.temperature === 1);
+    if (!auxiliary && compatible && thinking === undefined) {
+      if (adaptive) thinking = { type: "adaptive" };
+      else if (manual) {
+        const maximum = request.maxTokens ?? 4_096;
+        const desired = requested === "medium" ? 8_192 : requested && requested !== "low" ? 24_576 : 1_024;
+        const budget = Math.min(desired, Math.floor(maximum / 2));
+        if (budget >= 1_024) thinking = { type: "enabled", budget_tokens: budget };
+      }
+    }
+    const addEffort = outputConfig.effort === undefined && effort && (requested || auxiliary);
+    if (thinking === existing.thinking && !addEffort) return request;
     return {
       ...request,
-      providerOptions: { ...existing, output_config: { ...outputConfig, effort } },
+      providerOptions: {
+        ...existing,
+        ...(thinking !== undefined ? { thinking } : {}),
+        ...(addEffort ? { output_config: { ...outputConfig, effort } } : {}),
+      },
     };
   }
 
@@ -134,7 +157,16 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
     };
   }
 
-  if (parsed.provider === "openrouter" && existing.reasoning === undefined && (requested || auxiliary)) {
+  if (parsed.provider === "openrouter") {
+    // Request returned reasoning even at the default effort. OpenRouter can
+    // otherwise omit it, leaving the shared transcript with no middle phase.
+    const reasoning = record(existing.reasoning);
+    if (existing.reasoning !== undefined) {
+      // Do not undo explicit opt-outs (enabled:false / exclude:true), token
+      // budgets, or effort choices supplied by the caller.
+      if (reasoning.enabled !== undefined || reasoning.effort !== undefined || reasoning.max_tokens !== undefined) return request;
+      return { ...request, providerOptions: { ...existing, reasoning: { ...reasoning, enabled: true } } };
+    }
     const [vendor, ...modelParts] = parsed.model.split("/");
     const routedModel = modelParts.join("/");
     const baseEffort = requested ?? "low";
@@ -143,7 +175,7 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
       : baseEffort;
     return {
       ...request,
-      providerOptions: { ...existing, reasoning: { effort } },
+      providerOptions: { ...existing, reasoning: requested || auxiliary ? { effort } : { enabled: true } },
     };
   }
 

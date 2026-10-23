@@ -13,16 +13,16 @@ test('Claude display handling preserves execution policy and explicit thinking c
   for (const provider of ['anthropic', 'claude', 'claude-api', 'opencode', 'opencode-go']) {
     const request = { model: `${provider}/claude-sonnet-4-6`, messages, metadata: { reasoningLevel: 'high' } };
     const prepared = withReasoningPolicy(request);
-    assert.equal(prepared.providerOptions.thinking, undefined);
+    assert.deepEqual(prepared.providerOptions.thinking, { type: 'adaptive' });
     assert.equal(prepared.providerOptions.output_config.effort, 'high');
     assert.equal(prepared.providerOptions.reasoning, undefined);
     const explicit = withReasoningPolicy({ ...request, providerOptions: { thinking: { type: 'disabled' }, output_config: { effort: 'low' } } });
     assert.deepEqual(explicit.providerOptions, { thinking: { type: 'disabled' }, output_config: { effort: 'low' } });
   }
   const legacy = withReasoningPolicy({ model: 'claude-api/claude-sonnet-4-5', messages, maxTokens: 4096, metadata: { reasoningLevel: 'high' } });
-  assert.equal(legacy.providerOptions, undefined);
+  assert.deepEqual(legacy.providerOptions.thinking, { type: 'enabled', budget_tokens: 2048 });
   const untouched = { model: 'claude/claude-sonnet-4-6', messages };
-  assert.equal(withReasoningPolicy(untouched), untouched);
+  assert.deepEqual(withReasoningPolicy(untouched).providerOptions.thinking, { type: 'adaptive' });
   const manual = { ...untouched, providerOptions: { thinking: { type: 'enabled', budget_tokens: 1024 } } };
   assert.equal(withReasoningPolicy(manual), manual);
   assert.equal(withReasoningPolicy({ model: 'anthropic/claude-sonnet-4-5', messages, toolChoice: 'required' }).providerOptions, undefined);
@@ -107,4 +107,49 @@ test('SSE survives CRLF and Unicode split at every byte boundary', async () => {
   const response = new Response(new ReadableStream({ start(controller) { for (const byte of bytes) controller.enqueue(Uint8Array.of(byte)); controller.close(); } }));
   assert.deepEqual(await collect(parseSSE(response)), [{ event: 'reasoning', data: '한글' }, { data: 'next' }]);
   assert.deepEqual(await collect(parseSSE(new Response('data: first\r\rdata:   indented'))), [{ data: 'first' }, { data: '  indented' }]);
+});
+
+test('Claude and OpenRouter enable middle reasoning without overriding explicit execution choices', () => {
+  for (const provider of ['claude', 'claude-api', 'anthropic']) {
+    const base = { model: `${provider}/claude-sonnet-4-6`, messages };
+    assert.deepEqual(withReasoningPolicy(base).providerOptions.thinking, { type: 'adaptive' });
+    assert.equal(withReasoningPolicy({ ...base, temperature: 0.2 }).providerOptions, undefined);
+    assert.equal(withReasoningPolicy({ ...base, toolChoice: 'required' }).providerOptions, undefined);
+    assert.equal(withReasoningPolicy({ ...base, metadata: { purpose: 'session-title' } }).providerOptions.thinking, undefined);
+    const disabled = { ...base, providerOptions: { thinking: { type: 'disabled' } } };
+    assert.equal(withReasoningPolicy(disabled), disabled);
+    const effort = withReasoningPolicy({ ...base, providerOptions: { output_config: { effort: 'medium' } } });
+    assert.deepEqual(effort.providerOptions.thinking, { type: 'adaptive' });
+    assert.equal(effort.providerOptions.output_config.effort, 'medium');
+  }
+  for (const model of ['anthropic/claude-sonnet-4.6', 'openai/gpt-5', 'deepseek/deepseek-r1']) {
+    const base = { model: `openrouter/${model}`, messages };
+    assert.deepEqual(withReasoningPolicy(base).providerOptions.reasoning, { enabled: true });
+    for (const reasoning of [{ enabled: false }, { exclude: true }, { effort: 'high' }, { max_tokens: 2048 }]) {
+      const result = withReasoningPolicy({ ...base, providerOptions: { reasoning } });
+      for (const [key, value] of Object.entries(reasoning)) assert.equal(result.providerOptions.reasoning[key], value);
+    }
+  }
+});
+
+test('Claude initial commentary and OpenRouter hidden reasoning retain their phases', async () => {
+  for (const id of ['claude', 'claude-api']) {
+    const provider = new AnthropicProvider({ id, apiKey: 'test', fetch: async () => sse([
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: 'Plan', signature: '' } },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: 'Checking now.' } },
+      { type: 'content_block_start', index: 2, content_block: { type: 'thinking', thinking: 'Verify', signature: '' } },
+      { type: 'content_block_start', index: 3, content_block: { type: 'text', text: 'Done.' } },
+    ]) });
+    const events = await collect(provider.stream({ model: 'claude-sonnet-4-6', messages }));
+    assert.deepEqual(events.filter((event) => ['reasoning-start', 'text-delta'].includes(event.type)).map((event) => event.type), ['reasoning-start', 'text-delta', 'reasoning-start', 'text-delta']);
+    assert.deepEqual(events.filter((event) => event.type === 'text-delta').map((event) => event.delta), ['Checking now.', 'Done.']);
+  }
+  const provider = new OpenAIChatProvider({ id: 'openrouter', baseUrl: 'https://example.invalid/v1', fetch: async () => sse([
+    { choices: [{ delta: { reasoning_details: [{ type: 'reasoning.encrypted', data: 'opaque', index: 0 }] } }] },
+    { choices: [{ delta: { content: 'Answer' }, finish_reason: 'stop' }] },
+  ]) });
+  const events = await collect(provider.stream({ model: 'anthropic/claude-test', messages }));
+  assert.equal(events.filter((event) => event.type === 'reasoning-start').length, 1);
+  assert.equal(events.some((event) => event.type === 'reasoning-delta'), false);
+  assert.equal(events.at(-1).providerState.data.reasoningDetails[0].data, 'opaque');
 });

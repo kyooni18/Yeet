@@ -565,6 +565,10 @@ export class AnthropicProvider implements ProviderAdapter {
         yield { type: "reasoning-start" };
         if (raw.content_block.thinking) yield { type: "reasoning-summary-delta", delta: raw.content_block.thinking };
         if (raw.content_block.summary) yield { type: "reasoning-summary-delta", delta: raw.content_block.summary };
+      } else if (raw.type === "content_block_start" && raw.content_block?.type === "text") {
+        // Some Messages-compatible endpoints put commentary in the initial
+        // block rather than a later delta. Keep those middle messages too.
+        if (raw.content_block.text) yield { type: "text-delta", delta: raw.content_block.text };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "text_delta") {
         if (raw.delta.text) yield { type: "text-delta", delta: raw.delta.text };
       } else if (raw.type === "content_block_delta" && raw.delta?.type === "thinking_delta") {

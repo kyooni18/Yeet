@@ -840,7 +840,9 @@ export class OpenAIChatProvider implements ProviderAdapter {
       if (typeof delta.reasoning_content === "string") reasoningContent = `${reasoningContent ?? ""}${delta.reasoning_content}`;
       const reasoning = reasoningText(delta);
       const summary = reasoningSummary(delta);
-      if ((reasoning || summary) && !inReasoning) {
+      const hiddenReasoning = Array.isArray(delta.reasoning_details)
+        && delta.reasoning_details.some((part: any) => part?.type === "reasoning.encrypted");
+      if ((reasoning || summary || hiddenReasoning) && !inReasoning) {
         inReasoning = true;
         summaryDetailKey = undefined;
         yield { type: "reasoning-start" };
