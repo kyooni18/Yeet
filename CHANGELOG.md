@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-23
+
+- Improve TUI and Remote workbench navigation, tool displays, reasoning visibility, and rendering responsiveness.
+- Preserve conversation context and current-run progress across context rollover.
+- Improve file editing reliability, shell working-directory persistence, and tool output handling.
+- Add main-agent user questions and improve goal-mode controls and blocked-goal handling.
+- Improve provider compatibility, session persistence recovery, and shared Remote/TUI runtime behavior.
+
 ## [0.1.1] - 2026-10-09
 
 - Improve agent group orchestration, task lifecycle handling, and agent controls.

@@ -88,7 +88,7 @@ mod tool_summary_layout_tests {
         }
     }
     #[test]
-    fn groups_collapse_unless_active_or_failed_and_fit_any_width() {
+    fn tools_stay_compact_until_expanded_and_fit_any_width() {
         let done = call("read_file", ToolCallStatus::Completed);
         let collapsed = render(vec![tool_entry(&done)], 80, false);
         assert_eq!(collapsed.len(), 1);
@@ -98,11 +98,8 @@ mod tool_summary_layout_tests {
         let failed = call("search_workspace", ToolCallStatus::Failed);
         for tool in [&running, &failed] {
             let lines = render(vec![tool_entry(tool)], 80, false);
-            if matches!(tool.status, ToolCallStatus::Failed) {
-                assert!(lines.len() > 1, "failed tools open their details");
-            } else {
-                assert_eq!(lines.len(), 1, "running tools stay compact");
-            }
+            assert_eq!(lines.len(), 1, "running and failed tools stay compact");
+            assert!(render(vec![tool_entry(tool)], 80, true).len() > 1);
             for width in [0, 1, 2, 8, 24, 40, 60] {
                 assert!(
                     render(vec![tool_entry(tool)], width, false)

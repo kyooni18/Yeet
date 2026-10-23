@@ -2102,6 +2102,7 @@ mod tests {
         sparse.is_streaming = true;
         sparse.active_reasoning_entry_id = Some("reasoning".into());
         sparse.active_reasoning_text = "Inspecting latest changes".into();
+        sparse.active_reasoning_summary = "Reviewing changes".into();
         sparse.conversation_revision = 1;
         process_envelope(
             &shared,
