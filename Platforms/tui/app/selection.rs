@@ -192,8 +192,36 @@ impl App {
                 .find(|(area, _)| area.contains((event.column, event.row).into()))
                 .map(|(_, tab)| *tab)
             {
+                let from_strip = self.mode != Mode::Views;
                 self.activate_workbench_tab(tab);
+                // Pick the tab up; dragging over another tab reorders the strip.
+                self.tab_drag = (from_strip && Self::draggable_tab(tab))
+                    .then(|| self.active_workbench_tab())
+                    .filter(|active| *active == tab);
                 return Ok(());
+            }
+        }
+        if let Some(dragged) = self.tab_drag {
+            match event.kind {
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some(target) = self
+                        .tab_targets
+                        .iter()
+                        .find(|(area, tab)| {
+                            Self::draggable_tab(*tab)
+                                && area.contains((event.column, event.row).into())
+                        })
+                        .map(|(_, tab)| *tab)
+                    {
+                        self.drop_tab(dragged, target);
+                    }
+                    return Ok(());
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.tab_drag = None;
+                    return Ok(());
+                }
+                _ => {}
             }
         }
         if self.mode == Mode::Diff {

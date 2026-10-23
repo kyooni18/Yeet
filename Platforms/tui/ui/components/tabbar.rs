@@ -16,6 +16,10 @@ use ratatui::{
 pub(crate) use crate::tui::app::WorkbenchTab as Active;
 const NARROW: u16 = 70;
 
+fn is_session(tab: Active) -> bool {
+    matches!(tab, Active::Session | Active::Conversation(_))
+}
+
 struct Tab {
     area: Rect,
     target: Active,
@@ -24,7 +28,7 @@ struct Tab {
 }
 
 fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
-    if area.width < 4 || area.height == 0 || (area.width < NARROW && active == Active::Session) {
+    if area.width < 4 || area.height == 0 || (area.width < NARROW && is_session(active)) {
         return Vec::new();
     }
     let controls = crate::shared_ui::workbench::header(
@@ -32,6 +36,26 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
         |target| {
             let resource_label = match target {
                 Active::Session => conversation_title(app).to_owned(),
+                Active::Conversation(id) => {
+                    let session = app
+                        .session_tabs
+                        .get(id)
+                        .and_then(|tab| tab.state.as_deref());
+                    if session.is_some() && session == app.state.current_session_id.as_deref() {
+                        conversation_title(app).to_owned()
+                    } else {
+                        session
+                            .and_then(|id| {
+                                app.state
+                                    .saved_sessions
+                                    .iter()
+                                    .find(|saved| saved.id == id)
+                                    .map(|saved| saved.title.clone())
+                            })
+                            .filter(|title| !title.is_empty())
+                            .unwrap_or_else(|| "New conversation".into())
+                    }
+                }
                 Active::Diff(id) => {
                     let state = &app.diff_tabs.get(id).expect("listed diff instance").state;
                     state
@@ -161,7 +185,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App, area: Rect, active: Active)
         Block::default().style(theme::base().bg(theme::code_background())),
         area,
     );
-    if area.width < NARROW && active == Active::Session {
+    if area.width < NARROW && is_session(active) {
         draw_title(frame, app, area);
         return;
     }

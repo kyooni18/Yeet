@@ -10,9 +10,9 @@ pub mod files;
 mod home;
 pub(crate) use home::HomeAction;
 pub use home::HomeRefresh;
+mod composer;
 pub mod diff;
 mod input;
-mod composer;
 mod navigation;
 pub use navigation::WorkbenchTab;
 pub mod agent_group;
@@ -65,6 +65,101 @@ pub enum SettingsEditKind {
     Limit { name: String },
 }
 
+/// Selection and typed custom answer for the agent question modal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct QuestionPrompt {
+    pub id: String,
+    /// Index into options; `options.len()` is the custom-answer row.
+    pub cursor: usize,
+    pub custom: String,
+}
+
+impl QuestionPrompt {
+    fn sync(&mut self, question: &crate::shared_ui::composer::QuestionView) {
+        if self.id != question.id {
+            *self = Self {
+                id: question.id.clone(),
+                cursor: 0,
+                custom: String::new(),
+            };
+        }
+        let rows = question.options.len() + usize::from(question.allow_custom);
+        self.cursor = self.cursor.min(rows.saturating_sub(1));
+    }
+
+    pub(crate) fn on_custom_row(
+        &self,
+        question: &crate::shared_ui::composer::QuestionView,
+    ) -> bool {
+        question.allow_custom && self.cursor == question.options.len()
+    }
+
+    /// Applies one key; returns the composer action to send, if any.
+    fn handle_key(
+        &mut self,
+        event: &KeyEvent,
+        question: &crate::shared_ui::composer::QuestionView,
+    ) -> Option<crate::shared_ui::composer::ComposerAction> {
+        use crate::shared_ui::composer::ComposerAction;
+        self.sync(question);
+        let rows = question.options.len() + usize::from(question.allow_custom);
+        let answer = |answer: Option<String>| ComposerAction::AnswerQuestion {
+            id: question.id.clone(),
+            answer,
+        };
+        let shift_only = event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT;
+        match event.code {
+            KeyCode::Esc => return Some(answer(None)),
+            KeyCode::Up | KeyCode::BackTab => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Down | KeyCode::Tab => {
+                self.cursor = (self.cursor + 1).min(rows.saturating_sub(1))
+            }
+            KeyCode::Enter => {
+                if self.on_custom_row(question) {
+                    let text = self.custom.trim();
+                    if !text.is_empty() {
+                        return Some(answer(Some(text.to_owned())));
+                    }
+                } else if let Some(option) = question.options.get(self.cursor) {
+                    return Some(answer(Some(option.clone())));
+                }
+            }
+            KeyCode::Backspace if self.on_custom_row(question) => {
+                self.custom.pop();
+            }
+            KeyCode::Char('u') if event.modifiers == KeyModifiers::CONTROL => {
+                self.custom.clear();
+            }
+            KeyCode::Char(character) if shift_only => {
+                let digit = character.to_digit(10).map(|digit| digit as usize);
+                if !self.on_custom_row(question)
+                    && let Some(index) = digit.filter(|d| *d >= 1 && *d <= question.options.len())
+                {
+                    return Some(answer(Some(question.options[index - 1].clone())));
+                }
+                if question.allow_custom {
+                    self.cursor = question.options.len();
+                    self.custom.push(character);
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    pub(crate) fn paste(
+        &mut self,
+        question: &crate::shared_ui::composer::QuestionView,
+        text: &str,
+    ) {
+        self.sync(question);
+        if question.allow_custom {
+            self.cursor = question.options.len();
+            self.custom.push_str(&text.replace(['\r', '\n'], " "));
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionPromptAction {
     Allow,
@@ -101,6 +196,15 @@ pub struct App {
     pub(crate) workbench_command: Option<FrontendCommand>,
     pub(crate) pending_home: Option<crate::shared_ui::application_session::PreparedHomeAction>,
     pub diff_tabs: crate::tui::kit::Tabs<diff::DiffState>,
+    /// Open conversation tabs; each holds the session it shows.
+    pub session_tabs: crate::tui::kit::Tabs<Option<String>>,
+    /// Session shown before the latest tab switch; the active tab adopts the
+    /// runtime's session only once it has moved away from this one.
+    pub(crate) session_switch_from: Option<Option<String>>,
+    /// User-arranged tab order (drag or Alt+Shift+arrows).
+    pub(crate) tab_order: Vec<WorkbenchTab>,
+    /// Tab picked up by a left-button press on the tab strip.
+    pub(crate) tab_drag: Option<WorkbenchTab>,
     pub(crate) diff_frame: diff::DiffFrame,
     pub keymap: keymap::Keymap,
     pub debate_models: crate::debate::DebateModels,
@@ -150,6 +254,8 @@ pub struct App {
     pub selection_end: Option<(u16, u16)>,
     pub transcript_context_menu: Option<TranscriptContextMenu>,
     pub transcript_context_menu_area: (u16, u16, u16, u16),
+    /// Local answer state for the pending agent question (reset per question id).
+    pub(crate) question: QuestionPrompt,
     pub(crate) clipboard_request: Option<String>,
     pub(crate) clipboard_paste_request: bool,
     pub(crate) context_menu_click: bool,
@@ -197,6 +303,10 @@ impl Default for App {
             workbench_command: None,
             pending_home: None,
             diff_tabs: Default::default(),
+            session_tabs: Default::default(),
+            session_switch_from: None,
+            tab_order: Vec::new(),
+            tab_drag: None,
             diff_frame: Default::default(),
             keymap: keymap::Keymap::default(),
             debate_models: Default::default(),
@@ -248,6 +358,7 @@ impl Default for App {
             selection_end: None,
             transcript_context_menu: None,
             transcript_context_menu_area: (0, 0, 0, 0),
+            question: QuestionPrompt::default(),
             clipboard_request: None,
             clipboard_paste_request: false,
             context_menu_click: false,
@@ -347,12 +458,16 @@ impl App {
             }
         }
         if self.state.current_session_id != next.current_session_id {
-            self.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::Reset);
+            self.apply_conversation_action(
+                crate::shared_ui::conversation::ConversationAction::Reset,
+            );
             self.work_ids.clear();
             self.selected_work = None;
             self.work_rows.clear();
         }
+        let previous_session = self.state.current_session_id.clone();
         self.state = next;
+        self.sync_session_tab(previous_session);
         if projection_changed {
             self.application
                 .refresh_with_conversation_entries(&self.conversation, &self.state);
@@ -399,6 +514,10 @@ impl App {
 
     pub fn handle_paste(&mut self, text: &str) {
         self.sync_composer();
+        if let Some(question) = self.application.composer_projection().view.question {
+            self.question.paste(&question, text);
+            return;
+        }
         if text.is_empty() || !self.application.composer_projection().view.editable {
             return;
         }
@@ -536,21 +655,50 @@ impl App {
         if let Some(permission) = composer_view.permissions.first() {
             if let Some(action) = Self::permission_prompt_action(&event, self.state.is_streaming) {
                 let action = match action {
-                    PermissionPromptAction::Allow => crate::shared_ui::composer::ComposerAction::RespondPermission { target: permission.target.clone(), allow: true },
-                    PermissionPromptAction::Deny => crate::shared_ui::composer::ComposerAction::RespondPermission { target: permission.target.clone(), allow: false },
-                    PermissionPromptAction::Interrupt => crate::shared_ui::composer::ComposerAction::Interrupt,
+                    PermissionPromptAction::Allow => {
+                        crate::shared_ui::composer::ComposerAction::RespondPermission {
+                            target: permission.target.clone(),
+                            allow: true,
+                        }
+                    }
+                    PermissionPromptAction::Deny => {
+                        crate::shared_ui::composer::ComposerAction::RespondPermission {
+                            target: permission.target.clone(),
+                            allow: false,
+                        }
+                    }
+                    PermissionPromptAction::Interrupt => {
+                        crate::shared_ui::composer::ComposerAction::Interrupt
+                    }
                 };
+                self.send_composer_action(backend, action)?;
+            }
+            return Ok(());
+        }
+        if let Some(question) = composer_view.question.as_ref() {
+            if event.modifiers == KeyModifiers::CONTROL && event.code == KeyCode::Char('c') {
+                self.send_composer_action(
+                    backend,
+                    crate::shared_ui::composer::ComposerAction::Interrupt,
+                )?;
+            } else if let Some(action) = self.question.handle_key(&event, question) {
                 self.send_composer_action(backend, action)?;
             }
             return Ok(());
         }
 
         if Self::should_interrupt_active_non_chat(&event, self.state.is_streaming, self.mode) {
-            self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?;
+            self.send_composer_action(
+                backend,
+                crate::shared_ui::composer::ComposerAction::Interrupt,
+            )?;
             return Ok(());
         }
 
         if self.handle_workbench_key(&event) {
+            if let Some(command) = self.take_workbench_command() {
+                self.send_ui_command(backend, command)?;
+            }
             return Ok(());
         }
         if self.handle_home_key(&event) {
@@ -564,9 +712,11 @@ impl App {
             Mode::Debate => {
                 match event.code {
                     KeyCode::Esc => self.close_popup(),
-                    KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?
-                    }
+                    KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => self
+                        .send_composer_action(
+                        backend,
+                        crate::shared_ui::composer::ComposerAction::Interrupt,
+                    )?,
                     KeyCode::Enter
                         if !self.state.is_streaming
                             && self.debate_field == 0
@@ -647,7 +797,10 @@ impl App {
 
     pub fn command_suggestions(&self) -> Vec<(String, String)> {
         crate::shared_ui::composer::suggestions(&self.input, &self.state)
-            .into_iter().take(6).map(|item| (item.command, item.description)).collect()
+            .into_iter()
+            .take(6)
+            .map(|item| (item.command, item.description))
+            .collect()
     }
 
     #[cfg(test)]
@@ -849,7 +1002,10 @@ impl App {
             sidebar::SidebarKey::Ignored => {}
             sidebar::SidebarKey::Handled => return Ok(()),
             sidebar::SidebarKey::NewSession => {
-                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
+                self.send_composer_action(
+                    backend,
+                    crate::shared_ui::composer::ComposerAction::NewSession,
+                )?;
                 self.home_override = Some(false);
                 self.follow_tail = true;
                 return Ok(());
@@ -865,7 +1021,10 @@ impl App {
                         return Ok(());
                     }
                     if self.state.is_streaming {
-                        self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?;
+                        self.send_composer_action(
+                            backend,
+                            crate::shared_ui::composer::ComposerAction::Interrupt,
+                        )?;
                     } else {
                         self.quit = true;
                     }
@@ -876,7 +1035,10 @@ impl App {
                     return Ok(());
                 }
                 KeyCode::Char('n') => {
-                    self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
+                    self.send_composer_action(
+                        backend,
+                        crate::shared_ui::composer::ComposerAction::NewSession,
+                    )?;
                     self.home_override = Some(false);
                     self.follow_tail = true;
                     return Ok(());
@@ -960,8 +1122,10 @@ impl App {
             KeyCode::Down if !self.input_focused => self.scroll_down(3),
             KeyCode::Char('e') if !self.input_focused => {
                 let expanded = !self.application.conversation_state().expand_all;
-                self.apply_conversation_action(crate::shared_ui::conversation::ConversationAction::SetExpandAll(expanded));
-            },
+                self.apply_conversation_action(
+                    crate::shared_ui::conversation::ConversationAction::SetExpandAll(expanded),
+                );
+            }
             KeyCode::Char('g') if !self.input_focused => self.jump_to_transcript_start(),
             KeyCode::Char('G') if !self.input_focused => self.jump_to_transcript_end(),
             KeyCode::End if event.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -990,7 +1154,10 @@ impl App {
             }
             KeyCode::Enter => {
                 let editor = self.composer_editor_snapshot();
-                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Submit(editor))?;
+                self.send_composer_action(
+                    backend,
+                    crate::shared_ui::composer::ComposerAction::Submit(editor),
+                )?;
             }
             KeyCode::Backspace => self.backspace(),
             KeyCode::Delete => self.delete(),
@@ -1190,8 +1357,10 @@ impl App {
         event: KeyEvent,
         backend: &mut Backend,
     ) -> anyhow::Result<()> {
-        let options = self.toolbar_control("reasoning")
-            .map(|control| control.options).unwrap_or_default();
+        let options = self
+            .toolbar_control("reasoning")
+            .map(|control| control.options)
+            .unwrap_or_default();
         match event.code {
             KeyCode::Esc | KeyCode::F(4) => self.close_popup(),
             KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
@@ -1203,7 +1372,8 @@ impl App {
                     if self.send_toolbar_action(
                         backend,
                         crate::shared_ui::toolbar::ToolbarAction::Choose {
-                            id: "reasoning".into(), value: option.value.clone(),
+                            id: "reasoning".into(),
+                            value: option.value.clone(),
                         },
                     )? {
                         self.close_popup();
@@ -1216,21 +1386,29 @@ impl App {
     }
 
     fn handle_goal_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
-        let options = self.toolbar_control("goal")
-            .map(|control| control.options).unwrap_or_default();
+        let options = self
+            .toolbar_control("goal")
+            .map(|control| control.options)
+            .unwrap_or_default();
         match event.code {
             KeyCode::Esc => self.close_popup(),
             KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::Interrupt)?;
+                self.send_composer_action(
+                    backend,
+                    crate::shared_ui::composer::ComposerAction::Interrupt,
+                )?;
             }
             KeyCode::Up | KeyCode::Left => self.popup_index = self.popup_index.saturating_sub(1),
-            KeyCode::Down | KeyCode::Right => self.popup_index = cmp::min(self.popup_index + 1, options.len().saturating_sub(1)),
+            KeyCode::Down | KeyCode::Right => {
+                self.popup_index = cmp::min(self.popup_index + 1, options.len().saturating_sub(1))
+            }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 if let Some(option) = options.get(self.popup_index) {
                     self.send_toolbar_action(
                         backend,
                         crate::shared_ui::toolbar::ToolbarAction::Choose {
-                            id: "goal".into(), value: option.value.clone(),
+                            id: "goal".into(),
+                            value: option.value.clone(),
                         },
                     )?;
                 }
@@ -1339,7 +1517,10 @@ impl App {
                 self.popup_index = cmp::min(self.popup_index.saturating_add(8), count);
             }
             KeyCode::Char('n') if event.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
+                self.send_composer_action(
+                    backend,
+                    crate::shared_ui::composer::ComposerAction::NewSession,
+                )?;
                 self.home_override = Some(false);
                 self.close_popup();
                 self.activate_workbench_tab(WorkbenchTab::Session);
@@ -1347,7 +1528,10 @@ impl App {
             KeyCode::Enter => {
                 let items = self.filtered_session_picker_items();
                 if self.popup_index == items.len() {
-                    self.send_composer_action(backend, crate::shared_ui::composer::ComposerAction::NewSession)?;
+                    self.send_composer_action(
+                        backend,
+                        crate::shared_ui::composer::ComposerAction::NewSession,
+                    )?;
                     self.home_override = Some(false);
                     self.close_popup();
                     self.activate_workbench_tab(WorkbenchTab::Session);
@@ -1357,6 +1541,13 @@ impl App {
                     .get(self.popup_index)
                     .map(|item| item.session.id.clone());
                 if let Some(session_id) = id {
+                    if self.focus_session(&session_id) {
+                        self.close_popup();
+                        if let Some(command) = self.take_workbench_command() {
+                            self.send_ui_command(backend, command)?;
+                        }
+                        return Ok(());
+                    }
                     if !self.session_requires_load(&session_id) {
                         self.close_popup();
                         self.activate_workbench_tab(WorkbenchTab::Session);
@@ -1587,8 +1778,14 @@ impl App {
     fn clamp_popup_selection(&mut self) {
         let count = match self.mode {
             Mode::Models => self.filtered_models().len(),
-            Mode::Reasoning => self.toolbar_control("reasoning").map(|control| control.options.len()).unwrap_or(0),
-            Mode::Goal => self.toolbar_control("goal").map(|control| control.options.len()).unwrap_or(0),
+            Mode::Reasoning => self
+                .toolbar_control("reasoning")
+                .map(|control| control.options.len())
+                .unwrap_or(0),
+            Mode::Goal => self
+                .toolbar_control("goal")
+                .map(|control| control.options.len())
+                .unwrap_or(0),
             Mode::AgentGroup => agent_group::AGENT_GROUP_ROWS.len(),
             Mode::Sessions => self.filtered_session_picker_items().len() + 1,
             Mode::Capabilities => self.filtered_capabilities().len(),

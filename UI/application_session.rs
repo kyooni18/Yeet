@@ -743,6 +743,8 @@ impl ApplicationSession {
                 .as_ref()
                 .is_none_or(|files| !files.contains(&id)),
             WorkbenchTab::CloseDiff(id) => !resources.diffs.contains(&id),
+            WorkbenchTab::Conversation(id) => resources.active_session == Some(id),
+            WorkbenchTab::CloseConversation(id) => !resources.sessions.contains(&id),
             _ => true,
         };
         if !accepted {
@@ -761,6 +763,8 @@ impl ApplicationSession {
                     tab,
                     WorkbenchTab::Home
                         | WorkbenchTab::Session
+                        | WorkbenchTab::Conversation(_)
+                        | WorkbenchTab::NewConversation
                         | WorkbenchTab::Files
                         | WorkbenchTab::File(_)
                         | WorkbenchTab::Diff(_)

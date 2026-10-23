@@ -880,7 +880,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
             "/settings  runtime",
             "Ctrl+O  view launcher",
             "/login  auth",
-            "Ctrl+Tab  switch tabs",
+            "Alt+, / Alt+.  tabs · Ctrl+T new",
         ];
         let mut lines =
             vec![Line::from(help_columns("EDIT / SEND", "NAV / COMMANDS", width)).bold()];
@@ -947,6 +947,117 @@ pub(super) fn draw_permission(frame: &mut Frame<'_>, app: &App) {
         &permission.title,
         permission_action_line(permission, &projection.view.primary_control),
     );
+}
+
+pub(super) fn draw_question(frame: &mut Frame<'_>, app: &App) {
+    let projection = app.application.composer_projection();
+    let Some(question) = projection.view.question.as_ref() else {
+        return;
+    };
+    let mut prompt = app.question.clone();
+    if prompt.id != question.id {
+        prompt = Default::default();
+    }
+    let rows = question.options.len() + usize::from(question.allow_custom);
+    let cursor = prompt.cursor.min(rows.saturating_sub(1));
+    let mut lines = vec![
+        Line::from(question.question.clone()).bold(),
+        Line::default(),
+    ];
+    for (index, option) in question.options.iter().enumerate() {
+        let selected = index == cursor;
+        let marker = if selected { "›" } else { " " };
+        let style = if selected {
+            Style::default().fg(theme::accent()).bold()
+        } else {
+            Style::default().fg(theme::text())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {}. ", index + 1), style),
+            Span::styled(option.clone(), style),
+        ]));
+    }
+    if question.allow_custom {
+        let selected = cursor == question.options.len();
+        let marker = if selected { "›" } else { " " };
+        let line = if prompt.custom.is_empty() {
+            Line::from(vec![
+                Span::styled(
+                    format!("{marker} ✎ "),
+                    Style::default().fg(if selected {
+                        theme::accent()
+                    } else {
+                        theme::muted()
+                    }),
+                ),
+                Span::styled("Type your own answer…", Style::default().fg(theme::muted())),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(format!("{marker} ✎ "), Style::default().fg(theme::accent())),
+                Span::styled(prompt.custom.clone(), Style::default().fg(theme::text())),
+                Span::styled(
+                    if selected { "▏" } else { "" },
+                    Style::default().fg(theme::accent()),
+                ),
+            ])
+        };
+        lines.push(line);
+    }
+    let mut hints = vec![Span::styled(
+        "↑/↓ select · Enter answer",
+        Style::default().fg(theme::accent()),
+    )];
+    if !question.options.is_empty() {
+        hints.push(Span::styled(
+            format!(" · 1-{} pick", question.options.len()),
+            Style::default().fg(theme::accent()),
+        ));
+    }
+    if question.allow_custom {
+        hints.push(Span::styled(
+            " · type to answer",
+            Style::default().fg(theme::accent()),
+        ));
+    }
+    hints.push(Span::styled(
+        " · Esc dismiss",
+        Style::default().fg(theme::muted()),
+    ));
+    if matches!(
+        projection.view.primary_control.action,
+        crate::shared_ui::composer::ComposerAction::Interrupt
+    ) {
+        hints.push(Span::styled(
+            " · Ctrl+C stop",
+            Style::default().fg(theme::accent_hot()),
+        ));
+    }
+    draw_question_panel(frame, Text::from(lines), Line::from(hints));
+}
+
+fn draw_question_panel(frame: &mut Frame<'_>, text: Text<'_>, actions: Line<'static>) {
+    let mut area = centered_rect(82, 90, frame.area());
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let content_height = paragraph.line_count(area.width.saturating_sub(4).max(1));
+    let actions = Paragraph::new(actions).wrap(Wrap { trim: false });
+    let action_height = actions.line_count(area.width.saturating_sub(4).max(1)) as u16;
+    let height = (content_height.saturating_add(action_height as usize + 3))
+        .min(area.height as usize) as u16;
+    area.y += area.height.saturating_sub(height) / 2;
+    area.height = height;
+    theme::modal_backdrop(frame, area);
+    let block = theme::modal_block_with_accent(" Question from agent ", theme::accent());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(action_height),
+    ])
+    .split(inner);
+    frame.render_widget(paragraph, rows[0]);
+    frame.render_widget(actions, rows[2]);
 }
 
 fn draw_permission_panel(

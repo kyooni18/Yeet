@@ -310,6 +310,10 @@ impl App {
     pub fn open_resource(&mut self, target: ResourceTarget) {
         match target {
             ResourceTarget::Session(id) => {
+                if self.focus_session(&id) {
+                    self.follow_tail = true;
+                    return;
+                }
                 self.activate_workbench_tab(WorkbenchTab::Session);
                 if self.state.current_session_id.as_ref() != Some(&id) {
                     self.workbench_command = Some(FrontendCommand::LoadSession { session_id: id });

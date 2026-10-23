@@ -302,13 +302,22 @@ Required operations:
 - switch by searchable View Switcher
 - restore local state when revisiting a tab
 
-Likely bindings, subject to final keymap:
+Implemented bindings (terminal-safe; avoid OS/terminal-reserved chords such as
+Ctrl+PageUp/PageDown, Cmd+T/W, Ctrl+Shift+T, Super combos, and Alt+Left/Right
+which the composer uses for word motion):
 
-- Ctrl+W: close current tab
-- Ctrl+Tab: next / MRU tab
-- Ctrl+Shift+Tab: previous / MRU tab
-- View Switcher shortcut: TBD
-- Cmd/Ctrl+P: Command Palette, not View Switcher
+- Alt+. / Alt+, : next / previous tab (macOS Option glyphs ≥ / ≤ also work)
+- Alt+> / Alt+< : move active tab right / left (macOS ˘ / ¯); mouse drag on the strip reorders
+- Alt+1..8 / Ctrl+1..8: jump to tab N; Alt+9: last tab
+- Ctrl+T: new session tab (fresh session); Ctrl+O: view launcher ("New tab" entry too)
+- Ctrl+W: close current tab, except while typing a non-empty draft (then delete word)
+- Ctrl+Tab / Ctrl+Shift+Tab: still honored when the terminal delivers them
+
+Session tabs: several conversation tabs (`WorkbenchTab::Conversation(id)`) can be
+open; each remembers its session id. Activating one sends LoadSession/NewSession;
+the active tab adopts the runtime's current session once it changes. Picking a
+session already open in a tab focuses that tab. Home is pinned first; user tab
+order lives in `WorkbenchResources::order`.
 
 ### Tab overflow
 

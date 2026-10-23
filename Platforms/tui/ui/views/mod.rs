@@ -29,7 +29,8 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = floating.area(bounds);
     theme::modal_backdrop(frame, area);
     let launcher = crate::shared_ui::workbench::Tab::new(
-        crate::shared_ui::workbench::WorkbenchTab::Launcher, String::new(),
+        crate::shared_ui::workbench::WorkbenchTab::Launcher,
+        String::new(),
     );
     let block = theme::modal_block(&launcher.label);
     let inner = block.inner(area);
@@ -59,7 +60,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &mut App) {
     }
     if inner.height >= 5 {
         frame.render_widget(
-            Paragraph::new(" Ctrl+O views · Ctrl+Tab switch · × close")
+            Paragraph::new(" Ctrl+T new · Alt+,/. switch · Alt+</> move · × close")
                 .style(Style::default().fg(theme::muted())),
             Rect::new(inner.x, inner.bottom() - 2, inner.width, 1),
         );

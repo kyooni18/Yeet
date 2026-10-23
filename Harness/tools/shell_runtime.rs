@@ -164,14 +164,13 @@ impl ToolRegistry {
             unrestricted,
             cache_safe_inspection,
         )?;
-        Ok(match cwd_note {
-            Some(note) => {
-                let mut value: Value = serde_json::from_str(&result)?;
-                value["shellCwd"] = json!(note);
-                value.to_string()
-            }
-            None => result,
-        })
+        let mut value: Value = serde_json::from_str(&result)?;
+        value["workingDirectory"] = json!(effective_working_directory);
+        value["shellCwd"] = json!(shell_cwd);
+        if let Some(note) = cwd_note {
+            value["cwdNote"] = json!(note);
+        }
+        Ok(value.to_string())
     }
 
     /// Records where the command left the shell. Only directories inside the

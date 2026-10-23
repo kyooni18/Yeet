@@ -1,5 +1,6 @@
 //! Navigation shared by the workbench launcher, tabs, keyboard and mouse.
 use super::{App, Mode};
+use crate::model::FrontendCommand;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub use crate::shared_ui::workbench::WorkbenchTab;
@@ -65,6 +66,118 @@ impl App {
             active_file: self.files.as_ref().and_then(|files| files.active_tab()),
             diffs: self.diff_tabs.views().iter().map(|view| view.id).collect(),
             active_diff: self.diff_tabs.active_id(),
+            sessions: self
+                .session_tabs
+                .views()
+                .iter()
+                .map(|view| view.id)
+                .collect(),
+            active_session: self.session_tabs.active_id(),
+            order: self.tab_order.clone(),
+        }
+    }
+
+    /// The active conversation tab follows the runtime's current session,
+    /// except while a tab switch is still waiting for its session to load.
+    pub(crate) fn sync_session_tab(&mut self, previous: Option<String>) {
+        let current = self.state.current_session_id.clone();
+        if let Some(from) = &self.session_switch_from {
+            if *from == current {
+                return;
+            }
+            self.session_switch_from = None;
+        }
+        if self.session_tabs.is_empty() {
+            // Closing the last tab leaves the implicit session tab until the
+            // runtime moves to another session.
+            if current.is_none() || previous == current {
+                return;
+            }
+            self.session_tabs.open("", current);
+            return;
+        }
+        if let Some(tab) = self.session_tabs.active_mut() {
+            tab.state = current;
+        }
+    }
+
+    fn ensure_session_tab(&mut self) {
+        if self.session_tabs.is_empty() {
+            let current = self.state.current_session_id.clone();
+            self.session_tabs.open("", current);
+        }
+    }
+
+    /// Activate a conversation tab, loading its session into the runtime.
+    fn switch_session_tab(&mut self, id: crate::tui::kit::SurfaceId) -> bool {
+        if !self.session_tabs.activate(id) {
+            return false;
+        }
+        let target = self.session_tabs.active().and_then(|tab| tab.state.clone());
+        let current = self.state.current_session_id.clone();
+        if target != current {
+            self.workbench_command = Some(match target {
+                Some(session_id) => FrontendCommand::LoadSession { session_id },
+                None => FrontendCommand::NewSession,
+            });
+            self.session_switch_from = Some(current);
+            self.follow_tail = true;
+        }
+        true
+    }
+
+    /// Show `session_id`: focus a tab already showing it, otherwise load it
+    /// into the active conversation tab.
+    pub(crate) fn focus_session(&mut self, session_id: &str) -> bool {
+        let existing = self
+            .session_tabs
+            .views()
+            .iter()
+            .find(|tab| tab.state.as_deref() == Some(session_id))
+            .map(|tab| tab.id);
+        match existing {
+            Some(id) => {
+                self.activate_workbench_tab(WorkbenchTab::Conversation(id));
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn draggable_tab(tab: WorkbenchTab) -> bool {
+        !matches!(
+            tab,
+            WorkbenchTab::Home
+                | WorkbenchTab::Launcher
+                | WorkbenchTab::NewConversation
+                | WorkbenchTab::NewDiff
+                | WorkbenchTab::CloseFile(_)
+                | WorkbenchTab::CloseDiff(_)
+                | WorkbenchTab::CloseConversation(_)
+        )
+    }
+
+    fn move_tab(&mut self, tab: WorkbenchTab, delta: isize) {
+        self.tab_order = self.workbench_resources().moved(tab, delta);
+        self.tab_targets.clear();
+    }
+
+    pub(crate) fn drop_tab(&mut self, tab: WorkbenchTab, target: WorkbenchTab) {
+        if tab != target {
+            self.tab_order = self.workbench_resources().dropped(tab, target);
+            self.tab_targets.clear();
+        }
+    }
+
+    fn close_active_tab(&mut self) {
+        match self.active_workbench_tab() {
+            WorkbenchTab::File(id) => self.activate_workbench_tab(WorkbenchTab::CloseFile(id)),
+            WorkbenchTab::Diff(id) => self.activate_workbench_tab(WorkbenchTab::CloseDiff(id)),
+            WorkbenchTab::Conversation(id) => {
+                self.activate_workbench_tab(WorkbenchTab::CloseConversation(id))
+            }
+            WorkbenchTab::Agents => self.close_agents(),
+            _ => self.activate_workbench_tab(WorkbenchTab::Home),
         }
     }
     pub(crate) fn report_navigation(&mut self, tab: WorkbenchTab) {
@@ -127,6 +240,42 @@ impl App {
 
     pub(crate) fn apply_navigation(&mut self, tab: WorkbenchTab) {
         match tab {
+            WorkbenchTab::Conversation(id) => {
+                if self.switch_session_tab(id) {
+                    self.report_navigation(tab);
+                    self.sidebar_focus = false;
+                    self.clear_transcript_selection();
+                }
+            }
+            WorkbenchTab::NewConversation => {
+                self.ensure_session_tab();
+                let id = self.session_tabs.open("", None);
+                self.switch_session_tab(id);
+                self.report_navigation(WorkbenchTab::Conversation(id));
+                self.sidebar_focus = false;
+                self.input_focused = true;
+                self.clear_transcript_selection();
+            }
+            WorkbenchTab::CloseConversation(id) => {
+                let displayed = self.active_workbench_tab() == WorkbenchTab::Conversation(id);
+                if self.session_tabs.close(id).is_some() {
+                    self.tab_order
+                        .retain(|tab| *tab != WorkbenchTab::Conversation(id));
+                    self.report_navigation(tab);
+                    match self.session_tabs.active_id() {
+                        Some(next) if displayed => {
+                            return self.apply_navigation(WorkbenchTab::Conversation(next));
+                        }
+                        Some(next) => {
+                            self.switch_session_tab(next);
+                        }
+                        None if displayed => {
+                            return self.apply_navigation(WorkbenchTab::Home);
+                        }
+                        None => {}
+                    }
+                }
+            }
             WorkbenchTab::Home | WorkbenchTab::Session => {
                 self.report_navigation(tab);
                 self.sidebar_focus = false;
@@ -176,6 +325,14 @@ impl App {
         self.view_targets.clear();
     }
 
+    fn cycle_workbench_tab(&mut self, backwards: bool) {
+        let target = self
+            .application
+            .navigation()
+            .cycle_tab(&self.workbench_resources(), backwards);
+        self.activate_workbench_tab(target);
+    }
+
     pub(crate) fn handle_workbench_key(&mut self, event: &KeyEvent) -> bool {
         if !matches!(
             self.mode,
@@ -183,36 +340,54 @@ impl App {
         ) {
             return false;
         }
-        if !event.modifiers.contains(KeyModifiers::CONTROL) {
-            return false;
-        }
+        // Terminal-safe bindings: Alt+, / Alt+. (macOS Option glyphs ≤ ≥)
+        // cycle tabs, Alt+< / Alt+> (˘ ¯) move them, Alt+1..9 jump, Ctrl+T
+        // opens a session tab. None of these are reserved by Windows, Linux
+        // desktops or macOS; Ctrl+Tab still works where the terminal sends it.
+        let control = event.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = event.modifiers.contains(KeyModifiers::ALT);
+        let active = self.active_workbench_tab();
         match event.code {
-            KeyCode::Char('o') => self.open_views(),
-            KeyCode::Tab | KeyCode::BackTab => {
-                let back =
-                    event.code == KeyCode::BackTab || event.modifiers.contains(KeyModifiers::SHIFT);
-                let target = self
-                    .application
-                    .navigation()
-                    .cycle_tab(&self.workbench_resources(), back);
-                self.activate_workbench_tab(target);
+            KeyCode::Char('.' | '≥') if alt || event.code == KeyCode::Char('≥') => {
+                self.cycle_workbench_tab(false)
             }
-            KeyCode::Char('w') => match self.active_workbench_tab() {
-                WorkbenchTab::File(index) => {
-                    self.activate_workbench_tab(WorkbenchTab::CloseFile(index))
-                }
-                WorkbenchTab::Diff(i) => self.activate_workbench_tab(WorkbenchTab::CloseDiff(i)),
-                WorkbenchTab::Agents => self.close_agents(),
-                _ => self.activate_workbench_tab(WorkbenchTab::Home),
-            },
-            KeyCode::Char(c @ '1'..='9') => {
-                if let Some(tab) = self
-                    .workbench_tabs()
-                    .get((c as u8 - b'1') as usize)
-                    .copied()
-                {
+            KeyCode::Char(',' | '≤') if alt || event.code == KeyCode::Char('≤') => {
+                self.cycle_workbench_tab(true)
+            }
+            KeyCode::Char('>' | '˘') if alt || event.code == KeyCode::Char('˘') => {
+                self.move_tab(active, 1)
+            }
+            KeyCode::Char('<' | '¯') if alt || event.code == KeyCode::Char('¯') => {
+                self.move_tab(active, -1)
+            }
+            KeyCode::Char(c @ '1'..='9') if alt || control => {
+                let tabs = self.workbench_tabs();
+                let tab = if c == '9' {
+                    tabs.last().copied()
+                } else {
+                    tabs.get((c as u8 - b'1') as usize).copied()
+                };
+                if let Some(tab) = tab {
                     self.activate_workbench_tab(tab);
                 }
+            }
+            KeyCode::Char('t') if control => {
+                self.activate_workbench_tab(WorkbenchTab::NewConversation)
+            }
+            KeyCode::Char('o') if control => self.open_views(),
+            KeyCode::Tab | KeyCode::BackTab if control => {
+                let back =
+                    event.code == KeyCode::BackTab || event.modifiers.contains(KeyModifiers::SHIFT);
+                self.cycle_workbench_tab(back);
+            }
+            // Ctrl+W keeps deleting words while a draft is being typed.
+            KeyCode::Char('w')
+                if control
+                    && !(self.mode == Mode::Chat
+                        && self.input_focused
+                        && !self.input.is_empty()) =>
+            {
+                self.close_active_tab()
             }
             _ => return false,
         }
@@ -224,7 +399,71 @@ impl App {
 mod tests {
     use super::*;
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn session_tabs_switch_sessions_and_reorder_with_terminal_safe_keys() {
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+        let mut app = App::default();
+        let mut next = app.state.clone();
+        next.current_session_id = Some("a".into());
+        app.merge_state(next);
+        assert_eq!(app.session_tabs.len(), 1);
+        assert!(app.handle_workbench_key(&key(KeyCode::Char('t'), KeyModifiers::CONTROL)));
+        assert!(matches!(
+            app.take_workbench_command(),
+            Some(FrontendCommand::NewSession)
+        ));
+        let second = app.session_tabs.active_id().unwrap();
+        // The runtime still reports the old session; the new tab must not adopt it.
+        app.merge_state(app.state.clone());
+        let mut next = app.state.clone();
+        next.current_session_id = Some("b".into());
+        app.merge_state(next);
+        assert_eq!(
+            app.session_tabs.get(second).unwrap().state.as_deref(),
+            Some("b")
+        );
+        let first = app.session_tabs.views()[0].id;
+        // Alt+, goes back to the first session tab and loads its session.
+        assert!(app.handle_workbench_key(&key(KeyCode::Char(','), KeyModifiers::ALT)));
+        assert_eq!(
+            app.active_workbench_tab(),
+            WorkbenchTab::Conversation(first)
+        );
+        assert!(matches!(app.take_workbench_command(),
+            Some(FrontendCommand::LoadSession { session_id }) if session_id == "a"));
+        // macOS Option+Shift+. glyph moves the tab right.
+        assert!(app.handle_workbench_key(&key(KeyCode::Char('˘'), KeyModifiers::NONE)));
+        assert_eq!(
+            app.workbench_tabs()[..3],
+            [
+                WorkbenchTab::Home,
+                WorkbenchTab::Conversation(second),
+                WorkbenchTab::Conversation(first)
+            ]
+        );
+        app.drop_tab(
+            WorkbenchTab::Conversation(first),
+            WorkbenchTab::Conversation(second),
+        );
+        assert_eq!(app.workbench_tabs()[1], WorkbenchTab::Conversation(first));
+        // Ctrl+W edits a draft instead of closing; closing loads the neighbor.
+        app.input_focused = true;
+        app.input = "draft".into();
+        assert!(!app.handle_workbench_key(&key(KeyCode::Char('w'), KeyModifiers::CONTROL)));
+        app.input.clear();
+        let mut next = app.state.clone();
+        next.current_session_id = Some("a".into());
+        app.merge_state(next);
+        assert!(app.handle_workbench_key(&key(KeyCode::Char('w'), KeyModifiers::CONTROL)));
+        assert_eq!(
+            app.active_workbench_tab(),
+            WorkbenchTab::Conversation(second)
+        );
+        assert!(matches!(app.take_workbench_command(),
+            Some(FrontendCommand::LoadSession { session_id }) if session_id == "b"));
+    }
 
     #[test]
     fn native_choice_selection_tracks_shared_runtime_options() {
@@ -376,7 +615,9 @@ mod tests {
                 .any(|(_, tab)| *tab == WorkbenchTab::File(second_id)),
             "active tab must survive overflow"
         );
-        assert!(app.handle_workbench_key(&KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)));
+        assert!(
+            app.handle_workbench_key(&KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))
+        );
         assert_eq!(app.files.as_ref().unwrap().tabs.views()[0].id, first_id);
         assert_eq!(app.files.as_ref().unwrap().selected_path(), Some(first));
     }

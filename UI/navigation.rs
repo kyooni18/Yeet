@@ -63,10 +63,26 @@ pub struct WorkbenchResources {
     pub active_file: Option<SurfaceId>,
     pub diffs: Vec<SurfaceId>,
     pub active_diff: Option<SurfaceId>,
+    /// Open conversation instances. Empty means the single implicit session tab.
+    pub sessions: Vec<SurfaceId>,
+    pub active_session: Option<SurfaceId>,
+    /// User-arranged order (drag/move). Unlisted tabs keep their natural order
+    /// after the listed ones; Home always stays first.
+    pub order: Vec<WorkbenchTab>,
 }
 impl WorkbenchResources {
     pub fn tabs(&self) -> Vec<WorkbenchTab> {
-        let mut tabs = vec![WorkbenchTab::Home, WorkbenchTab::Session];
+        let mut tabs = vec![WorkbenchTab::Home];
+        if self.sessions.is_empty() {
+            tabs.push(WorkbenchTab::Session);
+        } else {
+            tabs.extend(
+                self.sessions
+                    .iter()
+                    .copied()
+                    .map(WorkbenchTab::Conversation),
+            );
+        }
         if self.agents {
             tabs.push(WorkbenchTab::Agents);
         }
@@ -75,7 +91,39 @@ impl WorkbenchResources {
             tabs.extend(files.iter().copied().map(WorkbenchTab::File));
         }
         tabs.extend(self.diffs.iter().copied().map(WorkbenchTab::Diff));
+        let rank = |tab: &WorkbenchTab| match tab {
+            WorkbenchTab::Home => (0, 0),
+            tab => self
+                .order
+                .iter()
+                .position(|ordered| ordered == tab)
+                .map_or((2, 0), |index| (1, index)),
+        };
+        // Stable sort keeps natural order among unranked tabs.
+        tabs.sort_by_key(rank);
         tabs
+    }
+    /// Order after moving `tab` by `delta` positions; Home stays pinned.
+    pub fn moved(&self, tab: WorkbenchTab, delta: isize) -> Vec<WorkbenchTab> {
+        let mut tabs = self.tabs();
+        if let Some(from) = tabs.iter().position(|t| *t == tab).filter(|i| *i > 0) {
+            let to = from.saturating_add_signed(delta).clamp(1, tabs.len() - 1);
+            let tab = tabs.remove(from);
+            tabs.insert(to, tab);
+        }
+        tabs.retain(|tab| *tab != WorkbenchTab::Home);
+        tabs
+    }
+    /// Order after dropping `tab` onto the position currently held by `target`.
+    pub fn dropped(&self, tab: WorkbenchTab, target: WorkbenchTab) -> Vec<WorkbenchTab> {
+        let tabs = self.tabs();
+        match (
+            tabs.iter().position(|t| *t == tab),
+            tabs.iter().position(|t| *t == target),
+        ) {
+            (Some(from), Some(to)) => self.moved(tab, to as isize - from as isize),
+            _ => self.moved(tab, 0),
+        }
     }
 }
 impl NavigationState {
@@ -116,14 +164,19 @@ impl NavigationState {
                 .active_file
                 .map_or(WorkbenchTab::Files, WorkbenchTab::File),
             Screen::Chat if self.home_visible() => WorkbenchTab::Home,
-            Screen::Chat => WorkbenchTab::Session,
+            Screen::Chat => resources
+                .active_session
+                .map_or(WorkbenchTab::Session, WorkbenchTab::Conversation),
             _ => unreachable!("primary mode is a workbench view"),
         }
     }
     /// Apply only after the adapter has accepted any associated resource operation.
     pub fn activated(&mut self, tab: WorkbenchTab) {
         match tab {
-            WorkbenchTab::Home | WorkbenchTab::Session => {
+            WorkbenchTab::Home
+            | WorkbenchTab::Session
+            | WorkbenchTab::Conversation(_)
+            | WorkbenchTab::NewConversation => {
                 self.home_override = Some(tab == WorkbenchTab::Home);
                 self.set_mode(Screen::Chat);
             }
@@ -131,7 +184,9 @@ impl NavigationState {
             WorkbenchTab::Diff(_) | WorkbenchTab::NewDiff => self.set_mode(Screen::Diff),
             WorkbenchTab::Agents => self.set_mode(Screen::Agents),
             WorkbenchTab::Launcher => self.open_launcher(),
-            WorkbenchTab::CloseFile(_) | WorkbenchTab::CloseDiff(_) => {}
+            WorkbenchTab::CloseFile(_)
+            | WorkbenchTab::CloseDiff(_)
+            | WorkbenchTab::CloseConversation(_) => {}
         }
     }
     pub fn diff_closed(&mut self, remaining: usize) {
@@ -192,6 +247,7 @@ mod tests {
             active_file: None,
             diffs: vec![id],
             active_diff: Some(id),
+            ..Default::default()
         };
         for tab in [
             WorkbenchTab::Home,
@@ -238,6 +294,7 @@ mod tests {
             diffs: vec![first, second],
             active_diff: Some(second),
             agents: true,
+            ..Default::default()
         };
         let mut state = NavigationState::default();
         state.activated(WorkbenchTab::Diff(second));

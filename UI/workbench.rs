@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 pub enum WorkbenchTab {
     Home,
     Session,
+    /// One concrete conversation instance; several may be open at once.
+    Conversation(SurfaceId),
+    CloseConversation(SurfaceId),
+    /// Open another conversation tab backed by a fresh session.
+    NewConversation,
     Files,
     File(SurfaceId),
     CloseFile(SurfaceId),
@@ -44,6 +49,12 @@ impl Tab {
         let (label, icon, close) = match action {
             WorkbenchTab::Home => ("Home".into(), Icon::Home, None),
             WorkbenchTab::Session => (resource_label, Icon::Conversation, None),
+            WorkbenchTab::Conversation(id) => (
+                resource_label,
+                Icon::Conversation,
+                Some(WorkbenchTab::CloseConversation(id)),
+            ),
+            WorkbenchTab::NewConversation => ("New session".into(), Icon::Conversation, None),
             WorkbenchTab::Files => ("Files".into(), Icon::Folder, None),
             WorkbenchTab::Agents => ("Agents".into(), Icon::Agents, None),
             WorkbenchTab::File(id) => (
@@ -58,9 +69,9 @@ impl Tab {
             ),
             WorkbenchTab::NewDiff => ("Diff".into(), Icon::Changes, None),
             WorkbenchTab::Launcher => ("Open a view".into(), Icon::Add, None),
-            WorkbenchTab::CloseFile(_) | WorkbenchTab::CloseDiff(_) => {
-                (resource_label, Icon::File, None)
-            }
+            WorkbenchTab::CloseFile(_)
+            | WorkbenchTab::CloseDiff(_)
+            | WorkbenchTab::CloseConversation(_) => (resource_label, Icon::File, None),
         };
         Self {
             action,
@@ -134,6 +145,12 @@ pub const LAUNCHER: &[LauncherItem] = &[
         label: "Agents",
         description: "Delegated agent group",
         icon: Icon::Agents,
+    },
+    LauncherItem {
+        action: WorkbenchTab::NewConversation,
+        label: "New tab",
+        description: "Another session tab",
+        icon: Icon::Conversation,
     },
 ];
 
