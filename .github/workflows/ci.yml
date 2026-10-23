@@ -102,6 +102,7 @@ jobs:
           node-version: lts/*
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-mun
       - run: npm --prefix web ci
       - run: npm --prefix RuntimeSource ci
       - run: npm --prefix RuntimeSource run build
@@ -152,6 +153,7 @@ jobs:
           node-version: lts/*
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-mun
       - run: npm --prefix web ci
       - run: npm --prefix RuntimeSource ci
       - run: npm --prefix RuntimeSource run build

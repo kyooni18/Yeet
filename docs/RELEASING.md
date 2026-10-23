@@ -4,6 +4,8 @@ Release tags use `v<version>`. The version must match `Cargo.toml`, `RuntimeSour
 
 ## Prepare
 
+The compatibility WebUI requires a built Mün workspace. Set `MUN_PATH` to its absolute path (for example, `MUN_PATH=/Users/kyooni18/Code/misutgaru/packages/modules/Mun`). CI builds the compatible revision pinned in `.github/actions/setup-mun/action.yml` and exports `MUN_PATH` automatically. Export this variable in your shell before running the WebUI build or packaging scripts.
+
 1. Update the three package versions and `CHANGELOG.md`.
 2. Commit the intended release with a clean working tree.
 3. Run:

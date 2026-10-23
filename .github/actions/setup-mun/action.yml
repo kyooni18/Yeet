@@ -1,0 +1,19 @@
+name: Set up Mün
+description: Build the pinned Mün workspace required by the compatibility WebUI.
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: kyooni18/Mun
+        ref: f707ec5e4cfd0f3f8360cca8c78507b5cbd17c52
+        path: .release-deps/mun
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 11.22.0
+    - shell: bash
+      working-directory: .release-deps/mun
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm --filter '@mun/vite...' --filter '@mun/web...' run build
+        echo "MUN_PATH=$(pwd -W 2>/dev/null || pwd)" >> "$GITHUB_ENV"
