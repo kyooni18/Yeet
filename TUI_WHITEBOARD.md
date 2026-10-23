@@ -11,6 +11,12 @@ Project memory, when enabled, uses an external Foundation MCP server only.
 
 The bottom composer remains the direct way to ask or command Yeet.
 
+Terminal repaint hygiene: scrolling, switching resource tabs or sessions, and
+opening/closing floating panels invalidate the physical terminal as well as the
+Ratatui diff buffer. Native frames use synchronized updates so a clear and its
+replacement frame appear together on supporting terminals. Ordinary typing,
+streaming, and idle frames remain incremental when the viewport is unchanged.
+
 Session picker activity is daemon-owned: show `running` or `permission` for any
 live session, including detached sessions, independently of the current-session
 marker. Idle sessions retain their age. Activity is ephemeral, not saved to disk.

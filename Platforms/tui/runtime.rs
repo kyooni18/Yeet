@@ -15,8 +15,8 @@ use crossterm::{
     },
     execute,
     terminal::{
-        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-        enable_raw_mode,
+        BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
+        LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     },
 };
 
@@ -46,7 +46,7 @@ pub fn run_remote(options: RemoteOptions) -> Result<()> {
     let mut height = options.rows;
     let mut terminal = Terminal::new(TestBackend::new(width, height))
         .context("failed to initialize remote terminal")?;
-    let mut rendered_session = None;
+    let mut rendered_scene = None;
 
     loop {
         if control.should_stop() {
@@ -87,7 +87,7 @@ pub fn run_remote(options: RemoteOptions) -> Result<()> {
             }
         }
 
-        draw_tui_frame(&mut terminal, &mut app, &mut rendered_session)?;
+        draw_tui_frame(&mut terminal, &mut app, &mut rendered_scene)?;
         remote.publish(terminal.backend().buffer());
         if app.quit {
             return Ok(());
@@ -171,9 +171,9 @@ fn event_loop(
     backend: &mut Backend,
 ) -> Result<()> {
     let terminal_events = spawn_terminal_event_reader();
-    let mut rendered_session = None;
+    let mut rendered_scene = None;
     // A first frame establishes hit targets before mouse events arrive.
-    draw_tui_frame(terminal, app, &mut rendered_session)?;
+    draw_native_frame(terminal, app, &mut rendered_scene)?;
     let mut last_frame = Instant::now();
     let mut input_changed = false;
     let mut backend_changed = false;
@@ -258,7 +258,7 @@ fn event_loop(
             input_changed,
             backend_changed,
         ) {
-            draw_tui_frame(terminal, app, &mut rendered_session)?;
+            draw_native_frame(terminal, app, &mut rendered_scene)?;
             last_frame = Instant::now();
             input_changed = false;
             backend_changed = false;
@@ -281,21 +281,73 @@ fn event_loop(
     }
 }
 
-// A session boundary needs a physical clear as well as a new frame. Resetting
-// Ratatui's back buffer makes unchanged cells repaint too, removing terminal
-// artifacts that an ordinary incremental draw cannot detect.
+// Ratatui's diff only repairs cells it believes changed. Repaint viewport
+// boundaries physically as well, so terminal-side stale cells (including wide
+// glyph remnants) cannot survive scrolling, tab changes, or closing overlays.
+// Keep ordinary typing, streaming and idle frames incremental.
+#[derive(Debug, PartialEq, Eq)]
+struct RenderedScene {
+    session: Option<String>,
+    tab: crate::shared_ui::workbench::WorkbenchTab,
+    view: crate::shared_ui::application::ApplicationView,
+    scroll: (u16, usize, usize, usize),
+    popup_index: usize,
+    file_cursor: Option<usize>,
+    diff_position: Option<(usize, usize)>,
+}
+
+impl RenderedScene {
+    fn capture(app: &App) -> Self {
+        Self {
+            session: app.state.current_session_id.clone(),
+            tab: app.active_workbench_tab(),
+            view: app.application.application_view(),
+            scroll: (
+                app.scroll_y,
+                app.home_scroll,
+                app.composer_scroll,
+                app.agents.scroll,
+            ),
+            popup_index: app.popup_index,
+            file_cursor: app.files.as_ref().map(|files| files.cursor),
+            diff_position: app
+                .diff_tabs
+                .active()
+                .map(|tab| (tab.state.selected, tab.state.scroll)),
+        }
+    }
+}
+
+fn draw_native_frame(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    rendered_scene: &mut Option<RenderedScene>,
+) -> Result<()> {
+    // Present the clear and complete repaint together on supporting terminals,
+    // rather than exposing a blank or partially updated frame during scrolling.
+    execute!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+    let result = draw_tui_frame(terminal, app, rendered_scene);
+    // Always release synchronized mode, even if drawing failed.
+    let end = execute!(terminal.backend_mut(), EndSynchronizedUpdate);
+    result?;
+    end.context("failed to finish terminal frame")?;
+    Ok(())
+}
+
 fn draw_tui_frame<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    rendered_session: &mut Option<String>,
+    rendered_scene: &mut Option<RenderedScene>,
 ) -> Result<()> {
-    if *rendered_session != app.state.current_session_id {
+    if rendered_scene.as_ref() != Some(&RenderedScene::capture(app)) {
         terminal.clear().context("failed to refresh terminal")?;
     }
     terminal
         .draw(|frame| ui::draw(frame, app))
         .context("failed to draw terminal")?;
-    rendered_session.clone_from(&app.state.current_session_id);
+    // Drawing can clamp scroll positions or synchronize navigation. Compare
+    // against what was actually painted, not the pre-layout state.
+    *rendered_scene = Some(RenderedScene::capture(app));
     Ok(())
 }
 
@@ -531,6 +583,43 @@ fn copy_via_osc52(text: &str) -> Result<()> {
 #[cfg(test)]
 mod frame_pacer_tests {
     use super::*;
+
+    #[test]
+    fn viewport_changes_repair_cells_outside_the_incremental_diff() {
+        use ratatui::{backend::Backend as _, buffer::Cell};
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let mut app = App::default();
+        let mut scene = None;
+        draw_tui_frame(&mut terminal, &mut app, &mut scene).unwrap();
+
+        // Simulate a terminal-side leftover unknown to Ratatui's back buffer.
+        // An unchanged frame must stay incremental; viewport changes must not.
+        let ghost = Cell::new("X");
+        terminal
+            .backend_mut()
+            .draw([(99, 29, &ghost)].into_iter())
+            .unwrap();
+        draw_tui_frame(&mut terminal, &mut app, &mut scene).unwrap();
+        assert_eq!(terminal.backend().buffer()[(99, 29)].symbol(), "X");
+
+        for change in 0..4 {
+            terminal
+                .backend_mut()
+                .draw([(99, 29, &ghost)].into_iter())
+                .unwrap();
+            match change {
+                0 => app.scroll_y += 1,
+                1 => app.set_mode(crate::tui::app::Mode::Status),
+                2 => app.set_mode(crate::tui::app::Mode::Chat),
+                _ => app.state.current_session_id = Some("another-session".into()),
+            }
+            draw_tui_frame(&mut terminal, &mut app, &mut scene).unwrap();
+            let mut clean = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            draw_tui_frame(&mut clean, &mut app, &mut None).unwrap();
+            assert_eq!(terminal.backend().buffer(), clean.backend().buffer());
+        }
+    }
 
     #[test]
     fn input_redraws_immediately_but_idle_frames_are_throttled() {
