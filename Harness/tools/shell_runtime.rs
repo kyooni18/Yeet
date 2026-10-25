@@ -5,6 +5,9 @@
 
 use super::*;
 
+use super::shell_jobs::{FinishedShellJob, ShellJobOptions, ShellJobWait};
+use std::time::Duration;
+
 const DEFAULT_BACKGROUND_TIMEOUT_SECONDS: usize = 4 * 60 * 60;
 
 impl ToolRegistry {
@@ -101,23 +104,34 @@ impl ToolRegistry {
         }
         let actor =
             requested_mode == "actor" || (requested_mode == "auto" && shell_actor_route(&command));
-        let default_timeout = if background {
-            DEFAULT_BACKGROUND_TIMEOUT_SECONDS
-        } else {
-            120
+        // A foreground command that outlives its window keeps running as a job
+        // instead of being killed, so the window only bounds how long the model
+        // is blocked. An explicit timeoutSeconds is a real deadline.
+        let hard_timeout = usize_arg(object, "timeoutSeconds").map(|seconds| seconds as u64);
+        let yield_seconds = match usize_arg(object, "yieldSeconds") {
+            Some(0) => bail!("yieldSeconds must be at least 1"),
+            other => other.map(|seconds| seconds as u64),
         };
-        let timeout = usize_arg(object, "timeoutSeconds").unwrap_or(default_timeout) as u64;
+        let job_timeout = hard_timeout.unwrap_or(DEFAULT_BACKGROUND_TIMEOUT_SECONDS as u64);
+        // Without a hard deadline the foreground window hands off to a job. With
+        // one, wait past it so the worker's own timeout is the one reported.
+        let wait_limit = match hard_timeout {
+            Some(seconds) => Duration::from_secs(seconds.saturating_add(30)),
+            None => Duration::from_secs(yield_seconds.unwrap_or(120)),
+        };
+        let job_id = self.shell_jobs.start(ShellJobOptions {
+            command: command.clone(),
+            root: shell_root.clone(),
+            directory: effective_cwd.clone(),
+            timeout_seconds: job_timeout,
+            capture_bytes: 64 * 1024,
+            track_cwd: !background,
+            allow_write,
+            unrestricted,
+            force_sandboxed: hard_confined,
+            artifacts: self.artifacts_enabled.then(|| self.artifacts.clone()),
+        })?;
         if background {
-            let id = self.shell_jobs.start(
-                command.clone(),
-                shell_root.clone(),
-                Some(effective_working_directory.clone()),
-                timeout,
-                allow_write,
-                unrestricted,
-                hard_confined,
-                Some(self.artifacts.clone()),
-            )?;
             self.evidence.workspace_write_generation =
                 self.evidence.workspace_write_generation.wrapping_add(1);
             self.invalidate_workspace_cache();
@@ -127,59 +141,77 @@ impl ToolRegistry {
                 "Use run_shell with job:{action:\"wait\",jobId:<id>} to suspend until completion without model polling. Add reportEverySeconds only when periodic monitoring is useful."
             };
             return Ok(
-                json!({"jobId":id,"status":"running","command":command,"hint":hint}).to_string(),
+                json!({"jobId":job_id,"status":"running","command":command,"hint":hint})
+                    .to_string(),
             );
         }
-        let wrapped = if cfg!(unix) {
-            command.clone()
-        } else {
-            with_cwd_report(&command)
-        };
-        let transcript = self
-            .artifacts_enabled
-            .then(|| self.artifacts.shell_log(&command))
-            .transpose()?;
-        let progress = transcript
-            .as_ref()
-            .map(|(_, log)| ShellProgress::new(8192).with_log(log.clone()));
-        let output = crate::shell::run_shell_session(
-            ShellExecutionRequest {
-                command: &wrapped,
-                workspace_root: &shell_root,
-                working_directory: Some(&effective_working_directory),
-                timeout_seconds: timeout,
-                capture_bytes: if actor { 512 * 1024 } else { 64 * 1024 },
-                allow_write,
-                unrestricted,
-                force_sandboxed: hard_confined,
-                cancel: Some(cancel),
-            },
-            crate::shell::ShellSessionOptions {
-                progress,
-                track_cwd: true,
-            },
-        );
-        if let Some((_, log)) = &transcript {
-            log.finish();
-        }
-        let output = output.map_err(|error| {
-            if let Some((id, log)) = &transcript {
-                anyhow!(
-                    "{error}\nShell transcript artifactId: {id}; {}",
-                    serde_json::to_string(&log.snapshot()).unwrap_or_default()
-                )
-            } else {
-                error
+        let shell_cwd = self
+            .shell_cwd
+            .as_deref()
+            .unwrap_or(&self.context.working_directory)
+            .display()
+            .to_string();
+        match self.shell_jobs.wait_finished(&job_id, wait_limit, cancel)? {
+            ShellJobWait::Finished => {}
+            ShellJobWait::Cancelled => {
+                // Let the worker observe the stop flag and reap its process group.
+                let _ = self.shell_jobs.wait_finished(
+                    &job_id,
+                    Duration::from_secs(10),
+                    &AtomicBool::new(false),
+                );
+                let _ = self.shell_jobs.take_finished(&job_id);
+                if allow_write || unrestricted {
+                    self.evidence.workspace_write_generation =
+                        self.evidence.workspace_write_generation.wrapping_add(1);
+                    self.invalidate_workspace_cache();
+                }
+                bail!("cancelled");
             }
-        });
+            ShellJobWait::TimedOut => {
+                // The command is still running and already changed what it changed.
+                self.evidence.workspace_write_generation =
+                    self.evidence.workspace_write_generation.wrapping_add(1);
+                self.invalidate_workspace_cache();
+                let mut value = json!({
+                    "jobId": job_id,
+                    "status": "running",
+                    "command": command,
+                    "workingDirectory": effective_working_directory,
+                    "shellCwd": shell_cwd,
+                    "outputHandedOff": true,
+                    "elapsedMilliseconds": self.shell_jobs.elapsed(&job_id),
+                    "progress": self.shell_jobs.progress(&job_id),
+                });
+                let hint = self.shell_jobs.transcript_id(&job_id).map_or_else(
+                    || "The command exceeded its foreground window and keeps running in the background. Use shell_job action=wait with this jobId to collect the result.".to_owned(),
+                    |artifact| {
+                        value["artifactId"] = json!(artifact);
+                        "The command exceeded its foreground window and keeps running in the background; output so far is in artifactId (read_artifact pages it). Use shell_job action=wait with this jobId to collect the result.".to_owned()
+                    },
+                );
+                value["hint"] = json!(hint);
+                return Ok(value.to_string());
+            }
+        }
+        let FinishedShellJob { result, transcript } = self.shell_jobs.take_finished(&job_id)?;
         // A failed or timed-out command may already have changed files. Do not
         // keep cached workspace evidence merely because no ShellResult arrived.
-        if output.is_err() && (allow_write || unrestricted) {
-            self.evidence.workspace_write_generation =
-                self.evidence.workspace_write_generation.wrapping_add(1);
-            self.invalidate_workspace_cache();
-        }
-        let mut output = output?;
+        let output = result.map_err(|error| {
+            if allow_write || unrestricted {
+                self.evidence.workspace_write_generation =
+                    self.evidence.workspace_write_generation.wrapping_add(1);
+                self.invalidate_workspace_cache();
+            }
+            match &transcript {
+                Some((id, log)) => anyhow!(
+                    "{error}\nShell transcript artifactId: {id}; {}",
+                    serde_json::to_string(&log.snapshot()).unwrap_or_default()
+                ),
+                None => anyhow!(error),
+            }
+        })?;
+        let mut output = output;
         output.command = command.clone();
         let previous_cwd = self.shell_cwd.clone();
         let cwd_note = self.track_shell_cwd(&mut output, &effective_cwd);
@@ -231,6 +263,16 @@ impl ToolRegistry {
         let trailer_bytes = captured_bytes - output.stdout.as_ref().map_or(0, String::len);
         output.stdout_bytes = output.stdout_bytes.saturating_sub(trailer_bytes);
         let ended_in = PathBuf::from(reported?);
+        self.apply_shell_cwd(ended_in, started_in)
+    }
+
+    /// Moves the session cwd to where a finished command left the shell, keeping
+    /// it only inside an accessible context root.
+    pub(super) fn apply_shell_cwd(
+        &mut self,
+        ended_in: PathBuf,
+        started_in: &Path,
+    ) -> Option<String> {
         let ended_in = ended_in.canonicalize().unwrap_or(ended_in);
         if ended_in == started_in {
             return None;
@@ -435,18 +477,7 @@ fn shell_diagnostic_lines(output: &crate::shell::ShellResult, limit: usize) -> V
 
 const CWD_REPORT_MARKER: &str = "__YEET_SHELL_CWD__=";
 
-/// Appends a trailer that prints the shell's final directory, preserving the
-/// command's exit status. Commands that `exit` early simply report nothing.
-fn with_cwd_report(command: &str) -> String {
-    if cfg!(windows) {
-        return command.to_owned();
-    }
-    format!(
-        "{command}\n__yeet_status=$?\nprintf '\\n{CWD_REPORT_MARKER}%s\\n' \"$(pwd -P)\"\nexit $__yeet_status"
-    )
-}
-
-/// Removes the cwd trailer from captured stdout and returns the directory.
+/// Removes a legacy cwd trailer from captured stdout and returns the directory.
 fn take_cwd_report(stdout: &mut String) -> Option<String> {
     let start = stdout.rfind(CWD_REPORT_MARKER)?;
     let path = stdout[start + CWD_REPORT_MARKER.len()..]

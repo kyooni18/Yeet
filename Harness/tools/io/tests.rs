@@ -139,6 +139,42 @@ fn shell_directory_persists_between_commands_within_context() {
 }
 
 #[test]
+fn long_foreground_command_hands_off_instead_of_dying() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root,
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    let args = json!({ "command": "sleep 30", "yieldSeconds": 1 });
+    let value: Value = serde_json::from_str(
+        &registry
+            .run_shell_tool(args.as_object().unwrap(), "", &AtomicBool::new(false))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["status"], json!("running"), "{value}");
+    assert_eq!(value["outputHandedOff"], json!(true));
+    let job_id = value["jobId"].as_str().unwrap();
+
+    let stop = json!({ "action": "stop", "jobId": job_id });
+    registry
+        .shell_job_tool(stop.as_object().unwrap(), &AtomicBool::new(false))
+        .unwrap();
+    let wait = json!({ "action": "wait", "jobId": job_id });
+    let value: Value = serde_json::from_str(
+        &registry
+            .shell_job_tool(wait.as_object().unwrap(), &AtomicBool::new(false))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["status"], json!("cancelled"), "{value}");
+}
+
+#[test]
 fn complete_actor_output_is_not_marked_truncated() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();

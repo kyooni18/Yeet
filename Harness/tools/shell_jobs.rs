@@ -32,9 +32,37 @@ struct ShellJob {
     state: Arc<(Mutex<ShellJobState>, Condvar)>,
     progress: ShellProgress,
     transcript: Option<(String, crate::shell::log::ShellOutputLog)>,
+    /// Directory the command started in, retained for late cwd tracking.
+    cwd_start: PathBuf,
+    /// Set once the finished command's directory has been applied.
+    cwd_applied: bool,
     started_at: Instant,
     /// Set once the workspace was refreshed after this job finished.
     settled: bool,
+}
+
+pub(super) struct ShellJobOptions {
+    pub command: String,
+    pub root: PathBuf,
+    pub directory: PathBuf,
+    pub timeout_seconds: u64,
+    pub capture_bytes: usize,
+    pub track_cwd: bool,
+    pub allow_write: bool,
+    pub unrestricted: bool,
+    pub force_sandboxed: bool,
+    pub artifacts: Option<ArtifactStore>,
+}
+
+pub(super) enum ShellJobWait {
+    Finished,
+    TimedOut,
+    Cancelled,
+}
+
+pub(super) struct FinishedShellJob {
+    pub result: Result<crate::shell::ShellResult, String>,
+    pub transcript: Option<(String, crate::shell::log::ShellOutputLog)>,
 }
 
 impl Drop for ShellJobs {
@@ -68,18 +96,19 @@ impl ShellJobs {
         refresh
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn start(
-        &mut self,
-        command: String,
-        root: PathBuf,
-        directory: Option<String>,
-        timeout: u64,
-        allow_write: bool,
-        unrestricted: bool,
-        force_sandboxed: bool,
-        artifacts: Option<ArtifactStore>,
-    ) -> Result<String> {
+    pub(super) fn start(&mut self, options: ShellJobOptions) -> Result<String> {
+        let ShellJobOptions {
+            command,
+            root,
+            directory,
+            timeout_seconds,
+            capture_bytes,
+            track_cwd,
+            allow_write,
+            unrestricted,
+            force_sandboxed,
+            artifacts,
+        } = options;
         if self.jobs.len() >= MAX_SHELL_JOBS {
             bail!(
                 "Shell job limit reached ({MAX_SHELL_JOBS}); forget completed jobs before starting more"
@@ -101,24 +130,28 @@ impl ShellJobs {
         let worker_cancel = cancel.clone();
         let worker_state = state.clone();
         let worker_command = command.clone();
+        let worker_directory = directory.to_string_lossy().into_owned();
         thread::Builder::new()
             .name(format!("shell-{id}"))
             .spawn(move || {
                 let _artifacts = artifacts;
                 let outcome = std::panic::catch_unwind(|| {
-                    run_shell_cancellable_with_progress(
+                    crate::shell::run_shell_session(
                         ShellExecutionRequest {
                             command: &worker_command,
                             workspace_root: &root,
-                            working_directory: directory.as_deref(),
-                            timeout_seconds: timeout,
-                            capture_bytes: 64 * 1024,
+                            working_directory: Some(&worker_directory),
+                            timeout_seconds,
+                            capture_bytes,
                             allow_write,
                             unrestricted,
                             force_sandboxed,
                             cancel: Some(&worker_cancel),
                         },
-                        Some(worker_progress),
+                        crate::shell::ShellSessionOptions {
+                            progress: Some(worker_progress),
+                            track_cwd,
+                        },
                     )
                     .map_err(|error| error.to_string())
                 })
@@ -139,11 +172,106 @@ impl ShellJobs {
                 state,
                 progress,
                 transcript,
+                cwd_start: directory,
+                cwd_applied: false,
                 started_at: Instant::now(),
                 settled: false,
             },
         );
         Ok(id)
+    }
+
+    pub(super) fn elapsed(&self, id: &str) -> Option<u128> {
+        self.jobs
+            .get(id)
+            .map(|job| job.started_at.elapsed().as_millis())
+    }
+
+    /// Blocks until the job finishes, the deadline passes, or the caller cancels.
+    /// Returning early leaves the job running in the background.
+    pub(super) fn wait_finished(
+        &self,
+        id: &str,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<ShellJobWait> {
+        let job = self
+            .jobs
+            .get(id)
+            .ok_or_else(|| anyhow!("Unknown shell job: {id}"))?;
+        let stop = job.cancel.clone();
+        let deadline = Instant::now() + timeout;
+        let (lock, completed) = &*job.state;
+        let mut state = lock
+            .lock()
+            .map_err(|_| anyhow!("Shell job state unavailable"))?;
+        loop {
+            if state.result.is_some() {
+                return Ok(ShellJobWait::Finished);
+            }
+            if cancel.load(Ordering::Acquire) {
+                stop.store(true, Ordering::Release);
+                return Ok(ShellJobWait::Cancelled);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(ShellJobWait::TimedOut);
+            }
+            let (next, _) = completed
+                .wait_timeout(state, (deadline - now).min(WAIT_CANCEL_CHECK_INTERVAL))
+                .map_err(|_| anyhow!("Shell job state unavailable"))?;
+            state = next;
+        }
+    }
+
+    /// Removes a finished job and hands back its typed result.
+    pub(super) fn take_finished(&mut self, id: &str) -> Result<FinishedShellJob> {
+        let job = self
+            .jobs
+            .remove(id)
+            .ok_or_else(|| anyhow!("Unknown shell job: {id}"))?;
+        let (lock, _) = &*job.state;
+        let state = lock
+            .lock()
+            .map_err(|_| anyhow!("Shell job state unavailable"))?;
+        Ok(FinishedShellJob {
+            result: state
+                .result
+                .clone()
+                .ok_or_else(|| anyhow!("Shell job {id} has not finished"))?,
+            transcript: job.transcript,
+        })
+    }
+
+    /// Reports a finished command's directory once so a late handoff can still
+    /// move the session cwd.
+    pub(super) fn take_cwd(&mut self, id: &str) -> Option<(PathBuf, PathBuf)> {
+        let job = self.jobs.get_mut(id)?;
+        if job.cwd_applied {
+            return None;
+        }
+        let (lock, _) = &*job.state;
+        let ended = lock
+            .lock()
+            .ok()?
+            .result
+            .as_ref()?
+            .as_ref()
+            .ok()?
+            .final_working_directory
+            .clone()?;
+        job.cwd_applied = true;
+        Some((job.cwd_start.clone(), PathBuf::from(ended)))
+    }
+
+    pub(super) fn transcript_id(&self, id: &str) -> Option<String> {
+        self.jobs
+            .get(id)
+            .and_then(|job| job.transcript.as_ref().map(|(id, _)| id.clone()))
+    }
+
+    pub(super) fn progress(&self, id: &str) -> Option<crate::shell::ShellProgressSnapshot> {
+        self.jobs.get(id).map(|job| job.progress.snapshot())
     }
 
     fn snapshot(&self, id: &str) -> Result<Value> {
@@ -330,6 +458,23 @@ impl ToolRegistry {
         let generation = self.evidence.workspace_generation;
         self.invalidate_workspace_cache();
         self.evidence.workspace_generation = generation;
+        // A command that was handed off from the foreground still owns the cwd
+        // once it finally exits.
+        if !matches!(value["status"].as_str(), Some("running" | "stopping"))
+            && let Some((started, ended)) = self.shell_jobs.take_cwd(id)
+        {
+            let note = self.apply_shell_cwd(ended, &started);
+            value["shellCwd"] = json!(
+                self.shell_cwd
+                    .as_deref()
+                    .unwrap_or(&self.context.working_directory)
+                    .display()
+                    .to_string()
+            );
+            if let Some(note) = note {
+                value["cwdNote"] = json!(note);
+            }
+        }
         let stdout = value["stdout"].as_str().unwrap_or_default().to_owned();
         let stderr = value["stderr"].as_str().unwrap_or_default().to_owned();
         if stdout.len() + stderr.len() > 16 * 1024 {
@@ -361,16 +506,18 @@ mod tests {
     fn finished_jobs_stop_requesting_workspace_refresh() {
         let root = tempfile::tempdir().unwrap();
         let mut jobs = ShellJobs::default();
-        jobs.start(
-            "true".into(),
-            root.path().to_path_buf(),
-            None,
-            30,
-            false,
-            true,
-            false,
-            None,
-        )
+        jobs.start(ShellJobOptions {
+            command: "true".into(),
+            root: root.path().to_path_buf(),
+            directory: root.path().to_path_buf(),
+            timeout_seconds: 30,
+            capture_bytes: 64 * 1024,
+            track_cwd: false,
+            allow_write: false,
+            unrestricted: true,
+            force_sandboxed: false,
+            artifacts: None,
+        })
         .unwrap();
         let started = Instant::now();
         while jobs.take_workspace_refresh() {

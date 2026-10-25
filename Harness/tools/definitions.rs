@@ -161,8 +161,8 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command (zsh). The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. Timeout defaults to 120 seconds (background: 4 hours), subject to sandbox limits. Only cwd persists, not environment variables or shell functions. Use background=true for long-running work and shell_job to follow it.",
-            json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
+            "Run a shell command (zsh). The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. stdout and stderr are captured in order; large output is kept in an artifact you can page with read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId you can collect with shell_job instead of being killed; timeoutSeconds is a hard deadline. Only cwd persists, not environment variables or shell functions.",
+            json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "shell_job",
@@ -349,7 +349,7 @@ fn mcp_read_file_tool_definition() -> ToolDefinition {
 fn mcp_run_shell_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "run_shell",
-        "Run a shell command or manage a detached shell job through one MCP tool. Supply command for execution. Timeout defaults to 120 seconds (background: 4 hours), subject to sandbox limits. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
+        "Run a shell command or manage a detached shell job through one MCP tool. Supply command for execution. stdout and stderr are captured in order and large output is kept in an artifact for read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId instead of being killed; timeoutSeconds is a hard deadline and background jobs default to 4 hours. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
         json!({
             "type":"object",
             "properties":{
@@ -358,6 +358,7 @@ fn mcp_run_shell_tool_definition() -> ToolDefinition {
                 "workingDirectory":{"type":"string"},
                 "mode":{"type":"string","enum":["auto","direct","actor"]},
                 "timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},
+                "yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},
                 "background":{"type":"boolean"},
                 "job":{
                     "type":"object",

@@ -19,7 +19,6 @@ use crate::{
     session_store::SessionStore,
     shell::{
         ShellExecutionRequest, ShellProgress, restricted_operation, run_shell_cancellable,
-        run_shell_cancellable_with_progress,
     },
     web_search::{WebSearchBackend, WebSearchClient, WebSearchRequest},
     workers::WorkerRegistry,
