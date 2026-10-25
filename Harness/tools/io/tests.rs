@@ -153,7 +153,9 @@ fn complete_actor_output_is_not_marked_truncated() {
     let result = registry
         .run_shell_tool(args.as_object().unwrap(), "", &AtomicBool::new(false))
         .unwrap();
-    assert!(!result.contains("artifactId"), "{result}");
+    let value: Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(value["stdout"], "hi\n");
+    assert_eq!(value["stdoutTruncated"], false);
 }
 
 #[test]
@@ -181,7 +183,16 @@ fn large_shell_output_keeps_real_head_and_tail() {
         assert_eq!(value["stdoutBytes"], json!(108894), "{mode}");
         assert_eq!(value["outputWindowed"], json!(true), "{mode}");
         let truncated = value["stdoutTruncated"].as_bool().unwrap();
-        assert_eq!(value["artifactComplete"], json!(!truncated), "{mode}");
+        assert_eq!(value["artifactComplete"], json!(true), "{mode}");
+        let id = value["artifactId"].as_str().unwrap();
+        let middle = registry
+            .artifacts
+            .read_page(id, Some(10000), Some(10002), 0, 8192)
+            .unwrap();
+        assert_eq!(middle, "10000\n10001\n10002");
+        let transcript = fs::read_to_string(registry.artifacts.path(id)).unwrap();
+        assert_eq!(transcript.len(), 108894);
+        assert!(!transcript.contains("__YEET_SHELL_CWD__"));
         if mode == "direct" {
             assert!(
                 truncated,

@@ -116,6 +116,7 @@ impl ToolRegistry {
                 allow_write,
                 unrestricted,
                 hard_confined,
+                Some(self.artifacts.clone()),
             )?;
             self.evidence.workspace_write_generation =
                 self.evidence.workspace_write_generation.wrapping_add(1);
@@ -129,17 +130,47 @@ impl ToolRegistry {
                 json!({"jobId":id,"status":"running","command":command,"hint":hint}).to_string(),
             );
         }
-        let wrapped = with_cwd_report(&command);
-        let output = run_shell_cancellable(ShellExecutionRequest {
-            command: &wrapped,
-            workspace_root: &shell_root,
-            working_directory: Some(&effective_working_directory),
-            timeout_seconds: timeout,
-            capture_bytes: if actor { 512 * 1024 } else { 64 * 1024 },
-            allow_write,
-            unrestricted,
-            force_sandboxed: hard_confined,
-            cancel: Some(cancel),
+        let wrapped = if cfg!(unix) {
+            command.clone()
+        } else {
+            with_cwd_report(&command)
+        };
+        let transcript = self
+            .artifacts_enabled
+            .then(|| self.artifacts.shell_log(&command))
+            .transpose()?;
+        let progress = transcript
+            .as_ref()
+            .map(|(_, log)| ShellProgress::new(8192).with_log(log.clone()));
+        let output = crate::shell::run_shell_session(
+            ShellExecutionRequest {
+                command: &wrapped,
+                workspace_root: &shell_root,
+                working_directory: Some(&effective_working_directory),
+                timeout_seconds: timeout,
+                capture_bytes: if actor { 512 * 1024 } else { 64 * 1024 },
+                allow_write,
+                unrestricted,
+                force_sandboxed: hard_confined,
+                cancel: Some(cancel),
+            },
+            crate::shell::ShellSessionOptions {
+                progress,
+                track_cwd: true,
+            },
+        );
+        if let Some((_, log)) = &transcript {
+            log.finish();
+        }
+        let output = output.map_err(|error| {
+            if let Some((id, log)) = &transcript {
+                anyhow!(
+                    "{error}\nShell transcript artifactId: {id}; {}",
+                    serde_json::to_string(&log.snapshot()).unwrap_or_default()
+                )
+            } else {
+                error
+            }
         });
         // A failed or timed-out command may already have changed files. Do not
         // keep cached workspace evidence merely because no ShellResult arrived.
@@ -171,6 +202,11 @@ impl ToolRegistry {
             cache_safe_inspection,
         )?;
         let mut value: Value = serde_json::from_str(&result)?;
+        if let Some((id, log)) = transcript {
+            value["artifactId"] = json!(id);
+            value["artifactComplete"] = json!(log.snapshot().complete);
+            value["transcript"] = serde_json::to_value(log.snapshot())?;
+        }
         value["workingDirectory"] = json!(effective_working_directory);
         value["shellCwd"] = json!(shell_cwd);
         if let Some(note) = cwd_note {
@@ -188,7 +224,10 @@ impl ToolRegistry {
         started_in: &Path,
     ) -> Option<String> {
         let captured_bytes = output.stdout.as_ref().map_or(0, String::len);
-        let reported = output.stdout.as_mut().and_then(take_cwd_report);
+        let reported = output
+            .final_working_directory
+            .take()
+            .or_else(|| output.stdout.as_mut().and_then(take_cwd_report));
         let trailer_bytes = captured_bytes - output.stdout.as_ref().map_or(0, String::len);
         output.stdout_bytes = output.stdout_bytes.saturating_sub(trailer_bytes);
         let ended_in = PathBuf::from(reported?);

@@ -31,6 +31,7 @@ struct ShellJob {
     cancel: Arc<AtomicBool>,
     state: Arc<(Mutex<ShellJobState>, Condvar)>,
     progress: ShellProgress,
+    transcript: Option<(String, crate::shell::log::ShellOutputLog)>,
     started_at: Instant,
     /// Set once the workspace was refreshed after this job finished.
     settled: bool,
@@ -77,6 +78,7 @@ impl ShellJobs {
         allow_write: bool,
         unrestricted: bool,
         force_sandboxed: bool,
+        artifacts: Option<ArtifactStore>,
     ) -> Result<String> {
         if self.jobs.len() >= MAX_SHELL_JOBS {
             bail!(
@@ -86,7 +88,15 @@ impl ShellJobs {
         let id = Uuid::new_v4().to_string();
         let cancel = Arc::new(AtomicBool::new(false));
         let state = Arc::new((Mutex::new(ShellJobState::default()), Condvar::new()));
-        let progress = ShellProgress::new(SHELL_JOB_PROGRESS_TAIL_BYTES);
+        let transcript = artifacts
+            .as_ref()
+            .map(|store| store.shell_log(&command))
+            .transpose()?;
+        let mut progress = ShellProgress::new(SHELL_JOB_PROGRESS_TAIL_BYTES);
+        if let Some((_, log)) = &transcript {
+            progress = progress.with_log(log.clone());
+        }
+        let worker_log = transcript.as_ref().map(|(_, log)| log.clone());
         let worker_progress = progress.clone();
         let worker_cancel = cancel.clone();
         let worker_state = state.clone();
@@ -94,6 +104,7 @@ impl ShellJobs {
         thread::Builder::new()
             .name(format!("shell-{id}"))
             .spawn(move || {
+                let _artifacts = artifacts;
                 let outcome = std::panic::catch_unwind(|| {
                     run_shell_cancellable_with_progress(
                         ShellExecutionRequest {
@@ -112,6 +123,9 @@ impl ShellJobs {
                     .map_err(|error| error.to_string())
                 })
                 .unwrap_or_else(|_| Err("Shell worker panicked".into()));
+                if let Some(log) = worker_log {
+                    log.finish();
+                }
                 let (lock, completed) = &*worker_state;
                 let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.result = Some(outcome);
@@ -124,6 +138,7 @@ impl ShellJobs {
                 cancel,
                 state,
                 progress,
+                transcript,
                 started_at: Instant::now(),
                 settled: false,
             },
@@ -144,7 +159,7 @@ impl ShellJobs {
     }
 
     fn snapshot_from_state(id: &str, job: &ShellJob, state: &ShellJobState) -> Result<Value> {
-        Ok(match state.result.as_ref() {
+        let mut value = match state.result.as_ref() {
             Some(Ok(output)) => {
                 let mut value = serde_json::to_value(output)?;
                 value["jobId"] = json!(id);
@@ -167,7 +182,13 @@ impl ShellJobs {
                 "elapsedMilliseconds":job.started_at.elapsed().as_millis(),
                 "progress":job.progress.snapshot()
             }),
-        })
+        };
+        if let Some((id, log)) = &job.transcript {
+            value["artifactId"] = json!(id);
+            value["artifactComplete"] = json!(log.snapshot().complete);
+            value["transcript"] = serde_json::to_value(log.snapshot())?;
+        }
+        Ok(value)
     }
 
     fn wait(
@@ -317,12 +338,16 @@ impl ToolRegistry {
                 .store(&format!("STDOUT:\n{stdout}\nSTDERR:\n{stderr}"))?;
             value["stdout"] = json!(super::shell_runtime::output_window(&stdout, 12 * 1024));
             value["stderr"] = json!(super::shell_runtime::output_window(&stderr, 4 * 1024));
-            value["artifactId"] = json!(artifact);
+            if value.get("transcript").is_none() {
+                value["artifactId"] = json!(artifact);
+            }
             value["outputWindowed"] = json!(true);
-            value["artifactComplete"] = json!(
-                !value["stdoutTruncated"].as_bool().unwrap_or(false)
-                    && !value["stderrTruncated"].as_bool().unwrap_or(false)
-            );
+            if value.get("transcript").is_none() {
+                value["artifactComplete"] = json!(
+                    !value["stdoutTruncated"].as_bool().unwrap_or(false)
+                        && !value["stderrTruncated"].as_bool().unwrap_or(false)
+                );
+            }
         }
         Ok(value.to_string())
     }
@@ -344,6 +369,7 @@ mod tests {
             false,
             true,
             false,
+            None,
         )
         .unwrap();
         let started = Instant::now();

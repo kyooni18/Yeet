@@ -7,11 +7,12 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::PathBuf,
+    sync::{Arc, atomic::AtomicUsize},
 };
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use super::{BUILTIN_CAPABILITIES, BuiltinCapabilityDescriptor, artifact_output};
+use super::{BUILTIN_CAPABILITIES, BuiltinCapabilityDescriptor};
 use crate::{
     core::McpServerStatus,
     edit::ReadResult,
@@ -58,9 +59,11 @@ pub(super) struct ReadCacheEntry {
     pub(super) anchored: String,
 }
 
+#[derive(Clone)]
 pub(super) struct ArtifactStore {
-    pub(super) _directory: TempDir,
+    pub(super) _directory: Arc<TempDir>,
     pub(super) root: PathBuf,
+    shell_log_budget: Arc<AtomicUsize>,
 }
 
 impl ArtifactStore {
@@ -70,9 +73,34 @@ impl ArtifactStore {
             .tempdir()?;
         let root = directory.path().to_path_buf();
         Ok(Self {
-            _directory: directory,
+            _directory: Arc::new(directory),
             root,
+            shell_log_budget: Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    pub(super) fn shell_log(
+        &self,
+        command: &str,
+    ) -> Result<(String, crate::shell::log::ShellOutputLog)> {
+        let id = self.store_typed(
+            "",
+            "shell-transcript",
+            "text/plain",
+            Some(command),
+            json!({
+                "streams": "stdout and stderr in read order; byte offsets",
+                "maxBytes": crate::shell::log::SHELL_LOG_LIMIT,
+            }),
+        )?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(self.path(&id))?;
+        Ok((
+            id,
+            crate::shell::log::ShellOutputLog::new(file, self.shell_log_budget.clone()),
+        ))
     }
 
     pub(super) fn store(&self, content: &str) -> Result<String> {
@@ -119,52 +147,30 @@ impl ArtifactStore {
             }
             bail!("unknown artifact: {id}");
         }
-        Ok(serde_json::from_slice(&fs::read(path)?)?)
+        let mut info: Value = serde_json::from_slice(&fs::read(path)?)?;
+        if info["kind"] == "shell-transcript" {
+            info.as_object_mut().unwrap().remove("characters");
+            info.as_object_mut().unwrap().remove("lines");
+            info["bytes"] = json!(fs::metadata(self.path(id))?.len());
+        }
+        Ok(info)
     }
 
-    pub(super) fn read(
+    pub(super) fn read_page(
         &self,
         id: &str,
         start: Option<usize>,
         end: Option<usize>,
+        offset: usize,
+        limit: usize,
     ) -> Result<String> {
         Uuid::parse_str(id)?;
-        let text = fs::read_to_string(self.path(id))?;
-        let lines: Vec<_> = text.lines().collect();
-        let start = start.unwrap_or(1).max(1);
-        let requested_end = end.unwrap_or_else(|| start.saturating_add(159));
-        if start > lines.len() {
-            return Ok(format!(
-                "[artifact has {} lines; startLine {start} is past the end]",
-                lines.len()
-            ));
-        }
-        // An end before the start is a line count, as in read_file.
-        let requested_end = if requested_end < start {
-            start.saturating_add(requested_end.max(1) - 1)
-        } else {
-            requested_end
-        };
-        // Treat an oversized end bound as a request for "through EOF". This keeps
-        // model-generated source ranges robust when the artifact is shorter than
-        // the source read that produced it, while still rejecting invalid starts.
-        let end = requested_end.min(lines.len());
-        Ok(lines[start - 1..end].join("\n"))
+        super::artifact_stream::page(&self.path(id), start, end, offset, limit)
     }
 
     pub(super) fn search(&self, id: &str, query: &str, max_results: usize) -> Result<Value> {
         Uuid::parse_str(id)?;
-        let text = fs::read_to_string(self.path(id))?;
-        let mut matches = Vec::new();
-        for (index, line) in text.lines().enumerate() {
-            if let Some(position) = line.find(query) {
-                if matches.len() >= max_results {
-                    return Ok(json!({"artifactId": id, "matches": matches, "truncated": true}));
-                }
-                matches.push(artifact_output::search_match(index + 1, line, position));
-            }
-        }
-        Ok(json!({"artifactId": id, "matches": matches, "truncated": false}))
+        super::artifact_stream::search(&self.path(id), id, query, max_results)
     }
 
     pub(super) fn path(&self, id: &str) -> PathBuf {

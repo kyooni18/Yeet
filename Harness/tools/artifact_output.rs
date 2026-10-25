@@ -1,12 +1,10 @@
 //! Bounds artifact text sent to the model, including single-line data files.
 
 use anyhow::Result;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::support::ArtifactStore;
 
-const PAGE_CHARS: usize = 8192;
-const MATCH_CHARS: usize = 512;
 pub(super) const MAX_MODEL_VISIBLE_TOOL_OUTPUT_BYTES: usize = 20 * 1024;
 const MODEL_VISIBLE_TOOL_OUTPUT_PREVIEW_BYTES: usize = 8 * 1024;
 
@@ -148,43 +146,4 @@ fn collect_logical_source_lines(value: &Value, chunks: &mut Vec<String>) {
         }
         _ => {}
     }
-}
-
-pub(super) fn page(text: &str, arguments: &Map<String, Value>) -> Result<String> {
-    let offset = super::usize_arg(arguments, "offset").unwrap_or(0);
-    let limit = super::usize_arg(arguments, "maxChars")
-        .unwrap_or(PAGE_CHARS)
-        .clamp(1, PAGE_CHARS);
-    let total = text.chars().count();
-    if offset >= total && offset > 0 {
-        return Ok(json!({
-            "content": "",
-            "offset": offset,
-            "totalChars": total,
-            "truncated": false,
-            "hint": "offset is past the end of this range; all of it has been read."
-        })
-        .to_string());
-    }
-    let content: String = text.chars().skip(offset).take(limit).collect();
-    let end = offset + content.chars().count();
-    if offset == 0 && end == total {
-        return Ok(content);
-    }
-    Ok(json!({
-        "content": content,
-        "offset": offset,
-        "totalChars": total,
-        "truncated": end < total,
-        "nextOffset": (end < total).then_some(end),
-        "hint": "Offsets are characters within the selected line range. Keep startLine/endLine unchanged when paging."
-    }).to_string())
-}
-
-pub(super) fn search_match(line_number: usize, line: &str, byte_position: usize) -> Value {
-    let position = line[..byte_position].chars().count();
-    let offset = position.saturating_sub(80);
-    let text: String = line.chars().skip(offset).take(MATCH_CHARS).collect();
-    let truncated = offset > 0 || line.chars().count() > MATCH_CHARS;
-    json!({"line": line_number, "text": text, "offset": offset, "truncated": truncated})
 }

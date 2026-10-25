@@ -26,6 +26,7 @@ use crate::{
 };
 
 mod artifact_output;
+mod artifact_stream;
 mod auto_check;
 mod bridge_handle;
 mod capability_runtime;

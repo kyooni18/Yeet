@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -21,6 +21,9 @@ use crate::harness::sandbox::{
 };
 use crate::platform::{TrackedChild, configure_process_group};
 
+pub mod log;
+use log::ShellOutputLog;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellResult {
@@ -35,11 +38,15 @@ pub struct ShellResult {
     pub stderr_truncated: bool,
     pub stdout: Option<String>,
     pub stderr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_working_directory: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct ShellProgress {
     inner: Arc<Mutex<ShellProgressState>>,
+    log: Option<ShellOutputLog>,
+    stop_readers: Arc<AtomicBool>,
 }
 
 struct ShellProgressState {
@@ -68,6 +75,8 @@ impl ShellProgress {
     pub fn new(tail_bytes: usize) -> Self {
         let tail_bytes = tail_bytes.clamp(256, 64 * 1024);
         Self {
+            log: None,
+            stop_readers: Arc::new(AtomicBool::new(false)),
             inner: Arc::new(Mutex::new(ShellProgressState {
                 stdout_bytes: 0,
                 stderr_bytes: 0,
@@ -75,6 +84,11 @@ impl ShellProgress {
                 stderr_tail: TailBuffer::new(tail_bytes),
             })),
         }
+    }
+
+    pub fn with_log(mut self, log: ShellOutputLog) -> Self {
+        self.log = Some(log);
+        self
     }
 
     pub fn snapshot(&self) -> ShellProgressSnapshot {
@@ -95,6 +109,9 @@ impl ShellProgress {
     }
 
     fn push(&self, stream: ShellStream, bytes: &[u8]) {
+        if let Some(log) = &self.log {
+            log.push(bytes);
+        }
         let mut state = self
             .inner
             .lock()
@@ -372,6 +389,26 @@ pub fn run_shell_cancellable_with_progress(
     request: ShellExecutionRequest<'_>,
     progress: Option<ShellProgress>,
 ) -> Result<ShellResult> {
+    run_shell_session(
+        request,
+        ShellSessionOptions {
+            progress,
+            ..Default::default()
+        },
+    )
+}
+
+#[derive(Default)]
+pub struct ShellSessionOptions {
+    pub progress: Option<ShellProgress>,
+    pub track_cwd: bool,
+}
+
+pub fn run_shell_session(
+    request: ShellExecutionRequest<'_>,
+    options: ShellSessionOptions,
+) -> Result<ShellResult> {
+    let progress = options.progress;
     let ShellExecutionRequest {
         command,
         workspace_root,
@@ -430,22 +467,39 @@ pub fn run_shell_cancellable_with_progress(
         }
 
         #[cfg(target_os = "windows")]
-        return run_windows_sandboxed_shell(command, &cwd, &effective, capture_bytes, cancel);
+        {
+            if let Some(log) = progress.as_ref().and_then(|p| p.log.as_ref()) {
+                log.incomplete("Full transcripts are not supported by the Windows sandbox backend");
+            }
+            return run_windows_sandboxed_shell(command, &cwd, &effective, capture_bytes, cancel);
+        }
     }
 
-    let mut scratch = None;
+    let scratch = tempfile::Builder::new()
+        .prefix("yeet-model-shell-")
+        .tempdir()?;
+    // Keep cwd reporting out of stdout and the full transcript. Retain the
+    // original open file rather than reopening a child-controlled path (which
+    // could have been replaced with a symlink outside the sandbox).
+    let mut cwd_report =
+        if cfg!(unix) && options.track_cwd && (unrestricted || effective.scratch_writable) {
+            Some(tempfile::NamedTempFile::new_in(scratch.path())?)
+        } else {
+            None
+        };
+    let wrapped = cwd_report.as_ref().map(|file| {
+        let path = file.path().to_string_lossy().replace('\'', "'\\''");
+        format!(
+            "{command}\n__yeet_status=$?\nprintf '%s' \"$(pwd -P)\" > '{path}'\nexit $__yeet_status"
+        )
+    });
+    let execution_command = wrapped.as_deref().unwrap_or(command);
     let mut launch = if unrestricted {
-        unrestricted_shell_command(command)?
+        unrestricted_shell_command(execution_command)?
     } else {
-        let directory = tempfile::Builder::new()
-            .prefix("yeet-model-sandbox-")
-            .tempdir()?;
-        let value = sandboxed_shell_command(command, &effective, &root, &cwd, directory.path())?;
-        scratch = Some(directory);
-        value
+        sandboxed_shell_command(execution_command, &effective, &root, &cwd, scratch.path())?
     };
     configure_process_group(&mut launch);
-    let _scratch = scratch;
     let mut child = launch
         .current_dir(&cwd)
         .stdin(Stdio::null())
@@ -463,6 +517,11 @@ pub fn run_shell_cancellable_with_progress(
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let mut child = TrackedChild::new(child, "shell");
+    #[cfg(unix)]
+    {
+        set_nonblocking(&stdout)?;
+        set_nonblocking(&stderr)?;
+    }
     // Keep diagnostics even when execution ends before reader threads return.
     let progress = progress.unwrap_or_else(|| ShellProgress::new(8 * 1024));
     let stdout_progress = Some(progress.clone());
@@ -484,35 +543,56 @@ pub fn run_shell_cancellable_with_progress(
         effective.limits.wall_time_seconds
     };
     let timeout = Duration::from_secs(timeout_seconds);
+    let mut cancelled = false;
+    let mut timed_out = false;
     let status = loop {
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-            kill_process_group(&mut child);
-            let _ = child.wait();
-            bail!("cancelled");
+            cancelled = true;
+            break None;
         }
         if let Some(status) = child.try_wait()? {
-            break status;
+            break Some(status);
         }
         if start.elapsed() >= timeout {
-            kill_process_group(&mut child);
-            let _ = child.wait();
-            bail!(shell_timeout_message(timeout_seconds, &progress));
+            timed_out = true;
+            break None;
         }
         thread::sleep(Duration::from_millis(20));
     };
-    // Descendants may still hold the pipes after the shell exits. Keep cancellation
-    // and the sandbox deadline effective while the reader threads drain them.
+    let mut drain_deadline = None;
+    if cancelled || timed_out {
+        kill_process_group(&mut child);
+        let _ = child.wait();
+        drain_deadline = Some(Instant::now() + Duration::from_millis(250));
+    }
+    // Drain after termination, but do not leak a blocked reader if an escaped
+    // descendant retains a pipe. Unix readers are nonblocking and cancellable.
     while !stdout_thread.is_finished() || !stderr_thread.is_finished() {
-        if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-            kill_process_group(&mut child);
-            bail!("cancelled");
+        if drain_deadline.is_none() {
+            cancelled = cancel.is_some_and(|flag| flag.load(Ordering::Acquire));
+            timed_out = start.elapsed() >= timeout;
+            if cancelled || timed_out {
+                kill_process_group(&mut child);
+                let _ = child.wait();
+                drain_deadline = Some(Instant::now() + Duration::from_millis(250));
+            }
         }
-        if start.elapsed() >= timeout {
-            kill_process_group(&mut child);
-            let _ = child.wait();
+        if drain_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            progress.stop_readers.store(true, Ordering::Release);
+            if let Some(log) = &progress.log {
+                log.incomplete("Output pipe did not close after process termination");
+            }
+            #[cfg(unix)]
+            {
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+            }
+            if cancelled {
+                bail!("cancelled");
+            }
             bail!(shell_timeout_message(timeout_seconds, &progress));
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(10));
     }
     let stdout = stdout_thread
         .join()
@@ -522,6 +602,13 @@ pub fn run_shell_cancellable_with_progress(
         .join()
         .unwrap_or_else(|_| BoundedOutput::new(stderr_limit))
         .into_capture();
+    if cancelled {
+        bail!("cancelled");
+    }
+    if timed_out {
+        bail!(shell_timeout_message(timeout_seconds, &progress));
+    }
+    let status = status.expect("non-terminated shell has an exit status");
     Ok(ShellResult {
         command: command.into(),
         working_directory: cwd.display().to_string(),
@@ -536,6 +623,12 @@ pub fn run_shell_cancellable_with_progress(
         stderr_truncated: stderr.truncated,
         stdout: (!stdout.text.is_empty()).then_some(stdout.text),
         stderr: (!stderr.text.is_empty()).then_some(stderr.text),
+        final_working_directory: cwd_report.as_mut().and_then(|file| {
+            file.seek(SeekFrom::Start(0)).ok()?;
+            let mut path = String::new();
+            file.take(16 * 1024).read_to_string(&mut path).ok()?;
+            (!path.is_empty() && !path.contains('\0')).then_some(path)
+        }),
     })
 }
 
@@ -841,6 +934,7 @@ fn run_windows_sandboxed_shell(
         stderr_truncated: stderr.truncated,
         stdout: (!stdout.text.is_empty()).then_some(stdout.text),
         stderr: (!stderr.text.is_empty()).then_some(stderr.text),
+        final_working_directory: None,
     })
 }
 
@@ -1294,6 +1388,16 @@ impl TailBuffer {
     }
 }
 
+#[cfg(unix)]
+fn set_nonblocking(file: &impl std::os::fd::AsRawFd) -> std::io::Result<()> {
+    let fd = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 fn read_bounded_with_progress(
     mut reader: impl Read,
     limit: usize,
@@ -1303,6 +1407,12 @@ fn read_bounded_with_progress(
     let mut output = BoundedOutput::new(limit);
     let mut buffer = [0_u8; 16 * 1024];
     loop {
+        if progress
+            .as_ref()
+            .is_some_and(|p| p.stop_readers.load(Ordering::Acquire))
+        {
+            break;
+        }
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
@@ -1313,7 +1423,15 @@ fn read_bounded_with_progress(
                 output.push(bytes);
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                if let Some(log) = progress.as_ref().and_then(|p| p.log.as_ref()) {
+                    log.incomplete(error);
+                }
+                break;
+            }
         }
     }
     output

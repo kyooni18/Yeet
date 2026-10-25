@@ -16,12 +16,13 @@ impl ToolRegistry {
             }
             "read_artifact" => {
                 let id = string_arg(object, "id")?;
-                let text = self.artifacts.read(
+                self.artifacts.read_page(
                     id,
                     usize_arg(object, "startLine"),
                     usize_arg(object, "endLine"),
-                )?;
-                artifact_output::page(&text, object)
+                    usize_arg(object, "offset").unwrap_or(0),
+                    usize_arg(object, "maxChars").unwrap_or(8192),
+                )
             }
             "search_artifact" => {
                 let id = string_arg(object, "id")?;
