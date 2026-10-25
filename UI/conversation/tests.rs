@@ -275,7 +275,7 @@ fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
         group
             .events
             .iter()
-            .all(|event| event.trace().status_label.is_none())
+            .all(|event| event.trace().status_label.as_deref() == Some("Completed"))
     );
     state.apply(ConversationAction::Toggle(id.clone()), &view, &harness);
     let view = state.project(&entries, &harness);

@@ -372,14 +372,15 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
         _ => Tool,
     };
     let status_label = match tool.status {
-        Completed => None,
+        Completed => Some("Completed"),
         Failed => Some("Failed"),
         TimedOut => Some("Timed out"),
         AwaitingPermission => Some("Awaiting approval"),
         Cancelled => Some("Cancelled"),
         Interrupted => Some("Interrupted"),
         Suppressed => Some("suppressed"),
-        Preparing | Running => None,
+        Preparing => Some("Preparing"),
+        Running => Some("running"),
     }
     .map(str::to_owned);
     let args = record(&tool.arguments);

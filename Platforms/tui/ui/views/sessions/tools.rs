@@ -50,6 +50,33 @@ mod tool_summary_layout_tests {
     }
 
     #[test]
+    fn tool_rows_show_every_lifecycle_state_without_duplicate_running() {
+        for (status, label) in [
+            (ToolCallStatus::Preparing, "Preparing"),
+            (ToolCallStatus::Running, "running"),
+            (ToolCallStatus::AwaitingPermission, "Awaiting approval"),
+            (ToolCallStatus::Completed, "Completed"),
+            (ToolCallStatus::Failed, "Failed"),
+            (ToolCallStatus::TimedOut, "Timed out"),
+            (ToolCallStatus::Cancelled, "Cancelled"),
+            (ToolCallStatus::Interrupted, "Interrupted"),
+        ] {
+            let tool = call("run_shell", status);
+            for expanded in [false, true] {
+                let lines = render(vec![tool_entry(&tool)], 80, expanded);
+                let header = lines[0].to_string();
+                assert_eq!(header.matches(label).count(), 1, "{header}");
+                if label != "running" {
+                    assert!(!header.contains("running"), "{header}");
+                }
+                if expanded {
+                    assert!(lines.iter().any(|line| line.to_string().contains("Input:")));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn summaries_use_compact_file_language() {
         let mut search = call("search_workspace", ToolCallStatus::Completed);
         search.arguments =
@@ -354,10 +381,12 @@ fn work_row(
     selected: bool,
 ) -> Line<'static> {
     let width = usize::from(width);
-    let status_style = Style::default().fg(if status.is_some_and(|s| s.contains("approval")) {
-        theme::text()
-    } else {
+    let status_style = Style::default().fg(if status.is_some_and(|s| {
+        matches!(s, "Failed" | "Timed out" | "Cancelled" | "Interrupted")
+    }) {
         theme::error_subtle()
+    } else {
+        theme::muted()
     });
     let mut suffix = String::new();
     if let Some(status) = status {
@@ -366,7 +395,7 @@ fn work_row(
     if let Some(count) = count {
         suffix.push_str(&format!(" · {count}"));
     }
-    if active {
+    if active && status.is_none() {
         suffix.push_str(" · running");
     }
     if let Some(expanded) = expanded {
@@ -475,7 +504,7 @@ pub(super) fn trace_lines(
         icons::conversation(trace.icon),
         if active_preview { &trace.title } else { &title }
     );
-    let status = trace.attention_label();
+    let status = trace.status_label.as_deref();
     let expandable = !trace.details.is_empty() || trace.metadata.is_some();
     let mut lines = vec![work_row(
         &title,
@@ -506,6 +535,11 @@ pub(super) fn trace_lines(
             } else {
                 theme::secondary()
             });
+            lines.extend(prefixed_wrapped_line(
+                Span::raw("  "),
+                Line::styled(format!("{}:", detail.title), style.add_modifier(Modifier::BOLD)),
+                width,
+            ));
             let body = if detail.monospaced {
                 // Tool output is literal text, not Markdown (preserve code and diffs).
                 detail
