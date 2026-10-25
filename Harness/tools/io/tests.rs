@@ -335,3 +335,37 @@ fn edits_chain_without_rereads_until_the_file_changes_elsewhere() {
     );
     registry.finish_task("task");
 }
+
+#[test]
+fn foreground_shell_reports_real_partial_output_while_it_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let store = crate::harness::sandbox::SandboxStore::new(&root).unwrap();
+    let mut policy = store.load().unwrap();
+    policy.workspace_read = crate::harness::sandbox::WorkspaceRead::All;
+    store.save(&policy).unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root.clone(),
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    let mut updates = Vec::new();
+    let args = json!({ "command": "printf first; sleep 1.5; printf second", "mode": "direct" });
+    let result = registry
+        .run_shell_tool_live(
+            args.as_object().unwrap(),
+            "",
+            &AtomicBool::new(false),
+            &mut |payload| updates.push(payload),
+        )
+        .unwrap();
+    let final_value: Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(final_value["stdout"], "firstsecond");
+    let live: Value = serde_json::from_str(updates.first().expect("progress while running")).unwrap();
+    assert_eq!(live["status"], "running");
+    assert_eq!(live["progress"]["stdoutTail"], "first");
+    // Nothing is reported for a stream that has produced no bytes.
+    assert!(live["progress"]["stderrTail"].is_null());
+}

@@ -202,6 +202,7 @@ impl MemberRunner for CoordinatorRunner {
                         call,
                         succeeded,
                         result,
+                        ..
                     } => {
                         on_progress(MemberProgress::Event {
                             kind: if succeeded {

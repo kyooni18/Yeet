@@ -500,6 +500,18 @@ impl ToolRegistry {
     }
 
     pub fn execute(&mut self, call: &ToolCall, model: &str, cancel: &AtomicBool) -> Result<String> {
+        self.execute_live(call, model, cancel, &mut |_| {})
+    }
+
+    /// Like `execute`, but `progress` receives real partial results (currently
+    /// foreground shell output) while the tool is still running.
+    pub fn execute_live(
+        &mut self,
+        call: &ToolCall,
+        model: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<String> {
         self.sync_edit_state();
         if self.shell_jobs.take_workspace_refresh() {
             // Refresh evidence without treating every poll/read as agent progress.
@@ -562,7 +574,7 @@ impl ToolRegistry {
             }
             "request_shell_permission" => self.request_shell_permission_tool(&object),
             "ask_user" if self.user_questions_enabled => self.ask_user_tool(&object, cancel),
-            "run_shell" => self.run_shell_tool(&object, model, cancel),
+            "run_shell" => self.run_shell_tool_live(&object, model, cancel, progress),
             "shell_job" => self.shell_job_tool(&object, cancel),
             "computer_use" => self.computer_use_tool(&object, cancel),
             "computer_use_reset" => self.computer_use_reset_tool(&object, cancel),

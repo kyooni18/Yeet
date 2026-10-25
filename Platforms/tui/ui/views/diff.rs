@@ -489,7 +489,7 @@ fn patch_rows(
     }
     result
 }
-fn tint(color: Color) -> Color {
+pub(in crate::platforms::tui::ui::views) fn tint(color: Color) -> Color {
     match (theme::code_background(), color) {
         (Color::Rgb(r, g, b), Color::Rgb(cr, cg, cb)) => Color::Rgb(
             ((r as u16 * 9 + cr as u16) / 10) as u8,

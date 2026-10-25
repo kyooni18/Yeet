@@ -137,6 +137,16 @@ impl ConversationState {
     }
 }
 fn disclosure_expanded(view: &ConversationView, id: &str) -> Option<bool> {
+    if let Some(key) = id.strip_prefix("raw:") {
+        return view.items.iter().find_map(|item| match item {
+            DisplayItem::Activity { group, .. } => group
+                .events
+                .iter()
+                .find(|event| event.key() == key)
+                .map(|event| event.trace().raw_expanded),
+            _ => None,
+        });
+    }
     for item in &view.items {
         match item {
             DisplayItem::Entry {

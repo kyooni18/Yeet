@@ -205,7 +205,8 @@ mod tests {
         let view = app.application.conversation_projection().view;
         let (text, rows, ids) = content(&app, &view, 40);
         assert_eq!(ids, view.work_ids());
-        assert_eq!(rows.len(), 2);
+        // Two work rows plus the expanded tool's raw-inspection disclosure.
+        assert_eq!(rows.len(), 3);
         assert!(
             text.lines[rows[1]]
                 .style

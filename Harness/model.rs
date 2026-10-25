@@ -656,6 +656,10 @@ pub struct ConversationToolCall {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
+    /// Structured JSON the tool returned, captured at execution time for native
+    /// presentation. `result` stays the compact model-facing text.
+    #[serde(default, rename = "rawResult", skip_serializing_if = "Option::is_none")]
+    pub raw_result: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

@@ -62,10 +62,12 @@ pub(super) fn agent_event_log_value(event: &AgentEvent) -> Option<Value> {
         AgentEvent::ToolExecutionStarted(call) => {
             Some(json!({"type":"agent-tool-started", "call":call}))
         }
+        AgentEvent::ToolProgress { .. } => None,
         AgentEvent::ToolExecutionFinished {
             call,
             succeeded,
             result,
+            ..
         } => Some(json!({
             "type":"agent-tool-finished",
             "call":call,
@@ -172,6 +174,7 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                         parallel_group_id: None,
                         job_id: None,
                         result: None,
+                        raw_result: None,
                         error: None,
                     });
                 if let Some(id) = id.filter(|value| !value.is_empty()) {
@@ -213,6 +216,7 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                         parallel_group_id: None,
                         job_id: None,
                         result: None,
+                        raw_result: None,
                         error: None,
                     });
                 pending.index = Some(index as i64);
@@ -226,13 +230,23 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
             state.set_activity("tool", "Preparing", Some(tool_activity_title(&call.name)));
         }
         AgentEvent::ToolExecutionStarted(call) => {
-            state.set_tool_call_execution_status(&call, ToolCallStatus::Preparing, None, None);
+            state.set_tool_call_execution_status(&call, ToolCallStatus::Running, None, None, None);
             state.set_activity("tool", &tool_activity_title(&call.name), tool_detail(&call));
+        }
+        AgentEvent::ToolProgress { call, result } => {
+            state.set_tool_call_execution_status(
+                &call,
+                ToolCallStatus::Running,
+                Some(result),
+                None,
+                None,
+            );
         }
         AgentEvent::ToolExecutionFinished {
             call,
             succeeded,
             result,
+            raw,
         } => {
             let (result, error) = if succeeded {
                 (Some(result), None)
@@ -247,6 +261,7 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                     ToolCallStatus::Failed
                 },
                 result,
+                raw,
                 error,
             );
             // Derive presentation from the existing call, without another model turn.
@@ -280,6 +295,7 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                 &call,
                 ToolCallStatus::Suppressed,
                 Some(reason.clone()),
+                None,
                 None,
             );
             state.set_activity("tool-suppressed", "Suppressed", Some(reason));
@@ -348,6 +364,50 @@ pub(super) fn record_usage(state: &mut HarnessState, usage: &Usage, already_coun
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_progress_updates_the_running_call_and_finish_keeps_the_structured_result() {
+        let mut session = SharedSession::new("claude-api/test".into(), "auto".into());
+        let call = crate::core::ToolCall {
+            id: "c1".into(),
+            name: "run_shell".into(),
+            arguments: json!({"command": "make"}),
+        };
+        apply_agent_event(&mut session, AgentEvent::ToolExecutionStarted(call.clone()));
+        apply_agent_event(
+            &mut session,
+            AgentEvent::ToolProgress {
+                call: call.clone(),
+                result: r#"{"status":"running"}"#.into(),
+            },
+        );
+        let tool = |session: &mut SharedSession| {
+            session
+                .conversation_mut()
+                .iter()
+                .find_map(|entry| match &entry.kind {
+                    ConversationKind::ToolCall { tool_call } => Some(tool_call.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let running = tool(&mut session);
+        assert!(matches!(running.status, ToolCallStatus::Running));
+        assert_eq!(running.result.as_deref(), Some(r#"{"status":"running"}"#));
+        apply_agent_event(
+            &mut session,
+            AgentEvent::ToolExecutionFinished {
+                call,
+                succeeded: true,
+                result: "ok".into(),
+                raw: Some(r#"{"exitCode":0}"#.into()),
+            },
+        );
+        let done = tool(&mut session);
+        assert!(matches!(done.status, ToolCallStatus::Completed));
+        assert_eq!(done.result.as_deref(), Some("ok"));
+        assert_eq!(done.raw_result.as_deref(), Some(r#"{"exitCode":0}"#));
+    }
 
     #[test]
     fn provider_phases_clear_stale_reasoning_without_inventing_a_transcript() {

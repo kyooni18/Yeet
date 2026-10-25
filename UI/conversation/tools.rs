@@ -385,6 +385,7 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
     .map(str::to_owned);
     let args = record(&tool.arguments);
     let files = edit_files(tool, args.as_ref());
+    let (rich, raw) = super::rich::project(tool, args.as_ref());
     ToolView {
         raw_tool: tool.clone(),
         title,
@@ -402,6 +403,8 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
         awaits_permission: matches!(tool.status, AwaitingPermission),
         icon,
         details: details(tool, args.as_ref(), &files),
+        rich,
+        raw,
     }
 }
 

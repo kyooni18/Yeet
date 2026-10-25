@@ -47,6 +47,7 @@ fn tool(status: ToolCallStatus) -> ConversationEntry {
             parallel_group_id: None,
             job_id: None,
             result: None,
+            raw_result: None,
             error: None,
         },
     })

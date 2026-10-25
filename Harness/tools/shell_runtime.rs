@@ -15,8 +15,63 @@ impl ToolRegistry {
     pub(super) fn run_shell_tool(
         &mut self,
         object: &Map<String, Value>,
+        model: &str,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        self.run_shell_tool_live(object, model, cancel, &mut |_| {})
+    }
+
+    /// Waits for a foreground job in short slices, reporting the job's real
+    /// output tails whenever they change. Returns the same outcome as one long
+    /// `wait_finished` would.
+    fn wait_with_progress(
+        &self,
+        job_id: &str,
+        command: &str,
+        working_directory: &str,
+        limit: Duration,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<ShellJobWait> {
+        const SLICE: Duration = Duration::from_millis(400);
+        let deadline = std::time::Instant::now() + limit;
+        let mut reported = (0usize, 0usize);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match self
+                .shell_jobs
+                .wait_finished(job_id, remaining.min(SLICE), cancel)?
+            {
+                ShellJobWait::TimedOut if !remaining.is_zero() && remaining > SLICE => {
+                    if let Some(snapshot) = self.shell_jobs.progress(job_id) {
+                        let bytes = (snapshot.stdout_bytes, snapshot.stderr_bytes);
+                        if bytes != reported && bytes != (0, 0) {
+                            reported = bytes;
+                            progress(
+                                json!({
+                                    "jobId": job_id,
+                                    "status": "running",
+                                    "command": command,
+                                    "workingDirectory": working_directory,
+                                    "elapsedMilliseconds": self.shell_jobs.elapsed(job_id),
+                                    "progress": snapshot,
+                                })
+                                .to_string(),
+                            );
+                        }
+                    }
+                }
+                outcome => return Ok(outcome),
+            }
+        }
+    }
+
+    pub(super) fn run_shell_tool_live(
+        &mut self,
+        object: &Map<String, Value>,
         _model: &str,
         cancel: &AtomicBool,
+        progress: &mut dyn FnMut(String),
     ) -> Result<String> {
         let background = object
             .get("background")
@@ -151,7 +206,14 @@ impl ToolRegistry {
             .unwrap_or(&self.context.working_directory)
             .display()
             .to_string();
-        match self.shell_jobs.wait_finished(&job_id, wait_limit, cancel)? {
+        match self.wait_with_progress(
+            &job_id,
+            &command,
+            &effective_working_directory,
+            wait_limit,
+            cancel,
+            progress,
+        )? {
             ShellJobWait::Finished => {}
             ShellJobWait::Cancelled => {
                 // Let the worker observe the stop flag and reap its process group.

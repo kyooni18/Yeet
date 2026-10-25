@@ -52,6 +52,14 @@ pub enum AgentEvent {
         call: ToolCall,
         succeeded: bool,
         result: String,
+        /// Unprojected structured tool output for native presentation, when the
+        /// tool has a rich view and the payload is small enough to retain.
+        raw: Option<String>,
+    },
+    /// Real partial output from a running tool; never synthesized.
+    ToolProgress {
+        call: ToolCall,
+        result: String,
     },
     ToolExecutionSuppressed {
         call: ToolCall,

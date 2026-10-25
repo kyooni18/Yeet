@@ -44,6 +44,7 @@ fn tool_event(
                 parallel_group_id: None,
                 job_id: None,
                 result: result.map(str::to_owned),
+                raw_result: None,
                 error: error.map(str::to_owned),
             },
         },

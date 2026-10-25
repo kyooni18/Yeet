@@ -172,7 +172,10 @@ fn reasoning_summary_stays_visible_separate_from_its_tool_dropdown() {
         assert!(app.handle_work_selection_key(&KeyEvent::new(key, KeyModifiers::NONE)));
         let toggled = transcript_content(&app, 90).0.to_string();
         assert!(toggled.contains("src/example.rs"));
-        assert!(toggled.contains("\"path\""));
+        // Rich view first; raw arguments stay behind their own disclosure.
+        assert!(toggled.contains("no source lines recorded"));
+        assert!(toggled.contains("Raw input and output"));
+        assert!(!toggled.contains("\"path\""));
         assert!(toggled.contains("Check the implementation"));
         assert!(!app.input_focused);
         assert_eq!(app.input, "keep draft");

@@ -1,4 +1,5 @@
 //! Active session/conversation view. `Mode::Sessions` remains the session picker.
+mod rich;
 mod shared;
 pub(in crate::platforms::tui::ui) mod tools;
 

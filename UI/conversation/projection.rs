@@ -119,6 +119,9 @@ fn trace(
         active,
         expanded: state.expanded_for(id, false),
         details: sections,
+        rich: Vec::new(),
+        raw: Vec::new(),
+        raw_expanded: false,
     }
 }
 fn append_tool(
@@ -142,6 +145,14 @@ fn append_tool(
         active: view.active,
         expanded: state.expanded_for(&key, false),
         details: view.details.clone(),
+        rich: view.rich.clone(),
+        raw: view.raw.clone(),
+        // Raw inspection is opted into per tool; "expand all" does not open it.
+        raw_expanded: state
+            .expanded
+            .get(&format!("raw:{key}"))
+            .copied()
+            .unwrap_or(false),
     };
     pending.push(ActivityEvent::Tool {
         key,

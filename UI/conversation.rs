@@ -1,6 +1,7 @@
 //! Transcript structure, disclosure state and actions authored once for every host.
 pub mod compact;
 mod projection;
+mod rich;
 mod state;
 #[cfg(test)]
 mod tests;

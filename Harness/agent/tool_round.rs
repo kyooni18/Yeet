@@ -59,6 +59,7 @@ pub(super) struct DispatchInput<'a> {
     pub tool_catalog: &'a [ToolDefinition],
     pub parallel_mcp_results: &'a mut ParallelResults,
     pub tool_discovery: &'a mut ToolDiscovery,
+    pub progress: &'a mut dyn FnMut(String),
 }
 
 impl AgentCoordinator {
@@ -107,7 +108,8 @@ impl AgentCoordinator {
             self.context_memory.sync(&self.history)?;
             self.context_memory.execute(call)
         } else {
-            self.registry.execute(call, input.model, input.cancel)
+            self.registry
+                .execute_live(call, input.model, input.cancel, input.progress)
         };
         check_cancel(input.cancel)?;
         Ok(match execution {
@@ -240,4 +242,22 @@ impl AgentCoordinator {
             });
         }
     }
+}
+
+/// Largest structured result kept beside the compact model text. Results over
+/// this size are already externalized or windowed by the tools themselves.
+const MAX_DISPLAY_RAW_BYTES: usize = 256 * 1024;
+
+/// Structured output worth keeping for native presentation: the tools whose
+/// compact model text discards hunks, streams, or line ranges.
+pub(super) fn raw_for_display(call: &ToolCall, content: &str, succeeded: bool) -> Option<String> {
+    let rich = matches!(
+        call.name.as_str(),
+        "run_shell" | "shell_job" | "read_file" | "read_files" | "apply_file_edits"
+    );
+    (rich
+        && (succeeded || call.name == "run_shell" || call.name == "shell_job")
+        && content.len() <= MAX_DISPLAY_RAW_BYTES
+        && serde_json::from_str::<Value>(content).is_ok())
+    .then(|| content.to_owned())
 }

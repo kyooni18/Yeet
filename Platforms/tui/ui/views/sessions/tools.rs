@@ -45,6 +45,7 @@ mod tool_summary_layout_tests {
             parallel_group_id: None,
             job_id: None,
             result: None,
+            raw_result: None,
             error: None,
         }
     }
@@ -70,7 +71,12 @@ mod tool_summary_layout_tests {
                     assert!(!header.contains("running"), "{header}");
                 }
                 if expanded {
-                    assert!(lines.iter().any(|line| line.to_string().contains("Input:")));
+                    assert!(
+                        lines
+                            .iter()
+                            .any(|line| line.to_string().contains("$ cargo check")),
+                        "{lines:?}"
+                    );
                 }
             }
         }
@@ -310,10 +316,14 @@ pub(super) fn activity_group_lines(
 ) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
     let mut rows = vec![(0, group.id.clone())];
     if let Some(trace) = group.single_trace() {
-        return (
-            trace_lines(&trace, width, selected == Some(&group.id)),
-            rows,
-        );
+        let raw_selected = trace
+            .raw_id()
+            .is_some_and(|id| selected == Some(id.as_str()));
+        let rendered = trace_lines(&trace, width, selected == Some(&group.id), raw_selected);
+        if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
+            rows.push((row, id));
+        }
+        return (rendered.lines, rows);
     }
     // While a grouped command is running, do not squeeze its command into an
     // abbreviated header. Give the actual command a few wrapped rows instead.
@@ -354,7 +364,19 @@ pub(super) fn activity_group_lines(
                 rows.push((lines.len(), trace.id.clone()));
             }
             let indent = " ".repeat(usize::from(width.min(2)));
-            for line in trace_lines(trace, width.saturating_sub(2), selected == Some(&trace.id)) {
+            let raw_selected = trace
+                .raw_id()
+                .is_some_and(|id| selected == Some(id.as_str()));
+            let rendered = trace_lines(
+                trace,
+                width.saturating_sub(2),
+                selected == Some(&trace.id),
+                raw_selected,
+            );
+            if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
+                rows.push((lines.len() + row, id));
+            }
+            for line in rendered.lines {
                 let style = line.style;
                 lines.push(
                     Line::from(
@@ -381,13 +403,14 @@ fn work_row(
     selected: bool,
 ) -> Line<'static> {
     let width = usize::from(width);
-    let status_style = Style::default().fg(if status.is_some_and(|s| {
-        matches!(s, "Failed" | "Timed out" | "Cancelled" | "Interrupted")
-    }) {
-        theme::error_subtle()
-    } else {
-        theme::muted()
-    });
+    let status_style = Style::default().fg(
+        if status.is_some_and(|s| matches!(s, "Failed" | "Timed out" | "Cancelled" | "Interrupted"))
+        {
+            theme::error_subtle()
+        } else {
+            theme::muted()
+        },
+    );
     let mut suffix = String::new();
     if let Some(status) = status {
         suffix.push_str(&format!(" · {status}"));
@@ -473,11 +496,18 @@ fn active_summary_lines(summary: &str, width: u16) -> Vec<Line<'static>> {
     rows
 }
 
+/// Rendered disclosure plus the row of its raw-inspection toggle, if shown.
+pub(super) struct TraceLines {
+    pub lines: Vec<Line<'static>>,
+    pub raw_row: Option<usize>,
+}
+
 pub(super) fn trace_lines(
     trace: &crate::shared_ui::conversation::TraceView,
     width: u16,
     selected: bool,
-) -> Vec<Line<'static>> {
+    raw_selected: bool,
+) -> TraceLines {
     use crate::shared_ui::conversation::ConversationIcon;
     let summary = trace
         .summary
@@ -529,7 +559,23 @@ pub(super) fn trace_lines(
                 width,
             ));
         }
-        for detail in &trace.details {
+        let mut raw_row = None;
+        let generic: &[crate::shared_ui::conversation::DetailSection] = if trace.rich.is_empty() {
+            &trace.details
+        } else {
+            lines.extend(super::rich::rich_lines(&trace.rich, width));
+            if !trace.raw.is_empty() {
+                raw_row = Some(lines.len());
+                let label = format!(
+                    "{} Raw input and output",
+                    icons::chevron(trace.raw_expanded)
+                );
+                let line = work_row_label(&label, width, raw_selected);
+                lines.push(line);
+            }
+            if trace.raw_expanded { &trace.raw } else { &[] }
+        };
+        for detail in generic {
             let style = Style::default().fg(if detail.is_error {
                 theme::error_subtle()
             } else {
@@ -537,7 +583,10 @@ pub(super) fn trace_lines(
             });
             lines.extend(prefixed_wrapped_line(
                 Span::raw("  "),
-                Line::styled(format!("{}:", detail.title), style.add_modifier(Modifier::BOLD)),
+                Line::styled(
+                    format!("{}:", detail.title),
+                    style.add_modifier(Modifier::BOLD),
+                ),
                 width,
             ));
             let body = if detail.monospaced {
@@ -558,6 +607,32 @@ pub(super) fn trace_lines(
                 ));
             }
         }
+        return TraceLines { lines, raw_row };
     }
-    lines
+    TraceLines {
+        lines,
+        raw_row: None,
+    }
+}
+
+/// A muted, selectable sub-row (the raw-inspection disclosure).
+fn work_row_label(label: &str, width: u16, selected: bool) -> Line<'static> {
+    let indent = usize::from(width.min(2));
+    let line = Line::styled(
+        format!(
+            "{}{}",
+            " ".repeat(indent),
+            task::fit(label, usize::from(width).saturating_sub(indent))
+        ),
+        Style::default().fg(theme::muted()),
+    );
+    if selected {
+        line.style(
+            Style::default()
+                .bg(theme::code_background())
+                .add_modifier(Modifier::REVERSED),
+        )
+    } else {
+        line
+    }
 }

@@ -30,6 +30,159 @@ pub struct DetailSection {
     pub is_error: bool,
     pub has_background: bool,
 }
+/// Tool-specific semantic detail. Data only: hosts decide how to paint it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RichDetail {
+    Diff(DiffDetail),
+    Terminal(TerminalDetail),
+    Source(SourceDetail),
+    Diagnostics { items: Vec<DiagnosticItem> },
+    Notice { message: String, is_error: bool },
+}
+/// Where complete data lives when the tool returned only a bounded preview.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Externalized {
+    pub artifact_id: Option<String>,
+    pub bytes: Option<u64>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DiffDetail {
+    pub files: Vec<DiffFile>,
+    /// Set when the edit payload was stored as an artifact, so no hunks are held here.
+    pub externalized: Option<Externalized>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DiffFile {
+    pub path: String,
+    pub previous_path: Option<String>,
+    /// `create`, `update`, `delete`, `rename`, or the backend's own word.
+    pub operation: String,
+    pub hunks: Vec<DiffHunk>,
+    pub warnings: Vec<String>,
+    /// False when the call has no recorded result (pending/failed) or it was externalized.
+    pub has_diff: bool,
+    pub truncated: bool,
+}
+impl DiffFile {
+    pub fn added(&self) -> usize {
+        self.count(DiffLineKind::Added)
+    }
+    pub fn removed(&self) -> usize {
+        self.count(DiffLineKind::Removed)
+    }
+    fn count(&self, kind: DiffLineKind) -> usize {
+        self.hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .filter(|line| line.kind == kind)
+            .count()
+    }
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DiffHunk {
+    pub old_start: usize,
+    pub old_end: Option<usize>,
+    pub new_start: usize,
+    pub new_end: Option<usize>,
+    pub lines: Vec<DiffLine>,
+    pub truncated: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffLineKind {
+    Context,
+    Added,
+    Removed,
+    /// Backend marker where the middle of a long hunk was dropped.
+    Omitted,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub old: Option<usize>,
+    pub new: Option<usize>,
+    pub text: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticItem {
+    pub severity: String,
+    pub path: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub message: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalState {
+    Waiting,
+    Running,
+    /// The command outlived its foreground window and continues as a job.
+    BackgroundJob,
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OutputStream {
+    pub text: String,
+    /// Total bytes the process wrote, when reported.
+    pub bytes: Option<u64>,
+    /// The backend dropped part of this stream.
+    pub truncated: bool,
+    /// Only the latest bytes of a still-running command.
+    pub tail: bool,
+}
+/// Streams are kept apart because their relative order is not recorded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerminalDetail {
+    pub working_directory: Option<String>,
+    pub command: Option<String>,
+    pub state: TerminalState,
+    pub exit_code: Option<i64>,
+    pub duration_ms: Option<u64>,
+    pub stdout: Option<OutputStream>,
+    pub stderr: Option<OutputStream>,
+    /// Output whose stream is unknown (text-only or older results).
+    pub combined: Option<String>,
+    pub job_id: Option<String>,
+    pub artifact_id: Option<String>,
+    /// The visible output is a window onto a larger transcript.
+    pub windowed: bool,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SourceDetail {
+    pub files: Vec<SourceFile>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceAvailability {
+    Lines,
+    /// Externalized read: only a bounded prefix of the range is present.
+    Preview,
+    /// No lines were recorded (still running, or metadata only).
+    Pending,
+    Failed,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceFile {
+    pub path: String,
+    pub start_line: Option<usize>,
+    pub end_line: Option<usize>,
+    pub total_lines: Option<usize>,
+    pub next_start_line: Option<usize>,
+    pub availability: SourceAvailability,
+    pub lines: Vec<SourceLine>,
+    pub artifact_id: Option<String>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceLine {
+    pub number: usize,
+    pub text: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolView {
     pub raw_tool: ConversationToolCall,
@@ -42,6 +195,12 @@ pub struct ToolView {
     pub awaits_permission: bool,
     pub icon: ConversationIcon,
     pub details: Vec<DetailSection>,
+    /// Specialized presentation; hosts without one keep using `details`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich: Vec<RichDetail>,
+    /// Arguments and results behind `rich`, for secondary inspection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw: Vec<DetailSection>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceView {
@@ -54,8 +213,18 @@ pub struct TraceView {
     pub active: bool,
     pub expanded: bool,
     pub details: Vec<DetailSection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich: Vec<RichDetail>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw: Vec<DetailSection>,
+    #[serde(default)]
+    pub raw_expanded: bool,
 }
 impl TraceView {
+    /// Stable ID of the raw-inspection disclosure shown beneath a rich view.
+    pub fn raw_id(&self) -> Option<String> {
+        (!self.rich.is_empty() && !self.raw.is_empty()).then(|| format!("raw:{}", self.id))
+    }
     /// Only exceptional states need visible status copy beside the action.
     pub fn attention_label(&self) -> Option<&str> {
         self.status_label.as_deref().filter(|label| {
@@ -245,16 +414,18 @@ impl ConversationView {
                 DisplayItem::Activity { id, group } => {
                     ids.push(id.clone());
                     if group.expanded && group.events.len() > 1 {
-                        ids.extend(
-                            group
-                                .events
-                                .iter()
-                                .filter(|event| {
-                                    !event.trace().details.is_empty()
-                                        || event.trace().metadata.is_some()
-                                })
-                                .map(|event| event.key().to_owned()),
-                        );
+                        for event in group.events.iter().filter(|event| {
+                            !event.trace().details.is_empty() || event.trace().metadata.is_some()
+                        }) {
+                            ids.push(event.key().to_owned());
+                            if event.trace().expanded {
+                                ids.extend(event.trace().raw_id());
+                            }
+                        }
+                    } else if group.expanded
+                        && let Some(trace) = group.single_trace()
+                    {
+                        ids.extend(trace.raw_id());
                     }
                 }
             }

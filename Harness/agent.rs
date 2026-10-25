@@ -239,6 +239,7 @@ impl AgentCoordinator {
                         call: call.clone(),
                         succeeded: false,
                         result: "Malformed or incomplete tool arguments; retrying.".into(),
+                        raw: None,
                     });
                 }
                 if malformed_repairs < MALFORMED_TOOL_REPAIR_LIMIT {
@@ -453,8 +454,8 @@ impl AgentCoordinator {
                 if !parallel_mcp_active {
                     emit(AgentEvent::ToolExecutionStarted(call.clone()));
                 }
-                let (content, transport_succeeded) =
-                    self.dispatch_tool_call(tool_round::DispatchInput {
+                let (content, transport_succeeded) = self.dispatch_tool_call(
+                    tool_round::DispatchInput {
                         call,
                         model,
                         cancel,
@@ -463,7 +464,14 @@ impl AgentCoordinator {
                         tool_catalog: &tool_catalog,
                         parallel_mcp_results: &mut parallel_mcp_results,
                         tool_discovery: &mut tool_discovery,
-                    })?;
+                        progress: &mut |result| {
+                            emit(AgentEvent::ToolProgress {
+                                call: call.clone(),
+                                result,
+                            })
+                        },
+                    },
+                )?;
                 let succeeded = tool_execution_succeeded(call, &content, transport_succeeded);
                 if succeeded {
                     tool_round::load_activated_tools(call, &content, &mut tool_discovery);
@@ -512,6 +520,7 @@ impl AgentCoordinator {
                     call: call.clone(),
                     succeeded,
                     result: recorded_content,
+                    raw: tool_round::raw_for_display(call, &content, succeeded),
                 });
             }
             self.finish_tool_round(&calls, &tool_discovery)?;

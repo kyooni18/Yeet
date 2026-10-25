@@ -408,6 +408,7 @@ impl SharedSession {
         call: &crate::core::ToolCall,
         status: ToolCallStatus,
         result: Option<String>,
+        raw_result: Option<String>,
         error: Option<String>,
     ) {
         let duration_ms = if matches!(
@@ -444,6 +445,7 @@ impl SharedSession {
             pending.status = status;
             pending.duration_ms = duration_ms;
             pending.result = result;
+            pending.raw_result = raw_result;
             pending.error = error;
             pending.clone()
         } else {
@@ -476,6 +478,7 @@ impl SharedSession {
                 parallel_group_id: None,
                 job_id: None,
                 result,
+                raw_result,
                 error,
             }
         };
