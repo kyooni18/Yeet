@@ -38,7 +38,7 @@ pub(crate) fn draw_session_management(frame: &mut Frame<'_>, app: &App) {
             ));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from("j/k select · l/Enter continue · h/q back"));
+        lines.push(Line::from("j/k select · Enter continue · q/Esc back"));
     } else {
         lines.push(Line::from(match manager.stage {
             Stage::Rename => "Name (Ctrl+U clears):",

@@ -34,8 +34,9 @@ impl SessionManager {
         match event.code {
             KeyCode::Char('j') => KeyCode::Down,
             KeyCode::Char('k') => KeyCode::Up,
-            KeyCode::Char('l') => KeyCode::Enter,
-            KeyCode::Char('h' | 'q') => KeyCode::Esc,
+            KeyCode::Char('h') => KeyCode::Left,
+            KeyCode::Char('l') => KeyCode::Right,
+            KeyCode::Char('q') => KeyCode::Esc,
             KeyCode::Char(c @ ('r' | 'm' | 'd')) => {
                 self.selected = match c {
                     'r' => 0,
@@ -112,8 +113,9 @@ impl App {
             KeyCode::Char('k') if plain => KeyCode::Up,
             KeyCode::Char('g') if plain => KeyCode::Home,
             KeyCode::Char('G') if plain => KeyCode::End,
-            KeyCode::Char('l') if plain => KeyCode::Enter,
-            KeyCode::Char('q' | 'h') if plain => KeyCode::Esc,
+            KeyCode::Char('h') if plain => KeyCode::Left,
+            KeyCode::Char('l') if plain => KeyCode::Right,
+            KeyCode::Char('q') if plain => KeyCode::Esc,
             KeyCode::Char('e') if plain => {
                 self.open_session_manager();
                 return None;
@@ -237,6 +239,20 @@ mod tests {
             app.session_navigation_key(key('k')).unwrap().code,
             KeyCode::Up
         );
+        for (letter, arrow) in [
+            ('h', KeyCode::Left),
+            ('j', KeyCode::Down),
+            ('k', KeyCode::Up),
+            ('l', KeyCode::Right),
+        ] {
+            assert_eq!(app.session_navigation_key(key(letter)).unwrap().code, arrow);
+            assert_eq!(
+                app.session_navigation_key(KeyEvent::new(arrow, KeyModifiers::NONE))
+                    .unwrap()
+                    .code,
+                arrow
+            );
+        }
         assert_eq!(
             app.session_navigation_key(key('G')).unwrap().code,
             KeyCode::End
@@ -247,16 +263,16 @@ mod tests {
         );
         assert!(app.session_navigation_key(key('/')).is_none());
         assert!(app.session_searching);
-        for c in "jkqen/".chars() {
+        for c in "hjklqen/".chars() {
             assert!(app.session_navigation_key(key(c)).is_none());
         }
-        assert_eq!(app.popup_filter, "jkqen/");
+        assert_eq!(app.popup_filter, "hjklqen/");
         assert!(
             app.session_navigation_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
                 .is_none()
         );
         assert!(!app.session_searching);
-        assert_eq!(app.popup_filter, "jkqen/");
+        assert_eq!(app.popup_filter, "hjklqen/");
         assert_eq!(
             app.session_navigation_key(key('q')).unwrap().code,
             KeyCode::Esc
@@ -274,7 +290,20 @@ mod tests {
             error: None,
         };
         let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
-        assert_eq!(manager.navigation_key(key('j')), KeyCode::Down);
+        for (letter, arrow) in [
+            ('h', KeyCode::Left),
+            ('j', KeyCode::Down),
+            ('k', KeyCode::Up),
+            ('l', KeyCode::Right),
+        ] {
+            assert_eq!(manager.navigation_key(key(letter)), arrow);
+            assert_eq!(
+                manager.navigation_key(KeyEvent::new(arrow, KeyModifiers::NONE)),
+                arrow
+            );
+            assert_eq!(manager.stage, Stage::Actions);
+            assert_eq!(manager.selected, 0);
+        }
         assert_eq!(manager.navigation_key(key('d')), KeyCode::Enter);
         assert_eq!(manager.selected, 2);
         for stage in [Stage::Rename, Stage::Move, Stage::Delete] {

@@ -46,7 +46,7 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
     let hint = if app.session_searching {
         format!("/{} · Enter/Esc normal", app.popup_filter)
     } else if app.popup_filter.is_empty() {
-        "j/k move · / search · l open · n new".into()
+        "j/k move · / search · Enter select".into()
     } else {
         format!("/{} · j/k move · / edit", app.popup_filter)
     };

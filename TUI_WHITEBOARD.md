@@ -14,12 +14,14 @@ No new screens or native frontend layouts are introduced.
 # TUI session management
 
 Sessions opens with `s` from unfocused chat or the `/sessions` command (no
-function keys). The picker starts in normal mode: j/k navigate, g/G jump,
-Ctrl+U/D page, Enter/l open, n creates, q/Esc closes. `/` enters search;
+function keys). In normal mode hjkl are strictly Left/Down/Up/Right aliases,
+not activate/back shortcuts. Horizontal arrows do nothing in these vertical
+lists. The picker uses g/G to jump, Ctrl+U/D to page, Enter to open, n to
+create, and q/Esc to close. `/` enters search;
 Enter/Esc returns to normal mode without opening a row. `e` opens management for
 the selected stable session ID (not the live filtered index). The nested panel
-offers rename (r), move workspace (m), and delete (d); j/k selects, l/Enter
-continues, and h/q/Esc returns without changing data. Editing fields keep
+offers rename (r), move workspace (m), and delete (d); j/k selects, Enter
+continues, and q/Esc returns without changing data. Editing fields keep
 literal text input, so navigation letters never steal names or paths.
 Rename and workspace path fields support paste and Ctrl+U; Tab cycles known
 workspace paths. Deletion requires typing `delete`, and creates a recovery

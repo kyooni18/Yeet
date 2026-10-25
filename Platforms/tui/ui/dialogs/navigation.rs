@@ -214,7 +214,7 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
 pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(82, 76, frame.area());
     theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Sessions · j/k move · l open · e manage · n new · q close ");
+    let block = theme::modal_block(" Sessions · j/k move · Enter open · e manage · n new · q close ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

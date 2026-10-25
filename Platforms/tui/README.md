@@ -32,11 +32,12 @@ view tabs, contextual rails, and separate command-palette/view-switcher behavior
 
 Open Sessions with **s** from unfocused chat (Esc leaves the composer), or submit
 **/sessions**. No function keys are used for sessions.
-Use **j/k** to navigate, **g/G** for first/last, **Ctrl+U/D** to page,
-**l/Enter** to open, **n** for new, and **q/Esc** to close.
+In normal mode **h/j/k/l** mean **Left/Down/Up/Right**, exactly like arrow keys.
+Horizontal arrows have no action in these vertical lists. Use **j/k** to navigate,
+**g/G** for first/last, **Ctrl+U/D** to page, and **Enter** to open, **n** for new, and **q/Esc** to close.
 **/** enters search; **Enter/Esc** returns to normal mode with the filter kept.
 Press **e** to manage the selection, then **r** to rename, **m** to move workspace,
-or **d** to delete. The menu also supports j/k, l/Enter, and h/q/Esc to go back.
+or **d** to delete. The menu also supports j/k, Enter, and q/Esc to go back.
 Fields accept paste; Ctrl+U clears them. In Move workspace, enter an existing
 directory or press Tab to cycle known workspace paths. Moving retains history
 but resets the session's working directory and extra context roots.
