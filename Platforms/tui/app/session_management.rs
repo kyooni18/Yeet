@@ -25,6 +25,29 @@ impl SessionManager {
         }
     }
 
+    fn navigation_key(&mut self, event: KeyEvent) -> KeyCode {
+        if self.stage != Stage::Actions
+            || !(event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT)
+        {
+            return event.code;
+        }
+        match event.code {
+            KeyCode::Char('j') => KeyCode::Down,
+            KeyCode::Char('k') => KeyCode::Up,
+            KeyCode::Char('l') => KeyCode::Enter,
+            KeyCode::Char('h' | 'q') => KeyCode::Esc,
+            KeyCode::Char(c @ ('r' | 'm' | 'd')) => {
+                self.selected = match c {
+                    'r' => 0,
+                    'm' => 1,
+                    _ => 2,
+                };
+                KeyCode::Enter
+            }
+            code => code,
+        }
+    }
+
     fn command(&mut self) -> Option<FrontendCommand> {
         let text = self.text.trim().to_owned();
         let session_id = self.id.clone();
@@ -56,6 +79,59 @@ impl SessionManager {
 }
 
 impl App {
+    /// Search is an explicit insert mode; normal-mode letters never edit the query.
+    pub(super) fn session_navigation_key(&mut self, event: KeyEvent) -> Option<KeyEvent> {
+        if self.session_searching {
+            match event.code {
+                KeyCode::Esc | KeyCode::Enter => self.session_searching = false,
+                KeyCode::Backspace => {
+                    self.popup_filter.pop();
+                    self.popup_index = 0;
+                }
+                KeyCode::Char('u') if event.modifiers == KeyModifiers::CONTROL => {
+                    self.popup_filter.clear();
+                    self.popup_index = 0;
+                }
+                KeyCode::Char(c)
+                    if event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT =>
+                {
+                    self.popup_filter.push(c);
+                    self.popup_index = 0;
+                }
+                _ => {}
+            }
+            return None;
+        }
+        let plain = event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT;
+        let code = match event.code {
+            KeyCode::Char('/') if plain => {
+                self.session_searching = true;
+                return None;
+            }
+            KeyCode::Char('j') if plain => KeyCode::Down,
+            KeyCode::Char('k') if plain => KeyCode::Up,
+            KeyCode::Char('g') if plain => KeyCode::Home,
+            KeyCode::Char('G') if plain => KeyCode::End,
+            KeyCode::Char('l') if plain => KeyCode::Enter,
+            KeyCode::Char('q' | 'h') if plain => KeyCode::Esc,
+            KeyCode::Char('e') if plain => {
+                self.open_session_manager();
+                return None;
+            }
+            KeyCode::Char('n') if plain => {
+                return Some(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+            }
+            KeyCode::Char('u') if event.modifiers == KeyModifiers::CONTROL => KeyCode::PageUp,
+            KeyCode::Char('d') if event.modifiers == KeyModifiers::CONTROL => KeyCode::PageDown,
+            KeyCode::Char('e' | 'n') if event.modifiers == KeyModifiers::CONTROL => {
+                return Some(event);
+            }
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::F(_) => return None,
+            code => code,
+        };
+        Some(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
     pub(crate) fn open_session_manager(&mut self) {
         let Some(item) = self
             .filtered_session_picker_items()
@@ -83,7 +159,8 @@ impl App {
             return Ok(());
         };
         manager.error = None;
-        match event.code {
+        let code = manager.navigation_key(event);
+        match code {
             KeyCode::Esc => {
                 if manager.stage == Stage::Actions {
                     self.session_manager = None;
@@ -148,6 +225,65 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn session_normal_keys_and_search_text_are_separate() {
+        let mut app = App::default();
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        assert_eq!(
+            app.session_navigation_key(key('j')).unwrap().code,
+            KeyCode::Down
+        );
+        assert_eq!(
+            app.session_navigation_key(key('k')).unwrap().code,
+            KeyCode::Up
+        );
+        assert_eq!(
+            app.session_navigation_key(key('G')).unwrap().code,
+            KeyCode::End
+        );
+        assert!(
+            app.session_navigation_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(app.session_navigation_key(key('/')).is_none());
+        assert!(app.session_searching);
+        for c in "jkqen/".chars() {
+            assert!(app.session_navigation_key(key(c)).is_none());
+        }
+        assert_eq!(app.popup_filter, "jkqen/");
+        assert!(
+            app.session_navigation_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_none()
+        );
+        assert!(!app.session_searching);
+        assert_eq!(app.popup_filter, "jkqen/");
+        assert_eq!(
+            app.session_navigation_key(key('q')).unwrap().code,
+            KeyCode::Esc
+        );
+    }
+
+    #[test]
+    fn management_vim_keys_do_not_steal_editor_text() {
+        let mut manager = SessionManager {
+            id: "session".into(),
+            title: "Title".into(),
+            stage: Stage::Actions,
+            selected: 0,
+            text: String::new(),
+            error: None,
+        };
+        let key = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        assert_eq!(manager.navigation_key(key('j')), KeyCode::Down);
+        assert_eq!(manager.navigation_key(key('d')), KeyCode::Enter);
+        assert_eq!(manager.selected, 2);
+        for stage in [Stage::Rename, Stage::Move, Stage::Delete] {
+            manager.stage = stage;
+            for c in "jkhlqrmd".chars() {
+                assert_eq!(manager.navigation_key(key(c)), KeyCode::Char(c));
+            }
+        }
+    }
     #[test]
     fn confirmation_and_commands_are_bound_to_the_original_id() {
         let mut manager = SessionManager {

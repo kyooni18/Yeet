@@ -523,6 +523,7 @@ fn bracketed_paste_uses_literal_text_only_in_editable_popup_fields() {
     app.mode = Mode::Sessions;
     app.popup_filter = "foreign-".into();
     app.popup_index = 3;
+    app.session_searching = true;
     app.handle_paste("session\r\nid");
     assert_eq!(app.popup_filter, "foreign-sessionid");
     assert_eq!(app.popup_index, 0);

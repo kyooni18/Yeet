@@ -93,7 +93,7 @@ pub(crate) fn draw_models(frame: &mut Frame<'_>, app: &App) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" Search  ", Style::default().fg(theme::accent()).bold()),
+            Span::styled(if app.session_searching { " / " } else { " Filter  " }, Style::default().fg(theme::accent()).bold()),
             Span::styled(query, Style::default().fg(theme::text())),
             Span::styled(
                 format!(
@@ -214,7 +214,7 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
 pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(82, 76, frame.area());
     theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Sessions · Enter open · Ctrl+E manage · Ctrl+N new · Esc close ");
+    let block = theme::modal_block(" Sessions · j/k move · l open · e manage · n new · q close ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -222,7 +222,11 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     let sessions = app.filtered_session_picker_items();
     let rows = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
     let filter_label = if app.popup_filter.is_empty() {
-        "type to filter".to_owned()
+        if app.session_searching {
+            "type query · Enter/Esc normal"
+        } else {
+            "/ to search"
+        }.to_owned()
     } else {
         app.popup_filter.clone()
     };
@@ -232,7 +236,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
             Span::styled(filter_label, Style::default().fg(theme::text())),
             Span::styled(
                 format!(
-                    "  ·  {}/{}  ·  ↑/↓ PgUp/PgDn",
+                    "  ·  {}/{}  ·  j/k g/G",
                     sessions.len(),
                     all_sessions.len()
                 ),
@@ -260,7 +264,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
             Paragraph::new(vec![
                 Line::from("No matching sessions."),
                 Line::styled(
-                    "Press Enter for a new session, or Backspace to broaden the filter.",
+                    "Press Enter for a new session, or / to edit the filter.",
                     Style::default().fg(theme::muted()),
                 ),
             ]),

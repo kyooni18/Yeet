@@ -459,6 +459,8 @@ impl App {
     pub(super) fn open_sessions(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         backend.send(FrontendCommand::RequestSessions)?;
         self.set_mode(Mode::Sessions);
+        self.session_searching = false;
+        self.session_manager = None;
         self.popup_filter.clear();
         self.popup_index = self
             .session_picker_items()

@@ -226,6 +226,7 @@ pub struct App {
     pub(crate) tab_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub(crate) view_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub(crate) session_manager: Option<session_management::SessionManager>,
+    pub(crate) session_searching: bool,
     pub popup_filter: String,
     pub popup_index: usize,
     pub capability_detail_id: Option<String>,
@@ -337,6 +338,7 @@ impl Default for App {
             tab_targets: Vec::new(),
             view_targets: Vec::new(),
             session_manager: None,
+            session_searching: false,
             popup_filter: String::new(),
             popup_index: 0,
             capability_detail_id: None,
@@ -559,6 +561,7 @@ impl App {
             Mode::Debate if !self.state.is_streaming => {
                 self.debate_field_mut().push_str(&single_line)
             }
+            Mode::Sessions if !self.session_searching => {}
             Mode::Models | Mode::Sessions | Mode::Capabilities => {
                 self.popup_filter.push_str(&single_line);
                 self.popup_index = 0;
@@ -1087,7 +1090,7 @@ impl App {
         // Unfocused navigation must not fall through to draft editing or submission.
         if !self.input_focused {
             match event.code {
-                KeyCode::Char('j' | 'k' | 'e' | 'g' | 'G')
+                KeyCode::Char('j' | 'k' | 'e' | 'g' | 'G' | 's')
                     if !event
                         .modifiers
                         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {}
@@ -1117,8 +1120,9 @@ impl App {
             {
                 self.activate_toolbar_control(backend, "models")?;
             }
-            KeyCode::F(3) | KeyCode::Char('s')
-                if event.code == KeyCode::F(3) || event.modifiers.contains(KeyModifiers::ALT) =>
+            KeyCode::Char('s')
+                if event.modifiers.contains(KeyModifiers::ALT)
+                    || (!self.input_focused && event.modifiers.is_empty()) =>
             {
                 self.activate_toolbar_control(backend, "sessions")?;
             }
@@ -1521,12 +1525,15 @@ impl App {
     }
 
     fn handle_session_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        let Some(event) = self.session_navigation_key(event) else {
+            return Ok(());
+        };
         if event.code == KeyCode::Char('e') && event.modifiers.contains(KeyModifiers::CONTROL) {
             self.open_session_manager();
             return Ok(());
         }
         match event.code {
-            KeyCode::Esc | KeyCode::F(3) => self.close_popup(),
+            KeyCode::Esc => self.close_popup(),
             KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
             KeyCode::Down => {
                 let count = self.filtered_session_picker_items().len();
@@ -1763,6 +1770,7 @@ impl App {
 
     fn close_popup(&mut self) {
         self.session_manager = None;
+        self.session_searching = false;
         self.application.navigation_mut().dismiss_panel();
         self.debate_model_picker = false;
         self.popup_filter.clear();

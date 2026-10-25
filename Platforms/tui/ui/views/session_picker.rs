@@ -35,7 +35,7 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
         return;
     }
     theme::modal_backdrop(frame, bounds);
-    let block = theme::modal_block("Sessions · Ctrl+E manage · Esc close");
+    let block = theme::modal_block("Sessions · e manage · q close");
     let area = block.inner(bounds);
     frame.render_widget(block, bounds);
     let top = Rect::new(area.x, area.y, area.width, 1);
@@ -43,18 +43,20 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
         Block::default().style(theme::base().bg(theme::code_background())),
         top,
     );
-    if !app.popup_filter.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::styled(
-                format!(
-                    " Filter: {}",
-                    fit(&app.popup_filter, area.width.saturating_sub(9) as usize)
-                ),
-                Style::default().fg(theme::text()),
-            )),
-            top,
-        );
-    }
+    let hint = if app.session_searching {
+        format!("/{} · Enter/Esc normal", app.popup_filter)
+    } else if app.popup_filter.is_empty() {
+        "j/k move · / search · l open · n new".into()
+    } else {
+        format!("/{} · j/k move · / edit", app.popup_filter)
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            format!(" {}", fit(&hint, area.width.saturating_sub(2) as usize)),
+            Style::default().fg(theme::text()),
+        )),
+        top,
+    );
 
     let items = app.filtered_session_picker_items();
     let mut rows = vec![Row::Blank, Row::Blank];

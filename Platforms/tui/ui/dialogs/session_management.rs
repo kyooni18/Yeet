@@ -24,7 +24,10 @@ pub(crate) fn draw_session_management(frame: &mut Frame<'_>, app: &App) {
         Line::from(""),
     ];
     if manager.stage == Stage::Actions {
-        for (i, label) in ["Rename", "Move workspace", "Delete…"].iter().enumerate() {
+        for (i, label) in ["Rename (r)", "Move workspace (m)", "Delete… (d)"]
+            .iter()
+            .enumerate()
+        {
             lines.push(Line::styled(
                 format!("{} {label}", if i == manager.selected { "›" } else { " " }),
                 if i == manager.selected {
@@ -35,7 +38,7 @@ pub(crate) fn draw_session_management(frame: &mut Frame<'_>, app: &App) {
             ));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from("↑/↓ select · Enter continue · Esc back"));
+        lines.push(Line::from("j/k select · l/Enter continue · h/q back"));
     } else {
         lines.push(Line::from(match manager.stage {
             Stage::Rename => "Name (Ctrl+U clears):",

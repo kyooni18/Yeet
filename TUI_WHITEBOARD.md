@@ -13,9 +13,14 @@ No new screens or native frontend layouts are introduced.
 
 # TUI session management
 
-The existing Sessions picker remains searchable. Ctrl+E opens management for
+Sessions opens with `s` from unfocused chat or the `/sessions` command (no
+function keys). The picker starts in normal mode: j/k navigate, g/G jump,
+Ctrl+U/D page, Enter/l open, n creates, q/Esc closes. `/` enters search;
+Enter/Esc returns to normal mode without opening a row. `e` opens management for
 the selected stable session ID (not the live filtered index). The nested panel
-offers rename, move workspace, and delete; Esc returns without changing data.
+offers rename (r), move workspace (m), and delete (d); j/k selects, l/Enter
+continues, and h/q/Esc returns without changing data. Editing fields keep
+literal text input, so navigation letters never steal names or paths.
 Rename and workspace path fields support paste and Ctrl+U; Tab cycles known
 workspace paths. Deletion requires typing `delete`, and creates a recovery
 archive using the existing export facility before removing the session.

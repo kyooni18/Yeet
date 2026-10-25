@@ -873,7 +873,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
         let right = [
             "Ctrl+N  new session",
             "Alt+M  models",
-            "Alt+S  sessions",
+            "s (unfocused) /sessions",
             "Alt+R  reasoning",
             "Alt+K  capabilities",
             "j/k  scroll transcript",
