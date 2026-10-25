@@ -178,6 +178,16 @@ fn large_shell_output_keeps_real_head_and_tail() {
         assert!(stdout.ends_with("19999\n20000\n"), "{mode}");
         assert!(stdout.contains("bytes omitted"), "{mode}");
         assert!(value["artifactId"].is_string(), "{mode}");
+        assert_eq!(value["stdoutBytes"], json!(108894), "{mode}");
+        assert_eq!(value["outputWindowed"], json!(true), "{mode}");
+        let truncated = value["stdoutTruncated"].as_bool().unwrap();
+        assert_eq!(value["artifactComplete"], json!(!truncated), "{mode}");
+        if mode == "direct" {
+            assert!(
+                truncated,
+                "capture loss must not be hidden behind an artifact"
+            );
+        }
     }
 }
 

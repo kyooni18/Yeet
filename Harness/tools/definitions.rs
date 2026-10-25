@@ -161,7 +161,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command (zsh). The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. Use background=true for long-running work and shell_job to follow it.",
+            "Run a shell command (zsh). The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. Timeout defaults to 120 seconds (background: 4 hours), subject to sandbox limits. Only cwd persists, not environment variables or shell functions. Use background=true for long-running work and shell_job to follow it.",
             json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
@@ -349,7 +349,7 @@ fn mcp_read_file_tool_definition() -> ToolDefinition {
 fn mcp_run_shell_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "run_shell",
-        "Run a shell command or manage a detached shell job through one MCP tool. Supply command for execution. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
+        "Run a shell command or manage a detached shell job through one MCP tool. Supply command for execution. Timeout defaults to 120 seconds (background: 4 hours), subject to sandbox limits. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
         json!({
             "type":"object",
             "properties":{

@@ -103,10 +103,8 @@ impl ToolRegistry {
             requested_mode == "actor" || (requested_mode == "auto" && shell_actor_route(&command));
         let default_timeout = if background {
             DEFAULT_BACKGROUND_TIMEOUT_SECONDS
-        } else if actor {
-            120
         } else {
-            15
+            120
         };
         let timeout = usize_arg(object, "timeoutSeconds").unwrap_or(default_timeout) as u64;
         if background {
@@ -132,7 +130,7 @@ impl ToolRegistry {
             );
         }
         let wrapped = with_cwd_report(&command);
-        let mut output = run_shell_cancellable(ShellExecutionRequest {
+        let output = run_shell_cancellable(ShellExecutionRequest {
             command: &wrapped,
             workspace_root: &shell_root,
             working_directory: Some(&effective_working_directory),
@@ -142,7 +140,15 @@ impl ToolRegistry {
             unrestricted,
             force_sandboxed: hard_confined,
             cancel: Some(cancel),
-        })?;
+        });
+        // A failed or timed-out command may already have changed files. Do not
+        // keep cached workspace evidence merely because no ShellResult arrived.
+        if output.is_err() && (allow_write || unrestricted) {
+            self.evidence.workspace_write_generation =
+                self.evidence.workspace_write_generation.wrapping_add(1);
+            self.invalidate_workspace_cache();
+        }
+        let mut output = output?;
         output.command = command.clone();
         let previous_cwd = self.shell_cwd.clone();
         let cwd_note = self.track_shell_cwd(&mut output, &effective_cwd);
@@ -181,9 +187,11 @@ impl ToolRegistry {
         output: &mut crate::shell::ShellResult,
         started_in: &Path,
     ) -> Option<String> {
-        let reported = output.stdout.as_mut().and_then(take_cwd_report)?;
-        output.stdout_bytes = output.stdout.as_ref().map_or(0, String::len);
-        let ended_in = PathBuf::from(reported);
+        let captured_bytes = output.stdout.as_ref().map_or(0, String::len);
+        let reported = output.stdout.as_mut().and_then(take_cwd_report);
+        let trailer_bytes = captured_bytes - output.stdout.as_ref().map_or(0, String::len);
+        output.stdout_bytes = output.stdout_bytes.saturating_sub(trailer_bytes);
+        let ended_in = PathBuf::from(reported?);
         let ended_in = ended_in.canonicalize().unwrap_or(ended_in);
         if ended_in == started_in {
             return None;
@@ -277,6 +285,10 @@ impl ToolRegistry {
             "durationMilliseconds": output.duration_milliseconds,
             "stdoutBytes": output.stdout_bytes,
             "stderrBytes": output.stderr_bytes,
+            "stdoutTruncated": output.stdout_truncated,
+            "stderrTruncated": output.stderr_truncated,
+            "outputWindowed": true,
+            "artifactComplete": complete,
             "stdout": output_window(&stdout, SHELL_STDOUT_WINDOW_BYTES),
             "stderr": output_window(&stderr, SHELL_STDERR_WINDOW_BYTES),
             "diagnostics": diagnostics,
@@ -290,8 +302,6 @@ impl ToolRegistry {
                 output.exit_code
             );
             value["artifactId"] = json!(self.artifacts.store(&raw)?);
-        } else {
-            value["stdoutTruncated"] = json!(true);
         }
         Ok(value.to_string())
     }
@@ -393,7 +403,7 @@ fn with_cwd_report(command: &str) -> String {
         return command.to_owned();
     }
     format!(
-        "{command}\n__yeet_status=$?\nprintf '\\n{CWD_REPORT_MARKER}%s\\n' \"$PWD\"\nexit $__yeet_status"
+        "{command}\n__yeet_status=$?\nprintf '\\n{CWD_REPORT_MARKER}%s\\n' \"$(pwd -P)\"\nexit $__yeet_status"
     )
 }
 

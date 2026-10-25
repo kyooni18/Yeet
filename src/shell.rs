@@ -463,8 +463,10 @@ pub fn run_shell_cancellable_with_progress(
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let mut child = TrackedChild::new(child, "shell");
-    let stdout_progress = progress.clone();
-    let stderr_progress = progress;
+    // Keep diagnostics even when execution ends before reader threads return.
+    let progress = progress.unwrap_or_else(|| ShellProgress::new(8 * 1024));
+    let stdout_progress = Some(progress.clone());
+    let stderr_progress = Some(progress.clone());
     let stdout_thread = thread::spawn(move || {
         read_bounded_with_progress(stdout, stdout_limit, stdout_progress, ShellStream::Stdout)
     });
@@ -494,7 +496,7 @@ pub fn run_shell_cancellable_with_progress(
         if start.elapsed() >= timeout {
             kill_process_group(&mut child);
             let _ = child.wait();
-            bail!("Shell command timed out after {timeout_seconds} seconds");
+            bail!(shell_timeout_message(timeout_seconds, &progress));
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -508,7 +510,7 @@ pub fn run_shell_cancellable_with_progress(
         if start.elapsed() >= timeout {
             kill_process_group(&mut child);
             let _ = child.wait();
-            bail!("Shell command timed out after {timeout_seconds} seconds");
+            bail!(shell_timeout_message(timeout_seconds, &progress));
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -535,6 +537,17 @@ pub fn run_shell_cancellable_with_progress(
         stdout: (!stdout.text.is_empty()).then_some(stdout.text),
         stderr: (!stderr.text.is_empty()).then_some(stderr.text),
     })
+}
+
+fn shell_timeout_message(seconds: u64, progress: &ShellProgress) -> String {
+    let snapshot = progress.snapshot();
+    format!(
+        "Shell command timed out after {seconds} seconds. Partial output (tails; stdout {} bytes, stderr {} bytes):\nSTDOUT:\n{}\nSTDERR:\n{}\nFor long-running work, use background=true and shell_job action=wait.",
+        snapshot.stdout_bytes,
+        snapshot.stderr_bytes,
+        snapshot.stdout_tail.as_deref().unwrap_or_default(),
+        snapshot.stderr_tail.as_deref().unwrap_or_default(),
+    )
 }
 
 #[allow(clippy::needless_return)]
@@ -1309,21 +1322,21 @@ fn read_bounded_with_progress(
 fn utf8_prefix_without_partial_suffix(bytes: &[u8]) -> &[u8] {
     match std::str::from_utf8(bytes) {
         Ok(_) => bytes,
-        Err(error) => &bytes[..error.valid_up_to()],
+        Err(error) if error.error_len().is_none() => &bytes[..error.valid_up_to()],
+        // Invalid bytes inside the output are data, not a split UTF-8 boundary.
+        Err(_) => bytes,
     }
 }
 
 fn utf8_suffix_without_partial_prefix(bytes: &[u8]) -> &[u8] {
-    if std::str::from_utf8(bytes).is_ok() {
-        return bytes;
-    }
-    for skip in 1..=bytes.len().min(4) {
-        let candidate = &bytes[skip..];
-        if std::str::from_utf8(candidate).is_ok() {
-            return candidate;
-        }
-    }
-    &[]
+    // Only discard leading continuation bytes from a split codepoint. Decode
+    // invalid interior bytes lossily rather than throwing away the entire tail.
+    let skip = bytes
+        .iter()
+        .take(3)
+        .take_while(|byte| (**byte & 0xc0) == 0x80)
+        .count();
+    &bytes[skip..]
 }
 
 #[cfg(unix)]
@@ -1430,4 +1443,49 @@ fn is_assignment(word: &str) -> bool {
     };
     (first == '_' || first.is_ascii_alphabetic())
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+#[cfg(test)]
+mod output_regressions {
+    use super::*;
+
+    #[test]
+    fn bounded_output_preserves_invalid_bytes_and_diagnostics() {
+        let mut output = BoundedOutput::new(32);
+        output.push(b"start\xff important header");
+        output.push(&[b'x'; 100]);
+        output.push(b"\xff fatal: broken\n");
+        let captured = output.into_capture();
+        assert!(captured.truncated);
+        assert!(captured.text.contains("important"));
+        assert!(captured.text.contains("fatal: broken"));
+    }
+
+    #[test]
+    fn split_utf8_boundaries_are_removed_without_losing_text() {
+        assert_eq!(utf8_prefix_without_partial_suffix(b"ok\xe2\x82"), b"ok");
+        assert_eq!(utf8_suffix_without_partial_prefix(b"\x82\xacok"), b"ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deadline_preserves_both_output_streams() {
+        let root = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        let error = run_shell(
+            "printf 'before timeout'; printf 'failure detail' >&2; sleep 10",
+            root.path(),
+            None,
+            1,
+            4096,
+            false,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("timed out after 1 seconds"), "{error}");
+        assert!(error.contains("before timeout"), "{error}");
+        assert!(error.contains("failure detail"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 }

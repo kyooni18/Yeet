@@ -157,7 +157,8 @@ impl ShellJobs {
                 "status":if error == "cancelled" { "cancelled" } else { "failed" },
                 "succeeded":false,
                 "durationMilliseconds":job.started_at.elapsed().as_millis(),
-                "error":error
+                "error":error,
+                "progress":job.progress.snapshot()
             }),
             None => json!({
                 "jobId":id,
@@ -317,6 +318,11 @@ impl ToolRegistry {
             value["stdout"] = json!(super::shell_runtime::output_window(&stdout, 12 * 1024));
             value["stderr"] = json!(super::shell_runtime::output_window(&stderr, 4 * 1024));
             value["artifactId"] = json!(artifact);
+            value["outputWindowed"] = json!(true);
+            value["artifactComplete"] = json!(
+                !value["stdoutTruncated"].as_bool().unwrap_or(false)
+                    && !value["stderrTruncated"].as_bool().unwrap_or(false)
+            );
         }
         Ok(value.to_string())
     }
