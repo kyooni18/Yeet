@@ -558,3 +558,36 @@ fn home_workbench_renders_activity_inspector_and_composer() {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
 }
+
+#[test]
+fn user_bubble_background_continues_across_blank_paragraph_lines() {
+    for (width, expected_rows) in [(80, 5), (160, 7)] {
+        let mut app = App {
+            conversation: vec![ConversationEntry {
+                id: "multiline-user".into(),
+                kind: ConversationKind::User {
+                    content: "First paragraph\n\nSecond paragraph\n  \nThird paragraph".into(),
+                },
+            }],
+            ..App::default()
+        };
+        app.activate_workbench_tab(crate::app::WorkbenchTab::Session);
+        let (_, buffer) = render(&mut app, width, 20);
+        let (x, y, area_width, _) = app.transcript_area;
+        let column = x + area_width - 4;
+        let lit: Vec<u16> = (y..y + 12)
+            .filter(|&row| buffer[(column, row)].bg == theme::surface_color())
+            .collect();
+        // Paragraphs, empty lines, and whitespace-only lines must share one surface.
+        assert_eq!(
+            lit.len(),
+            expected_rows,
+            "width={width} bubble rows: {lit:?}"
+        );
+        assert_eq!(
+            lit[expected_rows - 1] - lit[0],
+            (expected_rows - 1) as u16,
+            "width={width} bubble is interrupted: {lit:?}"
+        );
+    }
+}

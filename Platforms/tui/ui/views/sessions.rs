@@ -618,6 +618,12 @@ fn user_message_lines(content: &str, width: u16) -> Vec<Line<'static>> {
         lines.push(blank());
     }
     for source in content.split('\n') {
+        if source.trim().is_empty() {
+            // Ratatui does not paint the background of all-space wrapped rows.
+            // Use the same non-breaking blank surface as the bubble padding.
+            lines.push(blank());
+            continue;
+        }
         for row in prefixed_wrapped_line(
             Span::raw("  "),
             Line::styled(source.to_owned(), surface),
