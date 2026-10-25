@@ -38,7 +38,10 @@ pub use runtime::{
 pub const BRIDGE_PROTOCOL_VERSION: u64 = 1;
 const BRIDGE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const BRIDGE_SHUTDOWN_POLL: Duration = Duration::from_millis(20);
-const BRIDGE_STARTUP_PING_TIMEOUT: Duration = Duration::from_secs(3);
+// The Node bridge initializes credentials, skills, and MCP configuration before
+// it begins reading protocol requests. Allow cold filesystem-backed startup to
+// finish before treating the provider backend as unavailable.
+const BRIDGE_STARTUP_PING_TIMEOUT: Duration = Duration::from_secs(15);
 const BRIDGE_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
