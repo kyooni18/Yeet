@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-26
+
+- Add richer tool detail views for file edits, shell commands, and file reads, with explicit lifecycle status.
+- Add TUI session management with rename, workspace moves, safe deletion, and Vim-style navigation and search.
+- Stream shell output to paged disk transcripts and hand foreground timeouts off to background jobs.
+- Improve shell timeout handling, output diagnostics, and working-directory accounting.
+- Fix cold provider bridge startup and gaps in multiline TUI message backgrounds.
+
 ## [0.1.2] - 2026-10-23
 
 - Improve TUI and Remote workbench navigation, tool displays, reasoning visibility, and rendering responsiveness.
