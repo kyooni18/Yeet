@@ -387,6 +387,33 @@ impl HarnessService {
                 self.request_sessions();
                 Ok(())
             }
+            FrontendCommand::RenameSession { session_id, title } => {
+                let current = self.shared.lock_or_recover().state.current_session_id.clone();
+                if current.as_deref() == Some(&session_id) {
+                    self.ensure_session_management_idle()?;
+                }
+                self.store.rename(&session_id, &title)?;
+                if current.as_deref() == Some(&session_id) {
+                    let mut shared = self.shared.lock_or_recover();
+                    shared.meta.title = Some(title.trim().to_owned());
+                    shared.meta.title_generation_attempted = true;
+                }
+                self.request_sessions();
+                Ok(())
+            }
+            FrontendCommand::MoveSession { session_id, workspace_path } => {
+                self.ensure_session_not_loaded(&session_id)?;
+                self.store.move_to_workspace(&session_id, Path::new(&workspace_path))?;
+                self.request_sessions();
+                Ok(())
+            }
+            FrontendCommand::DeleteSession { session_id } => {
+                self.ensure_session_not_loaded(&session_id)?;
+                // Keep a verified recovery archive; reuse export's locked deletion path.
+                self.store.export_session(&session_id, None, true, None)?;
+                self.request_sessions();
+                Ok(())
+            }
             FrontendCommand::LoadSession { session_id } => self.load_session(&session_id),
             FrontendCommand::NewSession => {
                 self.new_session();

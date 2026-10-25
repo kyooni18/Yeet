@@ -153,6 +153,10 @@ impl App {
         event: MouseEvent,
         mut backend: Option<&mut crate::backend::Backend>,
     ) -> anyhow::Result<()> {
+        if self.mode == Mode::Sessions && self.session_manager.is_some() {
+            // The nested keyboard dialog must not activate rows beneath it.
+            return Ok(());
+        }
         if matches!(event.kind, MouseEventKind::Up(MouseButton::Left))
             && std::mem::take(&mut self.context_menu_click)
         {

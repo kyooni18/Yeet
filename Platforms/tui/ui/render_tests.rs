@@ -25,6 +25,26 @@ fn render(app: &mut App, width: u16, height: u16) -> (String, ratatui::buffer::B
 }
 
 #[test]
+fn session_management_renders_over_both_picker_shapes() {
+    use crate::tui::app::session_management::{SessionManager, Stage};
+    for (width, height) in [(120, 36), (44, 60)] {
+        let mut app = App::default();
+        app.set_mode(Mode::Sessions);
+        app.session_manager = Some(SessionManager {
+            id: "stable-id".into(), title: "My session".into(),
+            stage: Stage::Actions, selected: 0, text: String::new(), error: None,
+        });
+        let (text, _) = render(&mut app, width, height);
+        for label in ["Manage session", "My session", "Rename", "Move workspace", "Delete"] {
+            assert!(text.contains(label), "missing {label}: {text}");
+        }
+        app.session_manager.as_mut().unwrap().stage = Stage::Delete;
+        let (text, _) = render(&mut app, width, height);
+        assert!(text.contains("Type delete"), "{text}");
+    }
+}
+
+#[test]
 fn floating_settings_preserves_the_rendered_workbench_and_tab() {
     use crate::tui::app::WorkbenchTab;
     use ratatui::layout::Rect;

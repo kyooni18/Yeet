@@ -507,7 +507,9 @@ impl RunWorker {
         let history = self.coordinator.lock_or_recover().model_history();
         let title_write = workspace_id.and_then(|workspace_id| {
             let mut state = self.shared.lock_or_recover();
-            if state.state.current_session_id.as_deref() != Some(request.session_id.as_str()) {
+            if state.state.current_session_id.as_deref() != Some(request.session_id.as_str())
+                || state.meta.title != request.original_title
+            {
                 return None;
             }
             state.meta.title = Some(title);

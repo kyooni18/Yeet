@@ -35,7 +35,7 @@ pub(in crate::platforms::tui::ui) fn draw(frame: &mut Frame<'_>, app: &App) {
         return;
     }
     theme::modal_backdrop(frame, bounds);
-    let block = theme::modal_block("Sessions · Esc close");
+    let block = theme::modal_block("Sessions · Ctrl+E manage · Esc close");
     let area = block.inner(bounds);
     frame.render_widget(block, bounds);
     let top = Rect::new(area.x, area.y, area.width, 1);

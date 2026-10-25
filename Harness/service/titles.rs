@@ -15,6 +15,7 @@ pub(super) const TITLE_INPUT_TAIL_CHARS: usize = 800;
 #[derive(Debug, Clone)]
 pub(super) struct TitleRequest {
     pub(super) session_id: String,
+    pub(super) original_title: Option<String>,
     model: String,
     user_text: String,
 }
@@ -72,6 +73,7 @@ pub(super) fn prepare_title_request(state: &mut SharedSession) -> Option<TitleRe
     }
     Some(TitleRequest {
         session_id,
+        original_title: state.meta.title.clone(),
         model,
         user_text,
     })

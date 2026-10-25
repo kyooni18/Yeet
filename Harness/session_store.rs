@@ -341,6 +341,37 @@ impl SessionStore {
         self.serialized_session(id, false, || self.load_unlocked(id))
     }
 
+    pub fn rename(&self, id: &str, title: &str) -> Result<()> {
+        let title = title.trim();
+        ensure!(!title.is_empty(), "Session name cannot be empty");
+        ensure!(!title.chars().any(char::is_control), "Session name must be a single line");
+        self.serialized_session(id, true, || {
+            let mut session = self.load_unlocked(id)?;
+            session.title = title.to_owned();
+            session.updated_at = Utc::now();
+            self.save_unlocked(&session)
+        })
+    }
+
+    pub fn move_to_workspace(&self, id: &str, destination: &Path) -> Result<()> {
+        validate_id(id)?;
+        let destination = destination.canonicalize().context("Workspace path does not exist")?;
+        ensure!(destination.is_dir(), "Workspace must be a directory");
+        self.serialized_session(id, true, || {
+            let mut session = self.load_unlocked(id)?;
+            let workspace_id = ensure_workspace_id(&destination)?;
+            ensure!(session.workspace_id.as_deref() != Some(&workspace_id),
+                "Session already belongs to this workspace");
+            session.workspace_root = destination.to_string_lossy().into_owned();
+            session.workspace_id = Some(workspace_id);
+            // Do not carry absolute paths or stale subdirectories into a different workspace.
+            session.working_directory = None;
+            session.context_roots.clear();
+            session.updated_at = Utc::now();
+            self.save_unlocked(&session)
+        })
+    }
+
     fn load_unlocked(&self, id: &str) -> Result<StoredSession> {
         validate_id(id)?;
         let root = self.directory.join(id);
@@ -698,6 +729,39 @@ mod tests {
             attached_harness_capabilities: None,
             disabled_capabilities: Vec::new(),
         }
+    }
+
+    #[test]
+    fn session_management_preserves_history_and_reassigns_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let store = SessionStore::new(temp.path());
+        let mut saved = session("managed", &first, Some(ensure_workspace_id(&first).unwrap()));
+        saved.conversation.push(ConversationEntry {
+            id: "message".into(),
+            kind: crate::model::ConversationKind::User { content: "Keep history".into() },
+        });
+        store.save(&saved).unwrap();
+        assert!(store.rename("managed", "  ").is_err());
+        assert!(store.rename("../managed", "Bad path").is_err());
+        store.rename("managed", " New title ").unwrap();
+        assert!(store.move_to_workspace("managed", &temp.path().join("missing")).is_err());
+        store.move_to_workspace("managed", &second).unwrap();
+        let moved = store.load("managed").unwrap();
+        assert_eq!(moved.title, "New title");
+        assert_eq!(moved.conversation.len(), 1);
+        assert!(moved.working_directory.is_none());
+        assert!(moved.context_roots.is_empty());
+        assert!(store.list(&first).unwrap().is_empty());
+        assert_eq!(store.list(&second).unwrap()[0].id, "managed");
+        assert!(store.export_session("managed", None, true, Some("managed")).is_err());
+        let deleted = store.export_session("managed", None, true, None).unwrap();
+        assert!(deleted.source_deleted);
+        assert!(Path::new(&deleted.path).is_file());
+        assert!(store.load("managed").is_err());
     }
 
     #[test]

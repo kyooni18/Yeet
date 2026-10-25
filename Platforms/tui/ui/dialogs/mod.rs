@@ -12,6 +12,8 @@ use crate::{
 mod agent_group;
 #[path = "navigation.rs"]
 mod navigation;
+mod session_management;
+pub(crate) use session_management::draw_session_management;
 #[path = "status.rs"]
 mod status;
 pub(crate) use agent_group::draw_agent_group;

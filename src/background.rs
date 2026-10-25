@@ -742,6 +742,24 @@ fn dispatch_runtime_command(
     runtime_id: u64,
     command: FrontendCommand,
 ) -> Result<()> {
+    // A catalog entry may belong to another attached or detached live runtime.
+    // Never mutate its on-disk state behind that runtime's in-memory snapshot.
+    let target = match &command {
+        FrontendCommand::RenameSession { session_id, .. }
+        | FrontendCommand::MoveSession { session_id, .. }
+        | FrontendCommand::DeleteSession { session_id } => Some(session_id),
+        _ => None,
+    };
+    if let Some(target) = target {
+        for runtime in runtimes.iter() {
+            if runtime.service.current_session_id().as_ref() == Some(target) {
+                let own_rename = runtime.id == runtime_id
+                    && matches!(&command, FrontendCommand::RenameSession { .. });
+                anyhow::ensure!(own_rename,
+                    "Session is loaded in a runtime. Close it or switch to a new session before managing it.");
+            }
+        }
+    }
     let runtime = runtimes
         .iter_mut()
         .find(|runtime| runtime.id == runtime_id)

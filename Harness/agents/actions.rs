@@ -101,6 +101,9 @@ pub enum FrontendCommand {
         agent_id: Option<String>,
     },
     RequestSessions,
+    RenameSession { session_id: String, title: String },
+    MoveSession { session_id: String, workspace_path: String },
+    DeleteSession { session_id: String },
     LoadSession {
         session_id: String,
     },

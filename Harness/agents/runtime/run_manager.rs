@@ -26,6 +26,10 @@ struct RunManagerState {
 }
 
 impl RunManager {
+    /// Includes settled workers still committing persistence or generating titles.
+    pub(crate) fn has_pending_workers(&self) -> bool {
+        !self.lock().active.is_empty()
+    }
     pub(crate) fn register(&self, run_id: impl Into<String>, cancel: Arc<AtomicBool>) {
         self.lock().active.insert(run_id.into(), cancel);
     }

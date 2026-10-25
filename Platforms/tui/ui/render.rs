@@ -94,6 +94,7 @@ fn draw_surface(frame: &mut Frame<'_>, app: &mut App, surface: Mode) {
             } else {
                 draw_sessions(frame, app);
             }
+            dialogs::draw_session_management(frame, app);
         }
         Mode::Capabilities => draw_capabilities(frame, app),
         Mode::CapabilityDetail => draw_capability_detail(frame, app),

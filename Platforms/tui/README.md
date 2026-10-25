@@ -28,7 +28,21 @@ real behavior warrants it rather than adding empty framework scaffolding.
 Read and maintain `TUI_WHITEBOARD.md` before structural UX changes. Keep stateful
 view tabs, contextual rails, and separate command-palette/view-switcher behavior.
 
-## Verification
+## Managing sessions
+
+Open Sessions (F3), select a saved session, then press **Ctrl+E** to manage it.
+Choose **Rename**, **Move workspace**, or **Delete** with ↑/↓ and Enter.
+Fields accept paste; Ctrl+U clears them. In Move workspace, enter an existing
+directory or press Tab to cycle known workspace paths. Moving retains history
+but resets the session's working directory and extra context roots.
+
+Delete requires typing `delete` and Enter. A verified recovery archive is kept
+under the Yeet configuration directory's `exports/` folder. Loaded sessions
+cannot be moved or deleted; switch to a new session first (other clients or
+detached runtimes may still hold it). Stop a running session before renaming it.
+Esc cancels the edit, then returns from management to the searchable picker.
+
+## Verification commands
 
 ```sh
 cargo check --all-targets

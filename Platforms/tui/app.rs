@@ -19,6 +19,7 @@ pub mod agent_group;
 pub mod keymap;
 mod selection;
 mod settings;
+pub(crate) mod session_management;
 mod sidebar;
 #[cfg(test)]
 mod tests;
@@ -224,6 +225,7 @@ pub struct App {
     pub application: crate::shared_ui::application_session::ApplicationSession,
     pub(crate) tab_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub(crate) view_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
+    pub(crate) session_manager: Option<session_management::SessionManager>,
     pub popup_filter: String,
     pub popup_index: usize,
     pub capability_detail_id: Option<String>,
@@ -334,6 +336,7 @@ impl Default for App {
             ),
             tab_targets: Vec::new(),
             view_targets: Vec::new(),
+            session_manager: None,
             popup_filter: String::new(),
             popup_index: 0,
             capability_detail_id: None,
@@ -528,6 +531,10 @@ impl App {
             self.question.paste(&question, text);
             return;
         }
+        if self.mode == Mode::Sessions && let Some(manager) = &mut self.session_manager {
+            manager.paste(text);
+            return;
+        }
         if text.is_empty() || !self.application.composer_projection().view.editable {
             return;
         }
@@ -695,6 +702,10 @@ impl App {
                 self.send_composer_action(backend, action)?;
             }
             return Ok(());
+        }
+
+        if self.mode == Mode::Sessions && self.session_manager.is_some() {
+            return self.handle_session_management_key(event, backend);
         }
 
         if Self::should_interrupt_active_non_chat(&event, self.state.is_streaming, self.mode) {
@@ -1510,6 +1521,10 @@ impl App {
     }
 
     fn handle_session_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        if event.code == KeyCode::Char('e') && event.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_session_manager();
+            return Ok(());
+        }
         match event.code {
             KeyCode::Esc | KeyCode::F(3) => self.close_popup(),
             KeyCode::Up => self.popup_index = self.popup_index.saturating_sub(1),
@@ -1747,6 +1762,7 @@ impl App {
     }
 
     fn close_popup(&mut self) {
+        self.session_manager = None;
         self.application.navigation_mut().dismiss_panel();
         self.debate_model_picker = false;
         self.popup_filter.clear();
