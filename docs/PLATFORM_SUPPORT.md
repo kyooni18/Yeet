@@ -29,6 +29,8 @@ Sensitive directories and files are hardened to user-private permissions. Unix u
 
 `run_shell` is a non-interactive automation command runner, not an interactive terminal emulator. It captures stdout/stderr and does not promise PTY/ConPTY semantics. The native default shell is POSIX shell semantics on macOS/Linux and `cmd.exe /D /S /C` semantics on Windows. PowerShell is supported by invoking `powershell.exe`/`pwsh` explicitly in a command.
 
+Output is spooled while the command runs. Each command writes a bounded on-disk transcript (64 MiB per command, 512 MiB per session) that is exposed as an artifact, so output beyond the in-memory capture window remains readable through `read_artifact`/`search_artifact`. A foreground command that outlives `yieldSeconds` (default 120) keeps running as a shell job and returns its `jobId` instead of being killed; `timeoutSeconds` is a hard deadline and background jobs default to four hours. On Unix, pipe readers are nonblocking, so cancellation and sandbox deadlines still take effect when a descendant keeps a pipe open.
+
 Sandboxed commands are fail-closed. Linux uses Landlock through `nono`; Windows uses an AppContainer helper. Sandboxed execution denies network access by default. An unsupported network allowlist or secret-injection request is rejected rather than silently widening permissions.
 
 ## Process and daemon lifecycle
