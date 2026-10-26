@@ -176,12 +176,12 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "computer_use",
-            "Control native macOS apps through the installed Codex Computer Use runtime. The JavaScript session persists across calls. On the first call after start/reset, execute exactly one entry-point call such as `await cua.getState()` or `let app = await cua.getApp(\"App Name\")`, then read the returned runtime documentation before using further APIs. Prefer purpose-built APIs/connectors when available.",
+            "Control native desktop apps on macOS, Linux, and Windows through the installed Open Computer Use runtime. The JavaScript session persists across calls. On the first call after start/reset, execute exactly one entry-point call such as `await cua.getState()` or `let app = await cua.getApp(\"App Name\")`, then read the returned runtime documentation before using further APIs. Prefer purpose-built APIs/connectors when available.",
             json!({
                 "type":"object",
                 "properties":{
-                    "code":{"type":"string","description":"JavaScript to execute using Codex's initialized Computer Use runtime."},
-                    "timeout_ms":{"type":"integer","minimum":1,"description":"Optional execution timeout in milliseconds. Codex defaults to 30000 when omitted."},
+                    "code":{"type":"string","description":"JavaScript to execute using Open Computer Use’s initialized Computer Use runtime."},
+                    "timeout_ms":{"type":"integer","minimum":1,"description":"Optional execution timeout in milliseconds. The runtime defaults to 30000 when omitted."},
                     "title":{"type":"string","minLength":1,"maxLength":80,"description":"Short user-facing description of what the Computer Use action does."}
                 },
                 "required":["code"],
@@ -190,7 +190,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "computer_use_reset",
-            "Reset Yeet's persistent Codex Computer Use JavaScript session. This discards JavaScript bindings but does not close apps or erase their state.",
+            "Reset Yeet's persistent Open Computer Use JavaScript session. This discards JavaScript bindings but does not close apps or erase their state.",
             json!({"type":"object","properties":{},"additionalProperties":false}),
         ),
         ToolDefinition::new(

@@ -52,7 +52,7 @@ When no opener is available, Yeet prints the authorization URL instead of failin
 
 ## Computer Use
 
-Yeet's Computer Use integration itself is platform-neutral: it discovers the newest usable Codex `unified-computer-use` plugin from `CODEX_HOME`, validates native absolute executable/script paths, and exposes its persistent `js`/`js_reset` session. Actual desktop control availability still depends on whether the installed Codex distribution provides that plugin and whether the operating system grants the plugin's native automation permissions. Yeet fails with an explicit unavailable-runtime error when it is not installed; it does not silently substitute browser automation.
+Yeet's built-in Computer Use uses the independent [Open Computer Use](https://github.com/iFurySt/open-computer-use) npm package, installed with `yeet install computer-use` under the Yeet state directory (`YEET_CONFIG_DIR` overrides it). It starts the package’s persistent JavaScript MCP adapter with Yeet’s Node executable; Codex and its private plugins are not required. The package selects the macOS, Linux, or Windows native runtime. macOS requires 14+ and Accessibility/Screen Recording grants; Linux and Windows require a usable logged-in desktop session. Missing or incomplete installations report `yeet install computer-use`. It does not silently substitute browser automation.
 
 ## Releases and integrity
 

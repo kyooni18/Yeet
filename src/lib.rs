@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 // Compatibility import while runtime callers migrate to Harness ownership.
 pub use harness::core;
+mod computer_use;
 pub mod debate;
 pub mod edit;
 pub mod extensions;

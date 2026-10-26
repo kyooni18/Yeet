@@ -9,7 +9,7 @@ export * from "./http.js";
 export * from "./types.js";
 export * from "./skills.js";
 export * from "./mcp.js";
-export * from "./codex-computer-use.js";
+export * from "./open-computer-use.js";
 export * from "./platform.js";
 export * from "./model-metadata.js";
 export * from "./cache-capabilities.js";

@@ -59,8 +59,11 @@ Other components use the same CLI surface:
 ```sh
 yeet install web
 yeet install mcp
+yeet install computer-use
 yeet install status
 ```
+
+The built-in `computer_use` tool uses [Open Computer Use](https://github.com/iFurySt/open-computer-use), installed by `yeet install computer-use`. This requires npm and installs the pinned upstream package in `<Yeet state>/computer-use`, independently of Codex. `YEET_CONFIG_DIR` controls the state directory; `YEET_NPM` overrides npm. No source checkout or separate MCP registration is required. Use `yeet install status` to check it and `yeet uninstall computer-use` to remove it. Restart active Yeet sessions after installing or removing the runtime. macOS requires 14+ with Accessibility and Screen Recording permissions; Linux and Windows need a logged-in graphical session.
 
 `mcp` is a mode of the main Yeet binary; its install/uninstall commands start and stop the local MCP server daemon rather than building a separate executable. `remote` is also built directly into the Yeet binary and has no separate installation or managed service lifecycle (`yeet install remote` notes that it is already built-in).
 

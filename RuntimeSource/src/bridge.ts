@@ -6,7 +6,7 @@ import process from "node:process";
 import { AuthManager, type ResolvedCredential } from "./auth.js";
 import { AntigravityLocalClient } from "./antigravity-local.js";
 import { createDefaultCore } from "./defaults.js";
-import { CodexComputerUse } from "./codex-computer-use.js";
+import { OpenComputerUse } from "./open-computer-use.js";
 import { claudeCodeVersion } from "./claude-version.js";
 import { codexCliVersion } from "./codex-version.js";
 import type { ProviderFetchLog } from "./http.js";
@@ -66,7 +66,7 @@ const mcp = new McpManager({ configDir: auth.configDir, nativeAppApproval: reque
 await mcp.ensure();
 const externalMcp = new McpManager({ configDir: join(auth.configDir, "mcpserver", "external-runtime"), nativeAppApproval: requestNativeAppApproval });
 await externalMcp.ensure();
-const computerUse = new CodexComputerUse(mcp);
+const computerUse = new OpenComputerUse(mcp, { configDir: auth.configDir });
 const modelMetadata = new ModelMetadataCatalog();
 function writeApiCallLog(entry: ProviderFetchLog): void {
   process.stderr.write(`api-call ${JSON.stringify(entry)}\n`);

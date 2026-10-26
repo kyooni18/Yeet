@@ -804,7 +804,7 @@ export class McpManager {
   /**
    * Register an in-memory MCP-compatible runtime without writing it to
    * ~/.yeet/mcp.json or exposing it through the normal configured-server list.
-   * This is used by first-party bridges such as Codex Computer Use whose
+   * This is used by first-party bridges such as Open Computer Use whose
    * transport is an implementation detail rather than a user MCP capability.
    */
   async setRuntimeServer(configuration: McpServerConfiguration): Promise<McpServerConfiguration> {

@@ -1,6 +1,6 @@
-//! First-party Codex Computer Use execution for the Yeet tool registry.
+//! First-party Open Computer Use execution for the Yeet tool registry.
 //!
-//! The provider bridge owns discovery and lifetime of Codex's bundled CUA
+//! The provider bridge owns discovery and lifetime of the Yeet-managed Open Computer Use
 //! runtime. This module keeps native UI dispatch out of the central registry
 //! coordinator and refreshes workspace evidence after UI automation.
 

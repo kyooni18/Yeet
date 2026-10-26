@@ -10,8 +10,8 @@ use crate::{platform::replace_file, web_search};
 pub const HELP: &str = r#"Yeet component installer
 
 Usage:
-  yeet install [binary|runtime|web|mcp|remote|all]...
-  yeet uninstall [binary|runtime|web|mcp|remote|all]...
+  yeet install [binary|runtime|web|mcp|remote|computer-use|all]...
+  yeet uninstall [binary|runtime|web|mcp|remote|computer-use|all]...
   yeet install status
 
 The main Yeet source build uses Rust plus Node.js/npm. Yeet Remote is built into the
@@ -20,6 +20,8 @@ main binary and has no separate installation or service lifecycle.
 Environment:
   YEET_PREFIX             installation prefix (default: ~/.local)
   YEET_SOURCE_ROOT        Yeet source checkout for binary/runtime installs
+  YEET_NPM                npm executable for computer-use installation
+  YEET_CONFIG_DIR         state directory for the managed computer-use runtime
 "#;
 
 pub fn run_cli(args: &[String], uninstall: bool) -> Result<String> {
@@ -56,13 +58,12 @@ fn expand_targets<'a>(targets: &[&'a str], uninstall: bool) -> Result<Vec<&'a st
     let mut out = Vec::new();
     for target in targets {
         match *target {
-            "all" if uninstall => out.extend(["mcp", "web", "runtime", "binary"]),
-            "all" => out.extend(["binary", "runtime", "web", "mcp"]),
-            "binary" | "runtime" | "web" | "web-search" | "search" | "mcp" | "remote" => {
-                out.push(target)
-            }
+            "all" if uninstall => out.extend(["computer-use", "mcp", "web", "runtime", "binary"]),
+            "all" => out.extend(["binary", "runtime", "web", "mcp", "computer-use"]),
+            "binary" | "runtime" | "web" | "web-search" | "search" | "mcp" | "remote"
+            | "computer-use" => out.push(target),
             other => bail!(
-                "unknown component '{other}'; expected binary, runtime, web, mcp, remote, or all"
+                "unknown component '{other}'; expected binary, runtime, web, mcp, remote, computer-use, or all"
             ),
         }
     }
@@ -72,6 +73,7 @@ fn expand_targets<'a>(targets: &[&'a str], uninstall: bool) -> Result<Vec<&'a st
 fn install_target(target: &str) -> Result<String> {
     match target {
         "binary" => install_binary(),
+        "computer-use" => crate::computer_use::install(),
         "runtime" => install_runtime(),
         "web" | "web-search" | "search" => web_search::run_cli(&["install".into(), "all".into()]),
         "mcp" => crate::mcp_server::run_cli(&["start".into()]),
@@ -85,6 +87,7 @@ fn install_target(target: &str) -> Result<String> {
 fn uninstall_target(target: &str) -> Result<String> {
     match target {
         "binary" => uninstall_binary(),
+        "computer-use" => crate::computer_use::uninstall(),
         "runtime" => uninstall_runtime(),
         "web" | "web-search" | "search" => web_search::run_cli(&["remove".into(), "all".into()]),
         "mcp" => crate::mcp_server::run_cli(&["stop".into()]),
@@ -187,7 +190,7 @@ fn status() -> Result<String> {
     let binary = binary_destination()?;
     let runtime = runtime_destination()?;
     Ok(format!(
-        "prefix={}\nbinary={}\nruntime={}",
+        "prefix={}\nbinary={}\nruntime={}\n{}",
         prefix.display(),
         if binary.is_file() {
             "installed"
@@ -199,6 +202,7 @@ fn status() -> Result<String> {
         } else {
             "missing"
         },
+        crate::computer_use::status(),
     ))
 }
 
