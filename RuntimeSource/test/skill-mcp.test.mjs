@@ -284,6 +284,22 @@ test('McpManager falls back to legacy initialize for stdio MCP servers', async (
   await mcp.close();
 });
 
+test('McpManager connects to Open Computer Use despite its nonstandard discovery rejection', async () => {
+  const configDir = await tempConfig();
+  const fixture = fileURLToPath(new URL('./fixtures/legacy-mcp.mjs', import.meta.url));
+  const mcp = new McpManager({ configDir });
+  await mcp.setServer({ name: 'legacy', transport: 'stdio', command: process.execPath, args: [fixture], env: { OCU_DISCOVERY_ERROR: '1' } });
+  const tools = await mcp.listTools('legacy');
+  assert.equal(tools[0].qualifiedName, 'legacy/legacy-tool');
+  const result = await mcp.callTool('legacy', 'legacy-tool');
+  assert.equal(result.content[0].text, 'legacy-ok');
+  assert.deepEqual(result.feedback, { status: 'completed' });
+  const status = (await mcp.listServers())[0];
+  assert.equal(status.era, 'legacy');
+  assert.equal(status.protocol, '2025-11-25');
+  await mcp.close();
+});
+
 test('McpManager can host an in-memory runtime without persisting or listing it as user MCP', async () => {
   const configDir = await tempConfig();
   const fixture = fileURLToPath(new URL('./fixtures/legacy-mcp.mjs', import.meta.url));

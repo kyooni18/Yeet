@@ -276,7 +276,13 @@ class StdioMcpConnection implements McpConnection {
         throw abortReason(signal);
       }
       const code = error instanceof McpError ? error.code : undefined;
-      if (code !== -32601 && code !== -32022 && code !== undefined) {
+      // Open Computer Use's JS adapter uses InternalError for an unsupported
+      // discovery method. Accept only this explicit rejection, not arbitrary
+      // internal failures, before falling back to the legacy handshake.
+      const unsupportedDiscovery = code === -32603
+        && error instanceof Error
+        && /^Unsupported method: server\/discover$/i.test(error.message);
+      if (code !== -32601 && code !== -32022 && code !== undefined && !unsupportedDiscovery) {
         await this.close();
         throw error;
       }

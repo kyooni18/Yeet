@@ -140,7 +140,7 @@ export class OpenComputerUse {
 
   async #ensureRuntime(): Promise<void> {
     const installation = await discoverOpenComputerUse(this.#options);
-    const fingerprint = JSON.stringify(installation.configuration);
+    const fingerprint = JSON.stringify([installation.version, installation.configuration]);
     if (this.#fingerprint === fingerprint) return;
     await this.#mcp.setRuntimeServer(installation.configuration);
     this.#fingerprint = fingerprint;

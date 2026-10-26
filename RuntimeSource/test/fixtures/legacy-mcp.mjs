@@ -4,7 +4,9 @@ const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
 rl.on('line', (line) => {
   const message = JSON.parse(line);
   if (message.method === 'server/discover') {
-    send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'Method not found' } });
+    send({ jsonrpc: '2.0', id: message.id, error: process.env.OCU_DISCOVERY_ERROR === '1'
+      ? { code: -32603, message: 'Unsupported method: server/discover' }
+      : { code: -32601, message: 'Method not found' } });
   } else if (message.method === 'initialize') {
     send({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-11-25', capabilities: {}, serverInfo: { name: 'legacy', version: '1' } } });
   } else if (message.method === 'tools/list') {
