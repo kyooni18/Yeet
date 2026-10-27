@@ -970,6 +970,7 @@ impl App {
         self.state
             .available_capabilities
             .iter()
+            .filter(|item| item.id != "web-search")
             .filter(|item| {
                 query.is_empty()
                     || item.name.to_ascii_lowercase().contains(&query)

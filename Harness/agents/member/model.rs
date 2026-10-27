@@ -81,13 +81,9 @@ impl AgentRole {
 
     pub(crate) fn disabled_capabilities(self) -> Vec<String> {
         match self {
-            Self::Researcher => vec![
-                "builtin:file-write".into(),
-                "builtin:shell".into(),
-                "builtin:computer-use".into(),
-            ],
+            Self::Researcher => vec!["builtin:computer-use".into()],
             Self::Implementer => Vec::new(),
-            Self::Verifier => vec!["builtin:file-write".into(), "builtin:computer-use".into()],
+            Self::Verifier => vec!["builtin:computer-use".into()],
         }
     }
 }

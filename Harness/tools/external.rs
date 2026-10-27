@@ -21,8 +21,8 @@ impl ToolRegistry {
                 if self.catalog.capability_disabled("skill", &skill) {
                     bail!("Skill {skill} is disabled for this session");
                 }
-                if self.catalog.disabled_capabilities.contains("builtin:shell") {
-                    bail!("Shell is disabled for this session; Skill scripts cannot execute");
+                if self.catalog.deny_shell {
+                    bail!("Agent execution policy prohibits Skill scripts");
                 }
                 self.run_skill_script(&skill, object, model, cancel)
             }

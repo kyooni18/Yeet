@@ -182,6 +182,20 @@ pub(super) fn project(
         .supported_features
         .contains(&SettingsFeature::ServiceBackends)
     {
+        if let Some(web) = harness
+            .available_capabilities
+            .iter()
+            .find(|item| item.id == "web-search")
+        {
+            services.push(toggle(
+                "capability:web-search",
+                "Web Search",
+                web.description.clone(),
+                SettingsIcon::Web,
+                web.enabled,
+                enabled,
+            ));
+        }
         services.push(choice(
             "web_backend",
             "Web Backend",
@@ -195,9 +209,9 @@ pub(super) fn project(
 
     if !services.is_empty() {
         sections.push(section(
-            "services",
-            "Services",
-            SettingsIcon::Memory,
+            "web_search",
+            "Web Search",
+            SettingsIcon::Web,
             services,
         ));
     }
@@ -250,27 +264,30 @@ pub(super) fn project(
     if !model.is_empty() {
         sections.push(section("model", "Model", SettingsIcon::Model, model));
     }
-    let capabilities = harness
-        .available_capabilities
-        .iter()
-        .map(|capability| {
-            toggle(
-                &format!("capability:{}", capability.id),
-                &capability.name,
-                capability.description.clone(),
-                SettingsIcon::Capabilities,
-                capability.enabled,
-                enabled,
-            )
-        })
-        .collect::<Vec<_>>();
-    if !capabilities.is_empty() {
-        sections.push(section(
-            "capabilities",
-            "Capabilities",
-            SettingsIcon::Capabilities,
-            capabilities,
-        ));
+    for (kind, id, label) in [
+        ("builtin", "optional_features", "Optional built-in features"),
+        ("skill", "skills", "Skills"),
+        ("mcp", "mcp_servers", "MCP servers"),
+        ("capability", "extensions", "Other extensions"),
+    ] {
+        let capabilities = harness
+            .available_capabilities
+            .iter()
+            .filter(|capability| capability.kind == kind && capability.id != "web-search")
+            .map(|capability| {
+                toggle(
+                    &format!("capability:{}", capability.id),
+                    &capability.name,
+                    capability.description.clone(),
+                    SettingsIcon::Capabilities,
+                    capability.enabled,
+                    enabled,
+                )
+            })
+            .collect::<Vec<_>>();
+        if !capabilities.is_empty() {
+            sections.push(section(id, label, SettingsIcon::Capabilities, capabilities));
+        }
     }
     let providers = harness
         .auth_providers

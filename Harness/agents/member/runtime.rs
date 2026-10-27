@@ -107,6 +107,10 @@ impl MemberLauncher for CoordinatorLauncher {
             spec.role.as_str(),
             spec.description
         ));
+        coordinator.restrict_execution(
+            !spec.role.writes_workspace(),
+            spec.role == AgentRole::Researcher,
+        );
         Ok((
             id,
             Box::new(CoordinatorRunner {

@@ -1,6 +1,47 @@
 use super::*;
 use crate::harness::{HarnessCommand, HarnessState};
 use crate::shared_ui::settings_session::SettingsSession;
+
+#[test]
+fn web_search_has_dedicated_settings_and_extensions_are_grouped() {
+    let mut harness = HarnessState::default();
+    harness.available_capabilities = [
+        ("web-search", "web"),
+        ("builtin:document-read", "builtin"),
+        ("skill:example", "skill"),
+        ("mcp:docs", "mcp"),
+        ("extension", "capability"),
+    ]
+    .into_iter()
+    .map(|(id, kind)| crate::model::CapabilityToggleItem {
+        id: id.into(),
+        kind: kind.into(),
+        name: id.into(),
+        description: String::new(),
+        enabled: true,
+        source: None,
+    })
+    .collect();
+    let env = SettingsEnvironment {
+        supported_features: vec![SettingsFeature::ServiceBackends],
+        ..Default::default()
+    };
+    let view = SettingsState::default().view(&env, &harness);
+    let section = view
+        .sections
+        .iter()
+        .find(|section| section.id == "web_search")
+        .unwrap();
+    assert!(
+        section
+            .controls
+            .iter()
+            .any(|control| control.id == "capability:web-search")
+    );
+    for id in ["optional_features", "skills", "mcp_servers", "extensions"] {
+        assert!(view.sections.iter().any(|section| section.id == id));
+    }
+}
 #[test]
 fn flex_and_busy_guards_are_shared_with_rendered_controls() {
     let mut harness = HarnessState::default();

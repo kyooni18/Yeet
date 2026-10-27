@@ -26,6 +26,20 @@ pub(crate) fn status() -> String {
     )
 }
 
+pub(crate) fn availability() -> Result<()> {
+    if !cfg!(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows"
+    )) {
+        anyhow::bail!("Computer Use is unavailable on this platform");
+    }
+    if status() != "computer-use=installed" {
+        anyhow::bail!("Computer Use runtime is missing; run `yeet install computer-use`");
+    }
+    Ok(())
+}
+
 pub(crate) fn install() -> Result<String> {
     let destination = directory();
     let parent = destination

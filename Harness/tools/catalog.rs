@@ -23,6 +23,9 @@ pub(super) struct ToolCatalog {
     /// parallel batch or inside research.
     pub(super) read_only_mcp_tools: HashSet<String>,
     pub(super) disabled_capabilities: HashSet<String>,
+    /// Execution policy for scoped agents, independent of capability settings.
+    pub(super) deny_writes: bool,
+    pub(super) deny_shell: bool,
 }
 
 /// Where a non-built-in tool name is executed.
@@ -41,6 +44,11 @@ pub(super) enum ExternalRoute {
 }
 
 impl ToolCatalog {
+    pub(super) fn execution_prohibited(&self, name: &str) -> bool {
+        (self.deny_writes && name == "apply_file_edits")
+            || (self.deny_shell
+                && matches!(name, "run_shell" | "shell_job" | "request_shell_permission"))
+    }
     pub(super) fn with_builtin_tools() -> Self {
         Self {
             active_tools: base_tool_definitions()
@@ -58,6 +66,8 @@ impl ToolCatalog {
             active_workers: HashSet::new(),
             read_only_mcp_tools: HashSet::new(),
             disabled_capabilities: HashSet::new(),
+            deny_writes: false,
+            deny_shell: false,
         }
     }
 
@@ -68,9 +78,15 @@ impl ToolCatalog {
 
     /// Whether `tool_name` may be listed or executed.
     pub(super) fn tool_enabled(&self, tool_name: &str) -> bool {
-        if builtin_capability_for_tool(tool_name)
-            .is_some_and(|capability| self.disabled_capabilities.contains(capability.id))
+        if matches!(tool_name, "computer_use" | "computer_use_reset")
+            && crate::computer_use::availability().is_err()
         {
+            return false;
+        }
+        if builtin_capability_for_tool(tool_name).is_some_and(|capability| {
+            !crate::project_settings::is_permanent_core_capability(capability.id)
+                && self.disabled_capabilities.contains(capability.id)
+        }) {
             return false;
         }
         if let Some(skill) = self.skill_tool_map.get(tool_name) {
@@ -174,6 +190,70 @@ impl ToolCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_core_disables_do_not_hide_tools_but_optional_disables_do() {
+        let mut catalog = ToolCatalog::with_builtin_tools();
+        catalog.disabled_capabilities.extend([
+            "builtin:file-read".into(),
+            "builtin:file-write".into(),
+            "builtin:workspace-search".into(),
+            "builtin:code-symbols".into(),
+            "builtin:shell".into(),
+            "builtin:document-read".into(),
+        ]);
+        for name in [
+            "read_file",
+            "apply_file_edits",
+            "search_workspace",
+            "outline",
+            "run_shell",
+        ] {
+            assert!(catalog.tool_enabled(name), "{name}");
+        }
+        assert!(!catalog.tool_enabled("read_document"));
+        catalog.deny_writes = true;
+        catalog.deny_shell = true;
+        assert!(catalog.tool_enabled("apply_file_edits"));
+        assert!(catalog.tool_enabled("run_shell"));
+        assert!(catalog.execution_prohibited("apply_file_edits"));
+        assert!(catalog.execution_prohibited("run_shell"));
+        assert!(catalog.execution_prohibited("shell_job"));
+        assert!(!catalog.execution_prohibited("read_file"));
+    }
+
+    #[test]
+    fn scoped_execution_policy_denies_shell_and_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut registry = ToolRegistry::new_with_bridge_handle(
+            BridgeHandle::lazy_for_workspace(root.clone()),
+            root,
+            WorkerRegistry::new(Vec::new()).unwrap(),
+            PermissionBroker::default(),
+        )
+        .unwrap();
+        registry.restrict_execution(true, true);
+        for name in [
+            "run_shell",
+            "shell_job",
+            "request_shell_permission",
+            "apply_file_edits",
+        ] {
+            let call = ToolCall {
+                id: "test".into(),
+                name: name.into(),
+                arguments: json!({}),
+            };
+            assert!(
+                registry
+                    .execute(&call, "test", &AtomicBool::new(false))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("execution policy")
+            );
+        }
+    }
 
     #[test]
     fn disabled_mcp_server_hides_tools_and_parallel_eligibility() {

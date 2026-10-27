@@ -227,8 +227,7 @@ impl DebateRun {
             WorkerRegistry::new(Vec::new())?,
             PermissionBroker::default(),
         )?;
-        registry
-            .set_disabled_capabilities(vec!["builtin:file-write".into(), "builtin:shell".into()]);
+        registry.restrict_execution(true, true);
         let result = registry.attach_enabled_mcp_servers().and_then(|_| {
             crate::debate::research::run(
                 snapshot,

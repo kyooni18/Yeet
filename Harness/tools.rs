@@ -327,8 +327,16 @@ impl ToolRegistry {
     }
 
     pub fn set_disabled_capabilities(&mut self, disabled: impl IntoIterator<Item = String>) {
-        self.catalog.disabled_capabilities = disabled.into_iter().collect();
+        self.catalog.disabled_capabilities = disabled
+            .into_iter()
+            .filter(|id| !crate::project_settings::is_permanent_core_capability(id))
+            .collect();
         self.catalog.descriptors.clear();
+    }
+
+    pub(crate) fn restrict_execution(&mut self, deny_writes: bool, deny_shell: bool) {
+        self.catalog.deny_writes = deny_writes;
+        self.catalog.deny_shell = deny_shell;
     }
 
     /// Research uses the normal registry, with the same execution guard as its schema filter.
@@ -539,8 +547,14 @@ impl ToolRegistry {
             self.invalidate_workspace_cache();
             self.evidence.workspace_generation = generation;
         }
+        if matches!(call.name.as_str(), "computer_use" | "computer_use_reset") {
+            crate::computer_use::availability()?;
+        }
         if !self.tool_enabled(&call.name) {
             bail!("Tool {} is disabled for this session", call.name);
+        }
+        if self.catalog.execution_prohibited(&call.name) {
+            bail!("Tool {} is prohibited by agent execution policy", call.name);
         }
         let object = call
             .arguments

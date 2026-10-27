@@ -47,7 +47,7 @@ impl HarnessService {
                     .collect::<Vec<_>>();
                 items.push(CapabilityToggleItem {
                     id: "web-search".into(),
-                    kind: "capability".into(),
+                    kind: "web".into(),
                     name: "Web Search".into(),
                     description:
                         "Default-attached live web search through Agent-Reach/Exa with managed SearXNG fallback."
@@ -65,7 +65,14 @@ impl HarnessService {
                             id: capability.id.into(),
                             kind: "builtin".into(),
                             name: capability.name.into(),
-                            description: capability.description.into(),
+                            description: if capability.id == "builtin:computer-use" {
+                                match crate::computer_use::availability() {
+                                    Ok(()) => "Available on this platform using Yeet's managed Open Computer Use runtime.".into(),
+                                    Err(error) => format!("Unavailable: {error}"),
+                                }
+                            } else {
+                                capability.description.into()
+                            },
                             enabled: !disabled.iter().any(|value| value == capability.id),
                             source: Some("builtin".into()),
                         }),

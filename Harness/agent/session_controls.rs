@@ -7,6 +7,9 @@ const API_RETRY_DELAY: Duration = Duration::from_secs(60);
 const API_RETRY_LIMIT: u32 = 5;
 
 impl AgentCoordinator {
+    pub(crate) fn restrict_execution(&mut self, deny_writes: bool, deny_shell: bool) {
+        self.registry.restrict_execution(deny_writes, deny_shell);
+    }
     pub fn shutdown(&self) {
         self.registry.shutdown();
     }
