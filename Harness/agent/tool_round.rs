@@ -136,6 +136,9 @@ impl AgentCoordinator {
             calls,
         );
         self.history.extend(nested);
+        if let Some(context) = self.run_hooks(super::hooks::HookEvent::PostToolRound) {
+            self.history.push(Message::system(context).request_only());
+        }
         Ok(())
     }
 }

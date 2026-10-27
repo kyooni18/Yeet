@@ -6,6 +6,7 @@ mod continuity_tests;
 mod coordinator_support;
 mod goal;
 mod history;
+mod hooks;
 mod job;
 mod limits;
 mod loop_budget;
@@ -85,6 +86,7 @@ pub struct AgentCoordinator {
     warm_tool_names: Vec<String>,
     warm_tool_search_enabled: bool,
     stream_idle_timeout: std::time::Duration,
+    hooks: hooks::HookEngine,
 }
 
 impl AgentCoordinator {
@@ -122,7 +124,8 @@ impl AgentCoordinator {
         } = self.prepare_turn(request, goal_mode)?;
         let bridge = self.bridge.client()?;
         let mut execution_evidence = turn_state::TurnExecutionEvidence::default();
-        let mut retry_instruction: Option<String> = None;
+        let mut retry_instruction = self.run_hooks(hooks::HookEvent::UserPromptSubmit);
+        let mut stop_continuations = 0usize;
         let mut model_attempts = 0usize;
         let mut tool_rounds = 0usize;
         let mut malformed_repairs = 0usize;
@@ -335,6 +338,25 @@ impl AgentCoordinator {
                     } else {
                         AgentRunOutcome::CompletedUnverified { reason }
                     });
+                }
+
+                if !goal_mode.load(Ordering::Acquire)
+                    && stop_continuations < hooks::STOP_CONTINUATION_LIMIT
+                    && let Some(context) = self.run_hooks(hooks::HookEvent::Stop)
+                {
+                    stop_continuations += 1;
+                    if !text.is_empty() {
+                        self.history.push(
+                            Message::assistant(text, None)
+                                .with_provider_state(finish_provider_state.clone()),
+                        );
+                    }
+                    retry_instruction = Some(context);
+                    emit(AgentEvent::Finished {
+                        reason: finish_reason,
+                        usage: finish_usage,
+                    });
+                    continue;
                 }
 
                 self.history.push(
