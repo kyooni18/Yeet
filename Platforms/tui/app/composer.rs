@@ -24,11 +24,19 @@ impl App {
                 .context
                 .unsaved_generation,
         };
-        let changed = self
+        if self
             .composer
             .observed
             .as_ref()
-            .is_none_or(|previous| previous.context != context || previous.text != self.input);
+            .is_some_and(|previous| previous.context != context)
+        {
+            self.attachments.clear();
+        }
+        let changed = self.composer.observed.as_ref().is_none_or(|previous| {
+            previous.context != context
+                || previous.text != self.input
+                || previous.attachments != self.composer_attachments()
+        });
         if changed {
             self.composer.revision = self.composer.revision.saturating_add(1);
         }
@@ -36,6 +44,7 @@ impl App {
             context,
             text: self.input.clone(),
             revision: self.composer.revision,
+            attachments: self.composer_attachments(),
             ..Default::default()
         };
         self.composer.observed = Some(snapshot.clone());
@@ -88,7 +97,20 @@ impl App {
             prepared.effect.command,
             Some(crate::model::FrontendCommand::NewSession)
         );
-        if let Some(command) = prepared.effect.command.clone() {
+        let mut submitted_attachments = false;
+        if let Some(mut command) = prepared.effect.command.clone() {
+            if let crate::model::FrontendCommand::Submit {
+                text,
+                images,
+                attachment_ids,
+            } = &mut command
+            {
+                attachment_ids.clear();
+                if !text.starts_with('/') {
+                    self.populate_attachment_submit(text, images);
+                    submitted_attachments = true;
+                }
+            }
             backend.send(command)?;
         }
         if let Some(destination) = prepared.effect.ui.destination {
@@ -122,17 +144,20 @@ impl App {
         let effect = self
             .application
             .commit_composer_without_projection(prepared, &self.state);
-        self.apply_composer_effect(effect.ui);
+        self.apply_composer_effect(effect.ui, submitted_attachments);
         if new_session {
             self.application.observe_composer_new_session(&self.state);
         }
         Ok(())
     }
-    fn apply_composer_effect(&mut self, effect: ComposerUiEffect) {
+    fn apply_composer_effect(&mut self, effect: ComposerUiEffect, submitted_attachments: bool) {
         if let Some(accepted) = effect.accepted_editor {
             self.record_input_history(&accepted.text);
             if self.composer_editor_snapshot() == accepted {
                 self.input.clear();
+                if submitted_attachments {
+                    self.attachments.clear();
+                }
                 self.cursor = 0;
                 self.command_index = 0;
                 self.follow_tail = true;
@@ -160,25 +185,34 @@ mod tests {
         let accepted = app.composer_editor_snapshot();
         app.input = "newer draft".into();
         app.cursor = 4;
-        app.apply_composer_effect(ComposerUiEffect {
-            accepted_editor: Some(accepted.clone()),
-            ..Default::default()
-        });
+        app.apply_composer_effect(
+            ComposerUiEffect {
+                accepted_editor: Some(accepted.clone()),
+                ..Default::default()
+            },
+            false,
+        );
         assert_eq!(app.input, "newer draft");
         assert_eq!(app.cursor, 4);
         assert_eq!(app.input_history, vec!["original prompt"]);
         app.input = accepted.text.clone();
         app.state.current_session_id = Some("another-session".into());
-        app.apply_composer_effect(ComposerUiEffect {
-            accepted_editor: Some(accepted),
-            ..Default::default()
-        });
+        app.apply_composer_effect(
+            ComposerUiEffect {
+                accepted_editor: Some(accepted),
+                ..Default::default()
+            },
+            false,
+        );
         assert_eq!(app.input, "original prompt");
         let matching = app.composer_editor_snapshot();
-        app.apply_composer_effect(ComposerUiEffect {
-            accepted_editor: Some(matching),
-            ..Default::default()
-        });
+        app.apply_composer_effect(
+            ComposerUiEffect {
+                accepted_editor: Some(matching),
+                ..Default::default()
+            },
+            false,
+        );
         assert!(app.input.is_empty());
         assert_eq!(app.cursor, 0);
     }

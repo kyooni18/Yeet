@@ -11,6 +11,19 @@ sections (Input, Output/Result, Error, etc.) and duration when available.
 Grouped calls retain individual statuses in their expanded child rows.
 No new screens or native frontend layouts are introduced.
 
+# TUI attachments
+
+When a terminal delivers a file drop as a bracketed paste, a complete list of
+existing absolute paths is queued in the focused chat composer. Pasting such
+paths behaves identically because terminals do not distinguish paste from drop.
+The existing composer shows attachment names above the prompt, or a count when
+only one row is available; Ctrl+X removes the last one. PNG/JPEG/WebP/GIF are
+sent as image inputs; other files are referenced by their local paths for the
+agent's filesystem tools. Queue up to
+eight files, with a combined 20 MiB limit. Ordinary text paste is unchanged.
+Slash commands leave the queue intact; a submitted message consumes it, and
+changing composer workspace/session discards it.
+
 # TUI session management
 
 Sessions opens with `s` from unfocused chat or the `/sessions` command (no

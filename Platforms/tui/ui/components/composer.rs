@@ -25,6 +25,24 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16
     );
     let top = u16::from(area.height >= 2);
     let bottom = u16::from(area.height >= 3);
+    if top > 0 && !app.attachments.is_empty() {
+        let names = app
+            .attachments
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let label = format!("Attached: {names} · Ctrl+X removes last");
+        frame.render_widget(
+            Paragraph::new(Line::styled(label, Style::default().fg(theme::secondary()))),
+            Rect::new(
+                area.x.saturating_add(2),
+                area.y,
+                area.width.saturating_sub(4),
+                1,
+            ),
+        );
+    }
     let text_x = text_x
         .min(area.x + area.width / 3)
         .max(area.x.saturating_add(5));
@@ -40,9 +58,17 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect, text_x: u16
     if inner.width == 0 || inner.height == 0 {
         return;
     }
+    let marker = if top == 0 && !app.attachments.is_empty() {
+        format!("+{}", app.attachments.len())
+    } else {
+        "+".to_owned()
+    };
     frame.render_widget(
-        Paragraph::new(Line::styled("+", Style::default().fg(theme::secondary()))),
-        Rect::new(text_x - 3, inner.y, 1, 1),
+        Paragraph::new(Line::styled(
+            marker,
+            Style::default().fg(theme::secondary()),
+        )),
+        Rect::new(text_x - 3, inner.y, 2, 1),
     );
     frame.render_widget(
         Paragraph::new(Line::styled(

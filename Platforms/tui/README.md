@@ -48,6 +48,18 @@ cannot be moved or deleted; switch to a new session first (other clients or
 detached runtimes may still hold it). Stop a running session before renaming it.
 Esc cancels the edit, then returns from management to the searchable picker.
 
+## Attaching files
+
+Drop files onto the focused chat composer in a terminal that sends drops as
+bracketed paste. Pasting a complete list of absolute file paths also queues
+them; terminals do not distinguish the two. The composer shows the queued
+names (or a count in a single-row composer), and **Ctrl+X** removes the last
+attachment. PNG, JPEG, WebP and GIF are sent as image inputs. Other files are referenced by their local paths for
+the agent to read using its filesystem tools and sandbox permissions. Up to
+eight files totaling 20 MiB can be queued. A terminal that types dropped paths
+as individual keystrokes cannot signal a drop to Yeet; use `/image PATH` for
+images or paste the absolute paths instead.
+
 ## Verification commands
 
 ```sh

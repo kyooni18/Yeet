@@ -11,6 +11,7 @@ mod home;
 pub(crate) use home::HomeAction;
 pub use home::HomeRefresh;
 mod composer;
+mod attachments;
 pub mod diff;
 mod input;
 mod navigation;
@@ -219,6 +220,7 @@ pub struct App {
     pub conversation: Vec<ConversationEntry>,
     pub state: BridgeState,
     pub(crate) composer: composer::ComposerAdapter,
+    pub(crate) attachments: Vec<attachments::LocalAttachment>,
     pub input: String,
     pub input_focused: bool,
     pub cursor: usize,
@@ -329,6 +331,7 @@ impl Default for App {
             conversation: Vec::new(),
             state: BridgeState::default(),
             composer: Default::default(),
+            attachments: Vec::new(),
             input: String::new(),
             input_focused: true,
             cursor: 0,
@@ -543,6 +546,9 @@ impl App {
 
         if self.mode == Mode::Chat {
             if !self.input_focused || self.sidebar_focus {
+                return;
+            }
+            if self.try_attach_pasted_paths(text) {
                 return;
             }
             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -1040,6 +1046,11 @@ impl App {
         }
         if event.modifiers.contains(KeyModifiers::CONTROL) {
             match event.code {
+                KeyCode::Char('x') if self.input_focused && !self.sidebar_focus && !self.attachments.is_empty() => {
+                    self.attachments.pop();
+                    self.sync_composer();
+                    return Ok(());
+                }
                 KeyCode::Char('c') => {
                     if self.copy_transcript_selection() {
                         return Ok(());
