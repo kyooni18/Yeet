@@ -69,6 +69,13 @@ The built-in `computer_use` tool uses [Open Computer Use](https://github.com/iFu
 
 ## Use
 
+Yeet reads user-wide instructions from `AGENT.md` in its configuration directory
+(`YEET_CONFIG_DIR`, or the platform's default Yeet state directory). It also reads
+each workspace's root `AGENT.md`, `AGENTS.md`, and `YEET.md` on every turn.
+Nested files with those names are loaded when file tools touch their subtree;
+the nearest nested instruction directory applies. These files are user-managed:
+Yeet does not create or overwrite them when loading instructions.
+
 Start the TUI:
 
 ```sh

@@ -1,4 +1,4 @@
-//! Directory-scoped AGENTS.md / YEET.md instructions.
+//! Directory-scoped AGENT.md / AGENTS.md / YEET.md instructions.
 //!
 //! Root-level files are loaded by turn setup. Instructions that live deeper in
 //! the tree apply only to their subtree, so they are attached lazily: the first
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-const INSTRUCTION_FILES: [&str; 2] = ["AGENTS.md", "YEET.md"];
+const INSTRUCTION_FILES: [&str; 3] = ["AGENT.md", "AGENTS.md", "YEET.md"];
 const MAX_FILE_BYTES: u64 = 16 * 1024;
 
 /// Overlays for the nearest nested instruction files of the paths touched by
@@ -147,7 +147,7 @@ mod tests {
         let root = directory.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("crates/core/src")).unwrap();
         std::fs::write(root.join("AGENTS.md"), "root rules").unwrap();
-        std::fs::write(root.join("crates/core/AGENTS.md"), "core rules").unwrap();
+        std::fs::write(root.join("crates/core/AGENT.md"), "core rules").unwrap();
         let root_text = root.to_string_lossy().into_owned();
         let read = |path: &str| ToolCall {
             id: "1".into(),

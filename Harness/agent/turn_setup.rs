@@ -131,6 +131,11 @@ impl AgentCoordinator {
                 .load()?
                 .context;
         let mut turn_stable_overlays = Vec::new();
+        if let Some(global_instructions) =
+            load_global_instructions(&crate::platform::default_config_directory())
+        {
+            turn_stable_overlays.push(Message::system(global_instructions).request_only());
+        }
         if let Some(project_instructions) = load_project_instructions(&workspace_root) {
             turn_stable_overlays.push(Message::system(project_instructions).request_only());
         }
@@ -208,7 +213,7 @@ fn load_project_instructions(workspace_root: &str) -> Option<String> {
     const MAX_FILE_BYTES: u64 = 64 * 1024;
     let root = std::path::Path::new(workspace_root);
     let mut sections = Vec::new();
-    for name in ["AGENTS.md", "YEET.md"] {
+    for name in ["AGENT.md", "AGENTS.md", "YEET.md"] {
         let path = root.join(name);
         let Ok(metadata) = std::fs::metadata(&path) else {
             continue;
@@ -225,8 +230,26 @@ fn load_project_instructions(workspace_root: &str) -> Option<String> {
     }
     (!sections.is_empty()).then(|| {
         format!(
-            "Project instructions from root-level AGENTS.md and YEET.md files (apply where relevant):\n{}",
+            "Project instructions from root-level AGENT.md, AGENTS.md and YEET.md files (apply where relevant):\n{}",
             sections.join("\n\n")
+        )
+    })
+}
+
+/// User-wide instructions live in Yeet's configuration directory, independent
+/// of the active workspace. Never create or rewrite the file when loading it.
+fn load_global_instructions(config_dir: &std::path::Path) -> Option<String> {
+    let path = config_dir.join("AGENT.md");
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > 64 * 1024 {
+        return None;
+    }
+    let contents = std::fs::read_to_string(&path).ok()?;
+    (!contents.trim().is_empty()).then(|| {
+        format!(
+            "Yeet-wide instructions from {} (apply across projects):\n{}",
+            path.display(),
+            contents.trim()
         )
     })
 }
@@ -234,6 +257,35 @@ fn load_project_instructions(workspace_root: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_and_project_agent_files_are_independent_and_not_modified() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(config.join("AGENT.md"), "global rules\n").unwrap();
+        std::fs::write(project.join("AGENT.md"), "project rules\n").unwrap();
+        std::fs::write(project.join("AGENTS.md"), "existing rules\n").unwrap();
+        assert!(
+            load_global_instructions(&config)
+                .unwrap()
+                .contains("global rules")
+        );
+        let instructions = load_project_instructions(project.to_str().unwrap()).unwrap();
+        assert!(instructions.contains("project rules"));
+        assert!(instructions.contains("existing rules"));
+        assert_eq!(
+            std::fs::read_to_string(config.join("AGENT.md")).unwrap(),
+            "global rules\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("AGENT.md")).unwrap(),
+            "project rules\n"
+        );
+        assert!(load_global_instructions(&project.join("missing")).is_none());
+    }
 
     #[test]
     fn adaptive_agent_tools_attach_together_only_when_enabled() {
