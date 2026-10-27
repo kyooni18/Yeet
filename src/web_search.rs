@@ -15,6 +15,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 use uuid::Uuid;
@@ -356,7 +357,13 @@ impl WebSearchClient {
                     if cancel.load(Ordering::Acquire) {
                         bail!("cancelled");
                     }
-                    let mut fallback = self.search_searxng(request, cancel)?;
+                    let mut fallback = match self.search_searxng(request, cancel) {
+                        Ok(value) => value,
+                        Err(_) if cancel.load(Ordering::Acquire) => bail!("cancelled"),
+                        Err(error) => bail!(
+                            "Agent-Reach search failed: {agent_reach_error:#}; SearXNG fallback failed: {error:#}"
+                        ),
+                    };
                     if let Some(object) = fallback.as_object_mut() {
                         object.insert("fallbackFrom".into(), json!("agent-reach"));
                         object.insert(
@@ -962,32 +969,7 @@ pub fn run_cli(args: &[String]) -> Result<String> {
             let workspace = env::current_dir()?.canonicalize()?;
             let settings = ProjectSettingsStore::new(&workspace)?;
             let project = settings.load()?;
-            let value = match project.web.backend {
-                ServiceBackend::Builtin => {
-                    let mut value =
-                        serde_json::from_str::<Value>(&status()?).unwrap_or_else(|_| json!({}));
-                    if let Some(object) = value.as_object_mut() {
-                        object.insert("backend".into(), json!("builtin"));
-                        object.insert("server".into(), json!(project.web.server));
-                    }
-                    value
-                }
-                ServiceBackend::Mcp => {
-                    let bridge = BridgeClient::start()?;
-                    let tools = bridge.list_mcp_tools(Some(&project.web.server));
-                    let connected = tools.as_ref().is_ok_and(|tools| {
-                        tools.iter().any(|tool| tool.name == "web_search")
-                            && tools.iter().any(|tool| tool.name == "web_read")
-                    });
-                    bridge.shutdown();
-                    json!({
-                        "backend": "mcp",
-                        "server": project.web.server,
-                        "connected": connected,
-                        "requiredTools": ["web_search", "web_read"]
-                    })
-                }
-            };
+            let value = web_search_status(&project.web);
             Ok(serde_json::to_string_pretty(&value)?)
         }
         "path" => Ok(SearchPaths::discover().root.display().to_string()),
@@ -1167,30 +1149,130 @@ fn install_agent_reach() -> Result<String> {
     ))
 }
 
-fn status() -> Result<String> {
+/// A provider's installation and connectivity are deliberately separate: a
+/// detected executable or a responding configuration endpoint is not a search test.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderHealth {
+    pub installed: Option<bool>,
+    pub connectivity: Connectivity,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Connectivity {
+    Unknown,
+    Connected,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearchStatus {
+    pub backend: ServiceBackend,
+    pub server: String,
+    pub selected_provider: Option<String>,
+    pub fallback_available: Option<bool>,
+    pub agent_reach: ProviderHealth,
+    pub searxng: ProviderHealth,
+    pub searxng_url: String,
+    pub mcp: Option<ProviderHealth>,
+    pub path: PathBuf,
+}
+
+/// Inspect local installations and configured connections without installing or
+/// starting a provider. Connectivity is only known where it was actually checked.
+pub fn web_search_status(
+    settings: &crate::project_settings::WebBackendSettings,
+) -> WebSearchStatus {
     let paths = SearchPaths::discover();
     let client = WebSearchClient::default();
-    let external = env::var("YEET_SEARXNG_URL")
+    let url = env::var("YEET_SEARXNG_URL")
         .ok()
-        .filter(|value| !value.trim().is_empty());
-    let url = external.as_deref().unwrap_or(DEFAULT_URL);
-    let running = client.probe(url);
-    let managed_agent_reach = paths.agent_reach_installed();
-    let external_agent_reach = command_available("agent-reach") && command_available("mcporter");
-    Ok(format!(
-        "path: {}\nsearxng.installed: {}\nsearxng.running: {}\nsearxng.url: {}\nagent-reach.managed: {}\nagent-reach.external: {}\nagent-reach.preferred: {}",
-        paths.root.display(),
-        if paths.installed() { "yes" } else { "no" },
-        if running { "yes" } else { "no" },
-        url,
-        if managed_agent_reach { "yes" } else { "no" },
-        if external_agent_reach { "yes" } else { "no" },
-        if managed_agent_reach || external_agent_reach {
-            "yes"
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_URL.into());
+    let running = client.probe(&url);
+    let agent_installed = client.agent_reach_invocation().is_some();
+    let searx_installed = paths.installed();
+    let mcp = if settings.backend == ServiceBackend::Mcp {
+        let result = BridgeClient::start().and_then(|bridge| {
+            let result = bridge.list_mcp_tools(Some(&settings.server));
+            bridge.shutdown();
+            let tools = result?;
+            let missing = ["web_search", "web_read"]
+                .into_iter()
+                .filter(|name| !tools.iter().any(|tool| tool.name == *name))
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                bail!(
+                    "MCP server is missing required tools: {}",
+                    missing.join(", ")
+                );
+            }
+            Ok(())
+        });
+        Some(ProviderHealth {
+            installed: None,
+            connectivity: if result.is_ok() {
+                Connectivity::Connected
+            } else {
+                Connectivity::Unavailable
+            },
+            error: result.err().map(|e| format!("{e:#}")),
+        })
+    } else {
+        None
+    };
+    WebSearchStatus {
+        backend: settings.backend,
+        server: settings.server.clone(),
+        selected_provider: if settings.backend == ServiceBackend::Mcp {
+            Some("mcp".into())
+        } else if agent_installed {
+            Some("agent-reach".into())
+        } else if running || searx_installed {
+            Some("searxng".into())
         } else {
-            "no"
+            None
         },
-    ))
+        fallback_available: if settings.backend == ServiceBackend::Mcp {
+            Some(false)
+        } else if running {
+            Some(true)
+        } else if searx_installed {
+            None
+        } else {
+            Some(false)
+        },
+        agent_reach: ProviderHealth {
+            installed: Some(agent_installed),
+            connectivity: Connectivity::Unknown,
+            error: if agent_installed {
+                None
+            } else {
+                Some("Install Agent-Reach or configure another search provider.".into())
+            },
+        },
+        searxng: ProviderHealth {
+            installed: Some(searx_installed),
+            connectivity: if running {
+                Connectivity::Connected
+            } else {
+                Connectivity::Unavailable
+            },
+            error: if running {
+                None
+            } else if searx_installed {
+                Some("SearXNG is installed but not running; it will start on demand.".into())
+            } else {
+                Some("No SearXNG instance responded; install it or configure an endpoint.".into())
+            },
+        },
+        searxng_url: url,
+        mcp,
+        path: paths.root,
+    }
 }
 
 fn remove(target: &str) -> Result<String> {
@@ -1589,4 +1671,25 @@ fn strip_markup(input: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    #[test]
+    fn health_serialization_keeps_installation_and_connectivity_separate() {
+        let health = ProviderHealth {
+            installed: Some(true),
+            connectivity: Connectivity::Unknown,
+            error: None,
+        };
+        let value = serde_json::to_value(&health).unwrap();
+        assert_eq!(value["installed"], true);
+        assert_eq!(value["connectivity"], "unknown");
+        assert_eq!(
+            serde_json::from_value::<ProviderHealth>(value).unwrap(),
+            health
+        );
+    }
 }
