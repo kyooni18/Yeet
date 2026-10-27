@@ -311,139 +311,93 @@ fn search_workspace_in_process(
     case_sensitive: bool,
     regex: bool,
 ) -> Result<SearchResult> {
-    let expression = if regex {
-        if query.len() > 1024 {
-            bail!("Search regex is too long (maximum 1024 characters).");
-        }
-        Some(
-            RegexBuilder::new(query)
-                .case_insensitive(!case_sensitive)
-                .build()
-                .map_err(|error| anyhow!("Invalid search regex: {error}"))?,
-        )
-    } else {
-        None
-    };
-    let needle = if case_sensitive {
+    if regex && query.len() > 1024 {
+        bail!("Search regex is too long (maximum 1024 characters).");
+    }
+    // Literal queries compile to an escaped regex so case-insensitive search
+    // does not lowercase every line.
+    let pattern = if regex {
         query.to_owned()
     } else {
-        query.to_lowercase()
+        regex::escape(query)
     };
+    // multi_line keeps ^/$ per line, so the whole-file prefilter below never
+    // rejects a file that has a matching line.
+    let expression = RegexBuilder::new(&pattern)
+        .case_insensitive(!case_sensitive)
+        .multi_line(true)
+        .build()
+        .map_err(|error| anyhow!("Invalid search regex: {error}"))?;
     let mut matches = Vec::new();
     let mut files_scanned = 0usize;
     let mut truncated = false;
 
-    #[allow(clippy::too_many_arguments)] // Recursive traversal carries bounded accumulator state.
-    fn walk(
-        root: &Path,
-        path: &Path,
-        expression: Option<&regex::Regex>,
-        needle: &str,
-        case_sensitive: bool,
-        max_results: usize,
-        matches: &mut Vec<SearchMatch>,
-        files_scanned: &mut usize,
-        truncated: &mut bool,
-    ) -> Result<()> {
-        if *truncated {
-            return Ok(());
+    // Respects .gitignore and friends, never follows symlinks, and keeps the
+    // source-first directory order so truncation favors likely matches.
+    let walker = ignore::WalkBuilder::new(start)
+        .hidden(false)
+        .follow_links(false)
+        .require_git(false)
+        .filter_entry(|entry| {
+            !(entry.depth() > 0
+                && entry.file_type().is_some_and(|kind| kind.is_dir())
+                && ignored_workspace_directory(&entry.file_name().to_string_lossy()))
+        })
+        .sort_by_file_name(|left, right| {
+            let left = left.to_string_lossy();
+            let right = right.to_string_lossy();
+            workspace_entry_priority(&left)
+                .cmp(&workspace_entry_priority(&right))
+                .then_with(|| left.cmp(&right))
+        })
+        .build();
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
         }
-        let metadata = match fs::symlink_metadata(path) {
-            Ok(value) => value,
-            Err(_) => return Ok(()),
-        };
-        if metadata.file_type().is_symlink() {
-            return Ok(());
+        if files_scanned >= WORKSPACE_SEARCH_MAX_FILES || matches.len() >= max_results {
+            truncated = true;
+            break;
         }
-        if metadata.is_file() {
-            if *files_scanned >= WORKSPACE_SEARCH_MAX_FILES || matches.len() >= max_results {
-                *truncated = true;
-                return Ok(());
+        let path = entry.path();
+        if entry.metadata().map_or(true, |metadata| {
+            metadata.len() > WORKSPACE_SEARCH_MAX_FILE_BYTES
+        }) {
+            continue;
+        }
+        files_scanned += 1;
+        let Ok(bytes) = fs::read(path) else { continue };
+        if bytes.contains(&0) {
+            continue;
+        }
+        let text = normalize_edit_text(&bytes);
+        if !expression.is_match(&text) {
+            continue;
+        }
+        for (index, line) in text.split('\n').enumerate() {
+            if !expression.is_match(line) {
+                continue;
             }
-            if metadata.len() > WORKSPACE_SEARCH_MAX_FILE_BYTES {
-                return Ok(());
-            }
-            *files_scanned += 1;
-            let bytes = match fs::read(path) {
-                Ok(value) => value,
-                Err(_) => return Ok(()),
+            let text = if line.chars().count() <= 320 {
+                line.to_owned()
+            } else {
+                format!("{}...", line.chars().take(317).collect::<String>())
             };
-            if bytes.contains(&0) {
-                return Ok(());
-            }
-            let text = normalize_edit_text(&bytes);
-            for (index, line) in text.split('\n').enumerate() {
-                let matched = if let Some(expression) = expression {
-                    expression.is_match(line)
-                } else if case_sensitive {
-                    line.contains(needle)
-                } else {
-                    line.to_lowercase().contains(needle)
-                };
-                if !matched {
-                    continue;
-                }
-                let text = if line.chars().count() <= 320 {
-                    line.to_owned()
-                } else {
-                    format!("{}...", line.chars().take(317).collect::<String>())
-                };
-                matches.push(SearchMatch {
-                    path: stable_display_path(root, path)?,
-                    line: index + 1,
-                    text,
-                });
-                if matches.len() >= max_results {
-                    *truncated = true;
-                    break;
-                }
-            }
-            return Ok(());
-        }
-        if !metadata.is_dir() {
-            return Ok(());
-        }
-        for entry in sorted_directory_entries(path)? {
-            if *truncated {
+            matches.push(SearchMatch {
+                path: stable_display_path(root, path)?,
+                line: index + 1,
+                text,
+            });
+            if matches.len() >= max_results {
+                truncated = true;
                 break;
             }
-            let file_type = match entry.file_type() {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            if file_type.is_symlink() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if file_type.is_dir() && ignored_workspace_directory(&name) {
-                continue;
-            }
-            walk(
-                root,
-                &entry.path(),
-                expression,
-                needle,
-                case_sensitive,
-                max_results,
-                matches,
-                files_scanned,
-                truncated,
-            )?;
         }
-        Ok(())
+        if truncated {
+            break;
+        }
     }
-
-    walk(
-        root,
-        start,
-        expression.as_ref(),
-        &needle,
-        case_sensitive,
-        max_results,
-        &mut matches,
-        &mut files_scanned,
-        &mut truncated,
-    )?;
     matches.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
@@ -602,7 +556,7 @@ impl ToolRegistry {
         self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
     }
 
-    /// Searches workspace text with bounded results and duplicate-query suppression.
+    /// Searches workspace text with bounded results; the query is recorded for the working-state summary.
     pub(super) fn search_workspace(&mut self, object: &Map<String, Value>) -> Result<String> {
         let query = string_arg(object, "query")?.trim();
         if query.is_empty() {

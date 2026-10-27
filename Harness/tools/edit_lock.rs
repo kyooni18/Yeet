@@ -7,9 +7,11 @@
 use std::{
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
@@ -19,7 +21,13 @@ pub(super) struct WorkspaceEditLock {
 }
 
 impl WorkspaceEditLock {
-    pub(super) fn acquire(config_directory: &Path, workspace: &Path) -> Result<Self> {
+    /// Waits for the lock until it is free or `cancel` is set, so a hung
+    /// session cannot block every other session's edits forever.
+    pub(super) fn acquire(
+        config_directory: &Path,
+        workspace: &Path,
+        cancel: &AtomicBool,
+    ) -> Result<Self> {
         let directory = config_directory.join("transactions");
         fs::create_dir_all(&directory).with_context(|| {
             format!("create Yeet transaction directory {}", directory.display())
@@ -32,8 +40,12 @@ impl WorkspaceEditLock {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("open workspace edit lock {}", path.display()))?;
-        file.lock_exclusive()
-            .with_context(|| format!("lock workspace edit transaction {}", path.display()))?;
+        while file.try_lock_exclusive().is_err() {
+            if cancel.load(Ordering::Acquire) {
+                bail!("cancelled while waiting for another session's edit");
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
         Ok(Self { file })
     }
 }
@@ -64,14 +76,18 @@ mod tests {
     fn edit_transactions_wait_and_resume_instead_of_rejecting_other_sessions() {
         let config = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
-        let first = WorkspaceEditLock::acquire(config.path(), workspace.path()).unwrap();
+        let first =
+            WorkspaceEditLock::acquire(config.path(), workspace.path(), &AtomicBool::new(false))
+                .unwrap();
         let config_path = config.path().to_owned();
         let workspace_path = workspace.path().join(".");
         let (started_tx, started_rx) = mpsc::channel();
         let (acquired_tx, acquired_rx) = mpsc::channel();
         let waiter = std::thread::spawn(move || {
             started_tx.send(()).unwrap();
-            let _second = WorkspaceEditLock::acquire(&config_path, &workspace_path).unwrap();
+            let _second =
+                WorkspaceEditLock::acquire(&config_path, &workspace_path, &AtomicBool::new(false))
+                    .unwrap();
             acquired_tx.send(()).unwrap();
         });
         started_rx.recv_timeout(Duration::from_secs(5)).unwrap();

@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Component, Path, PathBuf},
-    sync::atomic::AtomicBool,
+    sync::atomic::{AtomicBool, Ordering},
     thread,
 };
 
@@ -17,9 +17,7 @@ use crate::{
     permission::PermissionBroker,
     project_settings::ServiceBackend,
     session_store::SessionStore,
-    shell::{
-        ShellExecutionRequest, ShellProgress, restricted_operation, run_shell_cancellable,
-    },
+    shell::{ShellExecutionRequest, ShellProgress, restricted_operation, run_shell_cancellable},
     web_search::{WebSearchBackend, WebSearchClient, WebSearchRequest},
     workers::WorkerRegistry,
 };
@@ -78,6 +76,7 @@ const EXPLICIT_READ_LINES: usize = 480;
 const DEFAULT_INLINE_BYTES: usize = 12 * 1024;
 const EXPLICIT_INLINE_BYTES: usize = 16 * 1024;
 const MAX_CAPABILITY_SEARCH_RESULTS: usize = 8;
+const MAX_PARALLEL_MCP_CALLS: usize = 4;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityDescriptor {
     pub id: String,
@@ -340,11 +339,13 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Read-only MCP calls in one response run concurrently, in waves of
+    /// MAX_PARALLEL_MCP_CALLS.
     pub fn can_parallel_read_only_mcp_batch(&self, calls: &[ToolCall]) -> bool {
-        (2..=4).contains(&calls.len())
-            && calls
-                .iter()
-                .all(|call| self.catalog.read_only_mcp_target(call).is_some())
+        calls.len() >= 2
+            && calls.iter().all(|call| {
+                self.tool_enabled(&call.name) && self.catalog.read_only_mcp_target(call).is_some()
+            })
     }
 
     /// Executes a batch only when every call is an MCP tool explicitly annotated read-only.
@@ -354,7 +355,7 @@ impl ToolRegistry {
         calls: &[ToolCall],
         cancel: &AtomicBool,
     ) -> Option<Vec<std::result::Result<String, String>>> {
-        if !(2..=4).contains(&calls.len()) {
+        if !self.can_parallel_read_only_mcp_batch(calls) {
             return None;
         }
         let targets = calls
@@ -366,14 +367,33 @@ impl ToolRegistry {
             })
             .collect::<Option<Vec<_>>>()?;
         let bridge = self.bridge_client().ok()?;
-        Some(thread::scope(|scope| {
-            let handles = targets
-                .into_iter()
+        // At most MAX_PARALLEL_MCP_CALLS requests are in flight; larger batches
+        // run in successive waves instead of falling back to fully serial.
+        Some(
+            targets
+                .chunks(MAX_PARALLEL_MCP_CALLS)
+                .flat_map(|wave| self.run_mcp_wave(&bridge, wave, cancel))
+                .collect(),
+        )
+    }
+
+    fn run_mcp_wave(
+        &self,
+        bridge: &BridgeClient,
+        wave: &[(String, String, Map<String, Value>)],
+        cancel: &AtomicBool,
+    ) -> Vec<std::result::Result<String, String>> {
+        if cancel.load(Ordering::Acquire) {
+            return wave.iter().map(|_| Err("cancelled".into())).collect();
+        }
+        thread::scope(|scope| {
+            let handles = wave
+                .iter()
                 .map(|(server, tool, arguments)| {
                     let bridge = bridge.clone();
                     scope.spawn(move || {
                         bridge
-                            .call_mcp_tool_cancellable(&server, &tool, &arguments, cancel)
+                            .call_mcp_tool_cancellable(server, tool, arguments, cancel)
                             .map(|value| value.to_string())
                             .map_err(|error| error.to_string())
                     })
@@ -387,7 +407,7 @@ impl ToolRegistry {
                         .unwrap_or_else(|_| Err("parallel read-only MCP execution panicked".into()))
                 })
                 .collect()
-        }))
+        })
     }
 
     pub fn execute_research(
@@ -578,7 +598,7 @@ impl ToolRegistry {
             "shell_job" => self.shell_job_tool(&object, cancel),
             "computer_use" => self.computer_use_tool(&object, cancel),
             "computer_use_reset" => self.computer_use_reset_tool(&object, cancel),
-            "apply_file_edits" => self.apply_file_edits(&call.arguments),
+            "apply_file_edits" => self.apply_file_edits(&call.arguments, cancel),
             other => match self.catalog.external_route(other) {
                 Some(route) => self.execute_external(route, &object, model, cancel),
                 None => bail!("Unknown direct tool: {other}"),

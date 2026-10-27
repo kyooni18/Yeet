@@ -5220,6 +5220,7 @@ dependencies = [
  "dotenvy",
  "flate2",
  "fs2",
+ "ignore",
  "io-harness",
  "libc",
  "nono",

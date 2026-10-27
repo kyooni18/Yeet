@@ -31,17 +31,25 @@ fn active_sessions_can_edit_the_same_file_without_finishing_their_tasks() {
             }]}]
         })
     };
-    first.apply_file_edits(&change(1, "ONE")).unwrap();
+    first
+        .apply_file_edits(&change(1, "ONE"), &AtomicBool::new(false))
+        .unwrap();
     // Another session's old local read must not silently overwrite live edits.
-    let stale = second.apply_file_edits(&change(1, "obsolete")).unwrap_err();
+    let stale = second
+        .apply_file_edits(&change(1, "obsolete"), &AtomicBool::new(false))
+        .unwrap_err();
     assert!(
         stale.to_string().contains("changed after it was read"),
         "{stale}"
     );
     second.read_file(read.as_object().unwrap()).unwrap();
-    second.apply_file_edits(&change(2, "TWO")).unwrap();
+    second
+        .apply_file_edits(&change(2, "TWO"), &AtomicBool::new(false))
+        .unwrap();
     first.read_file(read.as_object().unwrap()).unwrap();
-    first.apply_file_edits(&change(1, "FINAL")).unwrap();
+    first
+        .apply_file_edits(&change(1, "FINAL"), &AtomicBool::new(false))
+        .unwrap();
     assert_eq!(
         fs::read_to_string(root.join("shared.txt")).unwrap(),
         "FINAL\nTWO\n"
@@ -267,24 +275,30 @@ fn text_replacements_and_patches_edit_files_without_line_numbers() {
         ]}]})
     };
     let ambiguous = registry
-        .apply_file_edits(&replace("let x = 1;", "let x = 2;"))
+        .apply_file_edits(
+            &replace("let x = 1;", "let x = 2;"),
+            &AtomicBool::new(false),
+        )
         .unwrap_err();
     assert!(
         ambiguous.to_string().contains("matches 2 places"),
         "{ambiguous}"
     );
     registry
-        .apply_file_edits(&replace(
-            "fn a() {\n    let x = 1;",
-            "fn a() {\n    let x = 2;",
-        ))
+        .apply_file_edits(
+            &replace("fn a() {\n    let x = 1;", "fn a() {\n    let x = 2;"),
+            &AtomicBool::new(false),
+        )
         .unwrap();
 
     read(&mut registry, "lib.rs");
     read(&mut registry, "old.txt");
     let patch = "*** Begin Patch\n*** Update File: lib.rs\n@@ fn b() {\n-    let x = 1;\n+    let y = 3;\n+    let z = 4;\n }\n*** Add File: new.txt\n+hello\n*** Delete File: old.txt\n*** End Patch\n";
     registry
-        .apply_file_edits(&json!({"diagnostics": false, "patch": patch}))
+        .apply_file_edits(
+            &json!({"diagnostics": false, "patch": patch}),
+            &AtomicBool::new(false),
+        )
         .unwrap();
     assert_eq!(
         fs::read_to_string(root.join("lib.rs")).unwrap(),
@@ -315,10 +329,14 @@ fn edits_chain_without_rereads_until_the_file_changes_elsewhere() {
             {"kind": "replaceText", "oldText": old, "newText": new}
         ]}]})
     };
-    registry.apply_file_edits(&replace("one", "ONE")).unwrap();
+    registry
+        .apply_file_edits(&replace("one", "ONE"), &AtomicBool::new(false))
+        .unwrap();
     // Our own edit and an unknown-scope shell mutation keep the snapshot.
     registry.invalidate_workspace_cache();
-    registry.apply_file_edits(&replace("two", "TWO")).unwrap();
+    registry
+        .apply_file_edits(&replace("two", "TWO"), &AtomicBool::new(false))
+        .unwrap();
     assert_eq!(
         fs::read_to_string(root.join("a.txt")).unwrap(),
         "ONE\nTWO\nthree\n"
@@ -327,7 +345,7 @@ fn edits_chain_without_rereads_until_the_file_changes_elsewhere() {
     fs::write(root.join("a.txt"), "ONE\nTWO\nchanged\n").unwrap();
     registry.invalidate_workspace_cache();
     let stale = registry
-        .apply_file_edits(&replace("ONE", "uno"))
+        .apply_file_edits(&replace("ONE", "uno"), &AtomicBool::new(false))
         .unwrap_err();
     assert!(
         stale.to_string().contains("changed after it was read"),
@@ -363,7 +381,8 @@ fn foreground_shell_reports_real_partial_output_while_it_runs() {
         .unwrap();
     let final_value: Value = serde_json::from_str(&result).unwrap();
     assert_eq!(final_value["stdout"], "firstsecond");
-    let live: Value = serde_json::from_str(updates.first().expect("progress while running")).unwrap();
+    let live: Value =
+        serde_json::from_str(updates.first().expect("progress while running")).unwrap();
     assert_eq!(live["status"], "running");
     assert_eq!(live["progress"]["stdoutTail"], "first");
     // Nothing is reported for a stream that has produced no bytes.

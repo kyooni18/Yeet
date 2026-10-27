@@ -23,12 +23,17 @@ impl ToolRegistry {
     }
 
     /// Applies validated structured file changes and records mutation diagnostics.
-    pub(super) fn apply_file_edits(&mut self, arguments: &Value) -> Result<String> {
+    pub(super) fn apply_file_edits(
+        &mut self,
+        arguments: &Value,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
         // Separate sessions use separate edit daemons. Serialize only the
         // transaction's snapshot validation and commit, never the whole task.
         let _edit_guard = edit_lock::WorkspaceEditLock::acquire(
             &crate::platform::default_config_directory(),
             &self.context.workspace_root,
+            cancel,
         )?;
         self.sync_edit_state();
         let mut request = arguments.clone();
