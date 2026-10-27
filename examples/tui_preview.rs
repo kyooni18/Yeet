@@ -320,7 +320,7 @@ fn main() -> anyhow::Result<()> {
                 (chrono::Utc::now() - chrono::Duration::seconds(seconds)).to_rfc3339()
             };
             let member =
-                |name: &str, status: &str, task: &str, started: i64, tokens: (u64, u64)| {
+                |name: &str, status: &str, task: &str, started: i64, _tokens: (u64, u64)| {
                     AgentMemberItem {
                         id: name.into(),
                         description: name.into(),

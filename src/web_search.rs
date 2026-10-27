@@ -1992,7 +1992,7 @@ mod provider_integration_tests {
             ] {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut request = [0u8; 4096];
-                stream.read(&mut request).unwrap();
+                assert!(stream.read(&mut request).unwrap() > 0);
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
             }
         });
@@ -2039,7 +2039,7 @@ mod provider_integration_tests {
             for body in [r#"{"engines":[]}"#, r#"{"results":[]}"#] {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut request = [0u8; 4096];
-                stream.read(&mut request).unwrap();
+                assert!(stream.read(&mut request).unwrap() > 0);
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
