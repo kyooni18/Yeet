@@ -2206,10 +2206,7 @@ mod tests {
 
     #[test]
     fn home_inventory_uses_a_revisioned_ui_message_without_harness_cursors() {
-        use crate::shared_ui::{
-            application_session::ApplicationSession,
-            home::{ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent},
-        };
+        use crate::shared_ui::home::{ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent};
         let mut ui = crate::shared_ui::application_session::ApplicationSession::default();
         let mut content = WorkspaceContent::default();
         content.sessions.push(ResourceItem::new(
