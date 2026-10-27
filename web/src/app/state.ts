@@ -61,6 +61,7 @@ export function openPage(next: Page) {
 }
 
 export function openSheet(next: Sheet) {
+  if (next === 'settings') remoteStore.sendSettingsUi({ type: 'refresh' })
   withAnimation(ease, () => { sheet.value = next })
 }
 

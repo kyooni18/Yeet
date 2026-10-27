@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Settings2, Database, Globe, Cpu, Brain, Layers3, ShieldCheck, Bot, KeyRound, Sparkles, X } from '@/components/Icons'
 import { ProviderIcon } from '@/components/ProviderIcon'
 import type { SettingsIcon } from '../../../frontend/shared/remote/protocol'
@@ -7,9 +7,12 @@ import { remoteStore, useRemote } from '@/store/remoteStore'
 export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const remote = useRemote()
   const dialogRef = useRef<HTMLElement>(null)
+  const [editorValue, setEditorValue] = useState('')
+  useEffect(() => { setEditorValue(remote.settings?.editor?.value ?? '') }, [remote.settings?.editor?.kind])
 
   useEffect(() => {
     if (!open) return
+    remoteStore.sendSettingsUi({ type: 'refresh' })
     requestAnimationFrame(() => {
       dialogRef.current?.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')
         ?.focus({ preventScroll: true })
@@ -86,6 +89,12 @@ export function SettingsSheet({ open, onClose }: { open: boolean; onClose: () =>
               </div>
             </div>
           })}
+          {settings?.editor && <form onSubmit={(event) => { event.preventDefault(); remoteStore.sendSettingsUi({ type: 'submit_editor', value: editorValue }) }}>
+            <label>{settings.editor.label}<input value={editorValue} onChange={(event) => setEditorValue(event.target.value)} /></label>
+            <small>{settings.editor.hint}</small>
+            <button type="submit">Save</button>
+            <button type="button" onClick={() => remoteStore.sendSettingsUi({ type: 'cancel_editor' })}>Cancel</button>
+          </form>}
           {settings?.notice && <p role="status">{settings.notice}</p>}
         </div>
       </section>

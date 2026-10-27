@@ -6,6 +6,8 @@ pub struct SettingsState {
     pub selected: Option<String>,
     pub editor: Option<SettingsEditorView>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub web_advanced: bool,
 }
 impl SettingsState {
     pub fn view(&self, env: &SettingsEnvironment, harness: &HarnessState) -> SettingsView {
@@ -20,11 +22,10 @@ impl SettingsState {
         {
             self.selected = None;
         }
-        if self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| !env.supported_editors.contains(&editor.kind))
-        {
+        if self.editor.as_ref().is_some_and(|editor| {
+            editor.kind != SettingsEditorKind::WebEndpoint
+                && !env.supported_editors.contains(&editor.kind)
+        }) {
             self.editor = None;
         }
     }
@@ -96,6 +97,7 @@ impl SettingsState {
                             "context_length" => SettingsEditorKind::ContextLength,
                             "theme_dark" => SettingsEditorKind::DarkTheme,
                             "theme_light" => SettingsEditorKind::LightTheme,
+                            "web_endpoint" => SettingsEditorKind::WebEndpoint,
                             _ => return effect,
                         };
                         self.editor = Some(SettingsEditorView {
@@ -106,6 +108,36 @@ impl SettingsState {
                         });
                     }
                     SettingsControlKind::Navigation => {
+                        match id.as_str() {
+                            "web_advanced" => {
+                                self.web_advanced = !self.web_advanced;
+                                return effect;
+                            }
+                            "web_status" => {
+                                effect.command = Some(HarnessCommand::RequestWebSearchStatus);
+                                return effect;
+                            }
+                            "web_setup" => {
+                                effect.command = Some(HarnessCommand::PlanWebSearchSetup);
+                                return effect;
+                            }
+                            "web_install" => {
+                                if let Some(target) = harness
+                                    .web_setup_plan
+                                    .as_ref()
+                                    .and_then(|p| p.install.clone())
+                                {
+                                    effect.command =
+                                        Some(HarnessCommand::InstallWebSearch { target });
+                                }
+                                return effect;
+                            }
+                            "web_test" => {
+                                effect.command = Some(HarnessCommand::TestWebSearch);
+                                return effect;
+                            }
+                            _ => {}
+                        }
                         if let Some(provider) = &control.provider {
                             if let Some(provider) = harness
                                 .auth_providers
@@ -176,6 +208,11 @@ impl SettingsState {
                 };
                 effect.command = Some(match id.as_str() {
                     "appearance" => HarnessCommand::SetAppearance { appearance: value },
+                    "web_server" => HarnessCommand::SetServiceBackend {
+                        service: "web".into(),
+                        backend: "mcp".into(),
+                        server: Some(value),
+                    },
                     "web_backend" => HarnessCommand::SetServiceBackend {
                         service: "web".into(),
                         backend: value,
@@ -207,6 +244,9 @@ impl SettingsState {
                             }
                         };
                         HarnessCommand::SetContextLength { length }
+                    }
+                    SettingsEditorKind::WebEndpoint => {
+                        HarnessCommand::SetWebSearchEndpoint { url: Some(value) }
                     }
                     SettingsEditorKind::DarkTheme | SettingsEditorKind::LightTheme => {
                         if value.trim().is_empty() {

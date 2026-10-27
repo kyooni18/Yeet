@@ -199,6 +199,7 @@ impl App {
         } else if let Some(editor) = self.application.settings_projection().view.editor {
             let kind = match editor.kind {
                 SettingsEditorKind::ContextLength => SettingsEditKind::ContextLength,
+                SettingsEditorKind::WebEndpoint => SettingsEditKind::WebEndpoint,
                 SettingsEditorKind::DarkTheme => SettingsEditKind::ThemeDark,
                 SettingsEditorKind::LightTheme => SettingsEditKind::ThemeLight,
             };
@@ -378,6 +379,7 @@ impl App {
                     self.settings_edit_kind,
                     Some(
                         SettingsEditKind::ContextLength
+                            | SettingsEditKind::WebEndpoint
                             | SettingsEditKind::ThemeDark
                             | SettingsEditKind::ThemeLight
                     )
@@ -741,6 +743,7 @@ impl App {
         if matches!(
             kind,
             SettingsEditKind::ContextLength
+                | SettingsEditKind::WebEndpoint
                 | SettingsEditKind::ThemeDark
                 | SettingsEditKind::ThemeLight
         ) {
@@ -826,6 +829,7 @@ impl App {
                 SandboxAction::SetLimit { name, value }
             }
             SettingsEditKind::ContextLength
+            | SettingsEditKind::WebEndpoint
             | SettingsEditKind::ThemeDark
             | SettingsEditKind::ThemeLight => unreachable!(),
         };

@@ -177,42 +177,173 @@ pub(super) fn project(
     ];
     // Advanced destination support describes available host capabilities, not a
     // platform switch. UI still authors the complete applicable control tree.
-    let mut services = Vec::new();
     if env
         .supported_features
         .contains(&SettingsFeature::ServiceBackends)
     {
+        let enabled = enabled && !harness.web_search_working;
+        let detail = harness
+            .web_test_result
+            .as_ref()
+            .map(|result| result.message.clone())
+            .unwrap_or_else(|| {
+                harness
+                    .web_status
+                    .as_ref()
+                    .map(|status| {
+                        let provider = status
+                            .selected_provider
+                            .as_deref()
+                            .unwrap_or("none detected");
+                        let error =
+                            if status.backend == crate::project_settings::ServiceBackend::Mcp {
+                                status.mcp.as_ref().and_then(|p| p.error.as_deref())
+                            } else if status.selected_provider.is_none() {
+                                status.searxng.error.as_deref()
+                            } else {
+                                None
+                            };
+                        format!(
+                            "Preferred: {provider}. {}",
+                            error.unwrap_or("Run a search test to verify operation.")
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        "Checking status; run a search test to verify operation.".into()
+                    })
+            });
+        let mut controls = vec![
+            control(
+                "web_status",
+                "Status",
+                detail,
+                SettingsIcon::Web,
+                SettingsControlKind::Navigation,
+                "refresh".into(),
+                enabled,
+            ),
+            control(
+                "web_setup",
+                "Set up or repair",
+                "Check installed providers and prerequisites".into(),
+                SettingsIcon::Web,
+                SettingsControlKind::Navigation,
+                "setup".into(),
+                enabled,
+            ),
+            control(
+                "web_test",
+                "Test connection",
+                "Run a real search".into(),
+                SettingsIcon::Web,
+                SettingsControlKind::Navigation,
+                "test".into(),
+                enabled,
+            ),
+        ];
+        controls[0].action_label = "Refresh".into();
+        controls[1].action_label = "Set Up".into();
+        controls[2].action_label = "Test".into();
         if let Some(web) = harness
             .available_capabilities
             .iter()
             .find(|item| item.id == "web-search")
         {
-            services.push(toggle(
-                "capability:web-search",
-                "Web Search",
-                web.description.clone(),
+            controls.insert(
+                0,
+                toggle(
+                    "capability:web-search",
+                    "Web Search",
+                    web.description.clone(),
+                    SettingsIcon::Web,
+                    web.enabled,
+                    enabled,
+                ),
+            );
+        }
+        if let Some(plan) = &harness.web_setup_plan {
+            if let Some(target) = &plan.install {
+                let detail = if plan.missing_dependencies.is_empty() {
+                    plan.message.clone()
+                } else {
+                    format!(
+                        "Install prerequisites first: {}",
+                        plan.missing_dependencies.join(", ")
+                    )
+                };
+                let mut install = control(
+                    "web_install",
+                    "Approve installation",
+                    detail,
+                    SettingsIcon::Web,
+                    SettingsControlKind::Navigation,
+                    target.clone(),
+                    enabled && plan.missing_dependencies.is_empty(),
+                );
+                install.action_label = "Install".into();
+                controls.push(install);
+            }
+        }
+        let mut advanced = control(
+            "web_advanced",
+            "Advanced",
+            "Provider and connection settings".into(),
+            SettingsIcon::Settings,
+            SettingsControlKind::Navigation,
+            "open".into(),
+            enabled,
+        );
+        advanced.action_label = if state.web_advanced { "Hide" } else { "Open" }.into();
+        controls.push(advanced);
+        if state.web_advanced {
+            controls.push(choice(
+                "web_backend",
+                "Provider",
+                "Automatic is recommended",
                 SettingsIcon::Web,
-                web.enabled,
+                &harness.web_backend,
+                &[
+                    ("auto", "Automatic"),
+                    ("agent-reach", "Agent-Reach/Exa"),
+                    ("searxng", "SearXNG"),
+                    ("mcp", "MCP"),
+                ],
+                enabled,
+            ));
+            {
+                let options = harness
+                    .web_mcp_servers
+                    .iter()
+                    .map(|s| (s.as_str(), s.as_str()))
+                    .collect::<Vec<_>>();
+                controls.push(choice(
+                    "web_server",
+                    "MCP server",
+                    harness
+                        .web_mcp_error
+                        .as_deref()
+                        .unwrap_or("Only servers with web_search and web_read are shown"),
+                    SettingsIcon::Web,
+                    &harness.web_server,
+                    &options,
+                    enabled,
+                ));
+            }
+            controls.push(control(
+                "web_endpoint",
+                "SearXNG endpoint",
+                "HTTP or HTTPS URL; blank uses the default".into(),
+                SettingsIcon::Web,
+                SettingsControlKind::Editor,
+                harness.web_searxng_url.clone().unwrap_or_default(),
                 enabled,
             ));
         }
-        services.push(choice(
-            "web_backend",
-            "Web Backend",
-            &harness.web_server,
-            SettingsIcon::Web,
-            &harness.web_backend,
-            &[("builtin", "Built-in"), ("mcp", "MCP")],
-            enabled,
-        ));
-    }
-
-    if !services.is_empty() {
         sections.push(section(
             "web_search",
             "Web Search",
             SettingsIcon::Web,
-            services,
+            controls,
         ));
     }
     let mut model = Vec::new();

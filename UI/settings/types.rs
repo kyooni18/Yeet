@@ -34,6 +34,7 @@ pub enum SettingsEditorKind {
     ContextLength,
     DarkTheme,
     LightTheme,
+    WebEndpoint,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -46,7 +47,7 @@ pub struct SettingsEnvironment {
 impl Default for SettingsEnvironment {
     fn default() -> Self {
         Self {
-            supported_features: Vec::new(),
+            supported_features: vec![SettingsFeature::ServiceBackends],
             available: true,
             supported_destinations: Vec::new(),
             supported_editors: Vec::new(),

@@ -190,6 +190,10 @@ impl AgentCoordinator {
         self.registry.configure_web_backend(backend, server);
     }
 
+    pub fn configure_searxng_url(&self, url: Option<String>) {
+        self.registry.configure_searxng_url(url);
+    }
+
     pub fn set_retained_debate_knowledge(
         &mut self,
         knowledge: Vec<crate::debate::RetainedDebateKnowledge>,

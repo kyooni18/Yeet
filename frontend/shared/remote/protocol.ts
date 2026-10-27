@@ -362,6 +362,13 @@ export interface BridgeState {
   openai_flex: boolean
   web_backend: string
   web_server: string
+  web_searxng_url?: string | null
+  web_search_working?: boolean
+  web_status?: WebSearchStatus | null
+  web_test_result?: { success: boolean; message: string } | null
+  web_setup_plan?: { install?: string | null; missingDependencies: string[]; message: string } | null
+  web_mcp_servers?: string[]
+  web_mcp_error?: string | null
   settings_notice?: string | null
   settings_working: boolean
   runtime_settings?: RuntimeSettingsState | null
@@ -369,6 +376,23 @@ export interface BridgeState {
   sandbox_notice?: string | null
   sandbox_working: boolean
   debate?: unknown
+}
+
+export interface WebSearchProviderHealth {
+  installed: boolean | null
+  connectivity: 'unknown' | 'connected' | 'unavailable'
+  error?: string | null
+}
+export interface WebSearchStatus {
+  backend: 'builtin' | 'agent-reach' | 'searxng' | 'mcp'
+  server: string
+  selectedProvider?: string | null
+  fallbackAvailable?: boolean | null
+  agentReach: WebSearchProviderHealth
+  searxng: WebSearchProviderHealth
+  searxngUrl: string
+  mcp?: WebSearchProviderHealth | null
+  path: string
 }
 
 export const emptyBridgeState = (): BridgeState => ({
@@ -407,7 +431,7 @@ export const emptyBridgeState = (): BridgeState => ({
   provider_configurations: [],
   providers_working: false,
   openai_flex: false,
-  web_backend: 'builtin',
+  web_backend: 'auto',
   web_server: 'web',
   settings_working: false,
   sandbox_working: false,
@@ -467,6 +491,9 @@ export type FrontendCommand =
   | { type: 'request_settings' }
   | { type: 'set_open_ai_flex'; enabled: boolean }
   | { type: 'set_service_backend'; service: string; backend: string; server?: string | null }
+  | { type: 'request_web_search_status' | 'plan_web_search_setup' | 'test_web_search' }
+  | { type: 'install_web_search'; target: string }
+  | { type: 'set_web_search_endpoint'; url?: string | null }
   | { type: 'set_appearance'; appearance: string }
   | { type: 'set_theme'; mode: 'dark' | 'light' | 'both'; value: string }
   | { type: 'request_sandbox' }
@@ -700,7 +727,7 @@ export interface ComposerUiEffect { accepted_editor: EditorSnapshot | null; canc
 
 export type SettingsIcon = 'appearance' | 'settings' | 'memory' | 'web' | 'model' | 'reasoning' | 'context' | 'theme' | 'policy' | 'agents' | 'permissions' | 'provider' | 'capabilities'
 export type SettingsDestination = 'models' | 'reasoning' | 'agents' | 'permissions' | 'auth' | 'providers' | 'capabilities'
-export type SettingsEditorKind = 'context_length' | 'dark_theme' | 'light_theme'
+export type SettingsEditorKind = 'context_length' | 'dark_theme' | 'light_theme' | 'web_endpoint'
 export type SettingsAction =
   | { type: 'select'; value: string | null }
   | { type: 'move_selection'; value: number }

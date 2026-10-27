@@ -58,6 +58,7 @@ pub enum SettingsSection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsEditKind {
     ContextLength,
+    WebEndpoint,
     ThemeDark,
     ThemeLight,
     WorkspacePath,

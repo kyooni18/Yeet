@@ -167,3 +167,60 @@ fn projected_choices_and_provider_identity_drive_actions_without_native_policy()
         matches!(state.apply(SettingsAction::Activate("appearance".into()),&env,&harness).command,Some(HarnessCommand::SetAppearance{appearance})if appearance=="light")
     );
 }
+
+#[test]
+fn web_setup_requires_explicit_install_action_and_exposes_advanced_options() {
+    let mut harness = HarnessState::default();
+    let env = SettingsEnvironment::default();
+    let mut state = SettingsState::default();
+    assert!(matches!(
+        state
+            .apply(SettingsAction::Activate("web_setup".into()), &env, &harness)
+            .command,
+        Some(HarnessCommand::PlanWebSearchSetup)
+    ));
+    assert!(
+        state
+            .apply(
+                SettingsAction::Activate("web_install".into()),
+                &env,
+                &harness
+            )
+            .command
+            .is_none()
+    );
+    harness.web_setup_plan = Some(crate::web_search::SetupPlan {
+        install: Some("agent-reach".into()),
+        missing_dependencies: vec![],
+        message: "Install".into(),
+    });
+    assert!(
+        matches!(state.apply(SettingsAction::Activate("web_install".into()), &env, &harness).command, Some(HarnessCommand::InstallWebSearch { target }) if target == "agent-reach")
+    );
+    state.apply(
+        SettingsAction::Activate("web_advanced".into()),
+        &env,
+        &harness,
+    );
+    let view = state.view(&env, &harness);
+    let provider = view.controls().find(|c| c.id == "web_backend").unwrap();
+    assert_eq!(
+        provider
+            .options
+            .iter()
+            .map(|o| o.value.as_str())
+            .collect::<Vec<_>>(),
+        vec!["auto", "agent-reach", "searxng", "mcp"]
+    );
+    harness.settings_working = true;
+    assert!(
+        state
+            .apply(
+                SettingsAction::Activate("web_install".into()),
+                &env,
+                &harness
+            )
+            .command
+            .is_none()
+    );
+}

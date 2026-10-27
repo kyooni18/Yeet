@@ -169,6 +169,8 @@ struct AgentReachInvocation {
 pub struct WebSearchClient {
     paths: SearchPaths,
     state: Mutex<ProcessState>,
+    searxng_url: Mutex<Option<String>>,
+    agent_failure: Mutex<Option<(Instant, String)>>,
     agent: ureq::Agent,
 }
 
@@ -183,12 +185,20 @@ impl Default for WebSearchClient {
         Self {
             paths: SearchPaths::discover(),
             state: Mutex::new(ProcessState::default()),
+            searxng_url: Mutex::new(None),
+            agent_failure: Mutex::new(None),
             agent,
         }
     }
 }
 
 impl WebSearchClient {
+    pub fn set_searxng_url(&self, url: Option<String>) {
+        if let Ok(mut current) = self.searxng_url.lock() {
+            *current = url;
+        }
+    }
+
     pub fn read_url(&self, url: &str, max_chars: usize, cancel: &AtomicBool) -> Result<Value> {
         if cancel.load(Ordering::Acquire) {
             bail!("cancelled");
@@ -425,6 +435,9 @@ impl WebSearchClient {
                 let body = response.into_string().context("read SearXNG response")?;
                 let value: Value =
                     serde_json::from_str(&body).context("decode SearXNG JSON response")?;
+                if !value.get("results").is_some_and(Value::is_array) {
+                    bail!("SearXNG returned a response without a results array");
+                }
                 Ok(normalize_results(
                     &query_owned,
                     value,
@@ -457,8 +470,38 @@ impl WebSearchClient {
             "query": query,
             "numResults": max_results.clamp(1, 20),
         });
-        let stdout = self.invoke_agent_reach("exa.web_search_exa", arguments, cancel, "search")?;
-        normalize_agent_reach_output(query, &stdout, max_results.clamp(1, 20))
+        let mut failure = loop {
+            if cancel.load(Ordering::Acquire) {
+                bail!("cancelled");
+            }
+            match self.agent_failure.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    thread::sleep(Duration::from_millis(20))
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    bail!("Agent-Reach state lock poisoned")
+                }
+            }
+        };
+        if let Some((until, error)) = failure.as_ref()
+            && Instant::now() < *until
+        {
+            bail!("Agent-Reach is cooling down after a failed search: {error}");
+        }
+        let result = self
+            .invoke_agent_reach("exa.web_search_exa", arguments, cancel, "search")
+            .and_then(|stdout| {
+                normalize_agent_reach_output(query, &stdout, max_results.clamp(1, 20))
+            });
+        match &result {
+            Ok(_) => *failure = None,
+            Err(error) if !cancel.load(Ordering::Acquire) => {
+                *failure = Some((Instant::now() + RESTART_BACKOFF, error.to_string()))
+            }
+            Err(_) => {}
+        }
+        result
     }
 
     fn read_url_agent_reach(
@@ -591,12 +634,30 @@ impl WebSearchClient {
         if cancel.load(Ordering::Acquire) {
             bail!("cancelled");
         }
-        if let Some(url) = env::var_os("YEET_SEARXNG_URL").filter(|value| !value.is_empty()) {
-            let url = url.to_string_lossy().trim_end_matches('/').to_owned();
+        let configured = self
+            .searxng_url
+            .lock()
+            .ok()
+            .and_then(|url| url.clone())
+            .or_else(|| {
+                env::var("YEET_SEARXNG_URL")
+                    .ok()
+                    .filter(|url| !url.trim().is_empty())
+            });
+        if let Some(url) = configured {
+            let url = url.trim_end_matches('/').to_owned();
+            let parsed = Url::parse(&url).context("Invalid SearXNG endpoint")?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
+                bail!("SearXNG endpoint must be an HTTP or HTTPS URL without credentials");
+            }
             if self.probe(&url) {
                 return Ok(url);
             }
-            bail!("YEET_SEARXNG_URL is set but no SearXNG instance answered at {url}");
+            bail!("No SearXNG instance answered at {url}");
         }
 
         let mut state = self
@@ -969,7 +1030,7 @@ pub fn run_cli(args: &[String]) -> Result<String> {
             let workspace = env::current_dir()?.canonicalize()?;
             let settings = ProjectSettingsStore::new(&workspace)?;
             let project = settings.load()?;
-            let value = web_search_status(&project.web);
+            let value = web_search_status_for_workspace(&project.web, Some(&workspace));
             Ok(serde_json::to_string_pretty(&value)?)
         }
         "path" => Ok(SearchPaths::discover().root.display().to_string()),
@@ -1186,24 +1247,30 @@ pub struct WebSearchStatus {
 pub fn web_search_status(
     settings: &crate::project_settings::WebBackendSettings,
 ) -> WebSearchStatus {
+    web_search_status_for_workspace(settings, None)
+}
+
+pub fn web_search_status_for_workspace(
+    settings: &crate::project_settings::WebBackendSettings,
+    workspace: Option<&Path>,
+) -> WebSearchStatus {
     let paths = SearchPaths::discover();
     let client = WebSearchClient::default();
-    let url = env::var("YEET_SEARXNG_URL")
-        .ok()
+    let url = settings
+        .searxng_url
+        .clone()
+        .or_else(|| env::var("YEET_SEARXNG_URL").ok())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_URL.into());
     let running = client.probe(&url);
     let agent_installed = client.agent_reach_invocation().is_some();
     let searx_installed = paths.installed();
     let mcp = if settings.backend == ServiceBackend::Mcp {
-        let result = BridgeClient::start().and_then(|bridge| {
+        let result = start_search_bridge(workspace).and_then(|bridge| {
             let result = bridge.list_mcp_tools(Some(&settings.server));
             bridge.shutdown();
             let tools = result?;
-            let missing = ["web_search", "web_read"]
-                .into_iter()
-                .filter(|name| !tools.iter().any(|tool| tool.name == *name))
-                .collect::<Vec<_>>();
+            let missing = missing_web_tools(tools.iter().map(|tool| tool.name.as_str()));
             if !missing.is_empty() {
                 bail!(
                     "MCP server is missing required tools: {}",
@@ -1229,18 +1296,18 @@ pub fn web_search_status(
         server: settings.server.clone(),
         selected_provider: if settings.backend == ServiceBackend::Mcp {
             Some("mcp".into())
-        } else if agent_installed {
+        } else if settings.backend == ServiceBackend::AgentReach
+            || (settings.backend == ServiceBackend::Builtin && agent_installed)
+        {
             Some("agent-reach".into())
-        } else if running || searx_installed {
+        } else if settings.backend == ServiceBackend::Searxng || running || searx_installed {
             Some("searxng".into())
         } else {
             None
         },
-        fallback_available: if settings.backend == ServiceBackend::Mcp {
+        fallback_available: if settings.backend != ServiceBackend::Builtin {
             Some(false)
-        } else if running {
-            Some(true)
-        } else if searx_installed {
+        } else if running || searx_installed {
             None
         } else {
             Some(false)
@@ -1273,6 +1340,200 @@ pub fn web_search_status(
         mcp,
         path: paths.root,
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupPlan {
+    pub install: Option<String>,
+    pub missing_dependencies: Vec<String>,
+    pub message: String,
+}
+
+/// Plan setup without modifying the system or contacting an installer.
+pub fn setup_plan(
+    settings: &crate::project_settings::WebBackendSettings,
+    workspace: Option<&Path>,
+) -> SetupPlan {
+    setup_plan_inner(settings, workspace, false)
+}
+
+pub fn repair_plan(
+    settings: &crate::project_settings::WebBackendSettings,
+    workspace: Option<&Path>,
+) -> SetupPlan {
+    setup_plan_inner(settings, workspace, true)
+}
+
+fn setup_plan_inner(
+    settings: &crate::project_settings::WebBackendSettings,
+    workspace: Option<&Path>,
+    repair: bool,
+) -> SetupPlan {
+    let status = web_search_status_for_workspace(settings, workspace);
+    if settings.backend == ServiceBackend::Mcp {
+        return SetupPlan {
+            install: None,
+            missing_dependencies: vec![],
+            message: "Test the selected MCP server; Yeet does not install MCP servers.".into(),
+        };
+    }
+    if repair && settings.searxng_url.is_some() && settings.backend == ServiceBackend::Searxng {
+        return SetupPlan { install: None, missing_dependencies: vec![], message: "The configured SearXNG endpoint failed. Check the endpoint and its JSON search configuration.".into() };
+    }
+    if !repair
+        && match settings.backend {
+            ServiceBackend::AgentReach => status.agent_reach.installed == Some(true),
+            ServiceBackend::Searxng => {
+                status.searxng.installed == Some(true)
+                    || status.searxng.connectivity == Connectivity::Connected
+            }
+            ServiceBackend::Builtin => {
+                status.agent_reach.installed == Some(true)
+                    || status.searxng.installed == Some(true)
+                    || status.searxng.connectivity == Connectivity::Connected
+            }
+            ServiceBackend::Mcp => false,
+        }
+    {
+        return SetupPlan {
+            install: None,
+            missing_dependencies: vec![],
+            message: "An existing provider was detected. Test its connection.".into(),
+        };
+    }
+    let target = if settings.backend == ServiceBackend::Searxng
+        || (settings.backend == ServiceBackend::Builtin
+            && (!command_available("node")
+                || !command_available(&env::var("YEET_NPM").unwrap_or_else(|_| "npm".into())))
+            && command_available("git"))
+    {
+        "searxng"
+    } else {
+        "agent-reach"
+    };
+    let mut missing = Vec::new();
+    let python = env::var("YEET_PYTHON").unwrap_or_else(|_| "python3".into());
+    if !command_available(&python) {
+        missing.push("Python 3".into());
+    }
+    if target == "agent-reach" {
+        let npm = env::var("YEET_NPM").unwrap_or_else(|_| "npm".into());
+        if !command_available("node") {
+            missing.push("Node.js".into());
+        }
+        if !command_available(&npm) {
+            missing.push("npm".into());
+        }
+    } else if !command_available("git") {
+        missing.push("Git".into());
+    }
+    SetupPlan {
+        install: Some(target.into()),
+        missing_dependencies: missing,
+        message: format!(
+            "Install {target} using the existing Yeet installer, then run a search test."
+        ),
+    }
+}
+
+pub fn missing_web_tools<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'static str> {
+    let names = names.into_iter().collect::<Vec<_>>();
+    ["web_search", "web_read"]
+        .into_iter()
+        .filter(|name| !names.contains(name))
+        .collect()
+}
+
+fn start_search_bridge(workspace: Option<&Path>) -> Result<BridgeClient> {
+    match workspace {
+        Some(path) => BridgeClient::start_for_workspace(path),
+        None => BridgeClient::start(),
+    }
+}
+
+/// Run a real search with the configured provider. No installation is performed.
+pub fn test_web_search(
+    settings: &crate::project_settings::WebBackendSettings,
+    workspace: Option<&Path>,
+) -> Result<String> {
+    if settings.backend == ServiceBackend::Mcp {
+        let bridge = start_search_bridge(workspace)?;
+        let result = (|| {
+            let tools = bridge.list_mcp_tools(Some(&settings.server))?;
+            let missing = missing_web_tools(tools.iter().map(|tool| tool.name.as_str()));
+            if !missing.is_empty() {
+                bail!(
+                    "MCP server {} is missing {}",
+                    settings.server,
+                    missing.join(", ")
+                );
+            }
+            let args = json!({"query":"Yeet web search connection test", "maxResults":1})
+                .as_object()
+                .unwrap()
+                .clone();
+            let value = bridge.call_mcp_tool(&settings.server, "web_search", &args)?;
+            if value.get("isError").and_then(Value::as_bool) == Some(true) {
+                bail!("MCP search test failed: {value}");
+            }
+            if !value
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| !content.is_empty())
+                && value.get("structuredContent").is_none()
+            {
+                bail!("MCP search test returned no content");
+            }
+            Ok(format!(
+                "MCP server {} answered the search test.",
+                settings.server
+            ))
+        })();
+        bridge.shutdown();
+        return result;
+    }
+    let client = WebSearchClient::default();
+    client.set_searxng_url(settings.searxng_url.clone());
+    let backend = match settings.backend {
+        ServiceBackend::AgentReach => WebSearchBackend::AgentReach,
+        ServiceBackend::Searxng => WebSearchBackend::Searxng,
+        _ => WebSearchBackend::Auto,
+    };
+    let result = client.search(WebSearchRequest {
+        query: "Yeet web search connection test",
+        max_results: 1,
+        language: None,
+        category: None,
+        time_range: None,
+        safe_search: None,
+        page: None,
+        backend,
+    })?;
+    Ok(format!(
+        "Search test succeeded using {}{}.",
+        result
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("the configured provider"),
+        result
+            .get("fallbackReason")
+            .and_then(Value::as_str)
+            .map(|s| format!(" (fallback: {s})"))
+            .unwrap_or_default()
+    ))
+}
+
+/// Invoke the CLI's installer after the caller has obtained user approval.
+pub fn install_web_search(target: &str) -> Result<String> {
+    install(target)
 }
 
 fn remove(target: &str) -> Result<String> {
@@ -1328,11 +1589,25 @@ fn ensure_searxng_stopped(client: &WebSearchClient) -> Result<()> {
 }
 
 fn run(command: &mut Command, purpose: &str) -> Result<()> {
-    let status = command.status().with_context(|| purpose.to_owned())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!("{purpose} failed with {status}"))
+    configure_process_group(command);
+    let mut child = command.spawn().with_context(|| purpose.to_owned())?;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        if let Some(status) = child.try_wait().with_context(|| purpose.to_owned())? {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(anyhow!("{purpose} failed with {status}"))
+            };
+        }
+        if Instant::now() >= deadline {
+            kill_child_group(&mut child);
+            let _ = child.wait();
+            bail!(
+                "{purpose} timed out after 180 seconds; check your network connection and try again"
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -1678,6 +1953,12 @@ mod health_tests {
     use super::*;
 
     #[test]
+    fn mcp_requires_both_semantic_tools() {
+        assert_eq!(missing_web_tools(["web_search"]), vec!["web_read"]);
+        assert!(missing_web_tools(["web_read", "web_search"]).is_empty());
+    }
+
+    #[test]
     fn health_serialization_keeps_installation_and_connectivity_separate() {
         let health = ProviderHealth {
             installed: Some(true),
@@ -1691,5 +1972,112 @@ mod health_tests {
             serde_json::from_value::<ProviderHealth>(value).unwrap(),
             health
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_integration_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    #[test]
+    fn configured_searxng_endpoint_is_used_and_results_normalized() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let worker = thread::spawn(move || {
+            for body in [
+                r#"{"engines":[]}"#,
+                r#"{"results":[{"title":"Example","url":"https://example.com/","content":"<b>hello</b>"}]}"#,
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                stream.read(&mut request).unwrap();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let client = WebSearchClient::default();
+        client.set_searxng_url(Some(endpoint));
+        let result = client
+            .search(WebSearchRequest {
+                query: "test",
+                max_results: 1,
+                language: None,
+                category: None,
+                time_range: None,
+                safe_search: None,
+                page: None,
+                backend: WebSearchBackend::Searxng,
+            })
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(result["source"], "searxng");
+        assert_eq!(result["results"][0]["snippet"], "hello");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn automatic_fallback_reports_failed_provider() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let mut client = WebSearchClient::default();
+        client.paths.agent_reach_venv = root.path().join("venv");
+        client.paths.agent_reach_node = root.path().join("node");
+        client.paths.agent_reach_mcporter_config = root.path().join("config.json");
+        for path in [
+            client.paths.agent_reach_python(),
+            client.paths.agent_reach_cli(),
+            client.paths.managed_mcporter(),
+            client.paths.agent_reach_mcporter_config.clone(),
+        ] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "#!/bin/sh\necho provider-failed >&2\nexit 1\n").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        client.set_searxng_url(Some(format!("http://{}", listener.local_addr().unwrap())));
+        let worker = thread::spawn(move || {
+            for body in [r#"{"engines":[]}"#, r#"{"results":[]}"#] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                stream.read(&mut request).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+        });
+        let result = client
+            .search(WebSearchRequest {
+                query: "test",
+                max_results: 1,
+                language: None,
+                category: None,
+                time_range: None,
+                safe_search: None,
+                page: None,
+                backend: WebSearchBackend::Auto,
+            })
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(result["fallbackFrom"], "agent-reach");
+        assert!(
+            result["fallbackReason"]
+                .as_str()
+                .unwrap()
+                .contains("provider-failed")
+        );
+    }
+
+    #[test]
+    fn missing_installer_command_reports_the_failed_step() {
+        let error = run(
+            &mut Command::new("/missing/yeet-test-command"),
+            "install dependency",
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("install dependency"));
     }
 }

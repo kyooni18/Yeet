@@ -51,6 +51,7 @@ pub(super) fn initial_session(
     session.state.openai_flex = project.openai_flex;
     session.state.web_backend = project.web.backend.as_str().into();
     session.state.web_server = project.web.server.clone();
+    session.state.web_searxng_url = project.web.searxng_url.clone();
     session.meta.attached_capabilities = project.capabilities.attached.map(|values| {
         values
             .into_iter()

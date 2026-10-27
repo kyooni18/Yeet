@@ -618,7 +618,11 @@ impl ToolRegistry {
         let time_range = object.get("timeRange").and_then(Value::as_str);
         let safe_search = object.get("safeSearch").and_then(Value::as_u64);
         let page = object.get("page").and_then(Value::as_u64);
-        let backend = WebSearchBackend::parse(object.get("backend").and_then(Value::as_str))?;
+        let backend = match self.services.web_backend {
+            ServiceBackend::AgentReach => WebSearchBackend::AgentReach,
+            ServiceBackend::Searxng => WebSearchBackend::Searxng,
+            _ => WebSearchBackend::parse(object.get("backend").and_then(Value::as_str))?,
+        };
         let mut slots = vec![None; queries.len()];
         let mut pending = Vec::new();
         for (index, query) in queries.iter().enumerate() {

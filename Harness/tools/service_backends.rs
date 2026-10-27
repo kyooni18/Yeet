@@ -48,8 +48,12 @@ impl ToolRegistry {
         self.services.web_server = Some(server);
     }
 
+    pub fn configure_searxng_url(&self, url: Option<String>) {
+        self.web_search.set_searxng_url(url);
+    }
+
     pub(super) fn configured_web_tool_definitions(&self) -> Vec<ToolDefinition> {
-        if self.services.web_backend == ServiceBackend::Builtin {
+        if self.services.web_backend != ServiceBackend::Mcp {
             return vec![web_search_tool_definition(), web_read_tool_definition()];
         }
         let Some(server) = self.services.web_server.as_deref() else {

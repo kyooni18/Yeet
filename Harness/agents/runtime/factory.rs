@@ -75,6 +75,7 @@ impl AgentRuntimeFactory {
             self.permission.clone(),
         )?;
         registry.configure_web_backend(project.web.backend, project.web.server);
+        registry.configure_searxng_url(project.web.searxng_url);
         if !volatile_group_context {
             // Questions are a main-agent capability; Group agents never prompt.
             registry.enable_user_questions();

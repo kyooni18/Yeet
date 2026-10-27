@@ -214,6 +214,7 @@ impl HarnessService {
             && let Ok(mut coordinator) = self.coordinator.lock()
         {
             coordinator.configure_web_backend(project.web.backend, project.web.server.clone());
+            coordinator.configure_searxng_url(project.web.searxng_url.clone());
         }
         {
             let mut shared = self.shared.lock_or_recover();
@@ -224,6 +225,10 @@ impl HarnessService {
                     shared.state.openai_flex = project.openai_flex;
                     shared.state.web_backend = project.web.backend.as_str().into();
                     shared.state.web_server = project.web.server.clone();
+                    shared.state.web_searxng_url = project.web.searxng_url.clone();
+                    shared.state.web_setup_plan = None;
+                    shared.state.web_status = None;
+                    shared.state.web_test_result = None;
                     shared.state.settings_notice = None;
                     self.bridge.set_openai_flex(project.openai_flex);
                 }
@@ -339,9 +344,22 @@ impl HarnessService {
         self.publish_state();
 
         let result = ServiceBackend::parse(&backend).and_then(|backend| match service.as_str() {
-            "web" | "search" => self
-                .project_settings
-                .save_web_backend(backend, server.as_deref()),
+            "web" | "search" => {
+                if backend == ServiceBackend::Mcp {
+                    let server = server
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| anyhow!("Select an MCP server"))?;
+                    let tools = self.bridge.client()?.list_mcp_tools(Some(server))?;
+                    for name in ["web_search", "web_read"] {
+                        if !tools.iter().any(|tool| tool.name == name) {
+                            return Err(anyhow!("MCP server {server} is missing {name}"));
+                        }
+                    }
+                }
+                self.project_settings
+                    .save_web_backend(backend, server.as_deref())
+            }
             other => Err(anyhow!("Unknown service '{other}'; expected web")),
         });
         if let Err(error) = result {
@@ -359,6 +377,176 @@ impl HarnessService {
         shared.state.settings_notice = Some(format!("Web backend set to {selected}."));
         drop(shared);
         self.publish_state();
+    }
+
+    pub(super) fn set_web_search_endpoint(&self, url: Option<String>) {
+        let result = (|| -> Result<()> {
+            let mut settings = self.project_settings.load()?;
+            let url = url.map(|u| u.trim().to_owned()).filter(|u| !u.is_empty());
+            if let Some(ref value) = url {
+                let parsed = url::Url::parse(value)?;
+                if !matches!(parsed.scheme(), "http" | "https")
+                    || parsed.host_str().is_none()
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                {
+                    return Err(anyhow!(
+                        "Enter an HTTP or HTTPS endpoint without credentials"
+                    ));
+                }
+            }
+            settings.web.searxng_url = url;
+            self.project_settings.save(&settings)
+        })();
+        self.request_settings();
+        if let Err(error) = result {
+            self.shared.lock_or_recover().state.settings_notice =
+                Some(format!("Unable to save endpoint: {error}"));
+            self.publish_state();
+        }
+    }
+
+    pub(super) fn web_search_action(&self, action: &'static str, target: Option<String>) {
+        {
+            let mut shared = self.shared.lock_or_recover();
+            if shared.state.web_search_working {
+                return;
+            }
+            if action == "install"
+                && shared
+                    .state
+                    .web_setup_plan
+                    .as_ref()
+                    .and_then(|p| p.install.as_deref())
+                    != target.as_deref()
+            {
+                return;
+            }
+            shared.state.web_search_working = true;
+            shared.state.settings_notice = Some(
+                match action {
+                    "test" => "Testing web search…",
+                    "install" => "Installing web search…",
+                    "plan" => "Checking setup…",
+                    _ => "Checking web search status…",
+                }
+                .into(),
+            );
+        }
+        self.publish_state();
+        let store = self.project_settings.clone();
+        let workspace = self.workspace_root.clone();
+        let shared = self.shared.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let result = (|| -> Result<_> {
+                let settings = store.load()?.web;
+                let mut plan = None;
+                let notice = match action {
+                    "plan" => {
+                        let mut p = crate::web_search::setup_plan(&settings, Some(&workspace));
+                        if p.install.is_none() {
+                            match crate::web_search::test_web_search(&settings, Some(&workspace)) {
+                                Ok(message) => message,
+                                Err(error) if settings.backend == ServiceBackend::Mcp => {
+                                    return Err(error);
+                                }
+                                Err(error) => {
+                                    p = crate::web_search::repair_plan(&settings, Some(&workspace));
+                                    p.message =
+                                        format!("Search test failed: {error:#}. {}", p.message);
+                                    let message = p.message.clone();
+                                    plan = Some(p);
+                                    message
+                                }
+                            }
+                        } else {
+                            let message = p.message.clone();
+                            plan = Some(p);
+                            message
+                        }
+                    }
+                    "install" => {
+                        let p = crate::web_search::repair_plan(&settings, Some(&workspace));
+                        let target = target
+                            .as_deref()
+                            .ok_or_else(|| anyhow!("Missing install target"))?;
+                        if p.install.as_deref() != Some(target) {
+                            return Err(anyhow!("Setup plan changed; check setup again"));
+                        }
+                        if !p.missing_dependencies.is_empty() {
+                            return Err(anyhow!(
+                                "Install these prerequisites first: {}",
+                                p.missing_dependencies.join(", ")
+                            ));
+                        }
+                        crate::web_search::install_web_search(target)?;
+                        crate::web_search::test_web_search(&settings, Some(&workspace))?
+                    }
+                    "test" => crate::web_search::test_web_search(&settings, Some(&workspace))?,
+                    _ => "Web search status refreshed.".into(),
+                };
+                let status =
+                    crate::web_search::web_search_status_for_workspace(&settings, Some(&workspace));
+                let discovery = crate::core::BridgeClient::start_for_workspace(&workspace)
+                    .and_then(|bridge| {
+                        let result = bridge.list_mcp_servers().map(|servers| {
+                            servers
+                                .into_iter()
+                                .filter_map(|server| {
+                                    let tools = bridge.list_mcp_tools(Some(&server.name)).ok()?;
+                                    ["web_search", "web_read"]
+                                        .iter()
+                                        .all(|name| tools.iter().any(|tool| tool.name == *name))
+                                        .then_some(server.name)
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                        bridge.shutdown();
+                        result
+                    });
+                let (servers, discovery_error) = match discovery {
+                    Ok(servers) => (servers, None),
+                    Err(error) => (Vec::new(), Some(format!("MCP discovery failed: {error:#}"))),
+                };
+                Ok((notice, plan, status, servers, discovery_error))
+            })();
+            if let Ok(mut shared) = shared.lock() {
+                shared.state.web_search_working = false;
+                match result {
+                    Ok((notice, plan, status, servers, discovery_error)) => {
+                        if action == "test"
+                            || action == "install"
+                            || (action == "plan" && plan.is_none())
+                        {
+                            shared.state.web_test_result =
+                                Some(crate::web_search::SearchTestResult {
+                                    success: true,
+                                    message: notice.clone(),
+                                });
+                        }
+                        shared.state.settings_notice = Some(notice);
+                        shared.state.web_setup_plan = plan;
+                        shared.state.web_status = Some(status);
+                        shared.state.web_mcp_servers = servers;
+                        shared.state.web_mcp_error = discovery_error;
+                    }
+                    Err(error) => {
+                        let message = format!("Web search: {error:#}");
+                        if action != "status" {
+                            shared.state.web_test_result =
+                                Some(crate::web_search::SearchTestResult {
+                                    success: false,
+                                    message: message.clone(),
+                                });
+                        }
+                        shared.state.settings_notice = Some(message);
+                        shared.state.web_setup_plan = None;
+                    }
+                }
+                let _ = tx.send(ServiceEvent::Envelope(state_envelope(&shared.state)));
+            }
+        });
     }
 
     /// Enables or disables OpenAI Flex requests for this workspace.

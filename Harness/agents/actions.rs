@@ -155,6 +155,15 @@ pub enum FrontendCommand {
         #[serde(default)]
         server: Option<String>,
     },
+    RequestWebSearchStatus,
+    PlanWebSearchSetup,
+    InstallWebSearch {
+        target: String,
+    },
+    TestWebSearch,
+    SetWebSearchEndpoint {
+        url: Option<String>,
+    },
     RequestSandbox,
     UpdateSandbox {
         action: SandboxAction,

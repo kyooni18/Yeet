@@ -458,6 +458,7 @@ impl HarnessService {
             }
             FrontendCommand::RequestSettings => {
                 self.request_settings();
+                self.web_search_action("status", None);
                 Ok(())
             }
             FrontendCommand::SetAppearance { appearance } => {
@@ -486,6 +487,26 @@ impl HarnessService {
                 server,
             } => {
                 self.set_service_backend(service, backend, server);
+                Ok(())
+            }
+            FrontendCommand::RequestWebSearchStatus => {
+                self.web_search_action("status", None);
+                Ok(())
+            }
+            FrontendCommand::PlanWebSearchSetup => {
+                self.web_search_action("plan", None);
+                Ok(())
+            }
+            FrontendCommand::InstallWebSearch { target } => {
+                self.web_search_action("install", Some(target));
+                Ok(())
+            }
+            FrontendCommand::TestWebSearch => {
+                self.web_search_action("test", None);
+                Ok(())
+            }
+            FrontendCommand::SetWebSearchEndpoint { url } => {
+                self.set_web_search_endpoint(url);
                 Ok(())
             }
             FrontendCommand::RequestSandbox => {

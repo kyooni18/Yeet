@@ -23,22 +23,31 @@ pub struct ProjectCapabilities {
 #[serde(rename_all = "kebab-case")]
 pub enum ServiceBackend {
     #[default]
+    #[serde(alias = "auto", alias = "automatic")]
     Builtin,
+    AgentReach,
+    Searxng,
     Mcp,
 }
 
 impl ServiceBackend {
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "builtin" | "internal" | "native" => Ok(Self::Builtin),
+            "builtin" | "internal" | "native" | "auto" | "automatic" => Ok(Self::Builtin),
+            "agent-reach" | "exa" => Ok(Self::AgentReach),
+            "searxng" | "searx" => Ok(Self::Searxng),
             "mcp" | "external" => Ok(Self::Mcp),
-            other => bail!("Unknown backend '{other}'; expected builtin or mcp"),
+            other => {
+                bail!("Unknown backend '{other}'; expected auto, agent-reach, searxng, or mcp")
+            }
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Builtin => "builtin",
+            Self::Builtin => "auto",
+            Self::AgentReach => "agent-reach",
+            Self::Searxng => "searxng",
             Self::Mcp => "mcp",
         }
     }
@@ -51,6 +60,8 @@ pub struct WebBackendSettings {
     pub backend: ServiceBackend,
     #[serde(default = "default_web_server")]
     pub server: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub searxng_url: Option<String>,
 }
 
 impl Default for WebBackendSettings {
@@ -58,6 +69,7 @@ impl Default for WebBackendSettings {
         Self {
             backend: ServiceBackend::Builtin,
             server: default_web_server(),
+            searxng_url: None,
         }
     }
 }
@@ -391,6 +403,19 @@ mod tests {
         assert!(!settings.extra.contains_key("foundationMemory"));
         assert_eq!(settings.web.backend, ServiceBackend::Builtin);
         assert_eq!(settings.web.server, "web");
+    }
+
+    #[test]
+    fn legacy_builtin_and_new_provider_settings_migrate() {
+        let legacy: WebBackendSettings =
+            serde_json::from_value(json!({"backend":"builtin", "server":"web"})).unwrap();
+        assert_eq!(legacy.backend, ServiceBackend::Builtin);
+        assert_eq!(legacy.backend.as_str(), "auto");
+        assert!(legacy.searxng_url.is_none());
+        for name in ["auto", "agent-reach", "searxng", "mcp"] {
+            let parsed = ServiceBackend::parse(name).unwrap();
+            assert_eq!(ServiceBackend::parse(parsed.as_str()).unwrap(), parsed);
+        }
     }
 
     #[test]
