@@ -58,6 +58,9 @@ impl HarnessService {
                 items.extend(
                     crate::tools::builtin_capabilities()
                         .iter()
+                        .filter(|capability| {
+                            !crate::project_settings::is_permanent_core_capability(capability.id)
+                        })
                         .map(|capability| CapabilityToggleItem {
                             id: capability.id.into(),
                             kind: "builtin".into(),
@@ -122,6 +125,9 @@ impl HarnessService {
     }
 
     pub(super) fn toggle_capability(&self, id: &str) -> Result<bool> {
+        if crate::project_settings::is_permanent_core_capability(id) {
+            return Err(anyhow!("Core capability {id} is always available"));
+        }
         if id == "vision" {
             // Legacy clients may still request this toggle. Image support is automatic.
             return Ok(true);

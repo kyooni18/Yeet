@@ -103,7 +103,11 @@ impl HarnessService {
         shared.meta.runs = stored.runs;
         shared.meta.retained_debate_knowledge = stored.retained_debate_knowledge;
         shared.meta.attached_capabilities = stored.attached_harness_capabilities;
-        shared.meta.disabled_capabilities = stored.disabled_capabilities;
+        shared.meta.disabled_capabilities = stored
+            .disabled_capabilities
+            .into_iter()
+            .filter(|id| !crate::project_settings::is_permanent_core_capability(id))
+            .collect();
         shared.meta.working_directory = stored_working_directory.clone();
         shared.meta.context_roots = stored_context_roots.clone();
         shared.state.error_message = None;

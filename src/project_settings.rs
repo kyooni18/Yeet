@@ -286,9 +286,20 @@ fn normalize_capabilities(capabilities: &mut ProjectCapabilities) {
     }
     capabilities
         .disabled
-        .retain(|value| !retired_capability(value));
+        .retain(|value| !retired_capability(value) && !is_permanent_core_capability(value));
     capabilities.disabled.sort();
     capabilities.disabled.dedup();
+}
+
+pub(crate) fn is_permanent_core_capability(value: &str) -> bool {
+    matches!(
+        value,
+        "builtin:file-read"
+            | "builtin:file-write"
+            | "builtin:workspace-search"
+            | "builtin:code-symbols"
+            | "builtin:shell"
+    )
 }
 
 fn retired_capability(value: &str) -> bool {
@@ -315,6 +326,25 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    #[test]
+    fn legacy_core_disables_are_discarded() {
+        let mut capabilities = ProjectCapabilities {
+            attached: Some(vec!["skill:example".into()]),
+            disabled: vec![
+                "builtin:shell".into(),
+                "builtin:file-write".into(),
+                "builtin:computer-use".into(),
+                "mcp:docs".into(),
+            ],
+        };
+        normalize_capabilities(&mut capabilities);
+        assert_eq!(capabilities.attached, Some(vec!["skill:example".into()]));
+        assert_eq!(
+            capabilities.disabled,
+            vec!["builtin:computer-use", "mcp:docs"]
+        );
+    }
 
     #[test]
     fn service_backend_parse_accepts_aliases() {
