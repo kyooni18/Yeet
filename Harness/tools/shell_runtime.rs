@@ -8,8 +8,6 @@ use super::*;
 use super::shell_jobs::{FinishedShellJob, ShellJobOptions, ShellJobWait};
 use std::time::Duration;
 
-const DEFAULT_BACKGROUND_TIMEOUT_SECONDS: usize = 4 * 60 * 60;
-
 impl ToolRegistry {
     /// Executes a shell command under sandbox/approval policy and selects direct or actor output.
     pub(super) fn run_shell_tool(
@@ -77,9 +75,99 @@ impl ToolRegistry {
             .get("background")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let command = string_arg(object, "command")?.trim().to_owned();
+        let direct = match object.get("executable") {
+            Some(value) => {
+                if object.contains_key("command") {
+                    bail!("Provide either command or executable, not both");
+                }
+                if object.contains_key("shell")
+                    || object.contains_key("loadConfig")
+                    || object.contains_key("login")
+                {
+                    bail!("Shell options cannot be used with direct execution");
+                }
+                let executable = value
+                    .as_str()
+                    .filter(|s| !s.is_empty() && !s.contains('\0'))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("executable must be a non-empty string without NUL")
+                    })?;
+                let args = match object.get("args") {
+                    None => Vec::new(),
+                    Some(Value::Array(values)) => values
+                        .iter()
+                        .map(|v| {
+                            v.as_str()
+                                .filter(|s| !s.contains('\0'))
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("args must contain strings without NUL")
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    _ => bail!("args must be an array of strings"),
+                };
+                // Resolves PATH + PATHEXT like Windows command lookup and
+                // refuses batch files, whose argument re-parsing cannot be
+                // made safe for arbitrary arguments.
+                #[cfg(windows)]
+                let executable = crate::shell::selection::resolve_windows_executable(executable)?;
+                #[cfg(not(windows))]
+                let executable = std::path::PathBuf::from(executable);
+                Some(crate::shell::selection::LaunchSpec {
+                    executable,
+                    args,
+                    verbatim: false,
+                })
+            }
+            None => {
+                if object.contains_key("args") {
+                    bail!("args requires executable");
+                }
+                None
+            }
+        };
+        let command = if let Some(spec) = &direct {
+            format!(
+                "direct process: {}",
+                serde_json::to_string(&(spec.executable.to_string_lossy(), &spec.args))?
+            )
+        } else {
+            string_arg(object, "command")?.trim().to_owned()
+        };
+        let shell = object
+            .get("shell")
+            .map(|v| {
+                v.as_str()
+                    .ok_or_else(|| anyhow::anyhow!("shell must be a string"))
+            })
+            .transpose()?
+            .unwrap_or("auto");
+        if direct.is_none() {
+            crate::shell::selection::select(shell)?;
+        }
+        let load_config = object
+            .get("loadConfig")
+            .map(|v| {
+                v.as_bool()
+                    .ok_or_else(|| anyhow::anyhow!("loadConfig must be a boolean"))
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let login = object
+            .get("login")
+            .map(|v| {
+                v.as_bool()
+                    .ok_or_else(|| anyhow::anyhow!("login must be a boolean"))
+            })
+            .transpose()?
+            .unwrap_or(false);
         let has_permit = self.permitted_shell_commands.remove(&command);
-        let restricted = restricted_operation(&command);
+        let restricted = if direct.is_some() {
+            Some("direct process execution".to_owned())
+        } else {
+            restricted_operation(&command)
+        };
         let requested_working_directory = object.get("workingDirectory").and_then(Value::as_str);
         let persisted_cwd = self
             .shell_cwd
@@ -108,9 +196,7 @@ impl ToolRegistry {
         let mut unrestricted =
             !hard_confined && (policy.mode == SandboxMode::Unlimited || has_permit);
         let mut allow_write = false;
-        if restricted.is_some()
-            && self.catalog.deny_writes
-        {
+        if restricted.is_some() && self.catalog.deny_writes {
             bail!("File Write is disabled for this session; shell is read-only");
         }
         if context_root.is_none() {
@@ -159,20 +245,34 @@ impl ToolRegistry {
         // A foreground command that outlives its window keeps running as a job
         // instead of being killed, so the window only bounds how long the model
         // is blocked. An explicit timeoutSeconds is a real deadline.
-        let hard_timeout = usize_arg(object, "timeoutSeconds").map(|seconds| seconds as u64);
+        let hard_timeout = match object.get("timeoutSeconds") {
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .filter(|v| (1..=86_400).contains(v))
+                    .ok_or_else(|| anyhow::anyhow!("timeoutSeconds must be between 1 and 86400"))?,
+            ),
+            None => None,
+        };
         let yield_seconds = match usize_arg(object, "yieldSeconds") {
             Some(0) => bail!("yieldSeconds must be at least 1"),
             other => other.map(|seconds| seconds as u64),
         };
-        let job_timeout = hard_timeout.unwrap_or(DEFAULT_BACKGROUND_TIMEOUT_SECONDS as u64);
-        // Without a hard deadline the foreground window hands off to a job. With
-        // one, wait past it so the worker's own timeout is the one reported.
-        let wait_limit = match hard_timeout {
-            Some(seconds) => Duration::from_secs(seconds.saturating_add(30)),
-            None => Duration::from_secs(yield_seconds.unwrap_or(120)),
-        };
+        // Zero means no caller deadline; sandbox wall-time limits still apply.
+        let job_timeout = hard_timeout.unwrap_or(0);
+        let wait_limit = Duration::from_secs(yield_seconds.unwrap_or(120));
         let job_id = self.shell_jobs.start(ShellJobOptions {
             command: command.clone(),
+            pty: match object.get("pty") {
+                Some(value) => value
+                    .as_bool()
+                    .ok_or_else(|| anyhow::anyhow!("pty must be a boolean"))?,
+                None => false,
+            },
+            direct,
+            shell: Some(shell.to_owned()),
+            load_config,
+            login,
             root: shell_root.clone(),
             directory: effective_cwd.clone(),
             timeout_seconds: job_timeout,
@@ -692,9 +792,7 @@ impl ToolRegistry {
         let operation = restricted
             .clone()
             .unwrap_or_else(|| "unrestricted shell access".into());
-        if restricted.is_some()
-            && self.catalog.deny_writes
-        {
+        if restricted.is_some() && self.catalog.deny_writes {
             bail!(
                 "File Write is disabled for this session; mutating shell commands cannot be permitted"
             );
@@ -706,5 +804,50 @@ impl ToolRegistry {
             self.permitted_shell_commands.insert(command.clone());
         }
         Ok(json!({"granted": granted, "permissionRequired": true, "command": command, "operation": operation, "oneTime": true}).to_string())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_execution_tests {
+    use super::*;
+
+    #[test]
+    fn tool_direct_execution_uses_arguments_and_existing_session_cwd() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let store = SandboxStore::new(&root).unwrap();
+        let mut policy = store.load().unwrap();
+        policy.mode = SandboxMode::Unlimited;
+        store.save(&policy).unwrap();
+        let mut registry = ToolRegistry::new_with_bridge_handle(
+            BridgeHandle::lazy_for_workspace(root.clone()),
+            root.clone(),
+            WorkerRegistry::new(Vec::new()).unwrap(),
+            PermissionBroker::default(),
+        )
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        let cd = json!({"command":"cd sub", "shell":"sh", "mode":"direct"});
+        registry
+            .run_shell_tool(cd.as_object().unwrap(), "", &cancel)
+            .unwrap();
+        let direct = json!({"executable":"/bin/pwd", "args":[], "mode":"direct"});
+        let result: Value = serde_json::from_str(
+            &registry
+                .run_shell_tool(direct.as_object().unwrap(), "", &cancel)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            root.join("sub").to_str().unwrap()
+        );
+        let invalid = json!({"command":"echo x", "executable":"/bin/echo"});
+        assert!(
+            registry
+                .run_shell_tool(invalid.as_object().unwrap(), "", &cancel)
+                .is_err()
+        );
     }
 }

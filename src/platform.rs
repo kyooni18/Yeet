@@ -241,11 +241,20 @@ fn set_windows_private_acl(path: &Path, directory: bool) -> io::Result<()> {
 }
 
 pub(crate) fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    #[cfg(windows)]
-    if destination.exists() {
-        fs::remove_file(destination)?;
+    // fs::rename replaces atomically on Unix and on Windows (MoveFileExW with
+    // MOVEFILE_REPLACE_EXISTING). The remove-then-rename fallback only covers
+    // destinations that reject replacement while held open.
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(first) => {
+            #[cfg(windows)]
+            if destination.exists() {
+                fs::remove_file(destination)?;
+                return fs::rename(source, destination);
+            }
+            Err(first)
+        }
     }
-    fs::rename(source, destination)
 }
 
 pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
@@ -966,7 +975,7 @@ mod windows_tests {
         );
         child.wait().unwrap();
         wait_for("background descendant to start", || {
-            image_count("PING.EXE") >= baseline + 1
+            image_count("PING.EXE") > baseline
         });
         drop(child);
         wait_for("background descendant to be reaped", || {
@@ -982,7 +991,7 @@ mod windows_tests {
             "test-termination",
         );
         wait_for("child process to start", || {
-            image_count("PING.EXE") >= baseline + 1
+            image_count("PING.EXE") > baseline
         });
         let start = Instant::now();
         child.terminate_shell().unwrap();
