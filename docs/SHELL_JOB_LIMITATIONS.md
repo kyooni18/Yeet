@@ -31,6 +31,12 @@ cwd and exit-status handling, executable resolution, workspace-boundary path
 handling, and process-tree cleanup. They are compiled locally with
 `cargo check --tests --target x86_64-pc-windows-gnu` and executed natively by
 the Windows x64 and ARM64 CI runners.
+
+Native Windows CI has exposed unresolved correctness issues: Git Bash's MSYS
+runtime fails to create its named objects inside the AppContainer on the hosted
+runner, and the cmd cwd-report wrapper can lose a nonzero exit status. Do not
+rely on sandboxed Git Bash or cmd exit-status reporting until these are fixed
+and verified natively. Windows-native CI is not yet green.
 The compatibility Web client has an experimental interactive terminal for jobs
 exposed in expanded tool details; its Remote request/response path has mock-client
 coverage and a real-server stale-job test. Real-server reconnection and end-to-end
