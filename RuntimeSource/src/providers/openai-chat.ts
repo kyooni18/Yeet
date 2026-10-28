@@ -122,9 +122,18 @@ function mapTools(tools: ToolDefinition[] | undefined, model: string): unknown[]
     function: {
       name: tool.name,
       ...(tool.description ? { description: tool.description } : {}),
-      parameters: lowerForGemini ? geminiToolSchema(tool.inputSchema) : tool.inputSchema,
+      parameters: lowerForGemini ? geminiToolSchema(tool.inputSchema) : chatToolSchema(tool.inputSchema),
     },
   }));
+}
+
+// OpenAI (also behind routers such as OpenRouter) rejects root-level
+// combinators in function parameters. Yeet validates arguments locally, so
+// drop only the root combinators and keep nested schemas intact.
+function chatToolSchema(input: Record<string, unknown>): Record<string, unknown> {
+  if (!("oneOf" in input || "anyOf" in input || "allOf" in input)) return input;
+  const { oneOf: _oneOf, anyOf: _anyOf, allOf: _allOf, ...schema } = input;
+  return { ...schema, type: "object" };
 }
 
 function stableSessionId(value: string | undefined): string | undefined {

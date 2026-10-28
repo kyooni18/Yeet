@@ -514,7 +514,7 @@ fn run_agent(args: &[String]) -> Result<()> {
                 {
                     let _ = harness.send(FrontendCommand::Interrupt);
                     bail!(
-                        "Headless agent is waiting for an interactive permission. Configure sandbox auto-approval or use --benchmark for an isolated benchmark container."
+                        "Headless agent is waiting for an interactive permission. Run `yeet sandbox auto-approve on` or use --benchmark for an isolated benchmark container."
                     );
                 }
 

@@ -251,7 +251,7 @@ fn stop_and_direct_termination_do_not_respawn() {
             let mut dead = false;
             for _ in 0..50 {
                 unsafe {
-                    if libc::kill(pid as libc::pid_t, 0) != 0 {
+                    if libc::kill(pid as libc::pid_t, 0) != 0 || is_zombie(pid as u32) {
                         dead = true;
                         break;
                     }
@@ -338,4 +338,17 @@ fn shell_cwd_neutral_start_and_workspace() {
     // Clean up
     assert!(stop_remote().unwrap());
     assert!(remote_status().unwrap().is_none());
+}
+
+// A PID 1 that never reaps (common in containers) leaves killed processes
+// signalable as zombies.
+#[cfg(unix)]
+fn is_zombie(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(") ")
+                .map(|(_, fields)| fields.starts_with('Z'))
+        })
+        .unwrap_or(false)
 }

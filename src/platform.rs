@@ -105,7 +105,24 @@ pub(crate) fn default_config_directory() -> PathBuf {
 }
 #[cfg(unix)]
 pub(crate) fn bind_local(endpoint: &Path) -> io::Result<LocalListener> {
-    LocalListener::bind(endpoint)
+    LocalListener::bind(endpoint).map_err(|error| socket_path_error(endpoint, error))
+}
+
+// Unix socket paths are limited to ~108 bytes; name the path and the fix
+// instead of surfacing the bare SUN_LEN error.
+#[cfg(unix)]
+fn socket_path_error(endpoint: &Path, error: io::Error) -> io::Error {
+    if error.kind() != io::ErrorKind::InvalidInput || !error.to_string().contains("SUN_LEN") {
+        return error;
+    }
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "socket path is too long for a Unix socket ({} bytes): {}; set YEET_CONFIG_DIR to a shorter directory",
+            endpoint.as_os_str().len(),
+            endpoint.display()
+        ),
+    )
 }
 
 #[cfg(windows)]
@@ -120,7 +137,7 @@ pub(crate) fn bind_local(endpoint: &Path) -> io::Result<LocalListener> {
 
 #[cfg(unix)]
 pub(crate) fn connect_local(endpoint: &Path) -> io::Result<LocalStream> {
-    LocalStream::connect(endpoint)
+    LocalStream::connect(endpoint).map_err(|error| socket_path_error(endpoint, error))
 }
 
 #[cfg(windows)]
@@ -1113,7 +1130,33 @@ mod tests {
 
     fn process_group_exists(pgid: u32) -> bool {
         let result = unsafe { libc::kill(-(pgid as i32), 0) };
-        result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+        let signalable =
+            result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH);
+        signalable && live_group_member(pgid)
+    }
+
+    // Killed members reparented to a PID 1 that never reaps (common in
+    // containers) stay signalable as zombies; only running members count.
+    #[cfg(target_os = "linux")]
+    fn live_group_member(pgid: u32) -> bool {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return true;
+        };
+        entries.flatten().any(|entry| {
+            let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+                return false;
+            };
+            let Some((_, fields)) = stat.rsplit_once(") ") else {
+                return false;
+            };
+            let fields = fields.split_whitespace().collect::<Vec<_>>();
+            fields.first() != Some(&"Z") && fields.get(2) == Some(&pgid.to_string().as_str())
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn live_group_member(_pgid: u32) -> bool {
+        true
     }
 
     #[test]
