@@ -422,6 +422,7 @@ fn reconnectable_socket_error(error: &std::io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::protocol::DaemonHandshake;
     use super::*;
     #[cfg(unix)]
