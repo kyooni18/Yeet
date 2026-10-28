@@ -59,7 +59,7 @@ try {
     Copy-Item -Recurse -Force $RuntimeDist (Join-Path $RuntimeStage "dist")
     Copy-Item -Recurse -Force "RuntimeSource\skills" (Join-Path $RuntimeStage "skills")
     Copy-Item -Force "RuntimeSource\package.json" (Join-Path $RuntimeStage "package.json")
-    Copy-Item -Force "README.md", "CHANGELOG.md", "LICENSE.txt" $Stage
+    Copy-Item -Force "README.md", "CHANGELOG.md", "LICENSE.txt", "install.ps1" $Stage
     $BundledPdfSkill = Join-Path $RuntimeStage "skills\pdf\SKILL.md"
     if (-not (Test-Path $BundledPdfSkill -PathType Leaf)) {
         throw "Staged release is missing bundled PDF skill."

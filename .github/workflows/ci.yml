@@ -111,6 +111,7 @@ jobs:
           Copy-Item -Recurse "RuntimeSource\dist" (Join-Path $Stage "share\yeet\runtime\dist")
           Copy-Item -Recurse "RuntimeSource\skills" (Join-Path $Stage "share\yeet\runtime\skills")
           Copy-Item "RuntimeSource\package.json" (Join-Path $Stage "share\yeet\runtime\package.json")
+          Copy-Item "install.ps1" (Join-Path $Stage "install.ps1")
           $env:YEET_PREFIX = Join-Path $env:RUNNER_TEMP "yeet-install-prefix"
           $env:YEET_NO_PATH_UPDATE = "1"
           & (Join-Path $Stage "install.ps1")

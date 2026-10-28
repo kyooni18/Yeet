@@ -8,7 +8,7 @@
 #             node, and npm), then install the built artifacts.
 #   -Version  Install a specific release tag (defaults to $env:YEET_VERSION,
 #             then the latest GitHub release).
-#   -Prefix   Installation prefix (defaults to $env:YEET_PREFIX, $env:PREFIX,
+#   YEET_PREFIX   Installation prefix (defaults to $env:PREFIX,
 #             then $HOME\.local). No administrator rights are required.
 param(
     [switch]$Build,
@@ -136,7 +136,7 @@ if ($Build) {
 
 # An extracted release bundle installs directly.
 $LocalBundle = $PSScriptRoot
-if (Test-Path (Join-Path $LocalBundle "bin\yeet.exe" -PathType Leaf)) {
+if (Test-Path (Join-Path $LocalBundle "bin\yeet.exe") -PathType Leaf) {
     Install-Bundle $LocalBundle
     return
 }
