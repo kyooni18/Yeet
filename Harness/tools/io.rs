@@ -943,30 +943,61 @@ impl ToolRegistry {
             bail!("Skill script path escapes its root: {relative}");
         }
         let script = Path::new(&skill.root).join(relative);
-        let mut command_parts = Vec::new();
-        command_parts.push(format!(
-            "YEET_WORKSPACE_ROOT={}",
-            shell_quote(self.context.workspace_root.to_string_lossy().as_ref())
-        ));
+        let shell = crate::shell::selection::select("auto")?;
+        use crate::shell::selection::ShellKind;
+        // Quote for the shell that run_shell will actually select, so skill
+        // scripts work under Git Bash, PowerShell, and cmd alike.
+        let quote = |value: &str| -> String {
+            match shell.kind {
+                ShellKind::Powershell => format!("'{}'", value.replace('\'', "''")),
+                // Quotes cannot occur in Windows file names, so double quoting
+                // is complete for cmd.
+                ShellKind::Cmd => format!("\"{value}\""),
+                _ => shell_quote(value),
+            }
+        };
+        let mut invoke = Vec::new();
         match script
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or("")
         {
-            "py" => command_parts.push("python3".to_owned()),
-            "sh" | "bash" => command_parts.push("bash".to_owned()),
-            "js" | "mjs" | "cjs" => command_parts.push("node".to_owned()),
+            "py" => invoke.push(quote(&skill_python_interpreter()?)),
+            "sh" | "bash" => invoke.push(quote("bash")),
+            "js" | "mjs" | "cjs" => invoke.push(quote("node")),
             _ => {}
         }
-        command_parts.push(shell_quote(script.to_string_lossy().as_ref()));
+        invoke.push(quote(script.to_string_lossy().as_ref()));
         if let Some(args) = object.get("args").and_then(Value::as_array) {
             for value in args {
                 let arg = value
                     .as_str()
                     .ok_or_else(|| anyhow!("Skill script args must all be strings"))?;
-                command_parts.push(shell_quote(arg));
+                invoke.push(quote(arg));
             }
         }
+        let mut command_parts = Vec::new();
+        match shell.kind {
+            ShellKind::Powershell => command_parts.push(format!(
+                "$env:YEET_WORKSPACE_ROOT = {}; ",
+                quote(self.context.workspace_root.to_string_lossy().as_ref())
+            )),
+            ShellKind::Cmd => command_parts.push(format!(
+                "set \"YEET_WORKSPACE_ROOT={}\" && ",
+                self.context.workspace_root.display()
+            )),
+            _ => command_parts.push(format!(
+                "YEET_WORKSPACE_ROOT={} ",
+                quote(self.context.workspace_root.to_string_lossy().as_ref())
+            )),
+        }
+        // PowerShell only invokes a quoted first token through the call
+        // operator.
+        command_parts.push(if shell.kind == ShellKind::Powershell {
+            format!("& {}", invoke.join(" "))
+        } else {
+            invoke.join(" ")
+        });
         let mut shell_object = Map::new();
         shell_object.insert("command".into(), json!(command_parts.join(" ")));
         shell_object.insert("workingDirectory".into(), json!(skill.root));
@@ -985,6 +1016,24 @@ fn root_capable_workspace_path(path: Option<&str>) -> &str {
     match path {
         Some(path) if !path.trim().is_empty() => path,
         _ => ".",
+    }
+}
+
+/// Python interpreter token for skill scripts. On Windows this resolves
+/// through PATH + PATHEXT so the Microsoft Store alias stub is never launched
+/// and a missing Python is reported before any shell runs.
+fn skill_python_interpreter() -> Result<String> {
+    #[cfg(windows)]
+    {
+        Ok(
+            crate::shell::selection::resolve_windows_executable("python")?
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        Ok("python3".to_owned())
     }
 }
 

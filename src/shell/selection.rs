@@ -90,6 +90,17 @@ fn find(name: &str) -> Option<PathBuf> {
     find_in(name, |_| true)
 }
 
+#[cfg(windows)]
+fn is_store_shim_dir(dir: &Path) -> bool {
+    // The Microsoft Store `WindowsApps` folder hosts executable alias stubs
+    // that open the Store when the real app is not installed.
+    dir.components().any(|c| {
+        c.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("windowsapps")
+    })
+}
+
 /// PATH scan that skips executable-alias shim directories: the Microsoft Store
 /// `WindowsApps` folder (whose stubs open the Store when the app is missing)
 /// and the system directories hosting the WSL `bash.exe` launcher, which is
@@ -109,11 +120,7 @@ fn find_in(name: &str, accept: impl Fn(&Path) -> bool) -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn is_alias_shim_dir(dir: &Path) -> bool {
-    if dir.components().any(|c| {
-        c.as_os_str()
-            .to_string_lossy()
-            .eq_ignore_ascii_case("windowsapps")
-    }) {
+    if is_store_shim_dir(dir) {
         return true;
     }
     let Some(root) = std::env::var_os("SystemRoot") else {
@@ -218,7 +225,7 @@ pub fn resolve_windows_executable(name: &str) -> Result<PathBuf> {
         std::env::var_os("PATH")
             .into_iter()
             .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-            .filter(|dir| dir.is_absolute())
+            .filter(|dir| dir.is_absolute() && !is_store_shim_dir(dir))
             .flat_map(|dir| dir.join(name).with_extension_candidates(&exts))
             .find_map(&mut consider)
     };

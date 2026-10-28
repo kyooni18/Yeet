@@ -211,8 +211,17 @@ fn restricted_operation_inner(command: &str, depth: usize) -> Option<String> {
             "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
         ) {
             for pair in rest.windows(2) {
-                if matches!(pair[0].to_ascii_lowercase().as_str(), "-c" | "-command")
+                let flag = pair[0].to_ascii_lowercase();
+                if matches!(flag.as_str(), "-c" | "-command")
                     && let Some(value) = restricted_operation_inner(&pair[1], depth + 1)
+                {
+                    return Some(value);
+                }
+                // An encoded command hides its script text from naive
+                // inspection; decode it and classify the payload.
+                if matches!(flag.as_str(), "-e" | "-ec" | "-encodedcommand")
+                    && let Some(script) = decode_powershell_command(&pair[1])
+                    && let Some(value) = restricted_operation_inner(&script, depth + 1)
                 {
                     return Some(value);
                 }
@@ -220,4 +229,42 @@ fn restricted_operation_inner(command: &str, depth: usize) -> Option<String> {
         }
     }
     None
+}
+
+fn decode_powershell_command(encoded: &str) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&units).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(script: &str) -> String {
+        use base64::Engine;
+        let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn encoded_powershell_commands_are_classified_by_their_payload() {
+        let hidden = format!("pwsh -EncodedCommand {}", encode("Remove-Item -Recurse x"));
+        assert_eq!(restricted_operation(&hidden), Some("remove-item".into()));
+        let hidden = format!("powershell -ec {}", encode("Get-Date"));
+        assert_eq!(restricted_operation(&hidden), None);
+        assert_eq!(
+            restricted_operation("pwsh -EncodedCommand not-base64!"),
+            None
+        );
+    }
 }
