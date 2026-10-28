@@ -327,3 +327,40 @@ pub fn test_web_search(
 pub fn install_web_search(target: &str) -> Result<String> {
     install(target)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    #[test]
+    fn configured_search_connection_test_uses_the_provider() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for (expected, body) in [
+                ("/config", r#"{"engines":[]}"#),
+                (
+                    "/search?",
+                    r#"{"results":[{"title":"Example","url":"https://example.com/"}]}"#,
+                ),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let count = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                assert!(request.starts_with(&format!("GET {expected}")), "{request}");
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let settings = crate::project_settings::WebBackendSettings {
+            backend: ServiceBackend::Searxng,
+            searxng_url: Some(endpoint),
+            ..Default::default()
+        };
+        let message = test_web_search(&settings, None).unwrap();
+        worker.join().unwrap();
+        assert!(message.contains("succeeded using searxng"), "{message}");
+    }
+}
