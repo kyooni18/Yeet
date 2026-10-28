@@ -20,6 +20,7 @@ import {
   type UiProjection,
   type ConnectionStatus,
   type ConversationEntry,
+  type ShellJobResponse,
   type FrontendCommand,
   type ProviderUsageStatus,
   type SandboxAction,
@@ -293,8 +294,19 @@ export class RemoteStore {
     if (batch.length) this.emit()
   }
 
+  private shellJobListeners = new Set<(response: ShellJobResponse) => void>()
+
+  /** Ephemeral shell responses use their own byte cursor, not replay sequence. */
+  subscribeShellJobs(listener: (response: ShellJobResponse) => void): () => void {
+    this.shellJobListeners.add(listener)
+    return () => this.shellJobListeners.delete(listener)
+  }
+
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
+      case 'shell_job':
+        for (const listener of this.shellJobListeners) listener(message.payload)
+        return
       case 'ui_home':
         if (message.home_revision < this.homeRevision) return
         this.homeRevision = message.home_revision

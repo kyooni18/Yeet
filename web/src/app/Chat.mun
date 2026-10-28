@@ -149,6 +149,9 @@ struct Trace: View {
           ForEach(trace.details, { id: detail => detail.title + ":" + detail.content.length }) { detail in
             Detail(detail: detail)
           }
+          ForEach((trace.rich || []).filter(detail => detail.type === "terminal" && detail.job_id), { id: detail => detail.job_id }) { detail in
+            Element("yeet-shell-job", { "job-id": detail.job_id })
+          }
           if trace.metadata {
             Text("Duration: " + trace.metadata).fontSize(12).foregroundStyle(color.faint)
           }

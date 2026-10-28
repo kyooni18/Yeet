@@ -3,6 +3,7 @@ import { remoteStore } from '@/store/remoteStore'
 import { remote, startRemote } from '@/app/state'
 import { beginEdit } from '@/app/composer'
 import '@/app/markdown'
+import '@/app/shellJob'
 import App from '@/app/App.mun'
 import '@/app/remote.css'
 

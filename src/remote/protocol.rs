@@ -270,6 +270,12 @@ pub enum ServerMessage {
         entry: ConversationEntry,
         tool_call: Option<ConversationToolCall>,
     },
+    /// Ephemeral response to a session-scoped shell job request. Clients resume
+    /// output using the byte offset, not the conversation replay sequence.
+    ShellJob {
+        version: u16,
+        payload: Value,
+    },
     ActivityUpdate {
         version: u16,
         sequence: u64,
@@ -324,6 +330,7 @@ impl ServerMessage {
             | Self::ConversationReset { sequence, .. }
             | Self::ToolUpdate { sequence, .. }
             | Self::ActivityUpdate { sequence, .. } => Some(*sequence),
+            Self::ShellJob { .. } => None,
             Self::UiState { .. }
             | Self::WorkspaceSwitchRequested { .. }
             | Self::UiAgents { .. }
@@ -352,6 +359,7 @@ impl ServerMessage {
             | Self::ConversationReset { revision, .. }
             | Self::ToolUpdate { revision, .. }
             | Self::ActivityUpdate { revision, .. } => Some(*revision),
+            Self::ShellJob { .. } => None,
             Self::UiState { .. }
             | Self::WorkspaceSwitchRequested { .. }
             | Self::UiAgents { .. }

@@ -17,7 +17,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: `sh -c 'pnpm build && mkdir -p .e2e-workspace && cd .. && cargo build --quiet && export YEET_CONFIG_DIR="$PWD/web/.e2e-config" && rm -rf "$YEET_CONFIG_DIR" && mkdir -p "$YEET_CONFIG_DIR" && target/debug/yeet remote auth key clear --workspace "$PWD/web/.e2e-workspace" >/dev/null && target/debug/yeet remote auth passkey clear --workspace "$PWD/web/.e2e-workspace" >/dev/null && export YEET_RUNTIME_DIR="$PWD/RuntimeSource" && exec target/debug/yeet __remote-daemon "$PWD/web/.e2e-workspace" --bind 127.0.0.1:${backendPort}'`,
+    command: `sh -c 'npm run build && cd .. && cargo build --quiet && export YEET_CONFIG_DIR="$PWD/web/.e2e-config" && rm -rf "$YEET_CONFIG_DIR" && mkdir -p "$YEET_CONFIG_DIR" && target/debug/yeet remote auth key clear >/dev/null && target/debug/yeet remote auth passkey clear >/dev/null && export YEET_RUNTIME_DIR="$PWD/RuntimeSource" && exec target/debug/yeet remote --bind 127.0.0.1:${backendPort}'`,
     url: `http://127.0.0.1:${backendPort}/api/protocol`,
     timeout: 120_000,
     reuseExistingServer: false,

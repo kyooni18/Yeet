@@ -1072,6 +1072,17 @@ fn process_envelope(
                 None,
             ));
         }
+        "shell_job" => {
+            if let Some(payload) = envelope
+                .message
+                .and_then(|message| serde_json::from_str(&message).ok())
+            {
+                let _ = events.send(ServerMessage::ShellJob {
+                    version: REMOTE_PROTOCOL_VERSION,
+                    payload,
+                });
+            }
+        }
         _ => {}
     }
 }

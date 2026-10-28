@@ -454,9 +454,33 @@ export type SandboxAction =
   | { type: 'set_limit'; name: string; value: number }
   | { type: 'reset' }
 
+export interface ShellJobOutputEvent {
+  offset: number
+  nextOffset: number
+  stream: 'stdout' | 'stderr' | 'pty'
+  dataBase64: string
+}
+export interface ShellJobOutputPage {
+  events: ShellJobOutputEvent[]
+  nextOffset: number
+  totalBytes: number
+  finished: boolean
+  truncated: boolean
+  status?: 'running' | 'completed' | 'failed' | 'interrupted'
+}
+export interface ShellJobResponse {
+  jobId: string
+  requestId: string
+  action: string
+  result?: ShellJobOutputPage | { delivered: boolean }
+  error?: string
+  retryable?: boolean
+}
+
 export type FrontendCommand =
   | { type: 'submit'; text: string; attachment_ids?: string[] }
   | { type: 'interrupt' }
+  | { type: 'shell_job'; job_id: string; action: 'output' | 'input' | 'resize' | 'interrupt' | 'stop'; request_id: string; offset?: number; data?: string; rows?: number; cols?: number }
   | { type: 'regenerate_last' }
   | { type: 'edit_last'; text: string }
   | { type: 'resolve_permission'; request_id: string; granted: boolean }
@@ -743,6 +767,7 @@ export interface SettingsView { title: string; subtitle: string; sections: Setti
 export interface SettingsUiEffect { destination: SettingsDestination | null; accepted_editor: SettingsEditorView | null }
 
 export type RemoteServerMessage =
+  | { version: number; type: 'shell_job'; payload: ShellJobResponse }
   | { version: number; type: 'workspace_switch_requested'; id: string; path: string; source_workspace: string }
   | { version: number; type: 'ui_home'; home_revision: number; request_id?: string | null; view: HomeView }
   | { version: number; type: 'ui_diff'; diff_revision: number; request_id?: string | null; views: DiffView[] }

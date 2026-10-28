@@ -251,6 +251,19 @@ impl SessionRuntimePool {
             .map(|last_used| last_used.elapsed() >= ttl)
             .unwrap_or(false)
     }
+
+    fn has_running_shell_jobs(&self) -> bool {
+        let Ok(lanes) = self.runtimes.lanes.lock() else {
+            return true;
+        };
+        lanes.iter().any(|lane| {
+            let Ok(mut slot) = lane.try_lock() else {
+                return true;
+            };
+            slot.as_mut()
+                .is_some_and(|runtime| runtime.runtime.has_running_shell_jobs())
+        })
+    }
 }
 
 type RuntimeLane = Arc<Mutex<Option<SessionRuntime>>>;
@@ -540,10 +553,29 @@ impl RuntimeLanePool {
             let Ok(mut slot) = lane.try_lock() else {
                 continue;
             };
-            let Some(runtime) = slot.as_ref() else {
+            let Some(runtime) = slot.as_mut() else {
                 continue;
             };
             if now.saturating_duration_since(runtime.last_used) < MCP_LEGACY_RUNTIME_IDLE_TTL {
+                continue;
+            }
+            if runtime.runtime.has_running_shell_jobs() {
+                if let Ok(mut affinity) = self.affinity.lock() {
+                    for binding in affinity
+                        .handles
+                        .values_mut()
+                        .filter(|binding| binding.lane == lane_index)
+                    {
+                        binding.last_used = now;
+                    }
+                    for binding in affinity
+                        .sticky
+                        .values_mut()
+                        .filter(|binding| binding.lane == lane_index)
+                    {
+                        binding.last_used = now;
+                    }
+                }
                 continue;
             }
             let Ok(mut affinity) = self.affinity.lock() else {
@@ -1020,7 +1052,7 @@ fn prune_idle_sessions(sessions: &mut HashMap<String, Arc<SessionRuntimePool>>) 
         if Arc::strong_count(runtime) > 1 {
             return true;
         }
-        !runtime.is_idle_for(MCP_SESSION_IDLE_TTL)
+        !runtime.is_idle_for(MCP_SESSION_IDLE_TTL) || runtime.has_running_shell_jobs()
     });
 }
 
@@ -1388,6 +1420,9 @@ enum RuntimeCommand {
         payload: Value,
         response: SyncSender<Option<Value>>,
     },
+    HasRunningShellJobs {
+        response: SyncSender<bool>,
+    },
 }
 
 struct McpRuntime {
@@ -1449,6 +1484,9 @@ impl McpRuntime {
                             let result = server.handle_payload(payload);
                             let _ = response.send(result);
                         }
+                        RuntimeCommand::HasRunningShellJobs { response } => {
+                            let _ = response.send(server.has_running_shell_jobs());
+                        }
                     }
                 }
             })
@@ -1494,11 +1532,91 @@ impl McpRuntime {
     fn is_alive(&self) -> bool {
         !self.worker.is_finished()
     }
+
+    fn has_running_shell_jobs(&mut self) -> bool {
+        if !self.is_alive() {
+            return false;
+        }
+        let (response, receive) = mpsc::sync_channel(1);
+        if self
+            .requests
+            .try_send(RuntimeCommand::HasRunningShellJobs { response })
+            .is_err()
+        {
+            return true;
+        }
+        receive
+            .recv_timeout(Duration::from_millis(250))
+            .unwrap_or(true)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_session_retains_running_shell_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = McpRuntimeManager::new(directory.path().to_path_buf(), false).unwrap();
+        let (id, runtime) = manager.create_session().unwrap();
+        let response = runtime
+            .call(json!({
+                "jsonrpc":"2.0", "id":1, "method":"tools/call",
+                "params":{"name":"run_shell", "arguments":{"command":"sleep 10", "background":true}}
+            }))
+            .unwrap()
+            .unwrap();
+        assert!(response.get("error").is_none(), "{response}");
+        let started: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        let job_id = started["jobId"].as_str().unwrap().to_owned();
+        assert!(runtime.has_running_shell_jobs(), "{response}");
+        *runtime.last_used.lock().unwrap() =
+            Instant::now() - MCP_SESSION_IDLE_TTL - Duration::from_secs(1);
+        drop(runtime);
+        {
+            let mut sessions = manager.sessions.lock().unwrap();
+            prune_idle_sessions(&mut sessions);
+            assert!(sessions.contains_key(&id));
+        }
+        let reconnected = manager.get_session(&id).unwrap().unwrap();
+        let check = reconnected
+            .call(json!({
+                "jsonrpc":"2.0", "id":2, "method":"tools/call",
+                "params":{"name":"run_shell", "arguments":{"job":{"action":"check","jobId":job_id}}}
+            }))
+            .unwrap()
+            .unwrap();
+        let status: Value =
+            serde_json::from_str(check["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(status["jobId"], job_id);
+        assert_eq!(status["status"], "running");
+        drop(reconnected);
+        assert!(manager.remove_session(&id).unwrap());
+        assert!(manager.get_session(&id).unwrap().is_none());
+        // A fresh supervisor must reject a stale ID even when its former
+        // owner had a running job at shutdown.
+        let (old_id, old_runtime) = manager.create_session().unwrap();
+        let old_response = old_runtime.call(json!({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params":{"name":"run_shell", "arguments":{"command":"sleep 10", "background":true}}})).unwrap().unwrap();
+        let old_started: Value = serde_json::from_str(
+            old_response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let old_job = old_started["jobId"].as_str().unwrap().to_owned();
+        assert!(old_runtime.has_running_shell_jobs());
+        drop(old_runtime);
+        drop(manager);
+        let restarted = McpRuntimeManager::new(directory.path().to_path_buf(), false).unwrap();
+        assert!(restarted.get_session(&old_id).unwrap().is_none());
+        let (_, fresh) = restarted.create_session().unwrap();
+        let stale = fresh.call(json!({"jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{"name":"run_shell", "arguments":{"job":{"action":"check","jobId":old_job}}}})).unwrap().unwrap();
+        assert!(stale.to_string().contains("Unknown shell job"), "{stale}");
+    }
 
     #[test]
     fn runtime_pool_is_lazy_and_elastic() {
