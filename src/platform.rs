@@ -269,6 +269,23 @@ pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Renders a path for display, dropping the Windows `\\?\` verbatim prefix
+/// that `fs::canonicalize` adds. Boundary checks re-canonicalize their inputs,
+/// so display strings and internal forms stay interchangeable.
+pub(crate) fn display_path(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return rest.to_owned();
+        }
+    }
+    path.display().to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OwnedChildInfo {
     pub pid: u32,
@@ -909,6 +926,23 @@ mod portable_tests {
         assert_eq!(shell_signal_grace(Some("0")), 0);
         assert_eq!(shell_signal_grace(Some("175")), 175);
         assert_eq!(shell_signal_grace(Some("9000")), 5_000);
+    }
+
+    #[test]
+    fn display_path_hides_internal_verbatim_prefixes() {
+        #[cfg(windows)]
+        {
+            assert_eq!(display_path(Path::new(r"\\?\C:\proj\sub")), r"C:\proj\sub");
+            assert_eq!(
+                display_path(Path::new(r"\\?\UNC\server\share\x")),
+                r"\\server\share\x"
+            );
+            assert_eq!(display_path(Path::new(r"C:\proj")), r"C:\proj");
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(display_path(Path::new("/a/b")), "/a/b");
+        }
     }
 }
 

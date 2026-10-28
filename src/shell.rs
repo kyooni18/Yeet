@@ -24,7 +24,7 @@ use serde::Serialize;
 use crate::harness::sandbox::{
     SandboxMode, SandboxPolicy, SandboxStore, WorkspaceRead, validate_relative_path,
 };
-use crate::platform::{TrackedChild, configure_process_group};
+use crate::platform::{TrackedChild, configure_process_group, display_path};
 
 pub mod log;
 pub mod selection;
@@ -568,7 +568,7 @@ pub fn run_shell_session(
     let status = status.expect("non-terminated shell has an exit status");
     Ok(ShellResult {
         command: command.into(),
-        working_directory: cwd.display().to_string(),
+        working_directory: display_path(&cwd),
         exit_code: status
             .code()
             .unwrap_or_else(|| 128 + status_signal(&status)),
@@ -927,7 +927,7 @@ fn run_windows_sandboxed_shell(
 
     Ok(ShellResult {
         command: command.to_owned(),
-        working_directory: cwd.display().to_string(),
+        working_directory: display_path(cwd),
         exit_code,
         succeeded,
         duration_milliseconds: started.elapsed().as_millis(),
@@ -1838,6 +1838,53 @@ mod tests {
             let stdout = result.stdout.unwrap_or_default();
             assert!(stdout.contains("quoted & spaced"), "{shell}: {stdout:?}");
             assert!(stdout.contains("ünïcødé"), "{shell}: {stdout:?}");
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_working_directories_are_case_corrected_and_boundary_checked() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("MixedCase")).unwrap();
+        // Drive-letter absolute paths resolve across case differences.
+        let resolved = resolve_working_directory(
+            &root,
+            Some(&root.join("mixedcase").display().to_string()),
+            false,
+        )
+        .unwrap();
+        assert_eq!(resolved, root.join("MixedCase"));
+        // Drive-relative and traversal inputs cannot smuggle a working
+        // directory outside the workspace.
+        for bad in [
+            format!(
+                "{}sub",
+                display_path(&root).chars().take(2).collect::<String>()
+            ),
+            r"..\..".to_owned(),
+            r"sub\..\..".to_owned(),
+        ] {
+            assert!(
+                resolve_working_directory(&root, Some(&bad), false).is_err(),
+                "accepted {bad}"
+            );
+        }
+        // A junction pointing outside the workspace is resolved and refused.
+        let outside = tempfile::tempdir().unwrap();
+        let link = root.join("escape");
+        let status = std::process::Command::new("cmd")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        if status.success() {
+            assert!(
+                resolve_working_directory(&root, Some(&link.display().to_string()), false).is_err(),
+                "junction escape was accepted"
+            );
         }
     }
     // ConPTY is not implemented yet. Both policies must fail closed rather
