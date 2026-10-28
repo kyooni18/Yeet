@@ -309,7 +309,8 @@ fn terminal(tool: &ConversationToolCall, args: Option<&Value>) -> Vec<RichDetail
     let exit_code = value.get("exitCode").and_then(Value::as_i64);
     let status = text(&value, "status");
     let handed_off = flag(&value, "outputHandedOff")
-        || (status.as_deref() == Some("running") && value.get("exitCode").is_none());
+        || (matches!(status.as_deref(), Some("running" | "stopping"))
+            && value.get("exitCode").is_none());
     let state = match tool.status {
         ToolCallStatus::Cancelled => TerminalState::Cancelled,
         ToolCallStatus::Interrupted => TerminalState::Interrupted,
@@ -324,10 +325,15 @@ fn terminal(tool: &ConversationToolCall, args: Option<&Value>) -> Vec<RichDetail
         }
         ToolCallStatus::Failed | ToolCallStatus::Completed | ToolCallStatus::Suppressed => {
             match (status.as_deref(), exit_code) {
-                _ if handed_off => TerminalState::BackgroundJob,
                 (Some("cancelled"), _) => TerminalState::Cancelled,
+                (Some("interrupted"), _) => TerminalState::Interrupted,
+                (Some("timed_out" | "timeout"), _) => TerminalState::TimedOut,
                 (Some("failed"), _) => TerminalState::Failed,
                 (_, Some(code)) if code != 0 => TerminalState::Failed,
+                _ if value.get("succeeded").and_then(Value::as_bool) == Some(false) => {
+                    TerminalState::Failed
+                }
+                _ if handed_off => TerminalState::BackgroundJob,
                 _ if matches!(tool.status, ToolCallStatus::Failed) => TerminalState::Failed,
                 _ => TerminalState::Succeeded,
             }
@@ -677,6 +683,34 @@ mod tests {
         assert_eq!(terminal.state, TerminalState::BackgroundJob);
         assert_eq!(terminal.job_id.as_deref(), Some("job-7"));
         assert!(terminal.windowed);
+
+        // Shell-job result status is authoritative even when the enclosing
+        // shell_job tool invocation itself completed successfully.
+        for (result, expected) in [
+            (
+                json!({"status":"stopping", "jobId":"job-7"}),
+                TerminalState::BackgroundJob,
+            ),
+            (
+                json!({"status":"interrupted", "jobId":"job-7"}),
+                TerminalState::Interrupted,
+            ),
+            (
+                json!({"status":"timed_out", "jobId":"job-7"}),
+                TerminalState::TimedOut,
+            ),
+            (
+                json!({"status":"failed", "succeeded":false, "outputHandedOff":true}),
+                TerminalState::Failed,
+            ),
+            (json!({"succeeded":false}), TerminalState::Failed),
+        ] {
+            let tool = call("shell_job", args.clone(), "completed", Some(result), None);
+            let RichDetail::Terminal(terminal) = &project_for(&tool)[0] else {
+                panic!()
+            };
+            assert_eq!(terminal.state, expected);
+        }
 
         for (status, state) in [
             ("cancelled", TerminalState::Cancelled),
