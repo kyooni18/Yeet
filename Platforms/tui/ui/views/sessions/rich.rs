@@ -117,16 +117,22 @@ fn skip_csi(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
         }
     }
 }
-/// Logical lines of already-sanitized text. A bare carriage return rewrites the
-/// line (progress bars), so only the text after the last one remains.
+/// Logical lines of already-sanitized text. A carriage return moves the
+/// cursor to the start; it does not erase the unwritten suffix of the row.
 fn logical_lines(text: &str) -> Vec<String> {
     text.split('\n')
         .map(|line| {
-            let line = line
-                .rsplit('\r')
-                .find(|segment| !segment.is_empty())
-                .unwrap_or("");
-            expand_tabs(line)
+            let mut row = Vec::new();
+            for segment in line.split('\r') {
+                for (index, ch) in expand_tabs(segment).chars().enumerate() {
+                    if let Some(previous) = row.get_mut(index) {
+                        *previous = ch;
+                    } else {
+                        row.push(ch);
+                    }
+                }
+            }
+            row.into_iter().collect()
         })
         .collect()
 }
@@ -1169,6 +1175,7 @@ mod tests {
             logical_lines(&sanitize("10%\r50%\r100%\ndone")),
             ["100%", "done"]
         );
+        assert_eq!(logical_lines(&sanitize("abcdef\rXY\r")), ["XYcdef"]);
         assert_eq!(expand_tabs("a\tb"), "a   b");
         assert_eq!(wrap_cells("漢字ab", 3), ["漢", "字a", "b"]);
     }

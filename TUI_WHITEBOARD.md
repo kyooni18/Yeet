@@ -11,6 +11,12 @@ sections (Input, Output/Result, Error, etc.) and duration when available.
 Grouped calls retain individual statuses in their expanded child rows.
 No new screens or native frontend layouts are introduced.
 
+Shell output shown in the existing tool disclosure interprets carriage returns
+as a move to the beginning of the row rather than deleting the remaining text.
+This static preview is not a terminal emulator or an interactive shell UI; ANSI
+control sequences are still stripped for safety, and overwrites use character
+positions rather than terminal cells (so wide/combining glyphs can differ).
+
 # TUI attachments
 
 When a terminal delivers a file drop as a bracketed paste, a complete list of
