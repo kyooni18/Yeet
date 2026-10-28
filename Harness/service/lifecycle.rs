@@ -8,14 +8,21 @@ use super::*;
 impl HarnessService {
     pub(super) fn ensure_session_management_idle(&self) -> Result<()> {
         self.ensure_replaceable()?;
-        anyhow::ensure!(!self.run_manager.has_pending_workers(),
-            "Session is still finishing persistence. Try renaming again in a moment.");
+        anyhow::ensure!(
+            !self.run_manager.has_pending_workers(),
+            "Session is still finishing persistence. Try renaming again in a moment."
+        );
         Ok(())
     }
 
     pub(super) fn ensure_session_not_loaded(&self, id: &str) -> Result<()> {
         anyhow::ensure!(
-            self.shared.lock_or_recover().state.current_session_id.as_deref() != Some(id),
+            self.shared
+                .lock_or_recover()
+                .state
+                .current_session_id
+                .as_deref()
+                != Some(id),
             "This session is loaded. Switch to a new session before moving or deleting it."
         );
         Ok(())
