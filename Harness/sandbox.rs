@@ -158,6 +158,16 @@ impl Default for SandboxPolicy {
 }
 
 impl SandboxPolicy {
+    /// Unrestricted execution; used when no sandbox policy has been saved.
+    pub fn unlimited() -> Self {
+        Self {
+            mode: SandboxMode::Unlimited,
+            auto_approve: true,
+            workspace_read: WorkspaceRead::All,
+            ..Self::default()
+        }
+    }
+
     pub fn restricted_to(&self, other: &Self) -> Self {
         let network_allow = self
             .network_allow
@@ -384,12 +394,12 @@ impl SandboxStore {
     pub fn load(&self) -> Result<SandboxPolicy> {
         let directory = self.directory();
         if !directory.exists() {
-            return Ok(SandboxPolicy::default());
+            return Ok(SandboxPolicy::unlimited());
         }
         reject_symlink(&directory)?;
         let path = self.path();
         if !path.exists() {
-            return Ok(SandboxPolicy::default());
+            return Ok(SandboxPolicy::unlimited());
         }
         reject_symlink(&path)?;
         let data = fs::read(&path)?;

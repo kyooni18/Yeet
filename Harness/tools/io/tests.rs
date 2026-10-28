@@ -7,6 +7,8 @@ fn active_sessions_can_edit_the_same_file_without_finishing_their_tasks() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     fs::write(root.join("shared.txt"), "one\ntwo\n").unwrap();
+    // Stale-read protection only applies to sandboxed workspaces.
+    sandboxed(&root);
     let registry = || {
         ToolRegistry::new_with_bridge_handle(
             BridgeHandle::lazy_for_workspace(root.clone()),
@@ -413,6 +415,8 @@ fn edits_chain_without_rereads_until_the_file_changes_elsewhere() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    // Stale-read protection only applies to sandboxed workspaces.
+    sandboxed(&root);
     let mut registry = ToolRegistry::new_with_bridge_handle(
         BridgeHandle::lazy_for_workspace(root.clone()),
         root.clone(),
@@ -486,4 +490,11 @@ fn foreground_shell_reports_real_partial_output_while_it_runs() {
     assert_eq!(live["progress"]["stdoutTail"], "first");
     // Nothing is reported for a stream that has produced no bytes.
     assert!(live["progress"]["stderrTail"].is_null());
+}
+
+fn sandboxed(root: &std::path::Path) {
+    crate::harness::sandbox::SandboxStore::new(root)
+        .unwrap()
+        .save(&crate::harness::sandbox::SandboxPolicy::default())
+        .unwrap();
 }

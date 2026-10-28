@@ -57,7 +57,7 @@ pub fn run(workspace: &Path, args: &[String]) -> Result<String> {
         "reset" => {
             exact(args, 1, "yeet sandbox reset")?;
             store.reset()?;
-            Ok(store.render(&SandboxPolicy::default())?)
+            Ok(store.render(&SandboxPolicy::unlimited())?)
         }
         "mode" => mode(&store, args),
         "auto-approve" => auto_approve(&store, args),

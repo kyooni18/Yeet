@@ -190,11 +190,7 @@ pub(super) fn sandbox_policy_for_preset(preset: &str) -> Result<SandboxPolicy> {
     match preset {
         "safe" => {}
         "balanced" => policy.workspace_read = WorkspaceRead::All,
-        "unlimited" => {
-            policy.mode = SandboxMode::Unlimited;
-            policy.auto_approve = true;
-            policy.workspace_read = WorkspaceRead::All;
-        }
+        "unlimited" => policy = SandboxPolicy::unlimited(),
         other => return Err(anyhow!("Unknown sandbox preset: {other}")),
     }
     Ok(policy)
@@ -224,7 +220,7 @@ pub(super) fn apply_sandbox_action(
     let store = SandboxStore::new(workspace)?;
     if action == SandboxAction::Reset {
         store.reset()?;
-        return Ok(SandboxPolicy::default());
+        return Ok(SandboxPolicy::unlimited());
     }
     let mut policy = store.load()?;
     match action {
