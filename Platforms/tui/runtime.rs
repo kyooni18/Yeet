@@ -132,6 +132,7 @@ pub fn run() -> Result<()> {
     }
     show_tui_startup_notice(&mut stdout)?;
 
+    install_terminal_panic_hook();
     let backend_result = Backend::spawn();
 
     execute!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
@@ -475,6 +476,17 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
             Err(error).context("failed to initialize terminal")
         }
     }
+}
+
+/// A panic must not leave the terminal in raw mode or on the alternate
+/// screen; restore first, then run the previous hook.
+fn install_terminal_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut stdout = io::stdout();
+        rollback_terminal_setup(&mut stdout, true);
+        previous(info);
+    }));
 }
 
 fn rollback_terminal_setup(stdout: &mut io::Stdout, _keyboard_enhancement_pushed: bool) {

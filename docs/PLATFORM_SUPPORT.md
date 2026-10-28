@@ -27,7 +27,9 @@ Sensitive directories and files are hardened to user-private permissions. Unix u
 
 ## Shell contract
 
-`run_shell` is a non-interactive automation command runner, not an interactive terminal emulator. It captures stdout/stderr and does not promise PTY/ConPTY semantics. The native default shell is POSIX shell semantics on macOS/Linux and `cmd.exe /D /S /C` semantics on Windows. PowerShell is supported by invoking `powershell.exe`/`pwsh` explicitly in a command.
+`run_shell` is a non-interactive automation command runner, not an interactive terminal emulator. It captures stdout/stderr and does not promise PTY/ConPTY semantics. Shells are auto-discovered with a clean, non-interactive invocation: Bash (Git Bash on Windows), then the platform PowerShell, then `cmd.exe` on Windows. Explicit `shell: bash | zsh | sh | powershell | cmd` overrides are validated against discovery.
+
+Windows launches quote per shell: cmd receives its script verbatim inside one quote pair that `cmd /S` strips positionally, and PowerShell scripts travel as `-EncodedCommand`, so embedded quotes and Unicode survive both `powershell.exe` and `pwsh.exe` command-line parsing. cmd output is forced to UTF-8 with `chcp 65001` and PowerShell sets UTF-8 console encodings, so Unicode output decodes instead of being mangled by legacy code pages; BOM-marked UTF-16 output (for example `wmic` and `reg query`) is detected and decoded. Direct executable/argument-array execution resolves executables through PATH + PATHEXT and refuses the batch files it finds with an explicit error, since cmd re-expands batch arguments unsafely.
 
 Output is spooled while the command runs. Each command writes a bounded on-disk transcript (64 MiB per command, 512 MiB per session) that is exposed as an artifact, so output beyond the in-memory capture window remains readable through `read_artifact`/`search_artifact`. A foreground command that outlives `yieldSeconds` (default 120) keeps running as a shell job and returns its `jobId` instead of being killed; `timeoutSeconds` is a hard deadline and background jobs default to four hours. On Unix, pipe readers are nonblocking, so cancellation and sandbox deadlines still take effect when a descendant keeps a pipe open.
 
@@ -35,7 +37,7 @@ Sandboxed commands are fail-closed. Linux uses Landlock through `nono`; Windows 
 
 ## Process and daemon lifecycle
 
-Unix background daemons are detached into their own session/process group and tree shutdown attempts SIGTERM before SIGKILL. Windows uses detached process groups and tree-aware `taskkill`; shutdown attempts a non-forced tree termination before falling back to `/F`.
+Unix background daemons are detached into their own session/process group and tree shutdown attempts SIGTERM before SIGKILL. Windows child processes join a Job Object with kill-on-close, so descendants cannot escape cleanup and orphans are reaped even when the leader has already exited or Yeet dies. Termination attempts a console break and a non-forced `taskkill` tree request first, then escalates to `TerminateJobObject` (or `taskkill /T /F` when no job object could be assigned); process-tree discovery is never required for forced cleanup.
 
 Unix local control channels use filesystem Unix-domain sockets. Windows uses `127.0.0.1` with a random per-listener bearer token stored in the private endpoint file. An unauthenticated process that only discovers the TCP port cannot issue local daemon commands.
 
@@ -58,7 +60,7 @@ Yeet's built-in Computer Use uses the independent [Open Computer Use](https://gi
 
 Tag pushes matching `v*` first verify that the tag matches the synchronized Cargo, RuntimeSource, and WebUI package versions, then run the focused release checks. Release artifacts are built on native macOS arm64/x64, Linux arm64/x64, and Windows arm64/x64 runners; each staged archive must report the expected version and pass `yeet doctor` against its bundled runtime before upload. Unix packaging additionally smoke-tests the bundled installer into a temporary prefix. Each package gets a SHA-256 sidecar and the release gets an aggregate `SHA256SUMS`. GitHub build-provenance attestations are emitted for release artifacts. Windows Authenticode signing is enabled automatically when the release environment provides `WINDOWS_SIGN_CERTIFICATE_BASE64` and `WINDOWS_SIGN_CERTIFICATE_PASSWORD`; unsigned development releases remain possible when no certificate is configured.
 
-Extracted Unix archives include `install.sh`, which requires Node.js 20 or newer and installs the prebuilt binary plus bundled runtime without a Rust toolchain. Linux CI additionally creates Debian packages when `dpkg-deb` is available. Published macOS/Linux checksums are also used to render the Homebrew formula for the external tap.
+Extracted Unix archives include `install.sh`, which requires Node.js 20 or newer and installs the prebuilt binary plus bundled runtime without a Rust toolchain. The Windows release zip carries the same `bin\yeet.exe` plus `share\yeet\runtime` layout; `install.ps1` installs it into a user prefix (no administrator rights), verifies the release SHA-256 before installing, and can also build from source with `-Build`. Linux CI additionally creates Debian packages when `dpkg-deb` is available. Published macOS/Linux checksums are also used to render the Homebrew formula for the external tap.
 
 ## Linux containers
 

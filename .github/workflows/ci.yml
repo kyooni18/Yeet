@@ -88,6 +88,35 @@ jobs:
           cargo run --quiet -- model set openai/test-model | Out-Null
           $model = (cargo run --quiet -- model get).Trim()
           if ($model -ne "openai/test-model") { throw "model round trip failed: $model" }
+      - name: Windows installer scripts parse
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($script in @("install.ps1", "Scripts/package-release.ps1", "serve.ps1")) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$errors)
+            foreach ($error in $errors) { Write-Error "$script: $error" }
+            if ($errors.Count -gt 0) { exit 1 }
+          }
+          Write-Host "PowerShell scripts parse cleanly"
+      - name: Windows installer bundle smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Stage = Join-Path $env:RUNNER_TEMP "yeet-bundle"
+          if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
+          New-Item -ItemType Directory -Force (Join-Path $Stage "bin") | Out-Null
+          New-Item -ItemType Directory -Force (Join-Path $Stage "share\yeet\runtime") | Out-Null
+          Copy-Item "target\debug\yeet.exe" (Join-Path $Stage "bin\yeet.exe")
+          Copy-Item -Recurse "RuntimeSource\dist" (Join-Path $Stage "share\yeet\runtime\dist")
+          Copy-Item -Recurse "RuntimeSource\skills" (Join-Path $Stage "share\yeet\runtime\skills")
+          Copy-Item "RuntimeSource\package.json" (Join-Path $Stage "share\yeet\runtime\package.json")
+          $env:YEET_PREFIX = Join-Path $env:RUNNER_TEMP "yeet-install-prefix"
+          $env:YEET_NO_PATH_UPDATE = "1"
+          & (Join-Path $Stage "install.ps1")
+          $Installed = & (Join-Path $env:YEET_PREFIX "bin\yeet.exe") --version
+          if (-not $Installed) { throw "installed yeet.exe did not report a version" }
+          Write-Host "Installed $Installed through install.ps1"
 
   remote-web-build:
     strategy:
