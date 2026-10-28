@@ -1,10 +1,9 @@
 import { Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
-import { remote, sheet, ease, connected, openSheet, shortModel } from "./state"
+import { remote, sheet, ease, connected, openSheet, shortModel, settingsEditorValue } from "./state"
 
 const modelQuery = State("")
-const editorValue = State("")
 
 function filteredModels() {
   const needle = modelQuery.value.trim().toLowerCase()
@@ -131,12 +130,13 @@ struct SettingsEditor: View {
     VStack(alignment: .stretch, spacing: 6) {
       Text(remote.value.settings.editor.label).fontSize(13)
       HStack(spacing: 6) {
-        TextField(Binding(editorValue), remote.value.settings.editor.value)
+        TextField(Binding(settingsEditorValue), remote.value.settings.editor.label)
           .padding({ top: 6, bottom: 6, leading: 8, trailing: 8 })
           .background(color.raised)
           .style({ flex: "1", minWidth: "0" })
           .style({ border: "0", outline: "none", borderRadius: "6px", font: "inherit", color: "inherit" })
-        Button("Save") { remoteStore.sendSettingsUi({ type: "submit_editor", value: editorValue.value }); editorValue.value = "" }
+        Button("Save") { remoteStore.sendSettingsUi({ type: "submit_editor", value: settingsEditorValue.value }) }
+          .disabled(!connected() || remote.value.settings.working)
         Button("Cancel") { remoteStore.sendSettingsUi({ type: "cancel_editor" }) }.foregroundStyle(color.muted)
       }
       Text(remote.value.settings.editor.hint).fontSize(12).foregroundStyle(color.faint)

@@ -17,6 +17,8 @@ export const isWide = State(wide())
 export const workspaceMenu = State(false)
 export const toast = State('')
 export const sessionQuery = State('')
+/** Local draft, initialized only when the shared settings editor opens. */
+export const settingsEditorValue = State('')
 
 /** Spinner frames shared with the TUI (`| / - \` every 180 ms). */
 const FRAMES = ['|', '/', '-', '\\']
@@ -199,7 +201,15 @@ export function startRemote(onEditDraft: (text: string) => void) {
   window.addEventListener('resize', sizeViewport)
   sizeViewport()
   remoteStore.subscribe(() => {
-    remote.value = remoteStore.getSnapshot()
+    const previousEditor = remote.value.settings?.editor
+    const snapshot = remoteStore.getSnapshot()
+    const editor = snapshot.settings?.editor
+    if (editor && (!previousEditor || previousEditor.kind !== editor.kind)) {
+      settingsEditorValue.value = editor.value
+    } else if (!editor && previousEditor) {
+      settingsEditorValue.value = ''
+    }
+    remote.value = snapshot
     consumeEffects(onEditDraft)
   })
   const media = window.matchMedia('(min-width: 900px)')
