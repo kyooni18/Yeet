@@ -8,11 +8,9 @@ test.beforeEach(async ({ page }) => {
 })
 
 async function openSettings(page: Parameters<typeof installMockRemote>[0]) {
-  const panel = page.locator('.quick-panel')
-  const panelOpen = (await panel.getAttribute('class'))?.includes('is-open') ?? false
-  if (!panelOpen) await page.getByRole('button', { name: 'Quick settings' }).click()
-  await expect(panel).toHaveClass(/is-open/)
-  await panel.getByRole('button', { name: 'Settings', exact: true }).click()
+  const sidebar = page.getByRole('navigation', { name: 'Workspace navigation' })
+  if (!await sidebar.isVisible()) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
+  await sidebar.getByRole('button', { name: 'Settings', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Settings' })
   await expect(dialog).toBeVisible()
   return dialog
@@ -21,27 +19,24 @@ async function openSettings(page: Parameters<typeof installMockRemote>[0]) {
 test('Settings keeps dismissal available but disables Remote mutations offline', async ({ page }) => {
   let dialog = await openSettings(page)
   await expect(dialog.getByRole('switch', { name: 'OpenAI Flex' })).toBeDisabled()
-  await dialog.getByRole('button', { name: 'Close' }).click()
+  await dialog.getByRole('button', { name: 'Done' }).click()
   await expect(dialog).toHaveCount(0)
 
   await page.evaluate(() => window.dispatchEvent(new Event('offline')))
 
   dialog = await openSettings(page)
-  await expect(dialog.getByRole('button', { name: 'Close' })).toBeEnabled()
+  await expect(dialog.getByRole('button', { name: 'Done' })).toBeEnabled()
   await expect(dialog.getByRole('button', { name: 'Auto', exact: true })).toBeDisabled()
   await expect(dialog.getByRole('button', { name: 'Light', exact: true })).toBeDisabled()
   await expect(dialog.getByRole('button', { name: 'Dark', exact: true })).toBeDisabled()
   await expect(dialog.getByRole('switch', { name: 'OpenAI Flex' })).toBeDisabled()
 
-  const capabilitySwitches = dialog.locator('.settings-section').filter({ hasText: 'Capabilities' }).getByRole('switch')
-  for (let index = 0; index < await capabilitySwitches.count(); index += 1) {
-    await expect(capabilitySwitches.nth(index)).toBeDisabled()
-  }
-
-  const providerActions = dialog.locator('.provider-settings-row .small-action')
-  for (let index = 0; index < await providerActions.count(); index += 1) {
-    await expect(providerActions.nth(index)).toBeDisabled()
-  }
+  const mutationControls = dialog.getByRole('switch')
+  expect(await mutationControls.count()).toBeGreaterThan(0)
+  for (const control of await mutationControls.all()) await expect(control).toBeDisabled()
+  const buttons = dialog.getByRole('button').filter({ hasNotText: 'Done' })
+  expect(await buttons.count()).toBeGreaterThan(3)
+  for (const button of await buttons.all()) await expect(button).toBeDisabled()
 })
 
 test('Settings honors shared working state and Flex billing eligibility', async ({ page }) => {

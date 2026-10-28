@@ -8,15 +8,9 @@ test.beforeEach(async ({ page }) => {
 })
 
 async function openSettings(page: Parameters<typeof installMockRemote>[0]) {
-  const sidebar = page.locator('.remote-sidebar')
-  const isOpen = (await sidebar.getAttribute('class'))?.includes('is-open') ?? false
-  if (!isOpen) {
-    await page.getByRole('button', { name: 'Open sidebar' }).click()
-    await expect(sidebar).toHaveClass(/is-open/)
-    await sidebar.evaluate(async (element) => {
-      await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined)))
-    })
-  }
+  const sidebar = page.getByRole('navigation', { name: 'Workspace navigation' })
+  if (!await sidebar.isVisible()) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
+  await expect(sidebar).toBeVisible()
   await sidebar.getByRole('button', { name: 'Settings', exact: true }).click()
   const settings = page.getByRole('dialog', { name: 'Settings' })
   await expect(settings).toBeVisible()
@@ -27,7 +21,7 @@ test('Settings is an in-place sheet that can be dismissed and reopened without h
   const before = await page.evaluate(() => ({ href: location.href, length: history.length }))
 
   let settings = await openSettings(page)
-  await settings.getByRole('button', { name: 'Close' }).click()
+  await settings.getByRole('button', { name: 'Done' }).click()
   await expect(settings).toHaveCount(0)
 
   settings = await openSettings(page)

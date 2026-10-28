@@ -118,6 +118,7 @@ struct SettingControl: View {
             }
           }
         })
+        .withProps({ role: control.kind === "toggle" ? "switch" : "button", "aria-label": control.label, "aria-checked": control.kind === "toggle" ? !!control.checked : undefined })
         .disabled(!connected() || !control.enabled)
       }
     }
@@ -188,6 +189,7 @@ export struct SheetLayer: View {
           SettingsSheet()
         }
       }
+      .withProps({ role: "dialog", "aria-modal": "true", "aria-label": sheet.value === "model" ? "Model" : remote.value.settings?.title || "Settings" })
       .padding(16)
       .style({ width: "440px" })
       .background(color.bg)
