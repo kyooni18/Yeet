@@ -33,51 +33,48 @@ fn layout(app: &App, area: Rect, active: Active) -> Vec<Tab> {
     }
     let controls = crate::shared_ui::workbench::header(
         &app.workbench_resources(),
-        |target| {
-            let resource_label = match target {
-                Active::Session => conversation_title(app).to_owned(),
-                Active::Conversation(id) => {
-                    let session = app
-                        .session_tabs
-                        .get(id)
-                        .and_then(|tab| tab.state.as_deref());
-                    if session.is_some() && session == app.state.current_session_id.as_deref() {
-                        conversation_title(app).to_owned()
-                    } else {
-                        session
-                            .and_then(|id| {
-                                app.state
-                                    .saved_sessions
-                                    .iter()
-                                    .find(|saved| saved.id == id)
-                                    .map(|saved| saved.title.clone())
-                            })
-                            .filter(|title| !title.is_empty())
-                            .unwrap_or_else(|| "New conversation".into())
-                    }
+        |target| match target {
+            Active::Session => conversation_title(app).to_owned(),
+            Active::Conversation(id) => {
+                let session = app
+                    .session_tabs
+                    .get(id)
+                    .and_then(|tab| tab.state.as_deref());
+                if session.is_some() && session == app.state.current_session_id.as_deref() {
+                    conversation_title(app).to_owned()
+                } else {
+                    session
+                        .and_then(|id| {
+                            app.state
+                                .saved_sessions
+                                .iter()
+                                .find(|saved| saved.id == id)
+                                .map(|saved| saved.title.clone())
+                        })
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or_else(|| "New conversation".into())
                 }
-                Active::Diff(id) => {
-                    let state = &app.diff_tabs.get(id).expect("listed diff instance").state;
-                    state
-                        .paths
-                        .get(state.selected)
-                        .and_then(|path| path.file_name())
-                        .or_else(|| state.root.file_name())
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
-                }
-                Active::File(id) => app
-                    .files
-                    .as_ref()
-                    .and_then(|files| files.tabs.get(id))
-                    .and_then(|view| view.state.resource.as_ref())
+            }
+            Active::Diff(id) => {
+                let state = &app.diff_tabs.get(id).expect("listed diff instance").state;
+                state
+                    .paths
+                    .get(state.selected)
                     .and_then(|path| path.file_name())
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                _ => String::new(),
-            };
-            resource_label
+                    .or_else(|| state.root.file_name())
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            }
+            Active::File(id) => app
+                .files
+                .as_ref()
+                .and_then(|files| files.tabs.get(id))
+                .and_then(|view| view.state.resource.as_ref())
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            _ => String::new(),
         },
         app.files
             .as_ref()

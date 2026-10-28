@@ -159,7 +159,8 @@ fn hunk_span(
         Some(last) => *cursor..last + 1,
     };
     // Exact first, then tolerate trailing and surrounding whitespace drift.
-    let comparisons: [&dyn Fn(&str, &str) -> bool; 3] = [
+    type TextComparator<'a> = &'a dyn Fn(&str, &str) -> bool;
+    let comparisons: [TextComparator<'_>; 3] = [
         &|a, b| a == b,
         &|a, b| a.trim_end() == b.trim_end(),
         &|a, b| a.trim() == b.trim(),

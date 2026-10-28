@@ -448,7 +448,7 @@ fn strip_line_anchor(line: &str) -> String {
 
 /// Unwraps Yeet's legacy MCP structuredContent envelope when it contains no
 /// information beyond the actual result plus transport metadata.
-fn mcp_structured_payload<'a>(object: &'a serde_json::Map<String, Value>) -> Option<&'a Value> {
+fn mcp_structured_payload(object: &serde_json::Map<String, Value>) -> Option<&Value> {
     let result = object.get("result")?;
     object
         .keys()

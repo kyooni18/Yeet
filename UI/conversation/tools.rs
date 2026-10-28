@@ -306,13 +306,11 @@ fn details(
         .as_deref()
         .map(str::trim)
         .filter(|result| !result.is_empty())
-    {
-        if !sections
+        && !sections
             .iter()
             .any(|section| section.content.trim() == result)
-        {
-            sections.push(section("Output", result.into(), true));
-        }
+    {
+        sections.push(section("Output", result.into(), true));
     }
     if let Some(error) = tool
         .error

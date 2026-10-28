@@ -254,6 +254,39 @@ fn load_global_instructions(config_dir: &std::path::Path) -> Option<String> {
     })
 }
 
+const GOAL_BLOCK_HEADER: &str =
+    "Goal (the user's request; their newer messages take precedence):\n";
+
+/// Renders the per-turn goal block, returning the objective part separately so
+/// later turns can tell whether an older block is stale.
+fn goal_block(goal: &goal::GoalJob) -> (String, String) {
+    let brief = format!("{GOAL_BLOCK_HEADER}{}", goal.brief());
+    let mut block = brief.clone();
+    if !goal.remaining.is_empty() {
+        block.push_str("\n\nJudge says still missing:");
+        for item in &goal.remaining {
+            block.push_str("\n- ");
+            block.push_str(item);
+        }
+    }
+    (brief, block)
+}
+
+fn is_stale_goal_block(message: &Message, current_brief: Option<&str>) -> bool {
+    if message.role != MessageRole::System || message.request_only != Some(true) {
+        return false;
+    }
+    let Some(content) = message.content.as_deref() else {
+        return false;
+    };
+    if content.starts_with("This is a goal job:") {
+        return current_brief.is_none() || content != GOAL_JOB_INSTRUCTION;
+    }
+    // Blocks from before this format used a bare "Goal: " prefix.
+    let is_goal_block = content.starts_with(GOAL_BLOCK_HEADER) || content.starts_with("Goal: ");
+    is_goal_block && current_brief.is_none_or(|brief| !content.starts_with(brief))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,37 +347,4 @@ mod tests {
             assert!(attached.iter().any(|tool| tool.name == name));
         }
     }
-}
-
-const GOAL_BLOCK_HEADER: &str =
-    "Goal (the user's request; their newer messages take precedence):\n";
-
-/// Renders the per-turn goal block, returning the objective part separately so
-/// later turns can tell whether an older block is stale.
-fn goal_block(goal: &goal::GoalJob) -> (String, String) {
-    let brief = format!("{GOAL_BLOCK_HEADER}{}", goal.brief());
-    let mut block = brief.clone();
-    if !goal.remaining.is_empty() {
-        block.push_str("\n\nJudge says still missing:");
-        for item in &goal.remaining {
-            block.push_str("\n- ");
-            block.push_str(item);
-        }
-    }
-    (brief, block)
-}
-
-fn is_stale_goal_block(message: &Message, current_brief: Option<&str>) -> bool {
-    if message.role != MessageRole::System || message.request_only != Some(true) {
-        return false;
-    }
-    let Some(content) = message.content.as_deref() else {
-        return false;
-    };
-    if content.starts_with("This is a goal job:") {
-        return current_brief.is_none() || content != GOAL_JOB_INSTRUCTION;
-    }
-    // Blocks from before this format used a bare "Goal: " prefix.
-    let is_goal_block = content.starts_with(GOAL_BLOCK_HEADER) || content.starts_with("Goal: ");
-    is_goal_block && current_brief.is_none_or(|brief| !content.starts_with(brief))
 }

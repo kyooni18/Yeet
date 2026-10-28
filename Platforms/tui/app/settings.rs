@@ -845,6 +845,7 @@ mod shared_settings_adapter_tests {
     use super::*;
     use crate::shared_ui::settings::SettingsAction;
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // App derefs to NavigationState for `mode`
     fn settings_selection_survives_inserted_capability_rows() {
         let mut app = App::default();
         app.mode = Mode::Settings;

@@ -23,6 +23,341 @@ pub(in crate::platforms::tui::ui) fn tool_icon(name: &str) -> &'static str {
     }
 }
 
+pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {
+    let tick = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() / 180)
+        .unwrap_or(0);
+    ["|", "/", "-", "\\"][(tick % 4) as usize]
+}
+
+/// Paint a single disclosure per event; child IDs follow the shared work order.
+pub(super) fn activity_group_lines(
+    group: &crate::shared_ui::conversation::ActivityGroup,
+    width: u16,
+    selected: Option<&str>,
+) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
+    let mut rows = vec![(0, group.id.clone())];
+    if let Some(trace) = group.single_trace() {
+        let raw_selected = trace
+            .raw_id()
+            .is_some_and(|id| selected == Some(id.as_str()));
+        let rendered = trace_lines(&trace, width, selected == Some(&group.id), raw_selected);
+        if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
+            rows.push((row, id));
+        }
+        return (rendered.lines, rows);
+    }
+    // While a grouped command is running, do not squeeze its command into an
+    // abbreviated header. Give the actual command a few wrapped rows instead.
+    let running_summary = (group.active && !group.expanded && group.status_label.is_none())
+        .then(|| group.summary.split_once(" · "))
+        .flatten();
+    let count = group.events.len().to_string();
+    let title = if group.expanded {
+        format!("{count} actions")
+    } else {
+        format!(
+            "{} {}",
+            icons::conversation(group.events.last().unwrap().trace().icon),
+            running_summary.map_or(group.summary.as_str(), |(action, _)| action)
+        )
+    };
+    let status = if group.expanded {
+        None
+    } else {
+        group.status_label.as_deref()
+    };
+    let mut lines = vec![work_row(
+        &title,
+        if group.expanded { None } else { Some(&count) },
+        group.active && !group.expanded,
+        status,
+        Some(group.expanded),
+        width,
+        selected == Some(&group.id),
+    )];
+    if let Some((_, summary)) = running_summary {
+        lines.extend(active_summary_lines(summary, width));
+    }
+    if group.expanded {
+        for event in &group.events {
+            let trace = event.trace();
+            if !trace.details.is_empty() || trace.metadata.is_some() {
+                rows.push((lines.len(), trace.id.clone()));
+            }
+            let indent = " ".repeat(usize::from(width.min(2)));
+            let raw_selected = trace
+                .raw_id()
+                .is_some_and(|id| selected == Some(id.as_str()));
+            let rendered = trace_lines(
+                trace,
+                width.saturating_sub(2),
+                selected == Some(&trace.id),
+                raw_selected,
+            );
+            if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
+                rows.push((lines.len() + row, id));
+            }
+            for line in rendered.lines {
+                let style = line.style;
+                lines.push(
+                    Line::from(
+                        std::iter::once(Span::raw(indent.clone()))
+                            .chain(line.spans)
+                            .collect::<Vec<_>>(),
+                    )
+                    .style(style),
+                );
+            }
+        }
+    }
+    (lines, rows)
+}
+
+/// One line of meaningful copy, with space reserved for exceptional status first.
+fn work_row(
+    title: &str,
+    count: Option<&str>,
+    active: bool,
+    status: Option<&str>,
+    expanded: Option<bool>,
+    width: u16,
+    selected: bool,
+) -> Line<'static> {
+    let width = usize::from(width);
+    let status_style = Style::default().fg(
+        if status.is_some_and(|s| matches!(s, "Failed" | "Timed out" | "Cancelled" | "Interrupted"))
+        {
+            theme::error_subtle()
+        } else {
+            theme::muted()
+        },
+    );
+    let mut suffix = String::new();
+    if let Some(status) = status {
+        suffix.push_str(&format!(" · {status}"));
+    }
+    if let Some(count) = count {
+        suffix.push_str(&format!(" · {count}"));
+    }
+    if active && status.is_none() {
+        suffix.push_str(" · running");
+    }
+    if let Some(expanded) = expanded {
+        suffix.push_str(&format!(" {}", icons::chevron(expanded)));
+    }
+    let suffix = if suffix.is_empty() || width == 0 {
+        String::new()
+    } else {
+        format!(" {}", task::fit(&suffix, width.saturating_sub(1)))
+    };
+    let budget = width.saturating_sub(Span::raw(&suffix).width());
+    let (action, target) = title.split_once(" · ").unwrap_or((title, ""));
+    let action = task::fit(action, budget);
+    let remaining = budget.saturating_sub(Span::raw(&action).width());
+    let target = if target.is_empty() {
+        String::new()
+    } else {
+        task::fit(&format!(" · {target}"), remaining)
+    };
+    let line = Line::from(vec![
+        Span::styled(action, Style::default().fg(theme::secondary())),
+        Span::styled(target, Style::default().fg(theme::muted())),
+        Span::styled(
+            suffix,
+            if status.is_some() {
+                status_style
+            } else {
+                Style::default().fg(theme::muted())
+            },
+        ),
+    ]);
+    if selected {
+        line.style(
+            Style::default()
+                .bg(theme::code_background())
+                .add_modifier(Modifier::REVERSED),
+        )
+    } else {
+        line
+    }
+}
+
+/// Running commands are the user's current focus. Wrap a bounded preview
+/// beneath their header instead of throwing away the command behind an ellipsis.
+/// The disclosure still owns the full, unabridged arguments and output.
+fn active_summary_lines(summary: &str, width: u16) -> Vec<Line<'static>> {
+    const MAX_PREVIEW_ROWS: usize = 3;
+    if width < 24 || summary.trim().is_empty() {
+        return Vec::new();
+    }
+    let max_chars = usize::from(width) * MAX_PREVIEW_ROWS;
+    let sample = summary.chars().take(max_chars + 1).collect::<String>();
+    let clipped = sample.chars().count() > max_chars;
+    let normalized = sample
+        .chars()
+        .take(max_chars)
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let style = Style::default().fg(theme::muted());
+    let mut rows = prefixed_wrapped_line(Span::raw("    "), Line::styled(normalized, style), width);
+    let truncated = clipped || rows.len() > MAX_PREVIEW_ROWS;
+    rows.truncate(MAX_PREVIEW_ROWS);
+    if truncated && let Some(last) = rows.last_mut() {
+        let text = last.to_string();
+        let content = crate::tui::ui::support::text::truncate_end(
+            text.trim_end(),
+            usize::from(width.saturating_sub(1)),
+        );
+        *last = Line::styled(format!("{content}…"), style);
+    }
+    rows
+}
+
+/// Rendered disclosure plus the row of its raw-inspection toggle, if shown.
+pub(super) struct TraceLines {
+    pub lines: Vec<Line<'static>>,
+    pub raw_row: Option<usize>,
+}
+
+pub(super) fn trace_lines(
+    trace: &crate::shared_ui::conversation::TraceView,
+    width: u16,
+    selected: bool,
+    raw_selected: bool,
+) -> TraceLines {
+    use crate::shared_ui::conversation::ConversationIcon;
+    let summary = trace
+        .summary
+        .as_deref()
+        .filter(|text| !text.trim().is_empty());
+    let title = match summary {
+        Some(summary) if trace.icon == ConversationIcon::Reasoning || summary == trace.title => {
+            summary.to_owned()
+        }
+        Some(summary) => format!("{} · {summary}", trace.title),
+        None => trace.title.clone(),
+    };
+    // Keep historical rows compact, but show the active command itself below
+    // its heading. Do not duplicate it when the full disclosure is already open.
+    let active_preview = trace.active
+        && !trace.expanded
+        && width >= 24
+        && summary.is_some_and(|text| {
+            trace.icon == ConversationIcon::Terminal
+                || Span::raw(text).width() > usize::from(width.saturating_sub(20))
+        });
+    let title = format!(
+        "{} {}",
+        icons::conversation(trace.icon),
+        if active_preview { &trace.title } else { &title }
+    );
+    let status = trace.status_label.as_deref();
+    let expandable = !trace.details.is_empty() || trace.metadata.is_some();
+    let mut lines = vec![work_row(
+        &title,
+        None,
+        trace.active,
+        status,
+        expandable.then_some(trace.expanded),
+        width,
+        selected,
+    )];
+    if active_preview {
+        lines.extend(active_summary_lines(summary.unwrap_or_default(), width));
+    }
+    if trace.expanded && expandable {
+        if let Some(metadata) = &trace.metadata {
+            lines.extend(prefixed_wrapped_line(
+                Span::raw("  "),
+                Line::styled(
+                    format!("Duration: {metadata}"),
+                    Style::default().fg(theme::muted()),
+                ),
+                width,
+            ));
+        }
+        let mut raw_row = None;
+        let generic: &[crate::shared_ui::conversation::DetailSection] = if trace.rich.is_empty() {
+            &trace.details
+        } else {
+            lines.extend(super::rich::rich_lines(&trace.rich, width));
+            if !trace.raw.is_empty() {
+                raw_row = Some(lines.len());
+                let label = format!(
+                    "{} Raw input and output",
+                    icons::chevron(trace.raw_expanded)
+                );
+                let line = work_row_label(&label, width, raw_selected);
+                lines.push(line);
+            }
+            if trace.raw_expanded { &trace.raw } else { &[] }
+        };
+        for detail in generic {
+            let style = Style::default().fg(if detail.is_error {
+                theme::error_subtle()
+            } else {
+                theme::secondary()
+            });
+            lines.extend(prefixed_wrapped_line(
+                Span::raw("  "),
+                Line::styled(
+                    format!("{}:", detail.title),
+                    style.add_modifier(Modifier::BOLD),
+                ),
+                width,
+            ));
+            let body = if detail.monospaced {
+                // Tool output is literal text, not Markdown (preserve code and diffs).
+                detail
+                    .content
+                    .lines()
+                    .map(|line| Line::raw(line.to_owned()))
+                    .collect()
+            } else {
+                session_markdown_lines(&detail.content, usize::from(width.saturating_sub(2)))
+            };
+            for line in body {
+                lines.extend(prefixed_wrapped_line(
+                    Span::raw("  "),
+                    line.style(style),
+                    width,
+                ));
+            }
+        }
+        return TraceLines { lines, raw_row };
+    }
+    TraceLines {
+        lines,
+        raw_row: None,
+    }
+}
+
+/// A muted, selectable sub-row (the raw-inspection disclosure).
+fn work_row_label(label: &str, width: u16, selected: bool) -> Line<'static> {
+    let indent = usize::from(width.min(2));
+    let line = Line::styled(
+        format!(
+            "{}{}",
+            " ".repeat(indent),
+            task::fit(label, usize::from(width).saturating_sub(indent))
+        ),
+        Style::default().fg(theme::muted()),
+    );
+    if selected {
+        line.style(
+            Style::default()
+                .bg(theme::code_background())
+                .add_modifier(Modifier::REVERSED),
+        )
+    } else {
+        line
+    }
+}
+
 #[cfg(test)]
 mod tool_summary_layout_tests {
     use super::*;
@@ -99,8 +434,10 @@ mod tool_summary_layout_tests {
     }
 
     fn render(entries: Vec<ConversationEntry>, width: u16, expanded: bool) -> Vec<Line<'static>> {
-        let mut app = App::default();
-        app.conversation = entries;
+        let mut app = App {
+            conversation: entries,
+            ..Default::default()
+        };
         if expanded {
             app.apply_conversation_action(
                 crate::shared_ui::conversation::ConversationAction::SetExpandAll(true),
@@ -297,342 +634,5 @@ mod tool_summary_layout_tests {
             text.lines().next().unwrap().contains("Awaiting approval"),
             "{text}"
         );
-    }
-}
-
-pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {
-    let tick = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() / 180)
-        .unwrap_or(0);
-    ["|", "/", "-", "\\"][(tick % 4) as usize]
-}
-
-/// Paint a single disclosure per event; child IDs follow the shared work order.
-pub(super) fn activity_group_lines(
-    group: &crate::shared_ui::conversation::ActivityGroup,
-    width: u16,
-    selected: Option<&str>,
-) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
-    let mut rows = vec![(0, group.id.clone())];
-    if let Some(trace) = group.single_trace() {
-        let raw_selected = trace
-            .raw_id()
-            .is_some_and(|id| selected == Some(id.as_str()));
-        let rendered = trace_lines(&trace, width, selected == Some(&group.id), raw_selected);
-        if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
-            rows.push((row, id));
-        }
-        return (rendered.lines, rows);
-    }
-    // While a grouped command is running, do not squeeze its command into an
-    // abbreviated header. Give the actual command a few wrapped rows instead.
-    let running_summary = (group.active && !group.expanded && group.status_label.is_none())
-        .then(|| group.summary.split_once(" · "))
-        .flatten();
-    let count = group.events.len().to_string();
-    let title = if group.expanded {
-        format!("{count} actions")
-    } else {
-        format!(
-            "{} {}",
-            icons::conversation(group.events.last().unwrap().trace().icon),
-            running_summary.map_or(group.summary.as_str(), |(action, _)| action)
-        )
-    };
-    let status = if group.expanded {
-        None
-    } else {
-        group.status_label.as_deref()
-    };
-    let mut lines = vec![work_row(
-        &title,
-        if group.expanded { None } else { Some(&count) },
-        group.active && !group.expanded,
-        status,
-        Some(group.expanded),
-        width,
-        selected == Some(&group.id),
-    )];
-    if let Some((_, summary)) = running_summary {
-        lines.extend(active_summary_lines(summary, width));
-    }
-    if group.expanded {
-        for event in &group.events {
-            let trace = event.trace();
-            if !trace.details.is_empty() || trace.metadata.is_some() {
-                rows.push((lines.len(), trace.id.clone()));
-            }
-            let indent = " ".repeat(usize::from(width.min(2)));
-            let raw_selected = trace
-                .raw_id()
-                .is_some_and(|id| selected == Some(id.as_str()));
-            let rendered = trace_lines(
-                trace,
-                width.saturating_sub(2),
-                selected == Some(&trace.id),
-                raw_selected,
-            );
-            if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
-                rows.push((lines.len() + row, id));
-            }
-            for line in rendered.lines {
-                let style = line.style;
-                lines.push(
-                    Line::from(
-                        std::iter::once(Span::raw(indent.clone()))
-                            .chain(line.spans)
-                            .collect::<Vec<_>>(),
-                    )
-                    .style(style),
-                );
-            }
-        }
-    }
-    (lines, rows)
-}
-
-/// One line of meaningful copy, with space reserved for exceptional status first.
-fn work_row(
-    title: &str,
-    count: Option<&str>,
-    active: bool,
-    status: Option<&str>,
-    expanded: Option<bool>,
-    width: u16,
-    selected: bool,
-) -> Line<'static> {
-    let width = usize::from(width);
-    let status_style = Style::default().fg(
-        if status.is_some_and(|s| matches!(s, "Failed" | "Timed out" | "Cancelled" | "Interrupted"))
-        {
-            theme::error_subtle()
-        } else {
-            theme::muted()
-        },
-    );
-    let mut suffix = String::new();
-    if let Some(status) = status {
-        suffix.push_str(&format!(" · {status}"));
-    }
-    if let Some(count) = count {
-        suffix.push_str(&format!(" · {count}"));
-    }
-    if active && status.is_none() {
-        suffix.push_str(" · running");
-    }
-    if let Some(expanded) = expanded {
-        suffix.push_str(&format!(" {}", icons::chevron(expanded)));
-    }
-    let suffix = if suffix.is_empty() || width == 0 {
-        String::new()
-    } else {
-        format!(" {}", task::fit(&suffix, width.saturating_sub(1)))
-    };
-    let budget = width.saturating_sub(Span::raw(&suffix).width());
-    let (action, target) = title.split_once(" · ").unwrap_or((title, ""));
-    let action = task::fit(action, budget);
-    let remaining = budget.saturating_sub(Span::raw(&action).width());
-    let target = if target.is_empty() {
-        String::new()
-    } else {
-        task::fit(&format!(" · {target}"), remaining)
-    };
-    let line = Line::from(vec![
-        Span::styled(action, Style::default().fg(theme::secondary())),
-        Span::styled(target, Style::default().fg(theme::muted())),
-        Span::styled(
-            suffix,
-            if status.is_some() {
-                status_style
-            } else {
-                Style::default().fg(theme::muted())
-            },
-        ),
-    ]);
-    if selected {
-        line.style(
-            Style::default()
-                .bg(theme::code_background())
-                .add_modifier(Modifier::REVERSED),
-        )
-    } else {
-        line
-    }
-}
-
-/// Running commands are the user's current focus. Wrap a bounded preview
-/// beneath their header instead of throwing away the command behind an ellipsis.
-/// The disclosure still owns the full, unabridged arguments and output.
-fn active_summary_lines(summary: &str, width: u16) -> Vec<Line<'static>> {
-    const MAX_PREVIEW_ROWS: usize = 3;
-    if width < 24 || summary.trim().is_empty() {
-        return Vec::new();
-    }
-    let max_chars = usize::from(width) * MAX_PREVIEW_ROWS;
-    let sample = summary.chars().take(max_chars + 1).collect::<String>();
-    let clipped = sample.chars().count() > max_chars;
-    let normalized = sample
-        .chars()
-        .take(max_chars)
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let style = Style::default().fg(theme::muted());
-    let mut rows = prefixed_wrapped_line(Span::raw("    "), Line::styled(normalized, style), width);
-    let truncated = clipped || rows.len() > MAX_PREVIEW_ROWS;
-    rows.truncate(MAX_PREVIEW_ROWS);
-    if truncated {
-        if let Some(last) = rows.last_mut() {
-            let text = last.to_string();
-            let content = crate::tui::ui::support::text::truncate_end(
-                text.trim_end(),
-                usize::from(width.saturating_sub(1)),
-            );
-            *last = Line::styled(format!("{content}…"), style);
-        }
-    }
-    rows
-}
-
-/// Rendered disclosure plus the row of its raw-inspection toggle, if shown.
-pub(super) struct TraceLines {
-    pub lines: Vec<Line<'static>>,
-    pub raw_row: Option<usize>,
-}
-
-pub(super) fn trace_lines(
-    trace: &crate::shared_ui::conversation::TraceView,
-    width: u16,
-    selected: bool,
-    raw_selected: bool,
-) -> TraceLines {
-    use crate::shared_ui::conversation::ConversationIcon;
-    let summary = trace
-        .summary
-        .as_deref()
-        .filter(|text| !text.trim().is_empty());
-    let title = match summary {
-        Some(summary) if trace.icon == ConversationIcon::Reasoning || summary == trace.title => {
-            summary.to_owned()
-        }
-        Some(summary) => format!("{} · {summary}", trace.title),
-        None => trace.title.clone(),
-    };
-    // Keep historical rows compact, but show the active command itself below
-    // its heading. Do not duplicate it when the full disclosure is already open.
-    let active_preview = trace.active
-        && !trace.expanded
-        && width >= 24
-        && summary.is_some_and(|text| {
-            trace.icon == ConversationIcon::Terminal
-                || Span::raw(text).width() > usize::from(width.saturating_sub(20))
-        });
-    let title = format!(
-        "{} {}",
-        icons::conversation(trace.icon),
-        if active_preview { &trace.title } else { &title }
-    );
-    let status = trace.status_label.as_deref();
-    let expandable = !trace.details.is_empty() || trace.metadata.is_some();
-    let mut lines = vec![work_row(
-        &title,
-        None,
-        trace.active,
-        status,
-        expandable.then_some(trace.expanded),
-        width,
-        selected,
-    )];
-    if active_preview {
-        lines.extend(active_summary_lines(summary.unwrap_or_default(), width));
-    }
-    if trace.expanded && expandable {
-        if let Some(metadata) = &trace.metadata {
-            lines.extend(prefixed_wrapped_line(
-                Span::raw("  "),
-                Line::styled(
-                    format!("Duration: {metadata}"),
-                    Style::default().fg(theme::muted()),
-                ),
-                width,
-            ));
-        }
-        let mut raw_row = None;
-        let generic: &[crate::shared_ui::conversation::DetailSection] = if trace.rich.is_empty() {
-            &trace.details
-        } else {
-            lines.extend(super::rich::rich_lines(&trace.rich, width));
-            if !trace.raw.is_empty() {
-                raw_row = Some(lines.len());
-                let label = format!(
-                    "{} Raw input and output",
-                    icons::chevron(trace.raw_expanded)
-                );
-                let line = work_row_label(&label, width, raw_selected);
-                lines.push(line);
-            }
-            if trace.raw_expanded { &trace.raw } else { &[] }
-        };
-        for detail in generic {
-            let style = Style::default().fg(if detail.is_error {
-                theme::error_subtle()
-            } else {
-                theme::secondary()
-            });
-            lines.extend(prefixed_wrapped_line(
-                Span::raw("  "),
-                Line::styled(
-                    format!("{}:", detail.title),
-                    style.add_modifier(Modifier::BOLD),
-                ),
-                width,
-            ));
-            let body = if detail.monospaced {
-                // Tool output is literal text, not Markdown (preserve code and diffs).
-                detail
-                    .content
-                    .lines()
-                    .map(|line| Line::raw(line.to_owned()))
-                    .collect()
-            } else {
-                session_markdown_lines(&detail.content, usize::from(width.saturating_sub(2)))
-            };
-            for line in body {
-                lines.extend(prefixed_wrapped_line(
-                    Span::raw("  "),
-                    line.style(style),
-                    width,
-                ));
-            }
-        }
-        return TraceLines { lines, raw_row };
-    }
-    TraceLines {
-        lines,
-        raw_row: None,
-    }
-}
-
-/// A muted, selectable sub-row (the raw-inspection disclosure).
-fn work_row_label(label: &str, width: u16, selected: bool) -> Line<'static> {
-    let indent = usize::from(width.min(2));
-    let line = Line::styled(
-        format!(
-            "{}{}",
-            " ".repeat(indent),
-            task::fit(label, usize::from(width).saturating_sub(indent))
-        ),
-        Style::default().fg(theme::muted()),
-    );
-    if selected {
-        line.style(
-            Style::default()
-                .bg(theme::code_background())
-                .add_modifier(Modifier::REVERSED),
-        )
-    } else {
-        line
     }
 }

@@ -40,6 +40,8 @@ pub struct PreparedHomeAction {
 pub struct PreparedDiffAction {
     action: DiffAction,
 }
+// Boxing these variants would churn many call sites for little benefit.
+#[allow(clippy::large_enum_variant)]
 enum ToolbarRoute {
     None,
     Shell(ShellAction),

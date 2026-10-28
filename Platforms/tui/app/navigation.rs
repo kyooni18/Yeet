@@ -337,10 +337,10 @@ impl App {
                 self.report_navigation(tab);
             }
             WorkbenchTab::File(index) => {
-                if let Some(files) = &mut self.files {
-                    if files.activate_tab(index) {
-                        self.report_navigation(tab);
-                    }
+                if let Some(files) = &mut self.files
+                    && files.activate_tab(index)
+                {
+                    self.report_navigation(tab);
                 }
             }
             WorkbenchTab::CloseFile(index) => {
@@ -521,10 +521,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("a.rs");
         std::fs::write(&file, "a").unwrap();
-        let mut app = App::default();
-        app.files = Some(super::super::files::FilesState::open(
-            dir.path().to_path_buf(),
-        ));
+        let mut app = App {
+            files: Some(super::super::files::FilesState::open(
+                dir.path().to_path_buf(),
+            )),
+            ..Default::default()
+        };
         app.files.as_mut().unwrap().open_path(file, false);
         let file_id = app.files.as_ref().unwrap().active_tab().unwrap();
         app.activate_workbench_tab(WorkbenchTab::Files);
@@ -628,10 +630,12 @@ mod tests {
         let second = dir.path().join("beta.rs");
         std::fs::write(&first, "alpha").unwrap();
         std::fs::write(&second, "beta").unwrap();
-        let mut app = App::default();
-        app.files = Some(super::super::files::FilesState::open(
-            dir.path().to_path_buf(),
-        ));
+        let mut app = App {
+            files: Some(super::super::files::FilesState::open(
+                dir.path().to_path_buf(),
+            )),
+            ..Default::default()
+        };
         app.files.as_mut().unwrap().open_path(first.clone(), false);
         let first_id = app.files.as_ref().unwrap().active_tab().unwrap();
         app.files.as_mut().unwrap().open_path(second.clone(), false);
@@ -708,8 +712,10 @@ mod independence_tests {
 
     #[test]
     fn session_updates_do_not_choose_the_workbench_view() {
-        let mut app = App::default();
-        app.input = "draft".into();
+        let mut app = App {
+            input: "draft".into(),
+            ..Default::default()
+        };
         let mut next = app.state.clone();
         next.current_session_id = Some("background-session".into());
         next.is_streaming = true;

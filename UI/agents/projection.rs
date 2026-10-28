@@ -201,9 +201,7 @@ impl AgentState {
                             }
                         },
                         member_id,
-                        icon: feed_icon(
-                            &serde_json::to_value(item.kind).unwrap().as_str().unwrap(),
-                        ),
+                        icon: feed_icon(serde_json::to_value(item.kind).unwrap().as_str().unwrap()),
                         running: item.kind == AgentActivityKind::Tool
                             && group.members.iter().any(|member| {
                                 member.activity_state == "tool_call"

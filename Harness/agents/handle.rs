@@ -218,6 +218,7 @@ impl AgentGroupHandle {
         Ok(value.to_string())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_group_control(
         &self,
         factory: &AgentRuntimeFactory,
@@ -272,6 +273,7 @@ impl AgentGroupHandle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_group(
         &self,
         factory: &AgentRuntimeFactory,
@@ -389,7 +391,7 @@ impl AgentGroupHandle {
                         AgentEvent::ToolExecutionStarted(call) => {
                             self.runtime.record_coordinator_event(
                                 "coordinator_tool_started",
-                                &format!("{}", call.name),
+                                &call.name.to_string(),
                             )
                         }
                         AgentEvent::ToolExecutionFinished {

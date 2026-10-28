@@ -1119,9 +1119,11 @@ mod tests {
                 tool_call: tool.clone(),
             },
         };
-        let mut app = App::default();
-        app.input_focused = false;
-        app.conversation = vec![entry(&call)];
+        let mut app = App {
+            input_focused: false,
+            conversation: vec![entry(&call)],
+            ..Default::default()
+        };
         let collapsed = super::super::shared::content(
             &app,
             &app.application

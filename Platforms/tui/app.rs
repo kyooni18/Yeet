@@ -470,12 +470,12 @@ impl App {
             || self.state.active_reasoning_text != next.active_reasoning_text
             || self.state.active_reasoning_summary != next.active_reasoning_summary
             || self.state.error_message != next.error_message;
-        if let Some(conversation) = next.conversation.take() {
-            if replaced_transcript {
-                self.transcript_revision = self.transcript_revision.wrapping_add(1);
-                self.conversation = conversation;
-                self.clear_transcript_selection();
-            }
+        if let Some(conversation) = next.conversation.take()
+            && replaced_transcript
+        {
+            self.transcript_revision = self.transcript_revision.wrapping_add(1);
+            self.conversation = conversation;
+            self.clear_transcript_selection();
         }
         if self.state.current_session_id != next.current_session_id {
             self.apply_conversation_action(
@@ -1087,16 +1087,16 @@ impl App {
                 self.popup_index = cmp::min(self.popup_index + 1, options.len().saturating_sub(1));
             }
             KeyCode::Enter => {
-                if let Some(option) = options.get(self.popup_index) {
-                    if self.send_toolbar_action(
+                if let Some(option) = options.get(self.popup_index)
+                    && self.send_toolbar_action(
                         backend,
                         crate::shared_ui::toolbar::ToolbarAction::Choose {
                             id: "reasoning".into(),
                             value: option.value.clone(),
                         },
-                    )? {
-                        self.close_popup();
-                    }
+                    )?
+                {
+                    self.close_popup();
                 }
             }
             _ => {}

@@ -127,10 +127,10 @@ impl HookEngine {
         let mut outputs: Vec<String> = Vec::new();
         for entry in entries {
             let now = Instant::now();
-            if let (Some(last), Some(min)) = (entry.last_run, entry.def.min_interval_secs) {
-                if now.duration_since(last) < Duration::from_secs(min) {
-                    continue;
-                }
+            if let (Some(last), Some(min)) = (entry.last_run, entry.def.min_interval_secs)
+                && now.duration_since(last) < Duration::from_secs(min)
+            {
+                continue;
             }
             entry.last_run = Some(now);
             let timeout =

@@ -83,14 +83,13 @@ impl SessionStore {
             };
             for line in BufReader::new(file).lines() {
                 let line = line?;
-                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if event
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
+                    && event
                         .get("seq")
                         .and_then(serde_json::Value::as_u64)
                         .is_some()
-                    {
-                        events.push(event);
-                    }
+                {
+                    events.push(event);
                 }
             }
         }

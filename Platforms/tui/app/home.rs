@@ -27,146 +27,6 @@ impl HomeRefresh {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    #[test]
-    fn stable_resource_targets_open_files_and_deleted_directory_diffs() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        let run = |args: &[&str]| {
-            let output = Command::new("git")
-                .current_dir(&root)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        };
-        run(&["init", "-q"]);
-        std::fs::create_dir(root.join("nested")).unwrap();
-        let path = root.join("nested/real.rs");
-        std::fs::write(&path, "before\n").unwrap();
-        run(&["add", "."]);
-        run(&[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.invalid",
-            "commit",
-            "-qm",
-            "Fixture",
-        ]);
-        let mut app = App::default();
-        app.input = "Keep this draft".into();
-        app.cursor = 3;
-        app.open_resource(ResourceTarget::File(path.clone()));
-        app.open_resource(ResourceTarget::File(path.clone()));
-        assert_eq!(app.mode, Mode::Files);
-        assert_eq!(
-            app.files.as_ref().unwrap().tabs.views()[0].state.resource,
-            Some(path.clone())
-        );
-        assert_eq!(
-            app.files.as_ref().unwrap().selected_path(),
-            Some(path.clone())
-        );
-        app.observe_workbench_view();
-        assert_eq!(
-            app.recent_views.entries()[0].target,
-            ResourceTarget::File(path.clone())
-        );
-        std::fs::remove_dir_all(root.join("nested")).unwrap();
-        app.open_resource(ResourceTarget::Diff(path.clone()));
-        assert_eq!(app.mode, Mode::Diff);
-        let diff = &app.diff_tabs.active().unwrap().state;
-        assert!(diff.error.is_none(), "{:?}", diff.error);
-        assert_eq!(diff.selected_path(), Some(path.clone()));
-        assert!(diff.lines.iter().any(|line| line == "-before"));
-        app.observe_workbench_view();
-        assert_eq!(
-            app.recent_views.entries()[0].target,
-            ResourceTarget::Diff(path)
-        );
-        assert_eq!(app.input, "Keep this draft");
-        assert_eq!(app.cursor, 3);
-    }
-
-    #[test]
-    fn new_session_waits_for_delivery_before_shared_home_commit() {
-        let mut app = App::default();
-        let before = app.application.projection().ui_revision;
-        app.apply_home_action(HomeAction::NewSession);
-        assert!(matches!(
-            app.take_workbench_command(),
-            Some(FrontendCommand::NewSession)
-        ));
-        assert_eq!(app.application.projection().ui_revision, before);
-        assert!(
-            app.finish_home_delivery(Err(anyhow::anyhow!("delivery failed")))
-                .is_err()
-        );
-        assert_eq!(app.application.projection().ui_revision, before);
-
-        app.apply_home_action(HomeAction::NewSession);
-        assert!(matches!(
-            app.take_workbench_command(),
-            Some(FrontendCommand::NewSession)
-        ));
-        app.finish_home_delivery(Ok(())).unwrap();
-        assert!(app.application.projection().ui_revision > before);
-        assert!(!app.home_visible());
-    }
-
-    #[test]
-    fn home_mouse_wheel_selection_updates_shared_projection() {
-        let mut app = App::default();
-        let first = ResourceTarget::Session("first".into());
-        let second = ResourceTarget::Session("second".into());
-        let mut content = WorkspaceContent::default();
-        content.sessions.extend([
-            crate::shared_ui::home::ResourceItem::new(
-                first.clone(),
-                crate::shared_ui::home::ResourceKind::Session,
-                "First session",
-            ),
-            crate::shared_ui::home::ResourceItem::new(
-                second.clone(),
-                crate::shared_ui::home::ResourceKind::Session,
-                "Second session",
-            ),
-        ]);
-        app.application.update_home_content(content);
-        app.activate_workbench_tab(WorkbenchTab::Home);
-        app.home_targets.push((
-            ratatui::layout::Rect::new(0, 0, 1, 1),
-            HomeAction::NewSession,
-        ));
-
-        assert_eq!(app.application.projection().home.selected, Some(first));
-        app.handle_mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::ScrollDown,
-            column: 0,
-            row: 0,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        });
-
-        let projection = app.application.projection();
-        assert_eq!(projection.home.selected, Some(second.clone()));
-        assert_eq!(
-            projection.home.inspector.map(|item| item.target),
-            Some(second)
-        );
-        app.reveal_home_selection(true, 1);
-        assert_eq!(app.home_scroll, 2);
-    }
-}
-
 impl App {
     pub fn workspace_path(&self) -> PathBuf {
         self.state
@@ -400,5 +260,147 @@ impl App {
             _ => return false,
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn stable_resource_targets_open_files_and_deleted_directory_diffs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(&root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["init", "-q"]);
+        std::fs::create_dir(root.join("nested")).unwrap();
+        let path = root.join("nested/real.rs");
+        std::fs::write(&path, "before\n").unwrap();
+        run(&["add", "."]);
+        run(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "Fixture",
+        ]);
+        let mut app = App {
+            input: "Keep this draft".into(),
+            cursor: 3,
+            ..Default::default()
+        };
+        app.open_resource(ResourceTarget::File(path.clone()));
+        app.open_resource(ResourceTarget::File(path.clone()));
+        assert_eq!(app.mode, Mode::Files);
+        assert_eq!(
+            app.files.as_ref().unwrap().tabs.views()[0].state.resource,
+            Some(path.clone())
+        );
+        assert_eq!(
+            app.files.as_ref().unwrap().selected_path(),
+            Some(path.clone())
+        );
+        app.observe_workbench_view();
+        assert_eq!(
+            app.recent_views.entries()[0].target,
+            ResourceTarget::File(path.clone())
+        );
+        std::fs::remove_dir_all(root.join("nested")).unwrap();
+        app.open_resource(ResourceTarget::Diff(path.clone()));
+        assert_eq!(app.mode, Mode::Diff);
+        let diff = &app.diff_tabs.active().unwrap().state;
+        assert!(diff.error.is_none(), "{:?}", diff.error);
+        assert_eq!(diff.selected_path(), Some(path.clone()));
+        assert!(diff.lines.iter().any(|line| line == "-before"));
+        app.observe_workbench_view();
+        assert_eq!(
+            app.recent_views.entries()[0].target,
+            ResourceTarget::Diff(path)
+        );
+        assert_eq!(app.input, "Keep this draft");
+        assert_eq!(app.cursor, 3);
+    }
+
+    #[test]
+    fn new_session_waits_for_delivery_before_shared_home_commit() {
+        let mut app = App::default();
+        let before = app.application.projection().ui_revision;
+        app.apply_home_action(HomeAction::NewSession);
+        assert!(matches!(
+            app.take_workbench_command(),
+            Some(FrontendCommand::NewSession)
+        ));
+        assert_eq!(app.application.projection().ui_revision, before);
+        assert!(
+            app.finish_home_delivery(Err(anyhow::anyhow!("delivery failed")))
+                .is_err()
+        );
+        assert_eq!(app.application.projection().ui_revision, before);
+
+        app.apply_home_action(HomeAction::NewSession);
+        assert!(matches!(
+            app.take_workbench_command(),
+            Some(FrontendCommand::NewSession)
+        ));
+        app.finish_home_delivery(Ok(())).unwrap();
+        assert!(app.application.projection().ui_revision > before);
+        assert!(!app.home_visible());
+    }
+
+    #[test]
+    fn home_mouse_wheel_selection_updates_shared_projection() {
+        let mut app = App::default();
+        let first = ResourceTarget::Session("first".into());
+        let second = ResourceTarget::Session("second".into());
+        let mut content = WorkspaceContent::default();
+        content.sessions.extend([
+            crate::shared_ui::home::ResourceItem::new(
+                first.clone(),
+                crate::shared_ui::home::ResourceKind::Session,
+                "First session",
+            ),
+            crate::shared_ui::home::ResourceItem::new(
+                second.clone(),
+                crate::shared_ui::home::ResourceKind::Session,
+                "Second session",
+            ),
+        ]);
+        app.application.update_home_content(content);
+        app.activate_workbench_tab(WorkbenchTab::Home);
+        app.home_targets.push((
+            ratatui::layout::Rect::new(0, 0, 1, 1),
+            HomeAction::NewSession,
+        ));
+
+        assert_eq!(app.application.projection().home.selected, Some(first));
+        app.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+
+        let projection = app.application.projection();
+        assert_eq!(projection.home.selected, Some(second.clone()));
+        assert_eq!(
+            projection.home.inspector.map(|item| item.target),
+            Some(second)
+        );
+        app.reveal_home_selection(true, 1);
+        assert_eq!(app.home_scroll, 2);
     }
 }

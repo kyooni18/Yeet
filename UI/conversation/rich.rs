@@ -353,7 +353,7 @@ fn terminal(tool: &ConversationToolCall, args: Option<&Value>) -> Vec<RichDetail
     let stderr = stream(&value, "stderr", progress);
     // A text-only result carries no stream information; show it unlabelled.
     let combined = (result.is_none() && stdout.is_none() && stderr.is_none())
-        .then(|| tool.result.as_deref())
+        .then_some(tool.result.as_deref())
         .flatten()
         .map(str::trim_end)
         .filter(|text| !text.is_empty())

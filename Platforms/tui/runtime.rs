@@ -575,13 +575,13 @@ fn copy_via_osc52(text: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         use std::process::{Command, Stdio};
-        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
-            if let Some(mut stdin) = child.stdin.take() {
-                let written = stdin.write_all(text.as_bytes()).is_ok();
-                drop(stdin);
-                if child.wait().is_ok_and(|status| status.success()) && written {
-                    return Ok(());
-                }
+        if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn()
+            && let Some(mut stdin) = child.stdin.take()
+        {
+            let written = stdin.write_all(text.as_bytes()).is_ok();
+            drop(stdin);
+            if child.wait().is_ok_and(|status| status.success()) && written {
+                return Ok(());
             }
         }
     }

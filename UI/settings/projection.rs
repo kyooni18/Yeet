@@ -261,28 +261,28 @@ pub(super) fn project(
                 ),
             );
         }
-        if let Some(plan) = &harness.web_setup_plan {
-            if let Some(target) = &plan.install {
-                let detail = if plan.missing_dependencies.is_empty() {
-                    plan.message.clone()
-                } else {
-                    format!(
-                        "Install prerequisites first: {}",
-                        plan.missing_dependencies.join(", ")
-                    )
-                };
-                let mut install = control(
-                    "web_install",
-                    "Approve installation",
-                    detail,
-                    SettingsIcon::Web,
-                    SettingsControlKind::Navigation,
-                    target.clone(),
-                    enabled && plan.missing_dependencies.is_empty(),
-                );
-                install.action_label = "Install".into();
-                controls.push(install);
-            }
+        if let Some(plan) = &harness.web_setup_plan
+            && let Some(target) = &plan.install
+        {
+            let detail = if plan.missing_dependencies.is_empty() {
+                plan.message.clone()
+            } else {
+                format!(
+                    "Install prerequisites first: {}",
+                    plan.missing_dependencies.join(", ")
+                )
+            };
+            let mut install = control(
+                "web_install",
+                "Approve installation",
+                detail,
+                SettingsIcon::Web,
+                SettingsControlKind::Navigation,
+                target.clone(),
+                enabled && plan.missing_dependencies.is_empty(),
+            );
+            install.action_label = "Install".into();
+            controls.push(install);
         }
         let mut advanced = control(
             "web_advanced",

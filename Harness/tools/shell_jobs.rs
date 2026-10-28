@@ -202,6 +202,8 @@ impl ShellJobs {
         !self.jobs.is_empty()
     }
 
+    // Used by the preserved pending remote shell-job layer.
+    #[allow(dead_code)]
     pub(super) fn has_running_jobs(&self) -> bool {
         self.jobs.values().any(|job| {
             job.state

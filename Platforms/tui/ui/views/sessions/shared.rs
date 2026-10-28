@@ -12,16 +12,19 @@ pub(super) fn content(
     (text, rows, ids)
 }
 
-pub(super) fn content_with_entries(
-    app: &App,
-    view: &ConversationView,
-    width: u16,
-) -> (
+/// Rendered conversation content with entry rows, cache keys, and hit ranges.
+type RenderedContent = (
     Text<'static>,
     Vec<usize>,
     Vec<String>,
     Vec<(std::ops::Range<usize>, String)>,
-) {
+);
+
+pub(super) fn content_with_entries(
+    app: &App,
+    view: &ConversationView,
+    width: u16,
+) -> RenderedContent {
     let mut lines = Vec::new();
     let mut rows = Vec::new();
     let mut ids = Vec::new();
@@ -119,13 +122,15 @@ mod tests {
     use super::*;
     #[test]
     fn long_prompt_disclosure_has_clickable_and_keyboard_geometry() {
-        let mut app = App::default();
-        app.conversation = vec![ConversationEntry {
-            id: "long-prompt".into(),
-            kind: ConversationKind::User {
-                content: format!("{}HIDDEN_END", "x".repeat(500)),
-            },
-        }];
+        let mut app = App {
+            conversation: vec![ConversationEntry {
+                id: "long-prompt".into(),
+                kind: ConversationKind::User {
+                    content: format!("{}HIDDEN_END", "x".repeat(500)),
+                },
+            }],
+            ..Default::default()
+        };
         let view = app
             .application
             .conversation_state()
@@ -146,14 +151,16 @@ mod tests {
 
     #[test]
     fn work_geometry_uses_shared_stable_ids_and_disclosure() {
-        let mut app = App::default();
-        app.conversation = vec![ConversationEntry {
-            id: "reasoning-1".into(),
-            kind: ConversationKind::Reasoning {
-                content: "Private reasoning".into(),
-                summary: Some("Inspect the provider logs".into()),
-            },
-        }];
+        let mut app = App {
+            conversation: vec![ConversationEntry {
+                id: "reasoning-1".into(),
+                kind: ConversationKind::Reasoning {
+                    content: "Private reasoning".into(),
+                    summary: Some("Inspect the provider logs".into()),
+                },
+            }],
+            ..Default::default()
+        };
         let view = app
             .application
             .conversation_state()
@@ -185,11 +192,12 @@ mod tests {
     #[test]
     fn expanded_group_children_keep_selectable_rows_and_literal_tool_output() {
         use crate::shared_ui::conversation::ConversationAction;
-        let mut app = App::default();
-        app.input_focused = false;
-        app.conversation = ["first", "second"]
-            .into_iter()
-            .map(|id| ConversationEntry {
+        let mut app = App {
+            input_focused: false,
+            conversation: ["first", "second"]
+                .into_iter()
+                .map(|id| {
+                    ConversationEntry {
                 id: id.into(),
                 kind: ConversationKind::ToolCall {
                     tool_call: serde_json::from_value(serde_json::json!({
@@ -198,8 +206,11 @@ mod tests {
                     }))
                     .unwrap(),
                 },
-            })
-            .collect();
+            }
+                })
+                .collect(),
+            ..Default::default()
+        };
         app.apply_conversation_action(ConversationAction::Select(Some("tool:second".into())));
         app.apply_conversation_action(ConversationAction::Toggle("tool:second".into()));
         let view = app.application.conversation_projection().view;
@@ -219,13 +230,15 @@ mod tests {
 
     #[test]
     fn transcript_geometry_keeps_message_source_ids_for_native_controls() {
-        let mut app = App::default();
-        app.conversation = vec![ConversationEntry {
-            id: "user-1".into(),
-            kind: ConversationKind::User {
-                content: "First line\nSecond line".into(),
-            },
-        }];
+        let app = App {
+            conversation: vec![ConversationEntry {
+                id: "user-1".into(),
+                kind: ConversationKind::User {
+                    content: "First line\nSecond line".into(),
+                },
+            }],
+            ..Default::default()
+        };
         let view = app
             .application
             .conversation_state()

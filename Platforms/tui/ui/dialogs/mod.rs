@@ -735,20 +735,20 @@ pub(super) fn draw_settings_edit(frame: &mut Frame<'_>, app: &App) {
         })
         .collect::<Vec<_>>();
     draw_form_rows(frame, inner, &rows, app.editor_index, true);
-    if view.editor.is_some() {
-        if let Some(notice) = &view.notice {
-            frame.render_widget(
-                Paragraph::new(notice.as_str())
-                    .fg(theme::error())
-                    .wrap(Wrap { trim: false }),
-                Rect::new(
-                    inner.x,
-                    inner.bottom().saturating_sub(2),
-                    inner.width,
-                    2.min(inner.height),
-                ),
-            );
-        }
+    if view.editor.is_some()
+        && let Some(notice) = &view.notice
+    {
+        frame.render_widget(
+            Paragraph::new(notice.as_str())
+                .fg(theme::error())
+                .wrap(Wrap { trim: false }),
+            Rect::new(
+                inner.x,
+                inner.bottom().saturating_sub(2),
+                inner.width,
+                2.min(inner.height),
+            ),
+        );
     }
 }
 

@@ -686,6 +686,8 @@ impl ToolRegistry {
         self.shell_jobs.has_jobs()
     }
 
+    // Used by the preserved pending remote shell-job layer.
+    #[allow(dead_code)]
     pub(crate) fn has_running_shell_jobs(&self) -> bool {
         self.shell_jobs.has_running_jobs()
     }

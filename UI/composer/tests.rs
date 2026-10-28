@@ -137,14 +137,16 @@ fn readiness_context_streaming_and_attachment_edit_are_shared_guards() {
 }
 #[test]
 fn stale_permission_target_cannot_resolve_replacement() {
-    let mut harness = HarnessState::default();
-    harness.pending_shell_permission = Some(crate::model::ShellPermission {
-        id: "new".into(),
-        kind: "shell".into(),
-        command: "ls".into(),
-        operation: "Inspect".into(),
-        reason: "requested".into(),
-    });
+    let harness = HarnessState {
+        pending_shell_permission: Some(crate::model::ShellPermission {
+            id: "new".into(),
+            kind: "shell".into(),
+            command: "ls".into(),
+            operation: "Inspect".into(),
+            reason: "requested".into(),
+        }),
+        ..Default::default()
+    };
     let mut state = ComposerState::default();
     let env = environment();
     let action = |id: &str| ComposerAction::RespondPermission {
@@ -167,13 +169,15 @@ fn stale_permission_target_cannot_resolve_replacement() {
 }
 #[test]
 fn question_answers_target_current_question_and_respect_custom_policy() {
-    let mut harness = HarnessState::default();
-    harness.pending_user_question = Some(crate::model::UserQuestion {
-        id: "q".into(),
-        question: "Which?".into(),
-        options: vec!["A".into(), "B".into()],
-        allow_custom: false,
-    });
+    let harness = HarnessState {
+        pending_user_question: Some(crate::model::UserQuestion {
+            id: "q".into(),
+            question: "Which?".into(),
+            options: vec!["A".into(), "B".into()],
+            allow_custom: false,
+        }),
+        ..Default::default()
+    };
     let mut state = ComposerState::default();
     let env = environment();
     let answer = |id: &str, text: Option<&str>| ComposerAction::AnswerQuestion {

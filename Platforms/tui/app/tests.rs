@@ -35,6 +35,7 @@ fn closing_floating_panels_restores_the_same_file_view() {
 }
 
 #[test]
+#[allow(clippy::field_reassign_with_default)] // DebateState has private fields
 fn debate_form_selects_each_role_independently_and_restores_saved_models() {
     let mut app = App::default();
     app.state.active_model = "p/default".into();
@@ -1131,9 +1132,11 @@ fn sidebar_session_click_requests_load_without_starting_selection() {
 
 #[test]
 fn session_focus_is_explicit_and_preserves_draft() {
-    let mut app = App::default();
-    app.input = "keep draft".into();
-    app.cursor = 4;
+    let mut app = App {
+        input: "keep draft".into(),
+        cursor: 4,
+        ..Default::default()
+    };
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     assert!(app.handle_chat_focus_key(&key(KeyCode::Esc)));
     assert!(!app.input_focused);
@@ -1150,9 +1153,11 @@ fn session_focus_is_explicit_and_preserves_draft() {
 
 #[test]
 fn files_insert_shortcut_focuses_files_search_not_session() {
-    let mut app = App::default();
-    app.input_focused = false;
-    app.input = "session draft".into();
+    let mut app = App {
+        input_focused: false,
+        input: "session draft".into(),
+        ..Default::default()
+    };
     app.open_files();
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     app.handle_files_key(key(KeyCode::Char('i')));
@@ -1166,13 +1171,7 @@ fn files_insert_shortcut_focuses_files_search_not_session() {
 
 #[test]
 fn unfocused_work_navigation_and_expansion_preserve_draft() {
-    let mut app = App::default();
-    app.home_override = Some(false);
-    app.input = "keep this draft".into();
-    app.cursor = 4;
-    app.input_focused = false;
-    app.work_rows = vec![2, 20, 40];
-    app.conversation = (0..3)
+    let mut app = App { input: "keep this draft".into(), cursor: 4, input_focused: false, work_rows: vec![2, 20, 40], conversation: (0..3)
         .map(|index| crate::model::ConversationEntry {
             id: index.to_string(),
             kind: crate::model::ConversationKind::ToolCall {
@@ -1186,10 +1185,8 @@ fn unfocused_work_navigation_and_expansion_preserve_draft() {
                 .unwrap(),
             },
         })
-        .collect();
-    app.work_ids = vec!["tool:0".into(), "tool:1".into(), "tool:2".into()];
-    app.transcript_area = (0, 0, 80, 10);
-    app.max_scroll = 50;
+        .collect(), work_ids: vec!["tool:0".into(), "tool:1".into(), "tool:2".into()], transcript_area: (0, 0, 80, 10), max_scroll: 50, ..Default::default() };
+    app.home_override = Some(false);
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     assert!(app.handle_work_selection_key(&key(KeyCode::Down)));
     assert_eq!(app.selected_work, Some(0));

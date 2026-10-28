@@ -179,10 +179,10 @@ impl PermissionBroker {
             return false;
         };
         if state.answer.is_some()
-            || !state
+            || state
                 .question
                 .as_ref()
-                .is_some_and(|question| question.id == request_id)
+                .is_none_or(|question| question.id != request_id)
         {
             return false;
         }

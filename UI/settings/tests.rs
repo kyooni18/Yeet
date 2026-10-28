@@ -4,24 +4,26 @@ use crate::shared_ui::settings_session::SettingsSession;
 
 #[test]
 fn web_search_has_dedicated_settings_and_extensions_are_grouped() {
-    let mut harness = HarnessState::default();
-    harness.available_capabilities = [
-        ("web-search", "web"),
-        ("builtin:document-read", "builtin"),
-        ("skill:example", "skill"),
-        ("mcp:docs", "mcp"),
-        ("extension", "capability"),
-    ]
-    .into_iter()
-    .map(|(id, kind)| crate::model::CapabilityToggleItem {
-        id: id.into(),
-        kind: kind.into(),
-        name: id.into(),
-        description: String::new(),
-        enabled: true,
-        source: None,
-    })
-    .collect();
+    let harness = HarnessState {
+        available_capabilities: [
+            ("web-search", "web"),
+            ("builtin:document-read", "builtin"),
+            ("skill:example", "skill"),
+            ("mcp:docs", "mcp"),
+            ("extension", "capability"),
+        ]
+        .into_iter()
+        .map(|(id, kind)| crate::model::CapabilityToggleItem {
+            id: id.into(),
+            kind: kind.into(),
+            name: id.into(),
+            description: String::new(),
+            enabled: true,
+            source: None,
+        })
+        .collect(),
+        ..Default::default()
+    };
     let env = SettingsEnvironment {
         supported_features: vec![SettingsFeature::ServiceBackends],
         ..Default::default()
@@ -129,15 +131,17 @@ fn stable_selection_and_editor_delivery_preserve_failed_changes() {
 }
 #[test]
 fn projected_choices_and_provider_identity_drive_actions_without_native_policy() {
-    let mut harness = HarnessState::default();
-    harness.auth_providers = vec![crate::model::AuthProviderItem {
-        provider: "antigravity".into(),
-        authenticated: false,
-        method: String::new(),
-        expires_at: None,
-        usage: None,
-        error: None,
-    }];
+    let harness = HarnessState {
+        auth_providers: vec![crate::model::AuthProviderItem {
+            provider: "antigravity".into(),
+            authenticated: false,
+            method: String::new(),
+            expires_at: None,
+            usage: None,
+            error: None,
+        }],
+        ..Default::default()
+    };
     let env = SettingsEnvironment::default();
     let mut state = SettingsState::default();
     let view = state.view(&env, &harness);

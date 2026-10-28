@@ -232,10 +232,10 @@ fn flush(
         labels.push("Awaiting approval");
     }
     for event in pending.iter() {
-        if let Some(label) = event.trace().attention_label() {
-            if !labels.contains(&label) {
-                labels.push(label);
-            }
+        if let Some(label) = event.trace().attention_label()
+            && !labels.contains(&label)
+        {
+            labels.push(label);
         }
     }
     let status_label = (!labels.is_empty()).then(|| labels.join(" · "));

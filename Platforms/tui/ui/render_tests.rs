@@ -121,6 +121,7 @@ fn welcome_preserves_composer_and_adapts_shortcut_cards() {
 }
 
 #[test]
+#[allow(clippy::field_reassign_with_default)] // App derefs to NavigationState for `mode`
 fn views_switcher_renders_vertical_choices() {
     let mut app = App::default();
     app.mode = Mode::Views;
@@ -134,6 +135,7 @@ fn views_switcher_renders_vertical_choices() {
 }
 
 #[test]
+#[allow(clippy::field_reassign_with_default)] // App derefs to NavigationState for `mode`
 fn portrait_session_picker_is_a_floating_grouped_list() {
     let mut app = App::default();
     app.mode = Mode::Sessions;
@@ -481,9 +483,11 @@ mod overall_layout_tests {
 
 #[test]
 fn portrait_uses_borderless_single_row_composer_and_one_row_header() {
-    let mut app = App::default();
-    app.input = "hello".into();
-    app.cursor = 5;
+    let mut app = App {
+        input: "hello".into(),
+        cursor: 5,
+        ..Default::default()
+    };
     let (text, _) = render(&mut app, 40, 60);
     let rows: Vec<&str> = text.lines().collect();
     assert!(

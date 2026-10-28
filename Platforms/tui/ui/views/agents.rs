@@ -501,7 +501,7 @@ fn draw_timeline(frame: &mut Frame<'_>, model: &AgentsView, area: Rect) {
         let line = Line::from(vec![
             Span::styled(format!("{:<6} ", age(&entry.at)), muted()),
             Span::styled(
-                format!("{:<actor_width$} ", fit(&actor, actor_width)),
+                format!("{:<actor_width$} ", fit(actor, actor_width)),
                 muted(),
             ),
             Span::styled(icon, if running { glyph_running() } else { muted() }),

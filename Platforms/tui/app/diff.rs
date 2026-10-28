@@ -292,28 +292,26 @@ impl App {
                 self.refresh_diff_view(id);
             }
             KeyCode::Char('n') => {
-                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
-                    if let Some((i, _)) = s
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state)
+                    && let Some((i, _)) = s
                         .lines
                         .iter()
                         .enumerate()
                         .find(|(i, l)| *i > s.scroll && l.starts_with("@@"))
-                    {
-                        s.scroll = i;
-                    }
+                {
+                    s.scroll = i;
                 }
             }
             KeyCode::Char('p') => {
-                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state) {
-                    if let Some((i, _)) = s
+                if let Some(s) = self.diff_tabs.active_mut().map(|view| &mut view.state)
+                    && let Some((i, _)) = s
                         .lines
                         .iter()
                         .enumerate()
                         .rev()
                         .find(|(i, l)| *i < s.scroll && l.starts_with("@@"))
-                    {
-                        s.scroll = i;
-                    }
+                {
+                    s.scroll = i;
                 }
             }
             _ => {}
@@ -381,9 +379,11 @@ mod tests {
         std::fs::write(root.join("alpha.rs"), "new\ncontext\nunstaged\n").unwrap();
         std::fs::remove_file(root.join("gone.txt")).unwrap();
         std::fs::write(root.join("space name.txt"), "untracked\n").unwrap();
-        let mut app = App::default();
-        app.files = Some(super::super::files::FilesState::open(root.into()));
-        app.input = "keep draft".into();
+        let mut app = App {
+            files: Some(super::super::files::FilesState::open(root.into())),
+            input: "keep draft".into(),
+            ..Default::default()
+        };
         app.open_views();
         app.views_index = 3;
         app.handle_views_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

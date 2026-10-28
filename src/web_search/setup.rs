@@ -276,10 +276,10 @@ pub fn test_web_search(
             if value.get("isError").and_then(Value::as_bool) == Some(true) {
                 bail!("MCP search test failed: {value}");
             }
-            if !value
+            if value
                 .get("content")
                 .and_then(Value::as_array)
-                .is_some_and(|content| !content.is_empty())
+                .is_none_or(|content| content.is_empty())
                 && value.get("structuredContent").is_none()
             {
                 bail!("MCP search test returned no content");

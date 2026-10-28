@@ -166,11 +166,11 @@ impl App {
                 }
             }
         }
-        if let Some(cancelled) = effect.cancel_edit {
-            if self.composer_editor_snapshot() == cancelled {
-                self.input.clear();
-                self.cursor = 0;
-            }
+        if let Some(cancelled) = effect.cancel_edit
+            && self.composer_editor_snapshot() == cancelled
+        {
+            self.input.clear();
+            self.cursor = 0;
         }
     }
 }
@@ -180,8 +180,10 @@ mod tests {
     use super::*;
     #[test]
     fn accepted_submission_preserves_newer_native_text_and_context() {
-        let mut app = App::default();
-        app.input = "original prompt".into();
+        let mut app = App {
+            input: "original prompt".into(),
+            ..Default::default()
+        };
         let accepted = app.composer_editor_snapshot();
         app.input = "newer draft".into();
         app.cursor = 4;

@@ -729,6 +729,7 @@ fn await_initial_state(service: &mut BackgroundConnection, wake: &Wake) -> Resul
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn runtime_loop(
     mut service: BackgroundConnection,
     commands: mpsc::Receiver<RuntimeControl>,
@@ -754,17 +755,17 @@ fn runtime_loop(
                     let new_session = matches!(command, FrontendCommand::NewSession);
                     let theme_command = command.clone();
                     let result = service.send(&command).map_err(|error| format!("{error:#}"));
-                    if result.is_ok() {
-                        if let Ok(mut state) = shared.lock() {
-                            state.theme_cache.invalidate_for_command(&theme_command);
-                        }
+                    if result.is_ok()
+                        && let Ok(mut state) = shared.lock()
+                    {
+                        state.theme_cache.invalidate_for_command(&theme_command);
                     }
-                    if result.is_ok() && new_session {
-                        if let (Ok(state), Ok(mut ui)) = (shared.lock(), ui.lock()) {
-                            ui.observe_composer_new_session(&state.state);
-                            let _ =
-                                events.send(composer_message(ui.composer_projection(), None, None));
-                        }
+                    if result.is_ok()
+                        && new_session
+                        && let (Ok(state), Ok(mut ui)) = (shared.lock(), ui.lock())
+                    {
+                        ui.observe_composer_new_session(&state.state);
+                        let _ = events.send(composer_message(ui.composer_projection(), None, None));
                     }
                     let _ = completion.send(result);
                 }
@@ -1601,8 +1602,10 @@ mod tests {
             last_touched: Instant::now(),
         }));
         let (events, mut receiver) = broadcast::channel(8);
-        let mut state = BridgeState::default();
-        state.current_session_id = Some("theme-session".into());
+        let mut state = BridgeState {
+            current_session_id: Some("theme-session".into()),
+            ..Default::default()
+        };
         state.runtime_settings.theme_dark = "quiet-night".into();
         process_state_update(&shared, &events, state.clone());
         let ServerMessage::Snapshot {
@@ -1641,14 +1644,16 @@ mod tests {
     fn shared_transcript_projects_accumulated_sparse_updates_and_stream_deltas() {
         use super::*;
         use crate::shared_ui::application_session::ApplicationSession;
-        let mut initial = BridgeState::default();
-        initial.conversation = Some(
-            serde_json::from_value(serde_json::json!([
-                {"id":"user", "kind":{"type":"user","content":"keep history"}},
-                {"id":"reasoning", "kind":{"type":"reasoning","content":"","summary":""}}
-            ]))
-            .unwrap(),
-        );
+        let initial = BridgeState {
+            conversation: Some(
+                serde_json::from_value(serde_json::json!([
+                    {"id":"user", "kind":{"type":"user","content":"keep history"}},
+                    {"id":"reasoning", "kind":{"type":"reasoning","content":"","summary":""}}
+                ]))
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
         let shared = Arc::new(Mutex::new(RuntimeShared {
             theme_cache: crate::theme::ThemeProjectionCache::default(),
             state: initial.clone(),
@@ -1766,7 +1771,9 @@ mod tests {
 
     #[test]
     fn home_inventory_uses_a_revisioned_ui_message_without_harness_cursors() {
-        use crate::shared_ui::home::{ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent};
+        use crate::shared_ui::home::{
+            ResourceItem, ResourceKind, ResourceTarget, WorkspaceContent,
+        };
         let mut ui = crate::shared_ui::application_session::ApplicationSession::default();
         let mut content = WorkspaceContent::default();
         content.sessions.push(ResourceItem::new(

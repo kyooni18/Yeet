@@ -100,8 +100,10 @@ mod tests {
 
     #[test]
     fn empty_composer_focuses_sidebar_and_enter_requests_the_session() {
-        let mut app = App::default();
-        app.sidebar_nav_ids = vec![Some("a".into()), Some("b".into())];
+        let mut app = App {
+            sidebar_nav_ids: vec![Some("a".into()), Some("b".into())],
+            ..Default::default()
+        };
         app.state.current_session_id = Some("a".into());
 
         app.input = "/mo".into();

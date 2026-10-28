@@ -142,7 +142,7 @@ fn draw_workspace_summary(frame: &mut Frame<'_>, app: &App, area: Rect) {
         content,
     );
     frame.render_widget(
-        Paragraph::new(super::super::task::fit(&summary, content.width as usize))
+        Paragraph::new(super::super::task::fit(summary, content.width as usize))
             .style(Style::default().fg(theme::muted())),
         Rect::new(content.x, content.y + 1, content.width, 1),
     );
@@ -572,10 +572,12 @@ mod tests {
 
     #[test]
     fn home_renders_runtime_resources_after_resize_and_opens_selected_session() {
-        let mut app = App::default();
+        let mut app = App {
+            input: "Keep my draft".into(),
+            cursor: 4,
+            ..Default::default()
+        };
         app.home_override = Some(true);
-        app.input = "Keep my draft".into();
-        app.cursor = 4;
         app.state.saved_sessions.push(SessionSummary {
             id: "real-session".into(),
             title: "Real workspace session".into(),

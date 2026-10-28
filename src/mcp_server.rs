@@ -476,6 +476,8 @@ pub(super) struct McpServer {
 }
 
 impl McpServer {
+    // Used by the preserved pending remote shell-job layer.
+    #[allow(dead_code)]
     fn has_running_shell_jobs(&self) -> bool {
         self.workspaces
             .values()

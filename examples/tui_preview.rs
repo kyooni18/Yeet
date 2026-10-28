@@ -205,6 +205,8 @@ fn main() -> anyhow::Result<()> {
         "session-picker" => {
             app.mode = Mode::Sessions;
         }
+        // The example fixture assigns many fields after Default::default().
+        #[allow(clippy::field_reassign_with_default)]
         "diff" => {
             let root = std::env::current_dir()?;
             let mut state = yeet::app::diff::DiffState::default();

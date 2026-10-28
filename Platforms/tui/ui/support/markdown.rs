@@ -464,7 +464,7 @@ fn highlight_code(line: &str, syntax: &Syntax, panel: Style) -> Vec<Span<'static
             .line_comments
             .iter()
             .any(|marker| rest.starts_with(marker))
-            && !(rest.starts_with('#') && previous_is_word)
+            && (!rest.starts_with('#') || !previous_is_word)
             && !rest.starts_with("#[")
             && !rest.starts_with("#!")
         {

@@ -122,7 +122,8 @@ impl ShellState {
     /// Adapters can use that semantic identity to restore native focus.
     pub fn apply(&mut self, action: ShellAction) -> Option<Surface> {
         use ShellAction::*;
-        let closed = match action {
+
+        match action {
             SetLayout { layout } => {
                 if !self.layout_initialized && layout == Layout::Expanded {
                     self.navigation = true;
@@ -176,8 +177,7 @@ impl ShellState {
             Dismiss => self
                 .dismiss_target()
                 .and_then(|surface| self.close(surface)),
-        };
-        closed
+        }
     }
 
     fn close(&mut self, surface: Surface) -> Option<Surface> {

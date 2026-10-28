@@ -3,14 +3,13 @@ use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn cached_viewport_matches_full_transcript_and_invalidates_on_updates() {
-    let mut app = App::default();
-    app.conversation = (0..120).map(|index| ConversationEntry {
+    let mut app = App { conversation: (0..120).map(|index| ConversationEntry {
         id: index.to_string(),
         kind: ConversationKind::Assistant {
             content: format!("## Turn {index}\n\nWrapped **styled** words and Unicode 日本語 🦀.\n\n```rust\nlet value = {index};\n```"),
             tool_calls: Vec::new(),
         },
-    }).collect();
+    }).collect(), ..Default::default() };
     for width in [24, 80] {
         let text = transcript_text(&app, width);
         let rows = Paragraph::new(text.clone())
@@ -77,14 +76,16 @@ fn cached_viewport_matches_full_transcript_and_invalidates_on_updates() {
 
 #[test]
 fn reasoning_summaries_are_plain_noninteractive_provider_text() {
-    let mut app = App::default();
-    app.conversation = vec![ConversationEntry {
-        id: "summary".into(),
-        kind: ConversationKind::Reasoning {
-            content: "private reasoning".into(),
-            summary: Some("Inspect sources\nCompare results".into()),
-        },
-    }];
+    let mut app = App {
+        conversation: vec![ConversationEntry {
+            id: "summary".into(),
+            kind: ConversationKind::Reasoning {
+                content: "private reasoning".into(),
+                summary: Some("Inspect sources\nCompare results".into()),
+            },
+        }],
+        ..Default::default()
+    };
     let (visible, headers) = transcript_content(&app, 60);
     assert!(headers.is_empty());
     assert!(visible.to_string().contains("  Inspect sources"));

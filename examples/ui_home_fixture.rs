@@ -34,18 +34,20 @@ fn main() {
             serde_json::from_str(&line.expect("read fixture")).expect("decode fixture");
         let harness = HarnessState::default();
         let mut ui = ApplicationSession::new(&harness);
-        let mut content = WorkspaceContent::default();
-        content.sessions = input
-            .sessions
-            .into_iter()
-            .map(|session| {
-                ResourceItem::new(
-                    ResourceTarget::Session(session.id),
-                    ResourceKind::Session,
-                    session.title,
-                )
-            })
-            .collect();
+        let content = WorkspaceContent {
+            sessions: input
+                .sessions
+                .into_iter()
+                .map(|session| {
+                    ResourceItem::new(
+                        ResourceTarget::Session(session.id),
+                        ResourceKind::Session,
+                        session.title,
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        };
         ui.update_home_content(content);
         let mut open = None;
         let mut command = None;

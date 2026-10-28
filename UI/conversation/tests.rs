@@ -14,6 +14,7 @@ fn entry(id: &str, kind: ConversationKind) -> ConversationEntry {
     }
 }
 #[test]
+#[allow(clippy::field_reassign_with_default)] // ConversationState has private fields
 fn failed_tools_start_collapsed_and_can_be_opened_manually() {
     let harness = HarnessState::default();
     let entries = vec![entry(
@@ -143,14 +144,16 @@ fn embedded_tools_deduplicate_and_only_latest_messages_offer_mutation() {
 #[test]
 fn failed_delivery_preserves_controller_state_and_runtime_refresh_keeps_disclosure() {
     use crate::shared_ui::application_session::ApplicationSession;
-    let mut harness = HarnessState::default();
-    harness.conversation = Some(vec![entry(
-        "a1",
-        ConversationKind::Assistant {
-            content: "answer".into(),
-            tool_calls: vec![],
-        },
-    )]);
+    let mut harness = HarnessState {
+        conversation: Some(vec![entry(
+            "a1",
+            ConversationKind::Assistant {
+                content: "answer".into(),
+                tool_calls: vec![],
+            },
+        )]),
+        ..Default::default()
+    };
     let mut session = ApplicationSession::new(&harness);
     let before = session.projection().ui_revision;
     let prepared =
@@ -176,6 +179,7 @@ fn failed_delivery_preserves_controller_state_and_runtime_refresh_keeps_disclosu
 }
 
 #[test]
+#[allow(clippy::field_reassign_with_default)] // ConversationState has private fields
 fn native_tool_rows_stay_separate_and_toggle_independently() {
     let harness = HarnessState::default();
     let make = |id: &str| {
@@ -325,9 +329,11 @@ fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
 
 #[test]
 fn active_tool_progress_does_not_repeat_real_tool_calls() {
-    let mut harness = HarnessState::default();
-    harness.is_streaming = true;
-    harness.active_activity_entry_id = Some("progress".into());
+    let harness = HarnessState {
+        is_streaming: true,
+        active_activity_entry_id: Some("progress".into()),
+        ..Default::default()
+    };
     let progress = entry(
         "progress",
         ConversationKind::Activity {

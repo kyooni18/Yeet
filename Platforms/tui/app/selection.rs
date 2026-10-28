@@ -299,7 +299,7 @@ impl App {
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
             && self.point_in_transcript_context_menu(event.column, event.row)
         {
-            self.activate_transcript_context_menu(event.row, backend.as_deref_mut())?;
+            self.activate_transcript_context_menu(event.row, backend)?;
             return Ok(());
         }
         let inside = self.point_in_transcript(event.column, event.row);

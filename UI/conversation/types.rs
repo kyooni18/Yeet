@@ -244,6 +244,8 @@ impl TraceView {
         })
     }
 }
+// Boxing these variants would churn many call sites for little benefit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityEvent {
@@ -352,6 +354,8 @@ pub struct MessageControl {
     pub action: ConversationAction,
     pub enabled: bool,
 }
+// Boxing these variants would churn many call sites for little benefit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DisplayItem {

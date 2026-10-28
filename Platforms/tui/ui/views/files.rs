@@ -379,7 +379,6 @@ fn draw_list(frame: &mut Frame<'_>, files: &FilesState, area: Rect) {
         .skip(offset)
         .take(height)
         .enumerate()
-        .map(|(r, x)| (r, x))
     {
         let selected = index == files.cursor;
         let changed = files.is_changed(entry);

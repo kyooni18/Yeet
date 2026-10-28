@@ -149,7 +149,7 @@ impl AgentGroupState {
             })
             .collect::<Vec<_>>();
         let mut relevant = relevant;
-        relevant.sort_by(|left, right| right.0.cmp(&left.0));
+        relevant.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
         if !relevant.is_empty() {
             output.push_str("\n\nRELEVANT SHARED FINDINGS:\n");
             for (_, finding) in relevant.into_iter().take(3) {

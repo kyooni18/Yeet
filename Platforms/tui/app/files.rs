@@ -545,8 +545,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("alpha.rs"), "a\n").unwrap();
         std::fs::write(dir.path().join("beta.rs"), "b\n").unwrap();
-        let mut app = App::default();
-        app.files = Some(FilesState::open(dir.path().to_path_buf()));
+        let mut app = App {
+            files: Some(FilesState::open(dir.path().to_path_buf())),
+            ..Default::default()
+        };
         app.files.as_mut().unwrap().apply(Action::MoveDown);
         app.open_files();
         assert_eq!(

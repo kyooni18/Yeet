@@ -403,9 +403,11 @@ mod tests {
     use crate::shared_ui::application_session::ApplicationSession;
     #[test]
     fn ordered_controls_validate_live_choices_and_delegate_composer_commands() {
-        let mut state = HarnessState::default();
-        state.active_model = "openai/gpt-5.6-sol".into();
-        state.is_streaming = true;
+        let mut state = HarnessState {
+            active_model: "openai/gpt-5.6-sol".into(),
+            is_streaming: true,
+            ..Default::default()
+        };
         let mut ui = ApplicationSession::new(&state);
         let view = ui.toolbar_view();
         assert_eq!(
@@ -459,25 +461,27 @@ mod tests {
 
     #[test]
     fn sandbox_controls_are_projected_and_guard_invalid_or_in_flight_changes() {
-        let mut state = HarnessState::default();
-        state.sandbox_settings = Some(crate::model::SandboxSettingsState {
-            preset: "balanced".into(),
-            execution_mode: "sandboxed".into(),
-            auto_approve: false,
-            workspace_mode: "all".into(),
-            workspace_paths: Vec::new(),
-            scratch_writable: true,
-            network_allow: Vec::new(),
-            environment: Vec::new(),
-            secret_ids: Vec::new(),
-            limits: crate::model::SandboxLimitsState {
-                wall_time_seconds: 30,
-                max_stdout_bytes: 1024,
-                max_stderr_bytes: 1024,
-                max_memory_bytes: 0,
-                max_processes: 0,
-            },
-        });
+        let mut state = HarnessState {
+            sandbox_settings: Some(crate::model::SandboxSettingsState {
+                preset: "balanced".into(),
+                execution_mode: "sandboxed".into(),
+                auto_approve: false,
+                workspace_mode: "all".into(),
+                workspace_paths: Vec::new(),
+                scratch_writable: true,
+                network_allow: Vec::new(),
+                environment: Vec::new(),
+                secret_ids: Vec::new(),
+                limits: crate::model::SandboxLimitsState {
+                    wall_time_seconds: 30,
+                    max_stdout_bytes: 1024,
+                    max_stderr_bytes: 1024,
+                    max_memory_bytes: 0,
+                    max_processes: 0,
+                },
+            }),
+            ..Default::default()
+        };
         let ui = ApplicationSession::new(&state);
         let view = ui.toolbar_view_for(&state);
         assert_eq!(view.sandbox_controls[0].value, "balanced");
@@ -546,25 +550,27 @@ mod tests {
 
     #[test]
     fn workspace_choices_use_stable_ids_and_reject_stale_or_current_selection() {
-        let mut state = HarnessState::default();
-        state.known_workspaces = vec![
-            crate::model::WorkspaceSummary {
-                id: "current-id".into(),
-                path: "/work/current".into(),
-                display_name: "Current".into(),
-                updated_at: None,
-                session_count: 1,
-                is_current: true,
-            },
-            crate::model::WorkspaceSummary {
-                id: "target-id".into(),
-                path: "/work/target".into(),
-                display_name: "Target".into(),
-                updated_at: None,
-                session_count: 2,
-                is_current: false,
-            },
-        ];
+        let state = HarnessState {
+            known_workspaces: vec![
+                crate::model::WorkspaceSummary {
+                    id: "current-id".into(),
+                    path: "/work/current".into(),
+                    display_name: "Current".into(),
+                    updated_at: None,
+                    session_count: 1,
+                    is_current: true,
+                },
+                crate::model::WorkspaceSummary {
+                    id: "target-id".into(),
+                    path: "/work/target".into(),
+                    display_name: "Target".into(),
+                    updated_at: None,
+                    session_count: 2,
+                    is_current: false,
+                },
+            ],
+            ..Default::default()
+        };
         let ui = ApplicationSession::new(&state);
         let view = ui.toolbar_view_for(&state);
         assert_eq!(view.workspace_source, "/work/current");

@@ -58,6 +58,8 @@ impl Default for HarnessOptions {
     }
 }
 
+// Boxing these variants would churn many call sites for little benefit.
+#[allow(clippy::large_enum_variant)]
 enum HarnessTransport {
     Shared(BackgroundConnection),
     Embedded(HarnessService),
