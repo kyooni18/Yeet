@@ -22,6 +22,9 @@ pub(super) fn runtime_attached_capabilities(values: &[String]) -> Vec<String> {
 }
 
 impl AgentCoordinator {
+    pub(crate) fn shell_job_access(&self) -> crate::tools::ShellJobAccess {
+        self.registry.shell_job_access()
+    }
     /// Bind identity before a run, including lineage for generated in-process agents.
     pub fn register_runtime_agent(
         &mut self,

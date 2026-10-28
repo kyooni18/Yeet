@@ -755,8 +755,10 @@ fn dispatch_runtime_command(
             if runtime.service.current_session_id().as_ref() == Some(target) {
                 let own_rename = runtime.id == runtime_id
                     && matches!(&command, FrontendCommand::RenameSession { .. });
-                anyhow::ensure!(own_rename,
-                    "Session is loaded in a runtime. Close it or switch to a new session before managing it.");
+                anyhow::ensure!(
+                    own_rename,
+                    "Session is loaded in a runtime. Close it or switch to a new session before managing it."
+                );
             }
         }
     }

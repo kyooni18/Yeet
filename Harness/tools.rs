@@ -43,6 +43,7 @@ mod service_backends;
 mod session_capabilities;
 mod session_tools;
 mod shell_jobs;
+pub(crate) use shell_jobs::ShellJobAccess;
 mod shell_runtime;
 mod support;
 mod symbol_tools;
@@ -213,6 +214,16 @@ impl ToolRegistry {
     }
 
     pub fn set_session_runtime(&mut self, store: SessionStore, active_session_id: Option<String>) {
+        // A registry is reused when the local frontend changes sessions. Never
+        // expose the previous session's job IDs or cwd in the new one. The
+        // first None -> Some transition assigns the current unsaved session.
+        if (self.context.active_session_id.is_some()
+            && self.context.active_session_id != active_session_id)
+            || active_session_id.is_none()
+        {
+            self.shell_jobs.reset();
+            self.shell_cwd = None;
+        }
         self.artifacts.root = active_session_id
             .as_ref()
             .map(|id| store.directory.join(id).join("artifacts"))
@@ -673,6 +684,14 @@ impl ToolRegistry {
 
     pub fn has_shell_jobs(&self) -> bool {
         self.shell_jobs.has_jobs()
+    }
+
+    pub(crate) fn has_running_shell_jobs(&self) -> bool {
+        self.shell_jobs.has_running_jobs()
+    }
+
+    pub(crate) fn shell_job_access(&self) -> ShellJobAccess {
+        self.shell_jobs.access()
     }
 
     pub fn working_state_summary(&self) -> Option<String> {

@@ -175,7 +175,8 @@ impl HarnessService {
         let busy = {
             let shared = self.shared.lock_or_recover();
             shared.state.is_streaming || shared.meta.current_turn.is_some()
-        } || self.agent_groups.group_item().status == "running";
+        } || self.agent_groups.group_item().status == "running"
+            || self.shell_jobs.has_running();
         if busy {
             anyhow::bail!(
                 "A run is still active in this session. Stop it explicitly before replacing the session."

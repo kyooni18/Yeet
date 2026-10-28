@@ -476,8 +476,8 @@ impl AgentCoordinator {
                 if !parallel_mcp_active {
                     emit(AgentEvent::ToolExecutionStarted(call.clone()));
                 }
-                let (content, transport_succeeded) = self.dispatch_tool_call(
-                    tool_round::DispatchInput {
+                let (content, transport_succeeded) =
+                    self.dispatch_tool_call(tool_round::DispatchInput {
                         call,
                         model,
                         cancel,
@@ -492,8 +492,7 @@ impl AgentCoordinator {
                                 result,
                             })
                         },
-                    },
-                )?;
+                    })?;
                 let succeeded = tool_execution_succeeded(call, &content, transport_succeeded);
                 if succeeded {
                     tool_round::load_activated_tools(call, &content, &mut tool_discovery);

@@ -150,6 +150,8 @@ pub enum ServiceEvent {
 pub(crate) struct HarnessService {
     shared: Arc<Mutex<SharedSession>>,
     coordinator: Arc<Mutex<AgentCoordinator>>,
+    shell_jobs: crate::tools::ShellJobAccess,
+    shell_readers: Arc<std::sync::atomic::AtomicUsize>,
     bridge: BridgeHandle,
     config: ConfigStore,
     project_settings: ProjectSettingsStore,
@@ -205,6 +207,7 @@ impl HarnessService {
             AgentGroupPolicy::from(&agent_group),
         );
         let coordinator = Arc::new(Mutex::new(runtime_factory.build(None)?));
+        let shell_jobs = coordinator.lock_or_recover().shell_job_access();
         let mut session = bootstrap::initial_session(
             model,
             reasoning_level,
@@ -239,6 +242,8 @@ impl HarnessService {
         let service = Self {
             shared,
             coordinator,
+            shell_jobs,
+            shell_readers: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             bridge,
             config,
             project_settings,
@@ -276,6 +281,58 @@ impl HarnessService {
             FrontendCommand::Interrupt => {
                 self.set_goal_enabled(false)?;
                 self.interrupt();
+                Ok(())
+            }
+            FrontendCommand::ShellJob {
+                job_id,
+                action,
+                request_id,
+                offset,
+                data,
+                rows,
+                cols,
+            } => {
+                if job_id.len() > 128 || request_id.len() > 128 || data.len() > 8192 {
+                    return Err(anyhow!("Shell job request exceeds its size limit"));
+                }
+                let access = self.shell_jobs.clone();
+                let tx = self.tx.clone();
+                let readers = self.shell_readers.clone();
+                // Reserve capacity for interactive controls when long-lived output
+                // reads occupy the pool. Always reply with the request ID: a
+                // rejected output request otherwise leaves the viewer waiting forever.
+                let limit = if action == "output" { 8 } else { 16 };
+                if readers.fetch_add(1, Ordering::AcqRel) >= limit {
+                    readers.fetch_sub(1, Ordering::AcqRel);
+                    let message = json!({"jobId":job_id,"action":action,"requestId":request_id,"error":"Too many pending shell job requests; try again","retryable":true});
+                    let _ = tx.send(ServiceEvent::Envelope(HarnessEvent {
+                        kind: "shell_job".into(),
+                        state: None,
+                        message: Some(message.to_string()),
+                    }));
+                    return Ok(());
+                }
+                let worker_readers = readers.clone();
+                let worker_tx = tx.clone();
+                let (worker_job_id, worker_action, worker_request_id) =
+                    (job_id.clone(), action.clone(), request_id.clone());
+                if let Err(error) = std::thread::Builder::new().name("shell-ui-request".into()).spawn(move || {
+                    let result = access.execute(&worker_job_id, &worker_action, offset, &data, rows, cols);
+                    let message = match result {
+                        Ok(value) => json!({"jobId":worker_job_id,"action":worker_action,"requestId":worker_request_id,"result":value}),
+                        Err(error) => json!({"jobId":worker_job_id,"action":worker_action,"requestId":worker_request_id,"error":error.to_string()}),
+                    };
+                    let _ = worker_tx.send(ServiceEvent::Envelope(HarnessEvent { kind: "shell_job".into(), state: None, message: Some(message.to_string()) }));
+                    worker_readers.fetch_sub(1, Ordering::AcqRel);
+                }) {
+                    readers.fetch_sub(1, Ordering::AcqRel);
+                    let message = json!({"jobId":job_id,"action":action,"requestId":request_id,"error":format!("Could not start shell job request: {error}"),"retryable":true});
+                    let _ = tx.send(ServiceEvent::Envelope(HarnessEvent {
+                        kind: "shell_job".into(),
+                        state: None,
+                        message: Some(message.to_string()),
+                    }));
+                }
                 Ok(())
             }
             FrontendCommand::RegenerateLast => self.regenerate_last(),
@@ -388,7 +445,12 @@ impl HarnessService {
                 Ok(())
             }
             FrontendCommand::RenameSession { session_id, title } => {
-                let current = self.shared.lock_or_recover().state.current_session_id.clone();
+                let current = self
+                    .shared
+                    .lock_or_recover()
+                    .state
+                    .current_session_id
+                    .clone();
                 if current.as_deref() == Some(&session_id) {
                     self.ensure_session_management_idle()?;
                 }
@@ -401,9 +463,13 @@ impl HarnessService {
                 self.request_sessions();
                 Ok(())
             }
-            FrontendCommand::MoveSession { session_id, workspace_path } => {
+            FrontendCommand::MoveSession {
+                session_id,
+                workspace_path,
+            } => {
                 self.ensure_session_not_loaded(&session_id)?;
-                self.store.move_to_workspace(&session_id, Path::new(&workspace_path))?;
+                self.store
+                    .move_to_workspace(&session_id, Path::new(&workspace_path))?;
                 self.request_sessions();
                 Ok(())
             }

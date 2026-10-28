@@ -132,7 +132,8 @@ fn shell_directory_persists_between_commands_within_context() {
     let value: Value = serde_json::from_str(&inside).unwrap();
     assert_eq!(
         value["stdout"].as_str().unwrap().trim(),
-        root.join("sub").display().to_string()
+        root.join("sub").display().to_string(),
+        "tool result: {inside}"
     );
     assert!(!inside.contains("__YEET_SHELL_CWD__"), "{inside}");
 
@@ -157,7 +158,8 @@ fn long_foreground_command_hands_off_instead_of_dying() {
         PermissionBroker::default(),
     )
     .unwrap();
-    let args = json!({ "command": "sleep 30", "yieldSeconds": 1 });
+    // A hard execution deadline must not extend the foreground yield window.
+    let args = json!({ "command": "sleep 30", "yieldSeconds": 1, "timeoutSeconds": 20 });
     let value: Value = serde_json::from_str(
         &registry
             .run_shell_tool(args.as_object().unwrap(), "", &AtomicBool::new(false))
@@ -180,6 +182,103 @@ fn long_foreground_command_hands_off_instead_of_dying() {
     )
     .unwrap();
     assert_eq!(value["status"], json!("cancelled"), "{value}");
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_job_tool_controls_pty() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root,
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    let cancel = AtomicBool::new(false);
+    let args = json!({"command":"stty -echo; printf ready; read line; stty size; printf 'got:%s\\n' \"$line\"; sleep 30", "pty":true, "background":true});
+    let result: Value = serde_json::from_str(
+        &registry
+            .run_shell_tool(args.as_object().unwrap(), "", &cancel)
+            .unwrap(),
+    )
+    .unwrap();
+    let id = result["jobId"].as_str().unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        let output = json!({"action":"output", "jobId":id, "offset":0});
+        let page: Value = serde_json::from_str(
+            &registry
+                .shell_job_tool(output.as_object().unwrap(), &cancel)
+                .unwrap(),
+        )
+        .unwrap();
+        if !page["events"].as_array().unwrap().is_empty() {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "PTY never became ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    for request in [
+        json!({"action":"resize", "jobId":id, "rows":41, "cols":99}),
+        json!({"action":"input", "jobId":id, "data":"hello\n"}),
+    ] {
+        registry
+            .shell_job_tool(request.as_object().unwrap(), &cancel)
+            .unwrap();
+    }
+    loop {
+        let check = json!({"action":"check", "jobId":id});
+        let state: Value = serde_json::from_str(
+            &registry
+                .shell_job_tool(check.as_object().unwrap(), &cancel)
+                .unwrap(),
+        )
+        .unwrap();
+        if state["progress"]["stdoutTail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("got:hello")
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "input was not received: {state}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let interrupt = json!({"action":"interrupt", "jobId":id});
+    registry
+        .shell_job_tool(interrupt.as_object().unwrap(), &cancel)
+        .unwrap();
+    let wait = json!({"action":"wait", "jobId":id});
+    let result: Value = serde_json::from_str(
+        &registry
+            .shell_job_tool(wait.as_object().unwrap(), &cancel)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(result["status"], "running");
+    let stdout = result["stdout"].as_str().unwrap_or_default();
+    assert!(
+        stdout.contains("41 99") && stdout.contains("got:hello"),
+        "{result}"
+    );
+    assert!(!stdout.contains("Operation not permitted"), "{result}");
+
+    // The local frontend can rebind one registry to another session. A clone
+    // already held by the frontend must no longer resolve the old job ID.
+    let access = registry.shell_job_access();
+    let store = SessionStore::new(directory.path());
+    registry.set_session_runtime(store.clone(), Some("first".into()));
+    assert!(access.execute(id, "output", 0, "", 0, 0).is_ok());
+    registry.set_session_runtime(store, Some("second".into()));
+    assert!(access.execute(id, "output", 0, "", 0, 0).is_err());
 }
 
 #[test]

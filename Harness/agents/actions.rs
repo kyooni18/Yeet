@@ -23,6 +23,20 @@ pub enum FrontendCommand {
         attachment_ids: Vec<String>,
     },
     Interrupt,
+    /// Session-scoped access to an already approved shell job. Never starts a process.
+    ShellJob {
+        job_id: String,
+        action: String,
+        request_id: String,
+        #[serde(default)]
+        offset: usize,
+        #[serde(default)]
+        data: String,
+        #[serde(default)]
+        rows: u16,
+        #[serde(default)]
+        cols: u16,
+    },
     RegenerateLast,
     EditLast {
         text: String,
@@ -101,9 +115,17 @@ pub enum FrontendCommand {
         agent_id: Option<String>,
     },
     RequestSessions,
-    RenameSession { session_id: String, title: String },
-    MoveSession { session_id: String, workspace_path: String },
-    DeleteSession { session_id: String },
+    RenameSession {
+        session_id: String,
+        title: String,
+    },
+    MoveSession {
+        session_id: String,
+        workspace_path: String,
+    },
+    DeleteSession {
+        session_id: String,
+    },
     LoadSession {
         session_id: String,
     },

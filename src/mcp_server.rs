@@ -476,6 +476,11 @@ pub(super) struct McpServer {
 }
 
 impl McpServer {
+    fn has_running_shell_jobs(&self) -> bool {
+        self.workspaces
+            .values()
+            .any(|workspace| workspace.registry.has_running_shell_jobs())
+    }
     #[cfg(test)]
     pub(super) fn new(default_workspace: PathBuf) -> Self {
         Self::new_with_workspace_restriction(default_workspace, false)

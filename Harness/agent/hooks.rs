@@ -122,7 +122,8 @@ impl HookEngine {
         session_id: Option<&str>,
     ) -> Option<String> {
         let entries = self.entries.get_mut(event.name())?;
-        let input = json!({ "event": event.name(), "cwd": cwd, "sessionId": session_id }).to_string();
+        let input =
+            json!({ "event": event.name(), "cwd": cwd, "sessionId": session_id }).to_string();
         let mut outputs: Vec<String> = Vec::new();
         for entry in entries {
             let now = Instant::now();
@@ -132,7 +133,8 @@ impl HookEngine {
                 }
             }
             entry.last_run = Some(now);
-            let timeout = Duration::from_secs(entry.def.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
+            let timeout =
+                Duration::from_secs(entry.def.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
             let Some(output) = run_command(&entry.def.command, cwd, &input, timeout) else {
                 continue;
             };
@@ -164,7 +166,9 @@ fn run_command(command: &str, cwd: &str, input: &str, timeout: Duration) -> Opti
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut buffer = Vec::new();
-        let _ = (&mut stdout).take(MAX_OUTPUT_BYTES).read_to_end(&mut buffer);
+        let _ = (&mut stdout)
+            .take(MAX_OUTPUT_BYTES)
+            .read_to_end(&mut buffer);
         buffer
     });
     let deadline = Instant::now() + timeout;
@@ -188,7 +192,11 @@ fn run_command(command: &str, cwd: &str, input: &str, timeout: Duration) -> Opti
 impl AgentCoordinator {
     /// Runs the hooks for `event` and returns text to add to the conversation.
     pub(super) fn run_hooks(&mut self, event: HookEvent) -> Option<String> {
-        let cwd = self.registry.workspace_root().to_string_lossy().into_owned();
+        let cwd = self
+            .registry
+            .workspace_root()
+            .to_string_lossy()
+            .into_owned();
         let session_id = self.context_memory.session_id().map(str::to_owned);
         self.hooks.run(event, &cwd, session_id.as_deref())
     }
@@ -215,10 +223,16 @@ mod tests {
             r#"{{"hooks":{{"Stop":[{{"command":{script:?}}},{{"command":"exit 1"}}]}}}}"#
         ));
 
-        assert_eq!(engine.run(HookEvent::Stop, cwd, None).as_deref(), Some("first"));
+        assert_eq!(
+            engine.run(HookEvent::Stop, cwd, None).as_deref(),
+            Some("first")
+        );
         assert_eq!(engine.run(HookEvent::Stop, cwd, None), None);
         std::fs::write(&flag, "").unwrap();
-        assert_eq!(engine.run(HookEvent::Stop, cwd, None).as_deref(), Some("second"));
+        assert_eq!(
+            engine.run(HookEvent::Stop, cwd, None).as_deref(),
+            Some("second")
+        );
         // Events without hooks do nothing.
         assert_eq!(engine.run(HookEvent::PostToolRound, cwd, None), None);
     }
@@ -234,7 +248,8 @@ mod tests {
         assert_eq!(throttled.run(HookEvent::PostToolRound, cwd, None), None);
 
         let started = Instant::now();
-        let mut slow = engine(r#"{"hooks":{"Stop":[{"command":"sleep 5; echo late","timeoutSecs":1}]}}"#);
+        let mut slow =
+            engine(r#"{"hooks":{"Stop":[{"command":"sleep 5; echo late","timeoutSecs":1}]}}"#);
         assert_eq!(slow.run(HookEvent::Stop, cwd, None), None);
         assert!(started.elapsed() < Duration::from_secs(4));
     }

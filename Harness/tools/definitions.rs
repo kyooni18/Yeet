@@ -161,13 +161,13 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command (zsh). The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. stdout and stderr are captured in order; large output is kept in an artifact you can page with read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId you can collect with shell_job instead of being killed; timeoutSeconds is a hard deadline. Only cwd persists, not environment variables or shell functions.",
-            json!({"type":"object","properties":{"command":{"type":"string"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"}},"required":["command"],"additionalProperties":false}),
+            "Run a shell command or execute an executable with an argument array (no shell). Shell defaults to auto-discovery and clean non-interactive initialization. loadConfig and login are explicit opt-ins. Direct execution requires approval under sandbox policy. mode selects output routing, not process execution. The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. stdout and stderr are captured in order; large output is kept in an artifact you can page with read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId you can collect with shell_job instead of being killed; timeoutSeconds is a hard deadline. Only cwd persists, not environment variables or shell functions.",
+            json!({"type":"object","properties":{"command":{"type":"string"},"executable":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"shell":{"type":"string","enum":["auto","bash","zsh","sh","powershell","cmd"]},"loadConfig":{"type":"boolean"},"login":{"type":"boolean"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"},"pty":{"type":"boolean"}},"oneOf":[{"required":["command"]},{"required":["executable"]}],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "shell_job",
-            "Check, wait for, list, stop, or forget background shell jobs.",
-            json!({"type":"object","properties":{"action":{"type":"string","enum":["check","wait","list","stop","forget"]},"jobId":{"type":"string"},"reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400}},"required":["action"],"additionalProperties":false}),
+            "Check, wait for, list, stop, or forget shell jobs. output pages ordered raw base64 events by byte offset; decode each stream incrementally. For Unix PTY jobs, input sends text, resize sets terminal rows and cols, and interrupt sends Ctrl-C.",
+            json!({"type":"object","properties":{"action":{"type":"string","enum":["check","wait","list","stop","forget","output","input","resize","interrupt"]},"jobId":{"type":"string"},"reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400},"offset":{"type":"integer","minimum":0},"maxBytes":{"type":"integer","minimum":1,"maximum":8192},"waitMilliseconds":{"type":"integer","minimum":0,"maximum":30000},"data":{"type":"string"},"rows":{"type":"integer","minimum":1,"maximum":65535},"cols":{"type":"integer","minimum":1,"maximum":65535}},"required":["action"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "request_shell_permission",
@@ -349,29 +349,41 @@ fn mcp_read_file_tool_definition() -> ToolDefinition {
 fn mcp_run_shell_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "run_shell",
-        "Run a shell command or manage a detached shell job through one MCP tool. Supply command for execution. stdout and stderr are captured in order and large output is kept in an artifact for read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId instead of being killed; timeoutSeconds is a hard deadline and background jobs default to 4 hours. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
+        "Run a shell command, execute an executable with an argument array without a shell, or manage a detached shell job. Supply command or executable with args; shell selects auto, bash, zsh, sh, powershell, or cmd. loadConfig and login are explicit opt-ins. Direct execution requires approval under restricted sandbox policy. stdout and stderr are captured and large output is kept in an artifact for read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId instead of being killed; timeoutSeconds is a hard deadline, and sandbox limits still apply. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
         json!({
             "type":"object",
             "properties":{
                 "command":{"type":"string"},
+                "executable":{"type":"string"},
+                "args":{"type":"array","items":{"type":"string"}},
+                "shell":{"type":"string","enum":["auto","bash","zsh","sh","powershell","cmd"]},
+                "loadConfig":{"type":"boolean"},
+                "login":{"type":"boolean"},
                 "purpose":{"type":"string"},
                 "workingDirectory":{"type":"string"},
                 "mode":{"type":"string","enum":["auto","direct","actor"]},
                 "timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},
                 "yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},
                 "background":{"type":"boolean"},
+                "pty":{"type":"boolean"},
                 "job":{
                     "type":"object",
                     "properties":{
-                        "action":{"type":"string","enum":["check","wait","list","stop","forget"]},
+                        "action":{"type":"string","enum":["check","wait","list","stop","forget","output","input","resize","interrupt"]},
                         "jobId":{"type":"string"},
-                        "reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400}
+                        "reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400},
+                        "offset":{"type":"integer","minimum":0},
+                        "maxBytes":{"type":"integer","minimum":1,"maximum":8192},
+                        "waitMilliseconds":{"type":"integer","minimum":0,"maximum":30000},
+                        "data":{"type":"string"},
+                        "rows":{"type":"integer","minimum":1,"maximum":65535},
+                        "cols":{"type":"integer","minimum":1,"maximum":65535}
                     },
                     "required":["action"],
                     "additionalProperties":false
                 }
             },
-            "anyOf":[{"required":["command"]},{"required":["job"]}],
+            "anyOf":[{"required":["command"]},{"required":["executable"]},{"required":["job"]}],
             "additionalProperties":false
         }),
     )

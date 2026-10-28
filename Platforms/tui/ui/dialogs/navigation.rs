@@ -93,7 +93,14 @@ pub(crate) fn draw_models(frame: &mut Frame<'_>, app: &App) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(if app.session_searching { " / " } else { " Filter  " }, Style::default().fg(theme::accent()).bold()),
+            Span::styled(
+                if app.session_searching {
+                    " / "
+                } else {
+                    " Filter  "
+                },
+                Style::default().fg(theme::accent()).bold(),
+            ),
             Span::styled(query, Style::default().fg(theme::text())),
             Span::styled(
                 format!(
@@ -214,7 +221,8 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
 pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
     let area = centered_rect(82, 76, frame.area());
     theme::modal_backdrop(frame, area);
-    let block = theme::modal_block(" Sessions · j/k move · Enter open · e manage · n new · q close ");
+    let block =
+        theme::modal_block(" Sessions · j/k move · Enter open · e manage · n new · q close ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -226,7 +234,8 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
             "type query · Enter/Esc normal"
         } else {
             "/ to search"
-        }.to_owned()
+        }
+        .to_owned()
     } else {
         app.popup_filter.clone()
     };
@@ -235,11 +244,7 @@ pub(crate) fn draw_sessions(frame: &mut Frame<'_>, app: &App) {
             Span::styled(" Search  ", Style::default().fg(theme::accent()).bold()),
             Span::styled(filter_label, Style::default().fg(theme::text())),
             Span::styled(
-                format!(
-                    "  ·  {}/{}  ·  j/k g/G",
-                    sessions.len(),
-                    all_sessions.len()
-                ),
+                format!("  ·  {}/{}  ·  j/k g/G", sessions.len(), all_sessions.len()),
                 Style::default().fg(theme::muted()),
             ),
         ])),

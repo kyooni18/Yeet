@@ -10,9 +10,9 @@ pub mod files;
 mod home;
 pub(crate) use home::HomeAction;
 pub use home::HomeRefresh;
-mod composer;
-mod chat;
 mod attachments;
+mod chat;
+mod composer;
 pub mod diff;
 mod input;
 mod navigation;
@@ -20,8 +20,8 @@ pub use navigation::WorkbenchTab;
 pub mod agent_group;
 pub mod keymap;
 mod selection;
-mod settings;
 pub(crate) mod session_management;
+mod settings;
 mod sidebar;
 #[cfg(test)]
 mod tests;
@@ -538,7 +538,9 @@ impl App {
             self.question.paste(&question, text);
             return;
         }
-        if self.mode == Mode::Sessions && let Some(manager) = &mut self.session_manager {
+        if self.mode == Mode::Sessions
+            && let Some(manager) = &mut self.session_manager
+        {
             manager.paste(text);
             return;
         }

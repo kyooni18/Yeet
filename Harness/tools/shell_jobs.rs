@@ -1,7 +1,10 @@
 //! Session-owned detached commands. Workers retain bounded output and are cancelled on drop.
 use super::*;
 use std::{
-    sync::{Arc, Condvar, Mutex, atomic::Ordering},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -13,6 +16,106 @@ const SHELL_JOB_PROGRESS_TAIL_BYTES: usize = 2 * 1024;
 #[derive(Default)]
 pub(super) struct ShellJobs {
     jobs: BTreeMap<String, ShellJob>,
+    event_budget: Arc<AtomicUsize>,
+    access: ShellJobAccess,
+}
+
+/// A view into the existing job owner, not another process supervisor. It lets
+/// authenticated frontends interact while the agent holds its coordinator lock.
+#[derive(Clone, Default)]
+pub(crate) struct ShellJobAccess {
+    jobs: Arc<Mutex<BTreeMap<String, ShellJobHandle>>>,
+}
+
+#[derive(Clone)]
+struct ShellJobHandle {
+    #[cfg(unix)]
+    progress: ShellProgress,
+    log: crate::shell::log::ShellOutputLog,
+    cancel: Arc<AtomicBool>,
+    state: Arc<(Mutex<ShellJobState>, Condvar)>,
+}
+
+impl ShellJobAccess {
+    pub(crate) fn has_running(&self) -> bool {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .any(|job| {
+                job.state
+                    .0
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .result
+                    .is_none()
+            })
+    }
+
+    pub(crate) fn execute(
+        &self,
+        id: &str,
+        action: &str,
+        offset: usize,
+        data: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<Value> {
+        #[cfg(not(unix))]
+        let _ = (data, rows, cols);
+        let job = self
+            .jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Unknown or unrecoverable shell job: {id}"))?;
+        match action {
+            "output" => {
+                let page = job.log.wait_events(
+                    offset,
+                    8192,
+                    Duration::from_secs(15),
+                    &AtomicBool::new(false),
+                )?;
+                let state = job.state.0.lock().unwrap_or_else(|p| p.into_inner());
+                let status = match state.result.as_ref() {
+                    None => "running",
+                    Some(Ok(result)) if result.succeeded => "completed",
+                    Some(Ok(result)) if result.exit_code == 130 => "interrupted",
+                    Some(Ok(_)) => "failed",
+                    Some(Err(error)) if error == "cancelled" => "interrupted",
+                    Some(Err(_)) => "failed",
+                };
+                let mut value = serde_json::to_value(page)?;
+                value["status"] = json!(status);
+                Ok(value)
+            }
+            "stop" => {
+                job.cancel.store(true, Ordering::Release);
+                Ok(json!({"delivered":true}))
+            }
+            #[cfg(unix)]
+            "input" => {
+                if data.len() > 8192 {
+                    bail!("Input is limited to 8192 bytes");
+                }
+                job.progress.terminal_input(data.as_bytes())?;
+                Ok(json!({"delivered":true}))
+            }
+            #[cfg(unix)]
+            "resize" => {
+                job.progress.terminal_resize(rows, cols)?;
+                Ok(json!({"delivered":true}))
+            }
+            #[cfg(unix)]
+            "interrupt" => {
+                job.progress.terminal_input(b"\x03")?;
+                Ok(json!({"delivered":true}))
+            }
+            _ => bail!("Unsupported shell job action: {action}"),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -32,6 +135,7 @@ struct ShellJob {
     state: Arc<(Mutex<ShellJobState>, Condvar)>,
     progress: ShellProgress,
     transcript: Option<(String, crate::shell::log::ShellOutputLog)>,
+    event_log: crate::shell::log::ShellOutputLog,
     /// Directory the command started in, retained for late cwd tracking.
     cwd_start: PathBuf,
     /// Set once the finished command's directory has been applied.
@@ -43,6 +147,11 @@ struct ShellJob {
 
 pub(super) struct ShellJobOptions {
     pub command: String,
+    pub direct: Option<crate::shell::selection::LaunchSpec>,
+    pub shell: Option<String>,
+    pub load_config: bool,
+    pub login: bool,
+    pub pty: bool,
     pub root: PathBuf,
     pub directory: PathBuf,
     pub timeout_seconds: u64,
@@ -67,15 +176,40 @@ pub(super) struct FinishedShellJob {
 
 impl Drop for ShellJobs {
     fn drop(&mut self) {
-        for job in self.jobs.values() {
-            job.cancel.store(true, Ordering::Release);
-        }
+        self.reset();
     }
 }
 
 impl ShellJobs {
+    /// Revoke every frontend handle before transferring the registry to a new
+    /// session. Running workers retain their own cancel flag and reap children.
+    pub(super) fn reset(&mut self) {
+        for job in self.jobs.values() {
+            job.cancel.store(true, Ordering::Release);
+        }
+        self.access
+            .jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.jobs.clear();
+    }
+
+    pub(super) fn access(&self) -> ShellJobAccess {
+        self.access.clone()
+    }
     pub(super) fn has_jobs(&self) -> bool {
         !self.jobs.is_empty()
+    }
+
+    pub(super) fn has_running_jobs(&self) -> bool {
+        self.jobs.values().any(|job| {
+            job.state
+                .0
+                .lock()
+                .map(|state| state.result.is_none())
+                .unwrap_or(true)
+        })
     }
 
     /// True while a job may still be changing the workspace, and once more
@@ -99,6 +233,11 @@ impl ShellJobs {
     pub(super) fn start(&mut self, options: ShellJobOptions) -> Result<String> {
         let ShellJobOptions {
             command,
+            direct,
+            shell,
+            load_config,
+            login,
+            pty,
             root,
             directory,
             timeout_seconds,
@@ -121,12 +260,20 @@ impl ShellJobs {
             .as_ref()
             .map(|store| store.shell_log(&command))
             .transpose()?;
-        let mut progress = ShellProgress::new(SHELL_JOB_PROGRESS_TAIL_BYTES);
-        if let Some((_, log)) = &transcript {
-            progress = progress.with_log(log.clone());
-        }
-        let worker_log = transcript.as_ref().map(|(_, log)| log.clone());
+        let event_log = if let Some((_, log)) = &transcript {
+            log.clone()
+        } else {
+            crate::shell::log::ShellOutputLog::new_ephemeral(
+                tempfile::tempfile()?,
+                self.event_budget.clone(),
+            )
+        };
+        let progress =
+            ShellProgress::new(SHELL_JOB_PROGRESS_TAIL_BYTES).with_log(event_log.clone());
+        let worker_log = event_log.clone();
         let worker_progress = progress.clone();
+        #[cfg(unix)]
+        let terminal_progress = progress.clone();
         let worker_cancel = cancel.clone();
         let worker_state = state.clone();
         let worker_command = command.clone();
@@ -151,19 +298,40 @@ impl ShellJobs {
                         crate::shell::ShellSessionOptions {
                             progress: Some(worker_progress),
                             track_cwd,
+                            direct,
+                            shell,
+                            load_config,
+                            login,
+                            pty,
                         },
                     )
                     .map_err(|error| error.to_string())
                 })
                 .unwrap_or_else(|_| Err("Shell worker panicked".into()));
-                if let Some(log) = worker_log {
-                    log.finish();
-                }
+                #[cfg(unix)]
+                terminal_progress.terminal_close();
                 let (lock, completed) = &*worker_state;
                 let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.result = Some(outcome);
+                // Publish the outcome before waking output readers at EOF. Keep
+                // the state lock until the log is finished so waiters see both.
+                worker_log.finish();
                 completed.notify_all();
             })?;
+        self.access
+            .jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                id.clone(),
+                ShellJobHandle {
+                    #[cfg(unix)]
+                    progress: progress.clone(),
+                    log: event_log.clone(),
+                    cancel: cancel.clone(),
+                    state: state.clone(),
+                },
+            );
         self.jobs.insert(
             id.clone(),
             ShellJob {
@@ -172,6 +340,7 @@ impl ShellJobs {
                 state,
                 progress,
                 transcript,
+                event_log,
                 cwd_start: directory,
                 cwd_applied: false,
                 started_at: Instant::now(),
@@ -230,6 +399,11 @@ impl ShellJobs {
             .jobs
             .remove(id)
             .ok_or_else(|| anyhow!("Unknown shell job: {id}"))?;
+        self.access
+            .jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id);
         let (lock, _) = &*job.state;
         let state = lock
             .lock()
@@ -413,6 +587,62 @@ impl ToolRegistry {
         }
 
         let id = string_arg(object, "jobId")?;
+        if matches!(action, "input" | "resize" | "interrupt") {
+            let job = self
+                .shell_jobs
+                .jobs
+                .get(id)
+                .ok_or_else(|| anyhow!("Unknown shell job: {id}"))?;
+            #[cfg(unix)]
+            match action {
+                "input" => {
+                    let data = string_arg(object, "data")?;
+                    if data.len() > 8192 {
+                        bail!("Input is limited to 8192 bytes per call");
+                    }
+                    job.progress.terminal_input(data.as_bytes())?;
+                }
+                "interrupt" => job.progress.terminal_input(b"\x03")?,
+                "resize" => {
+                    let rows = usize_arg(object, "rows")
+                        .filter(|n| (1..=u16::MAX as usize).contains(n))
+                        .ok_or_else(|| anyhow!("Invalid rows"))?
+                        as u16;
+                    let cols = usize_arg(object, "cols")
+                        .filter(|n| (1..=u16::MAX as usize).contains(n))
+                        .ok_or_else(|| anyhow!("Invalid cols"))?
+                        as u16;
+                    job.progress.terminal_resize(rows, cols)?;
+                }
+                _ => unreachable!(),
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = job;
+                bail!("PTY operations are not supported on this platform");
+            }
+            #[cfg(unix)]
+            return Ok(json!({"jobId":id,"status":"delivered"}).to_string());
+        }
+        if action == "output" {
+            let job = self
+                .shell_jobs
+                .jobs
+                .get(id)
+                .ok_or_else(|| anyhow!("Unknown shell job: {id}"))?;
+            let offset = usize_arg(object, "offset").unwrap_or(0);
+            let max_bytes = usize_arg(object, "maxBytes").unwrap_or(8192);
+            let wait = usize_arg(object, "waitMilliseconds").unwrap_or(0);
+            if wait > 30_000 {
+                bail!("waitMilliseconds must be at most 30000");
+            }
+            return Ok(serde_json::to_string(&job.event_log.wait_events(
+                offset,
+                max_bytes,
+                Duration::from_millis(wait as u64),
+                cancel,
+            )?)?);
+        }
         let mut value = match action {
             "check" => self.shell_jobs.snapshot(id)?,
             "wait" => {
@@ -449,9 +679,17 @@ impl ToolRegistry {
                     bail!("Stop the job and wait for completion before forgetting it");
                 }
                 self.shell_jobs.jobs.remove(id);
+                self.shell_jobs
+                    .access
+                    .jobs
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(id);
                 return Ok(json!({"jobId":id,"status":"forgotten"}).to_string());
             }
-            _ => bail!("shell_job action must be check, wait, list, stop, or forget"),
+            _ => bail!(
+                "shell_job action must be check, wait, list, stop, forget, output, input, resize, or interrupt"
+            ),
         };
 
         // A detached process can change workspace contents while the model is asleep.
@@ -502,12 +740,276 @@ impl ToolRegistry {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn dropping_job_owner_cancels_and_reaps_running_shell() {
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("pid");
+        let mut jobs = ShellJobs::default();
+        let id = jobs
+            .start(ShellJobOptions {
+                command: format!(
+                    "trap '' INT TERM; echo $$ > '{}'; while :; do :; done",
+                    marker.display()
+                ),
+                direct: None,
+                shell: Some("sh".into()),
+                load_config: false,
+                login: false,
+                pty: false,
+                root: root.path().to_path_buf(),
+                directory: root.path().to_path_buf(),
+                timeout_seconds: 0,
+                capture_bytes: 4096,
+                track_cwd: false,
+                allow_write: false,
+                unrestricted: true,
+                force_sandboxed: false,
+                artifacts: None,
+            })
+            .unwrap();
+        let state = jobs.jobs[&id].state.clone();
+        let start = Instant::now();
+        let pid: i32 = loop {
+            if let Ok(text) = std::fs::read_to_string(&marker)
+                && let Ok(pid) = text.trim().parse()
+            {
+                break pid;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "shell did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        drop(jobs);
+        let (lock, completed) = &*state;
+        let guard = lock.lock().unwrap();
+        let (guard, _) = completed
+            .wait_timeout_while(guard, Duration::from_secs(8), |s| s.result.is_none())
+            .unwrap();
+        assert!(
+            guard
+                .result
+                .as_ref()
+                .expect("worker did not finish")
+                .is_err()
+        );
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "shell still exists after owner shutdown"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_jobs_have_independent_lifetimes() {
+        let root = tempfile::tempdir().unwrap();
+        let mut jobs = ShellJobs::default();
+        let options = |command: &str| ShellJobOptions {
+            command: command.into(),
+            direct: None,
+            shell: None,
+            load_config: false,
+            login: false,
+            pty: false,
+            root: root.path().to_path_buf(),
+            directory: root.path().to_path_buf(),
+            timeout_seconds: 10,
+            capture_bytes: 4096,
+            track_cwd: false,
+            allow_write: false,
+            unrestricted: true,
+            force_sandboxed: false,
+            artifacts: None,
+        };
+        let stopped = jobs.start(options("sleep 30")).unwrap();
+        let kept = jobs.start(options("sleep 1; printf done")).unwrap();
+        let access = jobs.access();
+        assert!(access.has_running());
+        jobs.jobs[&stopped].cancel.store(true, Ordering::Release);
+        assert!(matches!(
+            jobs.wait_finished(&stopped, Duration::from_secs(8), &AtomicBool::new(false))
+                .unwrap(),
+            ShellJobWait::Finished
+        ));
+        assert_eq!(
+            jobs.access()
+                .execute(&stopped, "output", 0, "", 0, 0)
+                .unwrap()["status"],
+            "interrupted"
+        );
+        assert!(jobs.take_finished(&stopped).unwrap().result.is_err());
+        assert!(matches!(
+            jobs.wait_finished(&kept, Duration::from_secs(8), &AtomicBool::new(false))
+                .unwrap(),
+            ShellJobWait::Finished
+        ));
+        assert_eq!(
+            jobs.access().execute(&kept, "output", 0, "", 0, 0).unwrap()["status"],
+            "completed"
+        );
+        let output = jobs.take_finished(&kept).unwrap().result.unwrap();
+        assert_eq!(output.stdout.as_deref(), Some("done"));
+        let failed = jobs.start(options("exit 7")).unwrap();
+        assert!(matches!(
+            jobs.wait_finished(&failed, Duration::from_secs(8), &AtomicBool::new(false))
+                .unwrap(),
+            ShellJobWait::Finished
+        ));
+        assert_eq!(
+            jobs.access()
+                .execute(&failed, "output", 0, "", 0, 0)
+                .unwrap()["status"],
+            "failed"
+        );
+        assert!(!access.has_running());
+        jobs.reset();
+        assert!(access.execute(&failed, "output", 0, "", 0, 0).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_input_resize_and_merged_output() {
+        let root = tempfile::tempdir().unwrap();
+        let mut jobs = ShellJobs::default();
+        let id = jobs.start(ShellJobOptions {
+            command: "stty size; read line; stty size; printf 'input=%s\\n' \"$line\"; printf 'err\\n' >&2".into(),
+            direct: None, shell: None, load_config: false, login: false, pty: true,
+            root: root.path().to_path_buf(), directory: root.path().to_path_buf(),
+            timeout_seconds: 10, capture_bytes: 4096, track_cwd: false,
+            allow_write: false, unrestricted: true, force_sandboxed: false, artifacts: None,
+        }).unwrap();
+        let progress = jobs.jobs[&id].progress.clone();
+        let start = Instant::now();
+        while progress.terminal_resize(41, 99).is_err() {
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let access = jobs.access();
+        access.execute(&id, "resize", 0, "", 41, 99).unwrap();
+        access.execute(&id, "input", 0, "hello\n", 0, 0).unwrap();
+        assert!(matches!(
+            jobs.wait_finished(&id, Duration::from_secs(10), &AtomicBool::new(false))
+                .unwrap(),
+            ShellJobWait::Finished
+        ));
+        let page = access.execute(&id, "output", 0, "", 0, 0).unwrap();
+        assert_eq!(page["finished"], true);
+        assert_eq!(page["status"], "completed");
+        let events = jobs.jobs[&id].event_log.events(0, 8192).unwrap();
+        assert!(events.finished);
+        assert!(events.events.iter().all(|event| event.stream == "pty"));
+        assert!(!events.events.is_empty());
+        let result = jobs.take_finished(&id).unwrap().result.unwrap();
+        let output = result.stdout.unwrap();
+        assert!(output.contains("41 99"), "{output}");
+        assert!(output.contains("input=hello"), "{output}");
+        assert!(output.contains("err"), "{output}");
+        assert_eq!(result.stderr_bytes, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_control_c_interrupts_foreground_command() {
+        let root = tempfile::tempdir().unwrap();
+        let mut jobs = ShellJobs::default();
+        let id = jobs
+            .start(ShellJobOptions {
+                command: "printf ready; sleep 30".into(),
+                direct: None,
+                shell: None,
+                load_config: false,
+                login: false,
+                pty: true,
+                root: root.path().to_path_buf(),
+                directory: root.path().to_path_buf(),
+                timeout_seconds: 10,
+                capture_bytes: 4096,
+                track_cwd: false,
+                allow_write: false,
+                unrestricted: true,
+                force_sandboxed: false,
+                artifacts: None,
+            })
+            .unwrap();
+        let progress = jobs.jobs[&id].progress.clone();
+        let start = Instant::now();
+        while !progress
+            .snapshot()
+            .stdout_tail
+            .unwrap_or_default()
+            .contains("ready")
+        {
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        progress.terminal_input(b"\x03").unwrap();
+        assert!(matches!(
+            jobs.wait_finished(&id, Duration::from_secs(4), &AtomicBool::new(false))
+                .unwrap(),
+            ShellJobWait::Finished
+        ));
+        let result = jobs.take_finished(&id).unwrap().result.unwrap();
+        assert!(!result.succeeded);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_an_output_wait_does_not_stop_the_job() {
+        let root = tempfile::tempdir().unwrap();
+        let mut jobs = ShellJobs::default();
+        let id = jobs
+            .start(ShellJobOptions {
+                command: "sleep 1; printf finished".into(),
+                direct: None,
+                shell: None,
+                load_config: false,
+                login: false,
+                pty: false,
+                root: root.path().to_path_buf(),
+                directory: root.path().to_path_buf(),
+                timeout_seconds: 10,
+                capture_bytes: 4096,
+                track_cwd: false,
+                allow_write: false,
+                unrestricted: true,
+                force_sandboxed: false,
+                artifacts: None,
+            })
+            .unwrap();
+        let cancel_wait = AtomicBool::new(true);
+        let error = jobs.jobs[&id]
+            .event_log
+            .wait_events(0, 128, Duration::from_secs(5), &cancel_wait)
+            .err()
+            .expect("output wait should be cancelled");
+        assert!(error.to_string().contains("job is still running"));
+        assert!(matches!(
+            jobs.wait_finished(&id, Duration::from_secs(5), &AtomicBool::new(false))
+                .unwrap(),
+            ShellJobWait::Finished
+        ));
+        let result = jobs.take_finished(&id).unwrap().result.unwrap();
+        assert_eq!(result.stdout.as_deref(), Some("finished"));
+    }
+
     #[test]
     fn finished_jobs_stop_requesting_workspace_refresh() {
         let root = tempfile::tempdir().unwrap();
         let mut jobs = ShellJobs::default();
         jobs.start(ShellJobOptions {
             command: "true".into(),
+            direct: None,
+            shell: None,
+            load_config: false,
+            login: false,
+            pty: false,
             root: root.path().to_path_buf(),
             directory: root.path().to_path_buf(),
             timeout_seconds: 30,

@@ -31,11 +31,21 @@ fn session_management_renders_over_both_picker_shapes() {
         let mut app = App::default();
         app.set_mode(Mode::Sessions);
         app.session_manager = Some(SessionManager {
-            id: "stable-id".into(), title: "My session".into(),
-            stage: Stage::Actions, selected: 0, text: String::new(), error: None,
+            id: "stable-id".into(),
+            title: "My session".into(),
+            stage: Stage::Actions,
+            selected: 0,
+            text: String::new(),
+            error: None,
         });
         let (text, _) = render(&mut app, width, height);
-        for label in ["Manage session", "My session", "Rename", "Move workspace", "Delete"] {
+        for label in [
+            "Manage session",
+            "My session",
+            "Rename",
+            "Move workspace",
+            "Delete",
+        ] {
             assert!(text.contains(label), "missing {label}: {text}");
         }
         app.session_manager.as_mut().unwrap().stage = Stage::Delete;
