@@ -90,7 +90,7 @@ test('a standalone count-and-phase activity is not shown as a fake action', asyn
   await expect(header).not.toContainText(/6\s*[·.]\s*Running/)
 })
 
-test('failures auto-open while running activity remains visibly active', async ({ page }) => {
+test('failures remain compact and can be inspected while activity is running', async ({ page }) => {
   await resetConversation(page, [
     toolEntry('tool-4', 'running'),
     toolEntry('tool-5', 'failed'),
@@ -98,8 +98,10 @@ test('failures auto-open while running activity remains visibly active', async (
 
   const group = page.locator('.activity-group')
   const header = group.locator('.activity-group__header')
-  await expect(header).toHaveAttribute('aria-expanded', 'true')
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
   await expect(group.locator('.activity-group__summary')).toHaveClass(/is-active/)
+  await header.click()
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
   await expect(group.locator('.activity-group__event')).toHaveCount(2)
 
   const rows = group.locator('.trace-disclosure__row')
