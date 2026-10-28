@@ -228,7 +228,7 @@ impl SharedSession {
         if transcript_changed {
             self.state.conversation_revision = self.state.conversation_revision.wrapping_add(1);
         }
-        if self.meta.current_turn.as_deref().is_some_and(&is_orphaned) {
+        if self.meta.current_turn.as_deref().is_some_and(is_orphaned) {
             self.meta.current_turn = None;
         }
         if self.state.active_run_id.as_deref().is_some_and(is_orphaned) {

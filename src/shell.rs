@@ -857,6 +857,19 @@ fn run_windows_sandboxed_shell(
     if environment.encode_utf16().count() > 6_000 {
         bail!("Sandbox environment is too large for the Windows process command line");
     }
+    // The sandbox re-executes this binary to enter its confined environment.
+    // In tests the binary is the libtest harness, so enter through a test that
+    // forwards to the same sandbox helper, mirroring the Linux helper entry.
+    #[cfg(test)]
+    let argv = vec![
+        executable.to_string_lossy().into_owned(),
+        "shell::tests::windows_sandbox_helper_entry".to_owned(),
+        "--exact".to_owned(),
+        "--nocapture".to_owned(),
+        serde_json::to_string(spec)?,
+        environment,
+    ];
+    #[cfg(not(test))]
     let argv = vec![
         executable.to_string_lossy().into_owned(),
         "__windows-sandbox-shell".to_owned(),
@@ -914,9 +927,18 @@ fn run_windows_sandboxed_shell(
     let capture_limit = capture_bytes.clamp(1024, 4 * 1024 * 1024);
     let stdout_limit = capture_limit.min(policy.limits.max_stdout_bytes);
     let stderr_limit = capture_limit.min(policy.limits.max_stderr_bytes);
+    // libtest writes its banner before the helper enters the sandboxed shell.
+    // It is not part of the command's output.
+    #[cfg(test)]
+    let output = outcome
+        .stdout
+        .strip_prefix("\nrunning 1 test\n")
+        .unwrap_or(&outcome.stdout);
+    #[cfg(not(test))]
+    let output = outcome.stdout.as_str();
     let (output, final_working_directory) = match cwd_marker {
-        Some(marker) => split_cwd_trailer(&outcome.stdout, marker),
-        None => (outcome.stdout.as_str(), None),
+        Some(marker) => split_cwd_trailer(output, marker),
+        None => (output, None),
     };
     let mut stdout = BoundedOutput::new(stdout_limit);
     stdout.push(output.as_bytes());
@@ -1354,11 +1376,12 @@ fn utf16_bom(bytes: &[u8]) -> Option<Utf16Endian> {
 }
 
 fn utf16_decode(bytes: &[u8], endian: Utf16Endian) -> String {
-    let units = bytes
-        .chunks_exact(2)
+    let (units, _) = bytes.as_chunks::<2>();
+    let units = units
+        .iter()
         .map(|pair| match endian {
-            Utf16Endian::Le => u16::from_le_bytes([pair[0], pair[1]]),
-            Utf16Endian::Be => u16::from_be_bytes([pair[0], pair[1]]),
+            Utf16Endian::Le => u16::from_le_bytes(*pair),
+            Utf16Endian::Be => u16::from_be_bytes(*pair),
         })
         .collect::<Vec<_>>();
     String::from_utf16_lossy(&units)
@@ -1756,6 +1779,21 @@ mod tests {
             std::process::exit(
                 run_linux_sandbox_shell_helper(Path::new(&plan), &command).unwrap_or(1),
             );
+        }
+    }
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_sandbox_helper_entry() {
+        // Test builds of the Windows sandbox re-exec enter through libtest:
+        // the launch payload rides in the trailing arguments.
+        let args = std::env::args().collect::<Vec<_>>();
+        if let Some(position) = args
+            .iter()
+            .position(|arg| arg == "shell::tests::windows_sandbox_helper_entry")
+            && let (Some(command), Some(environment)) =
+                (args.get(position + 3), args.get(position + 4))
+        {
+            std::process::exit(run_windows_sandbox_shell_helper(command, environment).unwrap_or(1));
         }
     }
     #[test]

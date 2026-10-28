@@ -167,8 +167,13 @@ impl SessionStore {
             "Session archive verification failed: ignored recursive/archive metadata leaked into export"
         );
 
-        let mut file = fs::File::open(&temp)?;
-        file.sync_all()?;
+        // FlushFileBuffers on Windows requires a handle opened for writing.
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&temp)
+            .context("open session archive for checksum and sync")?;
+        file.sync_all().context("sync session archive")?;
         let mut digest = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
         loop {
@@ -181,7 +186,7 @@ impl SessionStore {
         let bytes = file.metadata()?.len();
         let sha256 = format!("{:x}", digest.finalize());
         drop(file);
-        fs::rename(&temp, &destination)?;
+        fs::rename(&temp, &destination).context("publish session archive")?;
 
         let mut source_deleted = false;
         if delete_source {
@@ -192,7 +197,7 @@ impl SessionStore {
             let trash_root = config_root.join("trash");
             create_private_dir(&trash_root)?;
             let trash = trash_root.join(format!("{id}-{}", Uuid::new_v4()));
-            fs::rename(&root, &trash)?;
+            fs::rename(&root, &trash).context("quarantine exported session")?;
             // Deletion happens only after archive creation, reopen/list
             // verification, fsync, checksum, and an inactive-session recheck.
             // If cleanup fails, the source remains recoverable under trash/.

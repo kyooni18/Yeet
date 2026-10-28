@@ -239,9 +239,10 @@ fn decode_powershell_command(encoded: &str) -> Option<String> {
     if bytes.len() % 2 != 0 {
         return None;
     }
-    let units = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+    let (units, _) = bytes.as_chunks::<2>();
+    let units = units
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect::<Vec<_>>();
     String::from_utf16(&units).ok()
 }

@@ -86,7 +86,7 @@ impl ClientWriter {
     pub(super) fn send_frame(&self, bytes: Arc<[u8]>) -> Result<()> {
         if self
             .pending_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |pending| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |pending| {
                 pending
                     .checked_add(bytes.len())
                     .filter(|total| *total <= MAX_PENDING_BYTES)

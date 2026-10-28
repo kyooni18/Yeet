@@ -421,7 +421,7 @@ impl SelectedShell {
                 }
             }
             ShellKind::Cmd => {
-                args.extend(["/D".into(), "/S".into(), "/C".into()]);
+                args.extend(["/D".into(), "/V:OFF".into(), "/S".into(), "/C".into()]);
                 #[cfg(windows)]
                 {
                     // chcp 65001 makes cmd's internal commands emit UTF-8 so
@@ -429,7 +429,8 @@ impl SelectedShell {
                     // keeps its code page and the error stays silenced. The
                     // script rides the command line verbatim inside one quote
                     // pair, which cmd /S strips positionally, so embedded
-                    // quotes survive untouched.
+                    // quotes survive untouched. Delayed expansion starts off
+                    // so ordinary scripts preserve literal exclamation marks.
                     args.push(format!("\"chcp 65001 >nul 2>&1 & {script}\""));
                 }
                 #[cfg(not(windows))]
@@ -452,7 +453,7 @@ impl SelectedShell {
     pub fn wrap_cwd_trailer(&self, script: &str, marker: &str) -> String {
         match self.kind {
             ShellKind::Cmd => format!(
-                r#"{script} & call set "__yeet_status=%%errorlevel%%" & echo. & echo {marker} & cd & call exit /b %%__yeet_status%%"#
+                r#"setlocal EnableDelayedExpansion & setlocal DisableDelayedExpansion & {script} & endlocal & set "__yeet_status=!errorlevel!" & echo. & echo {marker} & cd & exit /b !__yeet_status!"#
             ),
             ShellKind::Powershell => format!(
                 "{script}\n; $__yeet_ok = $?; $__yeet_code = $LASTEXITCODE; [Console]::Out.WriteLine(); [Console]::Out.WriteLine('{marker}'); [Console]::Out.WriteLine((Get-Location).ProviderPath); if ($null -ne $__yeet_code) {{ exit $__yeet_code }} elseif (!$__yeet_ok) {{ exit 1 }}"
@@ -480,12 +481,14 @@ impl SelectedShell {
                 "{script}\n; $__yeet_ok = $?; $__yeet_code = $LASTEXITCODE; [IO.File]::WriteAllText('{}', (Get-Location).ProviderPath); if ($null -ne $__yeet_code) {{ exit $__yeet_code }} elseif (!$__yeet_ok) {{ exit 1 }}",
                 p.replace('\'', "''")
             )),
-            // The report path is supplied via an environment variable rather than
-            // interpolated into cmd syntax (where %, &, and quotes are special).
-            // CALL performs a second expansion after the user command, retaining
-            // its exit status before CD writes the report.
+            // The report path is supplied via an environment variable rather
+            // than interpolated into cmd syntax (where %, &, and quotes are
+            // special). Enable delayed expansion only after the script, so
+            // literal exclamation marks in user commands remain untouched.
+            // ENDLOCAL restores the outer expansion mode without changing the
+            // command's errorlevel.
             ShellKind::Cmd => Some(format!(
-                r#"{script} & call set "__yeet_status=%%errorlevel%%" & cd > "%YEET_INTERNAL_CWD_REPORT%" & call exit /b %%__yeet_status%%"#
+                r#"setlocal EnableDelayedExpansion & setlocal DisableDelayedExpansion & {script} & endlocal & set "__yeet_status=!errorlevel!" & cd > "%YEET_INTERNAL_CWD_REPORT%" & exit /b !__yeet_status!"#
             )),
         }
     }
@@ -579,14 +582,14 @@ mod windows_tests {
         let script = shell
             .wrap_cwd("cd /d \"sub & space\" & cmd /c exit 7", &report)
             .unwrap();
-        let status = shell
+        let output = shell
             .launch(&script, false, false)
             .command()
             .env("YEET_INTERNAL_CWD_REPORT", &report)
             .current_dir(root.path())
-            .status()
+            .output()
             .unwrap();
-        assert_eq!(status.code(), Some(7));
+        assert_eq!(output.status.code(), Some(7));
         let path = std::fs::read_to_string(report).unwrap();
         assert_eq!(
             PathBuf::from(path.trim_end_matches(['\r', '\n']))
@@ -657,11 +660,11 @@ mod windows_tests {
         let script = r#"echo "a b" & echo %PATH%"#;
         let spec = shell.launch(script, false, false);
         assert!(spec.verbatim);
-        assert_eq!(spec.args[..3], ["/D", "/S", "/C"]);
+        assert_eq!(spec.args[..4], ["/D", "/V:OFF", "/S", "/C"]);
         // The script keeps its quotes untouched and is wrapped in one quote
         // pair that cmd /S strips positionally.
-        assert_eq!(spec.args[3], format!("\"chcp 65001 >nul 2>&1 & {script}\""));
-        assert!(spec.args[3].contains(r#"echo "a b""#));
+        assert_eq!(spec.args[4], format!("\"chcp 65001 >nul 2>&1 & {script}\""));
+        assert!(spec.args[4].contains(r#"echo "a b""#));
     }
 
     #[test]
@@ -680,9 +683,10 @@ mod windows_tests {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&spec.args[3])
             .unwrap();
-        let units = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        let (units, _) = bytes.as_chunks::<2>();
+        let units = units
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect::<Vec<_>>();
         let decoded = String::from_utf16(&units).unwrap();
         assert!(decoded.ends_with(script), "{decoded}");
@@ -704,7 +708,12 @@ mod windows_tests {
         std::fs::write(&image, []).unwrap();
         let resolved =
             resolve_windows_executable(directory.path().join("tool").to_str().unwrap()).unwrap();
-        assert_eq!(resolved, image);
+        // PATHEXT spellings like ".EXE" differ only in case from the file on
+        // disk; compare canonical identity rather than literal spelling.
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            image.canonicalize().unwrap()
+        );
         std::fs::remove_file(&image).unwrap();
 
         let error = resolve_windows_executable(directory.path().join("missing").to_str().unwrap())

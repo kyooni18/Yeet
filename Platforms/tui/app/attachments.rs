@@ -36,7 +36,12 @@ fn pasted_paths(text: &str) -> Option<Vec<PathBuf>> {
             (None, '\'' | '"') => quote = Some(ch),
             (Some(q), ch) if q == ch => quote = None,
             (Some('\''), ch) => word.push(ch),
-            (_, '\\') => word.push(chars.next()?),
+            // Only whitespace and backslash are escapable: on Windows the
+            // backslashes in a path are separators, not escapes.
+            (_, '\\') => match chars.clone().next() {
+                Some(next) if next.is_whitespace() || next == '\\' => word.push(chars.next()?),
+                _ => word.push('\\'),
+            },
             (None, ch) if ch.is_whitespace() => {
                 if !word.is_empty() {
                     words.push(std::mem::take(&mut word));

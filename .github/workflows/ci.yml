@@ -93,10 +93,10 @@ jobs:
         shell: pwsh
         run: |
           foreach ($script in @("install.ps1", "Scripts/package-release.ps1", "serve.ps1")) {
-            $tokens = $null; $errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$errors)
-            foreach ($error in $errors) { Write-Error "$script: $error" }
-            if ($errors.Count -gt 0) { exit 1 }
+            $tokens = $null; $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$tokens, [ref]$parseErrors)
+            foreach ($parseError in $parseErrors) { Write-Error ("{0}: {1}" -f $script, $parseError) }
+            if ($parseErrors.Count -gt 0) { exit 1 }
           }
           Write-Host "PowerShell scripts parse cleanly"
       - name: Windows installer bundle smoke

@@ -324,7 +324,10 @@ mod tests {
         assert_eq!(app.mode, Mode::Diff);
         let diff = &app.diff_tabs.active().unwrap().state;
         assert!(diff.error.is_none(), "{:?}", diff.error);
-        assert_eq!(diff.selected_path(), Some(path.clone()));
+        assert_eq!(
+            crate::platform::display_path(&diff.selected_path().unwrap()).replace('\\', "/"),
+            crate::platform::display_path(&path).replace('\\', "/")
+        );
         assert!(diff.lines.iter().any(|line| line == "-before"));
         app.observe_workbench_view();
         assert_eq!(

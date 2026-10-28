@@ -440,13 +440,16 @@ mod tests {
         assert!(rendered.contains("changes only"));
         app.handle_diff_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Files);
+        let opened = app.files.as_ref().unwrap().tabs.views()[0]
+            .state
+            .resource
+            .clone()
+            .unwrap();
+        // The review flow round-trips paths through normalized keys; compare
+        // canonical identity rather than the spelling.
         assert_eq!(
-            app.files.as_ref().unwrap().tabs.views()[0]
-                .state
-                .resource
-                .clone()
-                .unwrap(),
-            root.join("alpha.rs")
+            opened.canonicalize().unwrap(),
+            root.join("alpha.rs").canonicalize().unwrap()
         );
         app.handle_files_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert_eq!(app.mode, Mode::Diff);

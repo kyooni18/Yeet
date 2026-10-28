@@ -138,7 +138,7 @@ impl ShellOutputLog {
         let mut reserved = 0;
         let _ = self
             .budget
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 reserved = requested.min(SESSION_SHELL_LOG_LIMIT.saturating_sub(used));
                 Some(used + reserved)
             });

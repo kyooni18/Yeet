@@ -18,12 +18,25 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+// Tabs and newlines are valid in Unix filenames but illegal on Windows,
+// where the test exercises equally awkward but legal names instead.
+const TRICKY_NAME: &str = if cfg!(windows) {
+    "first file name.rs"
+} else {
+    "first file\tname.rs"
+};
+const TRICKY_RENAMED: &str = if cfg!(windows) {
+    "renamed file.rs"
+} else {
+    "renamed\nfile.rs"
+};
+
 #[test]
 fn git_resources_cover_index_worktree_renames_binary_and_unborn_repositories() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().canonicalize().unwrap();
     git(&dir, &["init", "-q"]);
-    std::fs::write(dir.join("first file\tname.rs"), "one\ntwo\n").unwrap();
+    std::fs::write(dir.join(TRICKY_NAME), "one\ntwo\n").unwrap();
     git(&dir, &["add", "."]);
     let unborn = GitSnapshot::load(&dir);
     assert!(unborn.message.is_none(), "{:?}", unborn.message);
@@ -35,7 +48,7 @@ fn git_resources_cover_index_worktree_renames_binary_and_unborn_repositories() {
         })
     );
     assert!(
-        GitSnapshot::patch(&dir.join("first file\tname.rs"))
+        GitSnapshot::patch(&dir.join(TRICKY_NAME))
             .unwrap()
             .iter()
             .any(|line| line == "+two")
@@ -55,10 +68,10 @@ fn git_resources_cover_index_worktree_renames_binary_and_unborn_repositories() {
             "Fixture",
         ],
     );
-    git(&dir, &["mv", "first file\tname.rs", "renamed\nfile.rs"]);
-    std::fs::write(dir.join("renamed\nfile.rs"), "one\ntwo\nstaged\n").unwrap();
+    git(&dir, &["mv", TRICKY_NAME, TRICKY_RENAMED]);
+    std::fs::write(dir.join(TRICKY_RENAMED), "one\ntwo\nstaged\n").unwrap();
     git(&dir, &["add", "."]);
-    std::fs::write(dir.join("renamed\nfile.rs"), "one\ntwo\nstaged\nworking\n").unwrap();
+    std::fs::write(dir.join(TRICKY_RENAMED), "one\ntwo\nstaged\nworking\n").unwrap();
     std::fs::remove_file(dir.join("delete.rs")).unwrap();
     std::fs::write(dir.join("binary.dat"), [0, 3, 4]).unwrap();
     std::fs::write(dir.join("new file.rs"), "untracked\n").unwrap();
@@ -71,10 +84,10 @@ fn git_resources_cover_index_worktree_renames_binary_and_unborn_repositories() {
             .find(|change| change.path == Path::new(name))
             .unwrap()
     };
-    let renamed = find("renamed\nfile.rs");
+    let renamed = find(TRICKY_RENAMED);
     assert_eq!(
         renamed.previous_path.as_deref(),
-        Some(Path::new("first file\tname.rs"))
+        Some(Path::new(TRICKY_NAME))
     );
     assert_eq!(
         renamed.stats,

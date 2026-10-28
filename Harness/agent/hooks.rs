@@ -15,7 +15,7 @@ use std::{
     collections::HashMap,
     io::{Read, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     time::{Duration, Instant},
 };
 
@@ -149,11 +149,13 @@ impl HookEngine {
     }
 }
 
-/// Runs `sh -c command`. Returns trimmed stdout on exit 0, `None` on failure or timeout.
+/// Runs `command` through the platform shell. Returns trimmed stdout on exit
+/// 0, `None` on failure or timeout.
 fn run_command(command: &str, cwd: &str, input: &str, timeout: Duration) -> Option<String> {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let shell = crate::shell::selection::select("auto").ok()?;
+    let mut child = shell
+        .launch(command, false, false)
+        .command()
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
