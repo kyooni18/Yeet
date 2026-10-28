@@ -266,16 +266,142 @@ pub(crate) struct OwnedChildInfo {
     pub role: &'static str,
 }
 
+#[cfg(windows)]
+mod job_object {
+    //! Windows Job Objects give `TrackedChild` reliable descendant containment.
+    //! Every spawned descendant joins the job automatically, and
+    //! `KILL_ON_JOB_CLOSE` reaps surviving descendants when the owning handle
+    //! closes — including when the Yeet process dies unexpectedly.
+    use std::ptr;
+
+    pub(super) type Handle = *mut std::ffi::c_void;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        operations: [u64; 6],
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct ExtendedLimitInformation {
+        basic: BasicLimitInformation,
+        io: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
+    pub(super) const CTRL_BREAK_EVENT: u32 = 1;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateJobObjectW(job_attributes: *const std::ffi::c_void, name: *const u16) -> Handle;
+        fn SetInformationJobObject(
+            job: Handle,
+            info_class: i32,
+            info: *const std::ffi::c_void,
+            length: u32,
+        ) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        pub(super) fn TerminateJobObject(job: Handle, exit_code: u32) -> i32;
+        pub(super) fn CloseHandle(handle: Handle) -> i32;
+        pub(super) fn GenerateConsoleCtrlEvent(event: u32, process_group: u32) -> i32;
+    }
+
+    #[derive(Debug)]
+    pub(super) struct Job {
+        handle: Handle,
+    }
+
+    impl Job {
+        /// Containment is best effort: when the OS refuses the assignment (for
+        /// example inside a non-nesting parent job on older Windows), callers
+        /// fall back to the process-tree termination path instead of failing
+        /// the spawn.
+        pub(super) fn contain(process: Handle) -> Option<Self> {
+            unsafe {
+                let handle = CreateJobObjectW(ptr::null(), ptr::null());
+                if handle.is_null() {
+                    return None;
+                }
+                let mut info = ExtendedLimitInformation::default();
+                info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let configured = SetInformationJobObject(
+                    handle,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                    (&info as *const ExtendedLimitInformation).cast(),
+                    std::mem::size_of::<ExtendedLimitInformation>() as u32,
+                );
+                if configured == 0 || AssignProcessToJobObject(handle, process) == 0 {
+                    let _ = CloseHandle(handle);
+                    return None;
+                }
+                Some(Self { handle })
+            }
+        }
+
+        /// Forces every process in the job to exit without process-tree
+        /// discovery races.
+        pub(super) fn terminate(&self) {
+            unsafe {
+                let _ = TerminateJobObject(self.handle, 1);
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // Closing the last handle reaps survivors via KILL_ON_JOB_CLOSE,
+            // mirroring the Unix process-group kill after a leader exits.
+            unsafe {
+                let _ = CloseHandle(self.handle);
+            }
+        }
+    }
+
+    // The job handle is exclusively owned and every kernel32 call is safe from
+    // any thread, so the raw pointer may move with its owner.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+}
+
 static OWNED_CHILDREN: OnceLock<Mutex<BTreeMap<u32, &'static str>>> = OnceLock::new();
 
 fn owned_children() -> &'static Mutex<BTreeMap<u32, &'static str>> {
     OWNED_CHILDREN.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+fn shell_signal_grace(value: Option<&str>) -> u64 {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(500)
+        .min(5_000)
+}
+
 #[derive(Debug)]
 pub(crate) struct TrackedChild {
     child: Child,
     pid: u32,
+    #[cfg(windows)]
+    job: Option<job_object::Job>,
 }
 
 impl TrackedChild {
@@ -284,11 +410,81 @@ impl TrackedChild {
         if let Ok(mut children) = owned_children().lock() {
             children.insert(pid, role);
         }
-        Self { child, pid }
+        #[cfg(windows)]
+        let job = {
+            use std::os::windows::io::AsRawHandle;
+            job_object::Job::contain(child.as_raw_handle())
+        };
+        Self {
+            child,
+            pid,
+            #[cfg(windows)]
+            job,
+        }
     }
 
     pub(crate) fn kill(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            // Terminating the job covers descendants spawned after launch,
+            // which a PID-based tree walk can miss.
+            job.terminate();
+            return Ok(());
+        }
         force_terminate_process_tree(self.pid)
+    }
+
+    pub(crate) fn terminate_shell(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let tree = unix_process_tree(self.pid).unwrap_or_else(|_| vec![self.pid]);
+            let grace =
+                shell_signal_grace(std::env::var("YEET_SHELL_SIGNAL_GRACE_MS").ok().as_deref());
+            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGKILL] {
+                let _ = signal_process_group(self.pid, signal);
+                for target in tree.iter().rev().copied().filter(|pid| *pid != self.pid) {
+                    let _ = signal_owned_process_or_group(target, signal);
+                }
+                if signal != libc::SIGKILL {
+                    std::thread::sleep(std::time::Duration::from_millis(grace));
+                }
+            }
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            let grace =
+                shell_signal_grace(std::env::var("YEET_SHELL_SIGNAL_GRACE_MS").ok().as_deref());
+            // Graceful escalation mirrors Unix SIGINT → SIGTERM → SIGKILL.
+            // A console break interrupts shell traps and foreground children;
+            // taskkill without /F then allows GUI descendants a WM_CLOSE
+            // shutdown. Both are best effort and never block forced cleanup.
+            unsafe {
+                let _ =
+                    job_object::GenerateConsoleCtrlEvent(job_object::CTRL_BREAK_EVENT, self.pid);
+            }
+            let pid_text = self.pid.to_string();
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid_text, "/T"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            std::thread::sleep(std::time::Duration::from_millis(grace));
+            if let Some(job) = &self.job {
+                job.terminate();
+            } else {
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &pid_text, "/T", "/F"])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+            Ok(())
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            force_terminate_process_tree(self.pid)
+        }
     }
 }
 
@@ -505,7 +701,17 @@ pub(crate) fn configure_process_group(command: &mut Command) {
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // A dedicated process group isolates console control events from the
+        // parent and gives `terminate_shell` a Ctrl-Break target, mirroring the
+        // Unix setpgid() setup above.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    }
+
+    #[cfg(not(any(unix, windows)))]
     let _ = command;
 }
 
@@ -683,6 +889,114 @@ fn signal_process(pid: u32, signal: i32) -> io::Result<()> {
     Err(error)
 }
 
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+
+    #[test]
+    fn shell_signal_grace_is_configurable_and_bounded() {
+        assert_eq!(shell_signal_grace(None), 500);
+        assert_eq!(shell_signal_grace(Some("not-a-number")), 500);
+        assert_eq!(shell_signal_grace(Some("0")), 0);
+        assert_eq!(shell_signal_grace(Some("175")), 175);
+        assert_eq!(shell_signal_grace(Some("9000")), 5_000);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    /// Runs a cmd script as one raw command line so tests are independent of
+    /// `Command::arg` quoting behavior under test elsewhere.
+    fn raw_cmd(script: &str) -> Command {
+        let mut command = Command::new("cmd");
+        command
+            .raw_arg("/D")
+            .raw_arg("/S")
+            .raw_arg("/C")
+            .raw_arg(format!("\"{script}\""))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        configure_process_group(&mut command);
+        command
+    }
+
+    fn image_count(image: &str) -> usize {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {image}"), "/FO", "CSV", "/NH"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.starts_with(&format!("\"{image}\"")))
+            .count()
+    }
+
+    fn wait_for(description: &str, mut condition: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !condition() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "timed out waiting for {description}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn exit_codes_and_quoted_commands_survive_cmd_execution() {
+        let script = r#"echo "quoted & spaced" >nul & cmd /c exit 7"#;
+        let status = raw_cmd(script).status().unwrap();
+        assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn tracked_child_drop_reaps_descendants_after_leader_exit() {
+        let baseline = image_count("PING.EXE");
+        // The leader exits immediately after backgrounding a long-lived ping;
+        // only job-object cleanup can still reclaim that descendant.
+        let mut child = TrackedChild::new(
+            raw_cmd(r#"start "" /b ping -n 60 127.0.0.1 >nul & exit /b 0"#)
+                .spawn()
+                .unwrap(),
+            "test-job-containment",
+        );
+        child.wait().unwrap();
+        wait_for("background descendant to start", || {
+            image_count("PING.EXE") >= baseline + 1
+        });
+        drop(child);
+        wait_for("background descendant to be reaped", || {
+            image_count("PING.EXE") <= baseline
+        });
+    }
+
+    #[test]
+    fn shell_termination_cleans_up_the_process_tree_promptly() {
+        let baseline = image_count("PING.EXE");
+        let mut child = TrackedChild::new(
+            raw_cmd(r#"ping -n 60 127.0.0.1 >nul"#).spawn().unwrap(),
+            "test-termination",
+        );
+        wait_for("child process to start", || {
+            image_count("PING.EXE") >= baseline + 1
+        });
+        let start = Instant::now();
+        child.terminate_shell().unwrap();
+        let _ = child.wait().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "forced termination was not bounded"
+        );
+        wait_for("child process tree to be reaped", || {
+            image_count("PING.EXE") <= baseline
+        });
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -725,6 +1039,33 @@ mod tests {
         let pid = child.id();
         let _ = force_terminate_process_tree(pid);
         let _ = child.wait();
+    }
+
+    #[test]
+    fn shell_termination_escalates_through_interrupt_term_and_kill() {
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("ready");
+        let signals = directory.path().join("signals");
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c")
+            .arg("trap 'echo INT >> \"$SIGNALS\"' INT; trap 'echo TERM >> \"$SIGNALS\"' TERM; echo ready > \"$READY\"; while :; do :; done")
+            .env("SIGNALS", &signals).env("READY", &ready)
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        configure_process_group(&mut command);
+        let mut child = TrackedChild::new(command.spawn().unwrap(), "test-escalation");
+        let start = std::time::Instant::now();
+        while !ready.exists() {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "child did not start"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        child.terminate_shell().unwrap();
+        let status = child.wait().unwrap();
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        assert_eq!(std::fs::read_to_string(signals).unwrap(), "INT\nTERM\n");
     }
 
     fn process_group_exists(pgid: u32) -> bool {
