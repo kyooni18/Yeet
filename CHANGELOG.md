@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-30
+
+- Add lightweight native web search and improve search configuration.
+- Improve Linux shell handling and headless permission prompts.
+- Improve Windows terminal input and suppress background console windows.
+- Update web dependencies.
+
 ## [0.1.3] - 2026-10-26
 
 - Add richer tool detail views for file edits, shell commands, and file reads, with explicit lifecycle status.
