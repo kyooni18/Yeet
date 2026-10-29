@@ -32,6 +32,8 @@ const GEMINI_SPARK_COMPAT_SCOPES: &[&str] = &[
 ];
 
 const MAX_REGISTERED_CLIENTS: usize = 1024;
+const MAX_AUTHORIZE_FAILURES: usize = 10;
+const AUTHORIZE_FAILURE_WINDOW_SECONDS: u64 = 60;
 
 fn oauth_scope_supported(scope: &str) -> bool {
     scope == MCP_SCOPE
@@ -323,6 +325,7 @@ pub(super) struct OAuthRuntime {
     access_tokens: Arc<Mutex<HashMap<String, AccessToken>>>,
     refresh_tokens: Arc<Mutex<HashMap<String, RefreshToken>>>,
     registered_clients: Arc<Mutex<HashMap<String, RegisteredClient>>>,
+    failed_authorizations: Arc<Mutex<Vec<u64>>>,
 }
 
 impl OAuthRuntime {
@@ -338,6 +341,7 @@ impl OAuthRuntime {
             access_tokens: Arc::new(Mutex::new(HashMap::new())),
             refresh_tokens: Arc::new(Mutex::new(HashMap::new())),
             registered_clients: Arc::new(Mutex::new(HashMap::new())),
+            failed_authorizations: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -422,9 +426,19 @@ impl OAuthRuntime {
         if !self.store.status()?.oauth_enabled {
             bail!("OAuth authentication is not enabled for this MCP daemon");
         }
+        {
+            let now = unix_time();
+            let mut failures = self.failed_authorizations.lock().unwrap();
+            failures.retain(|at| *at + AUTHORIZE_FAILURE_WINDOW_SECONDS > now);
+            if failures.len() >= MAX_AUTHORIZE_FAILURES {
+                bail!("too many failed authorization attempts; retry in a minute");
+            }
+        }
         if !self.store.verify_key(key)? {
+            self.failed_authorizations.lock().unwrap().push(unix_time());
             bail!("invalid MCP authorization key");
         }
+        self.failed_authorizations.lock().unwrap().clear();
         let code = random_token("code");
         self.authorization_codes.lock().unwrap().insert(
             code.clone(),

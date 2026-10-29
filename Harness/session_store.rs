@@ -94,6 +94,9 @@ pub struct StoredSession {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub disabled_capabilities: Vec<String>,
+    /// "Allow for session" approvals the user granted in this session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_grants: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -735,6 +738,7 @@ mod tests {
             retained_debate_knowledge: Vec::new(),
             attached_harness_capabilities: None,
             disabled_capabilities: Vec::new(),
+            permission_grants: Vec::new(),
         }
     }
 

@@ -40,6 +40,19 @@ pub(crate) fn availability() -> Result<()> {
     Ok(())
 }
 
+/// Like `availability`, but a missing runtime is offered for installation
+/// instead of failing the request. `approve_install` asks the user.
+pub(crate) fn ensure_available(approve_install: impl FnOnce() -> bool) -> Result<()> {
+    let Err(error) = availability() else {
+        return Ok(());
+    };
+    if status() == "computer-use=installed" || !approve_install() {
+        return Err(error);
+    }
+    install().context("install Open Computer Use after user approval")?;
+    availability()
+}
+
 pub(crate) fn install() -> Result<String> {
     let destination = directory();
     let parent = destination

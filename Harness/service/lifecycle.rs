@@ -115,6 +115,9 @@ impl HarnessService {
             .into_iter()
             .filter(|id| !crate::project_settings::is_permanent_core_capability(id))
             .collect();
+        self.permission
+            .restore_session_grants(stored.permission_grants.clone());
+        shared.meta.permission_grants = stored.permission_grants;
         shared.meta.working_directory = stored_working_directory.clone();
         shared.meta.context_roots = stored_context_roots.clone();
         shared.state.error_message = None;

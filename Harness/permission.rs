@@ -54,6 +54,20 @@ enum PermissionRequest {
     NativeApp(NativeAppPermission),
 }
 
+impl PermissionRequest {
+    fn grant_key(&self) -> String {
+        match self {
+            Self::Shell(p) => format!("{}\u{1}{}", p.kind, p.operation),
+            Self::NativeApp(p) => format!(
+                "native\u{1}{}\u{1}{}\u{1}{}",
+                p.server,
+                p.bundle_id.as_deref().unwrap_or(""),
+                p.operation
+            ),
+        }
+    }
+}
+
 impl PermissionBroker {
     pub fn set_notifier(&self, notifier: PermissionNotifier) {
         if let Ok(mut value) = self.notifier.lock() {
@@ -68,38 +82,43 @@ impl PermissionBroker {
         operation: String,
         reason: String,
     ) -> bool {
-        let key = format!("{kind}\u{1}{operation}");
-        if self.has_session_grant(&key) {
-            return true;
-        }
-        let decision = self.wait_for(PermissionRequest::Shell(ShellPermission {
+        self.ask_user(PermissionRequest::Shell(ShellPermission {
             id: Uuid::new_v4().to_string(),
             kind,
             command,
             operation,
             reason,
-        }));
-        if decision == PermissionDecision::Session {
-            self.session_grants.lock().unwrap().insert(key);
-        }
-        decision.allowed()
+        }))
     }
 
     pub fn request_native(&self, request: NativeAppPermission) -> bool {
-        let key = format!(
-            "native\u{1}{}\u{1}{}\u{1}{}",
-            request.server,
-            request.bundle_id.as_deref().unwrap_or(""),
-            request.operation
-        );
-        if self.has_session_grant(&key) {
+        self.ask_user(PermissionRequest::NativeApp(request))
+    }
+
+    /// Skips the prompt when the user already allowed this kind of request for
+    /// the session. A "session" answer is recorded by `resolve_matching`.
+    fn ask_user(&self, request: PermissionRequest) -> bool {
+        if self.has_session_grant(&request.grant_key()) {
             return true;
         }
-        let decision = self.wait_for(PermissionRequest::NativeApp(request));
-        if decision == PermissionDecision::Session {
-            self.session_grants.lock().unwrap().insert(key);
-        }
-        decision.allowed()
+        self.wait_for(request).allowed()
+    }
+
+    /// Approvals kept for this session, for persistence with the session.
+    pub fn session_grants(&self) -> Vec<String> {
+        let mut grants: Vec<_> = self
+            .session_grants
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect();
+        grants.sort();
+        grants
+    }
+
+    pub fn restore_session_grants(&self, grants: Vec<String>) {
+        *self.session_grants.lock().unwrap() = grants.into_iter().collect();
     }
 
     fn has_session_grant(&self, key: &str) -> bool {
@@ -184,6 +203,12 @@ impl PermissionBroker {
         };
         if state.decision.is_some() || !state.pending.as_ref().is_some_and(accepts) {
             return false;
+        }
+        if decision == PermissionDecision::Session
+            && let Some(request) = state.pending.as_ref()
+        {
+            let key = request.grant_key();
+            self.session_grants.lock().unwrap().insert(key);
         }
         state.decision = Some(decision);
         condition.notify_all();

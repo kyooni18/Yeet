@@ -559,7 +559,14 @@ impl ToolRegistry {
             self.evidence.workspace_generation = generation;
         }
         if matches!(call.name.as_str(), "computer_use" | "computer_use_reset") {
-            crate::computer_use::availability()?;
+            crate::computer_use::ensure_available(|| {
+                self.context.permission.request(
+                    "install".into(),
+                    "open-computer-use".into(),
+                    "install the Computer Use runtime".into(),
+                    "The model requested Computer Use, but its runtime is not installed. Installing downloads it with npm; macOS will then ask for Accessibility and Screen Recording access.".into(),
+                )
+            })?;
         }
         let mut overridden = false;
         if !self.tool_enabled(&call.name) {

@@ -14,6 +14,7 @@ pub(super) struct SessionMeta {
     pub(super) title_generation_attempted: bool,
     pub(super) attached_capabilities: Option<Vec<String>>,
     pub(super) disabled_capabilities: Vec<String>,
+    pub(super) permission_grants: Vec<String>,
     pub(super) working_directory: Option<String>,
     pub(super) context_roots: Vec<String>,
     pub(super) pending_tool_calls: HashMap<usize, ConversationToolCall>,

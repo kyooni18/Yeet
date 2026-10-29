@@ -86,6 +86,7 @@ pub(super) fn prepare_session_write_locked(
             retained_debate_knowledge: state.meta.retained_debate_knowledge.clone(),
             attached_harness_capabilities: state.meta.attached_capabilities.clone(),
             disabled_capabilities: state.meta.disabled_capabilities.clone(),
+            permission_grants: state.meta.permission_grants.clone(),
         },
         goal_mode: state.state.goal_mode,
     })

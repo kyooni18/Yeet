@@ -347,8 +347,13 @@ impl HarnessService {
                     (true, false) => PermissionDecision::Once,
                     (true, true) => PermissionDecision::Session,
                 };
-                self.permission
-                    .resolve_request_scoped(&request_id, decision);
+                if self
+                    .permission
+                    .resolve_request_scoped(&request_id, decision)
+                    && decision == PermissionDecision::Session
+                {
+                    self.persist_permission_grants()?;
+                }
                 self.publish_state();
                 Ok(())
             }
@@ -684,6 +689,20 @@ impl HarnessService {
             }
         }
         self.publish_state();
+        Ok(())
+    }
+
+    fn persist_permission_grants(&self) -> Result<()> {
+        let history = self
+            .coordinator
+            .lock()
+            .map_err(|_| anyhow!("coordinator lock poisoned"))?
+            .model_history();
+        let mut shared = self.shared.lock_or_recover();
+        shared.meta.permission_grants = self.permission.session_grants();
+        if shared.state.current_session_id.is_some() {
+            persist_locked(&mut shared, &self.store, &self.workspace_root, history)?;
+        }
         Ok(())
     }
 
