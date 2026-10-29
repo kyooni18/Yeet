@@ -212,7 +212,7 @@ fn set_windows_private_acl(path: &Path, directory: bool) -> io::Result<()> {
         return Ok(());
     }
 
-    let identity = Command::new("whoami").output()?;
+    let identity = hidden_command("whoami").output()?;
     if !identity.status.success() {
         return Err(io::Error::other("whoami failed while hardening Yeet state"));
     }
@@ -228,7 +228,7 @@ fn set_windows_private_acl(path: &Path, directory: bool) -> io::Result<()> {
         format!("*S-1-5-18:{rights}"),
         format!("*S-1-5-32-544:{rights}"),
     ];
-    let output = Command::new("icacls")
+    let output = hidden_command("icacls")
         .arg(path)
         .arg("/inheritancelevel:r")
         .arg("/grant:r")
@@ -507,7 +507,7 @@ impl TrackedChild {
                     job_object::GenerateConsoleCtrlEvent(job_object::CTRL_BREAK_EVENT, self.pid);
             }
             let pid_text = self.pid.to_string();
-            let _ = Command::new("taskkill")
+            let _ = hidden_command("taskkill")
                 .args(["/PID", &pid_text, "/T"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -516,7 +516,7 @@ impl TrackedChild {
             if let Some(job) = &self.job {
                 job.terminate();
             } else {
-                let _ = Command::new("taskkill")
+                let _ = hidden_command("taskkill")
                     .args(["/PID", &pid_text, "/T", "/F"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -815,7 +815,7 @@ pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
         // preserves the opportunity for console/GUI processes to run normal
         // shutdown handling instead of making every Windows recycle abrupt.
         let pid_text = pid.to_string();
-        let graceful = Command::new("taskkill")
+        let graceful = hidden_command("taskkill")
             .args(["/PID", &pid_text, "/T"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -825,7 +825,7 @@ pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
         }
 
         std::thread::sleep(std::time::Duration::from_millis(150));
-        let _ = Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(["/PID", &pid_text, "/T", "/F"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -958,6 +958,21 @@ fn signal_process(pid: u32, signal: i32) -> io::Result<()> {
 #[cfg(test)]
 mod portable_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn hidden_commands_have_no_console_window() {
+        let output = hidden_command("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Add-Type -Name ConsoleProbe -Namespace Yeet -MemberDefinition '[System.Runtime.InteropServices.DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; [Yeet.ConsoleProbe]::GetConsoleWindow().ToInt64()",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+    }
 
     #[test]
     fn shell_signal_grace_is_configurable_and_bounded() {
