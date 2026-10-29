@@ -89,7 +89,7 @@ pub const HELP: &str = r#"Usage:
   yeet mcpserver auth [status|mode|key] ...
   yeet mcpserver stdio [WORKSPACE|--workspace PATH] [--restrict-workspace]
   yeet sandbox [show|path|reset|scratch|workspace|network|env|secret|limits] ...
-  yeet search [backend [builtin|mcp [SERVER]]|install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]
+  yeet search [backend [builtin|mcp [SERVER]]|install [all|native|searxng|agent-reach]|status|test|path|remove [all|searxng|agent-reach]]
 
 State:
   YEET_CONFIG_DIR overrides the per-user state directory.

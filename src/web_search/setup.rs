@@ -27,6 +27,8 @@ pub struct WebSearchStatus {
     pub server: String,
     pub selected_provider: Option<String>,
     pub fallback_available: Option<bool>,
+    #[serde(default)]
+    pub native: Option<ProviderHealth>,
     pub agent_reach: ProviderHealth,
     pub searxng: ProviderHealth,
     pub searxng_url: String,
@@ -57,6 +59,7 @@ pub fn web_search_status_for_workspace(
     let running = client.probe(&url);
     let agent_installed = client.agent_reach_invocation().is_some();
     let searx_installed = paths.installed();
+    let native_installed = paths.native_installed();
     let mcp = if settings.backend == ServiceBackend::Mcp {
         let result = start_search_bridge(workspace).and_then(|bridge| {
             let result = bridge.list_mcp_tools(Some(&settings.server));
@@ -88,6 +91,8 @@ pub fn web_search_status_for_workspace(
         server: settings.server.clone(),
         selected_provider: if settings.backend == ServiceBackend::Mcp {
             Some("mcp".into())
+        } else if settings.backend == ServiceBackend::Builtin && native_installed {
+            Some("exa".into())
         } else if settings.backend == ServiceBackend::AgentReach
             || (settings.backend == ServiceBackend::Builtin && agent_installed)
         {
@@ -104,6 +109,12 @@ pub fn web_search_status_for_workspace(
         } else {
             Some(false)
         },
+        native: Some(ProviderHealth {
+            installed: Some(native_installed),
+            connectivity: Connectivity::Unknown,
+            error: (!native_installed)
+                .then(|| "Run yeet install web to enable native search.".into()),
+        }),
         agent_reach: ProviderHealth {
             installed: Some(agent_installed),
             connectivity: Connectivity::Unknown,
@@ -188,7 +199,8 @@ fn setup_plan_inner(
                     || status.searxng.connectivity == Connectivity::Connected
             }
             ServiceBackend::Builtin => {
-                status.agent_reach.installed == Some(true)
+                status.native.as_ref().and_then(|value| value.installed) == Some(true)
+                    || status.agent_reach.installed == Some(true)
                     || status.searxng.installed == Some(true)
                     || status.searxng.connectivity == Connectivity::Connected
             }
@@ -201,19 +213,16 @@ fn setup_plan_inner(
             message: "An existing provider was detected. Test its connection.".into(),
         };
     }
-    let target = if settings.backend == ServiceBackend::Searxng
-        || (settings.backend == ServiceBackend::Builtin
-            && (!command_available("node")
-                || !command_available(&env::var("YEET_NPM").unwrap_or_else(|_| "npm".into())))
-            && command_available("git"))
-    {
+    let target = if settings.backend == ServiceBackend::Builtin {
+        "native"
+    } else if settings.backend == ServiceBackend::Searxng {
         "searxng"
     } else {
         "agent-reach"
     };
     let mut missing = Vec::new();
     let python = env::var("YEET_PYTHON").unwrap_or_else(|_| "python3".into());
-    if !command_available(&python) {
+    if target != "native" && !command_available(&python) {
         missing.push("Python 3".into());
     }
     if target == "agent-reach" {
@@ -224,7 +233,7 @@ fn setup_plan_inner(
         if !command_available(&npm) {
             missing.push("npm".into());
         }
-    } else if !command_available("git") {
+    } else if target == "searxng" && !command_available("git") {
         missing.push("Git".into());
     }
     SetupPlan {
