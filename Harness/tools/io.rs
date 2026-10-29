@@ -708,9 +708,7 @@ impl ToolRegistry {
             .web_server
             .clone()
             .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
-        if self.catalog.capability_disabled("mcp", &server) {
-            bail!("MCP server {server} is disabled for this session");
-        }
+        self.ensure_capability_allowed("mcp", &server)?;
         let result = self.bridge_client()?.call_mcp_tool_cancellable(
             &server,
             "web_search",
@@ -767,9 +765,7 @@ impl ToolRegistry {
             .web_server
             .clone()
             .ok_or_else(|| anyhow!("Web MCP server is not configured"))?;
-        if self.catalog.capability_disabled("mcp", &server) {
-            bail!("MCP server {server} is disabled for this session");
-        }
+        self.ensure_capability_allowed("mcp", &server)?;
         let result = self
             .bridge_client()?
             .call_mcp_tool_cancellable(&server, "web_read", object, cancel)?;

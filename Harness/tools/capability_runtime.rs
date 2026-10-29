@@ -3,9 +3,31 @@
 use super::*;
 
 impl ToolRegistry {
+    /// A disabled capability never silently fails a model request: the user is
+    /// asked, and can allow the request once or for the rest of the session.
+    /// This always prompts, even in auto-approve mode, because disabling a
+    /// capability is an explicit restriction.
+    pub(super) fn ensure_capability_allowed(&self, kind: &str, name: &str) -> Result<()> {
+        if !self.catalog.capability_disabled(kind, name) {
+            return Ok(());
+        }
+        let label = format!("{kind} {name}");
+        if self.context.permission.request(
+            "capability".into(),
+            label.clone(),
+            format!("use disabled {label}"),
+            "The model requested a capability that is disabled for this session.".into(),
+        ) {
+            Ok(())
+        } else {
+            bail!("User denied use of disabled {label}")
+        }
+    }
+
     pub(super) fn activate(&mut self, id: &str) -> Result<String> {
-        if self.catalog.disabled_capabilities.contains(id) {
-            bail!("Capability {id} is disabled for this session");
+        if self.catalog.disabled_capabilities.contains(id) && !self.catalog.override_disabled {
+            let (kind, name) = id.split_once(':').unwrap_or(("capability", id));
+            self.ensure_capability_allowed(kind, name)?;
         }
         if self.catalog.descriptors.is_empty() {
             self.refresh_capabilities();

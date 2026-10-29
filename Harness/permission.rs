@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -17,12 +18,30 @@ type NotifierSlot = Arc<Mutex<Option<PermissionNotifier>>>;
 pub struct PermissionBroker {
     inner: Arc<(Mutex<PermissionState>, Condvar)>,
     notifier: NotifierSlot,
+    /// Approvals the user chose to keep for the rest of this session.
+    session_grants: Arc<Mutex<HashSet<String>>>,
+}
+
+/// The user's answer to a permission prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionDecision {
+    Deny,
+    /// Allow this request only.
+    Once,
+    /// Allow this request and identical future requests in this session.
+    Session,
+}
+
+impl PermissionDecision {
+    pub fn allowed(self) -> bool {
+        self != Self::Deny
+    }
 }
 
 #[derive(Default)]
 struct PermissionState {
     pending: Option<PermissionRequest>,
-    decision: Option<bool>,
+    decision: Option<PermissionDecision>,
     closed: bool,
     question: Option<UserQuestion>,
     /// `Some(None)` means the user dismissed the question.
@@ -49,17 +68,47 @@ impl PermissionBroker {
         operation: String,
         reason: String,
     ) -> bool {
-        self.wait_for(PermissionRequest::Shell(ShellPermission {
+        let key = format!("{kind}\u{1}{operation}");
+        if self.has_session_grant(&key) {
+            return true;
+        }
+        let decision = self.wait_for(PermissionRequest::Shell(ShellPermission {
             id: Uuid::new_v4().to_string(),
             kind,
             command,
             operation,
             reason,
-        }))
+        }));
+        if decision == PermissionDecision::Session {
+            self.session_grants.lock().unwrap().insert(key);
+        }
+        decision.allowed()
     }
 
     pub fn request_native(&self, request: NativeAppPermission) -> bool {
-        self.wait_for(PermissionRequest::NativeApp(request))
+        let key = format!(
+            "native\u{1}{}\u{1}{}\u{1}{}",
+            request.server,
+            request.bundle_id.as_deref().unwrap_or(""),
+            request.operation
+        );
+        if self.has_session_grant(&key) {
+            return true;
+        }
+        let decision = self.wait_for(PermissionRequest::NativeApp(request));
+        if decision == PermissionDecision::Session {
+            self.session_grants.lock().unwrap().insert(key);
+        }
+        decision.allowed()
+    }
+
+    fn has_session_grant(&self, key: &str) -> bool {
+        self.session_grants.lock().unwrap().contains(key)
+    }
+
+    /// Forgets every "allow for this session" approval.
+    pub fn clear_session_grants(&self) {
+        self.session_grants.lock().unwrap().clear();
     }
 
     pub fn pending_shell(&self) -> Option<ShellPermission> {
@@ -84,33 +133,49 @@ impl PermissionBroker {
     }
 
     pub fn resolve(&self, granted: bool) -> bool {
-        self.resolve_matching(granted, |_| true)
+        self.resolve_matching(Self::decision_for(granted), |_| true)
+    }
+
+    fn decision_for(granted: bool) -> PermissionDecision {
+        if granted {
+            PermissionDecision::Once
+        } else {
+            PermissionDecision::Deny
+        }
+    }
+
+    /// Like `resolve_request`, but lets the caller keep the approval for the session.
+    pub fn resolve_request_scoped(&self, request_id: &str, decision: PermissionDecision) -> bool {
+        self.resolve_matching(decision, |request| match request {
+            PermissionRequest::Shell(permission) => permission.id == request_id,
+            PermissionRequest::NativeApp(permission) => permission.id == request_id,
+        })
     }
 
     /// Match the displayed request atomically so delayed UI input cannot approve
     /// a replacement request. Legacy unscoped callers retain their existing API.
     pub fn resolve_request(&self, request_id: &str, granted: bool) -> bool {
-        self.resolve_matching(granted, |request| match request {
+        self.resolve_matching(Self::decision_for(granted), |request| match request {
             PermissionRequest::Shell(permission) => permission.id == request_id,
             PermissionRequest::NativeApp(permission) => permission.id == request_id,
         })
     }
 
     pub fn resolve_shell(&self, granted: bool) -> bool {
-        self.resolve_matching(granted, |request| {
+        self.resolve_matching(Self::decision_for(granted), |request| {
             matches!(request, PermissionRequest::Shell(_))
         })
     }
 
     pub fn resolve_native_app(&self, granted: bool) -> bool {
-        self.resolve_matching(granted, |request| {
+        self.resolve_matching(Self::decision_for(granted), |request| {
             matches!(request, PermissionRequest::NativeApp(_))
         })
     }
 
     fn resolve_matching(
         &self,
-        granted: bool,
+        decision: PermissionDecision,
         accepts: impl FnOnce(&PermissionRequest) -> bool,
     ) -> bool {
         let (lock, condition) = &*self.inner;
@@ -120,7 +185,7 @@ impl PermissionBroker {
         if state.decision.is_some() || !state.pending.as_ref().is_some_and(accepts) {
             return false;
         }
-        state.decision = Some(granted);
+        state.decision = Some(decision);
         condition.notify_all();
         drop(state);
         self.notify();
@@ -205,7 +270,7 @@ impl PermissionBroker {
         let (lock, condition) = &*self.inner;
         if let Ok(mut state) = lock.lock() {
             state.closed = true;
-            state.decision = Some(false);
+            state.decision = Some(PermissionDecision::Deny);
             condition.notify_all();
         }
         self.notify();
@@ -218,14 +283,14 @@ impl PermissionBroker {
         }
     }
 
-    fn wait_for(&self, request: PermissionRequest) -> bool {
+    fn wait_for(&self, request: PermissionRequest) -> PermissionDecision {
         let (lock, condition) = &*self.inner;
         let mut state = lock.lock().unwrap();
         while state.pending.is_some() && !state.closed {
             state = condition.wait(state).unwrap();
         }
         if state.closed {
-            return false;
+            return PermissionDecision::Deny;
         }
         state.pending = Some(request);
         state.decision = None;
@@ -236,7 +301,7 @@ impl PermissionBroker {
         while state.decision.is_none() && !state.closed {
             state = condition.wait(state).unwrap();
         }
-        let decision = state.decision.take().unwrap_or(false);
+        let decision = state.decision.take().unwrap_or(PermissionDecision::Deny);
         state.pending = None;
         condition.notify_all();
         drop(state);
@@ -283,9 +348,44 @@ mod tests {
             assert!(!broker.resolve_request("previous-request", true));
             assert_eq!(broker.inner.0.lock().unwrap().decision, None);
             assert!(broker.resolve_request(&id, false));
-            assert_eq!(broker.inner.0.lock().unwrap().decision, Some(false));
+            assert_eq!(
+                broker.inner.0.lock().unwrap().decision,
+                Some(PermissionDecision::Deny)
+            );
             assert!(!broker.resolve_request(&id, true));
         }
+    }
+
+    #[test]
+    fn session_grant_skips_later_prompts_until_cleared() {
+        let broker = PermissionBroker::default();
+        let asker = broker.clone();
+        let first = std::thread::spawn(move || {
+            asker.request(
+                "capability".into(),
+                "mcp x".into(),
+                "use x".into(),
+                String::new(),
+            )
+        });
+        let id = loop {
+            if let Some(pending) = broker.pending_shell() {
+                break pending.id;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(broker.resolve_request_scoped(&id, PermissionDecision::Session));
+        assert!(first.join().unwrap());
+        // Same operation no longer prompts.
+        assert!(broker.request(
+            "capability".into(),
+            "mcp x".into(),
+            "use x".into(),
+            String::new()
+        ));
+        assert!(broker.pending_shell().is_none());
+        broker.clear_session_grants();
+        assert!(!broker.has_session_grant("capability\u{1}use x"));
     }
 
     #[test]

@@ -483,7 +483,7 @@ export type FrontendCommand =
   | { type: 'shell_job'; job_id: string; action: 'output' | 'input' | 'resize' | 'interrupt' | 'stop'; request_id: string; offset?: number; data?: string; rows?: number; cols?: number }
   | { type: 'regenerate_last' }
   | { type: 'edit_last'; text: string }
-  | { type: 'resolve_permission'; request_id: string; granted: boolean }
+  | { type: 'resolve_permission'; request_id: string; granted: boolean; session?: boolean }
   | { type: 'allow_shell' }
   | { type: 'deny_shell' }
   | { type: 'allow_native_app' }
@@ -739,7 +739,7 @@ export type ComposerAction =
   | { type: 'update_editor' | 'submit' | 'cancel_edit'; value: EditorSnapshot }
   | { type: 'interrupt' | 'new_session' }
   | { type: 'select_suggestion'; value: { editor: EditorSnapshot; command: string } }
-  | { type: 'respond_permission'; value: { target: ComposerPermissionTarget; allow: boolean } }
+  | { type: 'respond_permission'; value: { target: ComposerPermissionTarget; allow: boolean; session?: boolean } }
   | { type: 'answer_question'; value: { id: string; answer: string | null } }
 export type ComposerIcon = 'send' | 'stop' | 'edit' | 'close' | 'terminal' | 'application' | 'allow' | 'deny'
 export interface ComposerControl { label: string; icon: ComposerIcon; action: ComposerAction; enabled: boolean }

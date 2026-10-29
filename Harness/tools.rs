@@ -561,9 +561,39 @@ impl ToolRegistry {
         if matches!(call.name.as_str(), "computer_use" | "computer_use_reset") {
             crate::computer_use::availability()?;
         }
+        let mut overridden = false;
         if !self.tool_enabled(&call.name) {
-            bail!("Tool {} is disabled for this session", call.name);
+            // Disabled by capability settings, not by agent execution policy:
+            // ask the user instead of failing the model's request.
+            let (kind, name) = self.catalog.disabled_tool_owner(&call.name);
+            if !self.context.permission.request(
+                "capability".into(),
+                format!("{kind} {name}"),
+                format!("use disabled {kind} {name}"),
+                "The model requested a tool that is disabled for this session.".into(),
+            ) {
+                bail!(
+                    "User denied use of disabled {kind} {name} (tool {})",
+                    call.name
+                );
+            }
+            self.catalog.override_disabled = true;
+            overridden = true;
         }
+        let result = self.execute_gated(call, model, cancel, progress);
+        if overridden {
+            self.catalog.override_disabled = false;
+        }
+        result
+    }
+
+    fn execute_gated(
+        &mut self,
+        call: &ToolCall,
+        model: &str,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<String> {
         if self.catalog.execution_prohibited(&call.name) {
             bail!("Tool {} is prohibited by agent execution policy", call.name);
         }

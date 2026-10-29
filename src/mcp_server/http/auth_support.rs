@@ -137,3 +137,25 @@ fn html_escape(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
 }
+
+/// Blocks browser-originated requests (DNS rebinding / cross-site calls) whose
+/// `Origin` is neither loopback nor its configured public URL (a Host match is not enough: a rebound attacker domain matches its own Host).
+/// Requests without `Origin` come from non-browser MCP clients.
+pub(super) fn browser_origin_allowed(headers: &HashMap<String, String>, public_url: &Url) -> bool {
+    let Some(origin) = headers.get("origin") else {
+        return true;
+    };
+    let Ok(origin) = Url::parse(origin) else {
+        return false;
+    };
+    let Some(host) = origin.host_str() else {
+        return false;
+    };
+    if matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1") {
+        return true;
+    }
+    if origin.host_str() == public_url.host_str() && origin.port() == public_url.port() {
+        return true;
+    }
+    false
+}

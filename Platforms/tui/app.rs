@@ -167,6 +167,7 @@ impl QuestionPrompt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionPromptAction {
     Allow,
+    AllowSession,
     Deny,
     Interrupt,
 }
@@ -605,6 +606,7 @@ impl App {
         }
         match event.code {
             KeyCode::Char('y') | KeyCode::Enter => Some(PermissionPromptAction::Allow),
+            KeyCode::Char('s') => Some(PermissionPromptAction::AllowSession),
             KeyCode::Char('n') | KeyCode::Esc => Some(PermissionPromptAction::Deny),
             _ => None,
         }
@@ -689,12 +691,21 @@ impl App {
                         crate::shared_ui::composer::ComposerAction::RespondPermission {
                             target: permission.target.clone(),
                             allow: true,
+                            session: false,
+                        }
+                    }
+                    PermissionPromptAction::AllowSession => {
+                        crate::shared_ui::composer::ComposerAction::RespondPermission {
+                            target: permission.target.clone(),
+                            allow: true,
+                            session: true,
                         }
                     }
                     PermissionPromptAction::Deny => {
                         crate::shared_ui::composer::ComposerAction::RespondPermission {
                             target: permission.target.clone(),
                             allow: false,
+                            session: false,
                         }
                     }
                     PermissionPromptAction::Interrupt => {

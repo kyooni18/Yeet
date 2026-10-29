@@ -910,7 +910,16 @@ fn permission_action_line(
             spans.push(Span::raw(" · "));
         }
         let shortcut = match control.action {
-            ComposerAction::RespondPermission { allow: true, .. } => "Enter/y",
+            ComposerAction::RespondPermission {
+                allow: true,
+                session: false,
+                ..
+            } => "Enter/y",
+            ComposerAction::RespondPermission {
+                allow: true,
+                session: true,
+                ..
+            } => "s",
             ComposerAction::RespondPermission { allow: false, .. } => "n/Esc",
             _ => "",
         };

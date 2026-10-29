@@ -155,10 +155,11 @@ fn stale_permission_target_cannot_resolve_replacement() {
             id: id.into(),
         },
         allow: true,
+        session: false,
     };
     assert!(state.apply(action("old"), &env, &harness).command.is_none());
     assert!(
-        matches!(state.apply(action("new"),&env,&harness).command,Some(HarnessCommand::ResolvePermission{request_id,granted:true}) if request_id=="new")
+        matches!(state.apply(action("new"),&env,&harness).command,Some(HarnessCommand::ResolvePermission{request_id,granted:true,..}) if request_id=="new")
     );
     let view = state.view(&env, &harness);
     assert_eq!(view.permissions[0].controls[0].label, "Deny");

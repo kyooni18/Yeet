@@ -114,7 +114,7 @@ test('stacked permission and failure state keeps mobile decisions reachable', as
 
   const permission = page.locator('.composer-permission')
   const composer = page.locator('.composer-shell')
-  const allow = permission.getByRole('button', { name: 'Allow' })
+  const allow = permission.getByRole('button', { name: 'Allow once' })
   await expect(permission).toBeVisible()
   await expect(permission).toContainText('command-sentinel')
   await expect(page.locator('.info-card').filter({ hasText: 'Error' }).last()).toContainText('error-sentinel')

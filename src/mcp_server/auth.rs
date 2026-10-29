@@ -31,6 +31,8 @@ const GEMINI_SPARK_COMPAT_SCOPES: &[&str] = &[
     "TRIGGER_TOOLS_AND_FUNCTION",
 ];
 
+const MAX_REGISTERED_CLIENTS: usize = 1024;
+
 fn oauth_scope_supported(scope: &str) -> bool {
     scope == MCP_SCOPE
         || scope == OFFLINE_ACCESS_SCOPE
@@ -579,7 +581,11 @@ impl OAuthRuntime {
             validate_redirect_uri(uri)?;
         }
         let client_id = random_token("dcr");
-        self.registered_clients.lock().unwrap().insert(
+        let mut clients = self.registered_clients.lock().unwrap();
+        if clients.len() >= MAX_REGISTERED_CLIENTS {
+            bail!("OAuth client registration capacity reached");
+        }
+        clients.insert(
             client_id.clone(),
             RegisteredClient {
                 redirect_uris: redirect_uris.clone(),

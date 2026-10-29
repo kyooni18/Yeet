@@ -42,7 +42,7 @@ use crate::{
     },
 };
 
-const DEFAULT_BIND: &str = "0.0.0.0:7331";
+const DEFAULT_BIND: &str = "127.0.0.1:7331";
 const DEFAULT_COLS: u16 = 120;
 const DEFAULT_ROWS: u16 = 40;
 const MIN_COLS: u16 = 40;
@@ -57,6 +57,8 @@ const REMOTE_BACKGROUND_START_DELAY: Duration = Duration::from_millis(50);
 const AUTH_SESSION_SECONDS: u64 = 12 * 60 * 60;
 const PASSKEY_ENROLL_SECONDS: u64 = 10 * 60;
 const MAX_AUTH_SESSIONS: usize = 256;
+const MAX_LOGIN_FAILURES: usize = 10;
+const LOGIN_FAILURE_WINDOW_SECONDS: u64 = 60;
 const MAX_PASSKEY_ENROLLMENTS: usize = 32;
 const MAX_PENDING_PASSKEY_REGISTRATIONS: usize = 32;
 const MAX_PENDING_PASSKEY_AUTHENTICATIONS: usize = 128;
@@ -138,7 +140,7 @@ impl RemoteOptions {
 }
 
 pub fn remote_help() -> &'static str {
-    "Yeet remote mode\n\n  yeet remote [--background] [--bind ADDRESS] [--origin URL] [--legacy-tui]\n  yeet remote status\n  yeet remote stop\n  yeet remote auth status\n  yeet remote auth key generate|set|clear\n  yeet remote auth passkey add|clear\n  yeet --remote [--background] [--bind ADDRESS] [--origin URL]\n\nDefaults:\n  client workspace: restored per browser client, otherwise home directory\n  --bind 0.0.0.0:7331\n  frontend: experimental WebUI (requires an opt-in source build)\n\nOptions:\n  --background       detach one Remote process; no launchd/systemd service is installed\n  --legacy-tui       serve the previous browser-rendered Ratatui frontend\n  --size COLSxROWS   terminal size for --legacy-tui (default 120x40)\n\n`yeet remote` is workspace-neutral: the Remote server itself owns no project directory and never derives one from the shell current directory. Each WebUI client restores or selects its own workspace; a new client starts at the home directory and may switch to any valid workspace path. `--background` only detaches the current Remote process; it does not register a supervisor or restart policy, so a killed Remote stays dead. When included, the experimental WebUI is served directly by Yeet and does not require a Node development server. WebAuthn credentials remain scoped to the configured relying-party origin as required by WebAuthn. Network tunneling and port forwarding are intentionally outside Yeet."
+    "Yeet remote mode\n\n  yeet remote [--background] [--bind ADDRESS] [--origin URL] [--legacy-tui]\n  yeet remote status\n  yeet remote stop\n  yeet remote auth status\n  yeet remote auth key generate|set|clear\n  yeet remote auth passkey add|clear\n  yeet --remote [--background] [--bind ADDRESS] [--origin URL]\n\nDefaults:\n  client workspace: restored per browser client, otherwise home directory\n  --bind 127.0.0.1:7331 (non-loopback binds require an access key or passkey)\n  frontend: experimental WebUI (requires an opt-in source build)\n\nOptions:\n  --background       detach one Remote process; no launchd/systemd service is installed\n  --legacy-tui       serve the previous browser-rendered Ratatui frontend\n  --size COLSxROWS   terminal size for --legacy-tui (default 120x40)\n\n`yeet remote` is workspace-neutral: the Remote server itself owns no project directory and never derives one from the shell current directory. Each WebUI client restores or selects its own workspace; a new client starts at the home directory and may switch to any valid workspace path. `--background` only detaches the current Remote process; it does not register a supervisor or restart policy, so a killed Remote stays dead. When included, the experimental WebUI is served directly by Yeet and does not require a Node development server. WebAuthn credentials remain scoped to the configured relying-party origin as required by WebAuthn. Network tunneling and port forwarding are intentionally outside Yeet."
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,6 +340,7 @@ struct RemoteAuthState {
     enrollments: HashMap<String, u64>,
     registrations: HashMap<String, PendingPasskeyRegistration>,
     authentications: HashMap<String, PendingPasskeyAuthentication>,
+    failed_logins: Vec<u64>,
 }
 
 fn ensure_remote_auth_capacity(kind: &str, current: usize, maximum: usize) -> Result<()> {
@@ -399,6 +402,7 @@ impl RemoteAuthRuntime {
                 enrollments: HashMap::new(),
                 registrations: HashMap::new(),
                 authentications: HashMap::new(),
+                failed_logins: Vec::new(),
             })),
         })
     }
@@ -472,12 +476,62 @@ impl RemoteAuthRuntime {
             .is_some_and(|expires_at| *expires_at > now)
     }
 
-    fn websocket_origin_allowed(&self, _headers: &axum::http::HeaderMap) -> bool {
-        true
+    fn websocket_origin_allowed(&self, headers: &axum::http::HeaderMap) -> bool {
+        self.browser_origin_allowed(headers)
     }
 
-    fn http_auth_origin_allowed(&self, _headers: &axum::http::HeaderMap) -> bool {
-        true
+    fn http_auth_origin_allowed(&self, headers: &axum::http::HeaderMap) -> bool {
+        self.browser_origin_allowed(headers)
+    }
+
+    /// Browsers always attach `Origin` to WebSocket upgrades and cross-site
+    /// POSTs. Reject any origin that is neither this server's own `Host` nor
+    /// the configured public origin, so a web page on another site (or another
+    /// localhost port, which is same-site for cookies) cannot drive Remote.
+    /// Requests without `Origin` come from non-browser clients and are left to
+    /// the normal authentication check.
+    fn browser_origin_allowed(&self, headers: &axum::http::HeaderMap) -> bool {
+        let Some(origin) = headers.get(axum::http::header::ORIGIN) else {
+            return true;
+        };
+        let Some(origin) = origin
+            .to_str()
+            .ok()
+            .and_then(|value| Url::parse(value).ok())
+        else {
+            return false;
+        };
+        if !matches!(origin.scheme(), "http" | "https") {
+            return false;
+        }
+        let request_authority = origin_authority(&origin);
+        if let Some(public) = &self.public_origin
+            && request_authority == origin_authority(public)
+        {
+            return true;
+        }
+        // Without authentication a rebound attacker domain would match its own
+        // Host, so only loopback origins are trusted in that mode.
+        if !self.required() {
+            return matches!(
+                origin.host_str(),
+                Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+            );
+        }
+        headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|host| host.eq_ignore_ascii_case(&request_authority))
+    }
+
+    /// Global brute-force throttle: too many recent bad access keys pause login.
+    fn login_throttled(&self) -> bool {
+        let now = unix_time();
+        let mut state = self.state.lock().unwrap();
+        state
+            .failed_logins
+            .retain(|at| *at + LOGIN_FAILURE_WINDOW_SECONDS > now);
+        state.failed_logins.len() >= MAX_LOGIN_FAILURES
     }
 
     fn verify_access_key(&self, key: &str) -> Result<Option<String>> {
@@ -491,8 +545,10 @@ impl RemoteAuthRuntime {
             .verify_password(key.as_bytes(), &parsed)
             .is_err()
         {
+            self.state.lock().unwrap().failed_logins.push(unix_time());
             return Ok(None);
         }
+        self.state.lock().unwrap().failed_logins.clear();
         Ok(Some(self.issue_session()))
     }
 
@@ -742,6 +798,14 @@ impl RemoteAuthRuntime {
             notify_other_remote_auth_refresh();
         }
         Ok(self.issue_session())
+    }
+}
+
+fn origin_authority(url: &Url) -> String {
+    let host = url.host_str().unwrap_or_default();
+    match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
     }
 }
 
@@ -1280,6 +1344,11 @@ impl RemoteServer {
             Some(document) => RemoteAuthRuntime::from_document(document, options, address)?,
             None => RemoteAuthRuntime::for_remote(options, address)?,
         });
+        if !address.ip().is_loopback() && !auth.required() {
+            bail!(
+                "refusing to expose unauthenticated Yeet remote on {address}; run `yeet remote auth key generate` (or add a passkey) first, or bind to 127.0.0.1"
+            );
+        }
         let (input_tx, input_rx) = mpsc::channel();
         let frame = Arc::new(Mutex::new(FrameSnapshot::new(options.cols, options.rows)));
         let running = Arc::new(AtomicBool::new(true));
@@ -1476,3 +1545,56 @@ fn browser_key_code(key: &str, shift: bool) -> Option<KeyCode> {
 
 #[cfg(test)]
 mod lifecycle_tests;
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue, header};
+
+    fn runtime(key_required: bool) -> RemoteAuthRuntime {
+        let mut document = RemoteAuthDocument::default();
+        if key_required {
+            document.key_hash = Some("x".into());
+        }
+        RemoteAuthRuntime::from_document(
+            document,
+            &RemoteOptions::default(),
+            "127.0.0.1:7331".parse().unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn headers(origin: Option<&str>, host: &str) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        map.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+        if let Some(origin) = origin {
+            map.insert(header::ORIGIN, HeaderValue::from_str(origin).unwrap());
+        }
+        map
+    }
+
+    #[test]
+    fn cross_site_origins_cannot_reach_remote() {
+        let authed = runtime(true);
+        assert!(authed.websocket_origin_allowed(&headers(None, "box:7331")));
+        assert!(authed.websocket_origin_allowed(&headers(Some("http://box:7331"), "box:7331")));
+        assert!(
+            !authed.websocket_origin_allowed(&headers(Some("https://evil.example"), "box:7331"))
+        );
+        assert!(!authed.http_auth_origin_allowed(&headers(Some("null"), "box:7331")));
+
+        // Without authentication only loopback origins are trusted, so DNS
+        // rebinding to an attacker hostname is rejected even when Host matches.
+        let open = runtime(false);
+        assert!(
+            open.websocket_origin_allowed(&headers(
+                Some("http://localhost:7331"),
+                "localhost:7331"
+            ))
+        );
+        assert!(!open.websocket_origin_allowed(&headers(
+            Some("http://evil.example:7331"),
+            "evil.example:7331"
+        )));
+    }
+}

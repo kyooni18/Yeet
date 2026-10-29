@@ -18,18 +18,14 @@ impl ToolRegistry {
     ) -> Result<String> {
         match route {
             ExternalRoute::SkillScript(skill) => {
-                if self.catalog.capability_disabled("skill", &skill) {
-                    bail!("Skill {skill} is disabled for this session");
-                }
+                self.ensure_capability_allowed("skill", &skill)?;
                 if self.catalog.deny_shell {
                     bail!("Agent execution policy prohibits Skill scripts");
                 }
                 self.run_skill_script(&skill, object, model, cancel)
             }
             ExternalRoute::SkillFile(skill) => {
-                if self.catalog.capability_disabled("skill", &skill) {
-                    bail!("Skill {skill} is disabled for this session");
-                }
+                self.ensure_capability_allowed("skill", &skill)?;
                 self.bridge_client()?.read_skill_file(
                     &skill,
                     object.get("path").and_then(Value::as_str).unwrap_or(""),
@@ -40,9 +36,7 @@ impl ToolRegistry {
                 tool,
                 read_only,
             } => {
-                if self.catalog.capability_disabled("mcp", &server) {
-                    bail!("MCP server {server} is disabled for this session");
-                }
+                self.ensure_capability_allowed("mcp", &server)?;
                 let result = self
                     .bridge_client()?
                     .call_mcp_tool_cancellable(&server, &tool, object, cancel)?

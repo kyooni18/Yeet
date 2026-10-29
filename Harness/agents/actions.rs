@@ -45,6 +45,9 @@ pub enum FrontendCommand {
     ResolvePermission {
         request_id: String,
         granted: bool,
+        /// With `granted`, keep the approval for the rest of this session.
+        #[serde(default)]
+        session: bool,
     },
     /// Answers the pending main-agent question; `None` dismisses it.
     AnswerQuestion {

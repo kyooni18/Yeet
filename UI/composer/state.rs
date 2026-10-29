@@ -180,7 +180,11 @@ impl ComposerState {
             ComposerAction::Interrupt if env.available && harness.is_streaming => {
                 effect.command = Some(HarnessCommand::Interrupt)
             }
-            ComposerAction::RespondPermission { target, allow } if env.available => {
+            ComposerAction::RespondPermission {
+                target,
+                allow,
+                session,
+            } if env.available => {
                 let current = permissions(harness, true)
                     .into_iter()
                     .any(|permission| permission.target == target);
@@ -188,6 +192,7 @@ impl ComposerState {
                     effect.command = Some(HarnessCommand::ResolvePermission {
                         request_id: target.id,
                         granted: allow,
+                        session,
                     });
                 }
             }
@@ -341,15 +346,27 @@ fn permission_view(
                 ComposerAction::RespondPermission {
                     target: target.clone(),
                     allow: false,
+                    session: false,
                 },
                 available,
             ),
             control(
-                "Allow",
+                "Allow once",
                 ComposerIcon::Allow,
                 ComposerAction::RespondPermission {
                     target: target.clone(),
                     allow: true,
+                    session: false,
+                },
+                available,
+            ),
+            control(
+                "Allow for session",
+                ComposerIcon::Allow,
+                ComposerAction::RespondPermission {
+                    target: target.clone(),
+                    allow: true,
+                    session: true,
                 },
                 available,
             ),

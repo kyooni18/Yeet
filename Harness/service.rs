@@ -43,7 +43,7 @@ use crate::{
         WorkspaceSessionGroup, WorkspaceSummary, normalize_reasoning_level,
         reasoning_levels_for_model,
     },
-    permission::PermissionBroker,
+    permission::{PermissionBroker, PermissionDecision},
     project_settings::{ProjectSettingsStore, ServiceBackend},
     session_store::{RunStatus, SessionStore, StoredRun, StoredSession},
     tools::{BridgeHandle, ToolRegistry},
@@ -340,8 +340,15 @@ impl HarnessService {
             FrontendCommand::ResolvePermission {
                 request_id,
                 granted,
+                session,
             } => {
-                self.permission.resolve_request(&request_id, granted);
+                let decision = match (granted, session) {
+                    (false, _) => PermissionDecision::Deny,
+                    (true, false) => PermissionDecision::Once,
+                    (true, true) => PermissionDecision::Session,
+                };
+                self.permission
+                    .resolve_request_scoped(&request_id, decision);
                 self.publish_state();
                 Ok(())
             }
@@ -482,6 +489,7 @@ impl HarnessService {
             }
             FrontendCommand::LoadSession { session_id } => self.load_session(&session_id),
             FrontendCommand::NewSession => {
+                self.permission.clear_session_grants();
                 self.new_session();
                 Ok(())
             }

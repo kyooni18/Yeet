@@ -26,6 +26,9 @@ pub(super) struct ToolCatalog {
     /// Execution policy for scoped agents, independent of capability settings.
     pub(super) deny_writes: bool,
     pub(super) deny_shell: bool,
+    /// Set for the duration of one tool call the user explicitly allowed even
+    /// though its capability is disabled.
+    pub(super) override_disabled: bool,
 }
 
 /// Where a non-built-in tool name is executed.
@@ -68,16 +71,22 @@ impl ToolCatalog {
             disabled_capabilities: HashSet::new(),
             deny_writes: false,
             deny_shell: false,
+            override_disabled: false,
         }
     }
 
     pub(super) fn capability_disabled(&self, kind: &str, name: &str) -> bool {
-        self.disabled_capabilities
-            .contains(&format!("{kind}:{name}"))
+        !self.override_disabled
+            && self
+                .disabled_capabilities
+                .contains(&format!("{kind}:{name}"))
     }
 
     /// Whether `tool_name` may be listed or executed.
     pub(super) fn tool_enabled(&self, tool_name: &str) -> bool {
+        if self.override_disabled {
+            return true;
+        }
         if matches!(tool_name, "computer_use" | "computer_use_reset")
             && crate::computer_use::availability().is_err()
         {
@@ -96,6 +105,17 @@ impl ToolCatalog {
             return !self.capability_disabled("mcp", server);
         }
         true
+    }
+
+    /// Capability kind and name that owns a disabled tool, for the approval prompt.
+    pub(super) fn disabled_tool_owner(&self, tool_name: &str) -> (&'static str, String) {
+        if let Some(skill) = self.skill_tool_map.get(tool_name) {
+            ("skill", skill.clone())
+        } else if let Some((server, _)) = self.mcp_tool_map.get(tool_name) {
+            ("mcp", server.clone())
+        } else {
+            ("tool", tool_name.to_owned())
+        }
     }
 
     /// Enabled active schemas, with descriptions labelled by their source.

@@ -104,7 +104,7 @@ Runtime:
 Remote:
   Remote mode is opt-in, workspace-neutral, and runs in the current Yeet process.
   Add --background to detach one Remote process without installing a supervisor or
-  restart policy. It serves the semantic WebUI on 0.0.0.0:7331 by default. Each
+  restart policy. It serves the semantic WebUI on 127.0.0.1:7331 by default. Each
   browser client restores or selects its own workspace; a new client falls back to
   the home directory. Client backends stay in-process, while provider/edit/search
   sidecars start only when needed. Access keys and WebAuthn passkeys are optional.
@@ -539,6 +539,7 @@ fn run_agent(args: &[String]) -> Result<()> {
                     harness.send(FrontendCommand::ResolvePermission {
                         request_id: id.clone(),
                         granted,
+                        session: false,
                     })?;
                     answered_permission = Some(id);
                 }

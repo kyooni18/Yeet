@@ -147,7 +147,7 @@ test('permission prompts send semantic allow and deny commands', async ({ page }
   let prompt = page.getByRole('alertdialog', { name: 'Shell permission requested' })
   await expect(prompt).toContainText('cargo test --all-targets')
   await expect(prompt.getByRole('button', { name: 'Deny' })).toBeFocused()
-  await prompt.getByRole('button', { name: 'Allow' }).click()
+  await prompt.getByRole('button', { name: 'Allow once' }).click()
 
   await emit(page, {
     type: 'state_update',

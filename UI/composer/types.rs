@@ -101,6 +101,9 @@ pub enum ComposerAction {
     RespondPermission {
         target: PermissionTarget,
         allow: bool,
+        /// With `allow`, keep the approval for the rest of the session.
+        #[serde(default)]
+        session: bool,
     },
     /// Answers the displayed agent question; `None` dismisses it.
     AnswerQuestion {

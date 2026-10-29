@@ -52,7 +52,7 @@ test('permission alertdialog takes keyboard focus and restores the prior control
   await expect(prompt).toContainText('cargo test --all-targets')
 
   await page.keyboard.press('Tab')
-  const allow = prompt.getByRole('button', { name: 'Allow' })
+  const allow = prompt.getByRole('button', { name: 'Allow once' })
   await expect(allow).toBeFocused()
   await page.keyboard.press('Shift+Tab')
   await expect(deny).toBeFocused()
@@ -224,7 +224,7 @@ test('narrow permission prompts keep oversized commands inspectable and actions 
   expect(commandStyle.scrollHeight).toBeGreaterThan(commandStyle.clientHeight)
   expect(['auto', 'scroll']).toContain(commandStyle.overflowY)
 
-  for (const name of ['Deny', 'Allow']) {
+  for (const name of ['Deny', 'Allow once']) {
     const box = await prompt.getByRole('button', { name }).boundingBox()
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
     expect(box?.width ?? 0).toBeGreaterThanOrEqual(44)
@@ -253,7 +253,7 @@ test('pending permission remains inspectable but cannot be answered while Remote
 
   const prompt = page.getByRole('alertdialog', { name: 'Shell permission requested' })
   const deny = prompt.getByRole('button', { name: 'Deny' })
-  const allow = prompt.getByRole('button', { name: 'Allow' })
+  const allow = prompt.getByRole('button', { name: 'Allow once' })
   await expect(prompt).toBeVisible()
   await expect(deny).toBeEnabled()
   await expect(allow).toBeEnabled()
@@ -291,7 +291,7 @@ test('wide permission actions adapt touch target size to pointer type', async ({
 
   const prompt = page.getByRole('alertdialog', { name: 'Shell permission requested' })
   const touchFirst = await page.evaluate(() => matchMedia('(hover: none) and (pointer: coarse)').matches)
-  for (const name of ['Deny', 'Allow']) {
+  for (const name of ['Deny', 'Allow once']) {
     const box = await prompt.getByRole('button', { name }).boundingBox()
     expect(box).not.toBeNull()
     if (touchFirst) {
@@ -316,7 +316,7 @@ test('QuickPanel uses shared permission identities when native and shell request
   await expect(permissions).toHaveCount(2)
   await expect(permissions.nth(0)).toContainText('Notes')
   await expect(permissions.nth(1)).toContainText('cargo test')
-  await permissions.nth(0).getByRole('button', { name: 'Allow', exact: true }).click()
+  await permissions.nth(0).getByRole('button', { name: 'Allow once', exact: true }).click()
   await expect.poll(() => sentCommands(page)).toContainEqual(
     expect.objectContaining({ type: 'resolve_permission', request_id: 'quick-native', granted: true }),
   )

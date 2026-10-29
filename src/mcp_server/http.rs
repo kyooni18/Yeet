@@ -30,8 +30,8 @@ mod runtime_support;
 mod wire;
 
 use auth_support::{
-    attach_protocol_version, authorization_page, ensure_oauth_mode, mcp_authorized,
-    payload_contains_method, unauthorized_response,
+    attach_protocol_version, authorization_page, browser_origin_allowed, ensure_oauth_mode,
+    mcp_authorized, payload_contains_method, unauthorized_response,
 };
 use runtime_support::{JsonRpcErrorShape, mcp_jsonrpc_error_response};
 use wire::{
@@ -1279,6 +1279,9 @@ fn route_request(
             }
         }
         ("POST", "/mcp") => {
+            if !browser_origin_allowed(&request.headers, &public_url) {
+                return Ok(HttpResponse::json(403, json!({"error":"forbidden_origin"})));
+            }
             let auth = oauth.auth_store().status()?;
             if !mcp_authorized(&request.headers, &oauth, auth.mode, auth.oauth_enabled)? {
                 return Ok(unauthorized_response(
@@ -1378,6 +1381,9 @@ fn route_request(
             }
         }
         ("DELETE", "/mcp") => {
+            if !browser_origin_allowed(&request.headers, &public_url) {
+                return Ok(HttpResponse::json(403, json!({"error":"forbidden_origin"})));
+            }
             let auth = oauth.auth_store().status()?;
             if !mcp_authorized(&request.headers, &oauth, auth.mode, auth.oauth_enabled)? {
                 return Ok(unauthorized_response(

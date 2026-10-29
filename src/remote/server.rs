@@ -245,6 +245,17 @@ async fn auth_key(
         return json_error(StatusCode::FORBIDDEN, "browser origin is not allowed");
     }
 
+    if state.auth.login_throttled() {
+        let mut response = json_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed access-key attempts; retry in a minute",
+        );
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+        return response;
+    }
+
     // Argon2 verification is deliberately expensive. Keep it off Tokio's
     // request workers and bound the blocking work so unauthenticated bursts
     // cannot multiply Argon2 memory/CPU use without limit.
