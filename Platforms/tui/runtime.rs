@@ -627,6 +627,15 @@ mod frame_pacer_tests {
 
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let mut app = App::default();
+        // Keep asynchronous Git discovery from changing the content between
+        // the incremental frame and the clean reference frame.
+        let workspace = app.workspace_path();
+        app.home
+            .set_git_snapshot(crate::harness::resources::GitSnapshot {
+                workspace: workspace.clone(),
+                root: workspace,
+                ..Default::default()
+            });
         let mut scene = None;
         draw_tui_frame(&mut terminal, &mut app, &mut scene).unwrap();
 

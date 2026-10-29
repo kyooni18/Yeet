@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-30
+
+- Stabilize terminal redraw verification during asynchronous Git refresh.
+
 ## [0.1.4] - 2026-10-30
 
 - Add lightweight native web search and improve search configuration.
