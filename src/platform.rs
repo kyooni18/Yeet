@@ -105,7 +105,24 @@ pub(crate) fn default_config_directory() -> PathBuf {
 }
 #[cfg(unix)]
 pub(crate) fn bind_local(endpoint: &Path) -> io::Result<LocalListener> {
-    LocalListener::bind(endpoint)
+    LocalListener::bind(endpoint).map_err(|error| socket_path_error(endpoint, error))
+}
+
+// Unix socket paths are limited to ~108 bytes; name the path and the fix
+// instead of surfacing the bare SUN_LEN error.
+#[cfg(unix)]
+fn socket_path_error(endpoint: &Path, error: io::Error) -> io::Error {
+    if error.kind() != io::ErrorKind::InvalidInput || !error.to_string().contains("SUN_LEN") {
+        return error;
+    }
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "socket path is too long for a Unix socket ({} bytes): {}; set YEET_CONFIG_DIR to a shorter directory",
+            endpoint.as_os_str().len(),
+            endpoint.display()
+        ),
+    )
 }
 
 #[cfg(windows)]
@@ -120,7 +137,7 @@ pub(crate) fn bind_local(endpoint: &Path) -> io::Result<LocalListener> {
 
 #[cfg(unix)]
 pub(crate) fn connect_local(endpoint: &Path) -> io::Result<LocalStream> {
-    LocalStream::connect(endpoint)
+    LocalStream::connect(endpoint).map_err(|error| socket_path_error(endpoint, error))
 }
 
 #[cfg(windows)]
@@ -195,7 +212,7 @@ fn set_windows_private_acl(path: &Path, directory: bool) -> io::Result<()> {
         return Ok(());
     }
 
-    let identity = Command::new("whoami").output()?;
+    let identity = hidden_command("whoami").output()?;
     if !identity.status.success() {
         return Err(io::Error::other("whoami failed while hardening Yeet state"));
     }
@@ -211,7 +228,7 @@ fn set_windows_private_acl(path: &Path, directory: bool) -> io::Result<()> {
         format!("*S-1-5-18:{rights}"),
         format!("*S-1-5-32-544:{rights}"),
     ];
-    let output = Command::new("icacls")
+    let output = hidden_command("icacls")
         .arg(path)
         .arg("/inheritancelevel:r")
         .arg("/grant:r")
@@ -490,7 +507,7 @@ impl TrackedChild {
                     job_object::GenerateConsoleCtrlEvent(job_object::CTRL_BREAK_EVENT, self.pid);
             }
             let pid_text = self.pid.to_string();
-            let _ = Command::new("taskkill")
+            let _ = hidden_command("taskkill")
                 .args(["/PID", &pid_text, "/T"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -499,7 +516,7 @@ impl TrackedChild {
             if let Some(job) = &self.job {
                 job.terminate();
             } else {
-                let _ = Command::new("taskkill")
+                let _ = hidden_command("taskkill")
                     .args(["/PID", &pid_text, "/T", "/F"])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -578,6 +595,18 @@ pub(crate) fn systemd_managed_process() -> bool {
         false
     }
 }
+/// Create a non-interactive subprocess without opening a console on Windows.
+pub(crate) fn hidden_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 pub(crate) fn configure_detached(command: &mut Command) {
     #[cfg(unix)]
     {
@@ -602,6 +631,17 @@ pub(crate) fn configure_detached(command: &mut Command) {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+}
+
+pub(crate) fn configure_hidden_process_group(command: &mut Command) {
+    configure_process_group(command);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     }
 }
 
@@ -775,7 +815,7 @@ pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
         // preserves the opportunity for console/GUI processes to run normal
         // shutdown handling instead of making every Windows recycle abrupt.
         let pid_text = pid.to_string();
-        let graceful = Command::new("taskkill")
+        let graceful = hidden_command("taskkill")
             .args(["/PID", &pid_text, "/T"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -785,7 +825,7 @@ pub(crate) fn force_terminate_process_tree(pid: u32) -> io::Result<()> {
         }
 
         std::thread::sleep(std::time::Duration::from_millis(150));
-        let _ = Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(["/PID", &pid_text, "/T", "/F"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -918,6 +958,21 @@ fn signal_process(pid: u32, signal: i32) -> io::Result<()> {
 #[cfg(test)]
 mod portable_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn hidden_commands_have_no_console_window() {
+        let output = hidden_command("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Add-Type -Name ConsoleProbe -Namespace Yeet -MemberDefinition '[System.Runtime.InteropServices.DllImport(\"kernel32.dll\")] public static extern System.IntPtr GetConsoleWindow();'; [Yeet.ConsoleProbe]::GetConsoleWindow().ToInt64()",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0");
+    }
 
     #[test]
     fn shell_signal_grace_is_configurable_and_bounded() {
@@ -1113,7 +1168,33 @@ mod tests {
 
     fn process_group_exists(pgid: u32) -> bool {
         let result = unsafe { libc::kill(-(pgid as i32), 0) };
-        result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+        let signalable =
+            result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH);
+        signalable && live_group_member(pgid)
+    }
+
+    // Killed members reparented to a PID 1 that never reaps (common in
+    // containers) stay signalable as zombies; only running members count.
+    #[cfg(target_os = "linux")]
+    fn live_group_member(pgid: u32) -> bool {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return true;
+        };
+        entries.flatten().any(|entry| {
+            let Ok(stat) = fs::read_to_string(entry.path().join("stat")) else {
+                return false;
+            };
+            let Some((_, fields)) = stat.rsplit_once(") ") else {
+                return false;
+            };
+            let fields = fields.split_whitespace().collect::<Vec<_>>();
+            fields.first() != Some(&"Z") && fields.get(2) == Some(&pgid.to_string().as_str())
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn live_group_member(_pgid: u32) -> bool {
+        true
     }
 
     #[test]

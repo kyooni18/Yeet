@@ -1362,6 +1362,11 @@ mod contract_tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("example.txt"), "hello\nworld\n").unwrap();
         let workspace = directory.path().canonicalize().unwrap();
+        // Stale-read protection only applies to sandboxed workspaces.
+        crate::sandbox::SandboxStore::new(&workspace)
+            .unwrap()
+            .save(&crate::sandbox::SandboxPolicy::default())
+            .unwrap();
         let mut server = McpServer::new(workspace.clone());
         let read = server
             .handle(json!({
@@ -1401,6 +1406,11 @@ mod contract_tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("example.txt"), "hello\nworld\n").unwrap();
         let workspace = directory.path().canonicalize().unwrap();
+        // Stale-read protection only applies to sandboxed workspaces.
+        crate::sandbox::SandboxStore::new(&workspace)
+            .unwrap()
+            .save(&crate::sandbox::SandboxPolicy::default())
+            .unwrap();
         let mut server = McpServer::new(workspace.clone());
         let read = server
             .handle(json!({

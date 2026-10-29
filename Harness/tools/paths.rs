@@ -7,7 +7,6 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::Command,
     time::UNIX_EPOCH,
 };
 
@@ -50,7 +49,7 @@ pub(super) fn stable_workspace_path_key(root: &Path, input: &str) -> Result<Stri
 /// Computes the committed revision plus a bounded fingerprint of local worktree changes.
 pub(crate) fn workspace_revision_for_path(root: &Path) -> Option<String> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let head_output = Command::new("git")
+    let head_output = crate::platform::hidden_command("git")
         .arg("-C")
         .arg(&root)
         .args(["rev-parse", "HEAD"])
@@ -67,13 +66,13 @@ pub(crate) fn workspace_revision_for_path(root: &Path) -> Option<String> {
         return None;
     }
 
-    let diff = Command::new("git")
+    let diff = crate::platform::hidden_command("git")
         .arg("-C")
         .arg(&root)
         .args(["diff", "--binary", "HEAD", "--", "."])
         .output()
         .ok()?;
-    let status = Command::new("git")
+    let status = crate::platform::hidden_command("git")
         .arg("-C")
         .arg(&root)
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])

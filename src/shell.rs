@@ -432,6 +432,9 @@ pub fn run_shell_session(
     } else {
         "Unable to launch sandboxed shell command"
     })?;
+    // The Command still owns the PTY slave; Linux masters only report EIO
+    // once every slave descriptor, including this parent's, is closed.
+    drop(launch);
     let mut child = TrackedChild::new(child, "shell");
     let capture_limit = capture_bytes.clamp(1024, 4 * 1024 * 1024);
     let stdout_limit = capture_limit.min(effective.limits.max_stdout_bytes);
@@ -687,6 +690,20 @@ fn sandboxed_shell_command(
             .envs(sandbox_environment(policy, scratch, cwd))
             .env("YEET_TEST_LINUX_SANDBOX_PLAN", &plan_path)
             .env("YEET_TEST_LINUX_SANDBOX_COMMAND", &command);
+        // libtest prints its "running 1 test" banner on stdout before the
+        // helper runs, so park the real stdout on fd 3 until the helper restores it.
+        #[cfg(test)]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            value.pre_exec(|| {
+                let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+                if null < 0 || libc::dup2(1, 3) < 0 || libc::dup2(null, 1) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                libc::close(null);
+                Ok(())
+            });
+        }
 
         #[cfg(not(test))]
         value
@@ -1776,6 +1793,11 @@ mod tests {
             std::env::var("YEET_TEST_LINUX_SANDBOX_PLAN"),
             std::env::var("YEET_TEST_LINUX_SANDBOX_COMMAND"),
         ) {
+            std::io::stdout().flush().ok();
+            unsafe {
+                libc::dup2(3, 1);
+                libc::close(3);
+            }
             std::process::exit(
                 run_linux_sandbox_shell_helper(Path::new(&plan), &command).unwrap_or(1),
             );

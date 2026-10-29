@@ -74,7 +74,7 @@ impl BridgeClient {
     fn spawn(mut command: Command, workspace: Option<PathBuf>) -> Result<Self> {
         // Keep the provider bridge and every MCP subprocess it starts in one
         // owned process group. Linux additionally arms parent-death cleanup.
-        configure_process_group(&mut command);
+        crate::platform::configure_hidden_process_group(&mut command);
         let mut child = command
             .spawn()
             .context("failed to start Node provider bridge")?;
@@ -206,7 +206,7 @@ impl BridgeClient {
             command.current_dir(workspace);
             apply_workspace_env(&mut command, workspace)?;
         }
-        configure_process_group(&mut command);
+        crate::platform::configure_hidden_process_group(&mut command);
         let mut child = command
             .spawn()
             .context("failed to restart Node provider bridge")?;

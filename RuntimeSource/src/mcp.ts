@@ -327,6 +327,7 @@ class StdioMcpConnection implements McpConnection {
     const env = { ...process.env, ...(this.configuration.env ?? {}) };
     const child = spawn(this.configuration.command, this.configuration.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
       env,
       ...(this.configuration.cwd ? { cwd: this.configuration.cwd } : {}),
     });

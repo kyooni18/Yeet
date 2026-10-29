@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
-    io::{Read, Write},
+    io::{IsTerminal, Read, Write},
 };
 
 use anyhow::{Result, anyhow, bail};
@@ -89,7 +89,7 @@ pub const HELP: &str = r#"Usage:
   yeet mcpserver auth [status|mode|key] ...
   yeet mcpserver stdio [WORKSPACE|--workspace PATH] [--restrict-workspace]
   yeet sandbox [show|path|reset|scratch|workspace|network|env|secret|limits] ...
-  yeet search [backend [builtin|mcp [SERVER]]|install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]
+  yeet search [backend [builtin|mcp [SERVER]]|install [all|native|searxng|agent-reach]|status|test|path|remove [all|searxng|agent-reach]]
 
 State:
   YEET_CONFIG_DIR overrides the per-user state directory.
@@ -495,6 +495,7 @@ fn run_agent(args: &[String]) -> Result<()> {
     let started_at = std::time::Instant::now();
     let mut saw_streaming = false;
     let mut transport_error = None;
+    let mut answered_permission: Option<String> = None;
 
     let state = loop {
         if let Some(envelope) = harness.try_recv() {
@@ -508,14 +509,38 @@ fn run_agent(args: &[String]) -> Result<()> {
                     saw_streaming = true;
                 }
 
+                let pending = state
+                    .pending_shell_permission
+                    .as_ref()
+                    .map(|p| {
+                        (
+                            p.id.clone(),
+                            format!("{}: {}", p.operation, p.command),
+                            &p.reason,
+                        )
+                    })
+                    .or_else(|| {
+                        state
+                            .pending_native_app_permission
+                            .as_ref()
+                            .map(|p| (p.id.clone(), format!("{} {}", p.server, p.tool), &p.reason))
+                    });
                 if !benchmark
-                    && (state.pending_shell_permission.is_some()
-                        || state.pending_native_app_permission.is_some())
+                    && let Some((id, subject, reason)) = pending
+                    && answered_permission.as_deref() != Some(id.as_str())
                 {
-                    let _ = harness.send(FrontendCommand::Interrupt);
-                    bail!(
-                        "Headless agent is waiting for an interactive permission. Configure sandbox auto-approval or use --benchmark for an isolated benchmark container."
-                    );
+                    if !std::io::stdin().is_terminal() {
+                        let _ = harness.send(FrontendCommand::Interrupt);
+                        bail!(
+                            "Headless agent is waiting for a permission and stdin is not a terminal. Run `yeet sandbox auto-approve on` or use --benchmark for an isolated benchmark container."
+                        );
+                    }
+                    let granted = ask_permission(&subject, reason)?;
+                    harness.send(FrontendCommand::ResolvePermission {
+                        request_id: id.clone(),
+                        granted,
+                    })?;
+                    answered_permission = Some(id);
                 }
 
                 if saw_streaming && !state.is_streaming {
@@ -1024,4 +1049,20 @@ fn mcp(args: &[String]) -> Result<()> {
     })();
     bridge.shutdown();
     result
+}
+
+fn ask_permission(subject: &str, reason: &str) -> Result<bool> {
+    let mut stderr = std::io::stderr();
+    writeln!(stderr, "yeet: permission requested: {subject}")?;
+    if !reason.is_empty() {
+        writeln!(stderr, "  {reason}")?;
+    }
+    write!(stderr, "Allow? [y/N] ")?;
+    stderr.flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }

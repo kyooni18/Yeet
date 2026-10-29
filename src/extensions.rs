@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use crate::{
     config::ConfigStore,
     model::{BridgeState, ConversationKind, ExtensionCommandItem, ToolCallStatus},
-    platform::{TrackedChild, configure_process_group, force_terminate_process_tree},
+    platform::{TrackedChild, configure_hidden_process_group, force_terminate_process_tree},
 };
 
 pub const EXTENSION_PROTOCOL: &str = "yeet.extension.v1";
@@ -561,7 +561,7 @@ fn spawn_extension(
     for (key, value) in &entry.env {
         process.env(key, expand_value(value, workspace));
     }
-    configure_process_group(&mut process);
+    configure_hidden_process_group(&mut process);
     let mut child = process.spawn().with_context(|| {
         format!(
             "start extension {} with {}",

@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::{
     config::ConfigStore,
     core::BridgeClient,
-    platform::{TrackedChild, configure_process_group},
+    platform::{TrackedChild, configure_hidden_process_group},
     project_settings::{ProjectSettingsStore, ServiceBackend},
 };
 
@@ -151,6 +151,10 @@ impl SearchPaths {
             && self.managed_mcporter().is_file()
             && self.agent_reach_mcporter_config.is_file()
     }
+
+    fn native_installed(&self) -> bool {
+        self.root.join("native-exa.enabled").is_file()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -205,6 +209,9 @@ impl WebSearchClient {
         }
         validate_public_http_url(url)?;
         let max_chars = max_chars.clamp(2_000, 48_000);
+        if self.paths.native_installed() {
+            return self.read_url_direct(url, max_chars, cancel);
+        }
         match self.read_url_agent_reach(url, max_chars, cancel) {
             Ok(value) => Ok(value),
             Err(error) => {
@@ -361,7 +368,11 @@ impl WebSearchClient {
             WebSearchBackend::Auto if has_searxng_only_filters => {
                 self.search_searxng(request, cancel)
             }
-            WebSearchBackend::Auto => match self.search_agent_reach(query, max_results, cancel) {
+            WebSearchBackend::Auto => match if self.paths.native_installed() {
+                self.search_native_at(EXA_MCP_URL, query, max_results, cancel)
+            } else {
+                self.search_agent_reach(query, max_results, cancel)
+            } {
                 Ok(result) => Ok(result),
                 Err(agent_reach_error) => {
                     if cancel.load(Ordering::Acquire) {
@@ -371,11 +382,18 @@ impl WebSearchClient {
                         Ok(value) => value,
                         Err(_) if cancel.load(Ordering::Acquire) => bail!("cancelled"),
                         Err(error) => bail!(
-                            "Agent-Reach search failed: {agent_reach_error:#}; SearXNG fallback failed: {error:#}"
+                            "Web search failed: {agent_reach_error:#}; SearXNG fallback failed: {error:#}"
                         ),
                     };
                     if let Some(object) = fallback.as_object_mut() {
-                        object.insert("fallbackFrom".into(), json!("agent-reach"));
+                        object.insert(
+                            "fallbackFrom".into(),
+                            json!(if self.paths.native_installed() {
+                                "exa"
+                            } else {
+                                "agent-reach"
+                            }),
+                        );
                         object.insert(
                             "fallbackReason".into(),
                             json!(truncate_chars(&agent_reach_error.to_string(), 320)),
@@ -384,6 +402,86 @@ impl WebSearchClient {
                     Ok(fallback)
                 }
             },
+        }
+    }
+
+    fn search_native_at(
+        &self,
+        endpoint: &str,
+        query: &str,
+        max_results: usize,
+        cancel: &AtomicBool,
+    ) -> Result<Value> {
+        let agent = self.agent.clone();
+        let endpoint = endpoint.to_owned();
+        let query = query.to_owned();
+        let max_results = max_results.clamp(1, 20);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = (|| -> Result<Value> {
+                let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"web_search_exa","arguments":{"query":query,"numResults":max_results}}});
+                let response = agent
+                    .post(&endpoint)
+                    .set("Content-Type", "application/json")
+                    .set("Accept", "application/json, text/event-stream")
+                    .set("MCP-Protocol-Version", "2025-03-26")
+                    .send_string(&request.to_string())
+                    .map_err(|error| anyhow!("Exa search request failed: {error}"))?;
+                let mut body = String::new();
+                response
+                    .into_reader()
+                    .take(2_000_001)
+                    .read_to_string(&mut body)
+                    .context("read Exa search response")?;
+                if body.len() > 2_000_000 {
+                    bail!("Exa search response exceeded the size limit");
+                }
+                let payload = if body.trim_start().starts_with('{') {
+                    body.trim().to_owned()
+                } else {
+                    body.lines()
+                        .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                let value: Value =
+                    serde_json::from_str(&payload).context("decode Exa MCP response")?;
+                if let Some(error) = value.get("error") {
+                    bail!("Exa search failed: {error}");
+                }
+                let result = value
+                    .get("result")
+                    .context("Exa MCP response missing result")?;
+                if result.get("isError").and_then(Value::as_bool) == Some(true) {
+                    bail!("Exa search failed: {result}");
+                }
+                let mut normalized =
+                    normalize_agent_reach_output(&query, &result.to_string(), max_results)?;
+                if let Some(object) = normalized.as_object_mut() {
+                    object.insert("source".into(), json!("exa"));
+                    if let Some(results) = object.get_mut("results").and_then(Value::as_array_mut) {
+                        for result in results {
+                            if let Some(entry) = result.as_object_mut() {
+                                entry.insert("engines".into(), json!(["exa"]));
+                            }
+                        }
+                    }
+                }
+                Ok(normalized)
+            })();
+            let _ = tx.send(result);
+        });
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                bail!("cancelled");
+            }
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(result) => return result,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("Exa search worker stopped unexpectedly")
+                }
+            }
         }
     }
 
@@ -557,7 +655,7 @@ impl WebSearchClient {
         if let Some(config) = invocation.config.as_ref() {
             command.env("MCPORTER_CONFIG", config);
         }
-        configure_process_group(&mut command);
+        configure_hidden_process_group(&mut command);
         let mut child = command
             .spawn()
             .with_context(|| format!("run Agent-Reach Exa {operation} through mcporter"))?;
@@ -689,7 +787,7 @@ impl WebSearchClient {
         }
         if !self.paths.installed() {
             bail!(
-                "Web search is attached but local SearXNG is not installed. Run `yeet search install` once, or set YEET_SEARXNG_URL to an existing instance."
+                "SearXNG is not installed. Run `yeet search install searxng`, or set YEET_SEARXNG_URL to an existing instance."
             );
         }
 
@@ -712,7 +810,7 @@ impl WebSearchClient {
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
-        configure_process_group(&mut command);
+        configure_hidden_process_group(&mut command);
         let child = command.spawn();
         let child = match child {
             Ok(child) => child,
@@ -1033,6 +1131,11 @@ pub fn run_cli(args: &[String]) -> Result<String> {
             let value = web_search_status_for_workspace(&project.web, Some(&workspace));
             Ok(serde_json::to_string_pretty(&value)?)
         }
+        "test" => {
+            let workspace = env::current_dir()?.canonicalize()?;
+            let project = ProjectSettingsStore::new(&workspace)?.load()?;
+            test_web_search(&project.web, Some(&workspace))
+        }
         "path" => Ok(SearchPaths::discover().root.display().to_string()),
         "remove" | "uninstall" => {
             let workspace = env::current_dir()?.canonicalize()?;
@@ -1043,17 +1146,18 @@ pub fn run_cli(args: &[String]) -> Result<String> {
             remove(args.get(1).map(String::as_str).unwrap_or("all"))
         }
         _ => bail!(
-            "Usage: yeet search [backend [builtin|mcp [SERVER]]|install [all|searxng|agent-reach]|status|path|remove [all|searxng|agent-reach]]"
+            "Usage: yeet search [backend [builtin|mcp [SERVER]]|install [all|searxng|agent-reach]|status|test|path|remove [all|searxng|agent-reach]]"
         ),
     }
 }
 
 fn install(target: &str) -> Result<String> {
     match target {
-        "all" => {
-            let searxng = install_searxng()?;
-            let agent_reach = install_agent_reach()?;
-            Ok(format!("{searxng}\n{agent_reach}"))
+        "all" | "native" => {
+            let paths = SearchPaths::discover();
+            fs::create_dir_all(&paths.root)?;
+            fs::write(paths.root.join("native-exa.enabled"), b"1\n")?;
+            Ok("Native Exa web search enabled. No additional dependencies are required; run `yeet search test` to check connectivity.".into())
         }
         "searxng" | "searx" => install_searxng(),
         "agent-reach" | "agent_reach" | "exa" => install_agent_reach(),
@@ -1245,6 +1349,13 @@ fn remove(target: &str) -> Result<String> {
             }
             Ok("Removed managed SearXNG backend.".into())
         }
+        "native" => {
+            let marker = paths.root.join("native-exa.enabled");
+            if marker.is_file() {
+                fs::remove_file(marker)?;
+            }
+            Ok("Disabled native Exa web search.".into())
+        }
         "agent-reach" | "agent_reach" | "exa" => {
             for path in [&paths.agent_reach_venv, &paths.agent_reach_node] {
                 if path.exists() {
@@ -1270,7 +1381,7 @@ fn ensure_searxng_stopped(client: &WebSearchClient) -> Result<()> {
 }
 
 fn run(command: &mut Command, purpose: &str) -> Result<()> {
-    configure_process_group(command);
+    configure_hidden_process_group(command);
     let mut child = command.spawn().with_context(|| purpose.to_owned())?;
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
@@ -1661,6 +1772,27 @@ mod provider_integration_tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn native_search_decodes_mcp_event_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 8192];
+            let count = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(request.starts_with("POST /mcp "));
+            let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Title: Example\\nURL: https://example.com/\\nHighlights: Example evidence\"}]}}\n\n";
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let result = WebSearchClient::default()
+            .search_native_at(&endpoint, "test", 1, &AtomicBool::new(false))
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(result["source"], "exa");
+        assert_eq!(result["results"][0]["url"], "https://example.com/");
+    }
 
     #[test]
     fn configured_searxng_endpoint_is_used_and_results_normalized() {
