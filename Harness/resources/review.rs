@@ -1,11 +1,8 @@
 //! Git review resource retrieval, including staged, untracked, renamed and unborn files.
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
 
 fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let o = Command::new("git")
+    let o = crate::platform::hidden_command("git")
         .arg("--literal-pathspecs")
         .args(args)
         .current_dir(dir)
@@ -31,7 +28,7 @@ pub fn review_patch(
     has_base: bool,
     full: bool,
 ) -> Result<Vec<String>, String> {
-    let mut c = Command::new("git");
+    let mut c = crate::platform::hidden_command("git");
     c.arg("--literal-pathspecs").current_dir(root).args([
         "diff",
         "--no-color",

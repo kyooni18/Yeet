@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::{
     config::ConfigStore,
     core::BridgeClient,
-    platform::{TrackedChild, configure_process_group},
+    platform::{TrackedChild, configure_hidden_process_group},
     project_settings::{ProjectSettingsStore, ServiceBackend},
 };
 
@@ -557,7 +557,7 @@ impl WebSearchClient {
         if let Some(config) = invocation.config.as_ref() {
             command.env("MCPORTER_CONFIG", config);
         }
-        configure_process_group(&mut command);
+        configure_hidden_process_group(&mut command);
         let mut child = command
             .spawn()
             .with_context(|| format!("run Agent-Reach Exa {operation} through mcporter"))?;
@@ -712,7 +712,7 @@ impl WebSearchClient {
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
-        configure_process_group(&mut command);
+        configure_hidden_process_group(&mut command);
         let child = command.spawn();
         let child = match child {
             Ok(child) => child,
@@ -1270,7 +1270,7 @@ fn ensure_searxng_stopped(client: &WebSearchClient) -> Result<()> {
 }
 
 fn run(command: &mut Command, purpose: &str) -> Result<()> {
-    configure_process_group(command);
+    configure_hidden_process_group(command);
     let mut child = command.spawn().with_context(|| purpose.to_owned())?;
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {

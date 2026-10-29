@@ -10,7 +10,6 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    process::Command,
     sync::{Arc, Mutex, OnceLock},
     time::SystemTime,
 };
@@ -279,7 +278,7 @@ pub(super) fn source_files(root: &Path) -> Vec<String> {
 }
 
 fn git_files(root: &Path) -> Option<Vec<String>> {
-    let output = Command::new("git")
+    let output = crate::platform::hidden_command("git")
         .arg("-C")
         .arg(root)
         .args([

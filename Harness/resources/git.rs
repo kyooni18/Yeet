@@ -174,7 +174,7 @@ impl GitSnapshot {
 }
 
 fn command(dir: &Path) -> Command {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::platform::hidden_command("git");
     cmd.arg("--literal-pathspecs")
         .current_dir(dir)
         .env("GIT_OPTIONAL_LOCKS", "0")

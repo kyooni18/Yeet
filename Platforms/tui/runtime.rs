@@ -186,7 +186,9 @@ fn event_loop(
                 Ok(Ok(event)) => {
                     input_changed = true;
                     match event {
-                        Event::Key(key) => app.handle_key(key, backend)?,
+                        Event::Key(key) if accepts_key_event(&key) => {
+                            app.handle_key(key, backend)?
+                        }
                         Event::Mouse(mouse) => {
                             app.handle_mouse_with_backend(mouse, backend)?;
                             if let Some(command) = app.take_workbench_command() {
@@ -280,6 +282,10 @@ fn event_loop(
             }
         }
     }
+}
+
+fn accepts_key_event(key: &crossterm::event::KeyEvent) -> bool {
+    key.kind != crossterm::event::KeyEventKind::Release
 }
 
 // Ratatui's diff only repairs cells it believes changed. Repaint viewport
@@ -595,6 +601,25 @@ fn copy_via_osc52(text: &str) -> Result<()> {
 #[cfg(test)]
 mod frame_pacer_tests {
     use super::*;
+
+    #[test]
+    fn key_releases_are_ignored_but_repeats_are_accepted() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        for (kind, accepted) in [
+            (KeyEventKind::Press, true),
+            (KeyEventKind::Repeat, true),
+            (KeyEventKind::Release, false),
+        ] {
+            assert_eq!(
+                accepts_key_event(&KeyEvent::new_with_kind(
+                    KeyCode::Char('a'),
+                    KeyModifiers::NONE,
+                    kind
+                )),
+                accepted
+            );
+        }
+    }
 
     #[test]
     fn viewport_changes_repair_cells_outside_the_incremental_diff() {

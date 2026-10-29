@@ -1,5 +1,5 @@
 //! Filesystem metadata and lightweight file inspection, independent of presentation.
-use std::{collections::HashMap, path::Path, process::Command, time::SystemTime};
+use std::{collections::HashMap, path::Path, time::SystemTime};
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -92,7 +92,7 @@ pub fn git_identity(dir: &Path) -> (String, String) {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::platform::hidden_command("git")
         .arg("-C")
         .arg(dir)
         .args(args)

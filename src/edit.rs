@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     core::{edit_daemon_script, node_executable},
-    platform::{TrackedChild, configure_process_group},
+    platform::TrackedChild,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,7 +110,7 @@ impl EditClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
-        configure_process_group(&mut command);
+        crate::platform::configure_hidden_process_group(&mut command);
         let mut child = command
             .spawn()
             .context("failed to start Yeet edit daemon")?;

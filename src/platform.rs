@@ -595,6 +595,18 @@ pub(crate) fn systemd_managed_process() -> bool {
         false
     }
 }
+/// Create a non-interactive subprocess without opening a console on Windows.
+pub(crate) fn hidden_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 pub(crate) fn configure_detached(command: &mut Command) {
     #[cfg(unix)]
     {
@@ -619,6 +631,17 @@ pub(crate) fn configure_detached(command: &mut Command) {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+}
+
+pub(crate) fn configure_hidden_process_group(command: &mut Command) {
+    configure_process_group(command);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     }
 }
 
