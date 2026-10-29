@@ -67,7 +67,7 @@ yeet install status
 
 The built-in `computer_use` tool uses [Open Computer Use](https://github.com/iFurySt/open-computer-use), installed by `yeet install computer-use`. This requires npm and installs the pinned upstream package in `<Yeet state>/computer-use`, independently of Codex. `YEET_CONFIG_DIR` controls the state directory; `YEET_NPM` overrides npm. No source checkout or separate MCP registration is required. Use `yeet install status` to check it and `yeet uninstall computer-use` to remove it. Restart active Yeet sessions after installing or removing the runtime. macOS requires 14+ with Accessibility and Screen Recording permissions; Linux and Windows need a logged-in graphical session.
 
-`mcp` is a mode of the main Yeet binary; its install/uninstall commands start and stop the local MCP server daemon rather than building a separate executable. `remote` is also built directly into the Yeet binary and has no separate installation or managed service lifecycle (`yeet install remote` notes that it is already built-in).
+`mcp` is a mode of the main Yeet binary; its install/uninstall commands start and stop the local MCP server daemon rather than building a separate executable. The Remote server is also built into the binary; its experimental WebUI requires an opt-in source build.
 
 ## Use
 
@@ -84,7 +84,15 @@ Start the TUI:
 yeet
 ```
 
-### Remote WebUI
+### Experimental Remote WebUI
+
+Standard installers, release packages, and Docker builds omit the Remote WebUI. To build it into Yeet from a source checkout, first build the compatible Mün workspace and set `MUN_PATH` as described in [`docs/RELEASING.md`](docs/RELEASING.md), then run:
+
+```sh
+./install.sh --build --experimental-webui
+```
+
+On Windows, run `./install.ps1 -Build -ExperimentalWebUI` in PowerShell. The server and legacy TUI remain available without the experimental WebUI. `yeet install web` installs web search, not the Remote WebUI.
 
 Yeet Remote is built into the Yeet binary and is workspace-neutral: the Remote server itself owns no project directory and never derives one from the shell current directory. Each browser client restores or selects its own workspace, falling back to the user's home directory.
 
@@ -137,9 +145,7 @@ docker run --rm -it -v "$PWD:/workspace" yeet
 
 ```sh
 npm --prefix RuntimeSource ci
-npm --prefix web ci
 npm --prefix RuntimeSource run build
-npm --prefix web run build
 cargo test --all-targets
 ```
 
@@ -147,7 +153,7 @@ cargo test --all-targets
 
 The future UI design specification starts at [`app/ui/ContentView.ui`](app/ui/ContentView.ui) and the meaningful regions under `app/ui`. Edit those design documents and ask an AI agent to synchronize the normal implementation; they are never interpreted at runtime.
 
-The blank foundation for future user-designed UI is [`frontend/react-native`](frontend/react-native/README.md), using React Native and Expo for iOS, iPadOS, Android and web. [`frontend/desktop`](frontend/desktop/README.md) hosts its web export in Tauri 2 and connects to the existing Rust Harness for macOS, Windows and Linux. The current `web` client remains the release default during incremental parity work. See [`docs/FRONTEND_ARCHITECTURE.md`](docs/FRONTEND_ARCHITECTURE.md) for boundaries and migration details.
+The blank foundation for future user-designed UI is [`frontend/react-native`](frontend/react-native/README.md), using React Native and Expo for iOS, iPadOS, Android and web. [`frontend/desktop`](frontend/desktop/README.md) hosts its web export in Tauri 2 and connects to the existing Rust Harness for macOS, Windows and Linux. The current `web` client remains available experimentally during incremental parity work. See [`docs/FRONTEND_ARCHITECTURE.md`](docs/FRONTEND_ARCHITECTURE.md) for boundaries and migration details.
 
 ## Releases
 

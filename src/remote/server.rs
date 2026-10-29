@@ -180,7 +180,7 @@ fn webui_asset_response(path: &str, index: bool) -> Response {
     if !WEBUI_AVAILABLE {
         return text_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Yeet Remote WebUI assets are not embedded in this build; rebuild the WebUI before compiling Yeet",
+            "Experimental Remote WebUI is not included in this build. Reinstall from source with ./install.sh --build --experimental-webui or install.ps1 -Build -ExperimentalWebUI.",
         );
     }
     let Some(asset) = webui_asset(path) else {

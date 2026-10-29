@@ -4,7 +4,7 @@ Release tags use `v<version>`. The version must match `Cargo.toml`, `RuntimeSour
 
 ## Prepare
 
-The compatibility WebUI requires a built Mün workspace. Set `MUN_PATH` to its absolute path (for example, `MUN_PATH=/Users/kyooni18/Code/misutgaru/packages/modules/Mun`). CI builds the compatible revision pinned in `.github/actions/setup-mun/action.yml` and exports `MUN_PATH` automatically. Export this variable in your shell before running the WebUI build or packaging scripts.
+The experimental compatibility WebUI requires a built Mün workspace. Set `MUN_PATH` to its absolute path (for example, `MUN_PATH=/Users/kyooni18/Code/misutgaru/packages/modules/Mun`). CI builds the compatible revision pinned in `.github/actions/setup-mun/action.yml` and exports `MUN_PATH` automatically. Export this variable before an opt-in WebUI build. Standard release packages omit the WebUI.
 
 1. Update the three package versions and `CHANGELOG.md`.
 2. Commit the intended release with a clean working tree.
@@ -18,8 +18,6 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 npm --prefix RuntimeSource ci
 npm --prefix RuntimeSource run check
-npm --prefix web ci
-npm --prefix web run build
 ./Scripts/package-release.sh
 ```
 
@@ -34,7 +32,7 @@ git tag -a v0.1.0 -m "Yeet v0.1.0"
 git push origin v0.1.0
 ```
 
-The release workflow runs a focused functional gate (`cargo test --lib --bins -- --test-threads=1`, RuntimeSource checks, and a WebUI build), then builds macOS, Linux, and Windows packages for ARM64 and x64. Rust release tests are serialized because the Remote lifecycle tests intentionally override process-global Yeet configuration while exercising detached child processes; parallel execution can interfere with unrelated tests that instantiate `ConfigStore`. The source-layout architecture guard remains enforced by normal push/PR CI instead of blocking tag packaging on file-length policy. Unix release archives include the binary installer and bundled runtime; Linux jobs also produce `.deb` packages. Release assets include per-file SHA-256 sidecars, an aggregate `SHA256SUMS`, and GitHub provenance attestations.
+The release workflow runs a focused functional gate (`cargo test --lib --bins -- --test-threads=1`, and RuntimeSource checks), then builds macOS, Linux, and Windows packages for ARM64 and x64. Rust release tests are serialized because the Remote lifecycle tests intentionally override process-global Yeet configuration while exercising detached child processes; parallel execution can interfere with unrelated tests that instantiate `ConfigStore`. The source-layout architecture guard remains enforced by normal push/PR CI instead of blocking tag packaging on file-length policy. Unix release archives include the binary installer and bundled runtime; Linux jobs also produce `.deb` packages. Release assets include per-file SHA-256 sidecars, an aggregate `SHA256SUMS`, and GitHub provenance attestations.
 
 The publish job renders `Formula/yeet.rb` from the four macOS/Linux archive checksums and updates `kyooni18/homebrew-tap` over SSH using the repository secret `HOMEBREW_TAP_DEPLOY_KEY`. That secret contains a dedicated Ed25519 deploy key whose public half has write access only to the tap repository; no personal access token is required. Tap publication is a required release step, so a missing or invalid deploy key fails the release instead of silently leaving Homebrew stale.
 

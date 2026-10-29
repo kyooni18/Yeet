@@ -14,8 +14,8 @@ Usage:
   yeet uninstall [binary|runtime|web|mcp|remote|computer-use|all]...
   yeet install status
 
-The main Yeet source build uses Rust plus Node.js/npm. Yeet Remote is built into the
-main binary and has no separate installation or service lifecycle.
+The main Yeet source build uses Rust plus Node.js/npm. The Remote server is built
+into the binary; its experimental WebUI requires an opt-in source build.
 
 Environment:
   YEET_PREFIX             installation prefix (default: ~/.local)
@@ -78,7 +78,7 @@ fn install_target(target: &str) -> Result<String> {
         "web" | "web-search" | "search" => web_search::run_cli(&["install".into(), "all".into()]),
         "mcp" => crate::mcp_server::run_cli(&["start".into()]),
         "remote" => {
-            Ok("Yeet Remote is built into the Yeet binary; nothing extra to install".into())
+            Ok("The Remote server is built into Yeet. To include its experimental WebUI, rebuild with ./install.sh --build --experimental-webui or install.ps1 -Build -ExperimentalWebUI.".into())
         }
         _ => unreachable!(),
     }

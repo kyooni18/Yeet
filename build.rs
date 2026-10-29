@@ -6,6 +6,10 @@ use std::{
 
 fn main() -> io::Result<()> {
     println!("cargo:rerun-if-env-changed=YEET_FRONTEND_DIST");
+    println!("cargo:rerun-if-env-changed=YEET_EXPERIMENTAL_WEBUI");
+
+    let enabled = env::var("YEET_EXPERIMENTAL_WEBUI").is_ok_and(|value| value == "1")
+        || env::var_os("YEET_FRONTEND_DIST").is_some();
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let dist = env::var_os("YEET_FRONTEND_DIST")
@@ -19,15 +23,15 @@ fn main() -> io::Result<()> {
         })
         .unwrap_or_else(|| manifest_dir.join("web/dist"));
     println!("cargo:rerun-if-changed={}", dist.display());
-    if env::var_os("YEET_FRONTEND_DIST").is_some() && !dist.join("index.html").is_file() {
+    if enabled && !dist.join("index.html").is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "YEET_FRONTEND_DIST must contain an exported index.html",
+            "experimental Remote WebUI requires a built frontend containing index.html",
         ));
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("remote_web_assets.rs");
     let mut files = Vec::new();
-    if dist.is_dir() {
+    if enabled && dist.is_dir() {
         collect_files(&dist, &dist, &mut files)?;
         files.sort_by(|left, right| left.0.cmp(&right.0));
     }

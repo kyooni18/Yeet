@@ -120,6 +120,8 @@ jobs:
           Write-Host "Installed $Installed through install.ps1"
 
   remote-web-build:
+    env:
+      YEET_EXPERIMENTAL_WEBUI: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -175,6 +177,8 @@ jobs:
           if ($model -ne "openai/test-model") { throw "ARM64 model round trip failed: $model" }
 
   remote-web-e2e:
+    env:
+      YEET_EXPERIMENTAL_WEBUI: "1"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

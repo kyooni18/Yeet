@@ -6,12 +6,14 @@
 #
 #   -Build    Build from a Yeet source checkout instead (requires git, cargo,
 #             node, and npm), then install the built artifacts.
+#   -ExperimentalWebUI  Build and embed the experimental Remote WebUI (requires -Build).
 #   -Version  Install a specific release tag (defaults to $env:YEET_VERSION,
 #             then the latest GitHub release).
 #   YEET_PREFIX   Installation prefix (defaults to $env:PREFIX,
 #             then $HOME\.local). No administrator rights are required.
 param(
     [switch]$Build,
+    [switch]$ExperimentalWebUI,
     [string]$Version = $env:YEET_VERSION
 )
 
@@ -98,8 +100,10 @@ function Invoke-GitHubApi([string]$Uri) {
     Invoke-RestMethod -Headers $Headers -Uri $Uri
 }
 
+if ($ExperimentalWebUI -and -not $Build) { throw "-ExperimentalWebUI requires -Build." }
+
 if ($Build) {
-    if ((Test-Path "Cargo.toml") -and (Test-Path "RuntimeSource") -and (Test-Path "web")) {
+    if ((Test-Path "Cargo.toml") -and (Test-Path "RuntimeSource")) {
         $Root = (Get-Location).Path
     } else {
         Need "git"
@@ -119,15 +123,30 @@ if ($Build) {
 
     Stop-YeetProcesses
     Push-Location $Root
+    $PreviousExperimentalWebUI = $env:YEET_EXPERIMENTAL_WEBUI
+    $PreviousFrontendDist = $env:YEET_FRONTEND_DIST
     try {
         npm --prefix RuntimeSource ci
-        npm --prefix web ci
+        if ($LASTEXITCODE -ne 0) { throw "RuntimeSource dependency install failed." }
         npm --prefix RuntimeSource run build
-        npm --prefix web run build
+        if ($LASTEXITCODE -ne 0) { throw "Runtime build failed." }
+        if ($ExperimentalWebUI) {
+            if (-not (Test-Path "web\package.json")) { throw "Experimental WebUI requires the web source directory." }
+            npm --prefix web ci
+            if ($LASTEXITCODE -ne 0) { throw "Remote WebUI dependency install failed." }
+            npm --prefix web run build
+            if ($LASTEXITCODE -ne 0) { throw "Remote WebUI build failed." }
+        }
+        $env:YEET_EXPERIMENTAL_WEBUI = if ($ExperimentalWebUI) { "1" } else { $null }
+        $env:YEET_FRONTEND_DIST = $null
         cargo build --release
+        if ($LASTEXITCODE -ne 0) { throw "Rust release build failed." }
         $env:YEET_SOURCE_ROOT = $Root
         & (Join-Path $Root "target\release\yeet.exe") install binary runtime
+        if ($LASTEXITCODE -ne 0) { throw "Yeet binary/runtime installation failed." }
     } finally {
+        $env:YEET_EXPERIMENTAL_WEBUI = $PreviousExperimentalWebUI
+        $env:YEET_FRONTEND_DIST = $PreviousFrontendDist
         Pop-Location
     }
     Write-Host "Yeet is installed at $(Join-Path $Prefix 'bin\yeet.exe')"

@@ -23,9 +23,8 @@ checksum() {
 
 cd "$ROOT"
 npm --prefix RuntimeSource ci
-npm --prefix web ci
 npm --prefix RuntimeSource run build
-npm --prefix web run build
+unset YEET_EXPERIMENTAL_WEBUI YEET_FRONTEND_DIST
 cargo build --release
 
 rm -rf "$STAGE"
@@ -95,7 +94,7 @@ Priority: optional
 Architecture: $DEB_ARCH
 Depends: nodejs
 Maintainer: Yeet contributors
-Description: Native multiplatform agent CLI and remote UI
+Description: Native multiplatform agent CLI
  Yeet is a Rust CLI/TUI with a TypeScript provider and tool runtime.
 CONTROL
       DEB="$OUT/yeet_${VERSION}_${DEB_ARCH}.deb"

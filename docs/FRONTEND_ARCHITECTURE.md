@@ -8,7 +8,7 @@ The current scope is a native JavaScript UI foundation, with no actual UI implem
 
 `frontend/shared` reuses the existing Remote protocol, streaming store and transport logic. The blank app has an optional client adapter but no automatic connection or UI. Rust remains in the root crate and owns all business logic. Desktop uses the existing Harness through narrow commands/events, stages existing RuntimeSource resources, and requires Node for the provider bridge. No Yeet-MCP is used.
 
-The existing `web` client and release/install workflows remain operational. `web/dist` remains the default embedded frontend; YEET_FRONTEND_DIST allows an explicit alternate export at build time. This is a foundation for later user-directed design implementation, not a replacement of the working UI.
+The existing `web` compatibility client remains available as an experimental opt-in source build. `YEET_EXPERIMENTAL_WEBUI=1` embeds `web/dist`; `YEET_FRONTEND_DIST` explicitly selects an alternate export. Standard installers and release builds omit the WebUI. This is a foundation for later user-directed design implementation, not a replacement of the working UI.
 
 The in-progress multiplatform refactor introduces Rust `UI/` for application
 state, navigation, semantic views, actions and composition, with runtime service

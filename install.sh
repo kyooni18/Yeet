@@ -171,7 +171,6 @@ source_dir() {
   dir=$(script_directory) || return 1
   [ -f "$dir/Cargo.toml" ] || return 1
   [ -f "$dir/RuntimeSource/package.json" ] || return 1
-  [ -f "$dir/web/package.json" ] || return 1
   printf '%s\n' "$dir"
 }
 
@@ -185,10 +184,17 @@ install_source() {
   (
     cd "$root"
     npm --prefix RuntimeSource ci
-    npm --prefix web ci
     npm --prefix RuntimeSource run build
-    npm --prefix web run build
-    cargo build --release
+    if [ "$EXPERIMENTAL_WEBUI" -eq 1 ]; then
+      [ -f web/package.json ] || die "experimental WebUI requires the web source directory"
+      npm --prefix web ci
+      npm --prefix web run build
+      unset YEET_FRONTEND_DIST
+      YEET_EXPERIMENTAL_WEBUI=1 cargo build --release
+    else
+      unset YEET_EXPERIMENTAL_WEBUI YEET_FRONTEND_DIST
+      cargo build --release
+    fi
   )
 
   install_artifacts "$root/target/release/yeet" "$root/RuntimeSource" "$root"
@@ -202,19 +208,24 @@ bundle_dir() {
 }
 
 BUILD_FROM_SOURCE=0
+EXPERIMENTAL_WEBUI=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --build)
       BUILD_FROM_SOURCE=1
       ;;
+    --experimental-webui)
+      EXPERIMENTAL_WEBUI=1
+      ;;
     -h|--help)
       cat <<'EOF'
-Usage: ./install.sh [--build]
+Usage: ./install.sh [--build [--experimental-webui]]
 
 Without options, download and install the latest Yeet release.
 
   --build    Build source, stop Yeet and its runtime/MCP children, replace all
              artifacts, and restart background, remote, and HTTP MCP services.
+  --experimental-webui  Build and embed the experimental Remote WebUI (requires --build).
   -h|--help Show this help.
 EOF
       exit 0
@@ -225,6 +236,8 @@ EOF
   esac
   shift
 done
+
+[ "$EXPERIMENTAL_WEBUI" -eq 0 ] || [ "$BUILD_FROM_SOURCE" -eq 1 ] || die "--experimental-webui requires --build"
 
 if [ "$BUILD_FROM_SOURCE" -eq 1 ]; then
   source=$(source_dir) || die "--build requires a Yeet source checkout"

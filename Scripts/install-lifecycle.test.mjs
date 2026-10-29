@@ -35,8 +35,8 @@ test('build installation stages before shutdown, replaces stale runtime, then re
     copyFileSync(new URL('../install.sh', import.meta.url), join(root, 'install.sh'));
     put(join(prefix, 'bin/yeet'), '#!/bin/sh\necho old\n', 0o755);
     put(join(prefix, 'share/yeet/runtime/dist/stale.js'), 'stale');
-    put(join(commands, 'npm'), '#!/bin/sh\necho build-npm >> "$TEST_LOG"\n', 0o755);
-    put(join(commands, 'cargo'), '#!/bin/sh\necho build-cargo >> "$TEST_LOG"\nmkdir -p target/release\nprintf "#!/bin/sh\\necho new-binary\\n" > target/release/yeet\nchmod +x target/release/yeet\n', 0o755);
+    put(join(commands, 'npm'), '#!/bin/sh\necho "npm $*" >> "$TEST_LOG"\n', 0o755);
+    put(join(commands, 'cargo'), '#!/bin/sh\necho "build-cargo webui=${YEET_EXPERIMENTAL_WEBUI:-} dist=${YEET_FRONTEND_DIST:-}" >> "$TEST_LOG"\nmkdir -p target/release\nprintf "#!/bin/sh\\necho new-binary\\n" > target/release/yeet\nchmod +x target/release/yeet\n', 0o755);
     put(join(commands, 'node'), `#!/bin/sh
 case "$1" in
   */install-lifecycle.mjs) echo "$2" >> "$TEST_LOG"; [ "$2" != stop ] || echo '{}' > "$3" ;;
@@ -44,15 +44,25 @@ case "$1" in
 esac
 `, 0o755);
     execFileSync('/bin/sh', [join(root, 'install.sh'), '--build'], {
-      env: { ...process.env, PATH: `${commands}:${process.env.PATH}`, PREFIX: prefix, YEET_PREFIX: prefix, TEST_LOG: log, YEET_NO_PATH_UPDATE: '1' },
+      env: { ...process.env, PATH: `${commands}:${process.env.PATH}`, PREFIX: prefix, YEET_PREFIX: prefix, TEST_LOG: log, YEET_NO_PATH_UPDATE: '1', YEET_EXPERIMENTAL_WEBUI: '1', YEET_FRONTEND_DIST: 'stale' },
       stdio: 'pipe',
     });
     const events = readFileSync(log, 'utf8').trim().split('\n');
-    assert.ok(events.indexOf('build-cargo') < events.indexOf('stop'));
+    assert.ok(events.indexOf('build-cargo webui= dist=') < events.indexOf('stop'));
+    assert.equal(events.some(event => event.startsWith('npm --prefix web ')), false);
     assert.ok(events.indexOf('stop') < events.indexOf('restart'));
     assert.equal(readFileSync(join(prefix, 'share/yeet/runtime/dist/bridge.js'), 'utf8'), 'new runtime');
     assert.equal(existsSync(join(prefix, 'share/yeet/runtime/dist/stale.js')), false);
     assert.match(readFileSync(join(prefix, 'bin/yeet'), 'utf8'), /new-binary/);
+    writeFileSync(log, '');
+    execFileSync('/bin/sh', [join(root, 'install.sh'), '--build', '--experimental-webui'], {
+      env: { ...process.env, PATH: `${commands}:${process.env.PATH}`, PREFIX: prefix, YEET_PREFIX: prefix, TEST_LOG: log, YEET_NO_PATH_UPDATE: '1', YEET_FRONTEND_DIST: 'stale' },
+      stdio: 'pipe',
+    });
+    const optedIn = readFileSync(log, 'utf8').trim().split('\n');
+    assert.ok(optedIn.includes('npm --prefix web ci'));
+    assert.ok(optedIn.includes('npm --prefix web run build'));
+    assert.ok(optedIn.includes('build-cargo webui=1 dist='));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

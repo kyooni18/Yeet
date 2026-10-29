@@ -28,9 +28,6 @@ jobs:
       - run: npm --prefix RuntimeSource run check
       - run: cargo build --bin yeet
       - run: cargo test --lib --bins -- --test-threads=1
-      - uses: ./.github/actions/setup-mun
-      - run: npm --prefix web ci
-      - run: npm --prefix web run build
 
   package:
     needs: check
@@ -66,7 +63,6 @@ jobs:
           cache-dependency-path: RuntimeSource/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: ./.github/actions/setup-mun
       - name: Prepare Windows signing certificate
         if: runner.os == 'Windows'
         shell: pwsh

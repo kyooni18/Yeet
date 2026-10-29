@@ -21,15 +21,15 @@ $Stage = Join-Path $StageBase $Name
 $RuntimeDist = Join-Path $Root "RuntimeSource\dist"
 
 Push-Location $Root
+$PreviousExperimentalWebUI = $env:YEET_EXPERIMENTAL_WEBUI
+$PreviousFrontendDist = $env:YEET_FRONTEND_DIST
 try {
     npm --prefix RuntimeSource ci
     if ($LASTEXITCODE -ne 0) { throw "RuntimeSource dependency install failed." }
-    npm --prefix web ci
-    if ($LASTEXITCODE -ne 0) { throw "Remote WebUI dependency install failed." }
     npm --prefix RuntimeSource run build
     if ($LASTEXITCODE -ne 0) { throw "Runtime build failed." }
-    npm --prefix web run build
-    if ($LASTEXITCODE -ne 0) { throw "Remote WebUI build failed." }
+    $env:YEET_EXPERIMENTAL_WEBUI = $null
+    $env:YEET_FRONTEND_DIST = $null
     cargo build --release
     if ($LASTEXITCODE -ne 0) { throw "Rust release build failed." }
 
@@ -93,5 +93,7 @@ try {
     Set-Content -Encoding ascii -NoNewline -Path "$Archive.sha256" -Value "$Hash  $([IO.Path]::GetFileName($Archive))`n"
     Write-Host "Created $Archive"
 } finally {
+    $env:YEET_EXPERIMENTAL_WEBUI = $PreviousExperimentalWebUI
+    $env:YEET_FRONTEND_DIST = $PreviousFrontendDist
     Pop-Location
 }
