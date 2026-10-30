@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-30
+
 - Harden opt-in Remote: enforce browser Origin checks, throttle bad access keys, bind to loopback by default, and refuse unauthenticated non-loopback binds.
 - Harden the MCP HTTP server: reject cross-origin browser requests, cap OAuth client registrations, and throttle authorization-key attempts.
 - Permission prompts now offer allow once or allow for session; session approvals are saved with the session.
