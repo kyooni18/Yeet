@@ -597,6 +597,7 @@ pub(crate) fn systemd_managed_process() -> bool {
 }
 /// Create a non-interactive subprocess without opening a console on Windows.
 pub(crate) fn hidden_command(program: &str) -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut command = Command::new(program);
     #[cfg(windows)]
     {

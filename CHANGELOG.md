@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Harden opt-in Remote: enforce browser Origin checks, throttle bad access keys, bind to loopback by default, and refuse unauthenticated non-loopback binds.
+- Harden the MCP HTTP server: reject cross-origin browser requests, cap OAuth client registrations, and throttle authorization-key attempts.
+- Permission prompts now offer allow once or allow for session; session approvals are saved with the session.
+- Disabled tools, Skills, and MCP servers now ask for permission instead of failing the model's request.
+- Offer to install the Computer Use runtime when the model requests it and it is missing.
+- Split web search installer and result normalization into separate modules.
+
 ## [0.1.5] - 2026-10-30
 
 - Stabilize terminal redraw verification during asynchronous Git refresh.
