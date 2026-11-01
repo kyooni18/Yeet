@@ -81,9 +81,7 @@ fn replace_text_spans(path: &str, source: &str, edit: &Value) -> Result<Vec<Span
         .map(|(at, _)| at)
         .collect::<Vec<_>>();
     if starts.is_empty() {
-        bail!(
-            "replaceText oldText was not found in {path}. Copy it exactly from read_file output (without line numbers or hashes), including whitespace."
-        );
+        return Ok(vec![replace_text_fallback(path, source, &old, &new)?]);
     }
     if starts.len() > 1 && !all {
         let lines = starts
@@ -106,6 +104,164 @@ fn replace_text_spans(path: &str, source: &str, edit: &Value) -> Result<Vec<Span
             drops_lines,
         })
         .collect())
+}
+
+/// Matches whole lines of `oldText` with whitespace tolerance when the exact
+/// text is absent; only a unique match is accepted.
+fn replace_text_fallback(path: &str, source: &str, old: &str, new: &str) -> Result<Span> {
+    let whole_lines = old.ends_with('\n');
+    let old_body = old.strip_suffix('\n').unwrap_or(old);
+    let new_body = if whole_lines {
+        new.strip_suffix('\n').unwrap_or(new)
+    } else {
+        new
+    };
+    let old_lines = old_body.split('\n').collect::<Vec<_>>();
+    let file_lines = source.lines().collect::<Vec<_>>();
+    let not_found = || {
+        anyhow!(
+            "replaceText oldText was not found in {path}, even ignoring whitespace. Copy it exactly from read_file output (without line numbers or hashes).{}",
+            nearest_hint(&file_lines, &old_lines)
+        )
+    };
+    for tier in LOOSE_TIERS {
+        let found = (0..=file_lines.len().saturating_sub(old_lines.len()))
+            .filter(|index| block_matches(&file_lines, &old_lines, *index, tier))
+            .collect::<Vec<_>>();
+        match found.as_slice() {
+            [] => continue,
+            [index] => {
+                let starts = line_starts(source);
+                let last = index + old_lines.len() - 1;
+                let new_lines = new_body.split('\n').map(str::to_owned).collect::<Vec<_>>();
+                let text = reindent(tier, &old_lines, &file_lines[*index..=last], new_lines);
+                return Ok(Span {
+                    start: starts[*index],
+                    end: starts[last] + file_lines[last].len(),
+                    drops_lines: whole_lines && text.is_empty(),
+                    text,
+                });
+            }
+            many => bail!(
+                "replaceText oldText was not found exactly in {path}; ignoring whitespace it matches {} places (lines {}). Include more surrounding text to make it unique.",
+                many.len(),
+                many.iter()
+                    .map(|at| (at + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+    Err(not_found())
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Tier {
+    Exact,
+    TrailingWhitespace,
+    Indentation,
+}
+
+const LOOSE_TIERS: [Tier; 2] = [Tier::TrailingWhitespace, Tier::Indentation];
+
+fn lines_equal(tier: Tier, file: &str, wanted: &str) -> bool {
+    match tier {
+        Tier::Exact => file == wanted,
+        Tier::TrailingWhitespace => file.trim_end() == wanted.trim_end(),
+        Tier::Indentation => file.trim() == wanted.trim(),
+    }
+}
+
+fn block_matches(
+    file_lines: &[&str],
+    wanted: &[impl AsRef<str>],
+    index: usize,
+    tier: Tier,
+) -> bool {
+    index + wanted.len() <= file_lines.len()
+        && wanted
+            .iter()
+            .enumerate()
+            .all(|(offset, line)| lines_equal(tier, file_lines[index + offset], line.as_ref()))
+}
+
+fn indent_of(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
+/// Shifts replacement lines by the indentation the model got wrong, so an
+/// indentation-insensitive match keeps the file's real indentation.
+fn reindent(tier: Tier, old: &[impl AsRef<str>], matched: &[&str], new: Vec<String>) -> String {
+    let anchor = old
+        .iter()
+        .zip(matched)
+        .find(|(line, _)| !line.as_ref().trim().is_empty());
+    let (Tier::Indentation, Some((wanted, actual))) = (tier, anchor) else {
+        return new.join("\n");
+    };
+    let (wanted, actual) = (indent_of(wanted.as_ref()), indent_of(actual));
+    if wanted == actual {
+        return new.join("\n");
+    }
+    new.into_iter()
+        .map(|line| match line.strip_prefix(wanted) {
+            Some(rest) if !line.trim().is_empty() => format!("{actual}{rest}"),
+            _ => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Points at the file lines most similar to the first expected line.
+fn nearest_hint(file_lines: &[&str], wanted: &[impl AsRef<str>]) -> String {
+    let Some(target) = wanted
+        .iter()
+        .map(|line| line.as_ref().trim())
+        .find(|line| !line.is_empty())
+    else {
+        return String::new();
+    };
+    let mut scored = file_lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| (similarity(line.trim(), target), index))
+        .filter(|(score, _)| *score >= 0.5)
+        .collect::<Vec<_>>();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let closest = scored
+        .iter()
+        .take(2)
+        .map(|(_, index)| format!("\n  line {}: {}", index + 1, file_lines[*index].trim_end()))
+        .collect::<String>();
+    if closest.is_empty() {
+        closest
+    } else {
+        format!(" Closest lines:{closest}")
+    }
+}
+
+/// Normalized Levenshtein similarity over at most 200 characters per side.
+fn similarity(a: &str, b: &str) -> f64 {
+    let a = a.chars().take(200).collect::<Vec<_>>();
+    let b = b.chars().take(200).collect::<Vec<_>>();
+    let longest = a.len().max(b.len());
+    if longest == 0 {
+        return 1.0;
+    }
+    let mut row = (0..=b.len()).collect::<Vec<_>>();
+    for (i, ca) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (above + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(ca != cb));
+            diagonal = above;
+        }
+    }
+    1.0 - row[b.len()] as f64 / longest as f64
 }
 
 enum HunkTarget {
@@ -136,53 +292,67 @@ fn hunk_span(
     let file_lines = source.lines().collect::<Vec<_>>();
     if let Some(anchor) = edit.get("anchor").and_then(Value::as_str) {
         let anchor = anchor.trim();
-        let found = (*cursor..file_lines.len())
-            .find(|index| file_lines[*index].trim() == anchor)
-            .or_else(|| {
-                (*cursor..file_lines.len()).find(|index| file_lines[*index].contains(anchor))
-            })
-            .ok_or_else(|| anyhow!("Patch context `@@ {anchor}` was not found in {path}."))?;
+        let exact = (*cursor..file_lines.len()).find(|index| file_lines[*index].trim() == anchor);
+        let found = match exact {
+            Some(found) => found,
+            None => {
+                // A partial anchor is only trusted when it names one line.
+                let partial = (*cursor..file_lines.len())
+                    .filter(|index| file_lines[*index].contains(anchor))
+                    .collect::<Vec<_>>();
+                match partial.as_slice() {
+                    [found] => *found,
+                    [] => bail!(
+                        "Patch context `@@ {anchor}` was not found in {path}.{}",
+                        nearest_hint(&file_lines, &[anchor])
+                    ),
+                    many => bail!(
+                        "Patch context `@@ {anchor}` is not an exact line in {path} and appears in {} lines ({}). Use the full line text.",
+                        many.len(),
+                        many.iter()
+                            .map(|at| (at + 1).to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                }
+            }
+        };
         *cursor = found + 1;
     }
     if old.is_empty() {
         return Ok(HunkTarget::Append(new.join("\n")));
     }
     let at_end = edit.get("endOfFile").and_then(Value::as_bool) == Some(true);
-    let matches = |index: usize, compare: &dyn Fn(&str, &str) -> bool| {
-        old.iter()
-            .enumerate()
-            .all(|(offset, line)| compare(file_lines[index + offset], line))
-    };
     let candidates = || match file_lines.len().checked_sub(old.len()) {
         None => 0..0,
         Some(last) if at_end => last.max(*cursor)..last + 1,
         Some(last) => *cursor..last + 1,
     };
     // Exact first, then tolerate trailing and surrounding whitespace drift.
-    type TextComparator<'a> = &'a dyn Fn(&str, &str) -> bool;
-    let comparisons: [TextComparator<'_>; 3] = [
-        &|a, b| a == b,
-        &|a, b| a.trim_end() == b.trim_end(),
-        &|a, b| a.trim() == b.trim(),
-    ];
-    let found = comparisons
-        .iter()
-        .find_map(|compare| candidates().find(|index| matches(*index, *compare)))
+    let (found, tier) = std::iter::once(Tier::Exact)
+        .chain(LOOSE_TIERS)
+        .find_map(|tier| {
+            candidates()
+                .find(|index| block_matches(&file_lines, &old, *index, tier))
+                .map(|index| (index, tier))
+        })
         .ok_or_else(|| {
             anyhow!(
-                "Patch hunk for {path} did not match the file (first expected line: `{}`). Re-read the file and regenerate the hunk with exact context lines.",
-                old[0]
+                "Patch hunk for {path} did not match the file (first expected line: `{}`). Re-read the file and regenerate the hunk with exact context lines.{}",
+                old[0],
+                nearest_hint(&file_lines, &old)
             )
         })?;
     *cursor = found + old.len();
     let start = starts[found];
     let last_line = found + old.len() - 1;
     let end = starts[last_line] + file_lines[last_line].len();
+    let drops_lines = new.is_empty();
     Ok(HunkTarget::Span(Span {
         start,
         end,
-        text: new.join("\n"),
-        drops_lines: new.is_empty(),
+        text: reindent(tier, &old, &file_lines[found..=last_line], new),
+        drops_lines,
     }))
 }
 

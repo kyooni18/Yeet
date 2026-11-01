@@ -411,6 +411,48 @@ fn text_replacements_and_patches_edit_files_without_line_numbers() {
 }
 
 #[test]
+fn replace_text_tolerates_whitespace_drift_only_when_unique() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::write(
+        root.join("lib.rs"),
+        "mod m {\n    fn a() {\n        one();\n    }\n    fn b() {\n        two();   \n    }\n}\n",
+    )
+    .unwrap();
+    let mut registry = ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.clone()),
+        root.clone(),
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap();
+    registry.begin_task("task");
+    let mut apply = |old: &str, new: &str| {
+        let read = json!({"path": "lib.rs"});
+        registry.read_file(read.as_object().unwrap()).unwrap();
+        registry.apply_file_edits(
+            &json!({"diagnostics": false, "changes": [{"path": "lib.rs", "edits": [
+                {"kind": "replaceText", "oldText": old, "newText": new}
+            ]}]}),
+            &AtomicBool::new(false),
+        )
+    };
+    // Wrong indentation and missing trailing spaces still match one place,
+    // and the replacement keeps the file's indentation.
+    apply("fn a() {\n    one();\n}\n", "fn a() {\n    uno();\n}\n").unwrap();
+    apply("two();", "dos();").unwrap();
+    let ambiguous = apply("\t}\n", "}\n").unwrap_err().to_string();
+    assert!(ambiguous.contains("ignoring whitespace it matches"), "{ambiguous}");
+    let missing = apply("fn c() {", "fn d() {").unwrap_err().to_string();
+    assert!(missing.contains("Closest lines:"), "{missing}");
+    assert_eq!(
+        fs::read_to_string(root.join("lib.rs")).unwrap(),
+        "mod m {\n    fn a() {\n        uno();\n    }\n    fn b() {\n        dos();   \n    }\n}\n"
+    );
+    registry.finish_task("task");
+}
+
+#[test]
 fn edits_chain_without_rereads_until_the_file_changes_elsewhere() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
