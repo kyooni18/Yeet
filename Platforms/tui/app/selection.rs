@@ -9,6 +9,23 @@ pub struct TranscriptContextMenu {
     pub x: u16,
     pub y: u16,
     pub entry_id: Option<String>,
+    pub hovered_item: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TranscriptContextMenuAction {
+    CopySelection,
+    Paste,
+    ClearSelection,
+    EntryControl(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptContextMenuItem {
+    pub label: String,
+    pub shortcut: Option<&'static str>,
+    pub enabled: bool,
+    pub action: TranscriptContextMenuAction,
 }
 
 impl App {
@@ -178,6 +195,21 @@ impl App {
         if self.transcript_context_menu.is_some()
             && matches!(event.kind, MouseEventKind::Up(MouseButton::Left))
         {
+            return Ok(());
+        }
+        if self.transcript_context_menu.is_some() && matches!(event.kind, MouseEventKind::Moved) {
+            let hovered_item = self
+                .point_in_transcript_context_menu(event.column, event.row)
+                .then(|| {
+                    event
+                        .row
+                        .saturating_sub(self.transcript_context_menu_area.1)
+                        .saturating_sub(1) as usize
+                })
+                .filter(|index| *index < self.transcript_context_menu_items().len());
+            if let Some(menu) = self.transcript_context_menu.as_mut() {
+                menu.hovered_item = hovered_item;
+            }
             return Ok(());
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -358,14 +390,14 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Right) if inside => {
-                if self.selected_transcript_text().is_none() {
-                    let (x, _, width, _) = self.transcript_area;
-                    self.selection_start = Some((x, event.row));
-                    self.selection_end = Some((x + width.saturating_sub(1), event.row));
+                if !self.selection_contains(event.column, event.row) {
+                    self.selection_start = None;
+                    self.selection_end = None;
                 }
                 self.transcript_context_menu = Some(TranscriptContextMenu {
                     x: event.column,
                     y: event.row,
+                    hovered_item: None,
                     entry_id: self
                         .transcript_cache
                         .as_ref()
@@ -538,6 +570,101 @@ impl App {
         Some((start.min(end), start.max(end)))
     }
 
+    fn selection_contains(&self, column: u16, row: u16) -> bool {
+        let Some((start, end)) = self.normalized_selection() else {
+            return false;
+        };
+        if self.selected_transcript_text().is_none() || row < start.0 || row > end.0 {
+            return false;
+        }
+        let from = if row == start.0 {
+            start.1
+        } else {
+            self.transcript_area.0
+        };
+        let to = if row == end.0 {
+            end.1
+        } else {
+            self.transcript_area
+                .0
+                .saturating_add(self.transcript_area.2)
+                .saturating_sub(1)
+        };
+        column >= from && column <= to
+    }
+
+    pub(crate) fn transcript_context_menu_items(&self) -> Vec<TranscriptContextMenuItem> {
+        let mut items = Vec::new();
+        let mut entry_controls = Vec::new();
+        if let Some(entry_id) = self
+            .transcript_context_menu
+            .as_ref()
+            .and_then(|menu| menu.entry_id.as_deref())
+            && let Some((is_assistant, controls)) = self
+                .application
+                .conversation_projection()
+                .view
+                .items
+                .into_iter()
+                .find_map(|item| match item {
+                    crate::shared_ui::conversation::DisplayItem::Entry {
+                        entry, controls, ..
+                    } if entry.id == entry_id => Some((
+                        matches!(entry.kind, crate::model::ConversationKind::Assistant { .. }),
+                        controls,
+                    )),
+                    _ => None,
+                })
+        {
+            entry_controls = controls
+                .into_iter()
+                .enumerate()
+                .map(|(index, control)| TranscriptContextMenuItem {
+                    label: if is_assistant
+                        && matches!(
+                            control.action,
+                            crate::shared_ui::conversation::ConversationAction::Copy(_)
+                        ) {
+                        "Copy response".into()
+                    } else {
+                        control.label
+                    },
+                    shortcut: None,
+                    enabled: control.enabled,
+                    action: TranscriptContextMenuAction::EntryControl(index),
+                })
+                .collect();
+            if let Some(index) = entry_controls.iter().position(|item| {
+                matches!(item.action, TranscriptContextMenuAction::EntryControl(0))
+            }) {
+                items.push(entry_controls.remove(index));
+            }
+        }
+        let has_selection = self.selected_transcript_text().is_some();
+        items.extend([
+            TranscriptContextMenuItem {
+                label: "Copy selection".into(),
+                shortcut: Some("Ctrl+C"),
+                enabled: has_selection,
+                action: TranscriptContextMenuAction::CopySelection,
+            },
+            TranscriptContextMenuItem {
+                label: "Paste into composer".into(),
+                shortcut: Some("Ctrl+V"),
+                enabled: true,
+                action: TranscriptContextMenuAction::Paste,
+            },
+            TranscriptContextMenuItem {
+                label: "Clear selection".into(),
+                shortcut: None,
+                enabled: has_selection,
+                action: TranscriptContextMenuAction::ClearSelection,
+            },
+        ]);
+        items.extend(entry_controls);
+        items
+    }
+
     fn point_in_transcript_context_menu(&self, column: u16, row: u16) -> bool {
         let (x, y, width, height) = self.transcript_context_menu_area;
         width > 0
@@ -553,20 +680,28 @@ impl App {
         row: u16,
         backend: Option<&mut crate::backend::Backend>,
     ) -> anyhow::Result<()> {
-        let (_, y, _, height) = self.transcript_context_menu_area;
-        if height < 5 {
+        let (_, y, _, _) = self.transcript_context_menu_area;
+        let Some(index) = row
+            .checked_sub(y.saturating_add(1))
+            .map(|index| index as usize)
+        else {
             return Ok(());
-        }
-        match row.saturating_sub(y) {
-            1 => {
+        };
+        let items = self.transcript_context_menu_items();
+        let Some(item) = items.get(index).filter(|item| item.enabled) else {
+            return Ok(());
+        };
+        match item.action {
+            TranscriptContextMenuAction::CopySelection => {
                 self.copy_transcript_selection();
             }
-            2 => {
+            TranscriptContextMenuAction::Paste => {
                 self.clipboard_paste_request = true;
-                self.clear_transcript_selection();
+                self.transcript_context_menu = None;
+                self.transcript_context_menu_area = (0, 0, 0, 0);
             }
-            3 => self.clear_transcript_selection(),
-            control_row @ 4.. => {
+            TranscriptContextMenuAction::ClearSelection => self.clear_transcript_selection(),
+            TranscriptContextMenuAction::EntryControl(control_index) => {
                 let Some(entry_id) = self
                     .transcript_context_menu
                     .as_ref()
@@ -580,7 +715,7 @@ impl App {
                         entry, controls, ..
                     } if entry.id == entry_id => controls
                         .into_iter()
-                        .nth((control_row - 4) as usize)
+                        .nth(control_index)
                         .filter(|control| control.enabled)
                         .map(|control| control.action),
                     _ => None,
@@ -598,7 +733,6 @@ impl App {
                     self.transcript_context_menu = None;
                 }
             }
-            _ => {}
         }
         Ok(())
     }

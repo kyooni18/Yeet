@@ -954,6 +954,7 @@ fn direct_transcript_jumps_clear_screen_relative_selection() {
             x: 8,
             y: 3,
             entry_id: None,
+            hovered_item: None,
         }),
         transcript_context_menu_area: (8, 3, 22, 4),
         ..App::default()
@@ -973,6 +974,7 @@ fn direct_transcript_jumps_clear_screen_relative_selection() {
         x: 9,
         y: 4,
         entry_id: None,
+        hovered_item: None,
     });
     app.transcript_context_menu_area = (9, 4, 22, 4);
 
@@ -1127,6 +1129,44 @@ fn sidebar_session_click_requests_load_without_starting_selection() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.take_clipboard_request().as_deref(), Some("hello"));
+    assert!(app.transcript_context_menu.is_none());
+}
+
+#[test]
+fn response_context_menu_copies_original_markdown() {
+    let markdown = "A **bold** answer\n\n- one\n- two";
+    let mut app = App {
+        conversation: vec![ConversationEntry {
+            id: "answer".into(),
+            kind: crate::model::ConversationKind::Assistant {
+                content: markdown.into(),
+                tool_calls: Vec::new(),
+            },
+        }],
+        transcript_context_menu: Some(crate::tui::app::TranscriptContextMenu {
+            x: 4,
+            y: 4,
+            entry_id: Some("answer".into()),
+            hovered_item: None,
+        }),
+        transcript_context_menu_area: (4, 4, 24, 6),
+        ..App::default()
+    };
+    app.application
+        .refresh_with_conversation_entries(&app.conversation, &app.state);
+
+    let items = app.transcript_context_menu_items();
+    assert_eq!(items[0].label, "Copy response");
+    assert!(!items[1].enabled);
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 5,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    });
+
+    assert_eq!(app.take_clipboard_request().as_deref(), Some(markdown));
     assert!(app.transcript_context_menu.is_none());
 }
 

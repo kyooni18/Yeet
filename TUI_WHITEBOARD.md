@@ -1,5 +1,16 @@
 # TUI tool-call presentation
 
+# TUI response selection and context menu
+
+Dragging selects the visible conversation text without bubble padding or work
+decorations; Ctrl+C copies that selection. Right-clicking inside a selection
+keeps it, while right-clicking elsewhere clears the stale selection. The menu
+puts exact-message copying first: assistant responses copy their original
+Markdown rather than rendered/wrapped terminal text. Selection copying, paste,
+and clear have explicit enabled states, and pointer movement highlights the
+active menu item. Message edit/regenerate controls remain available below the
+clipboard actions.
+
 Tool calls use the existing compact transcript rows, not raw JSON as their
 primary presentation. Each call shows its authoritative lifecycle status:
 Preparing, running, Awaiting approval, Completed, Failed, Timed out, Cancelled,

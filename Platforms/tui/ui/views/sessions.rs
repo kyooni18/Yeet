@@ -409,31 +409,23 @@ pub(in crate::platforms::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, ap
         app.transcript_context_menu_area = (0, 0, 0, 0);
         return;
     }
-    let controls = app
-        .application
-        .conversation_projection()
-        .view
-        .items
-        .into_iter()
-        .find_map(|item| match item {
-            crate::shared_ui::conversation::DisplayItem::Entry {
-                entry, controls, ..
-            } if menu.entry_id.as_deref() == Some(entry.id.as_str()) => Some(controls),
-            _ => None,
-        })
-        .unwrap_or_default();
-    let control_count = controls.len().min(2);
-    let width = 22u16
+    let menu_items = app.transcript_context_menu_items();
+    let width = 24u16
         .max(
-            controls
+            menu_items
                 .iter()
-                .take(2)
-                .map(|control| control.label.chars().count() as u16 + 2)
+                .map(|item| {
+                    item.label.chars().count() as u16
+                        + item
+                            .shortcut
+                            .map(|shortcut| shortcut.chars().count() as u16 + 3)
+                            .unwrap_or(2)
+                })
                 .max()
                 .unwrap_or(0),
         )
         .min(screen.width);
-    let height = (5 + control_count as u16).min(screen.height);
+    let height = (menu_items.len() as u16 + 2).min(screen.height);
     let x = menu
         .x
         .min(screen.right().saturating_sub(width))
@@ -445,27 +437,35 @@ pub(in crate::platforms::tui::ui) fn draw_context_menu(frame: &mut Frame<'_>, ap
     let area = Rect::new(x, y, width, height);
     app.transcript_context_menu_area = (area.x, area.y, area.width, area.height);
 
-    let copy_style = if app.selected_transcript_text().is_some() {
-        theme::surface()
-    } else {
-        theme::surface().fg(theme::muted())
-    };
-    let mut items = vec![
-        ListItem::new(Line::styled(" Copy      ⌘C", copy_style)),
-        ListItem::new(Line::styled(" Paste     ⌘V", theme::surface())),
-        ListItem::new(Line::styled(" Clear selection", theme::surface())),
-    ];
-    items.extend(
-        controls
-            .into_iter()
-            .take(height.saturating_sub(5) as usize)
-            .map(|control| {
-                ListItem::new(Line::styled(
-                    format!(" {}", control.label),
-                    theme::surface(),
-                ))
-            }),
-    );
+    let items = menu_items
+        .into_iter()
+        .enumerate()
+        .take(height.saturating_sub(2) as usize)
+        .map(|(index, item)| {
+            let style = if menu.hovered_item == Some(index) && item.enabled {
+                Style::default().bg(theme::accent()).fg(theme::background())
+            } else if item.enabled {
+                theme::surface()
+            } else {
+                theme::surface().fg(theme::muted())
+            };
+            let label = format!(" {}", item.label);
+            let padding = (area.width as usize)
+                .saturating_sub(label.chars().count())
+                .saturating_sub(
+                    item.shortcut
+                        .map_or(1, |shortcut| shortcut.chars().count() + 2),
+                );
+            ListItem::new(Line::styled(
+                format!(
+                    "{label}{}{}",
+                    " ".repeat(padding),
+                    item.shortcut.unwrap_or("")
+                ),
+                style,
+            ))
+        })
+        .collect::<Vec<_>>();
     frame.render_widget(Clear, area);
     frame.render_widget(Block::default().style(theme::surface()), area);
     frame.render_widget(
