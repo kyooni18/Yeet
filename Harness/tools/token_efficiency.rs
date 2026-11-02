@@ -2,6 +2,8 @@
 
 use crate::core::ToolCall;
 use anyhow::Result;
+use serde_json::Value;
+use std::collections::HashSet;
 
 use super::{ToolRegistry, artifact_output};
 
@@ -58,12 +60,21 @@ impl ToolRegistry {
     /// fallback that prevents an extension result from dominating every later
     /// request in the same turn.
     pub fn bound_model_visible_tool_output(
-        &self,
+        &mut self,
         tool_name: &str,
         content: String,
     ) -> Result<(String, bool)> {
         if !self.artifacts_enabled {
             return Ok((content, false));
+        }
+        if matches!(tool_name, "read_file" | "read_files")
+            && content.len() > artifact_output::MAX_MODEL_VISIBLE_TOOL_OUTPUT_BYTES
+        {
+            // This legacy boundary has no request paths. Conservatively revoke
+            // source evidence rather than credit content the model never saw.
+            self.evidence.read_cache.clear();
+            self.evidence.edit_snapshots.clear();
+            self.evidence.edit_read_coverage.clear();
         }
         artifact_output::externalize_model_visible_tool_output(&self.artifacts, tool_name, content)
     }
@@ -71,7 +82,7 @@ impl ToolRegistry {
     /// Applies both the historical per-call boundary and the aggregate budget
     /// shared by all results produced before the next model inference.
     pub(crate) fn bound_round_output(
-        &self,
+        &mut self,
         call: &ToolCall,
         content: String,
         budget: &mut ModelVisibleToolOutputRoundBudget,
@@ -81,6 +92,9 @@ impl ToolRegistry {
             return Ok((content, false));
         }
         let limit = budget.next_limit();
+        if content.len() > limit && matches!(call.name.as_str(), "read_file" | "read_files") {
+            self.revoke_shortened_read_evidence(&call.arguments);
+        }
         let result = artifact_output::externalize_model_visible_tool_output_with_limit(
             &self.artifacts,
             &call.name,
@@ -89,6 +103,41 @@ impl ToolRegistry {
         )?;
         budget.observe(result.0.len());
         Ok(result)
+    }
+
+    /// The formatter can shorten a read after its handler recorded coverage.
+    /// A saved artifact is recoverable evidence, not evidence already viewed.
+    /// Revoke all evidence for the requested files; the next narrow read will
+    /// restore only delivered ranges and rehydrate the backend accordingly.
+    fn revoke_shortened_read_evidence(&mut self, arguments: &Value) {
+        fn collect_paths(value: &Value, paths: &mut Vec<String>) {
+            if let Some(path) = value.get("path").and_then(Value::as_str) {
+                paths.push(path.to_owned());
+            }
+            if let Some(requests) = value.get("requests").and_then(Value::as_array) {
+                for request in requests {
+                    collect_paths(request, paths);
+                }
+            }
+        }
+        let mut requested = Vec::new();
+        collect_paths(arguments, &mut requested);
+        let paths = requested
+            .iter()
+            .filter_map(|requested| {
+                let path = self.context.resolve_session_path(requested).ok()?;
+                super::paths::stable_workspace_path_key(
+                    &self.context.workspace_root,
+                    &path.to_string_lossy(),
+                )
+                .ok()
+            })
+            .collect::<HashSet<_>>();
+        for path in paths {
+            self.evidence.read_cache.remove(&path);
+            self.evidence.edit_snapshots.remove(&path);
+            self.evidence.edit_read_coverage.remove(&path);
+        }
     }
 
     pub fn is_read_only_extension_tool(&self, name: &str) -> bool {
@@ -101,5 +150,85 @@ impl ToolRegistry {
             || self.catalog.skill_tool_map.contains_key(name)
             || self.catalog.skill_script_tool_map.contains_key(name)
             || self.catalog.worker_tool_map.contains_key(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::BridgeHandle;
+    use super::*;
+    use crate::{permission::PermissionBroker, workers::WorkerRegistry};
+    use serde_json::json;
+
+    #[test]
+    fn final_read_truncation_revokes_only_requested_source_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::write(
+            root.join("large.txt"),
+            format!("{}\n", "line".repeat(100)).repeat(12),
+        )
+        .unwrap();
+        std::fs::write(root.join("keep.txt"), "keep\n").unwrap();
+        let mut registry = ToolRegistry::new_with_bridge_handle(
+            BridgeHandle::lazy_for_workspace(root.clone()),
+            root,
+            WorkerRegistry::new(Vec::new()).unwrap(),
+            PermissionBroker::default(),
+        )
+        .unwrap();
+        registry
+            .read_file(json!({"path":"keep.txt"}).as_object().unwrap())
+            .unwrap();
+        let args = json!({"requests":[{"path":"large.txt"}]});
+        let content = registry.read_file(args.as_object().unwrap()).unwrap();
+        assert!(
+            registry
+                .evidence
+                .edit_read_coverage
+                .contains_key("large.txt")
+        );
+        registry
+            .evidence
+            .edit_snapshots
+            .insert("large.txt".into(), "old-handle".into());
+        let call = ToolCall {
+            id: "read".into(),
+            name: "read_file".into(),
+            arguments: args,
+        };
+        let (rendered, shortened) = registry
+            .bound_round_output(&call, content, &mut ToolRegistry::round_output_budget(8))
+            .unwrap();
+        assert!(
+            shortened && rendered.contains("read_artifact") && rendered.contains("before editing")
+        );
+        assert!(!registry.evidence.read_cache.contains_key("large.txt"));
+        assert!(!registry.evidence.edit_snapshots.contains_key("large.txt"));
+        assert!(
+            !registry
+                .evidence
+                .edit_read_coverage
+                .contains_key("large.txt")
+        );
+        assert!(
+            registry
+                .evidence
+                .edit_read_coverage
+                .contains_key("keep.txt")
+        );
+        // A narrow reread restores exactly the requested evidence, not the
+        // unseen remainder retained in the artifact.
+        registry
+            .read_file(
+                json!({"path":"large.txt","startLine":2,"endLine":2})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            registry.evidence.edit_read_coverage["large.txt"].ranges,
+            vec![(2, 2)]
+        );
     }
 }

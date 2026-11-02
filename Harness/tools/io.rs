@@ -414,32 +414,42 @@ impl ToolRegistry {
     /// Reads one bounded file range or dispatches a small batch of independent reads.
     pub(super) fn read_file(&mut self, object: &Map<String, Value>) -> Result<String> {
         self.sync_edit_state();
-        let mut object = object.clone();
-        // Drop placeholder fields models send alongside the real request shape.
-        if object
-            .get("requests")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
-            && object.contains_key("path")
-        {
-            object.remove("requests");
-        }
-        if object.contains_key("requests") && object.get("path").and_then(Value::as_str) == Some("")
-        {
-            for key in ["path", "startLine", "endLine", "refresh"] {
-                object.remove(key);
-            }
-        }
-        let object = &object;
         if object.contains_key("requests") {
-            if object.contains_key("path")
-                || object.contains_key("startLine")
-                || object.contains_key("endLine")
-                || object.contains_key("refresh")
-            {
-                bail!("read_file accepts either path/range fields or requests, not both");
-            }
             return self.read_file_batch(object);
+        }
+
+        let positive_integer = |name: &str| -> Result<Option<usize>> {
+            object
+                .get(name)
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| anyhow!("{name} must be a positive integer"))
+                })
+                .transpose()
+        };
+        let requested_start = positive_integer("startLine")?.unwrap_or(1);
+        if object.contains_key("endLine") && object.contains_key("lineCount") {
+            bail!("read_file accepts endLine or lineCount, not both");
+        }
+        let explicit_end = match positive_integer("lineCount")? {
+            Some(count) => Some(
+                requested_start
+                    .checked_add(count - 1)
+                    .ok_or_else(|| anyhow!("read_file line range is too large"))?,
+            ),
+            None => positive_integer("endLine")?,
+        };
+        if explicit_end.is_some_and(|end| end < requested_start) {
+            bail!("endLine must be at least startLine; use lineCount to specify a count");
+        }
+        if object
+            .get("refresh")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            bail!("refresh must be a boolean; reads always use current contents");
         }
 
         let requested_path = string_arg(object, "path")?.to_owned();
@@ -451,16 +461,6 @@ impl ToolRegistry {
         self.context.ensure_file_scope(&path, false)?;
         let cache_path =
             super::paths::stable_workspace_path_key(&self.context.workspace_root, &path)?;
-        let requested_start = usize_arg(object, "startLine").unwrap_or(1).max(1);
-        // An endLine below startLine is almost always a line count
-        // (offset/limit habit), so read that many lines.
-        let explicit_end = usize_arg(object, "endLine").map(|end| {
-            if end < requested_start {
-                requested_start.saturating_add(end.max(1) - 1)
-            } else {
-                end
-            }
-        });
         let limit = if explicit_end.is_some() {
             EXPLICIT_READ_LINES
         } else {
@@ -473,8 +473,8 @@ impl ToolRegistry {
         } else {
             DEFAULT_INLINE_BYTES
         };
-        // Always return the requested range; the cache only tracks read
-        // coverage and snapshots for edit validation.
+        // Always return current contents, including refresh=false. refresh is
+        // retained only for old callers; the cache tracks evidence, not data.
         let mut read =
             read_file_in_process(Path::new(&path), Some(requested_start), Some(requested_end))?;
         read.path = cache_path.clone();
@@ -489,9 +489,53 @@ impl ToolRegistry {
         }
         let entry = cache_read_result(&mut self.evidence.read_cache, read.clone());
         let payload = self.read_payload(&entry, false)?;
-        let result = self.externalize_if_large(payload, threshold, Some(&read))?;
+        let mut result = self.externalize_if_large(payload, threshold, Some(&read))?;
         if result.contains("\"externalized\":true") {
+            let prior_entries = self
+                .evidence
+                .read_cache
+                .get(&cache_path)
+                .map_or(0, |entries| entries.len().saturating_sub(1));
             trim_cache_to_preview(&mut self.evidence.read_cache, &cache_path, &result);
+            let mut value: Value = serde_json::from_str(&result)?;
+            let preview = value["preview"].as_str().unwrap_or_default();
+            // The preview can end in a partial line and contains a synthetic
+            // truncation marker. Only complete, exact source lines count as
+            // read evidence, regardless of the preview's total line count.
+            let visible_lines = read
+                .anchored
+                .lines()
+                .zip(preview.lines())
+                .take_while(|(source, visible)| source == visible)
+                .count();
+            let visible_end = read.start_line + visible_lines - 1;
+            if let Some(entries) = self.evidence.read_cache.get_mut(&cache_path) {
+                entries.truncate(prior_entries);
+                if visible_lines > 0 {
+                    let mut visible_entry = entry.clone();
+                    visible_entry.end = visible_end;
+                    visible_entry.anchored = read
+                        .anchored
+                        .lines()
+                        .take(visible_lines)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    entries.push(visible_entry);
+                }
+            }
+            let entries = self
+                .evidence
+                .read_cache
+                .get(&cache_path)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            value["requestedEndLine"] = json!(read.end_line);
+            value["endLine"] = json!(visible_end);
+            value["nextStartLine"] =
+                json!((visible_end < read.total_lines).then_some(visible_end + 1));
+            value["firstUnreadLine"] = json!(next_uncovered(read.total_lines, entries));
+            value["fileFullyRead"] = json!(coverage_complete(read.total_lines, entries));
+            result = value.to_string();
         }
         self.record_edit_read_coverage(&cache_path, &read.snapshot);
         Ok(result)
@@ -499,6 +543,12 @@ impl ToolRegistry {
 
     /// Executes up to eight independent file reads and returns one batched result.
     fn read_file_batch(&mut self, object: &Map<String, Value>) -> Result<String> {
+        if ["path", "startLine", "endLine", "lineCount", "refresh"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+        {
+            bail!("read_file accepts either path/range fields or requests, not both");
+        }
         let requests = object
             .get("requests")
             .and_then(Value::as_array)
@@ -509,6 +559,10 @@ impl ToolRegistry {
         let mut values = Vec::new();
         for request in requests {
             match request.as_object() {
+                Some(object) if object.contains_key("requests") => values.push(json!({
+                    "error":"read_file batch entries must be individual file requests, not nested batches",
+                    "path":object.get("path").cloned()
+                })),
                 Some(object) => match self.read_file(object) {
                     Ok(value) => {
                         values.push(serde_json::from_str(&value).unwrap_or_else(|_| json!(value)))

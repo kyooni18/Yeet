@@ -1,11 +1,11 @@
 //! Structured editing and shared workspace-read cache maintenance.
 //!
-//! Edits require fresh snapshots in sandboxed mode and invalidate only the
+//! Edits require read snapshots independently of permission mode and invalidate only the
 //! cache entries that may have become stale. Large results are externalized
 //! through the registry's artifact store.
 
 use super::*;
-use crate::edit::ReadResult;
+use crate::edit::{EditFailure, ReadResult};
 
 impl ToolRegistry {
     /// Drops Rust-side evidence when the edit daemon has been replaced.
@@ -28,13 +28,17 @@ impl ToolRegistry {
         arguments: &Value,
         cancel: &AtomicBool,
     ) -> Result<String> {
-        // Separate sessions use separate edit daemons. Serialize only the
-        // transaction's snapshot validation and commit, never the whole task.
-        let _edit_guard = edit_lock::WorkspaceEditLock::acquire(
-            &crate::platform::default_config_directory(),
-            &self.context.workspace_root,
-            cancel,
-        )?;
+        self.apply_file_edits_inner(arguments, cancel)
+            .map_err(|error| {
+                if error.downcast_ref::<EditFailure>().is_some() {
+                    error
+                } else {
+                    EditFailure::new("edit_rejected", "unchanged", error.to_string()).into()
+                }
+            })
+    }
+
+    fn apply_file_edits_inner(&mut self, arguments: &Value, cancel: &AtomicBool) -> Result<String> {
         self.sync_edit_state();
         let mut request = arguments.clone();
         if let Some(patch) = request.get("patch").and_then(Value::as_str) {
@@ -53,6 +57,7 @@ impl ToolRegistry {
             .load()?
             .mode
             == SandboxMode::Unlimited;
+        let mut match_modes = Vec::new();
         let paths = {
             let changes = request
                 .get_mut("changes")
@@ -121,8 +126,15 @@ impl ToolRegistry {
                         "File change for {path} has no operation. For an existing file use edits:[{{kind:\"replaceText\",oldText:\"...\",newText:\"...\"}}] (or a line-range edit); for a new file use fileOp:{{kind:\"create\",text:\"...\"}}."
                     );
                 }
-                if !unlimited
-                    && !is_create
+                if !is_create && let Some(provided) = object.get("snapshot").and_then(Value::as_str)
+                {
+                    if self.cached_snapshot(&cache_path).as_deref() != Some(provided) {
+                        bail!(
+                            "Snapshot {provided} is not the retained read revision for {path}; call read_file again before editing."
+                        );
+                    }
+                }
+                if !is_create
                     && object.get("snapshot").is_none()
                     && let Some(snapshot) = self.cached_snapshot(&cache_path)
                 {
@@ -139,10 +151,7 @@ impl ToolRegistry {
                         self.rehydrate_local_snapshot(&cache_path, &path, &snapshot, unlimited)?;
                     object.insert("snapshot".into(), json!(daemon_snapshot));
                 }
-                if !unlimited
-                    && !is_create
-                    && object.get("snapshot").and_then(Value::as_str).is_none()
-                {
+                if !is_create && object.get("snapshot").and_then(Value::as_str).is_none() {
                     bail!(
                         "Editing existing file {path} requires fresh read coverage. Call read_file first, then retry apply_file_edits; the runtime attaches the cached snapshot automatically."
                     );
@@ -173,17 +182,30 @@ impl ToolRegistry {
                         .get_mut("edits")
                         .and_then(Value::as_array_mut)
                         .expect("semantic edit array exists");
-                    super::text_edit::concretize_text_edits(&path, &snapshot_text, edits)?;
+                    match_modes.push(super::text_edit::concretize_text_edits(
+                        &path,
+                        &snapshot_text,
+                        edits,
+                    )?);
                     super::syntax_edit::concretize_semantic_edits(
                         Path::new(&path),
                         &snapshot_text,
                         edits,
                     )?;
+                } else {
+                    match_modes.push(Vec::new());
                 }
             }
             paths
         };
-        let result: ApplyResult = match self.edit_mut()?.apply(&request, unlimited) {
+        // Approval and semantic preparation must not hold the cross-session
+        // lock. The backend revalidates file identities and digests on commit.
+        let edit_guard = edit_lock::WorkspaceEditLock::acquire(
+            &crate::platform::default_config_directory(),
+            &self.context.workspace_root,
+            cancel,
+        )?;
+        let mut result: ApplyResult = match self.edit_mut()?.apply(&request, unlimited) {
             Ok(result) => result,
             Err(error) => {
                 // A transport failure can happen after the daemon has
@@ -191,18 +213,32 @@ impl ToolRegistry {
                 // Rust. Drop all evidence in that ambiguous case; the next
                 // read will restart the daemon if needed and obtain a fresh
                 // snapshot instead of editing from stale cache state.
-                if self.edit.as_ref().is_some_and(|edit| edit.is_broken()) {
+                if self.edit.as_ref().is_some_and(|edit| edit.is_broken())
+                    || error
+                        .downcast_ref::<EditFailure>()
+                        .is_some_and(|failure| failure.mutation_outcome != "unchanged")
+                {
                     self.invalidate_workspace_cache();
                 }
                 return Err(error);
             }
         };
+        drop(edit_guard);
+        for (file, modes) in result.files.iter_mut().zip(match_modes) {
+            file.match_modes = modes;
+            // Public handles remain content revisions, not daemon-local IDs.
+            file.snapshot = file
+                .revision
+                .as_ref()
+                .map(|revision| format!("r_{revision}"));
+        }
         self.sync_edit_state();
         let error_count = result
             .diagnostics
             .iter()
             .filter(|diagnostic| diagnostic.severity.eq_ignore_ascii_case("error"))
-            .count();
+            .count()
+            + usize::from(result.diagnostics_error.is_some());
         let mut changed_paths = paths.into_iter().collect::<HashSet<_>>();
         for file in &result.files {
             changed_paths.insert(file.path.clone());
@@ -214,14 +250,24 @@ impl ToolRegistry {
         let mut changed_paths = changed_path_set.iter().cloned().collect::<Vec<_>>();
         changed_paths.sort();
         self.invalidate_workspace_cache_for_paths(&changed_path_set);
-        self.record_post_edit_snapshots(&request);
+        self.record_post_edit_snapshots(&result);
         self.evidence.latest_mutation = Some(MutationValidation {
             error_count,
             changed_paths,
         });
         self.evidence.workspace_write_generation =
             self.evidence.workspace_write_generation.wrapping_add(1);
-        self.externalize_if_large(serde_json::to_value(result)?, 16 * 1024, None)
+        serde_json::to_value(result)
+            .map_err(anyhow::Error::from)
+            .and_then(|value| self.externalize_if_large(value, 16 * 1024, None))
+            .map_err(|error| {
+                EditFailure::new(
+                    "edit_result_failed",
+                    "applied",
+                    format!("Edit was applied but its response could not be rendered: {error}"),
+                )
+                .into()
+            })
     }
 
     /// Converts one cached source range into the standard read-file payload.
@@ -233,10 +279,11 @@ impl ToolRegistry {
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let complete = coverage_complete(entry.total, entries);
-        let next = next_uncovered(entry.total, entries);
+        let next = (entry.end < entry.total).then_some(entry.end + 1);
+        let first_unread = next_uncovered(entry.total, entries);
         Ok(json!({
             "path":entry.path,"snapshot":entry.snapshot,"startLine":entry.start,"endLine":entry.end,"totalLines":entry.total,
-            "lines":entry.anchored,"fileFullyRead":complete,"nextStartLine":next,"refreshReplay":replay
+            "lines":entry.anchored,"fileFullyRead":complete,"nextStartLine":next,"firstUnreadLine":first_unread,"refreshReplay":replay
         }))
     }
 
@@ -264,6 +311,53 @@ impl ToolRegistry {
         metadata.insert("preview".into(), json!(preview));
         metadata.insert("previewBytes".into(), json!(preview_bytes));
         metadata.insert("hint".into(), json!("Large output was externalized. Reuse this bounded preview; use a narrow read_artifact range for specific missing evidence, and search_artifact only when the needed text cannot be located by range."));
+        if let Some(outcome) = value.get("mutationOutcome").and_then(Value::as_str)
+            && let Some(files) = value.get("files").and_then(Value::as_array)
+        {
+            // A short edit response must still say whether the write happened.
+            // Its complete result remains in the artifact, including revisions,
+            // coverage, diffs, and diagnostics omitted from this summary.
+            metadata.insert("mutationOutcome".into(), json!(outcome));
+            if let Some(status) = value.get("diagnosticsStatus").and_then(Value::as_str) {
+                metadata.insert("diagnosticsStatus".into(), json!(status));
+            }
+            if let Some(error) = value.get("diagnosticsError").and_then(Value::as_str) {
+                metadata.insert(
+                    "diagnosticsError".into(),
+                    json!(artifact_output::bounded_utf8_bytes(error, 1024)),
+                );
+                metadata.insert(
+                    "diagnosticsErrorTruncated".into(),
+                    json!(error.len() > 1024),
+                );
+            }
+            let summaries = files
+                .iter()
+                .take(6)
+                .map(|file| {
+                    let mut summary = Map::new();
+                    for key in ["path", "destination"] {
+                        if let Some(path) = file.get(key).and_then(Value::as_str) {
+                            summary.insert(
+                                key.into(),
+                                json!(artifact_output::bounded_utf8_bytes(path, 384)),
+                            );
+                            if path.len() > 384 {
+                                summary.insert(format!("{key}Truncated"), json!(true));
+                            }
+                        }
+                    }
+                    if let Some(operation) = file.get("operation").and_then(Value::as_str) {
+                        summary.insert("operation".into(), json!(operation));
+                    }
+                    Value::Object(summary)
+                })
+                .collect::<Vec<_>>();
+            metadata.insert("fileCount".into(), json!(files.len()));
+            metadata.insert("files".into(), json!(summaries));
+            metadata.insert("filesSummaryOnly".into(), json!(true));
+            metadata.insert("filesTruncated".into(), json!(files.len() > 6));
+        }
         if let Some(read) = read {
             metadata.insert("path".into(), json!(read.path));
             metadata.insert("snapshot".into(), json!(read.snapshot));
@@ -275,16 +369,23 @@ impl ToolRegistry {
     }
 
     pub(super) fn record_edit_read_coverage(&mut self, path: &str, snapshot: &str) {
+        let empty_file = self
+            .evidence
+            .read_cache
+            .get(path)
+            .into_iter()
+            .flatten()
+            .any(|entry| entry.snapshot == snapshot && entry.total == 0);
         let ranges = self
             .evidence
             .read_cache
             .get(path)
             .into_iter()
             .flatten()
-            .filter(|entry| entry.snapshot == snapshot)
+            .filter(|entry| entry.snapshot == snapshot && entry.end >= entry.start)
             .map(|entry| (entry.start, entry.end))
             .collect::<Vec<_>>();
-        if ranges.is_empty() {
+        if ranges.is_empty() && !empty_file {
             return;
         }
         let evidence = self
@@ -338,7 +439,7 @@ impl ToolRegistry {
         }
 
         let mut daemon_snapshot = None::<String>;
-        for (start, end) in evidence.ranges {
+        for &(start, end) in &evidence.ranges {
             let read = self
                 .edit_mut()?
                 .read(path, Some(start), Some(end), unsafe_access)?;
@@ -350,42 +451,70 @@ impl ToolRegistry {
                 None => daemon_snapshot = Some(read.snapshot),
             }
         }
+        if daemon_snapshot.is_none() {
+            let (_, lines) = super::io::local_snapshot_for_path(Path::new(path))?;
+            if lines != 0 {
+                bail!(
+                    "Snapshot {snapshot} has no retained read coverage for {path}; read the file again before editing."
+                );
+            }
+            daemon_snapshot = Some(
+                self.edit_mut()?
+                    .read(path, None, None, unsafe_access)?
+                    .snapshot,
+            );
+        }
+        let daemon_snapshot = daemon_snapshot.expect("covered ranges or an empty file");
+        // The daemon may remember a wider earlier read of the same digest.
+        // Restrict that evidence to what survived the model-output boundary.
+        self.edit_mut()?.limit_snapshot_coverage(
+            &daemon_snapshot,
+            snapshot.trim_start_matches("r_"),
+            &evidence.ranges,
+        )?;
         // edit_snapshots keeps the local content hash: daemon handles do not
         // survive a daemon restart and cannot be re-checked against the file.
-        Ok(daemon_snapshot.expect("read coverage is non-empty"))
+        Ok(daemon_snapshot)
     }
 
-    /// The agent just wrote these files, so the next edit can bind to their
-    /// new contents without another read_file round trip.
-    fn record_post_edit_snapshots(&mut self, request: &Value) {
-        let changes = request.get("changes").and_then(Value::as_array);
-        for change in changes.into_iter().flatten() {
-            let operation = change.get("fileOp").and_then(|op| op.get("kind"));
-            let target = match operation.and_then(Value::as_str) {
-                Some("delete") => continue,
-                Some("move") => change["fileOp"].get("destination"),
-                _ => change.get("path"),
-            };
-            let Some(target) = target.and_then(Value::as_str) else {
-                continue;
-            };
-            let Ok((snapshot, lines)) = super::io::local_snapshot_for_path(Path::new(target))
-            else {
-                continue;
-            };
-            let Ok(cache_path) =
-                super::paths::stable_workspace_path_key(&self.context.workspace_root, target)
-            else {
-                continue;
-            };
-            if lines == 0 {
+    /// Preserve the backend's transformed prior coverage and supplied text,
+    /// never promote a small successful edit into a full-file read.
+    fn record_post_edit_snapshots(&mut self, result: &ApplyResult) {
+        for file in &result.files {
+            if file.operation == "delete" {
                 continue;
             }
+            let target = file.destination.as_deref().unwrap_or(&file.path);
+            let Some(revision) = &file.revision else {
+                continue;
+            };
+            let snapshot = format!("r_{revision}");
+            let Ok(path) = self.context.resolve_session_path(target) else {
+                continue;
+            };
+            if super::io::local_snapshot_handle_for_path(&path)
+                .ok()
+                .as_deref()
+                != Some(snapshot.as_str())
+            {
+                // A later external write must not acquire this edit's coverage.
+                continue;
+            }
+            let Ok(cache_path) = super::paths::stable_workspace_path_key(
+                &self.context.workspace_root,
+                &path.to_string_lossy(),
+            ) else {
+                continue;
+            };
             self.evidence.edit_read_coverage.insert(
                 cache_path.clone(),
                 EditReadCoverage {
                     snapshot: snapshot.clone(),
-                    ranges: vec![(1, lines)],
+                    ranges: file
+                        .seen_ranges
+                        .iter()
+                        .map(|range| (range.start, range.end))
+                        .collect(),
                 },
             );
             self.evidence.edit_snapshots.insert(cache_path, snapshot);
@@ -497,4 +626,50 @@ fn merge_same_path_edits(changes: &mut Vec<Value>) {
         merged.push(change);
     }
     *changes = merged;
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn externalized_edit_preserves_outcome_and_full_retrievable_result() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let mut registry = ToolRegistry::new_with_bridge_handle(
+            BridgeHandle::lazy_for_workspace(root.clone()),
+            root,
+            WorkerRegistry::new(Vec::new()).unwrap(),
+            PermissionBroker::default(),
+        )
+        .unwrap();
+        let result = json!({
+            "mutationOutcome":"applied",
+            "diagnosticsStatus":"failed",
+            "diagnosticsError":"진단 오류 ".repeat(1000),
+            "diagnostics":[],
+            "files":(0..10).map(|index| json!({
+                "path":format!("src/file-{index}.rs"), "operation":"update",
+                "diff":{"text":"large change\n".repeat(2000)},
+            })).collect::<Vec<_>>(),
+        });
+        let rendered = registry
+            .externalize_if_large(result.clone(), 16 * 1024, None)
+            .unwrap();
+        let compact: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(compact["mutationOutcome"], "applied");
+        assert_eq!(compact["diagnosticsStatus"], "failed");
+        assert_eq!(compact["diagnosticsErrorTruncated"], true);
+        assert!(compact["diagnosticsError"].as_str().unwrap().len() < 1200);
+        assert_eq!(compact["fileCount"], 10);
+        assert_eq!(compact["filesTruncated"], true);
+        assert_eq!(compact["files"][0]["path"], "src/file-0.rs");
+        assert_eq!(compact["files"][0]["operation"], "update");
+        assert!(rendered.len() < 10 * 1024);
+        let artifact = compact["artifactId"].as_str().unwrap();
+        let retained: Value =
+            serde_json::from_slice(&std::fs::read(registry.artifacts.path(artifact)).unwrap())
+                .unwrap();
+        assert_eq!(retained, result);
+    }
 }

@@ -12,6 +12,7 @@ fn main() -> io::Result<()> {
         || env::var_os("YEET_FRONTEND_DIST").is_some();
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    emit_build_identity(&manifest_dir);
     let dist = env::var_os("YEET_FRONTEND_DIST")
         .map(PathBuf::from)
         .map(|path| {
@@ -76,6 +77,58 @@ fn main() -> io::Result<()> {
     }
     writeln!(generated, "}}")?;
     Ok(())
+}
+
+/// Diagnostic source identity; release archives without Git report unknown.
+/// This complements the exact public-schema SHA-256 reported by MCP.
+fn emit_build_identity(root: &Path) {
+    use std::process::Command;
+
+    for relative in [
+        "src",
+        "Harness",
+        "RuntimeSource/src",
+        "Cargo.toml",
+        "Cargo.lock",
+    ] {
+        println!("cargo:rerun-if-changed={}", root.join(relative).display());
+    }
+    for name in ["HEAD", "index", "logs/HEAD"] {
+        if let Ok(output) = Command::new("git")
+            .args(["rev-parse", "--git-path", name])
+            .current_dir(root)
+            .output()
+            && output.status.success()
+        {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            let path = root.join(path);
+            if path.exists() {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    let revision = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|revision| revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()));
+    let revision = match revision {
+        Some(mut revision) => {
+            let dirty = Command::new("git")
+                .args(["diff-index", "--quiet", "HEAD", "--"])
+                .current_dir(root)
+                .status();
+            if dirty.is_ok_and(|status| !status.success()) {
+                revision.push_str("-dirty");
+            }
+            revision
+        }
+        None => "unknown".to_owned(),
+    };
+    println!("cargo:rustc-env=YEET_BUILD_REVISION={revision}");
 }
 
 fn collect_files(

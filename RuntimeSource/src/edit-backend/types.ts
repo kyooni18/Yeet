@@ -65,6 +65,7 @@ export interface FileChange {
 export interface ApplyRequest {
   changes: FileChange[];
   diagnostics?: boolean;
+  /** Path/symlink authorization only; never bypasses snapshot correctness. */
   unsafe?: boolean;
 }
 
@@ -152,6 +153,8 @@ export interface FileApplyResult {
   destination?: string;
   operation: "create" | "update" | "delete" | "move";
   snapshot?: string;
+  revision?: string;
+  seenRanges?: LineRange[];
   anchors?: string;
   diff?: CompactDiff;
   warnings: string[];
@@ -160,6 +163,9 @@ export interface FileApplyResult {
 export interface ApplyResult {
   files: FileApplyResult[];
   diagnostics: Diagnostic[];
+  mutationOutcome: "unchanged" | "applied";
+  diagnosticsStatus: "skipped" | "passed" | "failed";
+  diagnosticsError?: string;
 }
 
 export interface BlockResolution {

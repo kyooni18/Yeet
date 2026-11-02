@@ -601,7 +601,7 @@ pub fn run_shell_session(
 fn shell_timeout_message(seconds: u64, progress: &ShellProgress) -> String {
     let snapshot = progress.snapshot();
     format!(
-        "Shell command timed out after {seconds} seconds. Partial output (tails; stdout {} bytes, stderr {} bytes):\nSTDOUT:\n{}\nSTDERR:\n{}\nFor long-running work, use background=true and shell_job action=wait.",
+        "Shell command timed out after {seconds} seconds. Partial output (tails; stdout {} bytes, stderr {} bytes):\nSTDOUT:\n{}\nSTDERR:\n{}\nFor long-running work, start in the background and wait on the returned job handle.",
         snapshot.stdout_bytes,
         snapshot.stderr_bytes,
         snapshot.stdout_tail.as_deref().unwrap_or_default(),

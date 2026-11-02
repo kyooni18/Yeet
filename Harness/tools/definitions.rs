@@ -77,32 +77,8 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "read_file",
-            "Read a text file (or up to 8 ranges with requests) as numbered lines. Relative paths resolve from the cwd.",
-            json!({
-                "type":"object",
-                "properties":{
-                    "path":{"type":"string"},
-                    "startLine":{"type":"integer","minimum":1},
-                    "endLine":{"type":"integer","minimum":1},
-                    "refresh":{"type":"boolean"},
-                    "requests":{
-                        "type":"array","minItems":1,"maxItems":8,
-                        "items":{
-                            "type":"object",
-                            "properties":{
-                                "path":{"type":"string"},
-                                "startLine":{"type":"integer","minimum":1},
-                                "endLine":{"type":"integer","minimum":1},
-                                "refresh":{"type":"boolean"}
-                            },
-                            "required":["path"],
-                            "additionalProperties":false
-                        }
-                    }
-                },
-                "oneOf":[{"required":["path"]},{"required":["requests"]}],
-                "additionalProperties":false
-            }),
+            "Read one UTF-8 file or up to 8 ranges with requests as numbered lines. Use inclusive startLine/endLine or startLine/lineCount. Reads always use current contents; nextStartLine continues this page and firstUnreadLine identifies earlier gaps. Relative paths resolve from the cwd.",
+            native_read_file_schema(),
         ),
         ToolDefinition::new(
             "search_workspace",
@@ -161,13 +137,13 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run a shell command or execute an executable with an argument array (no shell). Shell defaults to auto-discovery and clean non-interactive initialization. loadConfig and login are explicit opt-ins. Direct execution requires approval under sandbox policy. mode selects output routing, not process execution. The shell directory persists across calls like one terminal (a `cd` carries over); workingDirectory overrides it for one call. stdout and stderr are captured in order; large output is kept in an artifact you can page with read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId you can collect with shell_job instead of being killed; timeoutSeconds is a hard deadline. Only cwd persists, not environment variables or shell functions.",
-            json!({"type":"object","properties":{"command":{"type":"string"},"executable":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"shell":{"type":"string","enum":["auto","bash","zsh","sh","powershell","cmd"]},"loadConfig":{"type":"boolean"},"login":{"type":"boolean"},"purpose":{"type":"string"},"workingDirectory":{"type":"string"},"mode":{"type":"string","enum":["auto","direct","actor"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},"yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},"background":{"type":"boolean"},"pty":{"type":"boolean"}},"oneOf":[{"required":["command"]},{"required":["executable"]}],"additionalProperties":false}),
+            "Run exactly one shell command or executable with literal args (no shell). Shell defaults to clean non-interactive initialization; loadConfig/login are opt-ins. Direct execution retains sandbox checks. Only cwd persists, not environment variables or functions; workingDirectory selects this call's directory. yieldSeconds (default 120) ends the foreground wait while the process keeps running; timeoutSeconds is a hard deadline. Completed and running output is retained under jobId; use shell_job action=output to page it, or action=wait for event-driven completion. Inspect capture completeness and retention limits. mode controls output routing, not how the process launches.",
+            shell_execution_schema(),
         ),
         ToolDefinition::new(
             "shell_job",
-            "Check, wait for, list, stop, or forget shell jobs. output pages ordered raw base64 events by byte offset; decode each stream incrementally. For Unix PTY jobs, input sends text, resize sets terminal rows and cols, and interrupt sends Ctrl-C.",
-            json!({"type":"object","properties":{"action":{"type":"string","enum":["check","wait","list","stop","forget","output","input","resize","interrupt"]},"jobId":{"type":"string"},"reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400},"offset":{"type":"integer","minimum":0},"maxBytes":{"type":"integer","minimum":1,"maximum":8192},"waitMilliseconds":{"type":"integer","minimum":0,"maximum":30000},"data":{"type":"string"},"rows":{"type":"integer","minimum":1,"maximum":65535},"cols":{"type":"integer","minimum":1,"maximum":65535}},"required":["action"],"additionalProperties":false}),
+            "Inspect, wait for, list, stop, or forget running and retained completed jobs. output returns decoded text pages by byte offset; format=events preserves raw base64 events. Continue with nextOffset and inspect hasMore/captureComplete. For Unix PTY jobs, input sends text, resize changes terminal dimensions, and interrupt sends Ctrl-C. A stop request is distinct from confirmed process exit.",
+            shell_job_schema(),
         ),
         ToolDefinition::new(
             "request_shell_permission",
@@ -195,7 +171,7 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "apply_file_edits",
-            "Create, edit, move, or delete files. Read a file before editing it. Pass either `patch` or `changes`. `patch` takes a patch document: `*** Begin Patch`, then file sections `*** Add File: PATH` (every line prefixed `+`), `*** Delete File: PATH`, or `*** Update File: PATH` (optionally followed by `*** Move to: NEW_PATH`) with hunks introduced by `@@` or `@@ <line near the change>`, where ` ` lines are unchanged context, `-` lines are removed and `+` lines are added; include about 3 context lines around each change; end with `*** End Patch`. In `changes`, edit with exact text (replaceText: oldText must match once unless replaceAll), by line range (replace/delete/insert), or by named declaration (replaceNode/replaceBody/deleteNode/insertBefore/insertAfter).",
+            "Create, edit, move, or delete files. Read a file before editing it. Pass either `patch` or `changes`. `patch` takes a patch document: `*** Begin Patch`, then file sections `*** Add File: PATH` (every line prefixed `+`), `*** Delete File: PATH`, or `*** Update File: PATH` (optionally followed by `*** Move to: NEW_PATH`) with hunks introduced by `@@` or `@@ <line near the change>`, where ` ` lines are unchanged context, `-` lines are removed and `+` lines are added; include about 3 context lines around each change; end with `*** End Patch`. In `changes`, replaceText defaults to exact matching (oldText must match once unless replaceAll). Explicit matchPolicy=relaxed permits only unique whole-line whitespace fallback; replaceAll uses exact matches. Other edits operate by line range (replace/delete/insert), or by named declaration (replaceNode/replaceBody/deleteNode/insertBefore/insertAfter).",
             json!({
                 "type":"object",
                 "properties":{
@@ -227,10 +203,109 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "diagnostics":{"type":"boolean"}
                 },
+                "oneOf":[{"required":["patch"]},{"required":["changes"]}],
                 "additionalProperties":false
             }),
         ),
     ]
+}
+
+/// One range contract shared by native batches and the single-file MCP tool.
+fn read_file_range_schema() -> serde_json::Value {
+    json!({
+        "type":"object",
+        "properties":{
+            "path":{"type":"string","minLength":1},
+            "startLine":{"type":"integer","minimum":1},
+            "endLine":{"type":"integer","minimum":1,"description":"Inclusive absolute line number; must be at least startLine."},
+            "lineCount":{"type":"integer","minimum":1,"description":"Number of lines from startLine; cannot be combined with endLine."},
+            "refresh":{"type":"boolean","description":"Compatibility option; reads always use current file contents."}
+        },
+        "required":["path"],
+        "allOf":[{"not":{"required":["endLine","lineCount"]}}],
+        "additionalProperties":false
+    })
+}
+
+fn native_read_file_schema() -> serde_json::Value {
+    let range = read_file_range_schema();
+    let mut schema = range.clone();
+    let object = schema.as_object_mut().expect("read schema object");
+    object.remove("required");
+    object
+        .get_mut("properties")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "requests".into(),
+            json!({"type":"array","minItems":1,"maxItems":8,"items":range}),
+        );
+    object.insert(
+        "oneOf".into(),
+        json!([
+            {"required":["path"],"not":{"required":["requests"]}},
+            {"required":["requests"],"not":{"anyOf":[
+                {"required":["path"]},{"required":["startLine"]},{"required":["endLine"]},
+                {"required":["lineCount"]},{"required":["refresh"]}
+            ]}}
+        ]),
+    );
+    schema
+}
+
+/// Launch schemas are shared by native and MCP tools to prevent contract drift.
+fn shell_execution_schema() -> serde_json::Value {
+    json!({
+        "type":"object",
+        "properties":{
+            "command":{"type":"string","minLength":1},
+            "executable":{"type":"string","minLength":1},
+            "args":{"type":"array","items":{"type":"string"}},
+            "shell":{"type":"string","enum":["auto","bash","zsh","sh","powershell","cmd"]},
+            "loadConfig":{"type":"boolean"},
+            "login":{"type":"boolean"},
+            "purpose":{"type":"string"},
+            "workingDirectory":{"type":"string"},
+            "mode":{"type":"string","enum":["auto","direct","actor"]},
+            "timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},
+            "yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},
+            "background":{"type":"boolean"},
+            "pty":{"type":"boolean"}
+        },
+        "oneOf":[
+            {"required":["command"],"not":{"anyOf":[{"required":["executable"]},{"required":["args"]}]}},
+            {"required":["executable"],"not":{"anyOf":[
+                {"required":["command"]},{"required":["shell"]},
+                {"required":["loadConfig"]},{"required":["login"]}
+            ]}}
+        ],
+        "additionalProperties":false
+    })
+}
+
+fn shell_job_schema() -> serde_json::Value {
+    json!({
+        "type":"object",
+        "properties":{
+            "action":{"type":"string","enum":["check","wait","list","stop","forget","output","input","resize","interrupt"]},
+            "jobId":{"type":"string","minLength":1},
+            "reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400},
+            "offset":{"type":"integer","minimum":0},
+            "maxBytes":{"type":"integer","minimum":1,"maximum":8192},
+            "format":{"type":"string","enum":["text","events"],"default":"text","description":"output returns decoded text by default; events preserves raw base64 bytes for terminal clients."},
+            "waitMilliseconds":{"type":"integer","minimum":0,"maximum":30000},
+            "data":{"type":"string"},
+            "rows":{"type":"integer","minimum":1,"maximum":65535},
+            "cols":{"type":"integer","minimum":1,"maximum":65535}
+        },
+        "required":["action"],
+        "oneOf":[
+            {"properties":{"action":{"const":"list"}}},
+            {"properties":{"action":{"enum":["check","wait","stop","forget","output","input","resize","interrupt"]}},"required":["jobId"]}
+        ],
+        "additionalProperties":false
+    })
 }
 
 fn file_edit_variants() -> serde_json::Value {
@@ -248,7 +323,7 @@ fn file_edit_variants() -> serde_json::Value {
 }
 
 fn replace_text_edit_schema() -> serde_json::Value {
-    json!({"type":"object","properties":{"kind":{"const":"replaceText"},"oldText":{"type":"string","minLength":1},"newText":{"type":"string"},"replaceAll":{"type":"boolean"}},"required":["kind","oldText","newText"],"additionalProperties":false})
+    json!({"type":"object","properties":{"kind":{"const":"replaceText"},"oldText":{"type":"string","minLength":1},"newText":{"type":"string"},"replaceAll":{"type":"boolean"},"matchPolicy":{"type":"string","enum":["exact","relaxed"],"default":"exact","description":"Exact by default. Relaxed explicitly permits a unique whole-line whitespace fallback; replaceAll uses exact matches only."}},"required":["kind","oldText","newText"],"additionalProperties":false})
 }
 
 /// Main-agent-only question tool; registered by `ToolRegistry::enable_user_questions`.
@@ -331,61 +406,41 @@ pub(super) fn web_read_tool_definition() -> ToolDefinition {
 fn mcp_read_file_tool_definition() -> ToolDefinition {
     ToolDefinition::new(
         "read_file",
-        "Read one UTF-8 file range with line/hash edit anchors and a snapshot. MCP intentionally permits only one file per call. Relative paths resolve from the selected workspace; reuse narrow ranges and use refresh=true only when fresh contents are required.",
-        json!({
-            "type":"object",
-            "properties":{
-                "path":{"type":"string"},
-                "startLine":{"type":"integer","minimum":1},
-                "endLine":{"type":"integer","minimum":1},
-                "refresh":{"type":"boolean"}
-            },
-            "required":["path"],
-            "additionalProperties":false
-        }),
+        "Read one UTF-8 file range with line/hash edit anchors and a snapshot. MCP permits one file per call. Use inclusive startLine/endLine or startLine/lineCount; reversed bounds are errors. nextStartLine continues after this page; firstUnreadLine identifies the earliest unread gap. Reads always use current contents; refresh is a compatibility option. Relative paths resolve from the selected workspace.",
+        read_file_range_schema(),
     )
 }
 
 fn mcp_run_shell_tool_definition() -> ToolDefinition {
+    let mut schema = shell_execution_schema();
+    let object = schema.as_object_mut().expect("shell schema object");
+    let execution_fields = object["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    object
+        .get_mut("properties")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("job".into(), shell_job_schema());
+    let variants = object.get_mut("oneOf").unwrap().as_array_mut().unwrap();
+    for variant in variants.iter_mut() {
+        variant["not"]["anyOf"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"required":["job"]}));
+    }
+    variants.push(json!({
+        "required":["job"],
+        "not":{"anyOf":execution_fields.into_iter().map(|field| json!({"required":[field]})).collect::<Vec<_>>()}
+    }));
     ToolDefinition::new(
         "run_shell",
-        "Run a shell command, execute an executable with an argument array without a shell, or manage a detached shell job. Supply command or executable with args; shell selects auto, bash, zsh, sh, powershell, or cmd. loadConfig and login are explicit opt-ins. Direct execution requires approval under restricted sandbox policy. stdout and stderr are captured and large output is kept in an artifact for read_artifact. A foreground command that outlives yieldSeconds (default 120) keeps running and returns a jobId instead of being killed; timeoutSeconds is a hard deadline, and sandbox limits still apply. Use background=true to detach long work. For an existing detached job, supply job instead of command; job.action=wait suspends until completion without model polling.",
-        json!({
-            "type":"object",
-            "properties":{
-                "command":{"type":"string"},
-                "executable":{"type":"string"},
-                "args":{"type":"array","items":{"type":"string"}},
-                "shell":{"type":"string","enum":["auto","bash","zsh","sh","powershell","cmd"]},
-                "loadConfig":{"type":"boolean"},
-                "login":{"type":"boolean"},
-                "purpose":{"type":"string"},
-                "workingDirectory":{"type":"string"},
-                "mode":{"type":"string","enum":["auto","direct","actor"]},
-                "timeoutSeconds":{"type":"integer","minimum":1,"maximum":86400},
-                "yieldSeconds":{"type":"integer","minimum":1,"maximum":86400},
-                "background":{"type":"boolean"},
-                "pty":{"type":"boolean"},
-                "job":{
-                    "type":"object",
-                    "properties":{
-                        "action":{"type":"string","enum":["check","wait","list","stop","forget","output","input","resize","interrupt"]},
-                        "jobId":{"type":"string"},
-                        "reportEverySeconds":{"type":"integer","minimum":1,"maximum":86400},
-                        "offset":{"type":"integer","minimum":0},
-                        "maxBytes":{"type":"integer","minimum":1,"maximum":8192},
-                        "waitMilliseconds":{"type":"integer","minimum":0,"maximum":30000},
-                        "data":{"type":"string"},
-                        "rows":{"type":"integer","minimum":1,"maximum":65535},
-                        "cols":{"type":"integer","minimum":1,"maximum":65535}
-                    },
-                    "required":["action"],
-                    "additionalProperties":false
-                }
-            },
-            "anyOf":[{"required":["command"]},{"required":["executable"]},{"required":["job"]}],
-            "additionalProperties":false
-        }),
+        "Run exactly one shell command, executable with literal args, or existing job operation. Shell defaults to clean non-interactive initialization; loadConfig/login are opt-ins. Direct execution retains sandbox checks. Only cwd persists between commands. yieldSeconds (default 120) ends the foreground wait while the process keeps running; timeoutSeconds is a hard deadline. Completed and running output is retained under jobId: use job:{action:output,jobId,...} to page it, or job:{action:wait,jobId} for event-driven completion. Capture limits and retention expiry can make output unavailable; inspect completeness fields. MCP does not export read_artifact. Job operations cannot be combined with execution options.",
+        schema,
     )
 }
 

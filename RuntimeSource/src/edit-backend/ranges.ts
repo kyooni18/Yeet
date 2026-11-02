@@ -48,6 +48,11 @@ export class IntervalSet {
     return new IntervalSet(this.#ranges);
   }
 
+  replace(ranges: readonly LineRange[]): void {
+    const next = new IntervalSet(ranges);
+    this.#ranges = next.toJSON();
+  }
+
   toJSON(): LineRange[] {
     return this.#ranges.map(range => ({ ...range }));
   }

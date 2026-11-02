@@ -75,26 +75,40 @@ pub(super) fn externalize_model_visible_tool_output_with_limit(
         ),
         None => (exact_artifact_id, content.lines().count()),
     };
-    let rendered =
-        render_externalized_tool_output(&artifact_id, &content, max_visible_bytes, artifact_lines);
+    let rendered = render_externalized_tool_output(
+        tool_name,
+        &artifact_id,
+        &content,
+        max_visible_bytes,
+        artifact_lines,
+    );
     Ok((rendered, true))
 }
 
 fn render_externalized_tool_output(
+    tool_name: &str,
     artifact_id: &str,
     content: &str,
     max_visible_bytes: usize,
     artifact_lines: usize,
 ) -> String {
+    let source_hint = if matches!(tool_name, "read_file" | "read_files") {
+        "; reread required file ranges with read_file before editing"
+    } else {
+        ""
+    };
     let note = format!(
-        "[output truncated; full {artifact_lines} lines in artifact {artifact_id}, use read_artifact to see more]"
+        "[response shortened; complete response ({artifact_lines} lines) in artifact {artifact_id}; use read_artifact{source_hint}]"
     );
     let room = max_visible_bytes.saturating_sub(note.len() + 1);
     if room == 0 {
         return if note.len() <= max_visible_bytes {
             note
         } else {
-            String::new()
+            // An unusually wide round may reserve less space than a retrieval
+            // reference itself. Keep this bounded receipt rather than hiding
+            // the only recovery path merely to meet the aggregate target.
+            format!("[response shortened; read_artifact {artifact_id}]")
         };
     }
     let preview = bounded_preview(content, room.min(MODEL_VISIBLE_TOOL_OUTPUT_PREVIEW_BYTES));
@@ -145,5 +159,17 @@ fn collect_logical_source_lines(value: &Value, chunks: &mut Vec<String>) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiny_round_share_keeps_retrieval_reference() {
+        let rendered =
+            render_externalized_tool_output("external", "artifact-123", "some output", 1, 1);
+        assert!(rendered.contains("read_artifact artifact-123"));
     }
 }

@@ -30,19 +30,24 @@ pub(super) fn concretize_text_edits(
     path: &str,
     source: &str,
     edits: &mut Vec<Value>,
-) -> Result<()> {
+) -> Result<Vec<Value>> {
     if !has_text_edits(edits) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let source = source.replace("\r\n", "\n");
     let lines = line_starts(&source);
     let mut spans = Vec::new();
     let mut kept = Vec::new();
+    let mut match_modes = Vec::new();
     // Patch hunks apply in order, each searching after the previous one.
     let mut cursor = 0usize;
-    for edit in edits.drain(..) {
+    for (edit_index, edit) in edits.drain(..).enumerate() {
         match edit.get("kind").and_then(Value::as_str) {
-            Some("replaceText") => spans.extend(replace_text_spans(path, &source, &edit)?),
+            Some("replaceText") => {
+                let (resolved, mode) = replace_text_spans(path, &source, &edit)?;
+                spans.extend(resolved);
+                match_modes.push(json!({"editIndex": edit_index, "mode": mode}));
+            }
             Some("patchHunk") => match hunk_span(path, &source, &lines, &edit, &mut cursor)? {
                 HunkTarget::Span(span) => spans.push(span),
                 HunkTarget::Append(text) => kept.push(json!({
@@ -60,10 +65,10 @@ pub(super) fn concretize_text_edits(
     }
     kept.extend(line_edits(&source, &spans));
     *edits = kept;
-    Ok(())
+    Ok(match_modes)
 }
 
-fn replace_text_spans(path: &str, source: &str, edit: &Value) -> Result<Vec<Span>> {
+fn replace_text_spans(path: &str, source: &str, edit: &Value) -> Result<(Vec<Span>, &'static str)> {
     let old = edit
         .get("oldText")
         .and_then(Value::as_str)
@@ -76,12 +81,31 @@ fn replace_text_spans(path: &str, source: &str, edit: &Value) -> Result<Vec<Span
         .ok_or_else(|| anyhow!("replaceText requires newText"))?
         .replace("\r\n", "\n");
     let all = edit.get("replaceAll").and_then(Value::as_bool) == Some(true);
+    let relaxed = match edit.get("matchPolicy") {
+        None => false,
+        Some(Value::String(policy)) if policy == "exact" => false,
+        Some(Value::String(policy)) if policy == "relaxed" => true,
+        _ => bail!("replaceText matchPolicy must be exact or relaxed"),
+    };
     let starts = source
         .match_indices(&old)
         .map(|(at, _)| at)
         .collect::<Vec<_>>();
     if starts.is_empty() {
-        return Ok(vec![replace_text_fallback(path, source, &old, &new)?]);
+        if !relaxed || all {
+            bail!(
+                "replaceText oldText was not found exactly in {path}. Copy it from read_file output without line numbers or hashes. Relaxed matching requires matchPolicy:\"relaxed\" and cannot be used with replaceAll:true."
+            );
+        }
+        let (span, tier) = replace_text_fallback(path, source, &old, &new)?;
+        return Ok((
+            vec![span],
+            match tier {
+                Tier::TrailingWhitespace => "trailing_whitespace",
+                Tier::Indentation => "indentation",
+                Tier::Exact => "exact",
+            },
+        ));
     }
     if starts.len() > 1 && !all {
         let lines = starts
@@ -95,20 +119,23 @@ fn replace_text_spans(path: &str, source: &str, edit: &Value) -> Result<Vec<Span
         );
     }
     let drops_lines = new.is_empty() && old.ends_with('\n');
-    Ok(starts
-        .into_iter()
-        .map(|start| Span {
-            start,
-            end: start + old.len(),
-            text: new.clone(),
-            drops_lines,
-        })
-        .collect())
+    Ok((
+        starts
+            .into_iter()
+            .map(|start| Span {
+                start,
+                end: start + old.len(),
+                text: new.clone(),
+                drops_lines,
+            })
+            .collect(),
+        "exact",
+    ))
 }
 
 /// Matches whole lines of `oldText` with whitespace tolerance when the exact
 /// text is absent; only a unique match is accepted.
-fn replace_text_fallback(path: &str, source: &str, old: &str, new: &str) -> Result<Span> {
+fn replace_text_fallback(path: &str, source: &str, old: &str, new: &str) -> Result<(Span, Tier)> {
     let whole_lines = old.ends_with('\n');
     let old_body = old.strip_suffix('\n').unwrap_or(old);
     let new_body = if whole_lines {
@@ -135,12 +162,15 @@ fn replace_text_fallback(path: &str, source: &str, old: &str, new: &str) -> Resu
                 let last = index + old_lines.len() - 1;
                 let new_lines = new_body.split('\n').map(str::to_owned).collect::<Vec<_>>();
                 let text = reindent(tier, &old_lines, &file_lines[*index..=last], new_lines);
-                return Ok(Span {
-                    start: starts[*index],
-                    end: starts[last] + file_lines[last].len(),
-                    drops_lines: whole_lines && text.is_empty(),
-                    text,
-                });
+                return Ok((
+                    Span {
+                        start: starts[*index],
+                        end: starts[last] + file_lines[last].len(),
+                        drops_lines: whole_lines && text.is_empty(),
+                        text,
+                    },
+                    tier,
+                ));
             }
             many => bail!(
                 "replaceText oldText was not found exactly in {path}; ignoring whitespace it matches {} places (lines {}). Include more surrounding text to make it unique.",
@@ -178,6 +208,33 @@ fn block_matches(
     index: usize,
     tier: Tier,
 ) -> bool {
+    if tier == Tier::Indentation && index + wanted.len() <= file_lines.len() {
+        // Only a uniform indentation shift is recoverable. Trimming every
+        // line independently can confuse distinct Python/YAML nesting.
+        let anchor = wanted
+            .iter()
+            .enumerate()
+            .find(|(_, line)| !line.as_ref().trim().is_empty());
+        if let Some((offset, line)) = anchor {
+            let expected_indent = indent_of(line.as_ref());
+            let actual_indent = indent_of(file_lines[index + offset]);
+            return wanted.iter().enumerate().all(|(offset, line)| {
+                let expected = line.as_ref();
+                let actual = file_lines[index + offset];
+                if expected.trim().is_empty() {
+                    actual.trim().is_empty()
+                } else {
+                    match (
+                        expected.strip_prefix(expected_indent),
+                        actual.strip_prefix(actual_indent),
+                    ) {
+                        (Some(expected), Some(actual)) => expected.trim_end() == actual.trim_end(),
+                        _ => false,
+                    }
+                }
+            });
+        }
+    }
     index + wanted.len() <= file_lines.len()
         && wanted
             .iter()
@@ -517,4 +574,61 @@ pub(super) fn parse_patch(patch: &str) -> Result<Vec<Value>> {
         }
     }
     bail!("patch must end with `*** End Patch`")
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn exact_replacement_never_silently_repairs_whitespace() {
+        for (path, source, old) in [
+            ("Makefile", "\tbuild\n", "    build\n"),
+            ("example.py", "    run()\n", "        run()\n"),
+            ("config.yaml", "key: value  \n", "key: value\n"),
+        ] {
+            let mut edits = vec![json!({"kind":"replaceText","oldText":old,"newText":"updated\n"})];
+            let error = concretize_text_edits(path, source, &mut edits).unwrap_err();
+            assert!(error.to_string().contains("not found exactly"));
+        }
+    }
+
+    #[test]
+    fn relaxed_replacement_reports_mode_and_preserves_relative_indentation() {
+        let source = "    if ready:\n        run()\n";
+        let mut edits = vec![json!({"kind":"replaceText", "matchPolicy":"relaxed",
+            "oldText":"if ready:\n    run()", "newText":"if ready:\n    stop()"})];
+        let modes = concretize_text_edits("example.py", source, &mut edits).unwrap();
+        assert_eq!(modes, vec![json!({"editIndex":0,"mode":"indentation"})]);
+        assert_eq!(edits[0]["text"], "    if ready:\n        stop()");
+
+        let mut edits = vec![json!({"kind":"replaceText", "matchPolicy":"relaxed",
+            "oldText":"key: value\n", "newText":"key: changed\n"})];
+        let modes = concretize_text_edits("config.yaml", "key: value  \n", &mut edits).unwrap();
+        assert_eq!(modes[0]["mode"], "trailing_whitespace");
+    }
+
+    #[test]
+    fn relaxed_replacement_rejects_different_nesting_and_nonexact_replace_all() {
+        let source = "    if ready:\n    run()\n";
+        let old = "  if ready:\n      run()";
+        // Force the fallback path: a missing first-line prefix alone can
+        // still leave a valid exact substring, which is allowed by contract.
+        assert!(!source.contains(old));
+        let mut edits = vec![json!({"kind":"replaceText", "matchPolicy":"relaxed",
+            "oldText":old, "newText":"  if ready:\n      stop()"})];
+        assert!(concretize_text_edits("example.py", source, &mut edits).is_err());
+
+        let mut exact = vec![json!({"kind":"replaceText", "matchPolicy":"relaxed",
+            "oldText":"if ready:\n    run()", "newText":"if ready:\n    stop()"})];
+        let modes = concretize_text_edits("example.py", source, &mut exact).unwrap();
+        assert_eq!(modes[0]["mode"], "exact");
+        assert_eq!(exact[0]["text"], "    if ready:\n    stop()");
+
+        let mut edits = vec![
+            json!({"kind":"replaceText", "matchPolicy":"relaxed", "replaceAll":true,
+            "oldText":"run()\n", "newText":"stop()\n"}),
+        ];
+        assert!(concretize_text_edits("example.py", "    run()  \n", &mut edits).is_err());
+    }
 }

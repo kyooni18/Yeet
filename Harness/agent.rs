@@ -505,7 +505,7 @@ impl AgentCoordinator {
                     current_write_generation != workspace_write_generation;
                 workspace_write_generation = current_write_generation;
                 let (normalized, output_images) =
-                    normalize_tool_output_for_model(&content, vision_enabled);
+                    normalize_tool_output_for_model(&call.name, &content, vision_enabled);
                 let (model_content, externally_bounded) =
                     self.registry
                         .bound_round_output(call, normalized, &mut round_output_budget)?;

@@ -72,9 +72,10 @@ impl PartialToolCall {
 /// Converts structured tool output into compact model text plus supported images.
 ///
 /// Raw tool results remain untouched for execution bookkeeping, evidence, replay, and UI
-/// events. This is the model-facing projection boundary: transport metadata, duplicated
-/// MCP structured payloads, and opaque cache handles are removed here.
+/// events. Only recognized native tool contracts are projected. Unknown external
+/// payloads retain their fields, with exact MCP content duplicates suppressed.
 pub(super) fn normalize_tool_output_for_model(
+    tool_name: &str,
     content: &str,
     vision_enabled: bool,
 ) -> (String, Vec<ImageAttachment>) {
@@ -82,12 +83,20 @@ pub(super) fn normalize_tool_output_for_model(
         return (content.to_owned(), Vec::new());
     };
     let Some(object) = value.as_object() else {
-        return (render_model_value(&value), Vec::new());
+        return (render_model_value(tool_name, &value), Vec::new());
     };
     let Some(items) = object.get("content").and_then(Value::as_array) else {
-        return (render_model_value(&value), Vec::new());
+        return (render_model_value(tool_name, &value), Vec::new());
     };
 
+    // A business payload can also contain a field named `content`. Only
+    // interpret recognized MCP content blocks as transport framing.
+    if !items
+        .iter()
+        .all(|item| item.get("type").and_then(Value::as_str).is_some())
+    {
+        return (render_model_value(tool_name, &value), Vec::new());
+    }
     let mut lines = Vec::new();
     let mut images = Vec::new();
     for item in items {
@@ -102,7 +111,7 @@ pub(super) fn normalize_tool_output_for_model(
                     .filter(|value| !value.is_empty())
                 {
                     let rendered = serde_json::from_str::<Value>(text)
-                        .map(|value| render_model_value(&value))
+                        .map(|value| render_model_value(tool_name, &value))
                         .unwrap_or_else(|_| text.to_owned());
                     if !rendered.is_empty() {
                         lines.push(rendered);
@@ -142,28 +151,46 @@ pub(super) fn normalize_tool_output_for_model(
                     lines.push(format!("[resource output: {uri}]"));
                 }
             }
-            other if !other.is_empty() => lines.push(format!("[{other} output]")),
+            "resource_link" => lines.push(Value::Object(item.clone()).to_string()),
+            other if !other.is_empty() => lines.push(Value::Object(item.clone()).to_string()),
             _ => {}
         }
     }
 
-    // content is the canonical model-facing representation. MCP structuredContent
-    // is frequently the same payload wrapped in workspace/transport metadata, so it
-    // is only a fallback when the server supplied no usable content at all.
-    if lines.is_empty()
-        && let Some(structured) = object.get("structuredContent")
-    {
-        let rendered = render_model_value(structured);
-        if !rendered.is_empty() {
-            lines.push(rendered);
+    // Native tools own their transport metadata. An external server's
+    // structured result may add facts absent from its text, so suppress it
+    // only when a text block contains that exact JSON value.
+    if let Some(structured) = object.get("structuredContent") {
+        let already_in_text = items.iter().any(|item| {
+            item.get("text")
+                .and_then(Value::as_str)
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .as_ref()
+                == Some(structured)
+        });
+        if lines.is_empty() || (!is_typed_builtin(tool_name) && !already_in_text) {
+            let rendered = render_model_value(tool_name, structured);
+            if !rendered.is_empty() {
+                lines.push(rendered);
+            }
         }
     }
-    if lines.is_empty() && object.get("isError").and_then(Value::as_bool) == Some(true) {
-        lines.push("Tool reported an error.".into());
+    if !is_typed_builtin(tool_name) {
+        let extra = object
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "content" | "structuredContent" | "isError"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<serde_json::Map<_, _>>();
+        if !extra.is_empty() {
+            lines.push(Value::Object(extra).to_string());
+        }
+    }
+    if object.get("isError").and_then(Value::as_bool) == Some(true) {
+        lines.insert(0, "Tool reported an error.".into());
     }
 
     if lines.is_empty() {
-        (render_model_value(&value), images)
+        (render_model_value(tool_name, &value), images)
     } else {
         (lines.join("\n"), images)
     }
@@ -240,11 +267,11 @@ fn project_tool_json_for_model(value: &Value) -> Value {
 /// Renders the built-in tools' results as plain text: file reads as numbered
 /// lines, shell runs as output plus a non-zero exit code, searches as
 /// `path:line: text`, edits as diffs, and errors as one line.
-fn render_known_result(value: &Value) -> Option<String> {
+fn render_known_result(tool_name: &str, value: &Value) -> Option<String> {
     if let Value::Array(items) = value {
         let rendered = items
             .iter()
-            .map(render_known_result)
+            .map(|item| render_known_result(tool_name, item))
             .collect::<Option<Vec<_>>>()?;
         return (!rendered.is_empty()).then(|| rendered.join("\n\n"));
     }
@@ -252,18 +279,34 @@ fn render_known_result(value: &Value) -> Option<String> {
     let text = |key: &str| object.get(key).and_then(Value::as_str);
     let number = |key: &str| object.get(key).and_then(Value::as_u64);
 
-    if let Some(error) = text("error")
-        && object
-            .keys()
-            .all(|key| matches!(key.as_str(), "error" | "reason" | "hint"))
-    {
-        return Some(match text("hint") {
-            Some(hint) => format!("Error: {error}\n{hint}"),
-            None => format!("Error: {error}"),
-        });
+    if let Some(error) = text("error") {
+        let mut out = String::new();
+        if matches!(tool_name, "run_shell" | "shell_job") {
+            append_shell_receipt(&mut out, object);
+        }
+        if let Some(outcome) = text("mutationOutcome") {
+            push_line(&mut out, &format!("[mutation outcome: {outcome}]"));
+        }
+        if let Some(code) = text("code") {
+            push_line(&mut out, &format!("Error [{code}]: {error}"));
+        } else {
+            push_line(&mut out, &format!("Error: {error}"));
+        }
+        if let Some(path) = text("path") {
+            push_line(&mut out, &format!("[path: {path}]"));
+        }
+        if let Some(index) = number("operationIndex") {
+            push_line(&mut out, &format!("[operation index: {index}]"));
+        }
+        if let Some(hint) = text("hint") {
+            push_line(&mut out, hint);
+        }
+        return Some(out);
     }
 
-    if let (Some(path), Some(lines)) = (text("path"), text("lines")) {
+    if matches!(tool_name, "read_file" | "read_files")
+        && let (Some(path), Some(lines)) = (text("path"), text("lines"))
+    {
         let mut out = path.to_owned();
         if let (Some(start), Some(end), Some(total)) =
             (number("startLine"), number("endLine"), number("totalLines"))
@@ -281,12 +324,57 @@ fn render_known_result(value: &Value) -> Option<String> {
         return Some(out);
     }
 
-    if let Some(code) = object.get("exitCode").and_then(Value::as_i64)
-        && !object.contains_key("status")
+    if matches!(tool_name, "run_shell" | "shell_job")
+        && (object.contains_key("chunks")
+            || (object.contains_key("nextOffset") && !object.contains_key("events")))
     {
         let mut out = String::new();
+        append_shell_receipt(&mut out, object);
+        if let Some(offset) = number("nextOffset") {
+            push_line(
+                &mut out,
+                &format!(
+                    "[nextOffset: {offset}; hasMore: {}]",
+                    object
+                        .get("hasMore")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                ),
+            );
+        }
+        match object.get("finished").and_then(Value::as_bool) {
+            Some(true) => push_line(&mut out, "[log finished]"),
+            Some(false) => push_line(&mut out, "[process may produce more output]"),
+            None => {}
+        }
+        for chunk in object
+            .get("chunks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let stream = chunk
+                .get("stream")
+                .and_then(Value::as_str)
+                .unwrap_or("output");
+            let content = chunk
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            push_line(&mut out, &format!("[{stream}]\n{content}"));
+        }
+        return Some(out);
+    }
+
+    if matches!(tool_name, "run_shell" | "shell_job")
+        && object.get("exitCode").and_then(Value::as_i64).is_some()
+    {
+        let mut out = String::new();
+        append_shell_receipt(&mut out, object);
         if let Some(stdout) = text("stdout") {
-            out.push_str(stdout.trim_end());
+            if !stdout.trim_end().is_empty() {
+                push_line(&mut out, stdout.trim_end());
+            }
         }
         if let Some(stderr) = text("stderr").filter(|value| !value.trim().is_empty()) {
             if !out.is_empty() {
@@ -310,22 +398,18 @@ fn render_known_result(value: &Value) -> Option<String> {
             push_line(
                 &mut out,
                 &format!(
-                    "[output truncated; full output in artifact {artifact}, use read_artifact]"
+                    "[retained output in artifact {artifact}; use read_artifact{}]",
+                    if object.get("artifactComplete").and_then(Value::as_bool) == Some(false) {
+                        "; capture is incomplete"
+                    } else {
+                        ""
+                    }
                 ),
             );
         } else if object.get("stdoutTruncated").and_then(Value::as_bool) == Some(true)
             || object.get("stderrTruncated").and_then(Value::as_bool) == Some(true)
         {
             push_line(&mut out, "[output truncated]");
-        }
-        if code != 0 {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&format!("[exit code {code}]"));
-        }
-        if object.get("timedOut").and_then(Value::as_bool) == Some(true) {
-            out.push_str("\n[timed out]");
         }
         if let Some(cwd) = text("shellCwd") {
             push_line(&mut out, &format!("[shell cwd: {cwd}]"));
@@ -337,7 +421,9 @@ fn render_known_result(value: &Value) -> Option<String> {
         });
     }
 
-    if let Some(matches) = object.get("matches").and_then(Value::as_array) {
+    if tool_name == "search_workspace"
+        && let Some(matches) = object.get("matches").and_then(Value::as_array)
+    {
         let mut out = matches
             .iter()
             .filter_map(|item| {
@@ -362,10 +448,32 @@ fn render_known_result(value: &Value) -> Option<String> {
         return Some(out);
     }
 
-    if let Some(files) = object.get("files").and_then(Value::as_array)
+    if tool_name == "apply_file_edits"
+        && let Some(files) = object.get("files").and_then(Value::as_array)
         && files.iter().all(|file| file.get("operation").is_some())
     {
         let mut out = Vec::new();
+        for key in ["mutationOutcome", "diagnosticsStatus", "diagnosticsError"] {
+            if let Some(value) = text(key) {
+                out.push(format!("[{key}: {value}]"));
+            }
+        }
+        if object.get("filesSummaryOnly").and_then(Value::as_bool) == Some(true) {
+            out.push(format!(
+                "[file summaries: {} of {}; diffs are in the retained response]",
+                files.len(),
+                number("fileCount").unwrap_or(files.len() as u64)
+            ));
+        }
+        if object
+            .get("diagnosticsErrorTruncated")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            out.push(
+                "[diagnostics error shortened; full error is in the retained response]".into(),
+            );
+        }
         for file in files {
             let operation = file
                 .get("operation")
@@ -376,6 +484,18 @@ fn render_known_result(value: &Value) -> Option<String> {
                 Some(destination) => format!("{operation} {path} -> {destination}"),
                 None => format!("{operation} {path}"),
             };
+            if let Some(modes) = file.get("matchModes").and_then(Value::as_array)
+                && !modes.is_empty()
+            {
+                section.push_str(&format!(
+                    "\n[match modes: {}]",
+                    modes
+                        .iter()
+                        .map(render_inline)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
             let hunks = file
                 .pointer("/diff/hunks")
                 .and_then(Value::as_array)
@@ -415,9 +535,55 @@ fn render_known_result(value: &Value) -> Option<String> {
         {
             out.push(format!("diagnostic: {}", render_inline(diagnostic)));
         }
+        if let Some(artifact) = text("artifactId") {
+            out.push(format!(
+                "[complete edit response in artifact {artifact}; use read_artifact]"
+            ));
+        }
         return Some(out.join("\n"));
     }
     None
+}
+
+fn append_shell_receipt(out: &mut String, object: &serde_json::Map<String, Value>) {
+    let text = |key: &str| object.get(key).and_then(Value::as_str);
+    if let Some(job) = text("jobId") {
+        let state = text("state")
+            .or_else(|| text("status"))
+            .unwrap_or("unknown");
+        push_line(
+            out,
+            &format!(
+                "[job {job}; state: {state}; retained output: shell_job action=output, jobId={job}, offset=0]"
+            ),
+        );
+    }
+    if let Some(code) = object.get("exitCode").and_then(Value::as_i64)
+        && (code != 0 || object.contains_key("jobId"))
+    {
+        push_line(out, &format!("[exit code {code}]"));
+    }
+    if object.get("timedOut").and_then(Value::as_bool) == Some(true) {
+        push_line(out, "[timed out]");
+    }
+    if let Some(reason) = text("terminationReason") {
+        push_line(out, &format!("[termination reason: {reason}]"));
+    }
+    if let Some(signal) = object.get("signal") {
+        push_line(out, &format!("[signal: {signal}]"));
+    }
+    if object.get("cancelRequested").and_then(Value::as_bool) == Some(true) {
+        push_line(
+            out,
+            "[cancellation requested; process state reports confirmed status]",
+        );
+    }
+    if object.get("captureComplete").and_then(Value::as_bool) == Some(false) {
+        push_line(out, "[capture incomplete; some output is unavailable]");
+    }
+    if let Some(error) = text("captureError") {
+        push_line(out, &format!("[capture error: {error}]"));
+    }
 }
 
 fn push_line(out: &mut String, line: &str) {
@@ -471,9 +637,27 @@ fn looks_like_synchronous_shell_result(object: &serde_json::Map<String, Value>) 
             || object.contains_key("route"))
 }
 
-fn render_model_value(value: &Value) -> String {
+fn is_typed_builtin(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file"
+            | "read_files"
+            | "run_shell"
+            | "shell_job"
+            | "apply_file_edits"
+            | "search_workspace"
+    )
+}
+
+fn render_model_value(tool_name: &str, value: &Value) -> String {
+    if !is_typed_builtin(tool_name) {
+        return match value {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+    }
     let projected = project_tool_json_for_model(value);
-    if let Some(text) = render_known_result(&projected) {
+    if let Some(text) = render_known_result(tool_name, &projected) {
         return text;
     }
     match projected {
@@ -658,7 +842,7 @@ mod tests {
         })
         .to_string();
 
-        let (text, images) = normalize_tool_output_for_model(&payload, false);
+        let (text, images) = normalize_tool_output_for_model("run_shell", &payload, false);
 
         assert!(images.is_empty());
         assert_eq!(text, "{\"value\":42}");
@@ -668,40 +852,130 @@ mod tests {
 
     #[test]
     fn builtin_results_render_as_compact_text() {
-        let render = |value: Value| normalize_tool_output_for_model(&value.to_string(), false).0;
+        let render = |name: &str, value: Value| {
+            normalize_tool_output_for_model(name, &value.to_string(), false).0
+        };
         assert_eq!(
-            render(json!({
-                "route": "actor", "command": "printf ok", "workingDirectory": "/tmp",
-                "exitCode": 0, "succeeded": true, "durationMilliseconds": 12,
-                "stdoutBytes": 3, "stdoutTruncated": false, "stdout": "ok\n", "stderr": null
-            })),
+            render(
+                "run_shell",
+                json!({
+                    "route": "actor", "command": "printf ok", "workingDirectory": "/tmp",
+                    "exitCode": 0, "succeeded": true, "durationMilliseconds": 12,
+                    "stdoutBytes": 3, "stdoutTruncated": false, "stdout": "ok\n", "stderr": null
+                })
+            ),
             "ok"
         );
         assert_eq!(
-            render(json!({"exitCode": 2, "stdout": null, "stderr": "boom\n"})),
-            "boom\n[exit code 2]"
+            render(
+                "run_shell",
+                json!({"exitCode": 2, "stdout": null, "stderr": "boom\n"})
+            ),
+            "[exit code 2]\nboom"
         );
         assert_eq!(
-            render(json!({
-                "content": [],
-                "structuredContent": {"workspace": "/tmp", "result": {
-                    "path": "src/main.rs", "snapshot": "opaque", "requestedStartLine": 1,
-                    "startLine": 1, "endLine": 1, "totalLines": 9, "nextStartLine": 2,
-                    "lines": "1:abcd|fn main() {}"
-                }},
-                "isError": false
-            })),
+            render(
+                "read_file",
+                json!({
+                    "content": [],
+                    "structuredContent": {"workspace": "/tmp", "result": {
+                        "path": "src/main.rs", "snapshot": "opaque", "requestedStartLine": 1,
+                        "startLine": 1, "endLine": 1, "totalLines": 9, "nextStartLine": 2,
+                        "lines": "1:abcd|fn main() {}"
+                    }},
+                    "isError": false
+                })
+            ),
             "src/main.rs (lines 1-1 of 9)\n1|fn main() {}\n[more from line 2]"
         );
         assert_eq!(
             render(
+                "search_workspace",
                 json!({"filesScanned": 3, "truncated": false, "matches": [{"path": "a.rs", "line": 2, "text": "  hit"}]})
             ),
             "a.rs:2: hit"
         );
         assert_eq!(
-            render(json!({"error": "nope", "reason": "io"})),
+            render("apply_file_edits", json!({"error": "nope", "reason": "io"})),
             "Error: nope"
         );
+    }
+
+    #[test]
+    fn external_payload_fields_are_not_projected_as_native_metadata() {
+        let payload = json!({
+            "snapshot":"domain version", "route":"north", "durationMilliseconds":42,
+            "data":"important ".repeat(100), "content":[1,2], "empty":[], "nothing":null,
+            "nested":{"snapshot":"nested version","route":false}
+        });
+        let (text, _) =
+            normalize_tool_output_for_model("mcp_external_lookup", &payload.to_string(), false);
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), payload);
+
+        let envelope = json!({"content":[{"type":"text","text":"summary"}],
+            "structuredContent":{"snapshot":"additional fact","data":"retained"}});
+        let (text, _) =
+            normalize_tool_output_for_model("mcp_external_lookup", &envelope.to_string(), false);
+        assert!(
+            text.contains("summary")
+                && text.contains("additional fact")
+                && text.contains("retained")
+        );
+        let envelope = json!({"content":[{"type":"text","text":payload.to_string()}],"structuredContent":payload});
+        let (text, _) =
+            normalize_tool_output_for_model("mcp_external_lookup", &envelope.to_string(), false);
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), payload);
+    }
+
+    #[test]
+    fn shell_rendering_keeps_retained_output_receipt_and_capture_loss() {
+        let result = json!({"jobId":"job_one","state":"exited","exitCode":1,
+            "stdout":"head\ntail", "stdoutTruncated":true, "captureComplete":false, "timedOut":true,
+            "artifactId":"log_one","artifactComplete":false});
+        let (text, _) = normalize_tool_output_for_model("run_shell", &result.to_string(), false);
+        assert!(text.starts_with("[job job_one"), "{text}");
+        assert!(text.contains("shell_job action=output"), "{text}");
+        assert!(
+            text.contains("capture incomplete") && text.contains("exit code 1"),
+            "{text}"
+        );
+        assert!(!text.contains("full output"), "{text}");
+        assert!(text.find("[exit code 1]").unwrap() < text.find("head").unwrap());
+        assert!(text.find("[timed out]").unwrap() < text.find("head").unwrap());
+        let page = json!({"jobId":"job_one","chunks":[{"stream":"stdout","content":"한국어"},
+            {"stream":"stderr","content":"failure"}],"nextOffset":123,"hasMore":true,
+            "captureComplete":true,"finished":false});
+        let (text, _) = normalize_tool_output_for_model("shell_job", &page.to_string(), false);
+        assert!(text.contains("[stdout]\n한국어") && text.contains("[stderr]\nfailure"));
+        assert!(text.contains("nextOffset: 123; hasMore: true"));
+        assert!(text.contains("may produce more output"));
+        assert!(text.find("nextOffset: 123").unwrap() < text.find("[stdout]").unwrap());
+        assert!(text.find("may produce more output").unwrap() < text.find("[stdout]").unwrap());
+    }
+
+    #[test]
+    fn edit_outcomes_precede_diffs_and_survive_error_rendering() {
+        let applied = json!({"mutationOutcome":"applied","diagnosticsStatus":"failed",
+            "diagnosticsError":"provider unavailable","files":[{"operation":"update","path":"a.rs",
+                "diff":{"hunks":[{"oldStart":1,"newStart":1,"lines":["-old","+new"]}]}}]});
+        let (text, _) =
+            normalize_tool_output_for_model("apply_file_edits", &applied.to_string(), false);
+        assert!(
+            text.starts_with("[mutationOutcome: applied]\n[diagnosticsStatus: failed]"),
+            "{text}"
+        );
+        assert!(text.find("provider unavailable").unwrap() < text.find("-old").unwrap());
+        let unknown = json!({"error":"response lost","code":"edit_transport_lost","mutationOutcome":"unknown"});
+        let (text, _) =
+            normalize_tool_output_for_model("apply_file_edits", &unknown.to_string(), false);
+        assert!(text.starts_with("[mutation outcome: unknown]"));
+        assert!(text.contains("edit_transport_lost") && text.contains("response lost"));
+        let externalized = json!({"mutationOutcome":"applied","diagnosticsStatus":"failed",
+            "filesSummaryOnly":true,"fileCount":12,"filesTruncated":true,
+            "files":[{"operation":"update","path":"a.rs"}],"artifactId":"edit-response"});
+        let (text, _) =
+            normalize_tool_output_for_model("apply_file_edits", &externalized.to_string(), false);
+        assert!(text.contains("file summaries: 1 of 12") && text.contains("read_artifact"));
+        assert!(text.starts_with("[mutationOutcome: applied]"));
     }
 }

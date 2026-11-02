@@ -114,7 +114,7 @@ impl AgentCoordinator {
         check_cancel(input.cancel)?;
         Ok(match execution {
             Ok(content) => (content, true),
-            Err(error) => (error_payload(&error.to_string()), false),
+            Err(error) => (execution_error_payload(&error), false),
         })
     }
 
@@ -145,6 +145,21 @@ impl AgentCoordinator {
 
 fn error_payload(message: &str) -> String {
     json!({"error": message, "reason": classify_tool_error(message)}).to_string()
+}
+
+/// A lost edit response may follow a committed transaction. Keep that outcome
+/// machine-readable instead of reducing it to a generic retryable tool error.
+fn execution_error_payload(error: &anyhow::Error) -> String {
+    if let Some(failure) = error.downcast_ref::<crate::edit::EditFailure>() {
+        return json!({
+            "error": failure.message,
+            "reason": classify_tool_error(&failure.message),
+            "code": failure.code,
+            "mutationOutcome": failure.mutation_outcome,
+        })
+        .to_string();
+    }
+    error_payload(&error.to_string())
 }
 
 /// A successful capability activation attaches the tools it exposes.

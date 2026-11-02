@@ -1,6 +1,7 @@
 //! Bounded disk-backed shell transcripts, shared by readers and job snapshots.
 
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     sync::{
@@ -56,6 +57,33 @@ pub struct ShellEventPage {
     pub total_bytes: usize,
     pub finished: bool,
     pub truncated: bool,
+    pub has_more: bool,
+    pub capture_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_error: Option<String>,
+}
+
+/// Decoded model output. Cursors count retained raw bytes, exactly as the raw
+/// terminal protocol does; decoding state is reconstructed from the log.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellTextPage {
+    pub chunks: Vec<ShellTextChunk>,
+    pub offset: usize,
+    pub next_offset: usize,
+    pub total_bytes: usize,
+    pub has_more: bool,
+    pub finished: bool,
+    pub truncated: bool,
+    pub capture_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_error: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ShellTextChunk {
+    pub stream: &'static str,
+    pub content: String,
 }
 
 #[derive(Serialize)]
@@ -182,6 +210,22 @@ impl ShellOutputLog {
         wait: Duration,
         cancel: &AtomicBool,
     ) -> Result<ShellEventPage> {
+        self.wait_available(offset, wait, cancel)?;
+        self.events(offset, max_bytes)
+    }
+
+    pub fn wait_text(
+        &self,
+        offset: usize,
+        max_bytes: usize,
+        wait: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<ShellTextPage> {
+        self.wait_available(offset, wait, cancel)?;
+        self.text(offset, max_bytes)
+    }
+
+    fn wait_available(&self, offset: usize, wait: Duration, cancel: &AtomicBool) -> Result<()> {
         let deadline = Instant::now() + wait.min(Duration::from_secs(30));
         let mut state = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         loop {
@@ -210,8 +254,7 @@ impl ShellOutputLog {
                 .unwrap_or_else(|p| p.into_inner());
             state = next;
         }
-        drop(state);
-        self.events(offset, max_bytes)
+        Ok(())
     }
 
     pub fn events(&self, offset: usize, max_bytes: usize) -> Result<ShellEventPage> {
@@ -255,6 +298,78 @@ impl ShellOutputLog {
             total_bytes: total,
             finished: state.finished,
             truncated: state.truncated,
+            has_more: next_offset < total,
+            capture_complete: !state.truncated && state.error.is_none(),
+            capture_error: state.error.clone(),
+        })
+    }
+
+    /// Decode each stream separately, retaining split UTF-8 scalars across
+    /// chunks, pages, and interleaved stdout/stderr. At most three earlier bytes
+    /// per stream are needed. The bounded span index is scanned, but previous
+    /// raw transcript bytes are not reread beyond these decoder prefixes.
+    pub fn text(&self, offset: usize, max_bytes: usize) -> Result<ShellTextPage> {
+        let mut state = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if offset > state.bytes {
+            bail!(
+                "Shell output offset {offset} is past {} stored bytes",
+                state.bytes
+            );
+        }
+        let total = state.bytes;
+        let end = total.min(offset.saturating_add(max_bytes.clamp(1, 8192)));
+        let spans: Vec<_> = state
+            .spans
+            .iter()
+            .filter(|span| span.end > offset && span.start < end)
+            .map(|span| (span.start.max(offset), span.end.min(end), span.stream))
+            .take(128)
+            .collect();
+        let next_offset = spans.last().map_or(offset, |(_, end, _)| *end);
+        let final_page =
+            next_offset == total && (state.finished || state.truncated || state.error.is_some());
+        let result = (|| -> Result<Vec<ShellTextChunk>> {
+            let mut decoders = BTreeMap::new();
+            // Include streams absent from this page so a final incomplete scalar
+            // can be flushed even if the last bytes belonged to another stream.
+            let streams: Vec<_> = state
+                .spans
+                .iter()
+                .map(|span| span.stream)
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            for stream in streams {
+                decoders.insert(stream, pending_utf8_before(&mut state, stream, offset)?);
+            }
+            let mut chunks = Vec::new();
+            for (start, end, stream) in spans {
+                state.file.seek(SeekFrom::Start(start as u64))?;
+                let mut bytes = vec![0; end - start];
+                state.file.read_exact(&mut bytes)?;
+                let content = decode_utf8(decoders.entry(stream).or_default(), &bytes, false);
+                append_text_chunk(&mut chunks, stream, content);
+            }
+            if final_page {
+                for (stream, pending) in &mut decoders {
+                    append_text_chunk(&mut chunks, stream, decode_utf8(pending, &[], true));
+                }
+            }
+            Ok(chunks)
+        })();
+        // Reading the prefix and the page shares the append handle.
+        state.file.seek(SeekFrom::Start(total as u64))?;
+        let chunks = result?;
+        Ok(ShellTextPage {
+            chunks,
+            offset,
+            next_offset,
+            total_bytes: total,
+            has_more: next_offset < total,
+            finished: state.finished,
+            truncated: state.truncated,
+            capture_complete: !state.truncated && state.error.is_none(),
+            capture_error: state.error.clone(),
         })
     }
 
@@ -328,9 +443,150 @@ impl ShellOutputLog {
     }
 }
 
+fn pending_utf8_before(state: &mut LogState, stream: &str, offset: usize) -> Result<Vec<u8>> {
+    let mut remaining = 3;
+    let mut ranges = Vec::new();
+    for span in state
+        .spans
+        .iter()
+        .rev()
+        .filter(|span| span.stream == stream && span.start < offset)
+    {
+        let end = span.end.min(offset);
+        let start = span.start.max(end.saturating_sub(remaining));
+        ranges.push((start, end));
+        remaining -= end - start;
+        if remaining == 0 {
+            break;
+        }
+    }
+    let mut tail = Vec::with_capacity(3);
+    for (start, end) in ranges.into_iter().rev() {
+        state.file.seek(SeekFrom::Start(start as u64))?;
+        let mut bytes = vec![0; end - start];
+        state.file.read_exact(&mut bytes)?;
+        tail.extend_from_slice(&bytes);
+    }
+    for start in 0..tail.len() {
+        if matches!(tail[start], 0xc2..=0xf4)
+            && std::str::from_utf8(&tail[start..])
+                .is_err_and(|error| error.valid_up_to() == 0 && error.error_len().is_none())
+        {
+            return Ok(tail[start..].to_vec());
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn decode_utf8(pending: &mut Vec<u8>, bytes: &[u8], finished: bool) -> String {
+    pending.extend_from_slice(bytes);
+    let mut content = String::new();
+    let mut consumed = 0;
+    while consumed < pending.len() {
+        match std::str::from_utf8(&pending[consumed..]) {
+            Ok(text) => {
+                content.push_str(text);
+                consumed = pending.len();
+            }
+            Err(error) => {
+                let valid_end = consumed + error.valid_up_to();
+                content.push_str(std::str::from_utf8(&pending[consumed..valid_end]).unwrap());
+                consumed = valid_end;
+                match error.error_len() {
+                    Some(length) => {
+                        content.push('\u{fffd}');
+                        consumed += length;
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+    pending.drain(..consumed);
+    if finished && !pending.is_empty() {
+        content.push('\u{fffd}');
+        pending.clear();
+    }
+    content
+}
+
+fn append_text_chunk(chunks: &mut Vec<ShellTextChunk>, stream: &'static str, content: String) {
+    if content.is_empty() {
+        return;
+    }
+    if let Some(last) = chunks.last_mut().filter(|chunk| chunk.stream == stream) {
+        last.content.push_str(&content);
+    } else {
+        chunks.push(ShellTextChunk { stream, content });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_pages_decode_split_utf8_per_stream_with_one_byte_cursors() {
+        let log = ShellOutputLog::new(tempfile::tempfile().unwrap(), Arc::new(AtomicUsize::new(0)));
+        log.push("stdout", b"first \xe2");
+        log.push("stderr", b"error \xf0\x9f");
+        log.push("stdout", b"\x82\xac\n");
+        log.push("stderr", b"\x98\x80\n");
+        log.finish();
+        let mut offset = 0;
+        let mut streams: BTreeMap<&str, String> = BTreeMap::new();
+        loop {
+            let page = log.text(offset, 1).unwrap();
+            assert!(page.capture_complete);
+            assert!(page.next_offset > offset);
+            for chunk in page.chunks {
+                streams
+                    .entry(chunk.stream)
+                    .or_default()
+                    .push_str(&chunk.content);
+            }
+            offset = page.next_offset;
+            if !page.has_more {
+                break;
+            }
+        }
+        assert_eq!(streams["stdout"], "first €\n");
+        assert_eq!(streams["stderr"], "error 😀\n");
+        assert!(log.text(offset + 1, 4).is_err());
+    }
+
+    #[test]
+    fn text_pages_defer_incomplete_live_scalars_and_preserve_append_cursor() {
+        let log = ShellOutputLog::new(tempfile::tempfile().unwrap(), Arc::new(AtomicUsize::new(0)));
+        log.push("stdout", b"\xe2");
+        let first = log.text(0, 1).unwrap();
+        assert!(first.chunks.is_empty());
+        assert!(first.capture_complete);
+        assert!(!first.finished);
+        log.push("stderr", b"x");
+        log.push("stdout", b"\x82\xac");
+        log.finish();
+        let last = log.text(first.next_offset, 8).unwrap();
+        assert_eq!(last.chunks[0].stream, "stderr");
+        assert_eq!(last.chunks[0].content, "x");
+        assert_eq!(last.chunks[1].content, "€");
+        assert_eq!(last.next_offset, 4);
+        assert!(last.capture_complete);
+    }
+
+    #[test]
+    fn text_page_reports_lost_capture_and_flushes_terminal_incomplete_bytes() {
+        let log = ShellOutputLog::new(tempfile::tempfile().unwrap(), Arc::new(AtomicUsize::new(0)));
+        log.push("stdout", b"ok\xe2\x82");
+        log.incomplete("pipe abandoned");
+        log.finish();
+        let page = log.text(0, 8192).unwrap();
+        assert_eq!(page.chunks[0].content, "ok\u{fffd}");
+        assert!(page.truncated);
+        assert!(!page.capture_complete);
+        assert_eq!(page.capture_error.as_deref(), Some("pipe abandoned"));
+        assert!(!page.has_more);
+    }
 
     #[test]
     fn ephemeral_log_budget_is_released_only_after_last_reader() {

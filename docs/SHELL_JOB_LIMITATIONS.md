@@ -9,6 +9,13 @@ In the local session-switching frontend, an active shell job prevents replacing
 the session; stop it explicitly first. Rebinding the registry to another session
 revokes completed job handles and clears the tracked shell working directory.
 
+Completed foreground commands retain their job IDs and disk-backed output just
+like background commands. Completed records are retained for one hour and capped
+at 64 per runtime; pruning occurs lazily during subsequent tool activity and
+never evicts a running job. Explicit forgetting, session reset, or runtime exit
+revokes these handles. Use `shell_job action=output` natively or
+`run_shell job:{action:"output",jobId:...}` over MCP for retained output.
+
 This is not a persistent process supervisor. Dropping the registry requests
 job termination, and a complete daemon restart cannot reconnect to these jobs.
 Do not interpret an old job ID as evidence that a process is still running.
@@ -44,11 +51,15 @@ terminal behavior are not yet fully verified. Web terminal input is serialized;
 a disconnect discards unacknowledged and queued input because delivery of the
 in-flight write cannot be determined safely. The user must re-enter it.
 The TUI does not yet provide an interactive terminal.
-The bounded disk-backed
-transcript offers byte-offset, base64-encoded stream events through
-`shell_job output`. Clients must incrementally decode
-each stream. Interleaving is reader-observation order, not a precise ordering of
-writes across stdout and stderr. It is not a terminal emulator.
+The bounded disk-backed transcript offers decoded text pages through
+`shell_job output` by default, with per-stream UTF-8 decoding across page
+boundaries. Set `format: "events"` for byte-offset, base64-encoded events and
+decode each stream incrementally. The Remote terminal's lower-level output API
+continues to return raw events. Interleaving is reader-observation order, not a
+precise ordering of writes across stdout and stderr. It is not a terminal
+emulator. `captureComplete` describes capture integrity so far; `finished`
+separately describes completion, and `hasMore` describes page continuation.
+See [Harness tool contracts](HARNESS_TOOL_CONTRACTS.md) for the full contract.
 
 On Unix, shell cancellation and deadline expiry attempt SIGINT, then SIGTERM,
 then SIGKILL. `YEET_SHELL_SIGNAL_GRACE_MS` controls each grace interval (default

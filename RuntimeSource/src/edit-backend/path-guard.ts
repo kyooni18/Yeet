@@ -55,7 +55,10 @@ export class PathGuard {
       const ancestor = await existingAncestor(path.dirname(lexical));
       const realAncestor = await realpath(ancestor);
       if (!this.allowOutside && !isInside(this.realRoot, realAncestor)) throw new Error(`Parent path escapes workspace root: ${input}`);
-      return lexical;
+      // Missing paths still need the same identity they will have after
+      // creation (for example macOS /var -> /private/var). Preserve only the
+      // unresolved suffix after canonicalizing the existing ancestor.
+      return path.resolve(realAncestor, path.relative(ancestor, lexical));
     }
   }
 

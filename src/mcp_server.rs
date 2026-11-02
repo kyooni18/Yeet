@@ -642,36 +642,40 @@ impl McpServer {
         }
         let mut execution_name = name.to_owned();
         if name == "run_shell" {
-            let job = arguments.remove("job");
-            let has_command = arguments
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| !command.trim().is_empty());
-            match (has_command, job) {
-                (true, None) => {
-                    // The MCP caller is already the reasoning actor. Default to direct
-                    // execution so useful stdout/stderr is not replaced by Yeet's
-                    // internal actor summary before it crosses the MCP boundary.
-                    arguments.entry("mode").or_insert_with(|| json!("direct"));
-                }
-                (false, Some(Value::Object(job))) => {
-                    arguments = job;
-                    execution_name = "shell_job".into();
-                }
-                (false, Some(_)) => {
+            // Count variants by presence, not truthiness: an empty command must
+            // never disguise a mixed executable/job request from a raw client.
+            let variants = ["command", "executable", "job"]
+                .iter()
+                .filter(|key| arguments.contains_key(**key))
+                .count();
+            if variants != 1 {
+                return Ok(tool_error(
+                    "run_shell requires exactly one of command, executable, or job",
+                    Some(&workspace_text),
+                    modern,
+                ));
+            }
+            if let Some(job) = arguments.remove("job") {
+                let Value::Object(job) = job else {
                     return Ok(tool_error(
                         "run_shell job must be an object",
                         Some(&workspace_text),
                         modern,
                     ));
-                }
-                _ => {
+                };
+                if !arguments.is_empty() {
                     return Ok(tool_error(
-                        "run_shell requires exactly one of command or job",
+                        "run_shell job cannot be combined with execution options",
                         Some(&workspace_text),
                         modern,
                     ));
                 }
+                arguments = job;
+                execution_name = "shell_job".into();
+            } else {
+                // Native execution performs the same command/argv validation
+                // and sandbox checks for both native and MCP callers.
+                arguments.entry("mode").or_insert_with(|| json!("direct"));
             }
         } else if name == "web" {
             let action = arguments
@@ -719,7 +723,7 @@ impl McpServer {
             .and_then(|runtime| runtime.execute(&execution_name, arguments));
         Ok(match result {
             Ok(output) => tool_success(&execution_name, output, &workspace_text, modern),
-            Err(error) => tool_error(error.to_string(), Some(&workspace_text), modern),
+            Err(error) => execution_tool_error(&error, Some(&workspace_text), modern),
         })
     }
 
@@ -802,7 +806,7 @@ impl McpServer {
         self.sync_attached_tools()?;
         let mut tools = tool_definitions();
         tools.extend(self.attached_definitions.clone());
-        let mut result = json!({"tools": tools});
+        let mut result = json!({"tools": tools, "_meta": server_meta()});
         if modern {
             modernize_result(&mut result);
             if let Some(object) = result.as_object_mut() {
@@ -866,6 +870,22 @@ fn tool_error(message: impl Into<String>, _workspace: Option<&str>, modern: bool
     result
 }
 
+fn execution_tool_error(error: &anyhow::Error, workspace: Option<&str>, modern: bool) -> Value {
+    if let Some(failure) = error.downcast_ref::<crate::edit::EditFailure>() {
+        return tool_error(
+            json!({
+                "error": failure.message,
+                "code": failure.code,
+                "mutationOutcome": failure.mutation_outcome,
+            })
+            .to_string(),
+            workspace,
+            modern,
+        );
+    }
+    tool_error(error.to_string(), workspace, modern)
+}
+
 /// Removes Yeet/runtime bookkeeping from the MCP-visible payload while preserving
 /// semantic data needed by an external caller. The raw runtime result is still
 /// available inside the server before this response-boundary projection.
@@ -890,9 +910,7 @@ fn compact_mcp_value(tool_name: &str, value: &Value) -> Value {
                 .collect(),
         ),
         Value::Object(object) => {
-            let synchronous_shell = tool_name == "run_shell"
-                && !object.contains_key("status")
-                && object.contains_key("exitCode");
+            let synchronous_shell = tool_name == "run_shell" && object.contains_key("exitCode");
             let file_read = tool_name == "read_file";
             let mut compact = Map::new();
 
@@ -964,6 +982,7 @@ fn initialize_result(params: Option<&Value>) -> Value {
         "protocolVersion": protocol,
         "capabilities": {"tools": {"listChanged": true}},
         "serverInfo": {"name":"yeet","version":env!("CARGO_PKG_VERSION")},
+        "_meta": server_meta(),
         "instructions": "Yeet exposes five native tools and may additionally expose tools from MCP servers attached to the running daemon. Attached servers are proxied through this same MCP endpoint and can be added or removed without restarting Yeet."
     })
 }
@@ -978,12 +997,29 @@ fn request_protocol(params: Option<&Value>) -> Option<&str> {
 }
 
 fn server_meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/serverInfo": {
-            "name": "yeet",
-            "version": env!("CARGO_PKG_VERSION")
-        }
-    })
+    static IDENTITY: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    IDENTITY
+        .get_or_init(|| {
+            // Only native schemas participate: attached MCPs have their own mutable
+            // catalogs and must not obscure which Yeet contract this binary serves.
+            let serialized = serde_json::to_vec(&tool_definitions()).expect("native tool schemas");
+            let digest = Sha256::digest(serialized);
+            let fingerprint = digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            json!({
+                "io.modelcontextprotocol/serverInfo": {
+                    "name": "yeet",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "com.yeet/harness": {
+                    "buildRevision": env!("YEET_BUILD_REVISION"),
+                    "schemaFingerprint": format!("sha256:{fingerprint}")
+                }
+            })
+        })
+        .clone()
 }
 
 fn modernize_result(result: &mut Value) {
@@ -1159,6 +1195,301 @@ fn unsupported_protocol_error(id: Value, requested: &str) -> Value {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
+
+    #[test]
+    fn direct_mcp_edit_transport_failure_keeps_unknown_mutation_outcome() {
+        let error: anyhow::Error = crate::edit::EditFailure {
+            code: "edit_outcome_unknown".into(),
+            mutation_outcome: "unknown".into(),
+            message: "Edit daemon closed after the request was sent; inspect files before retrying"
+                .into(),
+        }
+        .into();
+        let result = execution_tool_error(&error, None, false);
+        assert_eq!(result["isError"], json!(true));
+        let visible: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(visible["mutationOutcome"], json!("unknown"));
+        assert_eq!(visible["code"], json!("edit_outcome_unknown"));
+        assert!(visible.get("changed").is_none());
+    }
+
+    fn unrestricted_server(workspace: &Path) -> McpServer {
+        let workspace = workspace.canonicalize().unwrap();
+        let sandbox = crate::sandbox::SandboxStore::new(&workspace).unwrap();
+        let mut policy = sandbox.load().unwrap();
+        policy.mode = crate::sandbox::SandboxMode::Unlimited;
+        sandbox.save(&policy).unwrap();
+        McpServer::new(workspace)
+    }
+
+    fn invoke(server: &mut McpServer, name: &str, arguments: Value) -> Value {
+        server
+            .handle(json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":name,"arguments":arguments}
+            }))
+            .expect("tool response")
+    }
+
+    fn visible_output(response: &Value) -> Value {
+        assert_eq!(response["result"]["isError"], json!(false), "{response}");
+        serde_json::from_str(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .expect("text content"),
+        )
+        .expect("JSON tool output")
+    }
+
+    #[test]
+    fn direct_mcp_read_uses_explicit_counts_and_local_continuation() {
+        let directory = tempfile::tempdir().unwrap();
+        let content = (1..=12)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        std::fs::write(directory.path().join("example.txt"), content).unwrap();
+        let mut server = McpServer::new(directory.path().to_path_buf());
+        let page = visible_output(&invoke(
+            &mut server,
+            "read_file",
+            json!({
+                "path":"example.txt","startLine":6,"lineCount":2
+            }),
+        ));
+        assert_eq!(page["startLine"], json!(6), "{page}");
+        assert_eq!(page["endLine"], json!(7), "{page}");
+        assert_eq!(page["nextStartLine"], json!(8), "{page}");
+        assert_eq!(page["firstUnreadLine"], json!(1), "{page}");
+        for bounds in [
+            json!({"path":"example.txt","startLine":6,"endLine":2}),
+            json!({"path":"example.txt","startLine":6,"endLine":7,"lineCount":2}),
+        ] {
+            let rejected = invoke(&mut server, "read_file", bounds);
+            assert_eq!(rejected["result"]["isError"], json!(true), "{rejected}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_mcp_executable_preserves_literal_argv_and_unicode_cwd() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("space 한글");
+        std::fs::create_dir(&workspace).unwrap();
+        let mut server = unrestricted_server(&workspace);
+        let arguments = [
+            "two words",
+            "한글",
+            "$(touch unexpected-file)",
+            "; touch unexpected-file",
+            "*",
+        ];
+        let mut argv = vec![json!("%s\\n")];
+        argv.extend(arguments.iter().map(|value| json!(value)));
+        let response = invoke(
+            &mut server,
+            "run_shell",
+            json!({
+                "executable":"/usr/bin/printf","args":argv,
+                "workingDirectory":workspace
+            }),
+        );
+        let visible = visible_output(&response);
+        assert_eq!(visible["exitCode"], json!(0), "{visible}");
+        assert_eq!(
+            visible["stdout"],
+            json!(format!("{}\n", arguments.join("\n"))),
+            "{visible}"
+        );
+        assert!(!workspace.join("unexpected-file").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_mcp_foreground_output_remains_pageable_without_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut server = unrestricted_server(directory.path());
+        let marker = "unique-middle-proof-84c2";
+        let program = format!(
+            "BEGIN {{ for (i=0; i<6000; i++) {{ if (i==3000) print \"{marker}\"; printf \"output-line-%05d-%040d\\n\", i, i; }} }}"
+        );
+        let launch = visible_output(&invoke(
+            &mut server,
+            "run_shell",
+            json!({
+                "executable":"/usr/bin/awk","args":[program]
+            }),
+        ));
+        assert_eq!(launch["exitCode"], json!(0), "{launch}");
+        assert_eq!(launch["responseTruncated"], json!(true), "{launch}");
+        assert_eq!(launch["captureComplete"], json!(true), "{launch}");
+        assert!(launch.get("artifact").is_none(), "{launch}");
+        assert!(
+            !launch["stdout"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(marker)
+        );
+        let job_id = launch["jobId"]
+            .as_str()
+            .expect("retained foreground jobId")
+            .to_owned();
+        let mut offset = 0u64;
+        let mut recovered = String::new();
+        let mut reached_end = false;
+        for _ in 0..128 {
+            let page = visible_output(&invoke(
+                &mut server,
+                "run_shell",
+                json!({
+                    "job":{"action":"output","jobId":job_id,"offset":offset,"maxBytes":8192}
+                }),
+            ));
+            assert_eq!(page["captureComplete"], json!(true), "{page}");
+            assert!(
+                page.get("events").is_none(),
+                "default output must be decoded text: {page}"
+            );
+            for chunk in page["chunks"].as_array().expect("text chunks") {
+                assert_eq!(chunk["stream"], json!("stdout"));
+                recovered.push_str(chunk["content"].as_str().expect("decoded content"));
+            }
+            let next = page["nextOffset"].as_u64().expect("continuation offset");
+            if page["hasMore"] == json!(false) {
+                reached_end = true;
+                break;
+            }
+            assert!(next > offset, "cursor made no progress: {page}");
+            offset = next;
+        }
+        assert!(reached_end, "retained output did not reach EOF");
+        assert!(recovered.contains(marker), "omitted middle output was lost");
+        assert!(recovered.starts_with("output-line-00000-"));
+        assert!(recovered.contains("output-line-05999-"));
+
+        let raw = visible_output(&invoke(
+            &mut server,
+            "run_shell",
+            json!({
+                "job":{"action":"output","jobId":job_id,"offset":0,"maxBytes":64,"format":"events"}
+            }),
+        ));
+        assert!(
+            raw["events"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty()),
+            "{raw}"
+        );
+        visible_output(&invoke(
+            &mut server,
+            "run_shell",
+            json!({
+                "job":{"action":"forget","jobId":job_id}
+            }),
+        ));
+        let forgotten = invoke(
+            &mut server,
+            "run_shell",
+            json!({
+                "job":{"action":"output","jobId":job_id}
+            }),
+        );
+        assert_eq!(forgotten["result"]["isError"], json!(true), "{forgotten}");
+    }
+
+    #[test]
+    fn direct_mcp_rejects_ambiguous_shell_variants_before_dispatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut server = McpServer::new(directory.path().to_path_buf());
+        for arguments in [
+            json!({}),
+            json!({"command":"echo forbidden","executable":"echo"}),
+            json!({"command":"","executable":"echo"}),
+            json!({"command":"echo forbidden","job":{"action":"list"}}),
+            json!({"executable":"echo","job":{"action":"list"}}),
+            json!({"job":{"action":"list"},"background":true}),
+            json!({"job":"invalid"}),
+        ] {
+            let response = invoke(&mut server, "run_shell", arguments);
+            assert_eq!(response["result"]["isError"], json!(true), "{response}");
+            assert!(
+                server.workspaces.is_empty(),
+                "invalid request reached runtime: {response}"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_mcp_narrow_edit_does_not_authorize_unread_lines_in_unlimited_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("example.txt");
+        let original = format!(
+            "known\n{}",
+            (2..=20)
+                .map(|line| format!("unseen {line}\n"))
+                .collect::<String>()
+        );
+        std::fs::write(&file, &original).unwrap();
+        let mut server = unrestricted_server(directory.path());
+        visible_output(&invoke(
+            &mut server,
+            "read_file",
+            json!({
+                "path":"example.txt","startLine":1,"endLine":1
+            }),
+        ));
+        visible_output(&invoke(
+            &mut server,
+            "apply_file_edits",
+            json!({
+                "changes":[{"path":"example.txt","edits":[
+                    {"kind":"replace","range":{"start":1,"end":1},"text":"updated"}
+                ]}]
+            }),
+        ));
+        let rejected = invoke(
+            &mut server,
+            "apply_file_edits",
+            json!({
+                "changes":[{"path":"example.txt","edits":[
+                    {"kind":"replace","range":{"start":20,"end":20},"text":"must not be applied"}
+                ]}]
+            }),
+        );
+        assert_eq!(rejected["result"]["isError"], json!(true), "{rejected}");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            original.replacen("known", "updated", 1)
+        );
+    }
+
+    #[test]
+    fn direct_mcp_unlimited_permissions_preserve_stale_read_protection() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("example.txt");
+        std::fs::write(&file, "before\n").unwrap();
+        let mut server = unrestricted_server(directory.path());
+        visible_output(&invoke(
+            &mut server,
+            "read_file",
+            json!({"path":"example.txt"}),
+        ));
+        std::fs::write(&file, "concurrent writer\n").unwrap();
+        let rejected = invoke(
+            &mut server,
+            "apply_file_edits",
+            json!({
+                "changes":[{"path":"example.txt","edits":[
+                    {"kind":"replace","range":{"start":1,"end":1},"text":"stale overwrite"}
+                ]}]
+            }),
+        );
+        assert_eq!(rejected["result"]["isError"], json!(true), "{rejected}");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "concurrent writer\n"
+        );
+    }
 
     #[test]
     fn direct_mcp_surface_is_minimal() {
@@ -1362,7 +1693,7 @@ mod contract_tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("example.txt"), "hello\nworld\n").unwrap();
         let workspace = directory.path().canonicalize().unwrap();
-        // Stale-read protection only applies to sandboxed workspaces.
+        // Exercise the same snapshot protection under the restricted policy.
         crate::sandbox::SandboxStore::new(&workspace)
             .unwrap()
             .save(&crate::sandbox::SandboxPolicy::default())
@@ -1406,7 +1737,7 @@ mod contract_tests {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("example.txt"), "hello\nworld\n").unwrap();
         let workspace = directory.path().canonicalize().unwrap();
-        // Stale-read protection only applies to sandboxed workspaces.
+        // Exercise the same snapshot protection under the restricted policy.
         crate::sandbox::SandboxStore::new(&workspace)
             .unwrap()
             .save(&crate::sandbox::SandboxPolicy::default())

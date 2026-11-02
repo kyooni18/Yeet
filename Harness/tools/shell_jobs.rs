@@ -10,6 +10,8 @@ use std::{
 use uuid::Uuid;
 
 const MAX_SHELL_JOBS: usize = 32;
+pub(super) const MAX_COMPLETED_SHELL_JOBS: usize = 64;
+pub(super) const COMPLETED_SHELL_JOB_RETENTION: Duration = Duration::from_secs(60 * 60);
 const WAIT_CANCEL_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const SHELL_JOB_PROGRESS_TAIL_BYTES: usize = 2 * 1024;
 
@@ -121,6 +123,7 @@ impl ShellJobAccess {
 #[derive(Default)]
 struct ShellJobState {
     result: Option<Result<crate::shell::ShellResult, String>>,
+    finished_at: Option<Instant>,
     monitor: Option<MonitorClock>,
 }
 
@@ -172,6 +175,7 @@ pub(super) enum ShellJobWait {
 pub(super) struct FinishedShellJob {
     pub result: Result<crate::shell::ShellResult, String>,
     pub transcript: Option<(String, crate::shell::log::ShellOutputLog)>,
+    pub event_log: crate::shell::log::ShellOutputLog,
 }
 
 impl Drop for ShellJobs {
@@ -181,6 +185,38 @@ impl Drop for ShellJobs {
 }
 
 impl ShellJobs {
+    /// Retention belongs to the runtime, not to foreground/background timing.
+    /// Only completed records expire; running jobs can never be evicted here.
+    fn prune_completed(&mut self) {
+        let now = Instant::now();
+        let mut completed: Vec<_> = self
+            .jobs
+            .iter()
+            .filter_map(|(id, job)| {
+                let state = job.state.0.lock().unwrap_or_else(|p| p.into_inner());
+                state.finished_at.map(|finished| (finished, id.clone()))
+            })
+            .collect();
+        completed.sort_by_key(|(finished, _)| *finished);
+        let excess = completed.len().saturating_sub(MAX_COMPLETED_SHELL_JOBS);
+        for (index, (finished, id)) in completed.into_iter().enumerate() {
+            if index < excess
+                || now.saturating_duration_since(finished) >= COMPLETED_SHELL_JOB_RETENTION
+            {
+                self.forget(&id);
+            }
+        }
+    }
+
+    fn forget(&mut self, id: &str) {
+        self.jobs.remove(id);
+        self.access
+            .jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(id);
+    }
+
     /// Revoke every frontend handle before transferring the registry to a new
     /// session. Running workers retain their own cancel flag and reap children.
     pub(super) fn reset(&mut self) {
@@ -233,6 +269,7 @@ impl ShellJobs {
     }
 
     pub(super) fn start(&mut self, options: ShellJobOptions) -> Result<String> {
+        self.prune_completed();
         let ShellJobOptions {
             command,
             direct,
@@ -250,9 +287,21 @@ impl ShellJobs {
             force_sandboxed,
             artifacts,
         } = options;
-        if self.jobs.len() >= MAX_SHELL_JOBS {
+        let running = self
+            .jobs
+            .values()
+            .filter(|job| {
+                job.state
+                    .0
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .result
+                    .is_none()
+            })
+            .count();
+        if running >= MAX_SHELL_JOBS {
             bail!(
-                "Shell job limit reached ({MAX_SHELL_JOBS}); forget completed jobs before starting more"
+                "Running shell job limit reached ({MAX_SHELL_JOBS}); wait for a job to finish before starting more"
             );
         }
         let id = Uuid::new_v4().to_string();
@@ -315,6 +364,7 @@ impl ShellJobs {
                 let (lock, completed) = &*worker_state;
                 let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.result = Some(outcome);
+                state.finished_at = Some(Instant::now());
                 // Publish the outcome before waking output readers at EOF. Keep
                 // the state lock until the log is finished so waiters see both.
                 worker_log.finish();
@@ -395,28 +445,32 @@ impl ShellJobs {
         }
     }
 
-    /// Removes a finished job and hands back its typed result.
+    /// Collects a finished result without discarding its supported output path.
+    /// An attempted collection of a running job also leaves the record intact.
     pub(super) fn take_finished(&mut self, id: &str) -> Result<FinishedShellJob> {
         let job = self
             .jobs
-            .remove(id)
+            .get_mut(id)
             .ok_or_else(|| anyhow!("Unknown shell job: {id}"))?;
-        self.access
-            .jobs
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(id);
         let (lock, _) = &*job.state;
         let state = lock
             .lock()
             .map_err(|_| anyhow!("Shell job state unavailable"))?;
-        Ok(FinishedShellJob {
+        let finished = FinishedShellJob {
             result: state
                 .result
                 .clone()
                 .ok_or_else(|| anyhow!("Shell job {id} has not finished"))?,
-            transcript: job.transcript,
-        })
+            transcript: job.transcript.clone(),
+            event_log: job.event_log.clone(),
+        };
+        drop(state);
+        // Foreground collection already applies the cwd and invalidates the
+        // workspace. Later reads of this retained receipt must not repeat it.
+        job.cwd_applied = true;
+        job.settled = true;
+        self.prune_completed();
+        Ok(finished)
     }
 
     /// Reports a finished command's directory once so a late handoff can still
@@ -468,6 +522,7 @@ impl ShellJobs {
                 let mut value = serde_json::to_value(output)?;
                 value["jobId"] = json!(id);
                 value["status"] = json!("completed");
+                value["state"] = json!("exited");
                 value
             }
             Some(Err(error)) => json!({
@@ -475,6 +530,8 @@ impl ShellJobs {
                 "command":job.command,
                 "status":if error == "cancelled" { "cancelled" } else { "failed" },
                 "succeeded":false,
+                "state":"unknown",
+                "workerFinished":true,
                 "durationMilliseconds":job.started_at.elapsed().as_millis(),
                 "error":error,
                 "progress":job.progress.snapshot()
@@ -483,10 +540,25 @@ impl ShellJobs {
                 "jobId":id,
                 "command":job.command,
                 "status":if job.cancel.load(Ordering::Acquire) { "stopping" } else { "running" },
+                "state":"running",
                 "elapsedMilliseconds":job.started_at.elapsed().as_millis(),
                 "progress":job.progress.snapshot()
             }),
         };
+        let capture = job.event_log.snapshot();
+        value["outputAvailable"] = json!(true);
+        value["captureComplete"] = json!(!capture.truncated && capture.error.is_none());
+        value["captureTruncated"] = json!(capture.truncated);
+        value["responseTruncated"] = json!(
+            value["stdoutTruncated"].as_bool().unwrap_or(false)
+                || value["stderrTruncated"].as_bool().unwrap_or(false)
+        );
+        if let Some(error) = capture.error {
+            value["captureError"] = json!(error);
+        }
+        value["cancelRequested"] = json!(job.cancel.load(Ordering::Acquire));
+        value["retentionSeconds"] = json!(COMPLETED_SHELL_JOB_RETENTION.as_secs());
+        value["retainedCompletedLimit"] = json!(MAX_COMPLETED_SHELL_JOBS);
         if let Some((id, log)) = &job.transcript {
             value["artifactId"] = json!(id);
             value["artifactComplete"] = json!(log.snapshot().complete);
@@ -570,6 +642,7 @@ impl ToolRegistry {
         object: &Map<String, Value>,
         cancel: &AtomicBool,
     ) -> Result<String> {
+        self.shell_jobs.prune_completed();
         // reportEverySeconds only affects wait; other actions ignore it.
         let action = string_arg(object, "action")?;
         if action == "list" {
@@ -632,18 +705,52 @@ impl ToolRegistry {
                 .jobs
                 .get(id)
                 .ok_or_else(|| anyhow!("Unknown shell job: {id}"))?;
-            let offset = usize_arg(object, "offset").unwrap_or(0);
-            let max_bytes = usize_arg(object, "maxBytes").unwrap_or(8192);
-            let wait = usize_arg(object, "waitMilliseconds").unwrap_or(0);
+            let integer = |name: &str, default: usize| -> Result<usize> {
+                object.get(name).map_or(Ok(default), |value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .ok_or_else(|| anyhow!("{name} must be a non-negative integer"))
+                })
+            };
+            let offset = integer("offset", 0)?;
+            let max_bytes = integer("maxBytes", 8192)?;
+            if max_bytes == 0 || max_bytes > 8192 {
+                bail!("maxBytes must be between 1 and 8192");
+            }
+            let wait = integer("waitMilliseconds", 0)?;
             if wait > 30_000 {
                 bail!("waitMilliseconds must be at most 30000");
             }
-            return Ok(serde_json::to_string(&job.event_log.wait_events(
-                offset,
-                max_bytes,
-                Duration::from_millis(wait as u64),
-                cancel,
-            )?)?);
+            let format = object
+                .get("format")
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| anyhow!("format must be text or events"))
+                })
+                .transpose()?
+                .unwrap_or("text");
+            let mut value = match format {
+                "text" => serde_json::to_value(job.event_log.wait_text(
+                    offset,
+                    max_bytes,
+                    Duration::from_millis(wait as u64),
+                    cancel,
+                )?)?,
+                "events" => serde_json::to_value(job.event_log.wait_events(
+                    offset,
+                    max_bytes,
+                    Duration::from_millis(wait as u64),
+                    cancel,
+                )?)?,
+                _ => bail!("format must be text or events"),
+            };
+            value["jobId"] = json!(id);
+            value["format"] = json!(format);
+            value["captureTruncated"] = value["truncated"].clone();
+            value["responseTruncated"] = json!(false);
+            return Ok(value.to_string());
         }
         let mut value = match action {
             "check" => self.shell_jobs.snapshot(id)?,
@@ -658,11 +765,18 @@ impl ToolRegistry {
                 let (mut value, wake_reason, waited_milliseconds) =
                     self.shell_jobs.wait(id, report_every, cancel)?;
                 value["wakeReason"] = json!(wake_reason);
+                value["waitOutcome"] = json!(if wake_reason == "terminal" {
+                    "finished"
+                } else {
+                    "interval"
+                });
                 value["waitedMilliseconds"] = json!(waited_milliseconds);
                 if wake_reason == "interval" {
-                    value["hint"] = json!(
-                        "The job is still running. Call shell_job action=wait with the same reportEverySeconds to keep the fixed monitoring cadence, or omit it to sleep until termination."
-                    );
+                    value["hint"] = json!(if self.artifacts_enabled {
+                        "The job is still running. Call shell_job action=wait with the same jobId and reportEverySeconds to keep the fixed monitoring cadence, or omit reportEverySeconds to sleep until termination."
+                    } else {
+                        "The job is still running. Call run_shell with job:{action:\"wait\",jobId:<id>,reportEverySeconds:<seconds>} using the same interval to keep the fixed monitoring cadence, or omit reportEverySeconds to sleep until termination."
+                    });
                 }
                 value
             }
@@ -680,13 +794,7 @@ impl ToolRegistry {
                 if matches!(value["status"].as_str(), Some("running" | "stopping")) {
                     bail!("Stop the job and wait for completion before forgetting it");
                 }
-                self.shell_jobs.jobs.remove(id);
-                self.shell_jobs
-                    .access
-                    .jobs
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(id);
+                self.shell_jobs.forget(id);
                 return Ok(json!({"jobId":id,"status":"forgotten"}).to_string());
             }
             _ => bail!(
@@ -718,21 +826,17 @@ impl ToolRegistry {
         let stdout = value["stdout"].as_str().unwrap_or_default().to_owned();
         let stderr = value["stderr"].as_str().unwrap_or_default().to_owned();
         if stdout.len() + stderr.len() > 16 * 1024 {
-            let artifact = self
-                .artifacts
-                .store(&format!("STDOUT:\n{stdout}\nSTDERR:\n{stderr}"))?;
             value["stdout"] = json!(super::shell_runtime::output_window(&stdout, 12 * 1024));
             value["stderr"] = json!(super::shell_runtime::output_window(&stderr, 4 * 1024));
-            if value.get("transcript").is_none() {
-                value["artifactId"] = json!(artifact);
-            }
             value["outputWindowed"] = json!(true);
-            if value.get("transcript").is_none() {
-                value["artifactComplete"] = json!(
-                    !value["stdoutTruncated"].as_bool().unwrap_or(false)
-                        && !value["stderrTruncated"].as_bool().unwrap_or(false)
-                );
-            }
+            value["responseTruncated"] = json!(true);
+        }
+        if value["responseTruncated"].as_bool().unwrap_or(false) {
+            value["outputHint"] = json!(if self.artifacts_enabled {
+                "Read retained output with shell_job action=output, this jobId, and offset=0; follow nextOffset while hasMore."
+            } else {
+                "Read retained output with run_shell job:{action:\"output\",jobId:<id>,offset:0}; follow nextOffset while hasMore."
+            });
         }
         Ok(value.to_string())
     }
@@ -741,6 +845,106 @@ impl ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn insert_retention_fixture(jobs: &mut ShellJobs, id: &str, finished_at: Option<Instant>) {
+        let state = Arc::new((
+            Mutex::new(ShellJobState {
+                result: finished_at.map(|_| Err("fixture completion".into())),
+                finished_at,
+                monitor: None,
+            }),
+            Condvar::new(),
+        ));
+        let log = crate::shell::log::ShellOutputLog::new_ephemeral(
+            tempfile::tempfile().unwrap(),
+            jobs.event_budget.clone(),
+        );
+        if finished_at.is_some() {
+            log.finish();
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = ShellProgress::new(256).with_log(log.clone());
+        jobs.access.jobs.lock().unwrap().insert(
+            id.into(),
+            ShellJobHandle {
+                #[cfg(unix)]
+                progress: progress.clone(),
+                log: log.clone(),
+                cancel: cancel.clone(),
+                state: state.clone(),
+            },
+        );
+        jobs.jobs.insert(
+            id.into(),
+            ShellJob {
+                command: "fixture".into(),
+                cancel,
+                state,
+                progress,
+                transcript: None,
+                event_log: log,
+                cwd_start: PathBuf::new(),
+                cwd_applied: false,
+                started_at: Instant::now(),
+                settled: false,
+            },
+        );
+    }
+
+    #[test]
+    fn retention_evicts_old_completions_and_preserves_running_handles() {
+        let mut jobs = ShellJobs::default();
+        let now = Instant::now();
+        insert_retention_fixture(&mut jobs, "running", None);
+        insert_retention_fixture(
+            &mut jobs,
+            "expired",
+            Some(now - COMPLETED_SHELL_JOB_RETENTION),
+        );
+        for index in 0..=MAX_COMPLETED_SHELL_JOBS {
+            insert_retention_fixture(
+                &mut jobs,
+                &format!("done-{index}"),
+                Some(now - Duration::from_secs(index as u64 + 1)),
+            );
+        }
+        let access = jobs.access();
+        jobs.prune_completed();
+        assert_eq!(jobs.jobs.len(), MAX_COMPLETED_SHELL_JOBS + 1);
+        assert!(jobs.jobs.contains_key("running"));
+        assert!(!jobs.jobs["running"].cancel.load(Ordering::Acquire));
+        assert!(access.jobs.lock().unwrap().contains_key("running"));
+        assert!(!access.jobs.lock().unwrap().contains_key("expired"));
+        assert!(
+            !jobs
+                .jobs
+                .contains_key(&format!("done-{MAX_COMPLETED_SHELL_JOBS}"))
+        );
+        assert!(jobs.take_finished("running").is_err());
+        assert!(jobs.jobs.contains_key("running"));
+        assert!(access.jobs.lock().unwrap().contains_key("running"));
+    }
+
+    #[test]
+    fn collecting_a_completion_keeps_receipt_and_stop_ack_is_not_an_exit() {
+        let mut jobs = ShellJobs::default();
+        insert_retention_fixture(&mut jobs, "done", Some(Instant::now()));
+        assert!(jobs.take_finished("done").unwrap().result.is_err());
+        assert!(jobs.jobs.contains_key("done"));
+        assert!(jobs.access().execute("done", "output", 0, "", 0, 0).is_ok());
+        insert_retention_fixture(&mut jobs, "running", None);
+        jobs.jobs["running"].cancel.store(true, Ordering::Release);
+        let value = jobs.snapshot("running").unwrap();
+        assert_eq!(value["state"], "running");
+        assert_eq!(value["status"], "stopping");
+        assert_eq!(value["cancelRequested"], true);
+        jobs.forget("done");
+        assert!(
+            jobs.access()
+                .execute("done", "output", 0, "", 0, 0)
+                .is_err()
+        );
+    }
 
     #[cfg(unix)]
     #[test]

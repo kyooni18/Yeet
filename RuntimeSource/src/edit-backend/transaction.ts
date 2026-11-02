@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { access, chmod, copyFile, link, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, link, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { configDirectory } from "./config.js";
 
 export interface PlannedFileState {
@@ -9,6 +9,13 @@ export interface PlannedFileState {
   mode?: number;
   expectedDigest?: string;
   expectMissing?: boolean;
+}
+
+export class TransactionCommitError extends Error {
+  constructor(message: string, readonly mutationOutcome: "unchanged" | "unknown") {
+    super(message);
+    this.name = "TransactionCommitError";
+  }
 }
 
 interface JournalRecord {
@@ -171,6 +178,16 @@ export class TransactionalWriter {
   }
 
   async commit(states: readonly PlannedFileState[]): Promise<void> {
+    try {
+      await this.#commit(states);
+    } catch (error) {
+      if (error instanceof TransactionCommitError) throw error;
+      // Only staging/validation can fail outside the mutation try/catch.
+      throw new TransactionCommitError(error instanceof Error ? error.message : String(error), "unchanged");
+    }
+  }
+
+  async #commit(states: readonly PlannedFileState[]): Promise<void> {
     const unique = new Set<string>();
     for (const state of states) {
       if (unique.has(state.path)) throw new Error(`Transaction contains duplicate target: ${state.path}`);
@@ -281,8 +298,33 @@ export class TransactionalWriter {
       await fsyncDir(this.journalDir);
       committed = true;
     } catch (error) {
-      await this.#rollback(journal, journalPath);
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        await this.#rollback(journal, journalPath);
+      } catch (rollbackError) {
+        throw new TransactionCommitError(`${message}; rollback could not be confirmed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`, "unknown");
+      }
+      // A competing writer may have changed a target during rollback. Only
+      // claim unchanged when every original pathname/content is confirmed.
+      let restored = true;
+      try {
+        for (const record of records) {
+          if (record.hadOriginal) {
+            if (!record.expectedDigest || !await this.#matchesDigest(record.target, record.expectedDigest)) restored = false;
+          } else {
+            try {
+              await lstat(record.target);
+              restored = false;
+            } catch (verifyError) {
+              if ((verifyError as NodeJS.ErrnoException).code !== "ENOENT") restored = false;
+            }
+          }
+        }
+      } catch {
+        // Verification is part of the mutation outcome, not preflight.
+        restored = false;
+      }
+      throw new TransactionCommitError(message, restored ? "unchanged" : "unknown");
     }
     if (committed) {
       // The edit is already durable once the journal is marked committed.

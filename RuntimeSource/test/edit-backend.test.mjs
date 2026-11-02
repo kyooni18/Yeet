@@ -217,3 +217,136 @@ test("move edits are committed transactionally and return a destination snapshot
     await f.cleanup();
   }
 });
+
+test("unsafe path permission never bypasses snapshots or seen lines", async () => {
+  const f = await fixture("one\ntwo\nthree\n");
+  try {
+    const edit = { kind: "replace", range: { start: 3, end: 3 }, text: "THREE" };
+    await assert.rejects(f.backend.apply({ unsafe: true, changes: [{ path: "a.txt", edits: [edit] }] }),
+      error => error.mutationOutcome === "unchanged" && /Snapshot handle is required/.test(error.message));
+    const read = await f.backend.read({ path: "a.txt", startLine: 1, endLine: 1, unsafe: true });
+    await assert.rejects(f.backend.apply({ unsafe: true, changes: [{ path: "a.txt", snapshot: read.snapshot, edits: [edit] }] }),
+      error => error.mutationOutcome === "unchanged" && /did not display required lines/.test(error.message));
+    await writeFile(f.file, "concurrent\ntwo\nthree\n");
+    await assert.rejects(f.backend.apply({ unsafe: true, changes: [{ path: "a.txt", snapshot: read.snapshot,
+      edits: [{ kind: "replace", range: { start: 1, end: 1 }, text: "ONE" }] }] }), /stale/);
+    await assert.rejects(f.backend.apply({ unsafe: true, changes: [{ path: "a.txt", snapshot: read.snapshot,
+      fileOp: { kind: "delete" } }] }), /stale/);
+    assert.equal(await readFile(f.file, "utf8"), "concurrent\ntwo\nthree\n");
+  } finally { await f.cleanup(); }
+});
+
+test("disjoint edits preserve shifted read coverage without crediting unseen diff gaps", async () => {
+  const f = await fixture(Array.from({ length: 200 }, (_, i) => `line-${i + 1}`).join("\n") + "\n");
+  try {
+    await f.backend.read({ path: "a.txt", startLine: 10, endLine: 10 });
+    const read = await f.backend.read({ path: "a.txt", startLine: 190, endLine: 191 });
+    const result = await f.backend.apply({ changes: [{ path: "a.txt", snapshot: read.snapshot, edits: [
+      { kind: "replace", range: { start: 10, end: 10 }, text: "ten-a\nten-b" },
+      { kind: "replace", range: { start: 190, end: 190 }, text: "one-ninety-a\none-ninety-b\none-ninety-c" },
+    ] }] });
+    assert.equal(result.mutationOutcome, "applied");
+    assert.equal(result.diagnosticsStatus, "skipped");
+    assert.deepEqual(result.files[0].seenRanges, [{ start: 10, end: 11 }, { start: 191, end: 194 }]);
+    assert.equal(result.files[0].revision, createHash("sha256").update(await readFile(f.file)).digest("hex"));
+    assert.equal(result.files[0].diff.hunks[0].truncated, true);
+    await assert.rejects(f.backend.apply({ changes: [{ path: "a.txt", snapshot: result.files[0].snapshot,
+      edits: [{ kind: "replace", range: { start: 100, end: 100 }, text: "unseen" }] }] }), /did not display required lines/);
+    await f.backend.apply({ changes: [{ path: "a.txt", snapshot: result.files[0].snapshot,
+      edits: [{ kind: "replace", range: { start: 194, end: 194 }, text: "known shifted line" }] }] });
+  } finally { await f.cleanup(); }
+});
+
+test("large supplied files retain complete coverage even with shortened edit previews", async () => {
+  const f = await fixture("existing\n");
+  try {
+    const text = Array.from({ length: 240 }, (_, i) => `supplied-${i + 1}`).join("\n") + "\n";
+    const result = await f.backend.apply({ changes: [{ path: "created.txt", fileOp: { kind: "create", text } }] });
+    assert.deepEqual(result.files[0].seenRanges, [{ start: 1, end: 240 }]);
+    await f.backend.apply({ changes: [{ path: "created.txt", snapshot: result.files[0].snapshot,
+      edits: [{ kind: "replace", range: { start: 150, end: 150 }, text: "updated supplied line" }] }] });
+    assert.match(await readFile(path.join(f.root, "created.txt"), "utf8"), /updated supplied line/);
+  } finally { await f.cleanup(); }
+});
+
+test("limiting daemon coverage prevents older broad reads from authorizing later edits", async () => {
+  const f = await fixture("one\ntwo\nthree\n");
+  try {
+    const read = await f.backend.read({ path: "a.txt", startLine: 1, endLine: 3 });
+    const revision = createHash("sha256").update("one\ntwo\nthree\n").digest("hex");
+    assert.throws(() => f.backend.limitSnapshotCoverage(read.snapshot, "wrong", [{ start: 1, end: 1 }]), /changed while binding/);
+    f.backend.limitSnapshotCoverage(read.snapshot, revision, [{ start: 1, end: 1 }]);
+    f.backend.limitSnapshotCoverage(read.snapshot, revision, [{ start: 1, end: 3 }]);
+    await assert.rejects(f.backend.apply({ changes: [{ path: "a.txt", snapshot: read.snapshot,
+      edits: [{ kind: "replace", range: { start: 3, end: 3 }, text: "unseen" }] }] }), /did not display required lines/);
+  } finally { await f.cleanup(); }
+});
+
+test("diagnostics failures after commit report applied without inviting a duplicate edit", async () => {
+  const f = await fixture("one\n");
+  try {
+    const backend = new EditBackend({ root: f.root, transactionDir: path.join(f.root, ".diagnostic-transactions"),
+      diagnostics: { diagnose: async () => { throw new Error("diagnostics unavailable"); } } });
+    await backend.initialize();
+    const read = await backend.read({ path: "a.txt" });
+    const result = await backend.apply({ changes: [{ path: "a.txt", snapshot: read.snapshot,
+      edits: [{ kind: "replace", range: { start: 1, end: 1 }, text: "ONE" }] }] });
+    assert.equal(result.mutationOutcome, "applied");
+    assert.equal(result.diagnosticsStatus, "failed");
+    assert.equal(result.diagnosticsError, "diagnostics unavailable");
+    assert.match(result.files[0].snapshot, /^s_/);
+    assert.equal(await readFile(f.file, "utf8"), "ONE\n");
+  } finally { await f.cleanup(); }
+});
+
+test("unknown commit failures remain unknown instead of claiming unchanged", async () => {
+  const f = await fixture("one\n");
+  try {
+    const read = await f.backend.read({ path: "a.txt" });
+    f.backend.transaction.commit = async () => { throw new Error("commit response unavailable"); };
+    await assert.rejects(f.backend.apply({ changes: [{ path: "a.txt", snapshot: read.snapshot,
+      edits: [{ kind: "replace", range: { start: 1, end: 1 }, text: "ONE" }] }] }),
+      error => error.mutationOutcome === "unknown" && error.code === "edit_commit_failed");
+  } finally { await f.cleanup(); }
+});
+
+test("diagnostics status distinguishes reported errors, completed checks, and explicit skips", async () => {
+  const f = await fixture("one\n");
+  try {
+    let severity = "error";
+    let calls = 0;
+    const backend = new EditBackend({ root: f.root, transactionDir: path.join(f.root, ".status-transactions"),
+      diagnostics: { diagnose: async () => { calls++; return [{ path: "a.txt", severity, message: "check result" }]; } } });
+    await backend.initialize();
+    let snapshot = (await backend.read({ path: "a.txt" })).snapshot;
+    for (const [text, expectedStatus, diagnostics] of [["two", "failed", true], ["three", "passed", true], ["four", "skipped", false]]) {
+      const result = await backend.apply({ diagnostics, changes: [{ path: "a.txt", snapshot,
+        edits: [{ kind: "replace", range: { start: 1, end: 1 }, text }] }] });
+      assert.equal(result.mutationOutcome, "applied");
+      assert.equal(result.diagnosticsStatus, expectedStatus);
+      assert.equal(result.diagnosticsError, undefined);
+      snapshot = result.files[0].snapshot;
+      severity = "warning";
+    }
+    assert.equal(calls, 2);
+  } finally { await f.cleanup(); }
+});
+
+test("created snapshots use canonical identities through a workspace alias", async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "yeet-edit-root-alias-"));
+  try {
+    const actual = path.join(parent, "actual");
+    const alias = path.join(parent, "alias");
+    await mkdir(actual);
+    await symlink(actual, alias, "dir");
+    const backend = new EditBackend({ root: alias, transactionDir: path.join(actual, ".transactions") });
+    await backend.initialize();
+    const created = await backend.apply({ changes: [{ path: "nested/new.txt", fileOp: { kind: "create", text: "new\n" } }] });
+    assert.equal(created.files[0].path, "nested/new.txt");
+    await backend.apply({ changes: [{ path: "nested/new.txt", snapshot: created.files[0].snapshot,
+      edits: [{ kind: "replace", range: { start: 1, end: 1 }, text: "updated" }] }] });
+    assert.equal(await readFile(path.join(actual, "nested/new.txt"), "utf8"), "updated\n");
+    await symlink(path.join(actual, "nested/new.txt"), path.join(actual, "leaf-link.txt"));
+    await assert.rejects(backend.read({ path: "leaf-link.txt" }), /symbolic link/);
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});

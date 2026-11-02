@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import readline from "node:readline";
 import process from "node:process";
-import { EditBackend } from "./backend.js";
+import { EditBackend, EditApplyError } from "./backend.js";
 import { loadEditBackendConfig } from "./config.js";
-import type { ApplyRequest, ListFilesRequest, ReadRequest, SearchRequest } from "./types.js";
+import type { ApplyRequest, LineRange, ListFilesRequest, ReadRequest, SearchRequest } from "./types.js";
 
 interface RpcRequest {
   id: string | number;
@@ -37,6 +37,11 @@ async function dispatch(request: RpcRequest): Promise<unknown> {
     case "snapshotText": {
       const params = request.params as { snapshot: string };
       return { text: backend.snapshotText(params.snapshot) };
+    }
+    case "limitSnapshotCoverage": {
+      const params = request.params as { snapshot: string; revision: string; ranges: LineRange[] };
+      backend.limitSnapshotCoverage(params.snapshot, params.revision, params.ranges);
+      return { ok: true };
     }
     case "search":
       return backend.search(request.params as SearchRequest);
@@ -113,7 +118,10 @@ for await (const line of rl) {
   } catch (error) {
     if (!writeResponse({
       id: request?.id ?? null,
-      error: { message: error instanceof Error ? error.message : String(error) },
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+        ...(error instanceof EditApplyError ? { code: error.code, mutationOutcome: error.mutationOutcome } : {}),
+      },
     })) break;
   }
 }

@@ -76,6 +76,11 @@ pub struct FileApplyResult {
     pub destination: Option<String>,
     pub operation: String,
     pub snapshot: Option<String>,
+    pub revision: Option<String>,
+    #[serde(default)]
+    pub seen_ranges: Vec<SeenRange>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub match_modes: Vec<Value>,
     pub anchors: Option<String>,
     pub diff: Option<Value>,
     #[serde(default)]
@@ -83,10 +88,46 @@ pub struct FileApplyResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeenRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplyResult {
     pub files: Vec<FileApplyResult>,
     pub diagnostics: Vec<Diagnostic>,
+    pub mutation_outcome: String,
+    pub diagnostics_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics_error: Option<String>,
 }
+
+#[derive(Debug)]
+pub struct EditFailure {
+    pub code: String,
+    pub mutation_outcome: String,
+    pub message: String,
+}
+
+impl EditFailure {
+    pub fn new(code: &str, mutation_outcome: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            mutation_outcome: mutation_outcome.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for EditFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for EditFailure {}
 
 pub struct EditClient {
     root: PathBuf,
@@ -198,6 +239,23 @@ impl EditClient {
         Ok(result.text)
     }
 
+    pub fn limit_snapshot_coverage(
+        &mut self,
+        snapshot: &str,
+        revision: &str,
+        ranges: &[(usize, usize)],
+    ) -> Result<()> {
+        let ranges = ranges
+            .iter()
+            .map(|(start, end)| json!({"start": start, "end": end}))
+            .collect::<Vec<_>>();
+        let _: Value = self.call(
+            "limitSnapshotCoverage",
+            json!({"snapshot": snapshot, "revision": revision, "ranges": ranges}),
+        )?;
+        Ok(())
+    }
+
     pub fn search(
         &mut self,
         query: &str,
@@ -241,7 +299,15 @@ impl EditClient {
                 .insert("unsafe".into(), json!(true));
         }
         self.ensure_healthy()?;
-        self.call("apply", request)
+        self.call("apply", request).map_err(|error| {
+            if error.downcast_ref::<EditFailure>().is_some() {
+                error
+            } else {
+                // Never retry a request that may have reached the writer.
+                EditFailure::new("edit_outcome_unknown", "unknown",
+                    format!("Edit response was lost; inspect the affected files before retrying: {error}")).into()
+            }
+        })
     }
 
     pub fn call<T: DeserializeOwned>(&mut self, method: &str, params: Value) -> Result<T> {
@@ -314,6 +380,23 @@ impl EditClient {
                 bail!("edit daemon returned a response for an unexpected request");
             }
             if let Some(error) = value.get("error") {
+                if method == "apply" {
+                    return Err(EditFailure::new(
+                        error
+                            .get("code")
+                            .and_then(Value::as_str)
+                            .unwrap_or("edit_failed"),
+                        error
+                            .get("mutationOutcome")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown"),
+                        error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("edit daemon error"),
+                    )
+                    .into());
+                }
                 return Err(anyhow!(
                     "{}",
                     error

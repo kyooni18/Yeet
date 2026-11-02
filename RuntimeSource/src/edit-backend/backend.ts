@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { opendir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { applyConcreteEdits, concretizeEdits, requiredSeenRanges } from "./apply.js";
-import { compactDiff, diffSeenRanges } from "./diff.js";
+import { compactDiff } from "./diff.js";
 import { ApplyPatchDialect } from "./dialects/apply-patch.js";
 import { HashlineDialect } from "./dialects/hashline.js";
 import { SloppyDialect } from "./dialects/sloppy.js";
@@ -10,7 +10,8 @@ import { ModelDialectSelector } from "./model-dialect.js";
 import { PathGuard } from "./path-guard.js";
 import { rebaseEdits } from "./rebase.js";
 import { SnapshotStore, digestText, type Snapshot } from "./snapshot.js";
-import { addressableLines, decodeText, encodeText, formatAnchored, formatNumbered } from "./text.js";
+import { IntervalSet } from "./ranges.js";
+import { addressableLines, decodeText, encodeText, formatAnchored, formatNumbered, payloadLines } from "./text.js";
 import { TransactionalWriter, type PlannedFileState } from "./transaction.js";
 import type {
   ApplyRequest,
@@ -22,6 +23,7 @@ import type {
   EditDialect,
   FileApplyResult,
   FileChange,
+  LineRange,
   ListFilesRequest,
   ListFilesResult,
   ModelDialectRule,
@@ -99,43 +101,49 @@ function freshAnchors(after: string, diff: CompactDiff, maxLines = 120): string 
   return chunks.join("\n");
 }
 
-function propagateSeen(snapshot: Snapshot, edits: readonly ConcreteEdit[], afterLineCount: number): Array<{ start: number; end: number }> {
-  const points = [...snapshot.seen.values()];
-  const result = new Set<number>();
-  for (const oldLine of points) {
-    let line = oldLine;
-    let removed = false;
-    for (const edit of edits) {
-      if (edit.kind === "replace" || edit.kind === "delete") {
-        const oldLength = edit.range.end - edit.range.start + 1;
-        const newLength = edit.kind === "delete" ? 0 : edit.text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n").length;
-        if (line >= edit.range.start && line <= edit.range.end) {
-          removed = true;
-          break;
-        }
-        if (line > edit.range.end) line += newLength - oldLength;
-      } else {
-        const inserted = edit.text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n").length;
-        let position: number;
-        switch (edit.at.kind) {
-          case "start": position = 0; break;
-          case "end": position = Number.MAX_SAFE_INTEGER; break;
-          case "before": position = edit.at.line - 1; break;
-          case "after": position = edit.at.line; break;
-        }
-        if (position < line) line += inserted;
-      }
+/** Transform evidence in the original coordinate system, then add supplied text.
+ * Diff context is deliberately not credited: a later model-output budget may
+ * shorten that preview without displaying those lines to the caller.
+ */
+function propagateSeen(snapshot: Snapshot | undefined, edits: readonly ConcreteEdit[], beforeLineCount: number): LineRange[] {
+  const splices = edits.map(edit => {
+    if (edit.kind === "replace" || edit.kind === "delete") {
+      return { start: edit.range.start - 1, end: edit.range.end,
+        count: edit.kind === "delete" ? 0 : payloadLines(edit.text).length };
     }
-    if (!removed && line >= 1 && line <= afterLineCount) result.add(line);
+    const start = edit.at.kind === "start" ? 0 : edit.at.kind === "end" ? beforeLineCount
+      : edit.at.kind === "before" ? edit.at.line - 1 : edit.at.line;
+    return { start, end: start, count: payloadLines(edit.text).length };
+  }).sort((a, b) => a.start - b.start || a.end - b.end);
+  const seen = new IntervalSet();
+  if (snapshot) {
+    for (const oldLine of snapshot.seen.values()) {
+      const oldIndex = oldLine - 1;
+      if (splices.some(splice => oldIndex >= splice.start && oldIndex < splice.end)) continue;
+      const offset = splices.filter(splice => splice.end <= oldIndex)
+        .reduce((sum, splice) => sum + splice.count - (splice.end - splice.start), 0);
+      seen.add(oldLine + offset);
+    }
   }
-  const sorted = [...result].sort((a, b) => a - b);
-  const ranges: Array<{ start: number; end: number }> = [];
-  for (const line of sorted) {
-    const tail = ranges.at(-1);
-    if (tail && tail.end + 1 === line) tail.end = line;
-    else ranges.push({ start: line, end: line });
+  let offset = 0;
+  for (const splice of splices) {
+    const start = splice.start + offset + 1;
+    if (splice.count > 0) seen.add(start, start + splice.count - 1);
+    offset += splice.count - (splice.end - splice.start);
   }
-  return ranges;
+  return seen.toJSON();
+}
+
+export class EditApplyError extends Error {
+  constructor(message: string, readonly code: string,
+    readonly mutationOutcome: "unchanged" | "applied" | "unknown") {
+    super(message);
+    this.name = "EditApplyError";
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export class EditBackend {
@@ -172,6 +180,21 @@ export class EditBackend {
 
   snapshotText(handle: string): string {
     return this.snapshots.get(handle).text;
+  }
+
+  limitSnapshotCoverage(handle: string, revision: string, ranges: readonly LineRange[]): void {
+    const snapshot = this.snapshots.get(handle);
+    if (snapshot.digest !== revision) throw new Error("File changed while binding read coverage; read the file again before editing.");
+    const requested = new IntervalSet(ranges);
+    const intersection: LineRange[] = [];
+    for (const prior of snapshot.seen.toJSON()) {
+      for (const range of requested.toJSON()) {
+        const start = Math.max(prior.start, range.start);
+        const end = Math.min(prior.end, range.end);
+        if (end >= start) intersection.push({ start, end });
+      }
+    }
+    snapshot.seen.replace(intersection);
   }
 
   registerDialect(dialect: EditDialect): void {
@@ -360,18 +383,48 @@ export class EditBackend {
     return {
       files: prepared.map(item => item.result),
       diagnostics: [],
+      mutationOutcome: "unchanged",
+      diagnosticsStatus: "skipped",
     };
   }
 
   async apply(request: ApplyRequest): Promise<ApplyResult> {
     return this.#serialize(async () => {
-      const prepared = await this.#prepare(request);
+      let prepared: PreparedFile[];
+      try {
+        prepared = await this.#prepare(request);
+      } catch (error) {
+        throw new EditApplyError(errorMessage(error), "edit_rejected", "unchanged");
+      }
       const states = prepared.flatMap(item => item.states);
-      await this.transaction.commit(states);
-      for (const item of prepared) item.postCommit?.();
+      try {
+        await this.transaction.commit(states);
+      } catch (error) {
+        const outcome = (error as { mutationOutcome?: string })?.mutationOutcome;
+        throw new EditApplyError(errorMessage(error), "edit_commit_failed",
+          outcome === "unchanged" ? "unchanged" : "unknown");
+      }
+      try {
+        for (const item of prepared) item.postCommit?.();
+      } catch (error) {
+        throw new EditApplyError(errorMessage(error), "edit_evidence_failed", "applied");
+      }
       const changedPaths = prepared.flatMap(item => item.canonicalDestination ?? item.canonicalSource ?? []);
-      const diagnostics = request.diagnostics === false ? [] : await this.diagnostics.diagnose(changedPaths);
-      return { files: prepared.map(item => item.result), diagnostics };
+      const result: ApplyResult = {
+        files: prepared.map(item => item.result), diagnostics: [],
+        mutationOutcome: states.length > 0 ? "applied" : "unchanged",
+        diagnosticsStatus: "skipped",
+      };
+      if (request.diagnostics !== false && this.diagnostics !== noopDiagnostics) {
+        try {
+          result.diagnostics = await this.diagnostics.diagnose(changedPaths);
+          result.diagnosticsStatus = result.diagnostics.some(item => item.severity === "error") ? "failed" : "passed";
+        } catch (error) {
+          result.diagnosticsStatus = "failed";
+          result.diagnosticsError = errorMessage(error);
+        }
+      }
+      return result;
     });
   }
 
@@ -443,9 +496,12 @@ export class EditBackend {
         canonicalDestination: canonical,
         states: [state],
         postCommit: () => {
-          const diff = result.diff!;
-          const snapshot = this.snapshots.record(canonical, normalized, diffSeenRanges(diff));
+          const lineCount = addressableLines(normalized).length;
+          const snapshot = this.snapshots.record(canonical, normalized,
+            lineCount > 0 ? [{ start: 1, end: lineCount }] : []);
           result.snapshot = snapshot.handle;
+          result.revision = snapshot.digest;
+          result.seenRanges = snapshot.seen.toJSON();
         },
       };
     }
@@ -456,10 +512,10 @@ export class EditBackend {
     const before = envelope.text;
     const snapshot = change.snapshot ? this.snapshots.get(change.snapshot) : undefined;
     if (snapshot) ensureSnapshotPath(snapshot, canonical);
-    if (!snapshot && !unsafe) throw new Error(`Snapshot handle is required before editing existing file: ${change.path}`);
+    if (!snapshot) throw new Error(`Snapshot handle is required before editing existing file: ${change.path}`);
     const snapshotText = snapshot?.text ?? before;
     const requested = await concretizeEdits(change.path, snapshotText, change.edits ?? [], this.#blockResolver);
-    if (this.#enforceSeenLines && !unsafe) {
+    if (this.#enforceSeenLines) {
       if (!snapshot) throw new Error(`Snapshot handle is required before editing existing file: ${change.path}`);
       const unseen = requiredSeenRanges(requested).filter(range => !snapshot.seen.covers(range.start, range.end));
       if (unseen.length > 0) {
@@ -472,6 +528,7 @@ export class EditBackend {
     const warnings: string[] = [];
     const liveMatches = snapshot ? digestText(before) === snapshot.digest && before === snapshot.text : true;
     if (snapshot && !liveMatches) {
+      if (change.fileOp) throw new Error(`Snapshot ${snapshot.handle} is stale for file ${change.fileOp.kind}; re-read ${change.path}.`);
       const rebased = rebaseEdits(snapshot.text, before, requested);
       if (!rebased) throw new Error(`Snapshot ${snapshot.handle} is stale and its edit anchors cannot be safely rebased. Re-read ${change.path}.`);
       concrete = rebased.edits;
@@ -524,12 +581,11 @@ export class EditBackend {
         ],
         postCommit: () => {
           this.snapshots.invalidatePath(canonical);
-          const seen = liveMatches && snapshot !== undefined
-            ? propagateSeen(snapshot, concrete, addressableLines(after).length)
-            : [];
-          for (const range of diffSeenRanges(diff)) seen.push(range);
+          const seen = propagateSeen(liveMatches ? snapshot : undefined, concrete, addressableLines(before).length);
           const next = this.snapshots.record(destination, after, seen);
           result.snapshot = next.handle;
+          result.revision = next.digest;
+          result.seenRanges = next.seen.toJSON();
         },
       };
     }
@@ -552,12 +608,11 @@ export class EditBackend {
       canonicalDestination: canonical,
       states: [{ path: canonical, content: encodeText(after, envelope), mode, expectedDigest: rawDigest(raw) }],
       postCommit: () => {
-        const seen = liveMatches && snapshot !== undefined
-          ? propagateSeen(snapshot, concrete, addressableLines(after).length)
-          : [];
-        for (const range of diffSeenRanges(diff)) seen.push(range);
+        const seen = propagateSeen(liveMatches ? snapshot : undefined, concrete, addressableLines(before).length);
         const next = this.snapshots.record(canonical, after, seen);
         result.snapshot = next.handle;
+        result.revision = next.digest;
+        result.seenRanges = next.seen.toJSON();
       },
     };
   }

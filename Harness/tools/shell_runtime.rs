@@ -5,7 +5,10 @@
 
 use super::*;
 
-use super::shell_jobs::{FinishedShellJob, ShellJobOptions, ShellJobWait};
+use super::shell_jobs::{
+    COMPLETED_SHELL_JOB_RETENTION, FinishedShellJob, MAX_COMPLETED_SHELL_JOBS, ShellJobOptions,
+    ShellJobWait,
+};
 use std::time::Duration;
 
 impl ToolRegistry {
@@ -135,6 +138,9 @@ impl ToolRegistry {
         } else {
             string_arg(object, "command")?.trim().to_owned()
         };
+        if command.is_empty() || command.contains('\0') {
+            bail!("command must be a non-empty string without NUL");
+        }
         let shell = object
             .get("shell")
             .map(|v| {
@@ -293,7 +299,7 @@ impl ToolRegistry {
                 "Use run_shell with job:{action:\"wait\",jobId:<id>} to suspend until completion without model polling. Add reportEverySeconds only when periodic monitoring is useful."
             };
             return Ok(
-                json!({"jobId":job_id,"status":"running","command":command,"hint":hint})
+                json!({"jobId":job_id,"status":"running","state":"running","command":command,"hint":hint})
                     .to_string(),
             );
         }
@@ -325,7 +331,9 @@ impl ToolRegistry {
                         self.evidence.workspace_write_generation.wrapping_add(1);
                     self.invalidate_workspace_cache();
                 }
-                bail!("cancelled");
+                bail!(
+                    "cancelled; shell jobId: {job_id}. The stop was requested; check the job to confirm cleanup and read retained output."
+                );
             }
             ShellJobWait::TimedOut => {
                 // The command is still running and already changed what it changed.
@@ -335,6 +343,8 @@ impl ToolRegistry {
                 let mut value = json!({
                     "jobId": job_id,
                     "status": "running",
+                    "state": "running",
+                    "waitOutcome": "yielded",
                     "command": command,
                     "workingDirectory": effective_working_directory,
                     "shellCwd": shell_cwd,
@@ -343,7 +353,11 @@ impl ToolRegistry {
                     "progress": self.shell_jobs.progress(&job_id),
                 });
                 let hint = self.shell_jobs.transcript_id(&job_id).map_or_else(
-                    || "The command exceeded its foreground window and keeps running in the background. Use shell_job action=wait with this jobId to collect the result.".to_owned(),
+                    || if self.artifacts_enabled {
+                        "The command exceeded its foreground window and keeps running in the background. Use shell_job action=wait with this jobId to collect the result.".to_owned()
+                    } else {
+                        "The command exceeded its foreground window and keeps running in the background. Use run_shell job:{action:\"wait\",jobId:<id>} to collect the result.".to_owned()
+                    },
                     |artifact| {
                         value["artifactId"] = json!(artifact);
                         "The command exceeded its foreground window and keeps running in the background; output so far is in artifactId (read_artifact pages it). Use shell_job action=wait with this jobId to collect the result.".to_owned()
@@ -353,7 +367,11 @@ impl ToolRegistry {
                 return Ok(value.to_string());
             }
         }
-        let FinishedShellJob { result, transcript } = self.shell_jobs.take_finished(&job_id)?;
+        let FinishedShellJob {
+            result,
+            transcript,
+            event_log,
+        } = self.shell_jobs.take_finished(&job_id)?;
         // A failed or timed-out command may already have changed files. Do not
         // keep cached workspace evidence merely because no ShellResult arrived.
         let output = result.map_err(|error| {
@@ -362,12 +380,17 @@ impl ToolRegistry {
                     self.evidence.workspace_write_generation.wrapping_add(1);
                 self.invalidate_workspace_cache();
             }
+            let retrieval = if self.artifacts_enabled {
+                format!("Read retained output with shell_job action=output, jobId={job_id}, offset=0.")
+            } else {
+                format!("Read retained output with run_shell job:{{action:\"output\",jobId:\"{job_id}\",offset:0}}.")
+            };
             match &transcript {
                 Some((id, log)) => anyhow!(
-                    "{error}\nShell transcript artifactId: {id}; {}",
+                    "{error}\nShell jobId: {job_id}. {retrieval}\nShell transcript artifactId: {id}; {}",
                     serde_json::to_string(&log.snapshot()).unwrap_or_default()
                 ),
-                None => anyhow!(error),
+                None => anyhow!("{error}\nShell jobId: {job_id}. {retrieval}"),
             }
         })?;
         let mut output = output;
@@ -393,6 +416,25 @@ impl ToolRegistry {
             cache_safe_inspection,
         )?;
         let mut value: Value = serde_json::from_str(&result)?;
+        let capture = event_log.snapshot();
+        value["jobId"] = json!(job_id);
+        value["state"] = json!("exited");
+        value["waitOutcome"] = json!("finished");
+        value["outputAvailable"] = json!(true);
+        value["captureComplete"] = json!(!capture.truncated && capture.error.is_none());
+        value["captureTruncated"] = json!(capture.truncated);
+        if let Some(error) = capture.error {
+            value["captureError"] = json!(error);
+        }
+        value["retentionSeconds"] = json!(COMPLETED_SHELL_JOB_RETENTION.as_secs());
+        value["retainedCompletedLimit"] = json!(MAX_COMPLETED_SHELL_JOBS);
+        if value["responseTruncated"].as_bool().unwrap_or(false) {
+            value["outputHint"] = json!(if self.artifacts_enabled {
+                "Read retained output with shell_job action=output, this jobId, and offset=0; follow nextOffset while hasMore."
+            } else {
+                "Read retained output with run_shell job:{action:\"output\",jobId:<id>,offset:0}; follow nextOffset while hasMore."
+            });
+        }
         if let Some((id, log)) = transcript {
             value["artifactId"] = json!(id);
             value["artifactComplete"] = json!(log.snapshot().complete);
@@ -492,7 +534,7 @@ impl ToolRegistry {
     }
 
     /// Shows the model the real output: whole when it fits, otherwise a head
-    /// and tail window with the full text kept as an artifact. Replacing large
+    /// and tail window with retained output accessible through the job. Replacing large
     /// output with a keyword-matched summary hid results (a grep reported as
     /// "Command succeeded" plus an unrelated line), so the summary is gone and
     /// diagnostics are added only to failures whose middle was omitted.
@@ -507,6 +549,7 @@ impl ToolRegistry {
         let complete = !output.stdout_truncated && !output.stderr_truncated;
         if complete && stdout.len() + stderr.len() <= SHELL_INLINE_OUTPUT_BYTES {
             let mut value = serde_json::to_value(&output)?;
+            value["responseTruncated"] = json!(false);
             if actor {
                 value["route"] = json!("actor");
             }
@@ -528,20 +571,13 @@ impl ToolRegistry {
             "stdoutTruncated": output.stdout_truncated,
             "stderrTruncated": output.stderr_truncated,
             "outputWindowed": true,
-            "artifactComplete": complete,
+            "responseTruncated": true,
             "stdout": output_window(&stdout, SHELL_STDOUT_WINDOW_BYTES),
             "stderr": output_window(&stderr, SHELL_STDERR_WINDOW_BYTES),
             "diagnostics": diagnostics,
         });
         if actor {
             value["route"] = json!("actor");
-        }
-        if self.artifacts_enabled {
-            let raw = format!(
-                "$ {command}\nEXIT: {}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}",
-                output.exit_code
-            );
-            value["artifactId"] = json!(self.artifacts.store(&raw)?);
         }
         Ok(value.to_string())
     }

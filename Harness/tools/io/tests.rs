@@ -2,12 +2,179 @@
 
 use super::*;
 
+fn registry_for_read_tests(root: &Path) -> ToolRegistry {
+    ToolRegistry::new_with_bridge_handle(
+        BridgeHandle::lazy_for_workspace(root.to_path_buf()),
+        root.to_path_buf(),
+        WorkerRegistry::new(Vec::new()).unwrap(),
+        PermissionBroker::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn read_line_count_and_continuation_are_distinct_from_earlier_unread_gaps() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let text = (1..=12)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    fs::write(root.join("lines.txt"), &text).unwrap();
+    let mut registry = registry_for_read_tests(&root);
+    let read = |registry: &mut ToolRegistry, arguments: Value| -> Value {
+        serde_json::from_str(&registry.read_file(arguments.as_object().unwrap()).unwrap()).unwrap()
+    };
+    let middle = read(
+        &mut registry,
+        json!({"path":"lines.txt","startLine":6,"lineCount":2}),
+    );
+    assert_eq!(middle["startLine"], 6);
+    assert_eq!(middle["endLine"], 7);
+    assert_eq!(middle["nextStartLine"], 8);
+    assert_eq!(middle["firstUnreadLine"], 1);
+    let beginning = read(
+        &mut registry,
+        json!({"path":"lines.txt","startLine":1,"endLine":5}),
+    );
+    assert_eq!(beginning["nextStartLine"], 6);
+    assert_eq!(beginning["firstUnreadLine"], 8);
+    let end = read(
+        &mut registry,
+        json!({"path":"lines.txt","startLine":8,"lineCount":100}),
+    );
+    assert_eq!(end["endLine"], 12);
+    assert!(end["nextStartLine"].is_null());
+    assert!(end["firstUnreadLine"].is_null());
+    assert_eq!(end["fileFullyRead"], true);
+
+    fs::write(
+        root.join("lines.txt"),
+        text.replace("line 6\n", "updated 6\n"),
+    )
+    .unwrap();
+    let fresh = read(
+        &mut registry,
+        json!({"path":"lines.txt","startLine":6,"lineCount":1,"refresh":false}),
+    );
+    assert!(fresh["lines"].as_str().unwrap().contains("updated 6"));
+    assert_eq!(fresh["firstUnreadLine"], 1);
+    assert_eq!(fresh["nextStartLine"], 7);
+    assert_ne!(fresh["snapshot"], middle["snapshot"]);
+}
+
+#[test]
+fn read_rejects_ambiguous_bounds_and_mixed_batch_shapes() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::write(root.join("lines.txt"), "one\ntwo\nthree\n").unwrap();
+    let mut registry = registry_for_read_tests(&root);
+    for arguments in [
+        json!({"path":"lines.txt","startLine":3,"endLine":1}),
+        json!({"path":"lines.txt","lineCount":0}),
+        json!({"path":"lines.txt","lineCount":-1}),
+        json!({"path":"lines.txt","lineCount":1.5}),
+        json!({"path":"lines.txt","lineCount":"2"}),
+        json!({"path":"lines.txt","startLine":0}),
+        json!({"path":"lines.txt","endLine":0}),
+        json!({"path":"lines.txt","endLine":2,"lineCount":2}),
+        json!({"path":"lines.txt","startLine":usize::MAX,"lineCount":2}),
+        json!({"path":"lines.txt","refresh":"yes"}),
+        json!({"path":"lines.txt","requests":[]}),
+        json!({"path":"","requests":[{"path":"lines.txt"}]}),
+        json!({"startLine":1,"requests":[{"path":"lines.txt"}]}),
+        json!({"lineCount":1,"requests":[{"path":"lines.txt"}]}),
+        json!({"refresh":false,"requests":[{"path":"lines.txt"}]}),
+    ] {
+        assert!(
+            registry.read_file(arguments.as_object().unwrap()).is_err(),
+            "{arguments}"
+        );
+    }
+    let batch: Value = serde_json::from_str(
+        &registry
+            .read_file(
+                json!({"requests":[
+                    {"path":"lines.txt","startLine":2,"lineCount":2},
+                    {"path":"lines.txt","startLine":3,"endLine":1},
+                    {"requests":[{"path":"lines.txt"}]}
+                ]})
+                .as_object()
+                .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(batch[0]["endLine"], 3);
+    assert!(batch[1]["error"].as_str().unwrap().contains("endLine"));
+    assert!(
+        batch[2]["error"]
+            .as_str()
+            .unwrap()
+            .contains("nested batches")
+    );
+}
+
+#[test]
+fn externalized_read_credits_only_complete_preview_lines_and_updates_continuation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    fs::write(
+        root.join("large.txt"),
+        format!("{}\n", "x".repeat(512)).repeat(100),
+    )
+    .unwrap();
+    fs::write(root.join("giant.txt"), format!("{}\n", "x".repeat(20_000))).unwrap();
+    let mut registry = registry_for_read_tests(&root);
+    let value: Value = serde_json::from_str(
+        &registry
+            .read_file(
+                json!({"path":"large.txt","startLine":6,"lineCount":70})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["externalized"], true);
+    assert_eq!(value["endLine"], 12);
+    assert_eq!(value["nextStartLine"], 13);
+    assert_eq!(value["firstUnreadLine"], 1);
+    assert_eq!(value["fileFullyRead"], false);
+    assert_eq!(
+        registry.evidence.edit_read_coverage["large.txt"].ranges,
+        vec![(6, 12)]
+    );
+
+    let value: Value = serde_json::from_str(
+        &registry
+            .read_file(
+                json!({"path":"giant.txt","lineCount":1})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(value["externalized"], true);
+    assert_eq!(value["endLine"], 0);
+    assert_eq!(value["nextStartLine"], 1);
+    assert_eq!(value["firstUnreadLine"], 1);
+    assert_eq!(value["fileFullyRead"], false);
+    assert!(
+        !registry
+            .evidence
+            .edit_read_coverage
+            .contains_key("giant.txt")
+    );
+}
+
 #[test]
 fn active_sessions_can_edit_the_same_file_without_finishing_their_tasks() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     fs::write(root.join("shared.txt"), "one\ntwo\n").unwrap();
-    // Stale-read protection only applies to sandboxed workspaces.
+    // Exercise the sandboxed policy; unrestricted writes retain the same
+    // stale-read protection independently of their permission settings.
     sandboxed(&root);
     let registry = || {
         ToolRegistry::new_with_bridge_handle(
@@ -209,7 +376,7 @@ fn shell_job_tool_controls_pty() {
     let id = result["jobId"].as_str().unwrap();
     let started = std::time::Instant::now();
     loop {
-        let output = json!({"action":"output", "jobId":id, "offset":0});
+        let output = json!({"action":"output", "jobId":id, "offset":0, "format":"events"});
         let page: Value = serde_json::from_str(
             &registry
                 .shell_job_tool(output.as_object().unwrap(), &cancel)
@@ -432,7 +599,7 @@ fn replace_text_tolerates_whitespace_drift_only_when_unique() {
         registry.read_file(read.as_object().unwrap()).unwrap();
         registry.apply_file_edits(
             &json!({"diagnostics": false, "changes": [{"path": "lib.rs", "edits": [
-                {"kind": "replaceText", "oldText": old, "newText": new}
+                {"kind": "replaceText", "oldText": old, "newText": new, "matchPolicy":"relaxed"}
             ]}]}),
             &AtomicBool::new(false),
         )
@@ -442,7 +609,10 @@ fn replace_text_tolerates_whitespace_drift_only_when_unique() {
     apply("fn a() {\n    one();\n}\n", "fn a() {\n    uno();\n}\n").unwrap();
     apply("two();", "dos();").unwrap();
     let ambiguous = apply("\t}\n", "}\n").unwrap_err().to_string();
-    assert!(ambiguous.contains("ignoring whitespace it matches"), "{ambiguous}");
+    assert!(
+        ambiguous.contains("ignoring whitespace it matches"),
+        "{ambiguous}"
+    );
     let missing = apply("fn c() {", "fn d() {").unwrap_err().to_string();
     assert!(missing.contains("Closest lines:"), "{missing}");
     assert_eq!(
@@ -457,7 +627,8 @@ fn edits_chain_without_rereads_until_the_file_changes_elsewhere() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
-    // Stale-read protection only applies to sandboxed workspaces.
+    // Chained edits keep valid coverage; external changes invalidate the
+    // snapshot regardless of the workspace's permission settings.
     sandboxed(&root);
     let mut registry = ToolRegistry::new_with_bridge_handle(
         BridgeHandle::lazy_for_workspace(root.clone()),
