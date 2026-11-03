@@ -197,12 +197,21 @@ impl ContextMemory {
             .as_ref()
             .unwrap()
             .join(format!("{}.json", self.id()));
-        ensure!(
-            !archive_path.exists(),
-            "Archived context window is immutable and already exists: {}",
-            archive_path.display()
-        );
-        write_json_new(archive_path, history)?;
+        if archive_path.exists() {
+            // A crash or failed state write can leave the archive committed while
+            // this window is still active. Resume only if it is the same snapshot;
+            // never overwrite an archive with different conversation content.
+            let archived = fs::read(&archive_path)?;
+            let matches = serde_json::from_slice::<Vec<Message>>(&archived)
+                .is_ok_and(|messages| messages == *history);
+            ensure!(
+                matches,
+                "Archived context window is immutable and already exists: {}",
+                archive_path.display()
+            );
+        } else {
+            write_json_new(archive_path, history)?;
+        }
         let old = self.state.clone();
         self.state.windows.push(Window {
             id: Uuid::new_v4().to_string(),
@@ -679,6 +688,25 @@ mod goal_persistence_tests {
             original[goal.observations[0].item].content.as_deref(),
             Some("test failed")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn rollover_resumes_after_archive_was_written() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("context");
+        let mut memory = ContextMemory::default();
+        memory.bind(Some(root.clone()));
+        let mut history = vec![Message::system("system"), Message::user("task")];
+        memory.load(&mut history)?;
+        memory.sync(&history)?;
+        memory.flush()?;
+        let archive = root.join(format!("{}.json", memory.id()));
+        write_json_new(archive.clone(), &history)?;
+        let bytes = fs::read(&archive)?;
+        memory.rollover(&mut history, None)?;
+        assert_eq!(memory.number(), 2);
+        assert_eq!(fs::read(&archive)?, bytes);
         Ok(())
     }
 

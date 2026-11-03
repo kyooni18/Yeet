@@ -68,13 +68,11 @@ impl AgentCoordinator {
             .load(Ordering::Acquire)
             .then(|| self.context_memory.goal().map(goal_block))
             .flatten();
-        // A goal block whose objective no longer matches (goal ended or the
-        // user amended it) would keep presenting superseded wording with
-        // system authority, so drop it even though that costs a cache miss.
-        let current_brief = goal_block.as_ref().map(|(brief, _)| brief.as_str());
-        self.history
-            .retain(|message| !is_stale_goal_block(message, current_brief));
         self.history.push(current_request.clone());
+        append_goal_supersession(
+            &mut self.history,
+            goal_block.as_ref().map(|(brief, _)| brief.as_str()),
+        );
         self.history
             .push(Message::system(TURN_CONTEXT_BOUNDARY).request_only());
         if let Some((_, block)) = goal_block {
@@ -272,6 +270,18 @@ fn goal_block(goal: &goal::GoalJob) -> (String, String) {
     (brief, block)
 }
 
+// Supersede obsolete system guidance at the tail; never delete submitted text.
+fn append_goal_supersession(history: &mut Vec<Message>, current_brief: Option<&str>) {
+    if history
+        .iter()
+        .any(|message| is_stale_goal_block(message, current_brief))
+    {
+        history.push(Message::system(
+            "Earlier goal-job instructions, objectives, and judge feedback are superseded. Only the goal block supplied for this turn, if any, is active; otherwise follow the latest user request without goal-job continuation."
+        ).request_only());
+    }
+}
+
 fn is_stale_goal_block(message: &Message, current_brief: Option<&str>) -> bool {
     if message.role != MessageRole::System || message.request_only != Some(true) {
         return false;
@@ -345,6 +355,24 @@ mod tests {
         let attached = enabled.attached(&catalog);
         for name in crate::agents::group::control_commands::TOOL_NAMES {
             assert!(attached.iter().any(|tool| tool.name == name));
+        }
+    }
+
+    #[test]
+    fn changed_or_ended_goals_preserve_submitted_history() {
+        for brief in [None, Some("Goal: new task")] {
+            let mut history = vec![Message::system("Goal: old task").request_only()];
+            let prefix = history.clone();
+            append_goal_supersession(&mut history, brief);
+            assert!(history.starts_with(&prefix));
+            assert_eq!(history.len(), 2);
+            assert!(
+                history[1]
+                    .content
+                    .as_deref()
+                    .unwrap()
+                    .contains("superseded")
+            );
         }
     }
 }
