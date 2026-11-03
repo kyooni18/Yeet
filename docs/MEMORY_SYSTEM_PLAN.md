@@ -1,6 +1,19 @@
 # Yeet memory system plan
 
-Status: proposal, not implemented. This document plans core behavior and API contracts, not UI layouts.
+Status: full implementation plan for the user-approved direction; not implemented. Exact model/runtime compatibility remains subject to the validation gates below. This document specifies functional behavior and core/API contracts, not UI layouts.
+
+## Executive summary
+
+- Two independent memory systems: agent-generated explicit knowledge and automatically indexed whole-session history.
+- Canonical memory text and indexes live in local storage. Cloud embedding is an explicitly selected processing service, not cloud memory storage.
+- Reusable embedding profiles: initially one shared profile for both systems and one Yeet-managed local profile for protected data. Chat-model selection never silently selects an embedding profile.
+- Yeet downloads and runs validated local embedding artifacts independently of chat-provider daemons.
+- Automatic bounded recall at user-turn/rollover boundaries plus explicit agent search/read tools.
+- One manager accessible via `/memories` and `/settings`: browse, edit, delete, privacy, setup and indexing operations.
+- Rust owns memory policy, lifecycle, retrieval and authority; existing provider/Remote/frontend boundaries remain authoritative.
+- No silent cloud fallback, declassification, historical backfill or bulk export. Protection covers queries, derived context and background requests, not just document embeddings.
+
+Sections 1–9 define product/architecture; 10–11 define delivery/acceptance; 12–18 specify setup, execution, recall, contracts, recovery, rollout and implementation tasks.
 
 ## 1. Product contract
 
@@ -183,8 +196,8 @@ Expose frontend-neutral paginated list/get/update/delete, settings, privacy-chan
 
 ## 10. Delivery checkpoints
 
-1. **Contracts and technical spike**: settle provider trust/egress metadata, settings, schemas, deletion semantics and exact local model/runtime compatibility. Verify existing cloud embedding APIs with supported credentials and review logging. No UI design work.
-2. **Store and explicit memory**: local canonical text, privacy partitions, scopes, FTS, lifecycle tools and policy enforcement. Add local model installation/inference and one verified cloud adapter; embedding jobs remain resumable. Ship explicit semantic retrieval once both lanes are validated.
+1. **Contracts and technical spike**: settle provider trust/egress metadata, settings, schemas, deletion semantics and exact local model/runtime compatibility. Verify existing cloud embedding APIs with supported credentials and review logging. Implement egress guards before enabling protected content in model requests. No UI design work.
+2. **Store and explicit memory**: local canonical text, privacy partitions, scopes, FTS, lifecycle tools and policy enforcement. Add local model installation/inference and one verified cloud adapter; embedding jobs remain resumable. Validate explicit semantic retrieval behind a feature gate; do not release protected recall before the full session-safety checkpoint.
 3. **Whole-session ingestion**: durable cursors, chunking/provenance, crash reconciliation, edit/regenerate and retention handling. Index new opted-in sessions first; backfill is separately authorized.
 4. **Retrieval and session safety**: hybrid search, bounded append-only insertion, source citations and protected-history provider-switch enforcement across all request paths. Keep cross-session auto-retrieval gated until these protections pass.
 5. **Product integration**: expose settings/status/management through core and Remote contracts, including the shared memory management destination accessible via `/settings` and `/memories`. Implement frontend controls against the user's supplied/requested design. Tune chunking and retrieval with a small representative corpus, then consider summaries/ANN indexes.
@@ -203,3 +216,236 @@ Keep tests small and behavior-driven:
 - **Retrieval quality**: a small fixed corpus includes exact preferences, paraphrased decisions, tool outcomes, conflicting old facts and overlapping chunks. Check relevant sources fit the context budget without rewriting the submitted prefix.
 
 Open validation gates: exact Nemotron/Gemini model identifiers and availability; managed inference runtime/artifact compatibility; acceptable download/RAM/latency budgets by platform. These need evidence during implementation, not assumed support in this plan.
+
+## 12. Setup and embedding-profile selection
+
+### Defaults and configuration ownership
+
+- On upgrade, both memory systems start disabled. No automatic backfill, model download or embedding traffic.
+- Enable either or both kinds independently. Whole-session capture requires its own disclosure because it processes substantially more conversation text than explicit saves.
+- Store profiles and installations at application/user level, outside committed project files. Reference existing provider credentials; do not copy API keys into memory records/configuration.
+- Workspace configuration references profiles and stores enablement/scope/retention choices. User defaults may initialize new workspaces without changing existing workspace choices. Workspace files cannot grant cloud consent, endpoint trust or cross-workspace access by themselves.
+- Each kind remembers its Local-only default, effective only under a trusted local generation configuration. Source taint always wins. Expose configured and effective state separately.
+- Disabling a kind stops new capture, recall and undispatched embedding work for it. Retain records and park pending jobs until re-enabled/deleted. Management remains available.
+
+Conceptual contract, to integrate into existing Rust/Remote schemas:
+
+```text
+MemorySettings
+  revision
+  explicit: { enabled, localOnly, sharedProfileId?, localProfileId? }
+  wholeSession: { enabled, localOnly, sharedProfileId?, localProfileId? }
+  retrieval: { automatic, maxInjectedTokens, defaultWorkspaceScope }
+  retention: { sourcePolicyReference, memoryExpiry? }
+
+EmbeddingProfile
+  id, revision, displayName
+  execution: cloud | managed-local
+  providerConfigurationRef? / managedModelManifestRef?
+  modelId, requestedOptions, resolvedCapabilities
+  fingerprint, validationStatus, lastValidationError?
+```
+
+Initially offer one reusable shared profile and one managed local profile, inherited by both kinds. Profile references allow later per-kind assignments without a storage redesign; advanced multi-profile configuration need not complicate first setup. Shared records may use local embedding; protected records must.
+
+### Cloud selection workflow
+
+1. Choose an existing provider/account or configure a supported endpoint through existing provider settings.
+2. Show curated embedding models plus provider discovery where reliable, not the entire chat-model catalog. Existing bridge name-based discovery/seeds are hints, not capability guarantees.
+3. Allow custom model IDs for compatible endpoints, unvalidated until tested. Explain chat-only credentials and authentication failures.
+4. Validate with a disclosed bundled non-sensitive probe, not real memories: query/document formatting, task types, counts, dimensions and finite values. Associate capabilities with the resolved profile revision.
+5. Explain what text leaves the device, destination provider/endpoint and available cost/limit information. Require consent before real document/query embedding; backfill requires separate authorization. Do not invent price estimates when unavailable.
+6. Mark ready only after validation. Incomplete setup leaves canonical text pending semantic indexing, with authorized local lexical search available.
+
+Do not infer an embedding choice from the active chat model. No cross-provider fallback for rate limits, expired credentials or model unavailability: retry the authorized profile or ask the user to select another.
+
+### Local selection workflow
+
+1. Choose a pinned tested manifest from a small catalog. Show license, download/disk size, approximate RAM and supported devices; accept offline artifacts validated against the same manifest.
+2. Obtain download approval, then install and verify model/runtime assets.
+3. Complete preparation and fixture checks before declaring readiness. Show precise progress, errors, cancel and retry actions.
+4. Reuse installation across workspaces. Load lazily; no dependency on Ollama/llama.cpp or a loaded chat model.
+
+### Profile changes
+
+Use immutable profile revisions. Changing encoder/endpoint/options creates a new index generation; refreshing credentials need not change identity if the encoder remains identical. Preview affected record counts and cloud egress before authorizing a rebuild. Protected records never enter a cloud migration batch.
+
+Build in the background while the previous authorized encoder/index remains usable. If the old encoder disappears, use lexical retrieval, never new query vectors against old document vectors. Replay concurrent record mutations/deletions before atomic cutover; retire old generations after readers release them.
+
+## 13. Managed local-model execution
+
+### Runtime selection gate
+
+Before choosing a production inference dependency, compare supported artifacts/runtimes for correctness, redistribution/license, package size, CPU behavior, acceleration and reproducible platform builds. GGUF, ONNX and other formats are candidates, not interchangeable guarantees. Pick one validated runtime path for v1.
+
+The spike must produce a pinned manifest, query/document fixture and measurements of install size, peak RAM, cold load and warm throughput on reference hardware. Verify the requested Nemotron artifact first; if unavailable/incompatible, document the result and disclose an alternative rather than silently substituting under the same profile name.
+
+### Installation/load states
+
+| State | Contract |
+| --- | --- |
+| Not installed | No semantic inference; user may install/import |
+| Checking requirements | Runtime/platform, license, disk and memory estimates |
+| Downloading / paused | Temporary files, resumable only for matching artifact revision |
+| Verifying | Sizes/hashes and complete artifact set; never load partial files |
+| Preparing | Tokenizer/runtime and optional device cache; no repository-supplied executable code |
+| Ready, unloaded | Valid installation, available offline |
+| Loading / loaded | Supervised bounded worker serves requests |
+| Failed | Typed error, retry or supported CPU fallback; never cloud fallback |
+| Removing | Resolve leases, unload, remove selected assets and update dependent profiles |
+
+Publish an installation atomically after verification and fixture validation. Verify runtime assets as well as weights. Bound extraction and reject path traversal/symlink escape. Partials/device caches have explicit cleanup rules and never count as ready installations.
+
+### Worker and resource ownership
+
+- Rust owns installation, authorization, queue admission and supervision. Use a private local worker channel, not an arbitrary publicly exposed inference port.
+- Begin with one loaded encoder per worker and bounded queues. Prioritize interactive query embeddings over ingestion, with fair scheduling to avoid permanent ingestion starvation.
+- Batch by model token/input limits. Separate query/document modes; apply tokenizer, pooling and normalization exactly as declared in the manifest.
+- Cancellation removes undispatched work and fences late responses. Worker crashes produce retryable jobs with bounded restart/backoff; repeated failures surface an actionable error.
+- Prefer supported acceleration; CPU fallback must preserve encoder semantics or create a separate compatible index generation. Use idle unload and bounded caches.
+- Removal reports dependent profiles/workspaces and leaves canonical text intact. Their semantic jobs become blocked, not deleted.
+- Installed inference needs no network. Advertise only validated platform/device combinations. Mobile clients may use an explicitly authorized desktop-hosted runtime; on-device mobile inference is a separate capability gate.
+
+## 14. Recall execution and agent behavior
+
+### Automatic recall algorithm
+
+1. At an accepted user turn, capture settings revision, workspace, consumer trust, authorization and retained-context taint. Skip disabled kinds.
+2. Build a bounded query from the current request and minimal permitted recent context. No cloud summarization of protected context; v1 needs no LLM query rewriting.
+3. Search workspace explicit facts and session chunks, plus authorized user-global explicit preferences. Exclude unauthorized sources and current-turn duplicates before ranking.
+4. Run FTS and matching-profile vector search. Initial candidate cap: 20 per permitted kind/profile lane with an overall bound. Fuse with reciprocal-rank fusion, not raw cross-model vector scores. Exact structured queries may use metadata/lexical paths alone.
+5. Deduplicate overlapping spans and diversify session excerpts. Prefer active durable decisions/preferences appropriately, but do not treat them as verified current code state without evidence.
+6. Expand neighbors only within the available budget. Cap injection at 2,000 tokens, reduced by remaining context capacity. Include IDs, dates, kind, edited/superseded indicators and sources, clearly delimited as untrusted data.
+7. Recheck revisions, tombstones, policy generation and consumer trust immediately before insertion/dispatch. Append without rewriting the submitted prefix. Persist protected provenance before any request consumes it.
+
+Repeat after rollover when a new working set needs recall; avoid reinserting the same turn's results. Do not run before every tool call. A retrieval deadline may yield permitted partial/no results; explicit tools remain available. A privacy violation blocks dispatch rather than degrading to an unsafe path.
+
+### Deliberate recall
+
+Give the agent concise guidance to search for earlier decisions, preferences, experiments, missing continuity or direct questions about past work. It can search even when automatic recall returns nothing. Results are snippets: use `memory_get` or permitted source history when details are needed.
+
+Search accepts query, kind/scope/source filters and bounded limit. The runtime intersects filters with authority. Direct reads enforce the same checks even for guessed IDs. Save attaches source attribution automatically; the agent cannot declare protected-derived knowledge untainted or widen access through tool arguments.
+
+If a protected query cannot use a shared cloud encoder, search shared documents lexically and protected documents with the local encoder. A separately built local shared index may be added later. Never compare local query vectors with cloud document vectors. Report partial semantic availability without logging query text.
+
+### Evidence and persistent safety
+
+Memory is evidence, not instruction or permission. Current user corrections/repository evidence can invalidate old facts. Surface conflicts or supersede explicitly. Retrieved commands/URLs never bypass approvals, sandbox or provenance rules.
+
+Persist provenance, not a transient UI flag. Conservatively protect generated descendants of protected input, including workers, summaries, regeneration and rollover. Preserve flags in session exports/imports. Missing provenance must not be treated as cloud-safe when continuing protected history; require a fresh safe branch or explicit review. Fine-grained automatic declassification is out of scope for v1.
+
+## 15. Persistence and API contracts
+
+### Logical entities
+
+| Entity | Responsibility |
+| --- | --- |
+| Records/revisions | Canonical text, kind/scope/privacy, current revision and lifecycle |
+| Sources/dependencies | Stable session/branch/window/event spans, source revision and derivative links |
+| Overrides/suppressions | User corrections and exclusions tied to source spans, independent of chunk IDs |
+| Profiles/index generations | Encoder identity, validation and active/building generations |
+| Embeddings/FTS | Revision-specific derived indexes partitioned by authority/privacy |
+| Jobs/cursors | Leased retryable work and reconciled committed-source position |
+| Policy generations/context provenance | Egress fences and durable protected dependencies, integrated with session persistence |
+
+Use separate shared/protected database files by default, with a coordinator for cross-partition changes. Non-content profile/install metadata can be shared. Require private permissions, short transactions, versioned schemas and a consistently packaged FTS-capable SQLite build.
+
+Suppress stable source spans/revisions, not just old chunk IDs: rechunking must not resurrect deleted text. Ambiguous override mappings after source edits stay excluded and require review instead of guessing. Keep minimal non-content tombstones; retained audit history must not hide deleted text. Garbage-collect obsolete text/vector revisions according to retention.
+
+### User-management operations
+
+| Operation | Contract |
+| --- | --- |
+| List/search/get | Cursor pagination, local search by default, authority-intersected filters |
+| Update record | Expected revision, permitted fields, new revision/index status |
+| Delete preview/confirm | Exact IDs/revisions and source/derivative/suppression effects |
+| Privacy preview/confirm | Exact authorized set, dependency impact and egress disclosure |
+| Get/update settings | Expected revision; configured/effective values and blocked reasons |
+| List/validate profiles | Capabilities, credential references only, readiness/errors |
+| Install/import/cancel/remove | Verified manifest, progress, resource checks and dependency effects |
+| Reindex/backfill/retry/cancel | Authorized sources/profile generation, durable progress and disclosure |
+
+Use request IDs/idempotency where operations may replay. Confirmation tokens bind initiating user/client, selected IDs/revisions, policy generation and expiry. Reject stale previews. Filtered bulk mutations apply to the previewed set, not newly matching records.
+
+Return typed errors: revision conflict, scope denied, Local-only blocked, profile unready, consent required, model unavailable, quota exceeded and cancellation. Errors must not reveal protected text or cross-workspace record existence. Progress events contain bounded IDs/counts/state, not record bodies; reconnect retrieves a revisioned snapshot through existing protocol mechanisms.
+
+Rust owns pagination, filtering and mutations. `frontend/shared` carries contracts/client delivery, not another retrieval engine or policy reducer. Negotiate Remote capabilities/version handling so older clients cannot accidentally accept unsupported privacy actions. Tauri/browser transports use the same authority checks.
+
+## 16. Concurrency, failures and resource limits
+
+### Cross-partition privacy fences
+
+A privacy move across database files is not an ordinary single SQLite transaction. Commit a durable shared deny/fence first, stop undispatched cloud jobs, copy/verify the protected revision, then retire shared copies. A crash at any step keeps shared access denied; reconciliation resumes the move. Workers recheck policy generation before dispatch and before committing vectors, so late responses cannot republish moved/deleted records.
+
+Earlier disclosure/in-flight cloud requests cannot be undone. Declassification uses an explicit confirmed preview and staged move; unrelated derivatives stay protected. Fence affected current contexts as well as indexes.
+
+### Jobs and degraded operation
+
+- Leased jobs use bounded retries/backoff with jitter; expired leases recover. Revision/profile keys deduplicate work. Never advance a source cursor past work that was not durably recorded.
+- Rate limits/auth failures pause only the affected profile. Other profiles/local lexical management remain usable. Show indexing lag and last successful cursor.
+- Disk-full pauses capture/indexing visibly; never evict authoritative sessions or claim success. Bound queues/caches and apply backpressure. Reconcile committed sources when resources recover.
+- Shutdown checkpoints cursors/jobs, cancels work and unloads inference. Chat/rollover persistence never depends on embedding success.
+- Follow existing daemon/runtime ownership; serialize store writers and enforce file/process locks. Multiple frontend attachments do not create competing memory engines/workers.
+- Model removal/provider changes respect leases. Revision-fenced readers and immediate logical deletion precede physical cleanup.
+
+### Initial engineering budgets
+
+These are provisional measurement targets, not unverified product claims:
+
+- At most 2,000 injected tokens and bounded retrieval candidates; no unbounded transcript scans in request assembly.
+- Target local management/FTS p95 below 200 ms on a 10,000-chunk fixture on declared reference hardware. Benchmark exact vector search at 10,000/100,000 chunks before choosing ANN.
+- Target warm local automatic recall below 500 ms on supported desktop reference hardware. Initial configurable total recall deadline: 1.5 seconds; cold load/cloud latency may exceed it, yielding permitted partial results rather than indefinitely blocking chat.
+- Begin with embedding-worker concurrency one. Derive batch/RAM/idle limits from the model spike, not unsupported guesses.
+- Ordinary logs/opt-in aggregate diagnostics contain counts, latency and typed failures, not raw memory, queries, vectors or source snippets. Audit existing API logging before embedding traffic is enabled.
+
+## 17. Rollout, migration and release criteria
+
+### First release
+
+Include both kinds; one reusable shared profile and one protected local profile; one verified managed model; at least one verified cloud adapter; automatic/tool hybrid recall; management through both slash entry points; edit/delete/privacy operations; resumable indexing and protected-history provider-switch enforcement.
+
+OpenAI, Gemini and OpenRouter belong in the supported architecture, but advertise specific models/adapters only after checks pass. Defer generated summaries, arbitrary custom local architectures, ANN infrastructure, automatic declassification, cloud memory synchronization and on-device mobile inference. Do not defer egress checks, coverage, suppression or direct-ID authorization.
+
+### Upgrade/backfill/rollback
+
+Add versioned memory storage without rewriting transcripts. Upgrade creates no embedding jobs. Opt-in starts at a committed source position; old history requires selected-scope backfill with counts and cloud disclosure. Never auto-import Foundation/external memories or instruction files.
+
+Migrations are transactional within each store and resumable across stores; incompatible versions block use. Rollback disables dispatch while preserving text, provenance and suppression. Never fall back to an application path that ignores protected metadata. Recovery/export preserves privacy/deletion markers; protected export requires authorization.
+
+### Release gates
+
+- Validate local inference on every advertised platform, offline after installation and without a chat-provider daemon.
+- Pass section 11 plus one full scenario: setup → save/capture → recall → edit → privacy move → delete → restart/reindex.
+- Intercepting fake transport proves protected queries/documents/derived context do not reach cloud embeddings or generation/background paths. Cover provider switch, cancellation races and crash during privacy move.
+- Both slash entry points reach the same manager without model dispatch. Test Remote capability/reconnect behavior and unauthorized management access.
+- Evaluate a fixed corpus with paraphrases, exact identifiers, conflicting facts and long tool output. Record relevant-source recall, duplicate injection and budget compliance against FTS-only, rather than assuming vectors always improve results.
+- Run relevant Rust/provider/frontend checks per checkpoint and `Scripts/check.sh` for integrated structural work. Record environment/pre-existing failures separately. Documentation-only planning needs no compile/test run.
+- Implement visuals only against user-provided/requested design; no invented layout or `.ui` rendering framework.
+
+## 18. Implementation work breakdown and handoff
+
+Checkpoint names describe ownership, not mandatory file-per-entity structure. Commit meaningful increments and keep incomplete features gated.
+
+| Checkpoint | Work | Completion evidence |
+| --- | --- | --- |
+| A. Compatibility | Pinned local manifest/runtime, cloud contract, provider trust metadata, credential/logging review | Fixture, license/platform report, measured resources, go/no-go |
+| B. Policy/schema | `Harness/memory` types/policy, settings/model contracts, persistent taint and central egress checks | Scope/trust tests; protected dispatch disabled without guards |
+| C. Store | SQLite/FTS, revisions, sources, suppressions, jobs/cursors, migrations, privacy journal | Crash/restart and deletion/override invariants; lexical management |
+| D. Embedding | Rust bridge support as needed, existing TS adapter extensions, installer/worker, validation/rebuild | Cloud fixture, offline managed inference, cancellation/retry |
+| E. Explicit tools | Catalog/schemas, save/search/get/forget, attribution, supersession, permissions | Authorized round trip; guessed IDs/scope widening denied |
+| F. Session capture | Post-commit notifications/reconciliation, episode chunking, edit/regenerate/rollover | Source coverage without duplicates or resurrected deletions |
+| G. Recall | Profile-aware hybrid search, budgeted append-only insertion, citations, switch enforcement | Fixed retrieval corpus and end-to-end privacy checks |
+| H. Management | Shared Rust semantic state/actions, Remote contracts, settings and slash routing | Same manager, revision-safe operations, reconnect safety |
+| I. Clients/release | User-designed components, supported client adapters, packaging and docs | Accessibility, platform verification and integrated release gates |
+
+Integration points to re-inspect before coding:
+
+- `Harness/core/provider_bridge.rs`, `RuntimeSource/src/bridge-protocol.ts`, `bridge.ts`, `embeddings.ts`, adapters/types: existing JS embedding operations are reusable; extend Rust client/protocol deliberately instead of duplicating transport.
+- Harness service persistence/run/lifecycle/replay, session store and agent context archives: add post-commit notifications and reconciliation, never embed while holding persistence locks.
+- Agent request assembly/history, detached/background helpers and workers: enforce append-only retrieval and the same egress policy on every path.
+- Project/application settings, `Harness/model.rs` and service settings: expose configured/effective references without secrets.
+- `UI/composer/state.rs`, `UI/application_session.rs`, shared settings and `Harness/service/commands.rs`: `/settings` already has interactive routing and a help fallback. Preserve it, add `/memories` consistently and route both to shared management, not a model prompt. Read/maintain `TUI_WHITEBOARD.md` before structural TUI changes.
+- `src/remote/protocol.rs`, UI hosts/transports, `frontend/shared/remote` and desktop bridge: negotiate capabilities and preserve per-client authority/projection boundaries.
+- `app/ui/ContentView.ui` is reserved, with no supplied layout. Read eventual memory specs before React Native implementation; preserve `web` compatibility until parity is verified.
+
+Before each checkpoint, inspect current Git work/history and recall Foundation knowledge when that integration is available. Preserve unrelated work, add only meaningful behavioral tests and record durable decisions/results. Replace open validation gates with measured supported configurations as implementation proceeds; never describe planned behavior as shipped.
