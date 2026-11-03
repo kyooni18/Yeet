@@ -24,6 +24,12 @@ output, retained job output, PTY input/resize/interruption, and MCP contracts.
 It also covers transcript selection/context menus, original Markdown copy,
 Unicode composer editing, root/global instruction loading, and nested overlays.
 
+`cargo test --bin yeet` also builds successfully (no binary-local tests).
+`cargo test --test source_layout`: five passed, one failed because
+`Harness/tools/shell_jobs.rs` is 1,241 lines against a 1,200-line target. This
+failure predates the audit: that file is unchanged from starting commit
+`a08073a`. It needs responsibility extraction, not an increased limit.
+
 These results are not a claim of production reliability across all platforms:
 no visual evaluation in the user's terminal, live provider evaluation, or
 Windows/Linux desktop clipboard round trip was performed. Tool availability
