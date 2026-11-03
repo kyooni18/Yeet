@@ -30,11 +30,12 @@ view tabs, contextual rails, and separate command-palette/view-switcher behavior
 
 ## Copy and paste
 
-Drag conversation text and press **Ctrl+C** to copy; right-click for **Copy
-message** (original Markdown), selection copy, and paste. **Ctrl+V** pastes into
-the focused composer. Terminal-native paste (usually Cmd+V or Ctrl+Shift+V) also
-works, including multiline bracketed paste. Cmd+C/V work when forwarded by the
-terminal. Without a selection Ctrl+C retains its interrupt/quit behavior.
+Use **Ctrl+Shift+C/V**, or **Cmd+C/V** on macOS, for copy/paste. When forwarded
+by the terminal, copy uses the transcript selection (or the focused draft), and
+paste requests the system clipboard. Terminal-native bracketed paste also works.
+Right-click for **Copy message** (original Markdown), selection copy, and paste.
+Ctrl+V is not bound. The existing Ctrl+C selection-copy/interrupt/quit behavior
+is retained.
 For terminal-native mouse selection, use your terminal's mouse-capture bypass
 modifier (often Shift; terminal-dependent).
 

@@ -741,10 +741,8 @@ fn terminal_editing_chords_map_without_stealing_empty_input_scroll_keys() {
         ..App::default()
     };
 
-    assert!(app.handle_chat_editing_key(&ctrl('v')));
-    assert!(app.take_clipboard_paste_request());
+    assert!(!app.handle_chat_editing_key(&ctrl('v')));
     assert!(!app.take_clipboard_paste_request());
-    assert_eq!(app.input, "one two");
     assert!(app.handle_chat_editing_key(&ctrl('a')));
     assert_eq!(app.cursor, 0);
     assert!(app.handle_chat_editing_key(&ctrl('e')));
@@ -1364,4 +1362,35 @@ fn question_prompt_picks_options_and_types_custom_answers() {
         prompt.handle_key(&key(KeyCode::Esc, KeyModifiers::NONE), &question),
         Some(ComposerAction::AnswerQuestion { answer: None, .. })
     ));
+}
+
+#[test]
+fn standard_clipboard_chords_do_not_take_plain_control_keys() {
+    let mut app = App {
+        input: "draft".into(),
+        input_focused: true,
+        ..App::default()
+    };
+    for modifiers in [
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        KeyModifiers::SUPER,
+    ] {
+        for character in ['c', 'C'] {
+            assert!(app.handle_clipboard_key(&KeyEvent::new(KeyCode::Char(character), modifiers)));
+            assert_eq!(app.take_clipboard_request().as_deref(), Some("draft"));
+            assert!(!app.quit);
+        }
+        for character in ['v', 'V'] {
+            assert!(app.handle_clipboard_key(&KeyEvent::new(KeyCode::Char(character), modifiers)));
+            assert!(app.take_clipboard_paste_request());
+            assert!(!app.take_clipboard_paste_request());
+            assert_eq!(app.input, "draft");
+        }
+    }
+    for character in ['c', 'v'] {
+        assert!(!app.handle_clipboard_key(&KeyEvent::new(
+            KeyCode::Char(character),
+            KeyModifiers::CONTROL
+        )));
+    }
 }

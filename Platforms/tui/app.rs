@@ -619,8 +619,12 @@ impl App {
             && event.code == KeyCode::Char('c')
     }
 
-    pub fn handle_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
-        if event.modifiers.contains(KeyModifiers::SUPER) {
+    fn handle_clipboard_key(&mut self, event: &KeyEvent) -> bool {
+        if event.modifiers.contains(KeyModifiers::SUPER)
+            || event
+                .modifiers
+                .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+        {
             match event.code {
                 KeyCode::Char('c' | 'C') => {
                     if !self.copy_transcript_selection()
@@ -629,14 +633,21 @@ impl App {
                     {
                         self.clipboard_request = Some(self.input.clone());
                     }
-                    return Ok(());
+                    return true;
                 }
                 KeyCode::Char('v' | 'V') => {
                     self.clipboard_paste_request = true;
-                    return Ok(());
+                    return true;
                 }
                 _ => {}
             }
+        }
+        false
+    }
+
+    pub fn handle_key(&mut self, event: KeyEvent, backend: &mut Backend) -> anyhow::Result<()> {
+        if self.handle_clipboard_key(&event) {
+            return Ok(());
         }
         if self.transcript_context_menu.is_some() && event.code == KeyCode::Esc {
             self.transcript_context_menu = None;

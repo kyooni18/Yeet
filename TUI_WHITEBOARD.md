@@ -11,9 +11,9 @@ and clear have explicit enabled states, and pointer movement highlights the
 active menu item. Message edit/regenerate controls remain available below the
 clipboard actions.
 
-Ctrl+V in the focused composer requests system clipboard paste through the same
-path as the context menu; terminal bracketed paste remains supported. Cmd+C/V
-are supported when the terminal forwards those keys. Ctrl+C copies an active
+Ctrl+Shift+C/V and Cmd+C/V handle copy/paste when forwarded by the terminal.
+Paste uses the same path as the context menu; terminal bracketed paste remains
+supported. Plain Ctrl+V is not bound. Ctrl+C copies an active
 transcript selection; without a selection it still interrupts/quits.
 The default light palette uses dark semantic text colors (including success,
 warning, and user labels), not bright icon colors on near-white surfaces.

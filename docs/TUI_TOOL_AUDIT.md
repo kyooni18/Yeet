@@ -2,10 +2,10 @@
 
 ## Validated changes
 
-- The focused composer now accepts Ctrl+V through the same system-clipboard
-  request path as the context menu. Bracketed paste and forwarded Cmd+V are
-  unchanged. Existing editing coverage also checks the paste request is consumed
-  exactly once without changing the draft prematurely.
+- Clipboard shortcuts are Ctrl+Shift+C/V or Cmd+C/V when forwarded by the
+  terminal. Plain Ctrl+V is not bound. Paste uses the same system-clipboard
+  request path as the context menu; bracketed paste remains supported. Regression
+  coverage checks lowercase/uppercase key events and preserves plain Ctrl keys.
 - Default light (Adwaita) accent, warning, success, and user foregrounds are
   darker. One contrast regression test requires 4.5:1 for normal semantic text
   roles on the default content surfaces, and user text on its tinted surface.
