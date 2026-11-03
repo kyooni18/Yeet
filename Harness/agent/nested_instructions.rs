@@ -2,8 +2,8 @@
 //!
 //! Root-level files are loaded by turn setup. Instructions that live deeper in
 //! the tree apply only to their subtree, so they are attached lazily: the first
-//! time a tool round reads or edits a file under that directory, the nearest
-//! instruction file is appended as a request-only overlay. History is
+//! time a tool round reads or edits a file under that directory, all ancestor
+//! instruction files are appended parent-first as request-only overlays. History is
 //! append-only, so a byte-identical copy already present is not attached again.
 
 use std::path::{Path, PathBuf};
@@ -13,8 +13,7 @@ use super::*;
 const INSTRUCTION_FILES: [&str; 3] = ["AGENT.md", "AGENTS.md", "YEET.md"];
 const MAX_FILE_BYTES: u64 = 16 * 1024;
 
-/// Overlays for the nearest nested instruction files of the paths touched by
-/// this round's successful file tools.
+/// Overlays for nested instruction files of the paths touched by this round.
 pub(super) fn overlays_for_round(
     history: &[Message],
     workspace_root: &str,
@@ -25,10 +24,10 @@ pub(super) fn overlays_for_round(
     let mut directories: Vec<PathBuf> = Vec::new();
     for path in calls.iter().flat_map(touched_paths) {
         let absolute = Path::new(session_cwd).join(path);
-        if let Some(directory) = nearest_instruction_directory(root, &absolute)
-            && !directories.contains(&directory)
-        {
-            directories.push(directory);
+        for directory in instruction_directories(root, &absolute) {
+            if !directories.contains(&directory) {
+                directories.push(directory);
+            }
         }
     }
     let mut overlays = Vec::new();
@@ -75,21 +74,28 @@ fn touched_paths(call: &ToolCall) -> Vec<String> {
     }
 }
 
-/// The deepest directory strictly below `root` containing an instruction
-/// file, walking up from `file`'s directory. `None` outside the workspace.
-fn nearest_instruction_directory(root: &Path, file: &Path) -> Option<PathBuf> {
+/// All instruction directories strictly below `root`, parent-first.
+/// A deeper file augments ancestor rules rather than hiding them.
+fn instruction_directories(root: &Path, file: &Path) -> Vec<PathBuf> {
     let file = normalize(file);
-    let mut directory = file.parent()?;
+    let mut found = Vec::new();
+    let Some(mut directory) = file.parent() else {
+        return found;
+    };
     while directory.starts_with(root) && directory != root {
         if INSTRUCTION_FILES
             .iter()
             .any(|name| directory.join(name).is_file())
         {
-            return Some(directory.to_path_buf());
+            found.push(directory.to_path_buf());
         }
-        directory = directory.parent()?;
+        let Some(parent) = directory.parent() else {
+            break;
+        };
+        directory = parent;
     }
-    None
+    found.reverse();
+    found
 }
 
 /// Lexically resolves `.`/`..` so model-supplied relative paths cannot walk
@@ -142,11 +148,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nearest_nested_instructions_attach_once() {
+    fn ancestor_nested_instructions_attach_once_parent_first() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("crates/core/src")).unwrap();
         std::fs::write(root.join("AGENTS.md"), "root rules").unwrap();
+        std::fs::write(root.join("crates/AGENTS.md"), "crates rules").unwrap();
         std::fs::write(root.join("crates/core/AGENT.md"), "core rules").unwrap();
         let root_text = root.to_string_lossy().into_owned();
         let read = |path: &str| ToolCall {
@@ -161,9 +168,16 @@ mod tests {
         ];
         let mut history = Vec::new();
         let overlays = overlays_for_round(&history, &root_text, &root_text, &calls);
-        assert_eq!(overlays.len(), 1);
+        assert_eq!(overlays.len(), 2);
         assert!(
             overlays[0]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("crates rules")
+        );
+        assert!(
+            overlays[1]
                 .content
                 .as_deref()
                 .unwrap()
