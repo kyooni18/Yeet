@@ -263,6 +263,63 @@ fn vector_spaces_are_immutable_and_late_results_cannot_revive_edits() {
         )
         .unwrap();
     assert_eq!(hits[0].record.id, record.id);
+    let mid = record.text.len() / 2;
+    store
+        .put_vectors(
+            &access("a"),
+            &record.id,
+            record.revision,
+            &profile,
+            vec![
+                (
+                    Chunk {
+                        start: 0,
+                        end: mid + 4,
+                        text: record.text[..mid + 4].into(),
+                    },
+                    vec![1.0, 0.0],
+                ),
+                (
+                    Chunk {
+                        start: mid,
+                        end: record.text.len(),
+                        text: record.text[mid..].into(),
+                    },
+                    vec![0.9, 0.1],
+                ),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .recall(
+                &access("a"),
+                "unrelated paraphrase",
+                Some((&profile, &[1.0, 0.1])),
+                5
+            )
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .put_vectors(
+                &access("a"),
+                &record.id,
+                record.revision,
+                &profile,
+                vec![(
+                    Chunk {
+                        start: 1,
+                        end: record.text.len(),
+                        text: record.text[1..].into()
+                    },
+                    vec![1.0, 0.0]
+                ),]
+            )
+            .is_err()
+    );
     let mut incompatible = profile.clone();
     incompatible.resolved_model = "model-v2".into();
     assert!(store.register_profile(&access("a"), &incompatible).is_err());
@@ -324,4 +381,36 @@ fn vector_spaces_are_immutable_and_late_results_cannot_revive_edits() {
         store.get(&access("a"), &edited.id).unwrap().indexing_status,
         "pending"
     );
+}
+
+#[test]
+fn vector_schema_upgrade_preserves_canonical_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = MemoryStore::open(dir.path()).unwrap();
+    let record = store.save(&access("a"), input(Privacy::Shared)).unwrap();
+    // Simulate the previous backend checkpoint; only derived vectors change.
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE vectors;
+        CREATE TABLE vectors(id TEXT,revision INTEGER,fingerprint TEXT,vector TEXT);
+        PRAGMA main.user_version=1;",
+        )
+        .unwrap();
+    drop(store);
+    let mut reopened = MemoryStore::open(dir.path()).unwrap();
+    assert_eq!(
+        reopened.get(&access("a"), &record.id).unwrap().text,
+        record.text
+    );
+    assert_eq!(
+        reopened
+            .connection
+            .query_row("PRAGMA main.user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    reopened
+        .delete(&access("a"), &record.id, record.revision)
+        .unwrap();
 }

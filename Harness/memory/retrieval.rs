@@ -73,8 +73,30 @@ impl MemoryStore {
         profile: &EmbeddingProfile,
         vector: Vec<f32>,
     ) -> Result<()> {
+        let record = self.get(access, id)?;
+        let chunk = Chunk {
+            start: 0,
+            end: record.text.len(),
+            text: record.text,
+        };
+        self.put_vectors(access, id, revision, profile, vec![(chunk, vector)])
+    }
+
+    /// Store complete model-aware leaf coverage, not a truncated document or
+    /// an average that loses the source spans needed for evidence expansion.
+    pub fn put_vectors(
+        &mut self,
+        access: &MemoryAccess,
+        id: &str,
+        revision: u64,
+        profile: &EmbeddingProfile,
+        chunks: Vec<(Chunk, Vec<f32>)>,
+    ) -> Result<()> {
         ensure!(access.management, "management authorization required");
-        validate_vectors(std::slice::from_ref(&vector), 1, profile.dimensions)?;
+        ensure!(
+            !chunks.is_empty() && chunks.len() <= 1024,
+            "invalid embedding leaf count"
+        );
         let fingerprint = profile.fingerprint()?;
         let tx = self
             .connection
@@ -101,8 +123,36 @@ impl MemoryStore {
             "local_only_blocked"
         );
         let schema = record.privacy.schema();
-        tx.execute(&format!("INSERT INTO {schema}.vectors VALUES (?1,?2,?3,?4) ON CONFLICT(id,fingerprint) DO UPDATE SET revision=excluded.revision,vector=excluded.vector"),
-            params![id, i64::try_from(revision)?, fingerprint, serde_json::to_string(&vector)?])?;
+        tx.execute(
+            &format!("DELETE FROM {schema}.vectors WHERE id=?1 AND fingerprint=?2"),
+            params![id, fingerprint],
+        )?;
+        let mut covered = 0;
+        for (chunk, vector) in chunks {
+            ensure!(
+                chunk.start <= covered
+                    && chunk.end > covered
+                    && record.text.get(chunk.start..chunk.end) == Some(chunk.text.as_str()),
+                "invalid embedding source coverage"
+            );
+            validate_vectors(std::slice::from_ref(&vector), 1, profile.dimensions)?;
+            tx.execute(
+                &format!("INSERT INTO {schema}.vectors VALUES (?1,?2,?3,?4,?5,?6)"),
+                params![
+                    id,
+                    i64::try_from(revision)?,
+                    fingerprint,
+                    chunk.start as i64,
+                    chunk.end as i64,
+                    serde_json::to_string(&vector)?
+                ],
+            )?;
+            covered = chunk.end;
+        }
+        ensure!(
+            covered == record.text.len(),
+            "incomplete embedding source coverage"
+        );
         tx.execute(
             &format!("UPDATE {schema}.jobs SET status='ready' WHERE id=?1 AND revision=?2"),
             params![id, i64::try_from(revision)?],
@@ -183,6 +233,8 @@ impl MemoryStore {
                 }
             }
             candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
+            let mut seen = std::collections::HashSet::new();
+            candidates.retain(|(_, record)| seen.insert(record.id.clone()));
             for (rank, (_, record)) in candidates.into_iter().take(100).enumerate() {
                 hits.entry(record.id.clone())
                     .or_insert(MemoryHit {

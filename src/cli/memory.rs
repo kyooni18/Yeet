@@ -24,11 +24,19 @@ const HELP: &str = "Native memory management (JSON output; current workspace):
   yeet memory settings [FILE|-]
   yeet memory profiles
   yeet memory probe-cloud PROFILE_ID PROVIDER/MODEL --allow-cloud
+  yeet memory local catalog
+  yeet memory local status MODEL
+  yeet memory local install MODEL --download
+  yeet memory local remove MODEL --confirm
+  yeet memory local validate MODEL PROFILE_ID
+  yeet memory local index MODEL PROFILE_ID
+  yeet memory local recall MODEL PROFILE_ID QUERY
 
 Text is stored locally; '-' reads stdin. Revision arguments prevent stale edits.
 Local-only content is not exposed to models in this initial backend checkpoint.
 Cloud probing sends only a bundled fixture, never your memories.
-Automatic capture/recall, managed inference and visual management are not yet enabled.";
+Managed inference is CPU-native and offline after installation.
+Automatic agent capture/recall and visual management are not yet enabled.";
 
 pub(super) fn run(args: &[String]) -> Result<()> {
     let parts: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -104,7 +112,106 @@ pub(super) fn run(args: &[String]) -> Result<()> {
             store.register_profile(&access, &profile)?;
             print(&profile)
         }
+        ["local", rest @ ..] => local(&mut store, &access, rest),
         _ => bail!("invalid memory command; use `yeet memory help`"),
+    }
+}
+
+fn local(store: &mut MemoryStore, access: &MemoryAccess, args: &[&str]) -> Result<()> {
+    let models = ManagedModels::new(ConfigStore::default().directory.join("memory-models"));
+    let cancel = AtomicBool::new(false);
+    match args {
+        ["catalog"] => print(&local_model_catalog()),
+        ["status", model] => print(&models.status(model)?),
+        ["install", model, "--download"] => {
+            let mut last = 0;
+            let status = models.install(model, &cancel, &mut |artifact, done, total| {
+                if done == total || done.saturating_sub(last) > 4 * 1024 * 1024 {
+                    eprintln!("{artifact}: {done}/{total} bytes");
+                    last = done;
+                }
+            })?;
+            print(&status)
+        }
+        ["remove", model, "--confirm"] => {
+            models.remove(model)?;
+            print(&models.status(model)?)
+        }
+        ["validate", model, profile] => {
+            let encoder = LocalEmbedder::load(&models, model, (*profile).into())?;
+            let fixture = vec![
+                "A puppy plays with a dog.".into(),
+                "A dog and puppy are playing.".into(),
+                "Database transaction durability.".into(),
+            ];
+            let vectors = encoder.embed(&fixture, &cancel)?;
+            let score = |a: usize, b: usize| {
+                vectors[a]
+                    .iter()
+                    .zip(&vectors[b])
+                    .map(|(x, y)| f64::from(*x) * f64::from(*y))
+                    .sum::<f64>()
+            };
+            ensure!(
+                score(0, 1) > score(0, 2),
+                "local model retrieval fixture failed"
+            );
+            store.register_profile(access, encoder.profile())?;
+            print(
+                &serde_json::json!({"state":"ready","profile":encoder.profile(),"relatedSimilarity":score(0,1),"unrelatedSimilarity":score(0,2)}),
+            )
+        }
+        ["index", model, profile] => {
+            let encoder = LocalEmbedder::load(&models, model, (*profile).into())?;
+            store.register_profile(access, encoder.profile())?;
+            let mut filter = MemoryFilter {
+                limit: 100,
+                ..Default::default()
+            };
+            let mut indexed = 0;
+            let mut blocked = Vec::new();
+            loop {
+                let page = store.list(access, &filter)?;
+                for record in page.records {
+                    let embedded = (|| -> Result<_> {
+                        let chunks = encoder.chunks(&record.text)?;
+                        let mut leaves = Vec::new();
+                        for batch in chunks.chunks(64) {
+                            let text: Vec<_> = batch.iter().map(|c| c.text.clone()).collect();
+                            let vectors = encoder.embed(&text, &cancel)?;
+                            leaves.extend(batch.iter().cloned().zip(vectors));
+                        }
+                        Ok(leaves)
+                    })();
+                    match embedded {
+                        Ok(leaves) => {
+                            store.put_vectors(
+                                access,
+                                &record.id,
+                                record.revision,
+                                encoder.profile(),
+                                leaves,
+                            )?;
+                            indexed += 1;
+                        }
+                        Err(_) => blocked.push(record.id),
+                    }
+                }
+                filter.after = page.next_cursor;
+                if filter.after.is_none() {
+                    break;
+                }
+            }
+            print(
+                &serde_json::json!({"indexed":indexed,"blocked":blocked,"note":"Complete model-aware leaf coverage; no text is silently truncated."}),
+            )
+        }
+        ["recall", model, profile, query] => {
+            let encoder = LocalEmbedder::load(&models, model, (*profile).into())?;
+            let vectors = encoder.embed(&[(*query).into()], &cancel)?;
+            print(&store.recall(access, query, Some((encoder.profile(), &vectors[0])), 10)?)
+        }
+        _ => bail!("invalid local model command; use `yeet memory help`"),
     }
 }
 

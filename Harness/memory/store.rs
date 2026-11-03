@@ -48,12 +48,21 @@ impl MemoryStore {
             let version: i64 =
                 connection.query_row(&format!("PRAGMA {schema}.user_version"), [], |r| r.get(0))?;
             ensure!(
-                version <= 1,
+                version <= 2,
                 "memory database requires a newer Yeet version"
             );
         }
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for schema in ["main", "protected"] {
+            let version: i64 =
+                tx.query_row(&format!("PRAGMA {schema}.user_version"), [], |r| r.get(0))?;
+            if version == 1 {
+                // Vectors are rebuildable. Preserve canonical records and all
+                // source suppressions while upgrading to per-leaf embeddings.
+                tx.execute_batch(&format!("DROP TABLE {schema}.vectors;
+                    UPDATE {schema}.records SET body=json_set(body,'$.indexingStatus','pending') WHERE body IS NOT NULL;
+                    UPDATE {schema}.jobs SET status='pending';"))?;
+            }
             tx.execute_batch(&format!(
                 "CREATE TABLE IF NOT EXISTS {schema}.records (
                     id TEXT PRIMARY KEY, revision INTEGER NOT NULL, workspace TEXT NOT NULL,
@@ -66,10 +75,11 @@ impl MemoryStore {
                     PRIMARY KEY(workspace,session,window,start,end));
                  CREATE TABLE IF NOT EXISTS {schema}.vectors (
                     id TEXT NOT NULL, revision INTEGER NOT NULL, fingerprint TEXT NOT NULL,
-                    vector TEXT NOT NULL, PRIMARY KEY(id,fingerprint));
+                    start INTEGER NOT NULL, end INTEGER NOT NULL,
+                    vector TEXT NOT NULL, PRIMARY KEY(id,fingerprint,start,end));
                  CREATE TABLE IF NOT EXISTS {schema}.jobs (
                     id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL);
-                 PRAGMA {schema}.user_version=1;"
+                 PRAGMA {schema}.user_version=2;"
             ))?;
         }
         tx.execute_batch(
