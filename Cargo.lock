@@ -5230,6 +5230,7 @@ dependencies = [
  "ratatui",
  "regex",
  "rpassword",
+ "rusqlite",
  "semver",
  "serde",
  "serde_json",

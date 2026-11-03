@@ -75,3 +75,13 @@ test("provider source identity changes with endpoint but not credential rotation
   assert.equal(original.source, (await run("https://one.invalid/v1", "key-b")).source);
   assert.notEqual(original.source, (await run("https://two.invalid/v1", "key-a")).source);
 });
+
+test("embedding payloads never reach the ordinary API logger", async () => {
+  const events = [];
+  const provider = new OpenAIChatProvider({
+    apiCallLogger: event => events.push(event),
+    fetch: async () => response({ data: [{ index: 0, embedding: [1, 2] }] }),
+  });
+  await provider.embed({ model: "embed", input: ["private memory fixture"] });
+  assert.deepEqual(events, []);
+});

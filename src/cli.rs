@@ -8,6 +8,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 
 mod cache_report;
+mod memory;
 use cache_report::cache;
 
 use crate::{
@@ -45,6 +46,7 @@ pub const HELP: &str = r#"Usage:
   yeet theme set [dark|light|both] NAME_OR_PATH
   yeet theme appearance [auto|dark|light]
   yeet cache [latest|SESSION_ID]
+  yeet memory help
   yeet run [--model provider/model] [--image path] [prompt]
   yeet agent [--model provider/model] [--reasoning LEVEL] [--benchmark] [--json] [--timeout-seconds N] [prompt]
   yeet auth status [provider]
@@ -138,6 +140,7 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         "model" => model(rest),
         "theme" => theme(rest),
         "cache" => cache(rest),
+        "memory" | "memories" => memory::run(rest),
         "run" => run_model(rest),
         "agent" => run_agent(rest),
         "auth" => auth(rest),

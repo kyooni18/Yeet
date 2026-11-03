@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail};
 pub mod agent;
 pub mod agents;
 pub mod core;
+pub mod memory;
 pub mod model;
 pub mod permission;
 pub mod resources;

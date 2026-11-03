@@ -3,7 +3,7 @@ import { providerFetch, readJson } from "./http.js";
 import type { ProviderFetchLogger } from "./http.js";
 import type { EmbeddingRequest, EmbeddingResult, FetchLike } from "./types.js";
 
-/** Shared transport uses the same provider credentials, endpoint and logging as generation. */
+/** Reuse provider credentials/transport, but never log embedding text or vectors. */
 export async function fetchEmbeddings(options: {
   provider: string; baseUrl: string; headers: Record<string, string>;
   request: EmbeddingRequest; format: "openai" | "gemini";
@@ -26,7 +26,6 @@ export async function fetchEmbeddings(options: {
   }, {
     provider: options.provider, timeoutMs: 60000,
     ...(options.fetch ? { fetch: options.fetch } : {}),
-    ...(options.apiCallLogger ? { apiCallLogger: options.apiCallLogger } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   });
   const raw = await readJson<any>(response);

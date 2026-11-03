@@ -1,6 +1,6 @@
 # Yeet memory system plan
 
-Status: full implementation plan for the user-approved direction; not implemented. Exact model/runtime compatibility remains subject to the validation gates below. This document specifies functional behavior and core/API contracts, not UI layouts.
+Status: implementation in progress; see checkpoint log below. Exact model/runtime compatibility remains subject to the validation gates below. This document specifies functional behavior and core/API contracts, not UI layouts; requirements are not claims of shipped functionality.
 
 ## Executive summary
 
@@ -449,3 +449,15 @@ Integration points to re-inspect before coding:
 - `app/ui/ContentView.ui` is reserved, with no supplied layout. Read eventual memory specs before React Native implementation; preserve `web` compatibility until parity is verified.
 
 Before each checkpoint, inspect current Git work/history and recall Foundation knowledge when that integration is available. Preserve unrelated work, add only meaningful behavioral tests and record durable decisions/results. Replace open validation gates with measured supported configurations as implementation proceeds; never describe planned behavior as shipped.
+
+## Implementation checkpoint log
+
+### Native store and local management foundation
+
+Implemented `Harness/memory` with separate private shared/local-only SQLite databases, bundled FTS5, workspace/user-global scopes, revision-safe editing/deletion/privacy moves, source-idempotent saves, persistent source suppression/overrides, pending indexing jobs, immutable encoder profiles and revision-fenced vector storage/hybrid search. Attached rollback-journal transactions make store-only privacy moves atomic without enabling WAL.
+
+`yeet memory help` exposes local JSON management: list/search/get/save/edit/delete/privacy/settings/profiles and consented cloud-profile probing with bundled non-sensitive text. Ordinary embedding transport no longer logs request text or returned vectors. Capture/indexing has no implicit network side effects. Profile options such as task-specific input modes still require later adapter work.
+
+This is a backend checkpoint, not the completed product: no agent/automatic capture or recall, visual manager, Remote management contract or managed inference is enabled yet. Protected model reads intentionally fail closed for every provider until durable context provenance and every egress path are guarded. Workspace enablement is persisted but is not yet wired to agent lifecycle. Local administrative privacy operations are not chat-provider UI toggles.
+
+Validated: six focused Rust memory tests, binary build, TypeScript build and six embedding transport tests. Strict library clippy currently reports two pre-existing collapsible-if warnings in `Harness/agent/tool_protocol.rs:374` and `Harness/tools/editing.rs:129`; no new-module warnings were reported. Foundation tools were not available in this environment, so durable implementation state is kept here and in Git.
