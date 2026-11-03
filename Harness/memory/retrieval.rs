@@ -180,23 +180,72 @@ impl MemoryStore {
         limit: usize,
     ) -> Result<Vec<MemoryHit>> {
         let limit = limit.clamp(1, 20);
-        let lexical = self.list(
-            access,
-            &MemoryFilter {
-                query: Some(query.into()),
-                limit: 100,
-                ..Default::default()
-            },
-        )?;
+        ensure!(query.len() <= 1024, "query_too_large");
+        // Conversation queries contain natural-language filler. Disjunctive,
+        // quoted terms plus BM25 preserve exact-identifier matching without
+        // requiring every word of the user's question to occur in a memory.
+        let terms: Vec<_> = query
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|word| word.chars().count() > 1)
+            .filter(|word| {
+                !matches!(
+                    word.to_ascii_lowercase().as_str(),
+                    "the"
+                        | "and"
+                        | "for"
+                        | "are"
+                        | "was"
+                        | "with"
+                        | "that"
+                        | "this"
+                        | "what"
+                        | "how"
+                        | "our"
+                        | "you"
+                        | "can"
+                        | "does"
+                        | "have"
+                        | "from"
+                        | "please"
+                )
+            })
+            .take(32)
+            .map(|word| format!("\"{word}\""))
+            .collect();
         let mut hits: BTreeMap<String, MemoryHit> = BTreeMap::new();
-        for (rank, record) in lexical.records.into_iter().enumerate() {
-            hits.insert(
-                record.id.clone(),
-                MemoryHit {
-                    record,
-                    rank_score: 1.0 / (60.0 + rank as f64),
-                },
-            );
+        if !terms.is_empty() {
+            let settings = self.settings(&access.workspace_id)?;
+            for privacy in [Privacy::Shared, Privacy::LocalOnly] {
+                if privacy == Privacy::LocalOnly && !access.management {
+                    continue;
+                }
+                let schema = privacy.schema();
+                let mut statement = self.connection.prepare(&format!(
+                    "SELECT r.body FROM {schema}.search JOIN {schema}.records r ON r.id=search.id
+                     WHERE search MATCH ?1 AND r.body IS NOT NULL AND (r.workspace=?2 OR r.workspace='')
+                     AND (?3=1 OR (r.kind='explicit' AND ?4=1) OR (r.kind='whole-session' AND ?5=1))
+                     ORDER BY bm25(search),r.id LIMIT 100"))?;
+                let rows = statement.query_map(
+                    params![
+                        terms.join(" OR "),
+                        access.workspace_id,
+                        access.management,
+                        settings.explicit.enabled,
+                        settings.whole_session.enabled
+                    ],
+                    |row| row.get::<_, String>(0),
+                )?;
+                for (rank, body) in rows.enumerate() {
+                    let record: MemoryRecord = serde_json::from_str(&body?)?;
+                    hits.insert(
+                        record.id.clone(),
+                        MemoryHit {
+                            record,
+                            rank_score: 1.0 / (60.0 + rank as f64),
+                        },
+                    );
+                }
+            }
         }
         if let Some((profile, vector)) = semantic {
             validate_vectors(&[vector.to_vec()], 1, profile.dimensions)?;

@@ -119,6 +119,18 @@ impl MemoryStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         authorize_kind(&tx, access, input.kind)?;
+        if !access.management {
+            ensure!(
+                input.scope == MemoryScope::Workspace(access.workspace_id.clone()),
+                "scope_denied"
+            );
+            ensure!(
+                !read_settings(&tx, &access.workspace_id)?
+                    .kind(input.kind)
+                    .local_only,
+                "protected_capture_unavailable: local-only capture requires guarded local execution"
+            );
+        }
         let source_key = input
             .source
             .as_ref()
@@ -287,6 +299,36 @@ impl MemoryStore {
                 "UPDATE {}.records SET body=NULL,revision=revision+1 WHERE id=?1",
                 record.privacy.schema()
             ),
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Narrow agent deletion: no elevated management authority, scope widening,
+    /// session suppression or protected access, even when given a guessed ID.
+    pub fn forget_explicit(
+        &mut self,
+        access: &MemoryAccess,
+        id: &str,
+        revision: u64,
+    ) -> Result<()> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let record = find_record(&tx, id)?.context("memory_not_found")?;
+        ensure!(
+            record.kind == MemoryKind::Explicit
+                && record.privacy == Privacy::Shared
+                && record.scope == MemoryScope::Workspace(access.workspace_id.clone()),
+            "memory_not_found"
+        );
+        authorize_kind(&tx, access, record.kind)?;
+        ensure!(record.revision == revision, "revision_conflict");
+        suppress_source(&tx, &record, None)?;
+        clear_derived(&tx, record.privacy, id)?;
+        tx.execute(
+            "UPDATE main.records SET body=NULL,revision=revision+1 WHERE id=?1",
             [id],
         )?;
         tx.commit()?;

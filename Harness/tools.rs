@@ -37,6 +37,7 @@ mod environment;
 mod evidence;
 mod external;
 mod io;
+mod memory;
 mod paths;
 pub mod repo_map;
 mod service_backends;
@@ -651,6 +652,9 @@ impl ToolRegistry {
             "web_read" => self.web_read(&object, cancel),
             "read_document" => self.read_document_tool(&object),
             "analyze_data" => self.analyze_data_tool(&object),
+            "memory_save" | "memory_search" | "memory_get" | "memory_forget" => {
+                self.execute_memory_tool(&call.name, &object)
+            }
             "artifact_info" | "read_artifact" | "search_artifact" => {
                 self.execute_artifact_tool(&call.name, &object)
             }

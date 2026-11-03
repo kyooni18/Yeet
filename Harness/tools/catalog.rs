@@ -48,7 +48,7 @@ pub(super) enum ExternalRoute {
 
 impl ToolCatalog {
     pub(super) fn execution_prohibited(&self, name: &str) -> bool {
-        (self.deny_writes && name == "apply_file_edits")
+        (self.deny_writes && matches!(name, "apply_file_edits" | "memory_save" | "memory_forget"))
             || (self.deny_shell
                 && matches!(name, "run_shell" | "shell_job" | "request_shell_permission"))
     }
@@ -259,6 +259,8 @@ mod tests {
             "shell_job",
             "request_shell_permission",
             "apply_file_edits",
+            "memory_save",
+            "memory_forget",
         ] {
             let call = ToolCall {
                 id: "test".into(),

@@ -43,6 +43,38 @@ fn privacy_scope_and_disabled_kinds_are_enforced_on_all_reads() {
         .unwrap();
     assert_eq!(page.records.len(), 1);
     assert_eq!(page.records[0].id, shared.id);
+    let hits = store
+        .recall(&consumer, "What does our SQLite store use?", None, 8)
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.id, shared.id);
+    assert!(
+        store
+            .forget_explicit(&consumer, &private.id, private.revision)
+            .is_err()
+    );
+    assert!(
+        store
+            .forget_explicit(
+                &MemoryAccess::shared_consumer("b".into()).unwrap(),
+                &shared.id,
+                shared.revision
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .forget_explicit(&consumer, &shared.id, shared.revision + 1)
+            .is_err()
+    );
+    let mut local_settings = store.settings("a").unwrap();
+    local_settings.explicit.local_only = true;
+    store.update_settings(&access("a"), local_settings).unwrap();
+    assert!(store.save(&consumer, input(Privacy::Shared)).is_err());
+    store
+        .forget_explicit(&consumer, &shared.id, shared.revision)
+        .unwrap();
+    assert!(store.get(&consumer, &shared.id).is_err());
     assert!(
         store
             .list(&access("b"), &MemoryFilter::default())
