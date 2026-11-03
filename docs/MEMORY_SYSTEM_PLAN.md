@@ -149,23 +149,56 @@ Provide resumable downloads, disk-space checks, cancellation, atomic installatio
 
 Fingerprint provider/endpoint identity or pinned local artifact, resolved model/revision, dimensions, normalization, pooling, query/document instructions and preprocessing version. Same dimensions do not imply compatible vectors. Keep profile-specific indexes and query each with its matching encoder. A model change starts resumable reindexing; atomically activate a completed generation, retain the old index until cutover, and expose progress. Local-only data never participates in a cloud reindex. Endpoint/model aliases that change without a stable revision need explicit invalidation/versioning policy.
 
-## 9. Delivery checkpoints
+## 9. Memory management view
+
+Provide one memory management destination, accessible through both entry points:
+
+- `/memories` opens memory management directly.
+- `/settings` exposes the same destination and memory configuration, not a separate copy of the manager or its state.
+
+Treat these as user navigation commands, not prompts submitted to the model. Both entry points use the same core commands, permissions and authoritative state. This specifies functional requirements only; visual structure and layout remain subject to the user's design.
+
+### Browse and inspect
+
+- List and search both explicit and whole-session memories, with pagination and filters for kind, workspace/global scope, source session, privacy and lifecycle/indexing status.
+- Show text, tags, dates, privacy, embedding profile/status and provenance; allow opening permitted source excerpts or sessions.
+- Show pending/failed indexing, blocked local-model setup, download/reindex progress and retry actions. Keep canonical text inspectable even when embeddings are unavailable.
+- Management search is local by default (metadata/FTS), so opening or searching the view does not silently send its query or memory text to a cloud model. Protected content is visible only through an authorized management client; a cloud generation provider never receives it. Management authorization is separate from model/tool visibility.
+
+### Edit and delete
+
+- Edit explicit memory text/tags and permitted scope, saving a new revision and re-embedding changed text. Exclude obsolete text/vectors immediately; use optimistic revision checks to avoid overwriting concurrent changes.
+- Allow correction of whole-session memory through a durable edited override linked to its source, without rewriting the exact transcript. Ingestion and reindexing must honor overrides and suppression markers so the original indexed text does not return. Identify edited excerpts as edited, not verbatim transcript evidence; explain that the original transcript remains until separately deleted.
+- Delete individual records, selected records or a filtered set with a clear confirmation for bulk/destructive actions. Explain whether only memory, its derived records or source sessions are affected. Removing a session chunk leaves a suppression marker so reconciliation cannot silently recreate it; source-session deletion remains a separate explicit action.
+
+### Settings and privacy actions
+
+- Independently enable/disable explicit memory and whole-session memory. Disabling stops capture and retrieval for that kind but retains stored data; deletion is separate.
+- Provide each kind's Local-only default plus per-record or selected-record privacy changes. Expose Local-only controls only with a trusted local generation configuration, as specified above. On cloud configurations, show existing privacy labels and a read-only explanation instead of a Local-only toggle.
+- Making a shared record local-only immediately excludes it from shared retrieval and cancels/fences queued cloud jobs; propagate protection to retained derivatives, move it into the protected partition and rebuild with local embeddings if needed. Warn that prior cloud disclosure cannot be undone and already dispatched requests cannot be recalled.
+- Making a protected record shared is explicit declassification, not an ordinary unconfirmed switch. Preview the affected content and derivatives, require user confirmation and retain protection on anything not explicitly authorized. Do not mark an already tainted conversation cloud-safe merely because a record changed privacy.
+- Offer embedding-profile selection, managed local-model download/removal, indexing retry/rebuild and retention/backfill controls. Require disclosure before any action that newly sends existing text to cloud embedding. All operations enforce policy in Rust, not only through disabled frontend controls.
+
+Expose frontend-neutral paginated list/get/update/delete, settings, privacy-change preview/confirm and job/status contracts through the existing core/Remote boundaries. These are user management operations, not agent tools with unrestricted administrative authority. Remote clients must have explicit management authorization before receiving protected content; merely selecting a local chat provider does not authorize an attached client. Avoid memory text in navigation parameters, ordinary telemetry or logs.
+
+## 10. Delivery checkpoints
 
 1. **Contracts and technical spike**: settle provider trust/egress metadata, settings, schemas, deletion semantics and exact local model/runtime compatibility. Verify existing cloud embedding APIs with supported credentials and review logging. No UI design work.
 2. **Store and explicit memory**: local canonical text, privacy partitions, scopes, FTS, lifecycle tools and policy enforcement. Add local model installation/inference and one verified cloud adapter; embedding jobs remain resumable. Ship explicit semantic retrieval once both lanes are validated.
 3. **Whole-session ingestion**: durable cursors, chunking/provenance, crash reconciliation, edit/regenerate and retention handling. Index new opted-in sessions first; backfill is separately authorized.
 4. **Retrieval and session safety**: hybrid search, bounded append-only insertion, source citations and protected-history provider-switch enforcement across all request paths. Keep cross-session auto-retrieval gated until these protections pass.
-5. **Product integration**: expose settings/status/management through core and Remote contracts; implement frontend controls only after the user supplies or requests the design. Tune chunking and retrieval with a small representative corpus, then consider summaries/ANN indexes.
+5. **Product integration**: expose settings/status/management through core and Remote contracts, including the shared memory management destination accessible via `/settings` and `/memories`. Implement frontend controls against the user's supplied/requested design. Tune chunking and retrieval with a small representative corpus, then consider summaries/ANN indexes.
 
 Meaningful commits should separate contracts/store, embedding execution, ingestion and retrieval integration. Do not ship the intermediate storage steps as a claim of end-to-end Local-only safety.
 
-## 10. Focused acceptance checks
+## 11. Focused acceptance checks
 
 Keep tests small and behavior-driven:
 
 - **Privacy/egress**: a transport spy sees no protected document/query/context in cloud embeddings, generation, retries or background calls; changing a toggle or switching providers cannot downgrade existing taint. Cover unknown “local” endpoints and cloud fallback rejection.
 - **Capture integrity**: completed source groups are covered exactly once after reconciliation; interrupted tool exchanges, crashes, rollover and edit/regenerate do not drop coverage or return stale revisions.
 - **Scope/lifecycle**: unrelated workspaces and protected IDs cannot be fetched by direct ID or vector search; superseded/deleted records and their derived indexes stop appearing immediately.
+- **Management**: `/settings` and `/memories` reach the same authoritative manager without model dispatch; edits reject stale revisions, deleted/overridden chunks stay suppressed after reindex, and privacy changes fence queued cloud jobs and require explicit declassification. Unauthorized management clients cannot read protected text.
 - **Embedding compatibility**: pin a tiny fixture per supported profile for query/document formatting, dimensions and preprocessing; a profile change cannot mix vector spaces. Managed inference works without an external local provider and offline after installation.
 - **Retrieval quality**: a small fixed corpus includes exact preferences, paraphrased decisions, tool outcomes, conflicting old facts and overlapping chunks. Check relevant sources fit the context budget without rewriting the submitted prefix.
 
