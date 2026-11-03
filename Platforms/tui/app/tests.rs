@@ -741,6 +741,10 @@ fn terminal_editing_chords_map_without_stealing_empty_input_scroll_keys() {
         ..App::default()
     };
 
+    assert!(app.handle_chat_editing_key(&ctrl('v')));
+    assert!(app.take_clipboard_paste_request());
+    assert!(!app.take_clipboard_paste_request());
+    assert_eq!(app.input, "one two");
     assert!(app.handle_chat_editing_key(&ctrl('a')));
     assert_eq!(app.cursor, 0);
     assert!(app.handle_chat_editing_key(&ctrl('e')));

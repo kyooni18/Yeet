@@ -11,6 +11,13 @@ and clear have explicit enabled states, and pointer movement highlights the
 active menu item. Message edit/regenerate controls remain available below the
 clipboard actions.
 
+Ctrl+V in the focused composer requests system clipboard paste through the same
+path as the context menu; terminal bracketed paste remains supported. Cmd+C/V
+are supported when the terminal forwards those keys. Ctrl+C copies an active
+transcript selection; without a selection it still interrupts/quits.
+The default light palette uses dark semantic text colors (including success,
+warning, and user labels), not bright icon colors on near-white surfaces.
+
 Tool calls use the existing compact transcript rows, not raw JSON as their
 primary presentation. Each call shows its authoritative lifecycle status:
 Preparing, running, Awaiting approval, Completed, Failed, Timed out, Cancelled,

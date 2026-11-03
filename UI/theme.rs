@@ -210,14 +210,14 @@ impl Palette {
             muted: rgb(94, 92, 100),
             border: rgb(192, 191, 188),
             border_dim: rgb(218, 216, 213),
-            accent: rgb(53, 132, 228),
+            accent: rgb(26, 95, 180),
             accent_hot: rgb(28, 113, 216),
             accent_warm: rgb(145, 65, 172),
-            warning: rgb(229, 165, 10),
-            success: rgb(51, 209, 122),
+            warning: rgb(125, 83, 0),
+            success: rgb(24, 103, 53),
             text: rgb(46, 52, 54),
             text_dim: rgb(94, 92, 100),
-            user: rgb(38, 162, 105),
+            user: rgb(24, 103, 53),
             user_surface: rgb(211, 244, 227),
             error: rgb(192, 28, 40),
         }
@@ -751,5 +751,42 @@ pub fn project_preferences(
             light_source,
         ),
         catalog: catalog(),
+    }
+}
+
+#[cfg(test)]
+mod readability_tests {
+    use super::*;
+
+    #[test]
+    fn default_light_text_roles_have_readable_contrast() {
+        let palette = Palette::adwaita();
+        let contrast = |foreground: Rgb, background: Rgb| {
+            let a = foreground.luminance();
+            let b = background.luminance();
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        for foreground in [
+            palette.text,
+            palette.text_dim,
+            palette.muted,
+            palette.accent,
+            palette.warning,
+            palette.success,
+            palette.error,
+        ] {
+            for background in [
+                palette.background,
+                palette.surface,
+                palette.surface_raised,
+                palette.code_background,
+            ] {
+                assert!(
+                    contrast(foreground, background) >= 4.5,
+                    "{foreground:?} is unreadable on {background:?}"
+                );
+            }
+        }
+        assert!(contrast(palette.user, palette.user_surface) >= 4.5);
     }
 }

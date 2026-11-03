@@ -28,6 +28,16 @@ real behavior warrants it rather than adding empty framework scaffolding.
 Read and maintain `TUI_WHITEBOARD.md` before structural UX changes. Keep stateful
 view tabs, contextual rails, and separate command-palette/view-switcher behavior.
 
+## Copy and paste
+
+Drag conversation text and press **Ctrl+C** to copy; right-click for **Copy
+message** (original Markdown), selection copy, and paste. **Ctrl+V** pastes into
+the focused composer. Terminal-native paste (usually Cmd+V or Ctrl+Shift+V) also
+works, including multiline bracketed paste. Cmd+C/V work when forwarded by the
+terminal. Without a selection Ctrl+C retains its interrupt/quit behavior.
+For terminal-native mouse selection, use your terminal's mouse-capture bypass
+modifier (often Shift; terminal-dependent).
+
 ## Managing sessions
 
 Open Sessions with **s** from unfocused chat (Esc leaves the composer), or submit

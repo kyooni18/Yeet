@@ -235,6 +235,7 @@ impl App {
     pub(super) fn handle_chat_editing_key(&mut self, event: &KeyEvent) -> bool {
         if event.modifiers.contains(KeyModifiers::CONTROL) {
             match event.code {
+                KeyCode::Char('v') => self.clipboard_paste_request = true,
                 KeyCode::Char('a') => self.cursor = 0,
                 KeyCode::Char('e') => self.cursor = self.input.chars().count(),
                 KeyCode::Char('b') if !self.input.is_empty() => {
