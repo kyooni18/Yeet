@@ -622,17 +622,16 @@ fn usage_command(args: &[String]) -> Result<()> {
         vec![match provider.as_str() {
             "codex" => "codex-cli".to_owned(),
             "claude" => "claude".to_owned(),
-            "google" => "gemini-web".to_owned(),
+            "google" => "gemini".to_owned(),
             other => other.to_owned(),
         }]
     } else {
         vec![
             "openai".to_owned(),
             "codex-cli".to_owned(),
-            "anthropic".to_owned(),
+            "claude-api".to_owned(),
             "claude".to_owned(),
             "gemini".to_owned(),
-            "gemini-web".to_owned(),
         ]
     };
 

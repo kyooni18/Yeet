@@ -44,7 +44,7 @@ export function createDefaultCore(options: DefaultCoreOptions = {}): CallCore {
   return new CallCore([
     new OpenAIProvider({ ...(openaiApiKey ? { apiKey: openaiApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new AntigravityProvider({ ...(antigravityApiKey ? { apiKey: antigravityApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
-    new AnthropicProvider({ ...(anthropicApiKey ? { apiKey: anthropicApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
+    new AnthropicProvider({ id: "claude-api", ...(anthropicApiKey ? { apiKey: anthropicApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new GeminiProvider({
       ...(geminiApiKey ? { apiKey: geminiApiKey } : {}),
       ...(geminiAccessToken ? { accessToken: geminiAccessToken } : {}),

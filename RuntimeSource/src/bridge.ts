@@ -261,9 +261,6 @@ async function refreshProvider(providerId: string): Promise<void> {
       }
       return;
     }
-    case "anthropic":
-      core.register(new AnthropicProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
-      return;
     case "claude":
       core.register(new AnthropicProvider({
         id: "claude",
@@ -285,15 +282,6 @@ async function refreshProvider(providerId: string): Promise<void> {
           ? { id: "gemini", accessToken: credential.accessToken, ...(credential.projectId ? { projectId: credential.projectId } : {}), apiCallLogger: writeApiCallLog }
           : { ...apiKeyOption(credential), apiCallLogger: writeApiCallLog },
       ));
-      return;
-    case "gemini-web":
-      core.register(new GeminiProvider({
-        id: "gemini-web",
-        codeAssist: true,
-        ...(credential?.kind === "oauth" ? { accessToken: credential.accessToken } : {}),
-        ...(credential?.kind === "oauth" && credential.projectId ? { projectId: credential.projectId } : {}),
-        apiCallLogger: writeApiCallLog,
-      }));
       return;
     case "openrouter":
       core.register(new OpenRouterProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
@@ -318,7 +306,7 @@ async function refreshProvider(providerId: string): Promise<void> {
   }));
 }
 
-for (const provider of ["openai", "codex-cli", "antigravity", "anthropic", "claude", "gemini", "gemini-web", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
+for (const provider of ["openai", "codex-cli", "antigravity", "claude", "gemini", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
 for (const provider of ["claude-api"]) await refreshProvider(provider);
 for (const provider of await auth.listCustomProviders()) {
   customProviders.set(provider.id, { kind: "openai-compatible", ...provider });

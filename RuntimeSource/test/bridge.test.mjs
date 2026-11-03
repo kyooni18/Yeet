@@ -62,6 +62,20 @@ function createBridge(environment = {}) {
   return { child, send, waitFor, close };
 }
 
+test("bridge excludes retired duplicate providers", async (t) => {
+  const bridge = createBridge();
+  t.after(() => bridge.child.kill());
+  bridge.send({ v: 1, id: "providers", op: "list-providers" });
+  const response = await bridge.waitFor((message) => message.id === "providers");
+  assert.equal(response.type, "providers");
+  assert.ok(!response.providers.includes("anthropic"));
+  assert.ok(!response.providers.includes("gemini-web"));
+  for (const provider of ["claude", "claude-api", "gemini"]) {
+    assert.ok(response.providers.includes(provider));
+  }
+  await bridge.close();
+});
+
 test("bridge exposes complete and stream over NDJSON", async (t) => {
   const server = http.createServer(async (req, res) => {
     let body = "";
