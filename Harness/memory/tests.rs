@@ -440,7 +440,7 @@ fn vector_schema_upgrade_preserves_canonical_text() {
             .connection
             .query_row("PRAGMA main.user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
     reopened
         .delete(&access("a"), &record.id, record.revision)

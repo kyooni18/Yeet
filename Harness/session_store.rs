@@ -237,7 +237,19 @@ impl SessionStore {
     }
 
     pub fn save(&self, session: &StoredSession) -> Result<()> {
-        self.serialized_session(&session.id, true, || self.save_unlocked(session))
+        self.serialized_session(&session.id, true, || self.save_unlocked(session))?;
+        // The transcript generation has committed and its filesystem locks are
+        // released. Canonical memory ingestion is optional and offline; failed
+        // ingestion must never turn a successful transcript save into failure.
+        // Reconciliation can retry from the independent committed transcript.
+        if let Some(config) = self.directory.parent() {
+            let directory = config.join("memory");
+            if directory.join("shared.sqlite3").exists() {
+                let _ = crate::harness::memory::MemoryStore::open(&directory)
+                    .and_then(|mut memory| memory.capture_session(session));
+            }
+        }
+        Ok(())
     }
 
     fn save_unlocked(&self, session: &StoredSession) -> Result<()> {
@@ -740,6 +752,149 @@ mod tests {
             disabled_capabilities: Vec::new(),
             permission_grants: Vec::new(),
         }
+    }
+
+    #[test]
+    fn committed_memory_capture_is_idempotent_and_never_revives_overrides_or_protected_sources() {
+        use crate::harness::memory::*;
+        use crate::model::ConversationKind;
+        let temp = tempfile::tempdir().unwrap();
+        let mut memory = MemoryStore::open(&temp.path().join("memory")).unwrap();
+        let access = MemoryAccess::local_management("workspace".into()).unwrap();
+        let mut settings = memory.settings("workspace").unwrap();
+        settings.whole_session.enabled = true;
+        memory.update_settings(&access, settings).unwrap();
+        let sessions = SessionStore::new(temp.path());
+        let mut saved = session("capture", temp.path(), Some("workspace".into()));
+        saved.conversation = vec![
+            ConversationEntry {
+                id: "user-1".into(),
+                kind: ConversationKind::User {
+                    content: "Use SQLite".into(),
+                },
+            },
+            ConversationEntry {
+                id: "reasoning-1".into(),
+                kind: ConversationKind::Reasoning {
+                    content: "hidden reasoning must not be indexed".into(),
+                    summary: None,
+                },
+            },
+            ConversationEntry {
+                id: "answer-1".into(),
+                kind: ConversationKind::Assistant {
+                    content: "Confirmed durable storage".into(),
+                    tool_calls: vec![],
+                },
+            },
+        ];
+        saved.runs.push(StoredRun {
+            id: "run-1".into(),
+            kind: "agent".into(),
+            status: RunStatus::Running,
+            started_at: Utc::now(),
+            finished_at: None,
+            model: "test".into(),
+            history_start: Some(0),
+            conversation_start: Some(0),
+            user_entry_id: Some("user-1".into()),
+            error: None,
+        });
+        sessions.save(&saved).unwrap();
+        assert!(
+            memory
+                .list(&access, &MemoryFilter::default())
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        saved.runs[0].status = RunStatus::Completed;
+        saved.updated_at = Utc::now();
+        sessions.save(&saved).unwrap();
+        let captured = memory
+            .list(&access, &MemoryFilter::default())
+            .unwrap()
+            .records;
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].text.contains("SQLite"));
+        assert!(!captured[0].text.contains("hidden reasoning"));
+        sessions.save(&saved).unwrap();
+        assert_eq!(
+            memory
+                .list(&access, &MemoryFilter::default())
+                .unwrap()
+                .records[0]
+                .id,
+            captured[0].id
+        );
+        saved.conversation[0].kind = ConversationKind::User {
+            content: "Use PostgreSQL instead".into(),
+        };
+        saved.updated_at = Utc::now();
+        sessions.save(&saved).unwrap();
+        let replaced = memory
+            .list(&access, &MemoryFilter::default())
+            .unwrap()
+            .records;
+        assert_eq!(replaced.len(), 1);
+        assert!(replaced[0].text.contains("PostgreSQL"));
+        assert!(memory.get(&access, &captured[0].id).is_err());
+        let edited = memory
+            .edit(
+                &access,
+                &replaced[0].id,
+                replaced[0].revision,
+                "User correction".into(),
+                vec![],
+            )
+            .unwrap();
+        saved.conversation[0].kind = ConversationKind::User {
+            content: "Changed old transcript again".into(),
+        };
+        saved.updated_at = Utc::now();
+        sessions.save(&saved).unwrap();
+        let overrides = memory
+            .list(&access, &MemoryFilter::default())
+            .unwrap()
+            .records;
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].text, "User correction");
+        let protected = memory
+            .set_privacy(
+                &access,
+                &edited.id,
+                edited.revision,
+                Privacy::LocalOnly,
+                false,
+            )
+            .unwrap();
+        memory
+            .delete(&access, &protected.id, protected.revision)
+            .unwrap();
+        saved.conversation[0].kind = ConversationKind::User {
+            content: "Protected source must never reappear".repeat(1000),
+        };
+        saved.updated_at = Utc::now();
+        sessions.save(&saved).unwrap();
+        assert!(
+            memory
+                .list(&access, &MemoryFilter::default())
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        let mut historical = saved.clone();
+        historical.id = "before-opt-in".into();
+        historical.runs[0].started_at = Utc::now() - chrono::Duration::days(1);
+        sessions.save(&historical).unwrap();
+        assert!(
+            memory
+                .list(&access, &MemoryFilter::default())
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        assert_eq!(sessions.load(&saved.id).unwrap().conversation.len(), 3);
     }
 
     #[test]

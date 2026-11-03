@@ -48,7 +48,7 @@ impl MemoryStore {
             let version: i64 =
                 connection.query_row(&format!("PRAGMA {schema}.user_version"), [], |r| r.get(0))?;
             ensure!(
-                version <= 2,
+                version <= 3,
                 "memory database requires a newer Yeet version"
             );
         }
@@ -79,12 +79,15 @@ impl MemoryStore {
                     vector TEXT NOT NULL, PRIMARY KEY(id,fingerprint,start,end));
                  CREATE TABLE IF NOT EXISTS {schema}.jobs (
                     id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL);
-                 PRAGMA {schema}.user_version=2;"
+                 PRAGMA {schema}.user_version=3;"
             ))?;
         }
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS settings(workspace TEXT PRIMARY KEY, body TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY, body TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS profiles(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS capture_epochs(workspace TEXT PRIMARY KEY, since TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS captured_sessions(workspace TEXT NOT NULL, session TEXT NOT NULL,
+                 updated_at TEXT NOT NULL, PRIMARY KEY(workspace,session));",
         )?;
         tx.commit()?;
         Ok(Self { connection })
@@ -105,6 +108,10 @@ impl MemoryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = read_settings(&tx, &access.workspace_id)?;
         ensure!(current.revision == next.revision, "revision_conflict");
+        if next.whole_session.enabled && !current.whole_session.enabled {
+            tx.execute("INSERT INTO capture_epochs VALUES (?1,?2) ON CONFLICT(workspace) DO UPDATE SET since=excluded.since",
+                params![access.workspace_id, Utc::now().to_rfc3339()])?;
+        }
         next.revision += 1;
         tx.execute("INSERT INTO settings VALUES (?1,?2) ON CONFLICT(workspace) DO UPDATE SET body=excluded.body",
             params![access.workspace_id, serde_json::to_string(&next)?])?;
@@ -357,6 +364,17 @@ impl MemoryStore {
             privacy != Privacy::Shared || confirm_declassification,
             "consent_required"
         );
+        if privacy == Privacy::LocalOnly && record.source.is_some() {
+            // Protect the entire source episode across rechunking/revisions,
+            // not just this leaf. Otherwise a later transcript edit could
+            // silently republish overlapping protected text as shared memory.
+            let mut envelope = record.clone();
+            if let Some(source) = &mut envelope.source {
+                source.start = 0;
+                source.end = i64::MAX as u64;
+            }
+            suppress_source(&tx, &envelope, Some(&record.id))?;
+        }
         // Atomic attached rollback-journal commit: no crash can publish both
         // a stale shared copy and the protected revision.
         let key: Option<String> = tx.query_row(
@@ -498,7 +516,11 @@ fn suppress_source(
     Ok(())
 }
 
-fn suppressed(connection: &Connection, scope: &MemoryScope, source: &MemorySource) -> Result<bool> {
+pub(super) fn suppressed(
+    connection: &Connection,
+    scope: &MemoryScope,
+    source: &MemorySource,
+) -> Result<bool> {
     for privacy in [Privacy::Shared, Privacy::LocalOnly] {
         let found: bool = connection.query_row(&format!(
             "SELECT EXISTS(SELECT 1 FROM {}.suppressions WHERE workspace=?1 AND session=?2 AND window=?3 AND start<?5 AND end>?4)", privacy.schema()),
@@ -510,7 +532,7 @@ fn suppressed(connection: &Connection, scope: &MemoryScope, source: &MemorySourc
     Ok(false)
 }
 
-fn insert_record(
+pub(super) fn insert_record(
     tx: &Transaction<'_>,
     record: &MemoryRecord,
     source_key: Option<&str>,
@@ -559,7 +581,7 @@ fn insert_derived(tx: &Transaction<'_>, record: &MemoryRecord) -> Result<()> {
     Ok(())
 }
 
-fn clear_derived(tx: &Transaction<'_>, privacy: Privacy, id: &str) -> Result<()> {
+pub(super) fn clear_derived(tx: &Transaction<'_>, privacy: Privacy, id: &str) -> Result<()> {
     for table in ["search", "vectors", "jobs"] {
         tx.execute(
             &format!("DELETE FROM {}.{table} WHERE id=?1", privacy.schema()),

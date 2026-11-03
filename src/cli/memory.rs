@@ -23,6 +23,7 @@ const HELP: &str = "Native memory management (JSON output; current workspace):
   yeet memory privacy ID REVISION shared --confirm-declassification
   yeet memory settings [FILE|-]
   yeet memory profiles
+  yeet memory reconcile
   yeet memory probe-cloud PROFILE_ID PROVIDER/MODEL --allow-cloud
   yeet memory local catalog
   yeet memory local status MODEL
@@ -36,7 +37,9 @@ Text is stored locally; '-' reads stdin. Revision arguments prevent stale edits.
 Local-only content is not exposed to models in this initial backend checkpoint.
 Cloud probing sends only a bundled fixture, never your memories.
 Managed inference is CPU-native and offline after installation.
-Automatic agent capture/recall and visual management are not yet enabled.";
+Enabled shared memories support agent tools, automatic lexical recall and post-commit session capture.
+Reconcile retries eligible committed runs; it never backfills pre-enable history.
+Protected agent context, automatic semantic workers and visual management remain gated.";
 
 pub(super) fn run(args: &[String]) -> Result<()> {
     let parts: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -49,6 +52,13 @@ pub(super) fn run(args: &[String]) -> Result<()> {
     let access = MemoryAccess::local_management(id.clone())?;
     let mut store = MemoryStore::open(&ConfigStore::default().directory.join("memory"))?;
     match parts.as_slice() {
+        ["reconcile"] => {
+            let sessions =
+                crate::session_store::SessionStore::new(&ConfigStore::default().directory);
+            let captured =
+                store.reconcile_workspace(&sessions, &workspace, &AtomicBool::new(false))?;
+            print(&serde_json::json!({"captured":captured,"historicalBackfill":false}))
+        }
         ["list"] => print(&store.list(&access, &MemoryFilter::default())?),
         ["list" | "search", query] => print(&store.list(
             &access,

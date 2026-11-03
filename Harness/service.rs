@@ -192,6 +192,26 @@ impl HarnessService {
         let workers = WorkerRegistry::new(Vec::new())?;
         let store = SessionStore::new(&config.directory);
         store.prepare()?;
+        let memory_directory = config.directory.join("memory");
+        if memory_directory.join("shared.sqlite3").exists() {
+            let sessions = store.clone();
+            let workspace = workspace_root.clone();
+            // Never hold a live-state/session persistence lock or start a
+            // provider during optional restart reconciliation.
+            let _ = thread::Builder::new()
+                .name("memory-reconcile".into())
+                .spawn(move || {
+                    let _ = crate::harness::memory::MemoryStore::open(&memory_directory).and_then(
+                        |mut memory| {
+                            memory.reconcile_workspace(
+                                &sessions,
+                                &workspace,
+                                &AtomicBool::new(false),
+                            )
+                        },
+                    );
+                });
+        }
         let runtime_factory = AgentRuntimeFactory::new(
             bridge.clone(),
             workspace_root.clone(),

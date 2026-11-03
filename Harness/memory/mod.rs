@@ -1,6 +1,7 @@
 //! Native memory persistence and policy. Model access is shared-only until
 //! protected context provenance is enforced across every generation path.
 
+mod capture;
 mod chunking;
 mod cloud;
 mod embedding;
