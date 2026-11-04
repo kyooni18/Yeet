@@ -299,7 +299,7 @@ fn run_task(
                 }
             }
             Ok(format!(
-                "Indexed {indexed}; blocked/stale {blocked}. Text preserved. Agent recall currently lexical."
+                "Indexed {indexed}; blocked/stale {blocked}. Text preserved. Explicit agent search uses assigned local profiles; automatic recall stays lexical."
             ))
         }
         MemoryTask::Reconcile => {

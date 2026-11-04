@@ -491,3 +491,12 @@ Supports browse/search, kind/privacy filters, pagination, full text/source inspe
 Local model download/preparation/fixture validation, cloud fixture probing, managed-local indexing, model removal and committed-history reconciliation run as explicit cancellable background tasks. Cloud consent is fixture-only, not consent to upload memories. Model prep is never a render-time download; removal preserves canonical text. Local preparation currently targets the one validated MiniLM manifest. Native app/web visual management and authenticated Remote management are not shipped.
 
 Validated: all-targets Rust check; 9 memory tests plus post-commit capture regression; shared composer/settings tests (4/5); one focused terminal regression exercising both entry-point effects (no Harness/model command), literal editing, typed delete/declassification confirmation, protected text absence from wire state and narrow/wide rendering. Strict clippy finds only the previously recorded unrelated tool_protocol/editing warnings after fixing new-module lints. TUI whiteboard updated. Foundation Memory is available again and implementation context has been recorded there.
+
+
+### Explicit shared hybrid search checkpoint
+
+`memory_search` now uses enabled kinds' assigned managed-local profiles for offline query embeddings and reciprocal-rank hybrid retrieval. Multiple profiles are loaded serially; duplicate records keep their best fused rank rather than receiving duplicate votes. Only existing installations are used, exact encoder fingerprints must match, and missing models/oversized inputs fall back to lexical retrieval without downloads or cloud calls. Protected data remains unavailable. Consumer semantic retrieval now fences candidates by the kind's selected profile, so an old vector space cannot remain active merely because its vectors still exist. Administrative cross-profile inspection is unchanged.
+
+Automatic turn recall stays lexical: loading an encoder synchronously on every turn is intentionally avoided. Resident worker scheduling, cancellable query inference, cloud memory consent/dispatch and protected-context egress enforcement remain outstanding. Explicit searches currently pay per-call model loading cost; this is a functional checkpoint, not the completed worker/release gate.
+
+Validated: all 9 focused memory tests, including selected-profile semantic authorization assertions added to the existing vector lifecycle regression; `cargo check --all-targets`; formatting and `git diff --check`. No visual layout changes.

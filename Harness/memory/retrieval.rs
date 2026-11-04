@@ -248,6 +248,7 @@ impl MemoryStore {
             }
         }
         if let Some((profile, vector)) = semantic {
+            let settings = self.settings(&access.workspace_id)?;
             validate_vectors(&[vector.to_vec()], 1, profile.dimensions)?;
             let fingerprint = profile.fingerprint()?;
             let mut candidates = Vec::new();
@@ -274,6 +275,12 @@ impl MemoryStore {
                     let (body, values) = row?;
                     let record: MemoryRecord = serde_json::from_str(&body)?;
                     if authorize_kind(&self.connection, access, record.kind).is_err() {
+                        continue;
+                    }
+                    if !access.management
+                        && settings.kind(record.kind).shared_profile_id.as_deref()
+                            != Some(profile.id.as_str())
+                    {
                         continue;
                     }
                     let values: Vec<f32> = serde_json::from_str(&values)?;

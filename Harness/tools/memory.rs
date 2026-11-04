@@ -88,17 +88,19 @@ impl ToolRegistry {
                 json!({"id":record.id,"revision":record.revision,"indexingStatus":record.indexing_status})
             }
             "memory_search" => {
-                let hits = store.recall(
+                let (hits, mode) = search_shared_memories(
+                    &store,
                     &access,
+                    &store.settings(&ensure_workspace_id(&self.context.workspace_root)?)?,
                     string_arg(object, "query")?,
-                    None,
                     usize_arg(object, "limit").unwrap_or(8).clamp(1, 20),
+                    &ConfigStore::default().directory,
                 )?;
                 let excerpts: Vec<_> = hits
                     .into_iter()
                     .map(|hit| excerpt(hit.record, 0, 1024))
                     .collect();
-                json!({"mode":"lexical","memories":excerpts,"untrustedHistoricalData":true})
+                json!({"mode":mode,"memories":excerpts,"untrustedHistoricalData":true})
             }
             "memory_get" => {
                 let record = store.get(&access, string_arg(object, "id")?)?;
@@ -121,6 +123,76 @@ impl ToolRegistry {
         };
         Ok(serde_json::to_string(&value)?)
     }
+}
+
+/// Explicit search may pay the cost of loading an already-installed encoder.
+/// Never install, probe a cloud endpoint, or elevate to management authority.
+/// Automatic turn recall deliberately stays lexical until a resident worker
+/// can provide bounded latency and cancellation.
+fn search_shared_memories(
+    store: &MemoryStore,
+    access: &MemoryAccess,
+    settings: &MemorySettings,
+    query: &str,
+    limit: usize,
+    directory: &std::path::Path,
+) -> Result<(Vec<MemoryHit>, &'static str)> {
+    let mut hits = store.recall(access, query, None, 20)?;
+    let profiles = store.profiles()?;
+    let models = ManagedModels::new(directory.join("memory-models"));
+    let mut selected = std::collections::BTreeSet::new();
+    for kind in [MemoryKind::Explicit, MemoryKind::WholeSession] {
+        let setting = settings.kind(kind);
+        if setting.enabled
+            && let Some(id) = &setting.shared_profile_id
+        {
+            selected.insert(id.clone());
+        }
+    }
+    let mut hybrid = false;
+    for id in selected {
+        let Some(profile) = profiles.iter().find(|profile| {
+            profile.id == id && profile.execution == EmbeddingExecution::ManagedLocal
+        }) else {
+            continue;
+        };
+        // A missing/removed installation, an oversized query, or an obsolete
+        // fingerprint degrades to lexical search; there is no network fallback.
+        let semantic = (|| -> Result<Vec<MemoryHit>> {
+            let model = local_model_catalog()
+                .iter()
+                .find(|m| m.repository == profile.model && m.revision == profile.resolved_model)
+                .context("unsupported managed encoder")?;
+            let encoder = LocalEmbedder::load(&models, model.id, profile.id.clone())?;
+            anyhow::ensure!(encoder.profile() == profile, "encoder fingerprint changed");
+            let vectors = encoder.embed(&[query.to_owned()], &AtomicBool::new(false))?;
+            store.recall(access, query, Some((profile, &vectors[0])), 20)
+        })();
+        if let Ok(semantic) = semantic {
+            hybrid = true;
+            for hit in semantic {
+                if let Some(old) = hits.iter_mut().find(|old| old.record.id == hit.record.id) {
+                    // Ranked spaces are not numerically compared by cosine;
+                    // keep the best reciprocal-rank score, not duplicate votes.
+                    old.rank_score = old.rank_score.max(hit.rank_score);
+                } else {
+                    hits.push(hit);
+                }
+            }
+        }
+    }
+    hits.sort_by(|a, b| {
+        b.rank_score
+            .total_cmp(&a.rank_score)
+            .then(a.record.id.cmp(&b.record.id))
+    });
+    hits.retain(|hit| {
+        store
+            .get(access, &hit.record.id)
+            .is_ok_and(|r| r.revision == hit.record.revision)
+    });
+    hits.truncate(limit);
+    Ok((hits, if hybrid { "hybrid-local" } else { "lexical" }))
 }
 
 fn excerpt(record: MemoryRecord, offset: usize, budget: usize) -> Value {

@@ -312,6 +312,38 @@ fn vector_spaces_are_immutable_and_late_results_cannot_revive_edits() {
         .unwrap();
     assert_eq!(hits[0].record.id, record.id);
     let mid = record.text.len() / 2;
+    let consumer = MemoryAccess::shared_consumer("a".into()).unwrap();
+    let mut settings = store.settings("a").unwrap();
+    settings.explicit.enabled = true;
+    store.update_settings(&access("a"), settings).unwrap();
+    // Stored vectors alone do not opt a kind into this encoder space.
+    assert!(
+        store
+            .recall(
+                &consumer,
+                "unrelated paraphrase",
+                Some((&profile, &[1.0, 0.1])),
+                5
+            )
+            .unwrap()
+            .is_empty()
+    );
+    let mut settings = store.settings("a").unwrap();
+    settings.explicit.shared_profile_id = Some(profile.id.clone());
+    store.update_settings(&access("a"), settings).unwrap();
+    assert_eq!(
+        store
+            .recall(
+                &consumer,
+                "unrelated paraphrase",
+                Some((&profile, &[1.0, 0.1])),
+                5
+            )
+            .unwrap()[0]
+            .record
+            .id,
+        record.id
+    );
     store
         .put_vectors(
             &access("a"),
