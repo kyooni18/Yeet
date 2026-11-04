@@ -84,6 +84,33 @@ Start the TUI:
 yeet
 ```
 
+### MCP client authentication
+
+Register an HTTP server, then sign in with OAuth or a bearer token/API key:
+
+```sh
+yeet mcp add-http example https://example.com/mcp
+yeet mcp login example                 # Browser OAuth with PKCE
+yeet mcp login example --token         # Hidden bearer token prompt
+printf '%s' "$MCP_TOKEN" | yeet mcp login example --token-stdin
+yeet mcp logout example                # Remove Yeet's saved credentials
+```
+
+OAuth discovers the server's protected-resource and authorization-server metadata,
+uses dynamic client registration when available, and refreshes expiring tokens.
+Use `--client-id ID` for a pre-registered public client, `--scope "scope1 scope2"`
+to select scopes, and `--no-browser` to open the displayed URL yourself. The callback
+uses a temporary loopback port on the machine running Yeet and expires after three
+minutes. Servers must support PKCE S256. Authentication requires HTTPS except for
+loopback development servers.
+
+Credentials are stored separately from server configuration in `mcp-credentials.json`
+in Yeet's configuration directory, with owner-only file permissions on Unix (not an
+encrypted keychain). They are bound to the configured server URL and omitted from
+`mcp list`. Logout removes these saved credentials; explicit `--header Authorization=...`
+configuration is independent and must be removed separately. API keys here are sent
+as `Authorization: Bearer ...`; use `add-http --header` for other authentication schemes.
+
 ### Experimental Remote WebUI
 
 Standard installers, release packages, and Docker builds omit the Remote WebUI. To build it into Yeet from a source checkout, first build the compatible Mün workspace and set `MUN_PATH` as described in [`docs/RELEASING.md`](docs/RELEASING.md), then run:

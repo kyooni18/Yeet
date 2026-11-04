@@ -1,3 +1,4 @@
+import { McpAuth } from "./mcp-auth.js";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -766,6 +767,7 @@ export interface McpManagerOptions {
 export class McpManager {
   readonly configDir: string;
   readonly configPath: string;
+  readonly auth: McpAuth;
   readonly #fetch: FetchLike;
   readonly #nativeAppApproval: NativeAppApprovalHandler | undefined;
   readonly #connections = new Map<string, McpConnection>();
@@ -775,6 +777,7 @@ export class McpManager {
     this.configDir = options.configDir ?? defaultConfigDirectory();
     this.configPath = join(this.configDir, "mcp.json");
     this.#fetch = options.fetch ?? fetch;
+    this.auth = new McpAuth(this.configDir, this.#fetch);
     this.#nativeAppApproval = options.nativeAppApproval;
   }
 
@@ -786,6 +789,21 @@ export class McpManager {
       if ((error as { code?: string }).code !== "ENOENT") throw error;
       await atomicJsonWrite(this.configPath, { version: 1, servers: {} } satisfies McpConfigFile);
     }
+  }
+
+  async login(name: string, options: { token?: string; clientId?: string; scope?: string; finish?: boolean; logout?: boolean }): Promise<string> {
+    await this.ensure();
+    const [server] = await this.#targetServers(name);
+    if (!server || server.transport !== "http") throw new McpError("MCP login requires an HTTP server");
+    await this.disconnect(name);
+    if (options.logout) { await this.auth.save(name); return ""; }
+    if (options.finish) { await this.auth.finish(name); return ""; }
+    if (options.token !== undefined) {
+      if (!options.token.trim() || /[\r\n]/.test(options.token)) throw new McpError("Invalid bearer token");
+      await this.auth.save(name, { url: server.url, access_token: options.token });
+      return "";
+    }
+    return this.auth.start(name, server.url, options.clientId, options.scope);
   }
 
   async setServer(configuration: McpServerConfiguration): Promise<McpServerConfiguration> {
@@ -804,6 +822,7 @@ export class McpManager {
     const config = await readConfig(this.configPath);
     const existed = name in config.servers;
     delete config.servers[name];
+    await this.auth.save(name);
     await atomicJsonWrite(this.configPath, config);
     return existed;
   }
@@ -990,6 +1009,8 @@ export class McpManager {
   }
 
   async close(): Promise<void> {
+    for (const pending of this.auth.pending.values()) pending.close();
+    this.auth.pending.clear();
     const connections = [...this.#connections.values()];
     this.#connections.clear();
     await Promise.all(connections.map((connection) => connection.close()));
@@ -1020,7 +1041,13 @@ export class McpManager {
     if (!configuration) throw new McpError(`Unknown MCP server: ${name}`, { server: name });
     const connection: McpConnection = configuration.transport === "stdio"
       ? new StdioMcpConnection(configuration, this.#nativeAppApproval)
-      : new HTTPMcpConnection(configuration, this.#fetch);
+       : new HTTPMcpConnection(configuration, async (input, init) => {
+        const token = await this.auth.bearer(name, configuration.url);
+        if (!token) return this.#fetch(input, init);
+        const headers = new Headers(init?.headers);
+        headers.set("Authorization", `Bearer ${token}`);
+        return this.#fetch(input, { ...init, headers, redirect: "error" });
+      });
     await withTimeout(
       (connectSignal) => connection.connect(connectSignal),
       MCP_CONNECT_TIMEOUT_MS,

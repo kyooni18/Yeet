@@ -71,6 +71,8 @@ pub const HELP: &str = r#"Usage:
   yeet mcp list
   yeet mcp add-stdio name command [args...]
   yeet mcp add-http name url [--header Name=Value]...
+  yeet mcp login name [--token|--token-stdin] [--client-id ID] [--scope SCOPE] [--no-browser]
+  yeet mcp logout name
   yeet mcp remove name
   yeet mcp tools [server]
   yeet mcp call server/tool [json-arguments]
@@ -916,6 +918,76 @@ fn mcp(args: &[String]) -> Result<()> {
                 }
                 Ok(())
             }
+            "login" | "logout" => {
+                let name = args
+                    .get(1)
+                    .ok_or_else(|| anyhow!("Usage: yeet mcp {sub} name"))?;
+                let mut options = Map::new();
+                let mut no_browser = false;
+                let mut index = 2;
+                while index < args.len() {
+                    match args[index].as_str() {
+                        "--token" | "--token-stdin" if sub == "login" => {
+                            if options.contains_key("token") {
+                                bail!("Specify only one token input option");
+                            }
+                            let token = if args[index] == "--token" {
+                                rpassword::prompt_password("MCP bearer token: ")?
+                            } else {
+                                let mut token = String::new();
+                                std::io::stdin().read_to_string(&mut token)?;
+                                token.trim_end_matches(['\r', '\n']).to_owned()
+                            };
+                            options.insert("token".into(), json!(token));
+                        }
+                        "--client-id" | "--scope" if sub == "login" => {
+                            let key = if args[index] == "--client-id" {
+                                "clientId"
+                            } else {
+                                "scope"
+                            };
+                            index += 1;
+                            let value = args
+                                .get(index)
+                                .ok_or_else(|| anyhow!("Missing value for {key}"))?;
+                            options.insert(key.into(), json!(value));
+                        }
+                        "--no-browser" if sub == "login" => no_browser = true,
+                        other => bail!("Unknown MCP {sub} option: {other}"),
+                    }
+                    index += 1;
+                }
+                if sub == "logout" {
+                    options.insert("logout".into(), json!(true));
+                }
+                let url = bridge.login_mcp(name, Value::Object(options))?;
+                if !url.is_empty() {
+                    eprintln!("Open this URL to sign in:\n{url}");
+                    if !no_browser {
+                        #[cfg(target_os = "macos")]
+                        let result = std::process::Command::new("open").arg(&url).spawn();
+                        #[cfg(target_os = "windows")]
+                        let result = std::process::Command::new("rundll32")
+                            .args(["url.dll,FileProtocolHandler", &url])
+                            .spawn();
+                        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                        let result = std::process::Command::new("xdg-open").arg(&url).spawn();
+                        if let Err(error) = result {
+                            eprintln!("Could not open browser: {error}. Open the URL manually.");
+                        }
+                    }
+                    bridge.login_mcp(name, json!({"finish": true}))?;
+                }
+                println!(
+                    "{} {name}",
+                    if sub == "logout" {
+                        "Logged out of"
+                    } else {
+                        "Logged in to"
+                    }
+                );
+                Ok(())
+            }
             "add-stdio" => {
                 if args.len() < 3 {
                     bail!("Usage: yeet mcp add-stdio name command [args...]");
@@ -1046,7 +1118,7 @@ fn mcp(args: &[String]) -> Result<()> {
                 Ok(())
             }
             _ => bail!(
-                "Usage: yeet mcp [list|add-stdio|add-http|remove|tools|call|resources|resource|prompts|prompt] ..."
+                "Usage: yeet mcp [list|login|logout|add-stdio|add-http|remove|tools|call|resources|resource|prompts|prompt] ..."
             ),
         }
     })();

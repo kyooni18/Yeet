@@ -576,6 +576,16 @@ impl BridgeClient {
     pub fn remove_skill(&self, skill: &str) -> Result<bool> {
         self.request_typed("skill-remove", field("skill", skill), "removed")
     }
+    pub fn login_mcp(&self, server: &str, options: Value) -> Result<String> {
+        let mut fields = field("server", server);
+        fields.insert("options".into(), options);
+        let frame = self.request_with_timeout("mcp-login", fields, Duration::from_secs(210))?;
+        Ok(frame
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned())
+    }
     pub fn list_mcp_servers(&self) -> Result<Vec<McpServerStatus>> {
         self.request_typed("mcp-list-servers", Map::new(), "servers")
     }

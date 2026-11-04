@@ -603,6 +603,9 @@ async function handle(command: BridgeCommand): Promise<void> {
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "skill-removed", removed: await skills.remove(command.skill) });
       return;
 
+    case "mcp-login":
+      write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-login", url: await mcp.login(command.server, command.options) });
+      return;
     case "mcp-list-servers":
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "mcp-servers", servers: await mcp.listServers() });
       return;

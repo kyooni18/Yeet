@@ -66,6 +66,7 @@ export type BridgeCommand =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-validate"; source: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-install"; source: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "skill-remove"; skill: string }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-login"; server: string; options: { token?: string; clientId?: string; scope?: string; finish?: boolean; logout?: boolean } }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-list-servers" }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-set-server"; server: McpServerConfiguration }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; op: "mcp-set-runtime-server"; server: McpServerConfiguration }
@@ -122,6 +123,7 @@ export type BridgeMessage =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill-file"; content: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill-install-result"; installed: string[]; destinationRoot: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "skill-removed"; removed: boolean }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-login"; url: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-servers"; servers: McpServerStatus[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-server"; server: McpServerConfiguration }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "mcp-removed"; removed: boolean }
