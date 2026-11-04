@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-04
+
+- Add private native memory storage, opt-in session episodes, scoped shared recall, and offline hybrid search with managed CPU embeddings.
+- Add a local TUI memory manager through settings and memory commands.
+- Add MCP CLI OAuth and bearer-token login.
+- Improve shell and file-edit reliability, whitespace-tolerant replacements, and ancestor instruction handling.
+- Preserve goal history and resume interrupted context rollover.
+- Improve TUI response selection, clipboard shortcuts, and default text contrast.
+- Remove duplicate Anthropic and Gemini Web provider registrations.
+
 ## [0.1.6] - 2026-10-30
 
 - Harden opt-in Remote: enforce browser Origin checks, throttle bad access keys, bind to loopback by default, and refuse unauthenticated non-loopback binds.
