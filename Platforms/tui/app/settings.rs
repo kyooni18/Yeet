@@ -130,6 +130,7 @@ impl App {
                 available: true,
                 supported_features: vec![SettingsFeature::ServiceBackends],
                 supported_destinations: vec![
+                    SettingsDestination::Memories,
                     SettingsDestination::Models,
                     SettingsDestination::Reasoning,
                     SettingsDestination::Agents,
@@ -180,6 +181,7 @@ impl App {
         }
         if let Some(destination) = prepared.effect.ui.destination {
             match destination {
+                SettingsDestination::Memories => self.open_memories(),
                 SettingsDestination::Models => self.open_models(backend)?,
                 SettingsDestination::Reasoning => self.open_reasoning(),
                 SettingsDestination::Agents => {

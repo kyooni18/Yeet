@@ -60,6 +60,7 @@ impl App {
                     ComposerDestination::Models,
                     ComposerDestination::Sessions,
                     ComposerDestination::Settings,
+                    ComposerDestination::Memories,
                     ComposerDestination::Reasoning,
                     ComposerDestination::Goal,
                     ComposerDestination::Agents,
@@ -119,6 +120,7 @@ impl App {
                 ComposerDestination::Models => self.open_models(backend)?,
                 ComposerDestination::Sessions => self.open_sessions(backend)?,
                 ComposerDestination::Settings => self.open_settings(backend)?,
+                ComposerDestination::Memories => self.open_memories(),
                 ComposerDestination::Reasoning => self.open_reasoning(),
                 ComposerDestination::Goal => self.open_goal(),
                 ComposerDestination::Agents => {

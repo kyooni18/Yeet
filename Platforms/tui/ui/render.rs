@@ -30,6 +30,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     app.sync_settings();
     app.toasts.expire(std::time::Instant::now());
     draw_content(frame, app);
+    if app.memory_manager.is_some() {
+        dialogs::draw_memories(frame, app);
+    }
     // Global runtime attention is workbench chrome and never selects a view.
     if !app
         .application

@@ -40,6 +40,7 @@ pub enum ComposerDestination {
     Models,
     Sessions,
     Settings,
+    Memories,
     Reasoning,
     Goal,
     Agents,

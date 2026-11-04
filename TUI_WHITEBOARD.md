@@ -66,3 +66,9 @@ archive using the existing export facility before removing the session.
 Loaded sessions cannot be moved or deleted; running sessions cannot be renamed.
 Rust Harness commands and SessionStore own validation and persistence. Both
 portrait and landscape pickers advertise the same management shortcut.
+
+# TUI memory management
+
+User approved building a functional terminal manager using existing TUI patterns while leaving the OpenPencil-controlled app blank. `/memories` and the Memories entry in `/settings` open one local overlay, never a model prompt or conversation entry. Protected text stays exclusively in the local manager and is never placed in shared Harness/Remote replay state.
+
+Use existing modal surfaces: j/k or arrows select; Enter inspects source/text; `/` edits search; kind/privacy filters and page controls are explicit. Add/edit uses a literal multiline draft with paste, Ctrl+U clear and Ctrl+S save. Delete and declassification require typed confirmation for captured IDs/revisions, including bulk selections. Escape cancels without saving. Local-only agent defaults stay unavailable until local provenance/egress guards are ready; administrative protection of stored text remains safe. Settings expose independent system enablement and validated embedding-profile selection. Model preparation must be an explicit confirmed background task, never a render-time download. Backend memory code owns storage, validation and policy; the TUI owns only input and rendering.

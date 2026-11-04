@@ -99,6 +99,22 @@ fn edits_privacy_moves_and_deletion_fence_stale_revisions() {
         )
         .unwrap();
     assert!(store.delete(&access("a"), &original.id, 1).is_err());
+    let second = store.save(&access("a"), input(Privacy::Shared)).unwrap();
+    assert!(
+        store
+            .delete_many(
+                &access("a"),
+                &[
+                    (second.id.clone(), second.revision),
+                    (original.id.clone(), 1)
+                ]
+            )
+            .is_err()
+    );
+    assert!(store.get(&access("a"), &second.id).is_ok());
+    store
+        .delete_many(&access("a"), &[(second.id.clone(), second.revision)])
+        .unwrap();
     let private = store
         .set_privacy(
             &access("a"),

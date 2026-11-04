@@ -156,6 +156,7 @@ impl SettingsState {
                             }
                         } else {
                             effect.ui.destination = Some(match id.as_str() {
+                                "memories" => SettingsDestination::Memories,
                                 "model" => SettingsDestination::Models,
                                 "reasoning" => SettingsDestination::Reasoning,
                                 "agents" => SettingsDestination::Agents,

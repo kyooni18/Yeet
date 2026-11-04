@@ -15,6 +15,7 @@ mod chat;
 mod composer;
 pub mod diff;
 mod input;
+pub(crate) mod memories;
 mod navigation;
 pub use navigation::WorkbenchTab;
 pub mod agent_group;
@@ -231,6 +232,7 @@ pub struct App {
     pub(crate) tab_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub(crate) view_targets: Vec<(ratatui::layout::Rect, WorkbenchTab)>,
     pub(crate) session_manager: Option<session_management::SessionManager>,
+    pub(crate) memory_manager: Option<memories::MemoryPanel>,
     pub(crate) session_searching: bool,
     pub popup_filter: String,
     pub popup_index: usize,
@@ -344,6 +346,7 @@ impl Default for App {
             tab_targets: Vec::new(),
             view_targets: Vec::new(),
             session_manager: None,
+            memory_manager: None,
             session_searching: false,
             popup_filter: String::new(),
             popup_index: 0,
@@ -539,6 +542,10 @@ impl App {
             self.question.paste(&question, text);
             return;
         }
+        if let Some(manager) = &mut self.memory_manager {
+            manager.paste(text);
+            return;
+        }
         if self.mode == Mode::Sessions
             && let Some(manager) = &mut self.session_manager
         {
@@ -685,7 +692,10 @@ impl App {
             event.modifiers.remove(KeyModifiers::SUPER);
             event.modifiers.insert(KeyModifiers::CONTROL);
         }
-        if self.vim_navigation_active() && event.modifiers.is_empty() {
+        if self.memory_manager.is_none()
+            && self.vim_navigation_active()
+            && event.modifiers.is_empty()
+        {
             event.code = match event.code {
                 KeyCode::Char('j') => KeyCode::Down,
                 KeyCode::Char('k') => KeyCode::Up,
@@ -739,6 +749,10 @@ impl App {
             return Ok(());
         }
 
+        if self.memory_manager.is_some() {
+            self.handle_memories_key(event);
+            return Ok(());
+        }
         if self.mode == Mode::Sessions && self.session_manager.is_some() {
             return self.handle_session_management_key(event, backend);
         }

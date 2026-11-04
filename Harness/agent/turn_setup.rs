@@ -78,10 +78,10 @@ impl AgentCoordinator {
         // Best-effort, local-only retrieval from the shared partition. Protected
         // recall remains unavailable until every retained-context egress path
         // can enforce provenance. Never replace or edit the cached prefix.
-        if !continuation {
-            if let Ok(Some(recall)) = self.registry.automatic_memory_recall(input, &self.history) {
-                self.history.push(Message::system(recall).request_only());
-            }
+        if !continuation
+            && let Ok(Some(recall)) = self.registry.automatic_memory_recall(input, &self.history)
+        {
+            self.history.push(Message::system(recall).request_only());
         }
         if let Some((_, block)) = goal_block {
             self.history

@@ -379,8 +379,9 @@ impl HarnessService {
             "/provider" => self.append_system("Use `yeet provider ...` for custom API endpoints."),
             "/login" => self.append_system("Use `yeet auth ...` for provider authentication."),
             "/settings" => self.append_system(
-                "Open /settings in the interactive TUI to manage runtime and application settings. Use /permissions for sandbox and permission settings.",
+                "Open /settings in the interactive TUI to manage runtime and application settings, including Memories. Use /memories for native memory management and /permissions for sandbox settings.",
             ),
+            "/memories" => self.append_system("Open /memories in the local interactive TUI, or use `yeet memory help`. Protected management data is never placed in chat or Remote replay."),
             "/permissions" => self.append_system(
                 "Open /permissions in the interactive TUI to manage sandbox and permission settings.",
             ),

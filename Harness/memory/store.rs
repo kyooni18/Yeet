@@ -108,6 +108,24 @@ impl MemoryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = read_settings(&tx, &access.workspace_id)?;
         ensure!(current.revision == next.revision, "revision_conflict");
+        for kind in [&next.explicit, &next.whole_session] {
+            for (id, protected) in [
+                (kind.shared_profile_id.as_ref(), false),
+                (kind.local_profile_id.as_ref(), true),
+            ] {
+                if let Some(id) = id {
+                    let body: Option<String> = tx
+                        .query_row("SELECT body FROM profiles WHERE id=?1", [id], |r| r.get(0))
+                        .optional()?;
+                    let profile: EmbeddingProfile =
+                        serde_json::from_str(&body.context("embedding_profile_not_ready")?)?;
+                    ensure!(
+                        !protected || profile.execution == EmbeddingExecution::ManagedLocal,
+                        "protected_profile_must_be_local"
+                    );
+                }
+            }
+        }
         if next.whole_session.enabled && !current.whole_session.enabled {
             tx.execute("INSERT INTO capture_epochs VALUES (?1,?2) ON CONFLICT(workspace) DO UPDATE SET since=excluded.since",
                 params![access.workspace_id, Utc::now().to_rfc3339()])?;
@@ -294,20 +312,29 @@ impl MemoryStore {
     }
 
     pub fn delete(&mut self, access: &MemoryAccess, id: &str, revision: u64) -> Result<()> {
+        self.delete_many(access, &[(id.to_owned(), revision)])
+    }
+
+    /// Preflight every captured revision before deleting anything. A stale
+    /// selection cannot partially erase a bulk action and then report failure.
+    pub fn delete_many(&mut self, access: &MemoryAccess, targets: &[(String, u64)]) -> Result<()> {
         ensure!(access.management, "management authorization required");
+        ensure!(
+            !targets.is_empty() && targets.len() <= 1000,
+            "invalid_bulk_selection"
+        );
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let record = managed_record(&tx, access, id, revision)?;
-        suppress_source(&tx, &record, None)?;
-        clear_derived(&tx, record.privacy, id)?;
-        tx.execute(
-            &format!(
-                "UPDATE {}.records SET body=NULL,revision=revision+1 WHERE id=?1",
-                record.privacy.schema()
-            ),
-            [id],
-        )?;
+        let records = targets
+            .iter()
+            .map(|(id, revision)| managed_record(&tx, access, id, *revision))
+            .collect::<Result<Vec<_>>>()?;
+        for record in records {
+            suppress_source(&tx, &record, None)?;
+            clear_derived(&tx, record.privacy, &record.id)?;
+            tx.execute(&format!("UPDATE {}.records SET body=NULL,revision=revision+1 WHERE id=?1 AND body IS NOT NULL",record.privacy.schema()),[&record.id])?;
+        }
         tx.commit()?;
         Ok(())
     }

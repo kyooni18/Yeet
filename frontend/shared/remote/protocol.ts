@@ -733,7 +733,7 @@ export interface ComposerContext { workspace: string; session_id: string | null;
 export type ComposerMode = { type: 'draft' } | { type: 'edit_last'; has_attachments: boolean }
 export interface ComposerAttachmentSnapshot { id: string; name: string; attachment_id: string | null; ready: boolean; error: string | null }
 export interface EditorSnapshot { context: ComposerContext; text: string; revision: number; mode: ComposerMode; attachments: ComposerAttachmentSnapshot[] }
-export type ComposerDestination = 'models' | 'sessions' | 'settings' | 'reasoning' | 'goal' | 'agents' | 'files' | 'views' | 'capabilities' | 'permissions' | 'status' | 'auth' | 'providers' | 'debate' | 'help'
+export type ComposerDestination = 'models' | 'sessions' | 'settings' | 'memories' | 'reasoning' | 'goal' | 'agents' | 'files' | 'views' | 'capabilities' | 'permissions' | 'status' | 'auth' | 'providers' | 'debate' | 'help'
 export interface ComposerPermissionTarget { kind: 'shell' | 'native_app'; id: string }
 export type ComposerAction =
   | { type: 'update_editor' | 'submit' | 'cancel_edit'; value: EditorSnapshot }
@@ -750,7 +750,7 @@ export interface ComposerSuggestion { command: string; description: string; dest
 export interface ComposerUiEffect { accepted_editor: EditorSnapshot | null; cancel_edit: EditorSnapshot | null; destination: ComposerDestination | null; replace_editor: { editor: EditorSnapshot; text: string } | null }
 
 export type SettingsIcon = 'appearance' | 'settings' | 'memory' | 'web' | 'model' | 'reasoning' | 'context' | 'theme' | 'policy' | 'agents' | 'permissions' | 'provider' | 'capabilities'
-export type SettingsDestination = 'models' | 'reasoning' | 'agents' | 'permissions' | 'auth' | 'providers' | 'capabilities'
+export type SettingsDestination = 'memories' | 'models' | 'reasoning' | 'agents' | 'permissions' | 'auth' | 'providers' | 'capabilities'
 export type SettingsEditorKind = 'context_length' | 'dark_theme' | 'light_theme' | 'web_endpoint'
 export type SettingsAction =
   | { type: 'select'; value: string | null }

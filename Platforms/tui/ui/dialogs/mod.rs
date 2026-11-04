@@ -10,9 +10,11 @@ use crate::{
 };
 #[path = "agent_group.rs"]
 mod agent_group;
+mod memories;
 #[path = "navigation.rs"]
 mod navigation;
 mod session_management;
+pub(crate) use memories::draw_memories;
 pub(crate) use session_management::draw_session_management;
 #[path = "status.rs"]
 mod status;

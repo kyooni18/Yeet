@@ -6,6 +6,7 @@ mod chunking;
 mod cloud;
 mod embedding;
 mod local;
+mod management;
 mod model_install;
 mod retrieval;
 mod store;
@@ -15,6 +16,7 @@ pub use chunking::{Chunk, chunk_text};
 pub use cloud::probe_cloud_profile;
 pub use embedding::{EmbeddingBatch, EmbeddingExecution, EmbeddingProfile, validate_vectors};
 pub use local::LocalEmbedder;
+pub use management::{LocalMemoryManager, MemoryTask};
 pub use model_install::{
     LocalModelManifest, ManagedModels, ModelArtifact, ModelInstallStatus, local_model_catalog,
 };

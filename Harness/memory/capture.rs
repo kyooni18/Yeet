@@ -82,10 +82,10 @@ impl MemoryStore {
                 |r| r.get(0),
             )
             .optional()?;
-        if let Some(previous) = previous {
-            if DateTime::parse_from_rfc3339(&previous)?.with_timezone(&Utc) > session.updated_at {
-                return Ok(0);
-            }
+        if let Some(previous) = previous
+            && DateTime::parse_from_rfc3339(&previous)?.with_timezone(&Utc) > session.updated_at
+        {
+            return Ok(0);
         }
 
         let mut episodes = BTreeMap::new();

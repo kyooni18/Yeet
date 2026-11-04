@@ -29,6 +29,11 @@ impl EmbeddingProfile {
     pub fn fingerprint(&self) -> Result<String> {
         ensure!(
             !self.id.is_empty()
+                && self.id.len() <= 128
+                && self
+                    .id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
                 && !self.source.is_empty()
                 && !self.model.is_empty()
                 && !self.resolved_model.is_empty()

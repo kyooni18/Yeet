@@ -39,7 +39,8 @@ Cloud probing sends only a bundled fixture, never your memories.
 Managed inference is CPU-native and offline after installation.
 Enabled shared memories support agent tools, automatic lexical recall and post-commit session capture.
 Reconcile retries eligible committed runs; it never backfills pre-enable history.
-Protected agent context, automatic semantic workers and visual management remain gated.";
+The local TUI manager opens via /memories or Settings → Manage memories.
+Protected agent context and automatic semantic workers remain gated.";
 
 pub(super) fn run(args: &[String]) -> Result<()> {
     let parts: Vec<&str> = args.iter().map(String::as_str).collect();

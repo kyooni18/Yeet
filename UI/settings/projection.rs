@@ -462,6 +462,12 @@ pub(super) fn project(
     let mut advanced = Vec::new();
     for (destination, id, label, icon) in [
         (
+            SettingsDestination::Memories,
+            "memories",
+            "Manage memories",
+            SettingsIcon::Memory,
+        ),
+        (
             SettingsDestination::Agents,
             "agents",
             "Agent Group",
