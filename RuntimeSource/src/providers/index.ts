@@ -2,6 +2,7 @@ export * from "./antigravity.js";
 export * from "./antigravity-local.js";
 export * from "./anthropic.js";
 export * from "./gemini.js";
+export * from "./mistral.js";
 export * from "./openai.js";
 export * from "./openai-chat.js";
 export * from "./opencode.js";

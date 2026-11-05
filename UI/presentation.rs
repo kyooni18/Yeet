@@ -8,6 +8,7 @@ pub fn provider_name(provider: &str) -> &str {
         "google" | "gemini" => "Gemini API",
         "gemini-web" => "Gemini Web",
         "antigravity" => "Google Antigravity",
+        "mistral" => "Mistral Vibe",
         "opencode" => "Opencode",
         "opencode-go" => "Opencode Go",
         "openrouter" => "Openrouter",

@@ -17,6 +17,7 @@ import { AntigravityProvider } from "./providers/antigravity.js";
 import { AntigravityLocalProvider } from "./providers/antigravity-local.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { GeminiProvider } from "./providers/gemini.js";
+import { MistralProvider } from "./providers/mistral.js";
 import { OpenAIChatProvider } from "./providers/openai-chat.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
@@ -283,6 +284,9 @@ async function refreshProvider(providerId: string): Promise<void> {
           : { ...apiKeyOption(credential), apiCallLogger: writeApiCallLog },
       ));
       return;
+    case "mistral":
+      core.register(new MistralProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
+      return;
     case "openrouter":
       core.register(new OpenRouterProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
       return;
@@ -306,7 +310,7 @@ async function refreshProvider(providerId: string): Promise<void> {
   }));
 }
 
-for (const provider of ["openai", "codex-cli", "antigravity", "claude", "gemini", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
+for (const provider of ["openai", "codex-cli", "antigravity", "claude", "gemini", "mistral", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
 for (const provider of ["claude-api"]) await refreshProvider(provider);
 for (const provider of await auth.listCustomProviders()) {
   customProviders.set(provider.id, { kind: "openai-compatible", ...provider });

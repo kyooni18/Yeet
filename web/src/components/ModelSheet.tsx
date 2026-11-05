@@ -18,7 +18,7 @@ function providerDisplayName(provider: string): string {
     case 'gemini': return 'Gemini API'
     case 'gemini-web': return 'Gemini Web'
     case 'xai': return 'xAI'
-    case 'mistral': return 'Mistral'
+    case 'mistral': return 'Mistral Vibe'
     case 'openrouter': return 'Openrouter'
     case 'groq': return 'Groq'
     case 'ollama': return 'Ollama'

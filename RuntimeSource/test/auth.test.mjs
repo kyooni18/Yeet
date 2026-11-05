@@ -135,6 +135,23 @@ test("OpenCode Zen and Go share OPENCODE_API_KEY and stored credentials", async 
 });
 
 
+test("Mistral credentials support environment and stored keys and reserve the provider id", async () => {
+  const auth = new AuthManager({ configDir: await temporaryConfig() });
+  const previous = process.env.MISTRAL_API_KEY;
+  try {
+    process.env.MISTRAL_API_KEY = "vibe-env";
+    assert.equal((await auth.status("mistral")).method, "environment");
+    assert.equal((await auth.resolve("mistral")).value, "vibe-env");
+    delete process.env.MISTRAL_API_KEY;
+    await auth.setApiKey("mistral", "vibe-stored");
+    assert.equal((await auth.resolve("mistral")).value, "vibe-stored");
+    await assert.rejects(auth.setCustomProvider({ id: "mistral", baseUrl: "http://localhost:8000/v1" }), /reserved/);
+  } finally {
+    if (previous === undefined) delete process.env.MISTRAL_API_KEY;
+    else process.env.MISTRAL_API_KEY = previous;
+  }
+});
+
 test("OpenRouter browser auth performs PKCE and stores the exchanged user key", async () => {
   const configDir = await temporaryConfig();
   let exchangeBody;

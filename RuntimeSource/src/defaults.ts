@@ -4,6 +4,7 @@ import type { FetchLike } from "./types.js";
 import { AntigravityProvider } from "./providers/antigravity.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { GeminiProvider } from "./providers/gemini.js";
+import { MistralProvider } from "./providers/mistral.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
 import { OpenRouterProvider } from "./providers/openrouter.js";
@@ -12,6 +13,7 @@ export interface DefaultCoreOptions {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   geminiApiKey?: string;
+  mistralApiKey?: string;
   antigravityApiKey?: string;
   geminiAccessToken?: string;
   geminiProjectId?: string;
@@ -35,6 +37,7 @@ export function createDefaultCore(options: DefaultCoreOptions = {}): CallCore {
   const openaiApiKey = options.openaiApiKey ?? env("OPENAI_API_KEY");
   const anthropicApiKey = options.anthropicApiKey ?? env("ANTHROPIC_API_KEY");
   const geminiApiKey = options.geminiApiKey ?? env("GEMINI_API_KEY");
+  const mistralApiKey = options.mistralApiKey ?? env("MISTRAL_API_KEY");
   const antigravityApiKey = options.antigravityApiKey ?? geminiApiKey;
   const opencodeApiKey = options.opencodeApiKey ?? env("OPENCODE_API_KEY");
   const opencodeGoApiKey = options.opencodeGoApiKey ?? opencodeApiKey;
@@ -42,6 +45,7 @@ export function createDefaultCore(options: DefaultCoreOptions = {}): CallCore {
   const geminiAccessToken = options.geminiAccessToken;
 
   return new CallCore([
+    new MistralProvider({ ...(mistralApiKey ? { apiKey: mistralApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new OpenAIProvider({ ...(openaiApiKey ? { apiKey: openaiApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new AntigravityProvider({ ...(antigravityApiKey ? { apiKey: antigravityApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new AnthropicProvider({ id: "claude-api", ...(anthropicApiKey ? { apiKey: anthropicApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
