@@ -10,6 +10,7 @@ import type { FetchLike } from "./types.js";
 import { defaultConfigDirectory } from "./platform.js";
 import { durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
 import { loginGeminiOAuth, refreshGeminiOAuth, setupGeminiCodeAssist } from "./gemini-oauth.js";
+import { loginMistral } from "./mistral-auth.js";
 import { AntigravityLocalClient } from "./antigravity-local.js";
 
 export type AuthMethod = "none" | "api-key" | "browser" | "environment";
@@ -423,6 +424,7 @@ export class AuthManager {
       createdAt: new Date().toISOString(),
     };
     await this.#writeCredentials(data);
+    this.#usageCache.delete(provider);
     return this.status(provider);
   }
 
@@ -503,6 +505,7 @@ export class AuthManager {
     delete data.providers[provider];
     if (provider === "gemini-web") delete data.oauthClients[provider];
     await this.#writeCredentials(data);
+    this.#usageCache.delete(provider);
     return this.status(provider);
   }
 
@@ -575,6 +578,9 @@ export class AuthManager {
         case "antigravity":
           usage = await this.#antigravityUsage();
           break;
+        case "mistral":
+          usage = await this.#mistralUsage();
+          break;
         default:
           usage = unavailableUsage(provider, "none", "No plan-usage adapter is available for this provider.");
           break;
@@ -595,6 +601,32 @@ export class AuthManager {
     const ttlMs = normalized === "claude" ? 5 * 60_000 : 60_000;
     this.#usageCache.set(normalized, { expiresAt: now + ttlMs, usage });
     return usage;
+  }
+
+  async #mistralUsage(): Promise<ProviderUsageStatus> {
+    const source = "mistral-billing-api";
+    const credential = await this.resolve("mistral");
+    if (!credential || credential.kind !== "api-key") return unavailableUsage("mistral", source, "Sign in to Mistral Vibe to view plan usage.");
+    const get = async (path: string): Promise<Record<string, unknown> | undefined> => {
+      try {
+        const response = await this.#fetch(`https://api.mistral.ai/v1/billing/${path}`, {
+          headers: { authorization: `Bearer ${credential.value}` }, redirect: "error", signal: AbortSignal.timeout(3000),
+        });
+        return response.ok ? asObject(await response.json()) : undefined;
+      } catch { return undefined; }
+    };
+    const [subscription, budget] = await Promise.all([get("subscription"), get("budget")]);
+    const plan = typeof subscription?.plan_name === "string" ? subscription.plan_name : undefined;
+    const vibe = asObject(budget?.vibe_budget);
+    const used = percent(vibe.usage_percentage);
+    if (used === undefined) return unavailableUsage("mistral", source, "Vibe usage is unavailable for this key or account; organization usage permission may be required.", plan);
+    const payg = vibe.payg_enabled ?? subscription?.vibe_payg_enabled;
+    return {
+      provider: "mistral", source, available: true, fetchedAt: new Date().toISOString(),
+      ...(plan ? { plan } : {}),
+      windows: [usageWindow("vibe_monthly", "Vibe monthly", used, resetIso(vibe.reset_at))],
+      ...(payg === true ? { message: "Pay-as-you-go is enabled; usage beyond the allowance is billed." } : {}),
+    };
   }
 
   async #openAIUsage(provider = "codex-cli"): Promise<ProviderUsageStatus> {
@@ -872,6 +904,14 @@ export class AuthManager {
   async loginInBrowser(provider: string, options: BrowserLoginOptions = {}): Promise<AuthStatus> {
     await this.ensure();
     switch (provider) {
+      case "mistral": {
+        const key = await loginMistral(this.#fetch, this.#openBrowser, options.timeoutMs);
+        const data = await this.#readCredentials();
+        data.providers.mistral = { type: "api-key", value: key, source: "browser", createdAt: new Date().toISOString() };
+        await this.#writeCredentials(data);
+        this.#usageCache.delete(provider);
+        return this.status(provider);
+      }
       case "openrouter":
         await this.#loginOpenRouter(options);
         return this.status(provider);

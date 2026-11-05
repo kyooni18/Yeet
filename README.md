@@ -86,7 +86,7 @@ yeet
 
 ### Mistral Vibe
 
-Use a Mistral API key (including a key created in the Mistral console under Code → Vibe CLI) with the `mistral` provider. Set `MISTRAL_API_KEY` in Yeet's environment, or save the key with `printf '%s' "$MISTRAL_API_KEY" | yeet auth set-key mistral`. Select an available `mistral/` model in the model picker. Yeet calls Mistral's hosted API directly and runs its own tools; it does not run the Vibe CLI or import its browser login/keyring credentials. Model access and usage depend on the key and account.
+Sign in from Provider settings or run `yeet auth login mistral` to open Mistral's browser sign-in and provision a Vibe key. Alternatively set `MISTRAL_API_KEY`, or save a key with `printf '%s' "$MISTRAL_API_KEY" | yeet auth set-key mistral`. Select an available `mistral/` model. Yeet calls Mistral's hosted API directly and runs its own tools; it does not run the Vibe CLI or import its keyring. The monthly Vibe allowance and plan are shown when the account and key permit access to Mistral's billing API (organization usage permission may be required). Model access and billing depend on the account.
 
 ### MCP client authentication
 
