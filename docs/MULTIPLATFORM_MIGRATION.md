@@ -14,6 +14,14 @@ The target dependency direction is `Platforms -> UI -> Harness`.
 This is an incremental migration, not a completed separation. A directory move
 alone does not establish the dependency boundary.
 
+## Current scope
+
+Native desktop application support has been removed at the user's request.
+There is no Tauri host, desktop IPC transport or desktop runtime staging.
+The CLI/TUI, browser Remote client, shared Rust UI/Harness and blank Expo
+mobile/web foundation remain. Tauri and desktop-host verification references
+in the evidence below are historical, not supported targets or remaining work.
+
 ## Current checkpoint
 
 `Harness/mod.rs` owns the public Shared/Embedded attachment API and the renamed
@@ -41,14 +49,13 @@ The working browser client remains in `web/`. `RemoteShell.tsx` renders ordered
 semantic views supplied by `UI/shell.rs`, reports viewport capabilities and sends
 shared shell actions. Rust owns panel visibility, dismissal priority and compact
 navigation interactions. Remote v1 adds per-client `ui_action`/`ui_state` messages;
-UI revisions do not advance Harness sequence/replay cursors. Tauri exposes the
-same shell state/actions/projection through its local adapter. Browser focus
-handles, DOM accessibility and native bridge lifecycle stay in adapters.
+UI revisions do not advance Harness sequence/replay cursors. Browser focus
+handles and DOM accessibility stay in adapters.
 
 `frontend/shared` shares Remote protocol, transport and streaming reconciliation.
 Sharing runtime DTOs alone does not share application UI. Expo/React Native is
-currently blank; Tauri hosts its web export and attaches an embedded Harness.
-`Sources/` contains empty Swift directories, not another active GUI frontend.
+currently blank and connects through Remote for mobile and web. There is no
+active native desktop GUI frontend.
 
 `app/ui/ContentView.ui` reserves the user's OpenPencil design. Do not invent a
 new design during structural migration. Preserve existing application behavior
@@ -69,8 +76,8 @@ this work does not introduce a parser or executable design-file runtime.
    Replace terminal-owned application decisions incrementally, retaining its
    keyboard, scrolling, selection and geometry behavior. Extract filesystem and
    Git operations currently performed by UI helpers into Harness services.
-4. Expose the same Rust UI state/actions/projection through additive Remote and
-   Tauri adapter surfaces. Remote UI state belongs to each client, independently
+4. Expose the same Rust UI state/actions/projection through additive Remote
+   adapter surfaces. Remote UI state belongs to each client, independently
    of shared runtime sessions. `RemoteHub` already maintains client/workspace
    runtimes and provides a useful integration boundary. Preserve existing v1
    streaming and reconnect behavior during rollout.
@@ -81,13 +88,13 @@ this work does not introduce a parser or executable design-file runtime.
    TypeScript application reducer that independently determines app structure.
 6. Move active adapters under `Platforms/`, resolve compatibility imports and
    remove obsolete facades after consumers migrate. Audit build scripts, asset
-   embedding, install/release workflows and Tauri resources when paths move.
+   embedding and install/release workflows when paths move.
 7. Verify the complete dependency direction and parity across actual consumers.
    Shared-state behavior tests, terminal rendering/interaction checks, browser
    integration checks and host builds must cover the migrated behavior. Keep
    tests focused on meaningful regressions, not redundant compile-time checks.
 
-## Evidence and continuity
+## Historical evidence and continuity
 
 The shared action compatibility test covers every existing navigation JSON form
 and a runtime command envelope. Stable tab lifecycle and declarative control

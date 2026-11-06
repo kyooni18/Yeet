@@ -1,7 +1,7 @@
 # Shared Rust Remote client
 
 These modules contain the existing Remote v1 contract and semantic client state,
-shared by the browser, Expo and desktop frontends. Rust remains authoritative for
+shared by the browser and Expo frontends. Rust remains authoritative for
 sessions, tools, permissions, providers, settings and agent execution. UI layout
 intent lives separately in `app/ui/`; these modules never interpret `.ui` files.
 
@@ -23,8 +23,8 @@ Only client/workspace/session identity is persisted; replay sequence/revision
 cursors remain in memory because a restarted client needs a fresh snapshot.
 
 `RemoteStore` receives a transport factory, frame scheduler and optional
-connectivity subscription. `RemoteClientTransport` is a structural contract so a
-local Tauri bridge can supply the same Rust state/events without a remote socket.
+connectivity subscription. `RemoteClientTransport` is a structural contract for
+Remote clients and test adapters.
 The store has no React dependency: frontend hooks should call their own React
 `useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot)`.
 The browser wrapper also exports a configurable `useRemote(store)` hook.

@@ -6,7 +6,7 @@ Read `app/ui/ContentView.ui` and the relevant `app/ui/**/*.ui` files before chan
 
 The `.ui` notation is an AI-readable design document. Never add a parser, compiler, runtime interpreter, generic renderer, or primitive-per-file framework unless explicitly requested. Platform behavior, accessibility, endpoints, authentication, storage, and rendering details belong in implementation code. Preserve sensible native platform behavior.
 
-Primary frontend: `frontend/react-native` (React Native / Expo). Desktop: React Native Web in Tauri 2. Keep `web` as the working compatibility client until migration parity is verified. Keep Rust core and existing Remote protocol authoritative; do not reimplement agent, tool, filesystem, or session business logic in TypeScript. Read `docs/FRONTEND_ARCHITECTURE.md` for migration boundaries.
+Primary frontend: `frontend/react-native` (React Native / Expo). Native desktop apps are not supported; do not reintroduce a desktop host or local GUI bridge. Keep `web` as the working compatibility client until migration parity is verified. Keep Rust core and existing Remote protocol authoritative; do not reimplement agent, tool, filesystem, or session business logic in TypeScript. Read `docs/FRONTEND_ARCHITECTURE.md` for migration boundaries.
 
 Use Foundation Memory to recall and preserve durable project knowledge, with project tags and context. Do not use Yeet-MCP for this frontend migration.
 

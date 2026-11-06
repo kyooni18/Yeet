@@ -59,7 +59,7 @@ pub enum HomeRow {
     Gap,
 }
 
-/// Owned projection suitable for Remote/Tauri transport and native renderers.
+/// Owned projection suitable for Remote transport and platform renderers.
 /// It preserves Home's existing content and labels without specifying layout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HomeView {

@@ -369,7 +369,7 @@ Use request IDs/idempotency where operations may replay. Confirmation tokens bin
 
 Return typed errors: revision conflict, scope denied, Local-only blocked, profile unready, consent required, model unavailable, quota exceeded and cancellation. Errors must not reveal protected text or cross-workspace record existence. Progress events contain bounded IDs/counts/state, not record bodies; reconnect retrieves a revisioned snapshot through existing protocol mechanisms.
 
-Rust owns pagination, filtering and mutations. `frontend/shared` carries contracts/client delivery, not another retrieval engine or policy reducer. Negotiate Remote capabilities/version handling so older clients cannot accidentally accept unsupported privacy actions. Tauri/browser transports use the same authority checks.
+Rust owns pagination, filtering and mutations. `frontend/shared` carries contracts/client delivery, not another retrieval engine or policy reducer. Negotiate Remote capabilities/version handling so older clients cannot accidentally accept unsupported privacy actions. Browser and mobile Remote transports use the same authority checks.
 
 ## 16. Concurrency, failures and resource limits
 
@@ -445,7 +445,7 @@ Integration points to re-inspect before coding:
 - Agent request assembly/history, detached/background helpers and workers: enforce append-only retrieval and the same egress policy on every path.
 - Project/application settings, `Harness/model.rs` and service settings: expose configured/effective references without secrets.
 - `UI/composer/state.rs`, `UI/application_session.rs`, shared settings and `Harness/service/commands.rs`: `/settings` already has interactive routing and a help fallback. Preserve it, add `/memories` consistently and route both to shared management, not a model prompt. Read/maintain `TUI_WHITEBOARD.md` before structural TUI changes.
-- `src/remote/protocol.rs`, UI hosts/transports, `frontend/shared/remote` and desktop bridge: negotiate capabilities and preserve per-client authority/projection boundaries.
+- `src/remote/protocol.rs`, UI hosts/transports, `frontend/shared/remote`: negotiate capabilities and preserve per-client authority/projection boundaries.
 - `app/ui/ContentView.ui` is reserved, with no supplied layout. Read eventual memory specs before React Native implementation; preserve `web` compatibility until parity is verified.
 
 Before each checkpoint, inspect current Git work/history and recall Foundation knowledge when that integration is available. Preserve unrelated work, add only meaningful behavioral tests and record durable decisions/results. Replace open validation gates with measured supported configurations as implementation proceeds; never describe planned behavior as shipped.

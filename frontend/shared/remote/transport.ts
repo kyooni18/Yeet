@@ -381,7 +381,7 @@ export class RemoteTransport {
   }
 }
 
-/** Semantic transport contract also implemented by the local desktop bridge. */
+/** Semantic transport contract for Remote clients and test adapters. */
 export type RemoteClientTransport = Pick<RemoteTransport,
   'connect' | 'send' | 'close' | 'markApplied' | 'switchWorkspace' | 'reconnectAfterAuth'
 > & Partial<Pick<RemoteTransport, 'sendUi' | 'sendAgentUi' | 'sendConversationUi' | 'sendComposerUi' | 'sendSettingsUi' | 'sendToolbarUi' | 'sendHomeUi' | 'sendDiffUi' | 'requestWorkspaceFiles' | 'requestWorkspaceChanges'>>

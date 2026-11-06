@@ -23,8 +23,8 @@ Expo generates iOS/Android native projects from app.json. Native exports go to d
 
 ## Rust boundary
 
-The optional `src/state/client.ts` exposes the existing shared Remote store and a subscription hook. `connectRemote(origin, accessKey)` initializes network transport; under Tauri it accepts an existing workspace path and uses the local Rust Harness. No visual entry point invokes it automatically.
+The optional `src/state/client.ts` exposes the existing shared Remote store and a subscription hook. `connectRemote(origin, accessKey)` connects to a running Rust Remote server over network transport. No visual entry point invokes it automatically.
 
 The Remote adapter handles endpoint validation, session identity and cookies. Web must share the Rust Remote origin; native device authentication still needs device verification. No access key is persisted. Rust owns agent, session, tool, provider and filesystem logic. The existing `web` app remains operational and is the release default.
 
-`../desktop` contains the optional Tauri host foundation for macOS, Windows and Linux, with the existing Rust Harness and runtime assets. It will render the blank app until a design is implemented.
+There is no native desktop host or local GUI bridge. This foundation targets iOS, iPadOS, Android and web; desktop users can use the CLI/TUI or browser Remote client.

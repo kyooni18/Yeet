@@ -16,8 +16,8 @@ Harness no longer computes their appearance values. Runtime defaults and setting
 refreshes publish requested preferences with empty compatibility fields.
 
 `src/theme.rs` is a host compatibility adapter. ThemeProjectionCache loads
-resources through Harness and invokes shared UI palette projection. Remote,
-Tauri and TUI adapters hydrate settings before publishing or applying appearance.
+resources through Harness and invokes shared UI palette projection. Remote and
+TUI adapters hydrate settings before publishing or applying appearance.
 The cache avoids custom-theme filesystem reads on each streaming update;
 accepted RequestSettings, SetTheme and SetAppearance commands invalidate it so
 refreshing the same path reloads modified resources. Existing wire field names,
@@ -34,7 +34,7 @@ runtime/wire DTOs can eventually separate, and all graphical renderers still nee
 to consume shared appearance projections consistently. The rest of the
 multiplatform migration remains tracked in MULTIPLATFORM_MIGRATION.md.
 
-Verification for checkpoint aa5e4ad used an exact staged export. All-target
+Historical verification (before native desktop removal) for checkpoint aa5e4ad used an exact staged export. All-target
 compilation passed, as did ten theme behavior tests, five Remote checks, three
 Tauri checks and the native renderer check. Source-layout checks passed five of
 six gates; the remaining RuntimeSource gate reported the unchanged committed
