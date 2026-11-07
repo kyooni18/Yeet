@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-07
+
+- Add headless provider OAuth login with `--no-browser`, automatic SSH detection, and callback forwarding instructions.
+- Add scheduled agent tasks with persistent background execution and a terminal task manager, including one-time, interval, and quota-reset schedules.
+- Harden task editing, scheduler failover, running-session reservations, and task-state preservation across resets.
+- Add the Mistral Vibe API provider, browser sign-in, and plan usage reporting.
+- Remove the unsupported native desktop host and local GUI bridge; retain the existing Remote protocol and web compatibility client.
+
 ## [0.1.7] - 2026-11-04
 
 - Add private native memory storage, opt-in session episodes, scoped shared recall, and offline hybrid search with managed CPU embeddings.
