@@ -13,6 +13,7 @@ pub enum FrontendCommand {
     RequestTasks,
     ManageTask {
         action: crate::harness::tasks::TaskAction,
+        request_id: String,
     },
     StartDebate {
         topic: String,

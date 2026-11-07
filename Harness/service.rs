@@ -287,11 +287,11 @@ impl HarnessService {
     pub(crate) fn send(&mut self, command: FrontendCommand) -> Result<()> {
         match command {
             FrontendCommand::RequestTasks => {
-                self.manage_tasks(None);
+                self.manage_tasks(None, None);
                 Ok(())
             }
-            FrontendCommand::ManageTask { action } => {
-                self.manage_tasks(Some(action));
+            FrontendCommand::ManageTask { action, request_id } => {
+                self.manage_tasks(Some(action), Some(request_id));
                 Ok(())
             }
             FrontendCommand::Submit {

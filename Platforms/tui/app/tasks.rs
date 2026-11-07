@@ -22,6 +22,7 @@ pub(crate) struct TaskPanel {
     pub directories: Vec<String>,
     pub directory_index: usize,
     pub pending: bool,
+    pub pending_request: String,
     pub last_refresh: Instant,
 }
 impl TaskPanel {
@@ -45,6 +46,7 @@ impl TaskPanel {
             directories: vec![],
             directory_index: 0,
             pending: false,
+            pending_request: String::new(),
             last_refresh: Instant::now(),
         }
     }
@@ -62,8 +64,9 @@ impl TaskPanel {
                 .filter(|c| !c.is_control() || (self.field == 4 && *c == '\n')),
         );
     }
-    pub fn sync(&mut self, tasks: &[Task], notice: &Option<String>) {
+    pub fn sync(&mut self, tasks: &[Task], notice: &Option<String>, response_id: &Option<String>) {
         if self.pending
+            && response_id.as_deref() == Some(self.pending_request.as_str())
             && let Some(notice) = notice
         {
             self.pending = false;
@@ -265,7 +268,12 @@ impl App {
     pub(crate) fn open_tasks(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         backend.send(FrontendCommand::RequestTasks)?;
         self.task_manager = Some(TaskPanel::new(
-            std::env::current_dir()?,
+            self.state
+                .known_workspaces
+                .iter()
+                .find(|w| w.is_current)
+                .map(|w| PathBuf::from(&w.path))
+                .unwrap_or(std::env::current_dir()?),
             self.state.active_model.clone(),
         ));
         self.clear_transcript_selection();
@@ -273,7 +281,11 @@ impl App {
     }
     pub(crate) fn refresh_tasks(&mut self, backend: &mut Backend) -> anyhow::Result<()> {
         if let Some(panel) = &mut self.task_manager {
-            panel.sync(&self.state.scheduled_tasks, &self.state.tasks_notice);
+            panel.sync(
+                &self.state.scheduled_tasks,
+                &self.state.tasks_notice,
+                &self.state.tasks_response_id,
+            );
             if !panel.pending && panel.last_refresh.elapsed() >= Duration::from_secs(2) {
                 backend.send(FrontendCommand::RequestTasks)?;
                 panel.last_refresh = Instant::now();
@@ -289,12 +301,20 @@ impl App {
         let Some(panel) = &mut self.task_manager else {
             return Ok(());
         };
-        panel.sync(&self.state.scheduled_tasks, &self.state.tasks_notice);
+        panel.sync(
+            &self.state.scheduled_tasks,
+            &self.state.tasks_notice,
+            &self.state.tasks_response_id,
+        );
         match panel.key(event, &self.state.scheduled_tasks) {
             Ok((true, _)) => self.task_manager = None,
             Ok((false, Some(action))) => {
                 self.state.tasks_notice = None;
-                backend.send(FrontendCommand::ManageTask { action })?;
+                panel.pending_request = uuid::Uuid::new_v4().to_string();
+                backend.send(FrontendCommand::ManageTask {
+                    action,
+                    request_id: panel.pending_request.clone(),
+                })?;
                 panel.pending = true;
             }
             Err(error) => panel.error = Some(error.to_string()),
@@ -309,5 +329,91 @@ impl App {
             backend.send(FrontendCommand::RequestTasks)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn task_editor_browses_folders_keeps_literal_input_and_matches_save_ack() {
+        use crate::shared_ui::composer::*;
+        let state = crate::model::HarnessState::default();
+        let mut composer = ComposerState::default();
+        let effect = composer.apply(
+            ComposerAction::Submit(EditorSnapshot {
+                text: "/tasks".into(),
+                ..Default::default()
+            }),
+            &ComposerEnvironment {
+                supported_destinations: vec![ComposerDestination::Tasks],
+                ..Default::default()
+            },
+            &state,
+        );
+        assert_eq!(effect.ui.destination, Some(ComposerDestination::Tasks));
+        assert!(effect.command.is_none());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("child")).unwrap();
+        let mut panel = TaskPanel::new(dir.path().into(), "test/model".into());
+        let key = |c| KeyEvent::new(c, KeyModifiers::NONE);
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        panel.key(key(KeyCode::Char('n')), &[]).unwrap();
+        panel.paste("jk literal");
+        panel.key(key(KeyCode::Tab), &[]).unwrap();
+        panel.key(ctrl('b'), &[]).unwrap();
+        panel.key(key(KeyCode::Enter), &[]).unwrap();
+        panel.key(ctrl('s'), &[]).unwrap();
+        assert_eq!(
+            PathBuf::from(&panel.fields[1]),
+            dir.path().join("child").canonicalize().unwrap()
+        );
+        panel.field = 4;
+        panel.paste("Do work\n한글");
+        let (_, action) = panel.key(ctrl('s'), &[]).unwrap();
+        let Some(TaskAction::Save { id, draft }) = action else {
+            panic!("expected save")
+        };
+        assert!(id.is_none());
+        assert_eq!(draft.name, "jk literal");
+        assert_eq!(draft.prompt, "Do work\n한글");
+        panel.pending = true;
+        panel.pending_request = "request".into();
+        panel.sync(&[], &Some("Task updated".into()), &Some("stale".into()));
+        assert!(panel.pending);
+        panel.sync(&[], &Some("Tasks: invalid".into()), &Some("request".into()));
+        assert!(!panel.pending);
+        assert!(matches!(panel.stage, Stage::Edit));
+        assert_eq!(panel.fields[4], "Do work\n한글");
+        let mut app = App::default();
+        app.task_manager = Some(panel);
+        for (width, height) in [(120, 40), (44, 60), (80, 24)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|f| crate::tui::ui::draw(f, &mut app))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(text.contains("Tasks"));
+            assert!(text.contains("Editing Prompt"));
+            // Wide glyphs have blank continuation cells in ratatui's buffer.
+            assert!(
+                text.contains('한') && text.contains('글'),
+                "{width}x{height}: {text}"
+            );
+        }
+        let panel = app.task_manager.as_mut().unwrap();
+        panel.stage = Stage::Delete("captured-id".into());
+        assert!(panel.key(key(KeyCode::Enter), &[]).unwrap().1.is_none());
+        panel.text = "delete".into();
+        assert!(
+            matches!(panel.key(key(KeyCode::Enter), &[]).unwrap().1, Some(TaskAction::Delete { id }) if id == "captured-id")
+        );
     }
 }

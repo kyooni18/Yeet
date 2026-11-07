@@ -76,6 +76,7 @@ impl TaskStore {
     pub fn in_directory(directory: &Path) -> Result<Self> {
         std::fs::create_dir_all(directory)?;
         let db = Connection::open(directory.join("tasks.sqlite3"))?;
+        crate::platform::set_private_file(&directory.join("tasks.sqlite3"))?;
         db.busy_timeout(Duration::from_secs(5))?;
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS scheduled_tasks (id TEXT PRIMARY KEY, body TEXT NOT NULL)",
@@ -122,9 +123,10 @@ impl TaskStore {
                 {
                     bail!("Enter an agent prompt (not a slash command), up to 100 KB");
                 }
-                if !draft.model.contains('/') || draft.model.len() > 500 {
+                if draft.model.len() > 500 {
                     bail!("Model must be provider/model");
                 }
+                draft.model = crate::config::validate_model_id(&draft.model)?;
                 draft.folder = draft.folder.canonicalize()?;
                 if !draft.folder.is_dir() {
                     bail!("Folder must be a directory");
@@ -263,6 +265,17 @@ pub fn five_hour_reset(
         .min()
 }
 
+/// True when a durable host owns the global scheduler lease.
+pub fn scheduler_running() -> bool {
+    let path = ConfigStore::default()
+        .directory
+        .join("tasks.scheduler.lock");
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
+        return false;
+    };
+    matches!(fs2::FileExt::try_lock_exclusive(&file), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+}
+
 pub struct Scheduler {
     busy: Arc<AtomicBool>,
 }
@@ -285,6 +298,10 @@ impl Scheduler {
             .name("yeet-tasks".into())
             .spawn(move || {
                 let mut owner = false;
+                let (done_tx, done_rx) =
+                    std::sync::mpsc::channel::<(String, String, Option<String>)>();
+                let mut active = 0;
+                let mut completions = Vec::new();
                 loop {
                     let mut run = || -> Result<()> {
                         let mut store = TaskStore::in_directory(&directory)?;
@@ -295,7 +312,6 @@ impl Scheduler {
                         if !owner {
                             match fs2::FileExt::try_lock_exclusive(&lease) {
                                 Ok(()) => {
-                                    owner = true;
                                     for task in store.list()?.into_iter().filter(|t| t.running) {
                                         store.finish(
                                             &task.id,
@@ -303,6 +319,7 @@ impl Scheduler {
                                             task.session_id,
                                         )?;
                                     }
+                                    owner = true;
                                 }
                                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                                     return Ok(());
@@ -310,10 +327,40 @@ impl Scheduler {
                                 Err(error) => return Err(error.into()),
                             }
                         }
-                        if let Some(task) = store.claim(Utc::now())? {
+                        completions.extend(done_rx.try_iter());
+                        // Keep completions until durable settlement succeeds, even
+                        // across transient disk errors. Never replay the run.
+                        while let Some((id, result, session)) = completions.last() {
+                            store.finish(id, result, session.clone())?;
+                            completions.pop();
+                            active -= 1;
+                        }
+                        // Bound resource usage without letting one long job delay
+                        // all other due jobs. A given task can never overlap itself.
+                        while active < 4 {
+                            let Some(task) = store.claim(Utc::now())? else {
+                                break;
+                            };
                             thread_busy.store(true, Ordering::Relaxed);
-                            let (result, session_id) = execute(&task);
-                            store.finish(&task.id, &result, session_id)?;
+                            let id = task.id.clone();
+                            let sender = done_tx.clone();
+                            active += 1;
+                            if let Err(error) = thread::Builder::new()
+                                .name("yeet-task-run".into())
+                                .spawn(move || {
+                                    let (result, session) =
+                                        std::panic::catch_unwind(|| execute(&task)).unwrap_or_else(
+                                            |_| ("Failed: task runtime panicked".into(), None),
+                                        );
+                                    let _ = sender.send((task.id, result, session));
+                                })
+                            {
+                                completions.push((
+                                    id,
+                                    format!("Failed to start task: {error}"),
+                                    None,
+                                ));
+                            }
                         }
                         Ok(())
                     };
@@ -335,11 +382,7 @@ impl Scheduler {
 fn execute(task: &Task) -> (String, Option<String>) {
     let mut session_id = None;
     let result = (|| -> Result<()> {
-        let mut harness = Harness::embedded(&task.draft.folder)?;
-        harness.send(FrontendCommand::NewSession)?;
-        harness.send(FrontendCommand::SelectModel {
-            model: task.draft.model.clone(),
-        })?;
+        let mut harness = Harness::embedded_for_task(&task.draft.folder, &task.draft.model)?;
         harness.send(FrontendCommand::SetGoal { enabled: false })?;
         harness.send(FrontendCommand::Submit {
             text: task.draft.prompt.clone(),
@@ -498,5 +541,37 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+    #[test]
+    fn quota_uses_a_real_future_five_hour_reset_and_never_guesses() {
+        use crate::core::{ProviderUsageStatus, ProviderUsageWindow};
+        let now = Utc::now();
+        let reset = now + chrono::Duration::minutes(12);
+        let mut usage = ProviderUsageStatus {
+            provider: "test".into(),
+            available: true,
+            source: "api".into(),
+            fetched_at: now.to_rfc3339(),
+            plan: None,
+            windows: vec![ProviderUsageWindow {
+                id: "primary".into(),
+                label: "7d".into(),
+                used_percent: 100,
+                remaining_percent: 0,
+                resets_at: Some(reset.to_rfc3339()),
+            }],
+            message: None,
+        };
+        assert!(five_hour_reset(&usage, now).is_none());
+        usage.windows[0].label = "5h".into();
+        assert_eq!(five_hour_reset(&usage, now), Some(reset));
+        assert!(five_hour_reset(&usage, reset).is_none());
+        usage.available = false;
+        assert!(five_hour_reset(&usage, now).is_none());
     }
 }

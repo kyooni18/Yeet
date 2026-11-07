@@ -2,7 +2,27 @@ use super::*;
 use crate::harness::tasks::{Schedule, TaskAction, TaskStore, five_hour_reset};
 
 impl HarnessService {
-    pub(super) fn manage_tasks(&self, action: Option<TaskAction>) {
+    pub(crate) fn configure_scheduled_run(&mut self, model: &str) -> Result<()> {
+        let model = crate::config::validate_model_id(model)?;
+        self.new_session();
+        let mut shared = self.shared.lock_or_recover();
+        shared.state.active_model = model.clone();
+        shared.state.active_model_context_length = self
+            .config
+            .context_length_override(&model)?
+            .or(self.config.context_length(&model)?);
+        shared.state.current_context_tokens = None;
+        if !reasoning_levels_for_model(&model)
+            .contains(&shared.state.active_reasoning_level.as_str())
+        {
+            shared.state.active_reasoning_level = "auto".into();
+        }
+        drop(shared);
+        self.publish_state();
+        Ok(())
+    }
+
+    pub(super) fn manage_tasks(&self, action: Option<TaskAction>, request_id: Option<String>) {
         let mutation = action.is_some();
         let result = (|| -> Result<_> {
             let mut store = TaskStore::open()?;
@@ -22,6 +42,10 @@ impl HarnessService {
             store.list()
         })();
         let mut shared = self.shared.lock_or_recover();
+        if mutation {
+            shared.state.tasks_response_id = request_id;
+        }
+        shared.state.tasks_scheduler_running = crate::harness::tasks::scheduler_running();
         match result {
             Ok(tasks) => {
                 shared.state.scheduled_tasks = tasks;

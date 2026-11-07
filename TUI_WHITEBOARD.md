@@ -19,6 +19,9 @@ integration is installed. Overdue jobs run once on restart, intervals skip
 missed ticks, and interrupted claimed runs are not automatically replayed.
 Each run creates an independent saved session with existing sandbox policy;
 unattended permission/question prompts fail rather than silently approving.
+Up to four jobs execute concurrently, never overlapping the same task. Mutations
+have correlated backend acknowledgements so stale refreshes cannot discard an
+edit. The header reports scheduler availability. See docs/SCHEDULED_TASKS.md.
 
 # TUI response selection and context menu
 

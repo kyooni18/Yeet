@@ -235,6 +235,8 @@ pub struct BridgeState {
     pub saved_sessions: Vec<SessionSummary>,
     pub scheduled_tasks: Vec<super::tasks::Task>,
     pub tasks_notice: Option<String>,
+    pub tasks_response_id: Option<String>,
+    pub tasks_scheduler_running: bool,
     /// Ephemeral activity for all sessions owned by the background service.
     pub session_activity: std::collections::BTreeMap<String, SessionActivity>,
     pub known_workspaces: Vec<WorkspaceSummary>,
@@ -302,6 +304,8 @@ impl BridgeState {
             saved_sessions: self.saved_sessions.clone(),
             scheduled_tasks: self.scheduled_tasks.clone(),
             tasks_notice: self.tasks_notice.clone(),
+            tasks_response_id: self.tasks_response_id.clone(),
+            tasks_scheduler_running: self.tasks_scheduler_running,
             session_activity: self.session_activity.clone(),
             known_workspaces: self.known_workspaces.clone(),
             workspace_session_groups: self.workspace_session_groups.clone(),

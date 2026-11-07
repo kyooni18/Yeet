@@ -10,7 +10,11 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, app: &mut App) {
     let Some(panel) = &mut app.task_manager else {
         return;
     };
-    panel.sync(&app.state.scheduled_tasks, &app.state.tasks_notice);
+    panel.sync(
+        &app.state.scheduled_tasks,
+        &app.state.tasks_notice,
+        &app.state.tasks_response_id,
+    );
     let area = centered_rect(96, 94, frame.area());
     theme::modal_backdrop(frame, area);
     let block = theme::modal_block(" Tasks · Esc back ");
@@ -22,7 +26,12 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, app: &mut App) {
         Constraint::Length(3),
     ])
     .split(inner);
-    frame.render_widget(Paragraph::new("Scheduled agent runs · independent saved sessions\nRequires the Yeet background service; no OS wake/startup.\nUnattended input/permission requests fail; existing sandbox applies.").wrap(Wrap { trim: false }), chunks[0]);
+    let host = if app.state.tasks_scheduler_running {
+        "Scheduler running · no OS wake/startup"
+    } else {
+        "Scheduler unavailable — reopen Yeet with background service"
+    };
+    frame.render_widget(Paragraph::new(format!("Scheduled agent runs · independent saved sessions\n{host}\nUnattended input/permission requests fail; existing sandbox applies.")).wrap(Wrap { trim: false }), chunks[0]);
     let status = if panel.pending {
         "Saving…"
     } else {
@@ -104,19 +113,46 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, app: &mut App) {
                 "Schedule",
                 "Prompt",
             ];
-            let regions =
-                Layout::vertical([Constraint::Min(1), Constraint::Length(5)]).split(chunks[1]);
-            let mut lines = Vec::new();
-            for (i, label) in labels.iter().enumerate() {
-                let marker = if panel.field == i { "›" } else { " " };
-                lines.push(Line::from(format!(
-                    "{marker} {label}: {}",
-                    clean(&panel.fields[i])
-                )));
-                lines.push(Line::from(""));
-            }
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), regions[0]);
-            frame.render_widget(Paragraph::new("Schedule: every 3600 | at 2027-01-01T09:00:00+09:00 | quota\nquota = next actual provider 5h reset, once (unsupported telemetry is rejected).\nTab/Shift+Tab field · Ctrl+U clear · Enter newline in prompt\nCtrl+S save · Esc cancel (edit never changes an active run)").wrap(Wrap { trim: false }), regions[1]);
+            let regions = Layout::vertical([
+                Constraint::Length(5),
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(4),
+            ])
+            .split(chunks[1]);
+            let lines: Vec<Line> = labels
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let marker = if panel.field == i { "›" } else { " " };
+                    let preview = clean(&panel.fields[i]).replace('\n', " ↵ ");
+                    let line = Line::from(truncate_end(
+                        &format!("{marker} {label}: {preview}"),
+                        regions[0].width as usize,
+                    ));
+                    if panel.field == i {
+                        line.style(theme::selected())
+                    } else {
+                        line
+                    }
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(lines), regions[0]);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "Editing {} (append / Backspace)",
+                    labels[panel.field]
+                )),
+                regions[1],
+            );
+            let value = Paragraph::new(format!("{}▏", clean(&panel.fields[panel.field])))
+                .wrap(Wrap { trim: false });
+            let scroll = value
+                .line_count(regions[2].width)
+                .saturating_sub(regions[2].height as usize)
+                .min(u16::MAX as usize) as u16;
+            frame.render_widget(value.scroll((scroll, 0)), regions[2]);
+            frame.render_widget(Paragraph::new("Schedule: every SECONDS | at RFC3339 | quota (next 5h reset, once)\nTab/Shift+Tab field · Ctrl+U clear · Enter newline in prompt\nFolder: Ctrl+B browse · Ctrl+S save · Esc cancel").wrap(Wrap { trim: false }), regions[3]);
         }
         Stage::Folder => {
             let regions = Layout::vertical([

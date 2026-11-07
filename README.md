@@ -84,6 +84,12 @@ Start the TUI:
 yeet
 ```
 
+Use `/tasks` to manage scheduled agent jobs: run once at a timestamp, at an
+interval, or at the next reported 5h quota reset, with a browsable working folder.
+The background service runs jobs independently of the terminal; it does not
+install OS autostart or wake a sleeping computer.
+See [Scheduled tasks](docs/SCHEDULED_TASKS.md) for controls and backend contracts.
+
 ### Mistral Vibe
 
 Sign in from Provider settings or run `yeet auth login mistral` to open Mistral's browser sign-in and provision a Vibe key. Alternatively set `MISTRAL_API_KEY`, or save a key with `printf '%s' "$MISTRAL_API_KEY" | yeet auth set-key mistral`. Select an available `mistral/` model. Yeet calls Mistral's hosted API directly and runs its own tools; it does not run the Vibe CLI or import its keyring. The monthly Vibe allowance and plan are shown when the account and key permit access to Mistral's billing API (organization usage permission may be required). Model access and billing depend on the account.
