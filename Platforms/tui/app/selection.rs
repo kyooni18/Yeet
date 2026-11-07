@@ -171,6 +171,7 @@ impl App {
         mut backend: Option<&mut crate::backend::Backend>,
     ) -> anyhow::Result<()> {
         if self.memory_manager.is_some()
+            || self.task_manager.is_some()
             || (self.mode == Mode::Sessions && self.session_manager.is_some())
         {
             // The nested keyboard dialog must not activate rows beneath it.

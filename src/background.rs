@@ -125,6 +125,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
     set_private_file(&paths.identity)?;
     let config = ConfigStore::default();
     config.ensure()?;
+    let scheduler = crate::harness::tasks::Scheduler::start()?;
     let extensions = ExtensionHost::discover_and_start(&config.directory, &workspace);
     let wake = Wake::new();
     let (client_tx, client_rx) = mpsc::sync_channel::<ClientEvent>(CLIENT_EVENT_QUEUE_CAPACITY);
@@ -723,7 +724,11 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
         }
 
         let any_streaming = runtimes.iter().any(|runtime| runtime.service.is_busy());
-        if clients.is_empty() && !any_streaming && pending_isolations.is_empty() {
+        if clients.is_empty()
+            && !any_streaming
+            && pending_isolations.is_empty()
+            && !scheduler.has_work()
+        {
             let since = idle_since.get_or_insert_with(Instant::now);
             if since.elapsed() >= DAEMON_IDLE_EXIT_AFTER {
                 break;

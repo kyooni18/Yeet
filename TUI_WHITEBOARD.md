@@ -1,5 +1,25 @@
 # TUI tool-call presentation
 
+# TUI scheduled tasks
+
+`/tasks` opens the terminal Tasks manager without sending a chat message.
+Tasks list their schedule, enabled/running state, next due time, last result
+and session ID. n creates, e edits, p pauses/resumes, d requests typed deletion,
+r refreshes; arrows/j/k select and Esc closes. The editor uses Tab to cycle
+literal fields, Ctrl+S to save, and Ctrl+B on Folder to browse directories
+(Enter descends, Backspace goes up, Ctrl+S chooses the current directory).
+Schedules are timestamps with explicit timezone, intervals in seconds, or
+the next provider-reported 5h quota reset (one-shot, not a guessed timer).
+Folder, prompt and model are captured per task.
+
+Rust Harness owns validation, durable storage, claims, execution and a typed
+command/state API. Only the TUI has a new UI. The background daemon keeps a
+single scheduler owner alive while enabled jobs exist; no OS wake/startup
+integration is installed. Overdue jobs run once on restart, intervals skip
+missed ticks, and interrupted claimed runs are not automatically replayed.
+Each run creates an independent saved session with existing sandbox policy;
+unattended permission/question prompts fail rather than silently approving.
+
 # TUI response selection and context menu
 
 Dragging selects the visible conversation text without bubble padding or work

@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FrontendCommand {
+    RequestTasks,
+    ManageTask {
+        action: crate::harness::tasks::TaskAction,
+    },
     StartDebate {
         topic: String,
         #[serde(default)]

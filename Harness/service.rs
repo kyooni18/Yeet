@@ -68,6 +68,7 @@ mod settings;
 mod settings_support;
 mod state;
 mod sync;
+mod tasks;
 mod titles;
 mod transport;
 
@@ -285,6 +286,14 @@ impl HarnessService {
 
     pub(crate) fn send(&mut self, command: FrontendCommand) -> Result<()> {
         match command {
+            FrontendCommand::RequestTasks => {
+                self.manage_tasks(None);
+                Ok(())
+            }
+            FrontendCommand::ManageTask { action } => {
+                self.manage_tasks(Some(action));
+                Ok(())
+            }
             FrontendCommand::Submit {
                 text,
                 images,

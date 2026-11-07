@@ -33,6 +33,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App) {
     if app.memory_manager.is_some() {
         dialogs::draw_memories(frame, app);
     }
+    if app.task_manager.is_some() {
+        dialogs::draw_tasks(frame, app);
+    }
     // Global runtime attention is workbench chrome and never selects a view.
     if !app
         .application

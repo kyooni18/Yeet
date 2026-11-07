@@ -14,8 +14,10 @@ mod memories;
 #[path = "navigation.rs"]
 mod navigation;
 mod session_management;
+mod tasks;
 pub(crate) use memories::draw_memories;
 pub(crate) use session_management::draw_session_management;
+pub(crate) use tasks::draw_tasks;
 #[path = "status.rs"]
 mod status;
 pub(crate) use agent_group::draw_agent_group;

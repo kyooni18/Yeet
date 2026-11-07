@@ -20,6 +20,7 @@ pub mod resources;
 pub mod sandbox;
 mod service;
 pub mod session_store;
+pub mod tasks;
 pub mod theme_resources;
 pub mod tools;
 pub mod workers;

@@ -61,6 +61,7 @@ impl App {
                     ComposerDestination::Sessions,
                     ComposerDestination::Settings,
                     ComposerDestination::Memories,
+                    ComposerDestination::Tasks,
                     ComposerDestination::Reasoning,
                     ComposerDestination::Goal,
                     ComposerDestination::Agents,
@@ -121,6 +122,7 @@ impl App {
                 ComposerDestination::Sessions => self.open_sessions(backend)?,
                 ComposerDestination::Settings => self.open_settings(backend)?,
                 ComposerDestination::Memories => self.open_memories(),
+                ComposerDestination::Tasks => self.open_tasks(backend)?,
                 ComposerDestination::Reasoning => self.open_reasoning(),
                 ComposerDestination::Goal => self.open_goal(),
                 ComposerDestination::Agents => {

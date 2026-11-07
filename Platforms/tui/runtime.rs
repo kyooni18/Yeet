@@ -57,6 +57,7 @@ pub fn run_remote(options: RemoteOptions) -> Result<()> {
         while let Some(event) = backend.try_recv() {
             apply_backend_event(&mut app, event);
         }
+        app.refresh_tasks(&mut backend)?;
 
         while let Some(input) = remote.try_recv() {
             match input {
@@ -271,6 +272,7 @@ fn event_loop(
         }
 
         let backend_started = Instant::now();
+        app.refresh_tasks(backend)?;
         for _ in 0..MAX_BACKEND_EVENTS_PER_FRAME {
             let Some(event) = backend.try_recv() else {
                 break;

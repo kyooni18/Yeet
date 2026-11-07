@@ -233,6 +233,8 @@ pub struct BridgeState {
     pub model_catalog: Vec<ModelCatalogItem>,
     pub is_loading_models: bool,
     pub saved_sessions: Vec<SessionSummary>,
+    pub scheduled_tasks: Vec<super::tasks::Task>,
+    pub tasks_notice: Option<String>,
     /// Ephemeral activity for all sessions owned by the background service.
     pub session_activity: std::collections::BTreeMap<String, SessionActivity>,
     pub known_workspaces: Vec<WorkspaceSummary>,
@@ -298,6 +300,8 @@ impl BridgeState {
             model_catalog: self.model_catalog.clone(),
             is_loading_models: self.is_loading_models,
             saved_sessions: self.saved_sessions.clone(),
+            scheduled_tasks: self.scheduled_tasks.clone(),
+            tasks_notice: self.tasks_notice.clone(),
             session_activity: self.session_activity.clone(),
             known_workspaces: self.known_workspaces.clone(),
             workspace_session_groups: self.workspace_session_groups.clone(),
