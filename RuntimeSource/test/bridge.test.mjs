@@ -410,3 +410,31 @@ test("bridge embedding operation uses a registered custom provider", async (t) =
   assert.equal(result.result.model, "fixture/custom-embedding-v1");
   assert.deepEqual(result.result.vectors, [[1, 2, 3]]);
 });
+
+
+test("headless login streams its URL before terminal errors and cleans up callbacks", { timeout: 15_000 }, async (t) => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const configDir = await mkdtemp(join(tmpdir(), "yeet-headless-bridge-"));
+  const bridge = createBridge({ YEET_CONFIG_DIR: configDir });
+  t.after(async () => { bridge.child.kill(); await rm(configDir, { recursive: true, force: true }); });
+  for (const mode of ["state-mismatch", "denied", "timeout"]) {
+    bridge.send({ v: 1, id: mode, op: "auth-login-browser", provider: "gemini-web",
+      options: { noBrowser: true, timeoutMs: mode === "timeout" ? 100 : 5_000 } });
+    const progress = await bridge.waitFor(message => message.id === mode);
+    assert.equal(progress.type, "auth-login-url");
+    const authorize = new URL(progress.url);
+    const callback = new URL(authorize.searchParams.get("redirect_uri"));
+    if (mode !== "timeout") {
+      callback.searchParams.set("state", mode === "state-mismatch" ? "wrong" : authorize.searchParams.get("state"));
+      callback.searchParams.set("error", "access_denied");
+      await fetch(callback);
+    }
+    const terminal = await bridge.waitFor(message => message.id === mode);
+    assert.equal(terminal.type, "error");
+    assert.match(terminal.error.message, mode === "state-mismatch" ? /state mismatch/ : mode === "denied" ? /access_denied/ : /timed out/);
+    await assert.rejects(fetch(callback));
+  }
+  await bridge.close();
+});

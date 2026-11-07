@@ -527,6 +527,50 @@ impl BridgeClient {
         }
         self.request_typed("auth-login-browser", fields, "status")
     }
+    /// Headless login emits a nonterminal URL frame before its final status.
+    /// Use request-scoped frames: stderr is captured diagnostics, not terminal output.
+    pub fn login_browser_with_url(
+        &self,
+        provider: &str,
+        options: Value,
+        mut on_url: impl FnMut(&str),
+    ) -> Result<AuthStatus> {
+        let id = Uuid::new_v4().to_string();
+        let (tx, rx) = mpsc::channel();
+        self.inner
+            .pending
+            .lock()
+            .map_err(|_| anyhow!("bridge pending lock poisoned"))?
+            .insert(id.clone(), tx);
+        let result = (|| {
+            self.write_value(&json!({
+                "v": BRIDGE_PROTOCOL_VERSION, "id": id,
+                "op": "auth-login-browser", "provider": provider, "options": options,
+            }))?;
+            loop {
+                let frame = rx
+                    .recv()
+                    .context("provider bridge closed before login response")?;
+                if frame.get("type").and_then(Value::as_str) == Some("auth-login-url") {
+                    if let Some(url) = frame.get("url").and_then(Value::as_str) {
+                        on_url(url);
+                    }
+                    continue;
+                }
+                let frame = ensure_success(frame)?;
+                return serde_json::from_value(
+                    frame
+                        .get("status")
+                        .cloned()
+                        .context("provider bridge login response missing status")?,
+                )
+                .context("decode provider login status");
+            }
+        })();
+        self.remove_pending(&id);
+        result
+    }
+
     pub fn logout(&self, provider: &str) -> Result<AuthStatus> {
         self.request_typed("auth-logout", field("provider", provider), "status")
     }

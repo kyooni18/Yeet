@@ -90,6 +90,15 @@ The background service runs jobs independently of the terminal; it does not
 install OS autostart or wake a sleeping computer.
 See [Scheduled tasks](docs/SCHEDULED_TASKS.md) for controls and backend contracts.
 
+### Headless / SSH authentication
+
+Use `yeet auth login codex-cli --no-browser` (or `gemini`, `openrouter`, `mistral`).
+SSH sessions select this mode automatically. Yeet prints a URL to open on your
+local machine and instructions for forwarding the callback or completing it
+manually—no browser is launched on the server. See
+[headless login](docs/PLATFORM_SUPPORT.md#headless--ssh-login) for details and
+provider limitations.
+
 ### Mistral Vibe
 
 Sign in from Provider settings or run `yeet auth login mistral` to open Mistral's browser sign-in and provision a Vibe key. Alternatively set `MISTRAL_API_KEY`, or save a key with `printf '%s' "$MISTRAL_API_KEY" | yeet auth set-key mistral`. Select an available `mistral/` model. Yeet calls Mistral's hosted API directly and runs its own tools; it does not run the Vibe CLI or import its keyring. The monthly Vibe allowance and plan are shown when the account and key permit access to Mistral's billing API (organization usage permission may be required). Model access and billing depend on the account.

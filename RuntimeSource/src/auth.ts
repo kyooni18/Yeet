@@ -50,6 +50,8 @@ export interface OAuthClientConfiguration {
 
 export interface BrowserLoginOptions extends Partial<OAuthClientConfiguration> {
   timeoutMs?: number;
+  /** Forward the sign-in URL without launching a local browser. */
+  noBrowser?: boolean;
 }
 
 export type ResolvedCredential =
@@ -901,11 +903,25 @@ export class AuthManager {
     return undefined;
   }
 
-  async loginInBrowser(provider: string, options: BrowserLoginOptions = {}): Promise<AuthStatus> {
+  async loginInBrowser(
+    provider: string,
+    options: BrowserLoginOptions = {},
+    onAuthorization?: (url: string) => Promise<void> | void,
+  ): Promise<AuthStatus> {
     await this.ensure();
+    const openBrowser = async (url: string) => {
+      if (onAuthorization) await onAuthorization(url);
+      if (!options.noBrowser) await this.#openBrowser(url);
+      else if (!onAuthorization) process.stderr.write(`Open this URL in a browser on any machine:\n${url}\n`);
+    };
+    if (options.noBrowser && (provider === "claude" || provider === "antigravity")) {
+      throw new Error(provider === "claude"
+        ? "Headless Claude login is managed by Claude Code. Run `claude auth login` on this host or set CLAUDE_CODE_OAUTH_TOKEN."
+        : "Antigravity login requires the local Antigravity application; headless browser login is not supported.");
+    }
     switch (provider) {
       case "mistral": {
-        const key = await loginMistral(this.#fetch, this.#openBrowser, options.timeoutMs);
+        const key = await loginMistral(this.#fetch, openBrowser, options.timeoutMs);
         const data = await this.#readCredentials();
         data.providers.mistral = { type: "api-key", value: key, source: "browser", createdAt: new Date().toISOString() };
         await this.#writeCredentials(data);
@@ -913,22 +929,22 @@ export class AuthManager {
         return this.status(provider);
       }
       case "openrouter":
-        await this.#loginOpenRouter(options);
+        await this.#loginOpenRouter(options, openBrowser);
         return this.status(provider);
       case "openai":
         // Keep the old command/provider alias working, but persist the
         // subscription credential in the dedicated Codex CLI slot.
-        await this.#loginOpenAI("codex-cli", options);
+        await this.#loginOpenAI("codex-cli", options, openBrowser);
         return this.status("codex-cli");
       case "codex-cli":
-        await this.#loginOpenAI("codex-cli", options);
+        await this.#loginOpenAI("codex-cli", options, openBrowser);
         return this.status(provider);
       case "antigravity":
         await this.#antigravityLocal.loginInBrowser(options.timeoutMs);
         return this.status("antigravity");
       case "gemini":
       case "gemini-web":
-        await this.#loginGemini("gemini-web", options);
+        await this.#loginGemini("gemini-web", options, openBrowser);
         return this.status("gemini-web");
       case "claude":
         await this.#claudeLogin();
@@ -1006,7 +1022,7 @@ export class AuthManager {
     await atomicJsonWrite(this.configPath, data, 0o600);
   }
 
-  async #loginOpenRouter(options: BrowserLoginOptions): Promise<void> {
+  async #loginOpenRouter(options: BrowserLoginOptions, openBrowser: (url: string) => Promise<void>): Promise<void> {
     const timeoutMs = options.timeoutMs ?? 180_000;
     const state = randomBytes(18).toString("base64url");
     const statePath = `/oauth/openrouter/${state}`;
@@ -1019,7 +1035,7 @@ export class AuthManager {
       authorize.searchParams.set("callback_url", loopback.callbackUrl);
       authorize.searchParams.set("code_challenge", challenge);
       authorize.searchParams.set("code_challenge_method", "S256");
-      await this.#openBrowser(authorize.toString());
+      await openBrowser(authorize.toString());
 
       const callback = await loopback.waitForCallback;
       const error = callback.searchParams.get("error");
@@ -1050,7 +1066,7 @@ export class AuthManager {
     }
   }
 
-  async #loginOpenAI(provider: string, options: BrowserLoginOptions): Promise<void> {
+  async #loginOpenAI(provider: string, options: BrowserLoginOptions, openBrowser: (url: string) => Promise<void>): Promise<void> {
     const timeoutMs = options.timeoutMs ?? 180_000;
     const clientId = options.clientId
       ?? process.env.CODEX_APP_SERVER_LOGIN_CLIENT_ID
@@ -1074,7 +1090,7 @@ export class AuthManager {
       authorize.searchParams.set("codex_cli_simplified_flow", "true");
       authorize.searchParams.set("state", state);
       authorize.searchParams.set("originator", "codex_cli_rs");
-      await this.#openBrowser(authorize.toString());
+      await openBrowser(authorize.toString());
 
       const callback = await loopback.waitForCallback;
       if (callback.searchParams.get("state") !== state) throw new Error("OpenAI OAuth callback state mismatch");
@@ -1127,7 +1143,7 @@ export class AuthManager {
   }
 
 
-  async #loginGemini(provider: string, options: BrowserLoginOptions): Promise<void> {
+  async #loginGemini(provider: string, options: BrowserLoginOptions, openBrowser: (url: string) => Promise<void>): Promise<void> {
     const current = await this.#readCredentials();
     const existing = current.oauthClients[provider];
     const previous = current.providers[provider];
@@ -1137,7 +1153,7 @@ export class AuthManager {
     const scopes = options.scopes ?? existing?.scopes;
     const oauth = await loginGeminiOAuth({
       fetch: this.#fetch,
-      openBrowser: this.#openBrowser,
+      openBrowser,
       ...(clientId ? { clientId } : {}),
       ...(clientSecret ? { clientSecret } : {}),
       ...(scopes ? { scopes } : {}),

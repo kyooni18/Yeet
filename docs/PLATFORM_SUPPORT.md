@@ -50,7 +50,48 @@ Browser OAuth uses the platform-native launcher with fallbacks:
 - WSL: `wslview`, Windows Explorer, then `xdg-open`.
 - Linux desktop: `xdg-open`, then `gio open`.
 
-When no opener is available, Yeet prints the authorization URL instead of failing the callback flow, which keeps headless/server authentication usable.
+### Headless / SSH login
+
+Run `yeet auth login codex-cli --no-browser` (also supported for `openai`,
+`gemini` / `gemini-web`, `openrouter`, and `mistral`). SSH sessions automatically
+use this mode. Yeet prints the sign-in URL immediately, without trying to launch
+an application on the server, and waits for approval. A browser is still needed
+on another machine; this is not unattended password-based login.
+
+For Codex, Gemini and OpenRouter, OAuth redirects to a loopback listener **on
+the server**. Opening the URL on your laptop alone is not sufficient. Yeet prints
+the actual callback port and a tunnel command:
+
+```sh
+# In the remote SSH shell:
+yeet auth login codex-cli --no-browser
+
+# In a separate terminal on your laptop, using the port Yeet prints:
+ssh -N -L PORT:127.0.0.1:PORT USER@HOST
+```
+
+Keep both commands running, then open the printed sign-in URL on your laptop.
+The tunnel forwards the browser's localhost callback to Yeet. The listener stays
+bound to `127.0.0.1`; do not expose it on a public interface. If the local port is
+occupied, use the manual alternative instead.
+
+**Without port forwarding:** complete sign-in locally, copy the full localhost
+redirect URL from the browser address bar (the page may fail to load), and run
+`curl --noproxy '*' 'FULL_REDIRECT_URL'` in a second SSH shell on the server while
+the original login is still waiting. Quote the URL so its query parameters are
+preserved. The original flow still checks state and PKCE. Treat this URL as a
+secret: do not share it or save it in shell history. If login times out, start a
+new login and use its new URL; old callbacks cannot complete a new attempt.
+
+Mistral polls for approval and needs no loopback tunnel. Claude authentication is
+delegated to Claude Code: run `claude auth login` on the server or supply
+`CLAUDE_CODE_OAUTH_TOKEN`. Antigravity requires its local application and does not
+support headless browser login. `--no-browser` reports these limitations instead
+of silently launching a desktop app.
+
+When a desktop browser opener is unavailable, the runtime also falls back to a
+manual URL diagnostic. Use the explicit CLI headless flow above over SSH so that
+the URL is delivered as interactive output rather than captured bridge stderr.
 
 ## Computer Use
 

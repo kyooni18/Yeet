@@ -50,6 +50,19 @@ MCP:
 
 Every command contains v, id, and op. Streams emit event frames followed by done. Errors are terminal for the request id.
 
+## Headless provider login
+
+`auth-login-browser` accepts `options.noBrowser: true`. It emits a nonterminal
+`{v:1,id,type:"auth-login-url",url}` frame as soon as the authorization URL is
+ready, then the usual terminal `auth-status` or `error` with the same request ID.
+The host must keep receiving after the URL frame. No browser opener runs in this
+mode. Existing requests without this option retain single-response behavior.
+The URL is interactive data, not a stderr diagnostic; do not persist it in logs.
+For loopback providers the host can derive the callback port from `redirect_uri`
+or `callback_url` to show SSH forwarding instructions. State, PKCE, timeouts and
+credential persistence are unchanged. Claude and Antigravity report their
+external-application requirements rather than pretending to support this mode.
+
 ## Native-app approval
 
 An MCP stdio server can request Computer Use access with an `elicitation/create`

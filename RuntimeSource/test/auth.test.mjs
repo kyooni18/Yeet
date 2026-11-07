@@ -186,6 +186,33 @@ test("OpenRouter browser auth performs PKCE and stores the exchanged user key", 
   });
 });
 
+test("headless OAuth forwards the URL, never opens a browser, and retains PKCE", async () => {
+  const configDir = await temporaryConfig();
+  let opened = false;
+  let challenge;
+  const auth = new AuthManager({
+    configDir,
+    openBrowser: () => { opened = true; throw new Error("must not launch a browser"); },
+    fetch: async (_input, init) => {
+      const { createHash } = await import("node:crypto");
+      const body = JSON.parse(init.body);
+      assert.equal(body.code, "manual-code");
+      assert.equal(createHash("sha256").update(body.code_verifier).digest("base64url"), challenge);
+      return Response.json({ key: "headless-key" });
+    },
+  });
+  const status = await auth.loginInBrowser("openrouter", { noBrowser: true, timeoutMs: 5_000 },
+    callbackOpener((authorize) => {
+      challenge = authorize.searchParams.get("code_challenge");
+      const callback = new URL(authorize.searchParams.get("callback_url"));
+      callback.searchParams.set("code", "manual-code");
+      return callback;
+    }));
+  assert.equal(opened, false);
+  assert.equal(status.authenticated, true);
+  assert.equal((await auth.resolve("openrouter")).value, "headless-key");
+});
+
 test("OpenAI browser auth performs Codex OAuth PKCE and stores ChatGPT tokens", async () => {
   const configDir = await temporaryConfig();
   let tokenExchangeBody = "";

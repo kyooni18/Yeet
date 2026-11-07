@@ -111,6 +111,7 @@ export type BridgeMessage =
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "harness-capabilities"; capabilities: HarnessCapabilityDescriptor[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "config-path"; path: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "auth-status"; status: AuthStatus }
+  | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "auth-login-url"; url: string }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-usage"; usage: ProviderUsageStatus }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-configurations"; providerConfigurations: OpenAICompatibleProviderConfig[] }
   | { v: typeof BRIDGE_PROTOCOL_VERSION; id: string; type: "provider-configuration"; providerConfiguration: OpenAICompatibleProviderConfig }

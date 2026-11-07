@@ -52,7 +52,7 @@ pub const HELP: &str = r#"Usage:
   yeet auth status [provider]
   yeet usage [codex|claude|gemini|provider]
   printf key | yeet auth set-key provider
-  yeet auth login provider
+  yeet auth login provider [--no-browser]
   yeet auth logout provider
   yeet provider list
   yeet provider add id base-url [--require-api-key] [--header Name=Value]
@@ -675,6 +675,29 @@ fn usage_command(args: &[String]) -> Result<()> {
     result
 }
 
+fn print_headless_login_url(url: &str) {
+    eprintln!("Open this sign-in URL in a browser on your local machine:\n\n{url}\n");
+    let redirect = url::Url::parse(url).ok().and_then(|authorize| {
+        authorize
+            .query_pairs()
+            .find(|(key, _)| key == "redirect_uri" || key == "callback_url")
+            .and_then(|(_, value)| url::Url::parse(&value).ok())
+    });
+    if let Some(port) = redirect.and_then(|redirect| redirect.port()) {
+        eprintln!(
+            "The callback listener is on this host at 127.0.0.1:{port}.\n\
+             For SSH, run this in a LOCAL terminal before signing in (replace USER@HOST):\n\n\
+             ssh -N -L {port}:127.0.0.1:{port} USER@HOST\n\n\
+             Or, without a tunnel: after signing in, copy the full localhost redirect URL\n\
+             from your browser's address bar (even if the page fails to load), then run\n\
+             curl --noproxy '*' 'PASTE_FULL_REDIRECT_URL_HERE' in a second SSH shell.\n\
+             Keep the URL private. Leave this login running until it completes.\n"
+        );
+    } else {
+        eprintln!("Leave this login running; it will finish after you approve in the browser.\n");
+    }
+}
+
 fn auth(args: &[String]) -> Result<()> {
     let sub = args
         .first()
@@ -721,17 +744,35 @@ fn auth(args: &[String]) -> Result<()> {
             "login" => {
                 let provider = args
                     .get(1)
-                    .ok_or_else(|| anyhow::anyhow!("Usage: yeet auth login provider"))?;
-                let options = if provider == "gemini" || provider == "gemini-web" {
-                    Some(json!({
+                    .filter(|provider| !provider.starts_with('-'))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Usage: yeet auth login provider [--no-browser]")
+                    })?;
+                for option in &args[2..] {
+                    if option != "--no-browser" {
+                        bail!(
+                            "Unknown login option: {option}. Usage: yeet auth login provider [--no-browser]"
+                        );
+                    }
+                }
+                let no_browser = args[2..].iter().any(|arg| arg == "--no-browser")
+                    || std::env::var_os("SSH_CONNECTION").is_some()
+                    || std::env::var_os("SSH_TTY").is_some();
+                let mut options = if provider == "gemini" || provider == "gemini-web" {
+                    json!({
                         "projectId": std::env::var("GEMINI_PROJECT_ID").ok()
                             .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT").ok())
                             .or_else(|| std::env::var("GOOGLE_CLOUD_PROJECT_ID").ok())
-                    }))
+                    })
                 } else {
-                    None
+                    json!({})
                 };
-                let status = bridge.login_browser(provider, options)?;
+                options["noBrowser"] = json!(no_browser);
+                let status = if no_browser {
+                    bridge.login_browser_with_url(provider, options, print_headless_login_url)?
+                } else {
+                    bridge.login_browser(provider, Some(options))?
+                };
                 println!("{}: authenticated via {}", status.provider, status.method);
                 Ok(())
             }

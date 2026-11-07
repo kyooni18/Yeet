@@ -509,7 +509,10 @@ async function handle(command: BridgeCommand): Promise<void> {
       return;
     }
     case "auth-login-browser": {
-      const status = await auth.loginInBrowser(command.provider, command.options ?? {});
+      const status = await auth.loginInBrowser(command.provider, command.options ?? {},
+        command.options?.noBrowser ? (url) => {
+          write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "auth-login-url", url });
+        } : undefined);
       await refreshProvider(command.provider);
       write({ v: BRIDGE_PROTOCOL_VERSION, id: command.id, type: "auth-status", status });
       return;
