@@ -47,7 +47,10 @@ uses the existing Harness and that folder's sandbox/configuration. There is no
 implicit auto-approval or unlimited-mode override. A request for permission or
 a user answer fails the unattended job with an explanation. Runs time out after
 one hour. Last outcome and session ID appear in Tasks; sessions use the ordinary
-session store.
+session store. A live task reserves its session before dispatch; loading,
+renaming, moving or deleting that session is blocked until the task finishes,
+preventing a second runtime from overwriting it. Job model selection does not
+change the user's global default model.
 
 There is **no OS scheduler installation, reboot autostart or wake-from-sleep**.
 Yeet's background service and an awake computer must be available. The Tasks

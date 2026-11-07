@@ -105,10 +105,14 @@ impl Harness {
     }
 
     /// Isolated job model selection must not rewrite the user's global default.
-    pub(crate) fn embedded_for_task(workspace: &Path, model: &str) -> Result<Self> {
+    pub(crate) fn embedded_for_task(
+        workspace: &Path,
+        model: &str,
+        session_id: &str,
+    ) -> Result<Self> {
         let mut harness = Self::embedded(workspace)?;
         if let HarnessTransport::Embedded(service) = &mut harness.transport {
-            service.configure_scheduled_run(model)?;
+            service.configure_scheduled_run(model, session_id)?;
         }
         Ok(harness)
     }

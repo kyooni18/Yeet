@@ -486,6 +486,7 @@ impl HarnessService {
                 Ok(())
             }
             FrontendCommand::RenameSession { session_id, title } => {
+                crate::harness::tasks::ensure_task_session_available(&session_id)?;
                 let current = self
                     .shared
                     .lock_or_recover()

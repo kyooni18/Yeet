@@ -16,6 +16,7 @@ impl HarnessService {
     }
 
     pub(super) fn ensure_session_not_loaded(&self, id: &str) -> Result<()> {
+        crate::harness::tasks::ensure_task_session_available(id)?;
         anyhow::ensure!(
             self.shared
                 .lock_or_recover()
@@ -29,6 +30,7 @@ impl HarnessService {
     }
     /// Restores a persisted session and rebinds coordinator runtime state.
     pub(super) fn load_session(&mut self, id: &str) -> Result<()> {
+        crate::harness::tasks::ensure_task_session_available(id)?;
         self.ensure_replaceable()?;
         // Settle and persist the live run before reading from disk. Loading
         // first would observe the still-`Running` record of the session being
@@ -211,6 +213,10 @@ impl HarnessService {
         // blank the client's session list and model picker until they are
         // re-requested, and publish an empty catalog to other runtimes.
         session.state.saved_sessions = previous.saved_sessions;
+        session.state.scheduled_tasks = previous.scheduled_tasks;
+        session.state.tasks_notice = previous.tasks_notice;
+        session.state.tasks_response_id = previous.tasks_response_id;
+        session.state.tasks_scheduler_running = previous.tasks_scheduler_running;
         session.state.known_workspaces = previous.known_workspaces;
         session.state.workspace_session_groups = previous.workspace_session_groups;
         session.state.available_models = previous.available_models;

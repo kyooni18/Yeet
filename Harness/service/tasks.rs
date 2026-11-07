@@ -2,10 +2,11 @@ use super::*;
 use crate::harness::tasks::{Schedule, TaskAction, TaskStore, five_hour_reset};
 
 impl HarnessService {
-    pub(crate) fn configure_scheduled_run(&mut self, model: &str) -> Result<()> {
+    pub(crate) fn configure_scheduled_run(&mut self, model: &str, session_id: &str) -> Result<()> {
         let model = crate::config::validate_model_id(model)?;
         self.new_session();
         let mut shared = self.shared.lock_or_recover();
+        shared.state.current_session_id = Some(session_id.to_owned());
         shared.state.active_model = model.clone();
         shared.state.active_model_context_length = self
             .config
@@ -29,7 +30,8 @@ impl HarnessService {
             if let Some(action) = action {
                 let reset = if let TaskAction::Save { draft, .. } = &action {
                     if matches!(draft.schedule, Schedule::QuotaReset) {
-                        let provider = draft.model.split_once('/').map(|p| p.0).unwrap_or("");
+                        let model = crate::config::validate_model_id(&draft.model)?;
+                        let provider = model.split_once('/').map(|p| p.0).unwrap_or("");
                         five_hour_reset(&self.bridge.provider_usage(provider)?, Utc::now())
                     } else {
                         None

@@ -90,6 +90,16 @@ impl TaskStore {
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
+    pub(crate) fn ensure_session_available(&self, session_id: &str) -> Result<()> {
+        anyhow::ensure!(
+            !self
+                .list()?
+                .iter()
+                .any(|task| task.running && task.session_id.as_deref() == Some(session_id)),
+            "This session belongs to a running scheduled task. Wait for the task to finish."
+        );
+        Ok(())
+    }
     fn write(db: &Connection, task: &Task) -> Result<()> {
         db.execute("INSERT INTO scheduled_tasks(id, body) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET body=excluded.body", params![task.id, serde_json::to_string(task)?])?;
         Ok(())
@@ -202,7 +212,7 @@ impl TaskStore {
         let task = if let Some(mut task) = due.into_iter().next() {
             task.running = true;
             task.last_run = Some(now);
-            task.session_id = None;
+            task.session_id = Some(uuid::Uuid::new_v4().to_string());
             task.last_result = Some("Running".into());
             // Advance before dispatch: a crash must not replay a side effect.
             task.next_run = match task.draft.schedule {
@@ -265,6 +275,21 @@ pub fn five_hour_reset(
         .min()
 }
 
+/// Scheduled runtimes are independent of a client's session runtime; prevent
+/// loading or mutating their live transcript as if it were an orphaned session.
+pub(crate) fn ensure_task_session_available(session_id: &str) -> Result<()> {
+    let directory = ConfigStore::default().directory;
+    if directory.join("tasks.sqlite3").exists() {
+        TaskStore::in_directory(&directory)?.ensure_session_available(session_id)?;
+    }
+    Ok(())
+}
+
+fn lock_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+}
+
 /// True when a durable host owns the global scheduler lease.
 pub fn scheduler_running() -> bool {
     let path = ConfigStore::default()
@@ -273,7 +298,7 @@ pub fn scheduler_running() -> bool {
     let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
         return false;
     };
-    matches!(fs2::FileExt::try_lock_exclusive(&file), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    matches!(fs2::FileExt::try_lock_exclusive(&file), Err(error) if lock_contended(&error))
 }
 
 pub struct Scheduler {
@@ -321,7 +346,7 @@ impl Scheduler {
                                     }
                                     owner = true;
                                 }
-                                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                Err(error) if lock_contended(&error) => {
                                     return Ok(());
                                 }
                                 Err(error) => return Err(error.into()),
@@ -382,7 +407,12 @@ impl Scheduler {
 fn execute(task: &Task) -> (String, Option<String>) {
     let mut session_id = None;
     let result = (|| -> Result<()> {
-        let mut harness = Harness::embedded_for_task(&task.draft.folder, &task.draft.model)?;
+        let reserved_session = task
+            .session_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("Task claim has no session reservation"))?;
+        let mut harness =
+            Harness::embedded_for_task(&task.draft.folder, &task.draft.model, reserved_session)?;
         harness.send(FrontendCommand::SetGoal { enabled: false })?;
         harness.send(FrontendCommand::Submit {
             text: task.draft.prompt.clone(),
@@ -467,6 +497,8 @@ mod tests {
             .claim(now + chrono::Duration::seconds(180))
             .unwrap()
             .unwrap();
+        let reserved = task.session_id.clone().unwrap();
+        assert!(store.ensure_session_available(&reserved).is_err());
         assert!(
             store
                 .claim(now + chrono::Duration::hours(1))
@@ -497,6 +529,7 @@ mod tests {
         store
             .finish(&task.id, "Completed", Some("session".into()))
             .unwrap();
+        assert!(store.ensure_session_available(&reserved).is_ok());
         drop(store);
         let mut store = TaskStore::in_directory(dir.path()).unwrap();
         assert!(!store.list().unwrap()[0].enabled);
