@@ -65,6 +65,8 @@ test.afterAll(async () => {
 })
 
 test('real Rust Remote persists settings, custom providers and scheduled tasks across reload', async ({ page }, testInfo) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(error.message))
   page.on('websocket', socket => {
     socket.on('framesent', event => {
       if (typeof event.payload === 'string' && JSON.parse(event.payload).type === 'ui_settings_action') frames.push(event.payload)
@@ -88,6 +90,11 @@ test('real Rust Remote persists settings, custom providers and scheduled tasks a
   let dialog = page.getByRole('dialog', { name: 'Settings', exact: true })
   await dialog.getByRole('button', { name: 'Dark', exact: true }).click()
   await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark')
+  await dialog.getByRole('button', { name: 'Dark theme', exact: true }).click()
+  await dialog.getByRole('textbox', { name: 'Dark theme', exact: true }).fill('quiet-night')
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect.poll(() => page.locator('html').evaluate(element => element.style.getPropertyValue('--bg'))).toBe('#111113')
+  await expect(dialog.getByRole('textbox')).toHaveCount(0)
   await dialog.getByRole('button', { name: 'Context window', exact: true }).click()
   await dialog.getByRole('textbox', { name: 'Context window' }).fill('128k')
   await dialog.getByRole('button', { name: 'Save', exact: true }).click()
@@ -112,6 +119,8 @@ test('real Rust Remote persists settings, custom providers and scheduled tasks a
   await expect(page.getByText('Task updated', { exact: true })).toBeVisible()
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark')
+  await expect.poll(() => page.locator('html').evaluate(element => element.style.getPropertyValue('--bg'))).toBe('#111113')
+  expect(JSON.parse(readFileSync(join(directory, 'config/config.json'), 'utf8')).contextLengthOverrides['openai/gpt-5']).toBe(128000)
   await page.locator('#sidebar').getByRole('button', { name: 'Scheduled tasks', exact: true }).click()
   await expect(page.getByText('Future smoke test', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Pause task', exact: true }).click()
@@ -119,4 +128,15 @@ test('real Rust Remote persists settings, custom providers and scheduled tasks a
   await page.getByRole('button', { name: 'Delete task…', exact: true }).click()
   await page.getByRole('button', { name: 'Confirm delete task', exact: true }).click()
   await expect(page.getByText('Future smoke test', { exact: true })).toHaveCount(0)
+
+  const secondWorkspace = join(directory, 'second-workspace')
+  mkdirSync(secondWorkspace)
+  await page.getByRole('button', { name: 'Switch workspace', exact: true }).click()
+  await page.getByRole('button', { name: 'Open another workspace…', exact: true }).click()
+  dialog = page.getByRole('dialog', { name: 'Open workspace', exact: true })
+  await dialog.getByRole('textbox', { name: 'Workspace folder', exact: true }).fill(secondWorkspace)
+  await dialog.getByRole('button', { name: 'Open workspace', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Switch workspace', exact: true })).toContainText('second-workspace')
+  await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeVisible()
+  expect(pageErrors).toEqual([])
 })

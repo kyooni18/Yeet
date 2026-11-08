@@ -19,6 +19,7 @@ const seconds = State("3600")
 const error = State("")
 const pending = State("")
 let timeout = 0
+let saving = false
 
 function editTask(task: Any) {
   taskId.value = task?.id || null
@@ -38,6 +39,7 @@ function editTask(task: Any) {
 function manage(action: Any) {
   const request_id = crypto.randomUUID()
   if (!remoteStore.send({ type: "manage_task", action, request_id })) { error.value = "Not connected. Your draft has been kept."; return }
+  saving = action.action === "save"
   pending.value = request_id
   error.value = ""
   clearTimeout(timeout)
@@ -48,7 +50,13 @@ function manage(action: Any) {
 
 remoteStore.subscribe(() => {
   const state = remoteStore.getSnapshot().state
-  if (pending.value && state.tasks_response_id === pending.value) { pending.value = ""; clearTimeout(timeout) }
+  if (pending.value && state.tasks_response_id === pending.value) {
+    pending.value = ""
+    clearTimeout(timeout)
+    // A confirmed create is now a saved row, not a second create-ready draft.
+    if (saving && state.tasks_notice === "Task updated") { editing.value = false }
+    saving = false
+  }
 })
 
 function saveTask() {
@@ -69,25 +77,25 @@ struct TaskEditor: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
       Text(taskId.value ? "Edit task" : "New scheduled task").fontSize(17).fontWeight("medium")
-      TextField(Binding(name), "Task name").accessibilityLabel("Task name").withProps({ className: "form-field" })
-      TextEditor(Binding(prompt), "What should Yeet do?", 3).accessibilityLabel("Task prompt").withProps({ className: "form-field" })
-      TextField(Binding(folder), "Workspace path on the server").accessibilityLabel("Task workspace").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
-      TextField(Binding(model), "Model ID").accessibilityLabel("Task model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      TextField(Binding(name), "Task name").accessibilityLabel("Task name").disabled(!!pending.value).withProps({ className: "form-field" })
+      TextEditor(Binding(prompt), "What should Yeet do?", 3).accessibilityLabel("Task prompt").disabled(!!pending.value).withProps({ className: "form-field" })
+      TextField(Binding(folder), "Workspace path on the server").accessibilityLabel("Task workspace").disabled(!!pending.value).withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      TextField(Binding(model), "Model ID").accessibilityLabel("Task model").disabled(!!pending.value).withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
       Picker(Binding(kind), [{ value: "interval", label: "Repeating interval" }, { value: "at", label: "Once at a date and time" }, { value: "quota_reset", label: "Next quota reset" }])
-        .accessibilityLabel("Task schedule").withProps({ className: "form-field" })
+        .accessibilityLabel("Task schedule").disabled(!!pending.value).withProps({ className: "form-field" })
       if kind.value === "at" {
         Text("Date and time in your local timezone").withProps({ className: "form-help" })
-        TextField(Binding(at), "Date and time").accessibilityLabel("Task date and time").withProps({ className: "form-field", type: "datetime-local" })
+        TextField(Binding(at), "Date and time").accessibilityLabel("Task date and time").disabled(!!pending.value).withProps({ className: "form-field", type: "datetime-local" })
       } else if kind.value === "interval" {
-        TextField(Binding(seconds), "Interval in seconds").accessibilityLabel("Interval in seconds").withProps({ className: "form-field", type: "number", min: 1 })
+        TextField(Binding(seconds), "Interval in seconds").accessibilityLabel("Interval in seconds").disabled(!!pending.value).withProps({ className: "form-field", type: "number", min: 1 })
       } else {
         Text("One run at the next provider quota reset. The server resolves the time when saving.").withProps({ className: "form-help" })
       }
       HStack(spacing: 8) {
         PrimaryButton(title: pending.value ? "Saving…" : "Save task", enabled: connected() && !pending.value, action: { saveTask() })
-        Button("Close editor") { editing.value = false }.withProps({ className: "form-action" })
+        Button("Close editor") { editing.value = false }.withProps({ className: "form-action" }).disabled(!!pending.value)
       }
-      Text("Tasks run on the server while its scheduler is active. A saved draft remains here until you close it.").withProps({ className: "form-help" })
+      Text("Tasks run on the server while its scheduler is active. Your draft is kept until the server confirms the save.").withProps({ className: "form-help" })
     }.withProps({ className: "feature-card" }).style({ width: "100%" })
   }
 }
