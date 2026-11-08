@@ -2,6 +2,8 @@ import { Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import { remote, sheet, ease, connected, openSheet, shortModel, settingsEditorValue } from "./state"
+import { FeatureSheet, sheetTitle } from "./FeatureSheets.mun"
+import { modalRef } from "./modal"
 
 const modelQuery = State("")
 
@@ -58,8 +60,9 @@ struct ModelSheet: View {
           }
         }
       }
-      .style({ maxHeight: "420px" })
+      .style({ maxHeight: "min(420px, calc(var(--app-height, 100dvh) - 180px))", minHeight: "0" })
     }
+    .style({ minHeight: "0", width: "100%" })
   }
 }
 
@@ -102,7 +105,7 @@ struct SettingControl: View {
         }
         .padding(2)
         .background(color.raised)
-        .style({ borderRadius: "8px" })
+        .style({ borderRadius: "8px", flexWrap: "wrap", width: "100%" })
       } else {
         Button(action: { remoteStore.sendSettingsUi(control.action) }, label: {
           HStack(spacing: 10) {
@@ -110,11 +113,12 @@ struct SettingControl: View {
               Text(control.label).fontSize(13)
               Text(control.detail).fontSize(12).foregroundStyle(color.muted)
             }
+            .style({ flex: "1", minWidth: "0", overflowWrap: "anywhere" })
             Spacer()
             if control.kind === "toggle" {
               Switch(on: !!control.checked)
             } else {
-              Text(control.action_label || control.value || "›").fontSize(12).foregroundStyle(color.muted).style({ whiteSpace: "nowrap" })
+              Text(control.action_label || control.value || "›").fontSize(12).foregroundStyle(color.muted).lineLimit(1).style({ maxWidth: "35%", minWidth: "0" })
             }
           }
         })
@@ -166,7 +170,8 @@ struct SettingsSheet: View {
         }
       }
     }
-    .style({ maxHeight: "520px" })
+    .withProps({ className: "sheet-scroll" })
+    .style({ minHeight: "0", flex: "1 1 auto" })
   }
 }
 
@@ -179,19 +184,21 @@ export struct SheetLayer: View {
         .transition(Transition.opacity)
       VStack(alignment: .stretch, spacing: 12) {
         HStack(spacing: 0) {
-          Text(sheet.value === "model" ? "Model" : remote.value.settings?.title || "Settings").fontWeight("semibold")
+          Text(sheetTitle()).fontWeight("semibold")
           Spacer()
           Button("Done") { openSheet("none") }.foregroundStyle(color.muted)
         }
         if sheet.value === "model" {
           ModelSheet()
-        } else {
+        } else if sheet.value === "settings" {
           SettingsSheet()
+        } else {
+          FeatureSheet().id(sheet.value)
         }
       }
-      .withProps({ role: "dialog", "aria-modal": "true", "aria-label": sheet.value === "model" ? "Model" : remote.value.settings?.title || "Settings" })
+      .withProps({ role: "dialog", "aria-modal": "true", "aria-label": sheetTitle(), "data-sheet-dialog": "true", className: "sheet-dialog", ref: modalRef, tabindex: "-1" })
       .padding(16)
-      .style({ width: "440px" })
+      .style({ width: "480px", maxHeight: "calc(var(--app-height, 100dvh) - 32px)", minHeight: "0" })
       .background(color.bg)
       .border(color.line, 1)
       .shadow("rgba(0, 0, 0, 0.18)", 24, 0, 8)

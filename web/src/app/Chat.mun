@@ -44,7 +44,7 @@ export struct TopBar: View {
           .withProps({ "aria-controls": "sidebar", "aria-expanded": sidebarOpen.value })
           .transition(Transition.opacity)
       }
-      Text(page.value === "chat" ? remote.value.currentSession?.title || "New session" : page.value === "files" ? "Files" : page.value === "diff" ? "Review changes" : "Agents")
+      Text(page.value === "chat" ? remote.value.currentSession?.title || "New session" : page.value === "files" ? "Files" : page.value === "diff" ? "Review changes" : page.value === "tasks" ? "Scheduled tasks" : page.value === "debate" ? "Debate" : page.value === "extensions" ? "Extensions" : "Agents")
         .fontSize(14).fontWeight("medium").lineLimit(1)
         .style({ minWidth: "0" })
       Spacer()

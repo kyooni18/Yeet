@@ -7,6 +7,8 @@ import { WorkspacePanel, InspectorScrim } from "./Inspector.mun"
 import { TopBar, Chat } from "./Chat.mun"
 import { FilesPage, DiffPage } from "./Pages.mun"
 import { AgentsPage } from "./Agents.mun"
+import { TasksPage } from "./Tasks.mun"
+import { DebatePage, ExtensionsPage } from "./Debate.mun"
 import { SheetLayer } from "./Sheets.mun"
 
 struct Content: View {
@@ -18,6 +20,12 @@ struct Content: View {
         DiffPage()
       } else if page.value === "agents" {
         AgentsPage()
+      } else if page.value === "tasks" {
+        TasksPage()
+      } else if page.value === "debate" {
+        DebatePage()
+      } else if page.value === "extensions" {
+        ExtensionsPage()
       } else {
         Chat()
       }

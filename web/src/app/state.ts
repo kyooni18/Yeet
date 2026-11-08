@@ -6,8 +6,8 @@ import { bindElement } from './dom'
 /** Mirror of the shared RemoteStore snapshot; every View reads `remote.value`. */
 export const remote = State(remoteStore.getSnapshot())
 
-export type Page = 'chat' | 'files' | 'diff' | 'agents'
-export type Sheet = 'none' | 'settings' | 'model'
+export type Page = 'chat' | 'files' | 'diff' | 'agents' | 'tasks' | 'debate' | 'extensions'
+export type Sheet = 'none' | 'settings' | 'model' | 'reasoning' | 'permissions' | 'auth' | 'providers' | 'capabilities' | 'agent-settings' | 'session'
 
 const wide = () => window.matchMedia('(min-width: 900px)').matches
 const desktop = () => window.matchMedia('(min-width: 1280px)').matches
@@ -31,6 +31,20 @@ export const toast = State('')
 export const sessionQuery = State('')
 /** Local draft, initialized only when the shared settings editor opens. */
 export const settingsEditorValue = State('')
+export const managedSession = State<{ id: string; title: string } | null>(null)
+
+export function manageSession(id: string, title: string) {
+  managedSession.value = { id, title }
+  openSheet('session')
+}
+
+/** Route every destination advertised by the Remote host to a real surface. */
+export function navigateDestination(destination: string) {
+  if (destination === 'models') openSheet('model')
+  else if (destination === 'sessions') { openSheet('none'); openPage('chat'); toggleSidebar(true) }
+  else if (destination === 'agents') { openSheet('none'); openPage('agents') }
+  else if (['settings', 'reasoning', 'permissions', 'auth', 'providers', 'capabilities'].includes(destination)) openSheet(destination as Sheet)
+}
 
 /** Spinner frames shared with the TUI (`| / - \` every 180 ms). */
 const FRAMES = ['|', '/', '-', '\\']
@@ -95,12 +109,18 @@ export function openPage(next: Page) {
   page.value = next
   if (next === 'files') remoteStore.requestFiles(remote.value.workspaceFiles?.path ?? '', null)
   if (next === 'diff') remoteStore.requestChanges(remote.value.workspaceChanges?.selected ?? null, false)
+  if (next === 'tasks') remoteStore.send({ type: 'request_tasks' })
   if (!isWide.value) toggleSidebar(false)
   if (!isDesktop.value && inspectorOpen.value) toggleInspector(false)
 }
 
 export function openSheet(next: Sheet) {
   if (next === 'settings') remoteStore.sendSettingsUi({ type: 'refresh' })
+  if (next === 'model') remoteStore.send({ type: 'request_models' })
+  if (next === 'auth') remoteStore.send({ type: 'request_auth' })
+  if (next === 'providers') remoteStore.send({ type: 'request_providers' })
+  if (next === 'capabilities') remoteStore.send({ type: 'request_capabilities' })
+  if (next === 'permissions') remoteStore.send({ type: 'request_sandbox' })
   if (next !== 'none') {
     if (!isWide.value) toggleSidebar(false)
     if (!isDesktop.value && inspectorOpen.value) toggleInspector(false)
@@ -266,8 +286,7 @@ function consumeEffects(onEditDraft: (text: string) => void) {
   if (settings && settings.revision !== handledSettings) {
     handledSettings = settings.revision
     const effect = remoteStore.consumeSettingsEffect(settings.revision)
-    if (effect?.destination === 'models') openSheet('model')
-    else if (effect?.destination === 'agents') { openSheet('none'); openPage('agents') }
+    if (effect?.destination) navigateDestination(effect.destination)
   }
   const home = snapshot.homeEffect
   if (home && home.id !== handledHome) {

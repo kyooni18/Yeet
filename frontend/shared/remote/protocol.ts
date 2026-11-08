@@ -248,6 +248,7 @@ export interface RuntimeSettingsState {
   themeDarkWarning?: string | null
   themeLightWarning?: string | null
   contextLengthOverride?: number | null
+  agentGroup?: { autoDeploy: boolean; writePolicy: string }
 }
 
 export type AgentMode = 'single' | 'adaptive'
@@ -318,6 +319,11 @@ export interface AgentGroupItem {
 
 
 export interface BridgeState {
+  scheduled_tasks?: ScheduledTask[]
+  tasks_notice?: string | null
+  tasks_response_id?: string | null
+  tasks_scheduler_running?: boolean
+  extension_commands?: Array<{ extensionId: string; command: string; description: string }>
   workspace_root?: string | null
   conversation_revision: number
   conversation?: ConversationEntry[] | null
@@ -375,7 +381,7 @@ export interface BridgeState {
   sandbox_settings?: SandboxSettingsState | null
   sandbox_notice?: string | null
   sandbox_working: boolean
-  debate?: unknown
+  debate?: DebateState | null
 }
 
 export interface WebSearchProviderHealth {
@@ -478,12 +484,15 @@ export interface ShellJobResponse {
 }
 
 export type FrontendCommand =
+  | { type: 'request_tasks' }
+  | { type: 'manage_task'; action: TaskAction; request_id: string }
   | { type: 'submit'; text: string; attachment_ids?: string[] }
   | { type: 'interrupt' }
   | { type: 'shell_job'; job_id: string; action: 'output' | 'input' | 'resize' | 'interrupt' | 'stop'; request_id: string; offset?: number; data?: string; rows?: number; cols?: number }
   | { type: 'regenerate_last' }
   | { type: 'edit_last'; text: string }
   | { type: 'resolve_permission'; request_id: string; granted: boolean; session?: boolean }
+  | { type: 'answer_question'; request_id: string; answer: string | null }
   | { type: 'allow_shell' }
   | { type: 'deny_shell' }
   | { type: 'allow_native_app' }
@@ -500,7 +509,12 @@ export type FrontendCommand =
   | { type: 'cancel_agent_group'; group_id: string }
   | { type: 'stop_agent_group'; group_id: string }
   | { type: 'inspect_agent_group'; group_id: string }
+  | { type: 'message_agent'; agent_id: string; message: string }
+  | { type: 'stop_agent' | 'remove_agent'; agent_id?: string | null }
   | { type: 'request_sessions' }
+  | { type: 'rename_session'; session_id: string; title: string }
+  | { type: 'move_session'; session_id: string; workspace_path: string }
+  | { type: 'delete_session'; session_id: string }
   | { type: 'load_session'; session_id: string }
   | { type: 'new_session' }
   | { type: 'request_capabilities' }
@@ -513,6 +527,8 @@ export type FrontendCommand =
   | { type: 'save_provider'; id: string; base_url: string; require_api_key: boolean }
   | { type: 'remove_provider'; id: string }
   | { type: 'request_settings' }
+  | { type: 'set_context_length'; length: number | null }
+  | { type: 'set_agent_group_settings'; settings: { autoDeploy: boolean; writePolicy: string } }
   | { type: 'set_open_ai_flex'; enabled: boolean }
   | { type: 'set_service_backend'; service: string; backend: string; server?: string | null }
   | { type: 'request_web_search_status' | 'plan_web_search_setup' | 'test_web_search' }
@@ -522,7 +538,23 @@ export type FrontendCommand =
   | { type: 'set_theme'; mode: 'dark' | 'light' | 'both'; value: string }
   | { type: 'request_sandbox' }
   | { type: 'update_sandbox'; action: SandboxAction }
-  | { type: 'start_debate'; topic: string; models?: string[] | null }
+  | { type: 'start_debate'; topic: string; models?: DebateModels | null }
+  | { type: 'extension_command'; command: string; args?: string[] }
+
+export type TaskSchedule = { kind: 'at'; at: string } | { kind: 'interval'; seconds: number } | { kind: 'quota_reset' }
+export interface TaskDraft { name: string; prompt: string; folder: string; model: string; schedule: TaskSchedule }
+export interface ScheduledTask {
+  id: string; draft: TaskDraft; enabled: boolean; running: boolean
+  next_run: string | null; last_run: string | null; last_result: string | null; session_id: string | null
+}
+export type TaskAction = { action: 'save'; id: string | null; draft: TaskDraft }
+  | { action: 'set_enabled'; id: string; enabled: boolean } | { action: 'delete'; id: string }
+export interface DebateModels { pro: string; con: string; jury: string }
+export interface DebateState {
+  topic: string; status: string; models: DebateModels; verdict: string | null
+  speeches: Array<{ stage: number; pro: boolean; text: string }>
+  ballots: Array<{ pro: number[]; con: number[]; reason: string }>
+}
 
 export interface RemoteAuthStatus {
   required: boolean

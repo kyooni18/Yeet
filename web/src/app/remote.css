@@ -83,6 +83,24 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .icon-button:active:not(:disabled) { transform: scale(0.94); }
 .section-label { font-size: 10px; font-weight: 600; letter-spacing: 0.085em; color: var(--faint); padding: 0 10px; }
 
+/* Forms grow with their container, not with the width of their placeholder. */
+.form-field { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--composer); color: var(--text); font-size: 16px; }
+.form-field:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
+textarea.form-field { resize: vertical; min-height: 96px; }
+.form-action { padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--composer); font-size: 13px; flex-shrink: 0; }
+.form-action:hover:not(:disabled) { background: var(--hover); }
+.destructive { color: var(--del); }
+.form-help { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.form-notice { padding: 10px 12px; border-left: 2px solid var(--focus); background: var(--panel); font-size: 13px; overflow-wrap: anywhere; }
+.feature-card { padding: 14px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.sheet-dialog { overflow: hidden; }
+.sheet-dialog > :first-child { flex-shrink: 0; }
+.sheet-scroll { overscroll-behavior: contain; scrollbar-gutter: stable; padding: 2px 4px 6px 2px; }
+.sheet-dialog [data-mun="Toggle"] { display: flex; align-items: center; gap: 10px; font-size: 13px; min-height: 40px; }
+.sheet-dialog [data-mun="Toggle"] input { accent-color: var(--accent); width: 18px; height: 18px; flex-shrink: 0; }
+.feature-page { width: 100% !important; max-width: 880px !important; margin: 0 auto; padding: 24px clamp(16px, 4vw, 32px) 40px; min-width: 0; }
+.feature-actions { flex-wrap: wrap; width: 100% !important; }
+
 /* Navigation: a fixed header/footer around an actually shrinkable scroll region. */
 #sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
 #sidebar > :not(.sidebar-scroll) { flex-shrink: 0; }

@@ -618,6 +618,13 @@ export class RemoteStore {
     return this.transport?.sendAgentUi?.(action) ?? false
   }
 
+  consumeAgentEffect(revision: number): AgentUiEffect | null {
+    if (this.agentEffect?.revision !== revision) return null
+    const effect = this.agentEffect.value
+    this.agentEffect = null
+    return effect
+  }
+
   sendUi(action: ShellAction): boolean {
     if (action.type === 'set_layout') this.layout = action.layout
     return this.transport?.sendUi?.(action) ?? false

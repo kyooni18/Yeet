@@ -214,7 +214,10 @@ export async function installMockRemote(page: Page): Promise<void> {
         const host = window as unknown as {
           __yeetProjectSettings(input: unknown): Promise<{ ui_state: Record<string, unknown>; view: unknown; effect: unknown; command?: unknown }>
         }
-        const result = await host.__yeetProjectSettings({ state: harnessState, ui_state: settingsUiState, action, environment: {} })
+        const result = await host.__yeetProjectSettings({ state: harnessState, ui_state: settingsUiState, action, environment: {
+          supported_destinations: ['models', 'reasoning', 'agents', 'permissions', 'auth', 'providers', 'capabilities'],
+          supported_editors: ['context_length', 'web_endpoint'],
+        } })
         settingsUiState = result.ui_state
         if (result.command) sent.push({ type: 'command', version: 1, command: result.command })
         socket.emit({ type: 'ui_settings', version: 1, settings_revision: ++settingsRevision, view: result.view, effect: result.effect })

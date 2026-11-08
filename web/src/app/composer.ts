@@ -2,7 +2,7 @@ import { State } from '@mun/core'
 import type { ComposerSuggestion, EditorSnapshot } from '@/remote/protocol'
 import { deleteAttachment, remoteFeatureSet, uploadAttachment } from '@/remote/attachments'
 import { remoteStore } from '@/store/remoteStore'
-import { connected, openSheet, remote } from './state'
+import { connected, navigateDestination, remote } from './state'
 
 export interface Attachment { id: string; name: string; remoteId: string | null; error: string | null }
 
@@ -153,8 +153,7 @@ remoteStore.subscribe(() => {
     }
   }
   if (effect.replace_editor && same(effect.replace_editor.editor, current)) text.value = effect.replace_editor.text
-  if (effect.destination === 'models') openSheet('model')
-  else if (effect.destination) openSheet('settings')
+  if (effect.destination) navigateDestination(effect.destination)
 })
 
 void remoteFeatureSet().then(features => {

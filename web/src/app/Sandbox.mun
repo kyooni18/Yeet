@@ -1,0 +1,107 @@
+import { remoteStore } from "@/store/remoteStore"
+import { remote, connected } from "./state"
+
+function update(action: Any) { return remoteStore.updateSandbox(action) }
+function editable() { return connected() && !remote.value.state.sandbox_working }
+
+/** Detailed policy edits are commands to Rust; no browser policy engine. */
+export struct SandboxSheet: View {
+  @State var path: String = ""
+  @State var host: String = ""
+  @State var port: String = ""
+  @State var envKey: String = ""
+  @State var envValue: String = ""
+  @State var secret: String = ""
+  @State var limit: String = "wall_time_seconds"
+  @State var limitValue: String = ""
+  @State var confirmUnlimited: Bool = false
+  @State var confirmReset: Bool = false
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 12) {
+      Text("These permissions affect commands run on the Yeet server. Unlimited mode grants normal user authority.").withProps({ className: "form-help" })
+      if remote.value.state.sandbox_notice { Text(remote.value.state.sandbox_notice).withProps({ role: "status", className: "form-notice" }) }
+      if remote.value.state.sandbox_settings {
+        Text("Preset").fontSize(13)
+        Picker(Binding(() => remote.value.state.sandbox_settings.preset, preset => {
+          if (preset === "unlimited") confirmUnlimited.value = true
+          else if (preset !== "custom") update({ type: "apply_preset", preset })
+        }), [{ value: "safe", label: "Safe" }, { value: "balanced", label: "Balanced" }, { value: "unlimited", label: "Unlimited" }, { value: "custom", label: "Custom" }])
+          .accessibilityLabel("Sandbox preset").withProps({ className: "form-field" }).disabled(!editable())
+        if confirmUnlimited.value {
+          Text("Unlimited mode removes sandbox isolation. Only enable it for a trusted agent and workspace.").withProps({ role: "alert", className: "form-help" })
+          HStack(spacing: 8) {
+            Button("Enable unlimited") { update({ type: "apply_preset", preset: "unlimited" }); confirmUnlimited.value = false }.withProps({ className: "form-action destructive" }).disabled(!editable())
+            Button("Keep sandbox") { confirmUnlimited.value = false }.withProps({ className: "form-action" })
+          }
+        }
+        Toggle("Auto approve requests", Binding(() => remote.value.state.sandbox_settings.auto_approve, enabled => update({ type: "set_auto_approve", enabled }))).disabled(!editable())
+        Toggle("Sandbox isolation", Binding(() => remote.value.state.sandbox_settings.execution_mode === "sandboxed", enabled => {
+          if (enabled) update({ type: "set_execution_mode", mode: "sandboxed" })
+          else confirmUnlimited.value = true
+        })).disabled(!editable())
+        Toggle("Scratch folder is writable", Binding(() => remote.value.state.sandbox_settings.scratch_writable, enabled => update({ type: "set_scratch_writable", enabled }))).disabled(!editable())
+        Text("Workspace access").fontSize(13)
+        Picker(Binding(() => remote.value.state.sandbox_settings.workspace_mode, mode => { if (mode !== "paths") update({ type: "set_workspace_mode", mode }) }), [{ value: "none", label: "No workspace reads" }, { value: "all", label: "Read entire workspace" }, { value: "paths", label: "Selected paths (add below)" }])
+          .accessibilityLabel("Workspace access").withProps({ className: "form-field" }).disabled(!editable())
+        Text("Adding a path switches workspace reads to the selected-paths policy.").withProps({ className: "form-help" })
+        ForEach(remote.value.state.sandbox_settings.workspace_paths, { id: item => item }) { item in
+          HStack(spacing: 8) {
+            Text(item).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
+            Button("Remove path") { update({ type: "remove_workspace_path", path: item }) }.withProps({ className: "form-action" }).disabled(!editable())
+          }
+        }
+        HStack(spacing: 8) {
+          TextField(Binding(path), "Relative workspace path").accessibilityLabel("Workspace path").withProps({ className: "form-field" }).style({ flex: "1", minWidth: "0" })
+          Button("Add path") { if (update({ type: "add_workspace_path", path: path.value.trim() })) { path.value = "" } }.withProps({ className: "form-action" }).disabled(!editable() || !path.value.trim())
+        }
+        Text("Allowed network destinations").fontSize(13)
+        ForEach(remote.value.state.sandbox_settings.network_allow, { id: item => item.host + ":" + item.port }) { item in
+          HStack(spacing: 8) {
+            Text(item.host + (item.port ? ":" + item.port : "")).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
+            Button("Remove host") { update({ type: "remove_network", host: item.host, port: item.port }) }.withProps({ className: "form-action" }).disabled(!editable())
+          }
+        }
+        TextField(Binding(host), "Host").accessibilityLabel("Allowed host").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+        HStack(spacing: 8) {
+          TextField(Binding(port), "Port (optional)").accessibilityLabel("Allowed port").withProps({ className: "form-field", type: "number", min: 1, max: 65535 }).style({ flex: "1", minWidth: "0" })
+          Button("Add host") { update({ type: "add_network", host: host.value.trim(), port: port.value ? Number(port.value) : null }) }.withProps({ className: "form-action" }).disabled(!editable() || !host.value.trim() || (!!port.value && (!Number.isInteger(Number(port.value)) || Number(port.value) < 1 || Number(port.value) > 65535)))
+        }
+        Text("Environment variables").fontSize(13)
+        ForEach(remote.value.state.sandbox_settings.environment, { id: item => item.key }) { item in
+          HStack(spacing: 8) {
+            Text(item.key).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
+            Button("Remove variable") { update({ type: "remove_environment", key: item.key }) }.withProps({ className: "form-action" }).disabled(!editable())
+          }
+        }
+        TextField(Binding(envKey), "Variable name").accessibilityLabel("Variable name").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+        TextField(Binding(envValue), "Value").accessibilityLabel("Variable value").withProps({ className: "form-field", type: "password", autocomplete: "off" })
+        Button("Set variable") { if (update({ type: "set_environment", key: envKey.value.trim(), value: envValue.value })) { envValue.value = "" } }.withProps({ className: "form-action" }).disabled(!editable() || !envKey.value.trim())
+        Text("Secret references").fontSize(13)
+        ForEach(remote.value.state.sandbox_settings.secret_ids, { id: item => item }) { item in
+          HStack(spacing: 8) {
+            Text(item).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
+            Button("Remove secret") { update({ type: "remove_secret", id: item }) }.withProps({ className: "form-action" }).disabled(!editable())
+          }
+        }
+        HStack(spacing: 8) {
+          TextField(Binding(secret), "Existing secret ID").accessibilityLabel("Secret ID").withProps({ className: "form-field" }).style({ flex: "1", minWidth: "0" })
+          Button("Add secret") { update({ type: "add_secret", id: secret.value.trim() }) }.withProps({ className: "form-action" }).disabled(!editable() || !secret.value.trim())
+        }
+        Text("Resource limits").fontSize(13)
+        Picker(Binding(limit), [{ value: "wall_time_seconds", label: "Wall time (seconds)" }, { value: "max_stdout_bytes", label: "Standard output (bytes)" }, { value: "max_stderr_bytes", label: "Standard error (bytes)" }, { value: "max_memory_bytes", label: "Memory (bytes)" }, { value: "max_processes", label: "Processes" }])
+          .accessibilityLabel("Resource limit").withProps({ className: "form-field" })
+        Text("Current: " + remote.value.state.sandbox_settings.limits[limit.value]).withProps({ className: "form-help" })
+        HStack(spacing: 8) {
+          TextField(Binding(limitValue), "New limit").accessibilityLabel("Limit value").withProps({ className: "form-field", type: "number", min: 0 }).style({ flex: "1", minWidth: "0" })
+          Button("Set limit") { update({ type: "set_limit", name: limit.value, value: Number(limitValue.value) }) }.withProps({ className: "form-action" }).disabled(!editable() || !limitValue.value || !Number.isSafeInteger(Number(limitValue.value)) || Number(limitValue.value) < 0)
+        }
+        Button(confirmReset.value ? "Confirm reset policy" : "Reset policy…") {
+          if confirmReset.value { update({ type: "reset" }); confirmReset.value = false }
+          else { confirmReset.value = true }
+        }.withProps({ className: "form-action destructive" }).disabled(!editable())
+      } else {
+        Text("Sandbox settings are not available yet. Connect and try again.").withProps({ className: "form-help" })
+      }
+    }.style({ width: "100%", minWidth: "0" })
+  }
+}

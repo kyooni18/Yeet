@@ -1,0 +1,139 @@
+import { remoteStore } from "@/store/remoteStore"
+import { remote, connected, openSession } from "./state"
+import { PrimaryButton, PageHeader } from "./Common.mun"
+
+function dateLabel(value: string | null) { return value ? new Date(value).toLocaleString() : "Not scheduled" }
+function scheduleLabel(schedule: Any) {
+  return schedule.kind === "at" ? dateLabel(schedule.at) : schedule.kind === "interval" ? "Every " + schedule.seconds + " seconds" : "At the next quota reset"
+}
+
+const editing = State(false)
+const taskId = State(null)
+const name = State("")
+const prompt = State("")
+const folder = State("")
+const model = State("")
+const kind = State("interval")
+const at = State("")
+const seconds = State("3600")
+const error = State("")
+const pending = State("")
+let timeout = 0
+
+function editTask(task: Any) {
+  taskId.value = task?.id || null
+  name.value = task?.draft.name || ""
+  prompt.value = task?.draft.prompt || ""
+  folder.value = task?.draft.folder || remote.value.state.workspace_root || ""
+  model.value = task?.draft.model || remote.value.state.active_model
+  kind.value = task?.draft.schedule.kind || "interval"
+  seconds.value = String(task?.draft.schedule.seconds || 3600)
+  const date = task?.draft.schedule.at ? new Date(task.draft.schedule.at) : new Date(Date.now() + 3600000)
+  // datetime-local uses the browser's wall clock; only serialization uses UTC.
+  at.value = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+  error.value = ""
+  editing.value = true
+}
+
+function manage(action: Any) {
+  const request_id = crypto.randomUUID()
+  if (!remoteStore.send({ type: "manage_task", action, request_id })) { error.value = "Not connected. Your draft has been kept."; return }
+  pending.value = request_id
+  error.value = ""
+  clearTimeout(timeout)
+  timeout = window.setTimeout(() => {
+    if (pending.value === request_id) { pending.value = ""; error.value = "No confirmation received. Refresh tasks before trying again; your draft has been kept." }
+  }, 15000)
+}
+
+remoteStore.subscribe(() => {
+  const state = remoteStore.getSnapshot().state
+  if (pending.value && state.tasks_response_id === pending.value) { pending.value = ""; clearTimeout(timeout) }
+})
+
+function saveTask() {
+  if (!name.value.trim() || !prompt.value.trim() || !folder.value.trim() || !model.value.trim()) { error.value = "Fill in the name, prompt, workspace and model."; return }
+  let schedule: Any
+  if (kind.value === "at") {
+    const date = new Date(at.value)
+    if (!Number.isFinite(date.getTime())) { error.value = "Choose a valid date and time."; return }
+    schedule = { kind: "at", at: date.toISOString() }
+  } else if (kind.value === "interval") {
+    if (!Number.isSafeInteger(Number(seconds.value)) || Number(seconds.value) < 1) { error.value = "Interval must be a positive number of seconds."; return }
+    schedule = { kind: "interval", seconds: Number(seconds.value) }
+  } else { schedule = { kind: "quota_reset" } }
+  manage({ action: "save", id: taskId.value, draft: { name: name.value.trim(), prompt: prompt.value.trim(), folder: folder.value.trim(), model: model.value.trim(), schedule } })
+}
+
+struct TaskEditor: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 12) {
+      Text(taskId.value ? "Edit task" : "New scheduled task").fontSize(17).fontWeight("medium")
+      TextField(Binding(name), "Task name").accessibilityLabel("Task name").withProps({ className: "form-field" })
+      TextEditor(Binding(prompt), "What should Yeet do?", 3).accessibilityLabel("Task prompt").withProps({ className: "form-field" })
+      TextField(Binding(folder), "Workspace path on the server").accessibilityLabel("Task workspace").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      TextField(Binding(model), "Model ID").accessibilityLabel("Task model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      Picker(Binding(kind), [{ value: "interval", label: "Repeating interval" }, { value: "at", label: "Once at a date and time" }, { value: "quota_reset", label: "Next quota reset" }])
+        .accessibilityLabel("Task schedule").withProps({ className: "form-field" })
+      if kind.value === "at" {
+        Text("Date and time in your local timezone").withProps({ className: "form-help" })
+        TextField(Binding(at), "Date and time").accessibilityLabel("Task date and time").withProps({ className: "form-field", type: "datetime-local" })
+      } else if kind.value === "interval" {
+        TextField(Binding(seconds), "Interval in seconds").accessibilityLabel("Interval in seconds").withProps({ className: "form-field", type: "number", min: 1 })
+      } else {
+        Text("One run at the next provider quota reset. The server resolves the time when saving.").withProps({ className: "form-help" })
+      }
+      HStack(spacing: 8) {
+        PrimaryButton(title: pending.value ? "Saving…" : "Save task", enabled: connected() && !pending.value, action: { saveTask() })
+        Button("Close editor") { editing.value = false }.withProps({ className: "form-action" })
+      }
+      Text("Tasks run on the server while its scheduler is active. A saved draft remains here until you close it.").withProps({ className: "form-help" })
+    }.withProps({ className: "feature-card" }).style({ width: "100%" })
+  }
+}
+
+struct TaskRow: View {
+  let task: Any
+  @State var confirmDelete: Bool = false
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 8) {
+      Text(task.draft.name).fontSize(16).fontWeight("medium")
+      Text(task.draft.prompt).withProps({ className: "form-help" }).lineLimit(3)
+      Text(scheduleLabel(task.draft.schedule) + " · " + (task.running ? "Running" : task.enabled ? "Next: " + dateLabel(task.next_run) : "Paused")).withProps({ className: "form-help" })
+      Text(task.draft.folder + " · " + task.draft.model).withProps({ className: "form-help" })
+      if task.last_result { Text(task.last_result).withProps({ className: "form-help" }) }
+      HStack(spacing: 8) {
+        Button("Edit task") { editTask(task) }.withProps({ className: "form-action" }).disabled(!!pending.value)
+        Button(task.enabled ? "Pause task" : "Enable task") { manage({ action: "set_enabled", id: task.id, enabled: !task.enabled }) }.withProps({ className: "form-action" }).disabled(!connected() || !!pending.value)
+        if task.session_id { Button("Open result session") { openSession(task.session_id) }.withProps({ className: "form-action" }).disabled(!connected()) }
+        Button(confirmDelete.value ? "Confirm delete task" : "Delete task…") {
+          if confirmDelete.value { manage({ action: "delete", id: task.id }); confirmDelete.value = false }
+          else { confirmDelete.value = true }
+        }.withProps({ className: "form-action destructive" }).disabled(!connected() || !!pending.value)
+        if confirmDelete.value { Button("Keep task") { confirmDelete.value = false }.withProps({ className: "form-action" }) }
+      }.withProps({ className: "feature-actions" })
+    }.withProps({ className: "feature-card" }).style({ width: "100%" })
+  }
+}
+
+export struct TasksPage: View {
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 20) {
+        PageHeader(title: "Scheduled tasks", subtitle: "Give Yeet work to do later")
+        HStack(spacing: 8) {
+          PrimaryButton(title: "New task", enabled: connected() && !pending.value, action: { editTask(null) })
+          Button("Refresh tasks") { remoteStore.send({ type: "request_tasks" }) }.withProps({ className: "form-action" }).disabled(!connected())
+        }
+        if remote.value.state.tasks_scheduler_running === false { Text("The server scheduler is not running. Saved tasks will wait until it starts.").withProps({ className: "form-notice" }) }
+        if remote.value.state.tasks_notice { Text(remote.value.state.tasks_notice).withProps({ role: "status", className: "form-notice" }) }
+        if error.value { Text(error.value).withProps({ role: "alert", className: "form-notice" }) }
+        if editing.value { TaskEditor() }
+        ForEach(remote.value.state.scheduled_tasks ?? [], { id: task => task.id }) { task in
+          TaskRow(task: task)
+        }
+        if !remote.value.state.scheduled_tasks?.length { Text("No scheduled tasks yet. Create one to run an agent on a schedule.").withProps({ className: "form-help" }) }
+      }.withProps({ className: "feature-page" })
+    }.style({ flex: "1", minHeight: "0", width: "100%" })
+  }
+}

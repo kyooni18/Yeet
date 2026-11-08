@@ -1,0 +1,72 @@
+import { remoteStore } from "@/store/remoteStore"
+import { remote, connected } from "./state"
+import { PageHeader, PrimaryButton } from "./Common.mun"
+
+export struct DebatePage: View {
+  @State var topic: String = ""
+  @State var pro: String = remote.value.state.active_model
+  @State var con: String = remote.value.state.active_model
+  @State var jury: String = remote.value.state.active_model
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 18) {
+        PageHeader(title: "Debate", subtitle: "Explore a question with opposing agents and a jury")
+        TextEditor(Binding(topic), "What should the agents debate?", 3).accessibilityLabel("Debate topic").withProps({ className: "form-field" })
+        Text("Pro model").fontSize(13)
+        TextField(Binding(pro), "Pro model ID").accessibilityLabel("Pro model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+        Text("Con model").fontSize(13)
+        TextField(Binding(con), "Con model ID").accessibilityLabel("Con model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+        Text("Jury model").fontSize(13)
+        TextField(Binding(jury), "Jury model ID").accessibilityLabel("Jury model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+        HStack(spacing: 8) {
+          PrimaryButton(title: "Start debate", enabled: connected() && !remote.value.state.is_streaming && !!topic.value.trim() && !!pro.value.trim() && !!con.value.trim() && !!jury.value.trim(), action: {
+            remoteStore.send({ type: "start_debate", topic: topic.value.trim(), models: { pro: pro.value.trim(), con: con.value.trim(), jury: jury.value.trim() } })
+          })
+          if remote.value.state.is_streaming {
+            Button("Stop generating") { remoteStore.interrupt() }.withProps({ className: "form-action" }).disabled(!connected())
+          }
+        }
+        if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
+        if remote.value.state.debate {
+          Text(remote.value.state.debate.topic).fontSize(18).fontWeight("medium")
+          Text(remote.value.state.debate.status).withProps({ role: "status", className: "form-help" })
+          ForEach(remote.value.state.debate.speeches.map((speech, index) => ({ ...speech, index })), { id: speech => speech.index }) { speech in
+            VStack(alignment: .stretch, spacing: 8) {
+              Text((speech.pro ? "Pro" : "Con") + " · Round " + (speech.stage + 1)).fontSize(13).fontWeight("medium")
+              Element("yeet-markdown", { source: speech.text })
+            }.withProps({ className: "feature-card" }).style({ width: "100%" })
+          }
+          if remote.value.state.debate.verdict {
+            Text("Verdict").fontSize(17).fontWeight("medium")
+            Element("yeet-markdown", { source: remote.value.state.debate.verdict })
+          }
+          ForEach(remote.value.state.debate.ballots.map((ballot, index) => ({ ...ballot, index })), { id: ballot => ballot.index }) { ballot in
+            Element("yeet-markdown", { source: ballot.reason })
+          }
+        }
+      }.withProps({ className: "feature-page" })
+    }.style({ flex: "1", minHeight: "0", width: "100%" })
+  }
+}
+
+export struct ExtensionsPage: View {
+  @State var args: String = ""
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 18) {
+        PageHeader(title: "Extensions", subtitle: "Commands supplied by installed Yeet extensions")
+        TextEditor(Binding(args), "Arguments (one per line)", 2).accessibilityLabel("Extension arguments").withProps({ className: "form-field" })
+        ForEach(remote.value.state.extension_commands ?? [], { id: item => item.extensionId + ":" + item.command }) { item in
+          VStack(alignment: .stretch, spacing: 8) {
+            Text(item.command).fontWeight("medium")
+            Text(item.description).withProps({ className: "form-help" })
+            Button("Run " + item.command) { remoteStore.send({ type: "extension_command", command: item.command, args: args.value.split("\n").filter(Boolean) }) }
+              .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.is_streaming)
+          }.withProps({ className: "feature-card" }).style({ width: "100%" })
+        }
+        if !remote.value.state.extension_commands?.length { Text("No extension commands are available on this server.").withProps({ className: "form-help" }) }
+        if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
+      }.withProps({ className: "feature-page" })
+    }.style({ flex: "1", minHeight: "0", width: "100%" })
+  }
+}

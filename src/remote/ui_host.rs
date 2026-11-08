@@ -128,7 +128,22 @@ pub(super) fn configure_composer_host(
         Providers,
         Capabilities,
     ];
-    ui.configure_composer(environment, state).is_some()
+    // Advertise only destinations the browser implements. Editor validation
+    // remains in the shared reducer, not in an independent browser reducer.
+    use crate::shared_ui::settings::{SettingsDestination as D, SettingsEditorKind as E};
+    let mut settings = ui.settings_environment().clone();
+    settings.supported_destinations = vec![
+        D::Models,
+        D::Reasoning,
+        D::Agents,
+        D::Permissions,
+        D::Auth,
+        D::Providers,
+        D::Capabilities,
+    ];
+    settings.supported_editors = vec![E::ContextLength, E::WebEndpoint];
+    let settings_changed = ui.configure_settings(settings, state).is_some();
+    ui.configure_composer(environment, state).is_some() || settings_changed
 }
 
 /// Keep toolbar delivery and UI commit on the serialized host lane.

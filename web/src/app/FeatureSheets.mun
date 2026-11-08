@@ -1,0 +1,222 @@
+import { remoteStore } from "@/store/remoteStore"
+import { remote, sheet, connected, openSheet, managedSession, toolbarControl } from "./state"
+import { color } from "./theme"
+import { PrimaryButton, Chip } from "./Common.mun"
+import { SandboxSheet } from "./Sandbox.mun"
+
+export function sheetTitle() {
+  return ({ model: "Model", settings: "Settings", reasoning: "Response controls", permissions: "Sandbox & permissions", auth: "Authentication", providers: "Custom providers", capabilities: "Capabilities", "agent-settings": "Agent Group settings", session: "Manage session" })[sheet.value] || "Settings"
+}
+
+/** Native labelled controls; values always come back from the Rust projection. */
+export struct ResponseControls: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 14) {
+      ForEach(["reasoning", "goal"], { id: id => id }) { id in
+        if toolbarControl(id) {
+          VStack(alignment: .stretch, spacing: 6) {
+            Text(toolbarControl(id).label).fontSize(13)
+            if toolbarControl(id).options.length {
+              Picker(Binding(() => toolbarControl(id).value, value => remoteStore.sendToolbarUi({ type: "choose", value: { id, value } })), toolbarControl(id).options.map(option => ({ value: option.value, label: option.label })))
+                .accessibilityLabel(toolbarControl(id).label).withProps({ className: "form-field" })
+                .disabled(!connected() || !toolbarControl(id).enabled)
+            } else {
+              Button(toolbarControl(id).pressed ? "Enabled" : "Disabled") { remoteStore.sendToolbarUi({ type: "activate", value: id }) }
+                .withProps({ className: "form-action", role: "switch", "aria-label": toolbarControl(id).label, "aria-checked": !!toolbarControl(id).pressed })
+                .disabled(!connected() || !toolbarControl(id).enabled)
+            }
+          }
+        }
+      }
+      Text("Changes apply to this session. Context window and persistent defaults are in Settings.").withProps({ className: "form-help" })
+    }
+  }
+}
+
+struct ProviderAuth: View {
+  let provider: Any
+  @State var apiKey: String = ""
+  @State var confirmLogout: Bool = false
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 8) {
+      HStack(spacing: 8) {
+        Text(provider.provider).fontWeight("medium")
+        Spacer()
+        if provider.authenticated {
+          Button(confirmLogout.value ? "Confirm log out" : "Log out") {
+            if confirmLogout.value { remoteStore.authLogout(provider.provider); confirmLogout.value = false }
+            else { confirmLogout.value = true }
+          }.withProps({ className: "form-action destructive" }).disabled(!connected() || remote.value.state.auth_working)
+        } else {
+          Button("Log in") { remoteStore.authLogin(provider.provider) }
+            .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.auth_working)
+        }
+      }
+      Text(provider.error || (provider.authenticated ? "Signed in with " + provider.method : "Use provider login or an API key.")).withProps({ className: "form-help" })
+      ForEach(provider.usage?.windows ?? [], { id: window => window.id }) { window in
+        Text(window.label + ": " + Math.round(window.remainingPercent) + "% remaining" + (window.resetsAt ? " · resets " + new Date(window.resetsAt).toLocaleString() : "")).withProps({ className: "form-help" })
+      }
+      HStack(spacing: 8) {
+        TextField(Binding(apiKey), "API key")
+          .accessibilityLabel(provider.provider + " API key")
+          .withProps({ className: "form-field", type: "password", autocomplete: "off", spellcheck: false })
+          .style({ flex: "1", minWidth: "0" })
+        Button("Save key") {
+          if (remoteStore.authSetApiKey(provider.provider, apiKey.value.trim())) { apiKey.value = "" }
+        }.withProps({ className: "form-action" }).disabled(!connected() || !apiKey.value.trim() || remote.value.state.auth_working)
+      }
+    }.withProps({ className: "feature-card" }).style({ width: "100%" })
+  }
+}
+
+struct AuthenticationSheet: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 14) {
+      Text("Credentials are saved on the Yeet server, not in browser storage. Provider login may require completing the flow in the server terminal.").withProps({ className: "form-help" })
+      if remote.value.state.auth_notice {
+        Text(remote.value.state.auth_notice).withProps({ role: "status", className: "form-notice" })
+      }
+      ForEach(remote.value.state.auth_providers, { id: provider => provider.provider }) { provider in
+        ProviderAuth(provider: provider)
+      }
+      if !remote.value.state.auth_providers.length {
+        Text("No providers returned yet. Refresh after connecting.").withProps({ className: "form-help" })
+      }
+      Button("Refresh providers & usage") { remoteStore.send({ type: "request_auth" }); remoteStore.refreshProviderUsage() }
+        .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.auth_working)
+    }
+  }
+}
+
+struct ProvidersSheet: View {
+  @State var id: String = ""
+  @State var url: String = ""
+  @State var requireKey: Bool = true
+  @State var removing: String = ""
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 12) {
+      Text("Connect an OpenAI-compatible endpoint. Saved providers appear in the model picker.").withProps({ className: "form-help" })
+      if remote.value.state.providers_notice {
+        Text(remote.value.state.providers_notice).withProps({ role: "status", className: "form-notice" })
+      }
+      ForEach(remote.value.state.provider_configurations, { id: provider => provider.id }) { provider in
+        VStack(alignment: .stretch, spacing: 6) {
+          Text(provider.id).fontWeight("medium")
+          Text(provider.base_url).withProps({ className: "form-help" })
+          HStack(spacing: 8) {
+            Button("Edit") { id.value = provider.id; url.value = provider.base_url; requireKey.value = provider.require_api_key }
+              .withProps({ className: "form-action" })
+            Button(removing.value === provider.id ? "Confirm remove" : "Remove") {
+              if removing.value === provider.id { remoteStore.send({ type: "remove_provider", id: provider.id }); removing.value = "" }
+              else { removing.value = provider.id }
+            }.withProps({ className: "form-action destructive" }).disabled(!connected() || remote.value.state.providers_working)
+          }
+        }.withProps({ className: "feature-card" }).style({ width: "100%" })
+      }
+      Text("Provider ID").fontSize(13)
+      TextField(Binding(id), "e.g. local")
+        .accessibilityLabel("Provider ID").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      Text("Base URL").fontSize(13)
+      TextField(Binding(url), "https://example.com/v1")
+        .accessibilityLabel("Base URL").withProps({ className: "form-field", type: "url", autocapitalize: "none", spellcheck: false })
+      Toggle("Requires API key", Binding(requireKey))
+      PrimaryButton(title: "Save provider", enabled: connected() && !remote.value.state.providers_working && !!id.value.trim() && !!url.value.trim(), action: {
+        remoteStore.send({ type: "save_provider", id: id.value.trim(), base_url: url.value.trim(), require_api_key: requireKey.value })
+      })
+      Chip(title: "Manage credentials", action: { openSheet("auth") })
+    }
+  }
+}
+
+struct CapabilitiesSheet: View {
+  @State var query: String = ""
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 12) {
+      TextField(Binding(query), "Search tools, skills, MCP servers")
+        .accessibilityLabel("Search capabilities").withProps({ className: "form-field", type: "search" })
+      if remote.value.state.is_loading_capabilities { Text("Loading capabilities…").withProps({ className: "form-help" }) }
+      ForEach(remote.value.state.available_capabilities.filter(item => (item.name + " " + item.description + " " + item.kind).toLowerCase().includes(query.value.toLowerCase())), { id: item => item.id }) { item in
+        VStack(alignment: .stretch, spacing: 6) {
+          Toggle(item.name, Binding(() => item.enabled, value => { if (value !== item.enabled) remoteStore.toggleCapability(item.id) }))
+            .disabled(!connected() || remote.value.state.is_loading_capabilities)
+          Text(item.kind + " · " + item.description).withProps({ className: "form-help" })
+        }.withProps({ className: "feature-card" }).style({ width: "100%" })
+      }
+      if !remote.value.state.available_capabilities.length {
+        Text("No optional capabilities were returned by this server.").withProps({ className: "form-help" })
+      }
+    }
+  }
+}
+
+struct AgentSettingsSheet: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 14) {
+      Text("Session behavior").fontSize(13).fontWeight("medium")
+      Text("Agent mode").fontSize(13)
+      Picker(Binding(() => remote.value.state.agent_mode, mode => remoteStore.send({ type: "set_agent_mode", mode })), [{ value: "single", label: "Single agent" }, { value: "adaptive", label: "Adaptive group" }])
+        .accessibilityLabel("Agent mode").withProps({ className: "form-field" }).disabled(!connected() || remote.value.state.is_streaming)
+      Text("Autonomy").fontSize(13)
+      Picker(Binding(() => remote.value.state.autonomy_mode, mode => remoteStore.send({ type: "set_autonomy_mode", mode })), [{ value: "manual", label: "Manual" }, { value: "goal", label: "Goal" }, { value: "autonomous", label: "Autonomous" }])
+        .accessibilityLabel("Autonomy").withProps({ className: "form-field" }).disabled(!connected() || remote.value.state.is_streaming)
+      if remote.value.state.runtime_settings?.agentGroup {
+        Text("Defaults for new sessions").fontSize(13).fontWeight("medium")
+        Toggle("Automatically deploy Group Agent", Binding(() => remote.value.state.runtime_settings.agentGroup.autoDeploy, autoDeploy => remoteStore.send({ type: "set_agent_group_settings", settings: { ...remote.value.state.runtime_settings.agentGroup, autoDeploy } })))
+          .disabled(!connected() || remote.value.state.settings_working)
+        Text("Write policy").fontSize(13)
+        Picker(Binding(() => remote.value.state.runtime_settings.agentGroup.writePolicy, writePolicy => remoteStore.send({ type: "set_agent_group_settings", settings: { ...remote.value.state.runtime_settings.agentGroup, writePolicy } })), [{ value: "single_writer", label: "One group writer" }, { value: "primary_only", label: "Only the main agent writes" }])
+          .accessibilityLabel("Write policy").withProps({ className: "form-field" }).disabled(!connected() || remote.value.state.settings_working)
+      }
+      if remote.value.state.settings_notice { Text(remote.value.state.settings_notice).withProps({ role: "status", className: "form-notice" }) }
+    }
+  }
+}
+
+struct SessionSheet: View {
+  @State var title: String = managedSession.value?.title || ""
+  @State var workspace: String = ""
+  @State var confirming: Bool = false
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 12) {
+      Text("Session title").fontSize(13)
+      TextField(Binding(title), "Session title").accessibilityLabel("Session title").withProps({ className: "form-field" })
+      Button("Rename session") {
+        remoteStore.send({ type: "rename_session", session_id: managedSession.value.id, title: title.value.trim() })
+      }.withProps({ className: "form-action" }).disabled(!connected() || !title.value.trim())
+      Text("Move to workspace").fontSize(13)
+      TextField(Binding(workspace), "Absolute path on the Yeet server")
+        .accessibilityLabel("Destination workspace").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      Button("Move session") {
+        remoteStore.send({ type: "move_session", session_id: managedSession.value.id, workspace_path: workspace.value.trim() })
+      }.withProps({ className: "form-action" }).disabled(!connected() || !workspace.value.trim())
+      Text("Deleting a session permanently removes its saved history.").withProps({ className: "form-help" })
+      if confirming.value {
+        HStack(spacing: 8) {
+          Button("Permanently delete") {
+            if (remoteStore.send({ type: "delete_session", session_id: managedSession.value.id })) { openSheet("none") }
+          }.withProps({ className: "form-action destructive" }).disabled(!connected())
+          Button("Keep session") { confirming.value = false }.withProps({ className: "form-action" })
+        }
+      } else {
+        Button("Delete session…") { confirming.value = true }.withProps({ className: "form-action destructive" }).disabled(!connected())
+      }
+      if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
+    }
+  }
+}
+
+export struct FeatureSheet: View {
+  var body: some View {
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 14) {
+        if sheet.value === "reasoning" { ResponseControls() }
+        else if sheet.value === "permissions" { SandboxSheet() }
+        else if sheet.value === "auth" { AuthenticationSheet() }
+        else if sheet.value === "providers" { ProvidersSheet() }
+        else if sheet.value === "capabilities" { CapabilitiesSheet() }
+        else if sheet.value === "agent-settings" { AgentSettingsSheet() }
+        else if sheet.value === "session" { SessionSheet() }
+      }.style({ width: "100%", minWidth: "0" })
+    }.withProps({ className: "sheet-scroll" }).style({ minHeight: "0", flex: "1 1 auto" })
+  }
+}

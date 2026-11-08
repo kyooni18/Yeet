@@ -5,7 +5,7 @@ import { sidebarRef } from "./drawer"
 import { Spinner, IconButton } from "./Common.mun"
 import {
   remote, page, workspaceMenu, isWide, ease, connected, openPage, openSheet, newSession, openSession,
-  chooseWorkspace, workspaces, toggleSidebar, age, sessionQuery, filteredSessions,
+  chooseWorkspace, workspaces, toggleSidebar, age, sessionQuery, filteredSessions, manageSession,
 } from "./state"
 
 struct NavItem: View {
@@ -97,6 +97,11 @@ struct Navigation: View {
       NavItem(id: "files", title: "Files", icon: "folder", badge: "")
       NavItem(id: "diff", title: "Diff", icon: "diff", badge: remote.value.workspaceChanges?.files.length ? String(remote.value.workspaceChanges.files.length) : "")
       NavItem(id: "agents", title: "Agents", icon: "agents", badge: remote.value.agents?.active_count ? String(remote.value.agents.active_count) : "")
+      NavItem(id: "tasks", title: "Scheduled tasks", icon: "activity", badge: "")
+      NavItem(id: "debate", title: "Debate", icon: "reasoning", badge: "")
+      if remote.value.state.extension_commands?.length {
+        NavItem(id: "extensions", title: "Extensions", icon: "tool", badge: "")
+      }
     }
     .padding({ top: 12, bottom: 16 })
   }
@@ -140,7 +145,10 @@ struct Sessions: View {
         .withProps({ className: "section-label" })
         .padding({ top: 12, bottom: 4 })
       ForEach(filteredSessions(), { id: session => session.id }) { session in
-        SessionRow(session: session)
+        HStack(spacing: 0) {
+          SessionRow(session: session).style({ flex: "1", minWidth: "0" })
+          IconButton(icon: "settings", label: "Manage " + (session.title || "Untitled"), action: { manageSession(session.id, session.title || "Untitled") })
+        }
       }
       if filteredSessions().length === 0 {
         Text(sessionQuery.value ? "No matching sessions" : "Your sessions will appear here")
@@ -154,8 +162,9 @@ struct Sessions: View {
 struct Footer: View {
   var body: some View {
     HStack(spacing: 8) {
-      Circle().withProps({ className: connected() ? "connection-dot is-connected" : "connection-dot" })
-      Text(connected() ? "Connected" : remote.value.connection).fontSize(12).foregroundStyle(color.muted)
+      if !connected() {
+        Text(remote.value.connection).fontSize(12).foregroundStyle(color.muted)
+      }
       Spacer()
       IconButton(icon: "settings", label: "Settings", action: { openSheet("settings") })
     }
