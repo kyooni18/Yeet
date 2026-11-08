@@ -2,7 +2,13 @@ import { expect, test, type Page } from '@playwright/test'
 import { installMockRemote } from './mockRemote'
 
 async function navigation(page: Page) {
-  if (!await page.locator('#sidebar').isVisible()) await page.getByRole('button', { name: 'Toggle sidebar', exact: true }).click()
+  const toggle = page.getByRole('button', { name: 'Toggle sidebar', exact: true })
+  // During an exit animation the old sidebar is still visible, but not open.
+  if (await toggle.count() && await toggle.getAttribute('aria-expanded') === 'false') {
+    await expect(page.locator('#sidebar')).toHaveCount(0)
+    await toggle.click()
+  }
+  await expect(page.locator('#sidebar')).toBeVisible()
   return page.locator('#sidebar')
 }
 async function settings(page: Page, destination?: string) {

@@ -216,7 +216,7 @@ export async function installMockRemote(page: Page): Promise<void> {
         }
         const result = await host.__yeetProjectSettings({ state: harnessState, ui_state: settingsUiState, action, environment: {
           supported_destinations: ['models', 'reasoning', 'agents', 'permissions', 'auth', 'providers', 'capabilities'],
-          supported_editors: ['context_length', 'web_endpoint'],
+          supported_editors: ['context_length', 'web_endpoint', 'dark_theme', 'light_theme'],
         } })
         settingsUiState = result.ui_state
         if (result.command) sent.push({ type: 'command', version: 1, command: result.command })

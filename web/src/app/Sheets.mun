@@ -133,9 +133,10 @@ struct SettingControl: View {
 struct SettingsEditor: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 6) {
-      Text(remote.value.settings.editor.label).fontSize(13)
+      Text(remote.value.settings?.editor?.label || "Setting").fontSize(13)
       HStack(spacing: 6) {
-        TextField(Binding(settingsEditorValue), remote.value.settings.editor.label)
+        TextField(Binding(settingsEditorValue), remote.value.settings?.editor?.label || "Setting")
+          .accessibilityLabel(remote.value.settings?.editor?.label || "Setting")
           .padding({ top: 6, bottom: 6, leading: 8, trailing: 8 })
           .background(color.raised)
           .style({ flex: "1", minWidth: "0" })
@@ -144,8 +145,9 @@ struct SettingsEditor: View {
           .disabled(!connected() || remote.value.settings.working)
         Button("Cancel") { remoteStore.sendSettingsUi({ type: "cancel_editor" }) }.foregroundStyle(color.muted)
       }
-      Text(remote.value.settings.editor.hint).fontSize(12).foregroundStyle(color.faint)
+      Text(remote.value.settings?.editor?.hint || "").fontSize(12).foregroundStyle(color.faint)
     }
+    .style({ width: "100%", minWidth: "0" })
     .transition(Transition.opacity)
   }
 }
@@ -168,7 +170,7 @@ struct SettingsSheet: View {
             }
           }
         }
-      }
+      }.style({ width: "100%", minWidth: "0" })
     }
     .withProps({ className: "sheet-scroll" })
     .style({ minHeight: "0", flex: "1 1 auto" })

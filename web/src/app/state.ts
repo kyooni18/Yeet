@@ -7,7 +7,7 @@ import { bindElement } from './dom'
 export const remote = State(remoteStore.getSnapshot())
 
 export type Page = 'chat' | 'files' | 'diff' | 'agents' | 'tasks' | 'debate' | 'extensions'
-export type Sheet = 'none' | 'settings' | 'model' | 'reasoning' | 'permissions' | 'auth' | 'providers' | 'capabilities' | 'agent-settings' | 'session'
+export type Sheet = 'none' | 'settings' | 'model' | 'reasoning' | 'permissions' | 'auth' | 'providers' | 'capabilities' | 'agent-settings' | 'session' | 'workspace'
 
 const wide = () => window.matchMedia('(min-width: 900px)').matches
 const desktop = () => window.matchMedia('(min-width: 1280px)').matches

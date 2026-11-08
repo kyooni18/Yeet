@@ -1,11 +1,11 @@
 import { remoteStore } from "@/store/remoteStore"
-import { remote, sheet, connected, openSheet, managedSession, toolbarControl } from "./state"
+import { remote, sheet, connected, openSheet, openPage, managedSession, toolbarControl } from "./state"
 import { color } from "./theme"
 import { PrimaryButton, Chip } from "./Common.mun"
 import { SandboxSheet } from "./Sandbox.mun"
 
 export function sheetTitle() {
-  return ({ model: "Model", settings: "Settings", reasoning: "Response controls", permissions: "Sandbox & permissions", auth: "Authentication", providers: "Custom providers", capabilities: "Capabilities", "agent-settings": "Agent Group settings", session: "Manage session" })[sheet.value] || "Settings"
+  return ({ model: "Model", settings: "Settings", reasoning: "Response controls", permissions: "Sandbox & permissions", auth: "Authentication", providers: "Custom providers", capabilities: "Capabilities", "agent-settings": "Agent Group settings", session: "Manage session", workspace: "Open workspace" })[sheet.value] || "Settings"
 }
 
 /** Native labelled controls; values always come back from the Rust projection. */
@@ -205,6 +205,22 @@ struct SessionSheet: View {
   }
 }
 
+struct WorkspaceSheet: View {
+  @State var path: String = ""
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 12) {
+      Text("Enter an existing folder on the Yeet server, not a folder on this browser's device.").withProps({ className: "form-help" })
+      TextField(Binding(path), "Absolute workspace path")
+        .accessibilityLabel("Workspace folder").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      PrimaryButton(title: "Open workspace", enabled: connected() && !!path.value.trim(), action: {
+        remoteStore.switchWorkspace(path.value.trim())
+        openSheet("none")
+        openPage("chat")
+      })
+    }
+  }
+}
+
 export struct FeatureSheet: View {
   var body: some View {
     ScrollView() {
@@ -216,6 +232,8 @@ export struct FeatureSheet: View {
         else if sheet.value === "capabilities" { CapabilitiesSheet() }
         else if sheet.value === "agent-settings" { AgentSettingsSheet() }
         else if sheet.value === "session" { SessionSheet() }
+        else if sheet.value === "workspace" { WorkspaceSheet() }
+        if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
       }.style({ width: "100%", minWidth: "0" })
     }.withProps({ className: "sheet-scroll" }).style({ minHeight: "0", flex: "1 1 auto" })
   }

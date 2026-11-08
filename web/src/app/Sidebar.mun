@@ -124,6 +124,8 @@ struct WorkspaceSelection: View {
       .disabled(!connected())
       if workspaceMenu.value {
         WorkspaceMenu()
+        Button("Open another workspace…") { openSheet("workspace") }
+          .withProps({ className: "workspace-choice" }).fontSize(13).disabled(!connected())
       }
     }
     .padding({ bottom: 18 })

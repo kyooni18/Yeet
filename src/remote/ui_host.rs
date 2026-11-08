@@ -141,7 +141,12 @@ pub(super) fn configure_composer_host(
         D::Providers,
         D::Capabilities,
     ];
-    settings.supported_editors = vec![E::ContextLength, E::WebEndpoint];
+    settings.supported_editors = vec![
+        E::ContextLength,
+        E::WebEndpoint,
+        E::DarkTheme,
+        E::LightTheme,
+    ];
     let settings_changed = ui.configure_settings(settings, state).is_some();
     ui.configure_composer(environment, state).is_some() || settings_changed
 }
