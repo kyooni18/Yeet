@@ -28,7 +28,7 @@ for (const appearance of ['light', 'dark'] as const) {
     await expect(page.locator('.activity-group__events').first()).toBeVisible()
     for (const view of ['Files', 'Diff', 'Agents']) {
       if (!await page.locator('#sidebar').isVisible()) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
-      await page.getByRole('button', { name: new RegExp(`^${view}(?:\\s|$)`) }).click()
+      await page.locator('#sidebar').getByRole('button', { name: new RegExp(`^${view}(?:\\s|$)`) }).click()
       await expect(editor).toHaveCount(0)
       if (view === 'Files') await expect(page.locator('#main')).toContainText('Files')
       if (view === 'Diff') await expect(page.locator('#main')).toContainText('Review changes')

@@ -4,13 +4,13 @@ import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
   remote, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
-  toolbarControl, pinToBottom, workspaceLine, elapsed,
+  toolbarControl, conversationRef, workspaceLine, elapsed, inspectorOpen, toggleInspector,
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
   removeAttachment, pickFiles, addFiles,
 } from "./composer"
-import { Spinner, PageHeader, Chip } from "./Common.mun"
+import { Spinner, PageHeader, Chip, IconButton } from "./Common.mun"
 
 const questionAnswer = State("")
 
@@ -34,32 +34,27 @@ function connectionLabel(): string {
   }
 }
 
-/** Thin bar above every page: sidebar toggle when hidden, connection and context on the right. */
+/** Stable shell controls stay available on every page and viewport. */
 export struct TopBar: View {
   var body: some View {
     HStack(spacing: 10) {
       if !sidebarOpen.value {
-        Chip(title: "⟩", action: { toggleSidebar(true) })
-          .accessibilityLabel("Toggle sidebar")
+        IconButton(icon: "sidebar", label: "Toggle sidebar", action: { toggleSidebar(true) })
+          .withProps({ "aria-controls": "sidebar", "aria-expanded": sidebarOpen.value })
           .transition(Transition.opacity)
       }
-      if page.value === "chat" {
-        Text(remote.value.currentSession?.title || "New session")
-          .fontSize(13)
-          .foregroundStyle(color.muted)
-          .lineLimit(1)
-          .style({ minWidth: "0" })
-      }
+      Text(page.value === "chat" ? remote.value.currentSession?.title || "New session" : page.value === "files" ? "Files" : page.value === "diff" ? "Review changes" : "Agents")
+        .fontSize(14).fontWeight("medium").lineLimit(1)
+        .style({ minWidth: "0" })
       Spacer()
       Text(connectionLabel())
         .fontSize(12)
         .foregroundStyle(remote.value.connection === "failed" ? color.del : color.faint)
-      Text(contextLabel())
-        .fontSize(12)
-        .foregroundStyle(color.faint)
+        .withProps({ role: "status", className: "connection-label" })
+      IconButton(icon: "inspector", label: "Toggle workspace panel", action: { toggleInspector() })
+        .withProps({ "aria-controls": "workspace-panel", "aria-expanded": inspectorOpen.value, "aria-keyshortcuts": "Control+Shift+B Meta+Shift+B" })
     }
-    .padding({ top: 8, leading: 12, trailing: 18 })
-    .style({ height: "44px", flex: "none", paddingTop: "max(8px, env(safe-area-inset-top))" })
+    .withProps({ className: "topbar" })
   }
 }
 
@@ -246,6 +241,7 @@ struct MessageControls: View {
         Spacer()
       }
     }
+    .withProps({ className: "message-actions" })
   }
 }
 
@@ -330,10 +326,12 @@ struct Working: View {
 struct EmptyState: View {
   var body: some View {
     VStack(alignment: .center, spacing: 6) {
-      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(28).fontWeight("medium")
-      Text(workspaceLine()).fontSize(15).foregroundStyle(color.faint)
+      Image("/yeet-mark.svg").style({ width: "44px", height: "44px", marginBottom: "12px" })
+      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(30).fontWeight("medium")
+      Text(workspaceLine()).fontSize(13).foregroundStyle(color.faint)
     }
-    .style({ flex: "1", justifyContent: "center", minHeight: "60vh" })
+    .withProps({ className: "empty-conversation" })
+    .style({ flex: "1", justifyContent: "center", minHeight: "0", textAlign: "center" })
     .transition(Transition.opacity)
   }
 }
@@ -363,9 +361,9 @@ struct Thread: View {
         Text(remote.value.conversation.error).foregroundStyle(color.del).padding({ top: 12 })
       }
     }
-    .padding({ top: 20, bottom: 32, leading: 24, trailing: 24 })
+    .padding({ top: 32, bottom: 32, leading: 24, trailing: 24 })
     .withProps({ className: "conversation-content" })
-    .style({ maxWidth: "808px", margin: "0 auto", minHeight: "100%", width: "100%" })
+    .style({ maxWidth: "800px", margin: "0 auto", minHeight: "100%", width: "100%" })
   }
 }
 
@@ -546,23 +544,25 @@ struct Composer: View {
           })
           .fontSize(16)
           .style({ width: "100%", minHeight: "26px", border: "0", outline: "none", background: "transparent", resize: "none", fieldSizing: "content", maxHeight: "40vh", color: "inherit", padding: "0" })
-        HStack(spacing: 2) {
+        HStack(spacing: 4) {
           if canAttach.value {
-            Chip(title: "+", action: { pickFiles() })
-              .accessibilityLabel("Attach files")
+            IconButton(icon: "plus", label: "Attach files", action: { pickFiles() })
               .disabled(!connected() || remote.value.state.is_streaming)
           }
           Chip(title: shortModel(remote.value.state.active_model) || "Model", action: { openSheet("model") })
           ToolbarChoice(id: "reasoning")
           Spacer()
-          Button(remote.value.state.is_streaming ? "Stop" : "Send") { primary() }
+          Button(action: { primary() }, label: {
+            if remote.value.state.is_streaming {
+              RoundedRectangle(3).style({ width: "12px", height: "12px", background: "currentColor" })
+            } else {
+              Icon(workIcon("arrow"), { width: 19, height: 19, strokeWidth: 2 })
+            }
+          })
             .accessibilityLabel(remote.value.composer?.primary_control.label || "Send")
-            .fontSize(14)
-            .fontWeight("medium")
-            .padding({ top: 6, bottom: 6, leading: 14, trailing: 14 })
+            .withProps({ className: "send-button", title: remote.value.state.is_streaming ? "Stop generating" : "Send message" })
             .background(remote.value.state.is_streaming ? color.raised : color.accent)
             .foregroundStyle(remote.value.state.is_streaming ? color.text : color.accentInk)
-            .style({ borderRadius: "10px" })
             .opacity(remote.value.composer?.primary_control.enabled ? 1 : 0.35)
             .animation(ease, value: remote.value.state.is_streaming)
             .disabled(!connected() || !remote.value.composer?.primary_control.enabled)
@@ -570,11 +570,12 @@ struct Composer: View {
       }
       .padding({ top: 14, bottom: 10, leading: 16, trailing: 10 })
       .background(color.composer)
-      .style({ borderRadius: "21px" })
+      .withProps({ className: "composer-surface" })
+      Text("Enter to send · Shift + Enter for a new line").withProps({ className: "composer-hint" })
     }
     .padding({ top: 4, bottom: 16, leading: 16, trailing: 16 })
     .withProps({ className: "composer" })
-    .style({ maxWidth: "840px", margin: "0 auto", width: "100%" })
+    .style({ maxWidth: "816px", margin: "0 auto", width: "100%" })
   }
 }
 
@@ -584,7 +585,7 @@ export struct Chat: View {
       ScrollView() {
         Thread()
       }
-      .elementRef(pinToBottom)
+      .withProps({ className: "thread-scroll", role: "region", "aria-label": "Conversation", tabindex: "0", ref: conversationRef })
       .style({ flex: "1", minHeight: "0", width: "100%" })
       Composer()
     }

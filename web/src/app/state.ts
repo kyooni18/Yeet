@@ -1,6 +1,7 @@
 import { Animation, State, withAnimation } from '@mun/core'
 import type { ToolbarControl } from '@/remote/protocol'
 import { remoteStore } from '@/store/remoteStore'
+import { bindElement } from './dom'
 
 /** Mirror of the shared RemoteStore snapshot; every View reads `remote.value`. */
 export const remote = State(remoteStore.getSnapshot())
@@ -9,11 +10,22 @@ export type Page = 'chat' | 'files' | 'diff' | 'agents'
 export type Sheet = 'none' | 'settings' | 'model'
 
 const wide = () => window.matchMedia('(min-width: 900px)').matches
+const desktop = () => window.matchMedia('(min-width: 1280px)').matches
+function panelPreference(): boolean | null {
+  try {
+    const saved = localStorage.getItem('yeet.remote.inspector')
+    return saved == null ? null : saved === 'open'
+  } catch { return null }
+}
+let preferredInspector = panelPreference()
 
 export const page = State<Page>('chat')
 export const sheet = State<Sheet>('none')
 export const sidebarOpen = State(wide())
 export const isWide = State(wide())
+export const isDesktop = State(desktop())
+export const inspectorOpen = State(desktop() && (preferredInspector ?? true))
+export const inspectorTab = State<'changes' | 'files'>('changes')
 export const workspaceMenu = State(false)
 export const toast = State('')
 export const sessionQuery = State('')
@@ -52,7 +64,31 @@ export const ease = Animation.snappy(0.28)
 export const connected = () => remote.value.connection === 'connected'
 
 export function toggleSidebar(open = !sidebarOpen.value) {
-  withAnimation(ease, () => { sidebarOpen.value = open })
+  withAnimation(ease, () => {
+    sidebarOpen.value = open
+    if (open && !isWide.value) inspectorOpen.value = false
+  })
+}
+
+export function refreshInspector() {
+  if (!connected()) return
+  remoteStore.requestChanges(remote.value.workspaceChanges?.selected ?? null, false)
+  if (inspectorTab.value === 'files') remoteStore.requestFiles(remote.value.workspaceFiles?.path ?? '', remote.value.workspaceFiles?.selected ?? null)
+}
+
+export function toggleInspector(open = !inspectorOpen.value) {
+  preferredInspector = open
+  try { localStorage.setItem('yeet.remote.inspector', open ? 'open' : 'closed') } catch { /* Private browsing. */ }
+  withAnimation(ease, () => {
+    inspectorOpen.value = open
+    if (open && !isWide.value) sidebarOpen.value = false
+  })
+  if (open) refreshInspector()
+}
+
+export function selectInspectorTab(tab: 'changes' | 'files') {
+  inspectorTab.value = tab
+  if (tab === 'files' && connected()) remoteStore.requestFiles(remote.value.workspaceFiles?.path ?? '', remote.value.workspaceFiles?.selected ?? null)
 }
 
 export function openPage(next: Page) {
@@ -60,10 +96,15 @@ export function openPage(next: Page) {
   if (next === 'files') remoteStore.requestFiles(remote.value.workspaceFiles?.path ?? '', null)
   if (next === 'diff') remoteStore.requestChanges(remote.value.workspaceChanges?.selected ?? null, false)
   if (!isWide.value) toggleSidebar(false)
+  if (!isDesktop.value && inspectorOpen.value) toggleInspector(false)
 }
 
 export function openSheet(next: Sheet) {
   if (next === 'settings') remoteStore.sendSettingsUi({ type: 'refresh' })
+  if (next !== 'none') {
+    if (!isWide.value) toggleSidebar(false)
+    if (!isDesktop.value && inspectorOpen.value) toggleInspector(false)
+  }
   withAnimation(ease, () => { sheet.value = next })
 }
 
@@ -159,6 +200,8 @@ export function pinToBottom(element: HTMLElement) {
   return () => { observer.disconnect(); element.removeEventListener('scroll', onScroll) }
 }
 
+export const conversationRef = bindElement(pinToBottom)
+
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); showToast('Copied') }
   catch { showToast('Copy failed') }
@@ -200,7 +243,11 @@ export function startRemote(onEditDraft: (text: string) => void) {
   viewport?.addEventListener('resize', sizeViewport)
   window.addEventListener('resize', sizeViewport)
   sizeViewport()
+  let lastWorkspace = remote.value.state.workspace_root
+  let wasStreaming = remote.value.state.is_streaming
+  let refreshFrame = 0
   remoteStore.subscribe(() => {
+    const previous = remote.value
     const previousEditor = remote.value.settings?.editor
     const snapshot = remoteStore.getSnapshot()
     const editor = snapshot.settings?.editor
@@ -210,6 +257,17 @@ export function startRemote(onEditDraft: (text: string) => void) {
       settingsEditorValue.value = ''
     }
     remote.value = snapshot
+    if (inspectorOpen.value && snapshot.connection === 'connected' && (
+      previous.connection !== 'connected' || lastWorkspace !== snapshot.state.workspace_root ||
+      (wasStreaming && !snapshot.state.is_streaming)
+    )) {
+      // Welcome clears request cursors in the store's frame-batched queue.
+      // Issue reads after that batch, not synchronously from onOpen.
+      cancelAnimationFrame(refreshFrame)
+      refreshFrame = requestAnimationFrame(() => { if (inspectorOpen.value) refreshInspector() })
+    }
+    lastWorkspace = snapshot.state.workspace_root
+    wasStreaming = snapshot.state.is_streaming
     consumeEffects(onEditDraft)
   })
   const media = window.matchMedia('(min-width: 900px)')
@@ -217,9 +275,23 @@ export function startRemote(onEditDraft: (text: string) => void) {
     isWide.value = media.matches
     toggleSidebar(media.matches)
   })
+  const desktopMedia = window.matchMedia('(min-width: 1280px)')
+  desktopMedia.addEventListener('change', () => {
+    isDesktop.value = desktopMedia.matches
+    withAnimation(ease, () => { inspectorOpen.value = desktopMedia.matches && (preferredInspector ?? true) })
+    if (inspectorOpen.value) refreshInspector()
+  })
   window.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && sheet.value !== 'none') openSheet('none')
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') { event.preventDefault(); toggleSidebar() }
+    if (event.key === 'Escape') {
+      if (sheet.value !== 'none') openSheet('none')
+      else if (inspectorOpen.value && !isDesktop.value) toggleInspector(false)
+      else if (sidebarOpen.value && !isWide.value) toggleSidebar(false)
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
+      event.preventDefault()
+      if (event.shiftKey) toggleInspector()
+      else toggleSidebar()
+    }
   })
   remoteStore.init()
 }

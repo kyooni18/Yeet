@@ -12,9 +12,13 @@ if (!existsSync(resolve(mun, 'packages/core/dist'))) {
   console.error(`Mün checkout not built at ${mun}. Run \`pnpm build\` there or set MUN_PATH.`)
   process.exit(1)
 }
-mkdirSync(resolve(web, 'node_modules/@mun'), { recursive: true })
-for (const name of packages) {
-  const link = resolve(web, 'node_modules/@mun', name)
-  rmSync(link, { recursive: true, force: true })
-  symlinkSync(resolve(mun, 'packages', name), link, 'dir')
+// Current compilers emit @mun-ui imports; keep @mun for existing client imports.
+// Both names must resolve to the same runtime (and therefore the same State).
+for (const scope of ['@mun', '@mun-ui']) {
+  mkdirSync(resolve(web, 'node_modules', scope), { recursive: true })
+  for (const name of packages) {
+    const link = resolve(web, 'node_modules', scope, name)
+    rmSync(link, { recursive: true, force: true })
+    symlinkSync(resolve(mun, 'packages', name), link, 'dir')
+  }
 }

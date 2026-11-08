@@ -1,3 +1,5 @@
+import { Icon } from "@mun/core"
+import { workIcon } from "./workIcons"
 import { color, mono } from "./theme"
 import { ease, tick } from "./state"
 
@@ -59,5 +61,19 @@ export struct Chip: View {
       .style({ borderRadius: "8px", whiteSpace: "nowrap" })
       .animation(ease, value: hovering.value)
       .onHover(inside => { hovering.value = inside })
+  }
+}
+
+/** Consistent hit area and native tooltip for shell actions. */
+export struct IconButton: View {
+  let icon: String
+  let label: String
+  let action: () => void
+  var body: some View {
+    Button(action: action, label: {
+      Icon(workIcon(icon), { width: 18, height: 18, strokeWidth: 1.6 })
+    })
+    .accessibilityLabel(label)
+    .withProps({ className: "icon-button", title: label })
   }
 }

@@ -1,0 +1,205 @@
+import { Icon, Transition } from "@mun/core"
+import { remoteStore } from "@/store/remoteStore"
+import { workIcon } from "./workIcons"
+import { color } from "./theme"
+import { inspectorRef } from "./drawer"
+import { IconButton } from "./Common.mun"
+import { Patch } from "./Pages.mun"
+import {
+  remote, connected, isDesktop, inspectorTab, toggleInspector, selectInspectorTab,
+  refreshInspector, displayPath, openPage, contextLabel, shortModel,
+} from "./state"
+
+struct PanelRow: View {
+  let title: String
+  let detail: String
+  let icon: String
+  let selected: Bool
+  let action: () => void
+  var body: some View {
+    Button(action: action, label: {
+      HStack(spacing: 8) {
+        Icon(workIcon(icon), { width: 16, height: 16, strokeWidth: 1.6 })
+          .foregroundStyle(color.faint)
+        Text(title).lineLimit(1).style({ minWidth: "0", flex: "1" })
+        Text(detail).fontSize(11).foregroundStyle(color.muted).style({ whiteSpace: "nowrap" })
+      }
+    })
+    .withProps({ className: "panel-row", title, "aria-pressed": selected })
+    .disabled(!connected())
+  }
+}
+
+struct PanelEmpty: View {
+  let icon: String
+  let title: String
+  let detail: String
+  var body: some View {
+    VStack(alignment: .center, spacing: 8) {
+      Icon(workIcon(icon), { width: 28, height: 28, strokeWidth: 1.3 }).foregroundStyle(color.faint)
+      Text(title).fontSize(14).fontWeight("medium")
+      Text(detail).fontSize(12).foregroundStyle(color.muted).style({ textAlign: "center", maxWidth: "240px" })
+    }
+    .withProps({ className: "panel-empty" })
+  }
+}
+
+struct Changes: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 4) {
+      HStack(spacing: 8) {
+        Text("WORKING CHANGES").withProps({ className: "section-label" })
+        Spacer()
+        IconButton(icon: "expand", label: "Open full diff", action: { openPage("diff") })
+      }
+      if remote.value.workspaceChanges === null {
+        PanelEmpty(icon: "diff", title: connected() ? "Loading changes…" : "Not connected", detail: "Workspace changes will appear here.")
+      } else if remote.value.workspaceChanges.files.length === 0 {
+        PanelEmpty(icon: "check", title: "All caught up", detail: remote.value.workspaceChanges.message || "No uncommitted changes in this workspace.")
+      } else {
+        ForEach(remote.value.workspaceChanges.files, { id: file => file.path }) { file in
+          PanelRow(
+            title: file.path,
+            detail: file.added === null ? file.status.trim() : "+" + file.added + " −" + (file.removed ?? 0),
+            icon: "file", selected: file.path === remote.value.workspaceChanges.selected,
+            action: { remoteStore.requestChanges(file.path, false) }
+          )
+        }
+        if remote.value.workspaceChanges.patch.length {
+          VStack(alignment: .stretch, spacing: 0) {
+            Text("DIFF PREVIEW").withProps({ className: "section-label" }).padding({ top: 14, bottom: 10 })
+            Patch().withProps({ className: "inspector-patch", tabindex: "0", "aria-label": "Diff preview" })
+          }
+          .style({ height: "280px", minHeight: "0" })
+        }
+      }
+    }
+  }
+}
+
+struct Files: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 4) {
+      HStack(spacing: 6) {
+        Text(remote.value.workspaceFiles?.path || "WORKSPACE FILES")
+          .withProps({ className: "section-label" }).lineLimit(1).style({ minWidth: "0" })
+        Spacer()
+        if remote.value.workspaceFiles?.parent !== null && remote.value.workspaceFiles?.parent !== undefined {
+          IconButton(icon: "arrow", label: "Parent folder", action: { remoteStore.requestFiles(remote.value.workspaceFiles.parent) })
+            .disabled(!connected())
+        }
+        IconButton(icon: "expand", label: "Open file browser", action: { openPage("files") })
+      }
+      if remote.value.workspaceFiles === null {
+        PanelEmpty(icon: "folder", title: connected() ? "Loading files…" : "Not connected", detail: "Browse files without leaving the conversation.")
+      } else if remote.value.workspaceFiles.entries.length === 0 {
+        PanelEmpty(icon: "folder", title: "Empty folder", detail: "There are no files in this directory.")
+      } else {
+        ForEach(remote.value.workspaceFiles.entries, { id: entry => entry.path }) { entry in
+          PanelRow(
+            title: entry.name, detail: entry.directory ? "›" : entry.status ? "Modified" : "",
+            icon: entry.directory ? "folder" : "file", selected: entry.path === remote.value.workspaceFiles.selected,
+            action: { entry.directory ? remoteStore.requestFiles(entry.path) : remoteStore.requestFiles(remote.value.workspaceFiles.path, entry.path) }
+          )
+        }
+      }
+      if remote.value.workspaceFiles?.info {
+        VStack(alignment: .stretch, spacing: 6) {
+          Text("FILE DETAILS").withProps({ className: "section-label" })
+          Text(remote.value.workspaceFiles.info.name).fontSize(14).fontWeight("medium")
+          Text([Math.ceil(remote.value.workspaceFiles.info.size / 1024) + " KB", remote.value.workspaceFiles.info.lines ? remote.value.workspaceFiles.info.lines + " lines" : ""].filter(Boolean).join(" · "))
+            .fontSize(12).foregroundStyle(color.muted)
+          if remote.value.workspaceFiles.info.status {
+            Button("Review changes →") {
+              remoteStore.requestChanges(remote.value.workspaceFiles.info.path, false)
+              selectInspectorTab("changes")
+            }
+            .withProps({ className: "panel-link" }).disabled(!connected())
+          }
+        }
+        .withProps({ className: "file-details" })
+      }
+    }
+  }
+}
+
+struct PanelFooter: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 10) {
+      HStack(spacing: 8) {
+        Text(shortModel(remote.value.state.active_model) || "No model selected")
+          .fontSize(12).lineLimit(1).style({ flex: "1", minWidth: "0" })
+        Text(contextLabel()).fontSize(11).foregroundStyle(color.muted)
+      }
+      if remote.value.contextPercent !== null {
+        Element("meter", { min: 0, max: 100, value: remote.value.contextPercent, "aria-label": "Context usage" })
+          .style({ width: "100%", height: "4px" })
+      }
+      Button(action: { openPage("agents") }, label: {
+        HStack(spacing: 8) {
+          Icon(workIcon("agents"), { width: 16, height: 16, strokeWidth: 1.6 })
+          Text(remote.value.agents?.active_count ? remote.value.agents.active_count + " agents working" : "Agent activity").fontSize(12)
+          Spacer()
+          Icon(workIcon("chevron"), { width: 13, height: 13 })
+        }
+      })
+      .withProps({ className: "panel-link" })
+    }
+    .withProps({ className: "panel-footer" })
+  }
+}
+
+export struct WorkspacePanel: View {
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 0) {
+      HStack(spacing: 8) {
+        Text("Workspace").fontSize(14).fontWeight("semibold")
+        Spacer()
+        IconButton(icon: "refresh", label: "Refresh workspace", action: { refreshInspector() }).disabled(!connected())
+        IconButton(icon: "inspector", label: "Hide workspace panel", action: { toggleInspector(false) })
+      }
+      .withProps({ className: "panel-header" })
+      VStack(alignment: .stretch, spacing: 6) {
+        Text(remote.value.currentWorkspace?.display_name || "Workspace").fontSize(16).fontWeight("medium").lineLimit(1)
+        Text(displayPath(remote.value.state.workspace_root)).fontSize(12).foregroundStyle(color.muted).lineLimit(1)
+          .withProps({ title: remote.value.state.workspace_root })
+        if remote.value.workspaceChanges?.branch || remote.value.workspaceFiles?.branch {
+          HStack(spacing: 5) {
+            Icon(workIcon("branch"), { width: 13, height: 13, strokeWidth: 1.6 })
+            Text(remote.value.workspaceChanges?.branch || remote.value.workspaceFiles?.branch).fontSize(12).lineLimit(1)
+          }
+          .foregroundStyle(color.muted)
+        }
+      }
+      .withProps({ className: "panel-context" })
+      HStack(spacing: 4) {
+        Button("Changes" + (remote.value.workspaceChanges?.files.length ? " · " + remote.value.workspaceChanges.files.length : "")) { selectInspectorTab("changes") }
+          .withProps({ className: "panel-tab", "aria-pressed": inspectorTab.value === "changes" })
+        Button("Files") { selectInspectorTab("files") }
+          .withProps({ className: "panel-tab", "aria-pressed": inspectorTab.value === "files" })
+      }
+      .withProps({ className: "panel-tabs", role: "group", "aria-label": "Workspace view" })
+      ScrollView() {
+        if inspectorTab.value === "changes" {
+          Changes()
+        } else {
+          Files()
+        }
+      }
+      .withProps({ className: "panel-scroll" })
+      .style({ flex: "1 1 0", minHeight: "0" })
+      PanelFooter()
+    }
+    .withProps({ id: "workspace-panel", role: isDesktop.value ? "complementary" : "dialog", "aria-modal": isDesktop.value ? undefined : "true", "aria-label": "Workspace panel", ref: inspectorRef })
+    .style({ width: "320px", maxWidth: "calc(100vw - 24px)", height: "100%", flex: "none", position: isDesktop.value ? "relative" : "fixed", top: "0", right: "0", zIndex: "12" })
+  }
+}
+
+export struct InspectorScrim: View {
+  var body: some View {
+    Button("") { toggleInspector(false) }
+      .accessibilityLabel("Close workspace panel")
+      .withProps({ className: "drawer-scrim", tabindex: "-1" })
+      .transition(Transition.opacity)
+  }
+}

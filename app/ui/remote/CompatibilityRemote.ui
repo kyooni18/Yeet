@@ -1,0 +1,39 @@
+CompatibilityRemote
+
+# User-requested design refresh for Experimental Yeet Remote (web) only.
+# The native ContentView remains reserved for the user's OpenPencil design.
+
+Shell
+  LeftNavigation: 264px, collapsible; overlay below 900px
+    Header: Yeet wordmark, close navigation
+    NewSession: prominent full-width action
+    ScrollRegion: independently scrollable, min-height 0
+      Navigation: Sessions, Files, Diff, Agents; icon + label + optional count
+      WorkspaceDisclosure: current workspace, expandable bounded scrollable list
+      SessionSearch
+      RecentSessions: title, relative age, selected and running state
+    Footer: connection status, Settings; always reachable
+  Main: flexible, min-width 0
+    TopBar: navigation toggle, session/view title, connection, workspace-panel toggle
+    Conversation: independently scrollable, centered readable column (~760px)
+      Messages: generous rhythm, quiet tool disclosures, keyboard-visible actions
+      EmptyState: centered greeting and workspace context
+    Composer: same column alignment, raised rounded surface, auto-growing field
+      Controls: attachment, model, reasoning, send/stop
+      Hint: keyboard behavior; not shown on touch devices
+  WorkspacePanel: 320px, collapsible, visible by default at >=1280px
+    Header: workspace name, close; workspace path and branch
+    Tabs: Changes, Files; count for changes
+    ScrollRegion: live backend-provided entries, selection and empty states
+      Changes: file paths, additions/deletions, selected patch, full-page review action
+      Files: directory navigation, selected file metadata, full-page browse action
+    Footer: model and context usage, agents activity link
+    Overlay: below 1280px; scrim, Escape dismissal, focus containment and restoration
+
+VisualLanguage
+  Warm neutral canvas; distinct navigation and raised composer; subtle borders.
+  Light/dark via existing appearance setting; no new business logic or protocol.
+  Consistent outline icons, 8px spacing rhythm, readable muted labels.
+  Restrained panel entrances, hover/press/focus feedback; respect reduced motion.
+  Touch targets >=44px; safe-area padding; no horizontal document overflow.
+  Navigation and workspace drawers are mutually exclusive on narrow screens.

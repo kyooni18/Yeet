@@ -1,164 +1,165 @@
-import { Transition, withAnimation } from "@mun/core"
+import { Icon, Transition, withAnimation } from "@mun/core"
 import { color } from "./theme"
-import { Spinner } from "./Common.mun"
+import { workIcon } from "./workIcons"
+import { sidebarRef } from "./drawer"
+import { Spinner, IconButton } from "./Common.mun"
 import {
   remote, page, workspaceMenu, isWide, ease, connected, openPage, openSheet, newSession, openSession,
   chooseWorkspace, workspaces, toggleSidebar, age, sessionQuery, filteredSessions,
 } from "./state"
 
-/** Quiet navigation, distinct from the recent-session list. */
 struct NavItem: View {
   let id: String
   let title: String
+  let icon: String
   let badge: String
-  @State var hovering: Bool = false
   var body: some View {
     Button(action: { openPage(id) }, label: {
-      HStack(spacing: 8) {
-        Text(title).fontSize(15)
+      HStack(spacing: 10) {
+        Icon(workIcon(icon), { width: 18, height: 18, strokeWidth: 1.6 })
+        Text(title).fontSize(14)
         Spacer()
-        Text(badge).fontSize(12).foregroundStyle(color.faint)
+        if badge {
+          Text(badge).withProps({ className: "nav-count" })
+        }
       }
     })
-    .foregroundStyle(color.text2)
-    .padding({ top: 6, bottom: 6, leading: 14, trailing: 14 })
-    .background(page.value === id ? color.navSelect : hovering.value ? color.navHover : "transparent")
-    .style({ borderRadius: "8px" })
-    .animation(ease, value: page.value === id || hovering.value)
-    .onHover(inside => { hovering.value = inside })
+    .withProps({ className: "nav-item", "aria-current": page.value === id ? "page" : undefined })
   }
 }
 
-/** A compact session row with activity only while running. */
 struct SessionRow: View {
   let session: Any
-  @State var hovering: Bool = false
   var body: some View {
     Button(action: { openSession(session.id) }, label: {
-      VStack(alignment: .stretch, spacing: 2) {
-        HStack(spacing: 6) {
-          if session.id === remote.value.state.current_session_id && remote.value.state.is_streaming {
-            Spinner()
-              .transition(Transition.opacity)
-          }
-          Text(session.title || "Untitled").fontSize(14).lineLimit(1)
-          Spacer()
+      HStack(spacing: 8) {
+        if session.id === remote.value.state.current_session_id && remote.value.state.is_streaming {
+          Spinner()
         }
-        Text(age(session.updated_at)).fontSize(12).foregroundStyle(color.muted)
+        Text(session.title || "Untitled").lineLimit(1).style({ flex: "1", minWidth: "0" })
+        Text(age(session.updated_at)).fontSize(11).foregroundStyle(color.faint)
       }
     })
-    .foregroundStyle(color.text2)
-    .padding({ top: 7, bottom: 7, leading: 14, trailing: 14 })
-    .background(session.id === remote.value.state.current_session_id ? color.sessionSelect : hovering.value ? color.hover : "transparent")
-    .style({ borderRadius: "10px" })
-    .animation(ease, value: hovering.value)
-    .onHover(inside => { hovering.value = inside })
+    .withProps({ className: "session-row", title: session.title || "Untitled", "aria-current": session.id === remote.value.state.current_session_id ? "true" : undefined })
+    .disabled(!connected())
+  }
+}
+
+struct WorkspaceRow: View {
+  let item: Any
+  var body: some View {
+    Button(action: { chooseWorkspace(item.path, item.id) }, label: {
+      HStack(spacing: 8) {
+        Icon(workIcon("folder"), { width: 15, height: 15, strokeWidth: 1.6 })
+        Text(item.label).lineLimit(1).style({ flex: "1", minWidth: "0" })
+        if item.selected {
+          Icon(workIcon("check"), { width: 14, height: 14 })
+        }
+      }
+    })
+    .withProps({ className: "workspace-choice", title: item.path, "aria-current": item.selected ? "true" : undefined })
     .disabled(!connected())
   }
 }
 
 struct WorkspaceMenu: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 1) {
-      ForEach(workspaces(), { id: item => item.id }) { item in
-        Button(item.label) { chooseWorkspace(item.path, item.id) }
-          .fontSize(13)
-          .foregroundStyle(item.selected ? color.text : color.text2)
-          .padding({ top: 5, bottom: 5, leading: 14, trailing: 14 })
-          .background(item.selected ? color.sessionSelect : "transparent")
-          .style({ borderRadius: "8px" })
+    ScrollView() {
+      VStack(alignment: .stretch, spacing: 2) {
+        ForEach(workspaces(), { id: item => item.id }) { item in
+          WorkspaceRow(item: item)
+        }
       }
     }
-    .padding({ bottom: 6 })
-    .transition(Transition.opacity.combined(Transition.move("top", 6)))
+    .withProps({ id: "workspace-list", role: "region", "aria-label": "Workspaces", tabindex: "0" })
+    .style({ maxHeight: "min(240px, 32dvh)", flexShrink: "0", marginTop: "6px" })
+    .transition(Transition.opacity.combined(Transition.move("top", 4)))
   }
 }
 
 struct Header: View {
   var body: some View {
     HStack(spacing: 8) {
+      Image("/yeet-mark.svg").style({ width: "28px", height: "28px" })
+      Text("Yeet").fontSize(20).fontWeight("semibold").style({ letterSpacing: "-0.6px" })
+      Text("REMOTE").withProps({ className: "brand-tag" })
       Spacer()
-      Button("New session") { newSession() }
-        .fontSize(13)
-        .foregroundStyle(color.muted)
-        .disabled(!connected())
-      Button("⟨") { toggleSidebar(false) }
-        .accessibilityLabel("Hide sidebar")
-        .fontSize(14)
-        .foregroundStyle(color.muted)
-        .padding({ leading: 6, trailing: 6 })
+      IconButton(icon: "sidebar", label: "Hide sidebar", action: { toggleSidebar(false) })
     }
-    .style({ height: "30px", flex: "none" })
-  }
-}
-
-struct Search: View {
-  var body: some View {
-    TextField(Binding(sessionQuery), "Search sessions")
-      .accessibilityLabel("Search sessions")
-      .fontSize(14)
-      .padding({ top: 9, bottom: 9, leading: 14, trailing: 14 })
-      .background(color.field)
-      .style({ border: "0", outline: "none", borderRadius: "8px", width: "100%", color: "inherit" })
+    .withProps({ className: "sidebar-header" })
   }
 }
 
 struct Navigation: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 1) {
-      NavItem(id: "chat", title: "Sessions", badge: "")
-      NavItem(id: "files", title: "Files", badge: "")
-      NavItem(id: "diff", title: "Diff", badge: remote.value.workspaceChanges?.files.length ? String(remote.value.workspaceChanges.files.length) : "")
-      NavItem(id: "agents", title: "Agents", badge: remote.value.agents?.active_count ? String(remote.value.agents.active_count) : "")
+    VStack(alignment: .stretch, spacing: 2) {
+      NavItem(id: "chat", title: "Sessions", icon: "chat", badge: "")
+      NavItem(id: "files", title: "Files", icon: "folder", badge: "")
+      NavItem(id: "diff", title: "Diff", icon: "diff", badge: remote.value.workspaceChanges?.files.length ? String(remote.value.workspaceChanges.files.length) : "")
+      NavItem(id: "agents", title: "Agents", icon: "agents", badge: remote.value.agents?.active_count ? String(remote.value.agents.active_count) : "")
     }
+    .padding({ top: 12, bottom: 16 })
   }
 }
 
 struct WorkspaceSelection: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 2) {
+    VStack(alignment: .stretch, spacing: 0) {
+      Text("WORKSPACE").withProps({ className: "section-label" })
       Button(action: { withAnimation(ease) { workspaceMenu.value = !workspaceMenu.value } }, label: {
-        HStack(spacing: 4) {
-          Text(remote.value.currentWorkspace?.display_name || "Workspace").fontSize(14)
-          Text("›").fontSize(14).rotationEffect(workspaceMenu.value ? 270 : 90).animation(ease, value: workspaceMenu.value)
-          Spacer()
+        HStack(spacing: 8) {
+          Icon(workIcon("folder"), { width: 16, height: 16, strokeWidth: 1.6 })
+          Text(remote.value.currentWorkspace?.display_name || "Workspace").lineLimit(1).style({ flex: "1", minWidth: "0" })
+          Icon(workIcon("chevron"), { width: 14, height: 14 })
+            .rotationEffect(workspaceMenu.value ? 270 : 90)
+            .animation(ease, value: workspaceMenu.value)
         }
       })
-      .foregroundStyle(color.muted)
-      .padding({ top: 4, bottom: 4, leading: 2 })
+      .withProps({ className: "workspace-toggle", "aria-label": "Switch workspace", "aria-expanded": workspaceMenu.value, "aria-controls": "workspace-list" })
       .disabled(!connected())
       if workspaceMenu.value {
         WorkspaceMenu()
       }
     }
+    .padding({ bottom: 18 })
   }
 }
 
 struct Sessions: View {
   var body: some View {
-    ScrollView() {
-      VStack(alignment: .stretch, spacing: 2) {
-        ForEach(filteredSessions(), { id: session => session.id }) { session in
-          SessionRow(session: session)
-        }
+    VStack(alignment: .stretch, spacing: 4) {
+      HStack(spacing: 8) {
+        Icon(workIcon("search"), { width: 15, height: 15, strokeWidth: 1.6 })
+          .foregroundStyle(color.faint)
+        TextField(Binding(sessionQuery), "Search sessions")
+          .accessibilityLabel("Search sessions")
+          .withProps({ className: "session-search", type: "search" })
+      }
+      .withProps({ className: "search-field" })
+      Text(sessionQuery.value ? "SEARCH RESULTS" : "RECENT SESSIONS")
+        .withProps({ className: "section-label" })
+        .padding({ top: 12, bottom: 4 })
+      ForEach(filteredSessions(), { id: session => session.id }) { session in
+        SessionRow(session: session)
+      }
+      if filteredSessions().length === 0 {
+        Text(sessionQuery.value ? "No matching sessions" : "Your sessions will appear here")
+          .fontSize(13).foregroundStyle(color.faint)
+          .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
       }
     }
-    .style({ flex: "1", minHeight: "0" })
   }
 }
 
 struct Footer: View {
   var body: some View {
     HStack(spacing: 8) {
-      Text(connected() ? "" : remote.value.connection)
-        .fontSize(12)
-        .foregroundStyle(color.muted)
+      Circle().withProps({ className: connected() ? "connection-dot is-connected" : "connection-dot" })
+      Text(connected() ? "Connected" : remote.value.connection).fontSize(12).foregroundStyle(color.muted)
       Spacer()
-      Button("Settings") { openSheet("settings") }
-        .fontSize(13)
-        .foregroundStyle(color.muted)
+      IconButton(icon: "settings", label: "Settings", action: { openSheet("settings") })
     }
-    .padding({ top: 10, leading: 4, trailing: 4 })
+    .withProps({ className: "sidebar-footer" })
   }
 }
 
@@ -166,25 +167,36 @@ export struct Sidebar: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
       Header()
-      WorkspaceSelection().padding({ top: 12, bottom: 16 })
-      Navigation().padding({ bottom: 20 })
-      Search().padding({ bottom: 12 })
-      Sessions()
+      Button(action: { newSession() }, label: {
+        HStack(spacing: 9) {
+          Icon(workIcon("plus"), { width: 17, height: 17, strokeWidth: 1.8 })
+          Text("New session").fontSize(14).fontWeight("medium")
+          Spacer()
+        }
+      })
+      .withProps({ className: "new-session" })
+      .disabled(!connected())
+      ScrollView() {
+        VStack(alignment: .stretch, spacing: 0) {
+          Navigation()
+          WorkspaceSelection()
+          Sessions()
+        }
+      }
+      .withProps({ className: "sidebar-scroll", role: "region", "aria-label": "Workspaces and sessions" })
+      .style({ flex: "1 1 0", minHeight: "0" })
       Footer()
     }
-    .padding({ top: 14, bottom: 16, leading: 20, trailing: 20 })
-    .withProps({ id: "sidebar", role: "navigation", "aria-label": "Workspace navigation" })
-    .background(color.sidebar)
-    .style({ width: "272px", maxWidth: "calc(100vw - 40px)", height: "100%", flex: "none", position: isWide.value ? "relative" : "fixed", top: "0", left: "0", zIndex: "10" })
+    .withProps({ id: "sidebar", role: isWide.value ? "navigation" : "dialog", "aria-modal": isWide.value ? undefined : "true", "aria-label": "Workspace navigation", ref: sidebarRef })
+    .style({ width: "264px", maxWidth: "calc(100vw - 40px)", height: "100%", flex: "none", position: isWide.value ? "relative" : "fixed", top: "0", left: "0", zIndex: "12" })
   }
 }
 
-/** Dims the conversation behind the sidebar on narrow screens. */
 export struct Scrim: View {
   var body: some View {
-    Rectangle()
-      .style({ position: "fixed", inset: "0", zIndex: "9", background: "var(--scrim)" })
-      .onTapGesture(() => toggleSidebar(false))
+    Button("") { toggleSidebar(false) }
+      .accessibilityLabel("Close navigation")
+      .withProps({ className: "drawer-scrim", tabindex: "-1" })
       .transition(Transition.opacity)
   }
 }

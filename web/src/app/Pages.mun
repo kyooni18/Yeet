@@ -121,7 +121,7 @@ struct PatchLine: View {
   }
 }
 
-struct Patch: View {
+export struct Patch: View {
   var body: some View {
     ScrollView() {
       VStack(alignment: .stretch, spacing: 0) {
