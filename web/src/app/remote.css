@@ -114,6 +114,10 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .topbar { min-height: 56px; flex: none; padding: max(10px, env(safe-area-inset-top)) 18px 10px 24px; border-bottom: 1px solid var(--line); }
 .connection-label { max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; }
 .thread-scroll { overscroll-behavior: contain; scroll-padding: 24px; }
+.jump-latest-anchor { height: 0; flex: none; position: relative; z-index: 2; overflow: visible; }
+.jump-to-latest { position: absolute; bottom: 12px; left: 50%; translate: -50% 0; border: 1px solid var(--line); border-radius: 20px; background: var(--composer); box-shadow: var(--shadow); padding: 7px 12px; color: var(--muted); white-space: nowrap; }
+.jump-to-latest:hover { color: var(--text); }
+.jump-to-latest svg[data-mun="VectorSymbol"] { width: 14px; height: 14px; }
 .conversation-content { line-height: 1.7; }
 .message-actions:focus-within { opacity: 1 !important; }
 .message-actions { min-height: 28px; }
@@ -176,8 +180,7 @@ meter::-moz-meter-bar { background: var(--muted); border-radius: 4px; }
   .composer { padding-left: 10px !important; padding-right: 10px !important; }
   .composer select { max-width: 90px !important; }
   .composer-surface { padding-left: 12px !important; }
-  .composer-surface > :last-child { flex-wrap: wrap; }
-  .composer-surface > :last-child > button:not(.icon-button):not(.send-button) { max-width: 125px; overflow: hidden; text-overflow: ellipsis; }
+  .composer-surface > :last-child > button:not(.icon-button):not(.send-button) { min-width: 0; max-width: 125px; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; }
   .empty-conversation { overflow-wrap: anywhere; }
   .empty-conversation > :nth-child(2) { font-size: 25px !important; }
 }

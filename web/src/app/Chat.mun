@@ -5,6 +5,7 @@ import { color, mono } from "./theme"
 import {
   remote, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
   toolbarControl, conversationRef, workspaceLine, elapsed, inspectorOpen, toggleInspector,
+  showJumpToLatest, jumpToLatest,
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
@@ -587,6 +588,21 @@ export struct Chat: View {
       }
       .withProps({ className: "thread-scroll", role: "region", "aria-label": "Conversation", tabindex: "0", ref: conversationRef })
       .style({ flex: "1", minHeight: "0", width: "100%" })
+      if showJumpToLatest.value {
+        HStack(spacing: 0) {
+          Spacer()
+          Button(action: { jumpToLatest() }, label: {
+            HStack(spacing: 6) {
+              Icon(workIcon("arrow"), { width: 14, height: 14 }).rotationEffect(180)
+              Text("Jump to latest").fontSize(12)
+            }
+          })
+          .withProps({ className: "jump-to-latest" })
+          Spacer()
+        }
+        .withProps({ className: "jump-latest-anchor" })
+        .transition(Transition.opacity.combined(Transition.move("bottom", 4)))
+      }
       Composer()
     }
     .style({ flex: "1", minHeight: "0" })

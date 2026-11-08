@@ -18,6 +18,7 @@ Shell
     Conversation: independently scrollable, centered readable column (~760px)
       Messages: generous rhythm, quiet tool disclosures, keyboard-visible actions
       EmptyState: centered greeting and workspace context
+      FollowOutput: pinned only while near bottom; floating Jump to latest when reading history
     Composer: same column alignment, raised rounded surface, auto-growing field
       Controls: attachment, model, reasoning, send/stop
       Hint: keyboard behavior; not shown on touch devices

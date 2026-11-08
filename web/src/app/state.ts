@@ -189,15 +189,56 @@ export function contextLabel(): string {
   return percent == null ? '' : `${Math.round(percent)}% context`
 }
 
-/** Keeps a scroll container pinned to the bottom while the user has not scrolled up. */
-export function pinToBottom(element: HTMLElement) {
+export const showJumpToLatest = State(false)
+let conversationElement: HTMLElement | null = null
+
+export function jumpToLatest() {
+  if (!conversationElement) return
+  conversationElement.scrollTop = conversationElement.scrollHeight
+  conversationElement.focus({ preventScroll: true })
+  showJumpToLatest.value = false
+}
+
+/** Follow output (including shadow-DOM markdown growth), never drag a reader down. */
+function pinToBottom(element: HTMLElement) {
+  conversationElement = element
+  showJumpToLatest.value = false
   let pinned = true
-  const onScroll = () => { pinned = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }
-  const observer = new MutationObserver(() => { if (pinned) element.scrollTop = element.scrollHeight })
+  const follow = () => { if (pinned) element.scrollTop = element.scrollHeight }
+  const onScroll = () => {
+    pinned = element.scrollHeight - element.scrollTop - element.clientHeight < 80
+    showJumpToLatest.value = !pinned
+  }
+  const context = () => {
+    const snapshot = remoteStore.getSnapshot()
+    return `${snapshot.state.workspace_root}:${snapshot.state.current_session_id}:${snapshot.sessionResetRevision}`
+  }
+  let lastContext = context()
+  let frame = 0
+  const unsubscribe = remoteStore.subscribe(() => {
+    const next = context()
+    if (next === lastContext) return
+    lastContext = next
+    pinned = true
+    showJumpToLatest.value = false
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(follow)
+  })
+  const observer = new MutationObserver(follow)
+  const resize = new ResizeObserver(follow)
+  if (element.firstElementChild) resize.observe(element.firstElementChild)
+  resize.observe(element)
   element.addEventListener('scroll', onScroll, { passive: true })
   observer.observe(element, { childList: true, subtree: true, characterData: true })
-  element.scrollTop = element.scrollHeight
-  return () => { observer.disconnect(); element.removeEventListener('scroll', onScroll) }
+  follow()
+  return () => {
+    unsubscribe()
+    cancelAnimationFrame(frame)
+    observer.disconnect()
+    resize.disconnect()
+    element.removeEventListener('scroll', onScroll)
+    if (conversationElement === element) conversationElement = null
+  }
 }
 
 export const conversationRef = bindElement(pinToBottom)
