@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { accountIdFromJwt, jwtExpiresAt } from "./auth-jwt.js";
 import type { FetchLike } from "./types.js";
 import { defaultConfigDirectory } from "./platform.js";
+import { latestExaoneRateLimits } from "./providers/exaone.js";
 import { durationLabel, numeric, percent, resetIso, resolveClaudeOAuthToken, unavailableUsage, usageWindow } from "./provider-usage.js";
 import { loginGeminiOAuth, refreshGeminiOAuth, setupGeminiCodeAssist } from "./gemini-oauth.js";
 import { loginMistral } from "./mistral-auth.js";
@@ -584,6 +585,9 @@ export class AuthManager {
         case "mistral":
           usage = await this.#mistralUsage();
           break;
+        case "exaone":
+          usage = await this.#exaoneUsage();
+          break;
         default:
           usage = unavailableUsage(provider, "none", "No plan-usage adapter is available for this provider.");
           break;
@@ -601,9 +605,23 @@ export class AuthManager {
       usage = unavailableUsage(provider, source, error instanceof Error ? error.message : String(error));
     }
 
-    const ttlMs = normalized === "claude" ? 5 * 60_000 : 60_000;
+    // EXAONE usage is read from locally observed response headers, so keep it fresh.
+    const ttlMs = normalized === "claude" ? 5 * 60_000 : normalized === "exaone" ? 0 : 60_000;
     this.#usageCache.set(normalized, { expiresAt: now + ttlMs, usage });
     return usage;
+  }
+
+  async #exaoneUsage(): Promise<ProviderUsageStatus> {
+    const source = "exaone-rate-limit-headers";
+    if (!(await this.resolve("exaone"))) return unavailableUsage("exaone", source, "Add an EXAONE API key to view rate limits.");
+    const snapshot = latestExaoneRateLimits();
+    if (!snapshot) return unavailableUsage("exaone", source, "EXAONE reports rate limits on API responses; they appear after the first request.");
+    const labels = { second: "Per second", minute: "Per minute", day: "Daily" } as const;
+    return {
+      provider: "exaone", source, available: true, fetchedAt: snapshot.observedAt,
+      windows: snapshot.windows.map(({ window, limit, remaining }) =>
+        usageWindow(`exaone_${window}`, `${labels[window]} (${remaining}/${limit} requests left)`, ((limit - remaining) / limit) * 100)),
+    };
   }
 
   async #mistralUsage(): Promise<ProviderUsageStatus> {

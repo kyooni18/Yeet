@@ -164,7 +164,7 @@ test('EXAONE maps reasoning levels and sends them on the chat completions wire',
   let sent;
   const provider = new ExaoneProvider({ apiKey: 'test', fetch: async (url, init) => {
     sent = { url, body: JSON.parse(init.body), auth: init.headers.authorization };
-    return json({ id: 'x', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '\n\nHi', reasoning_content: 'think' } }], usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, reasoning_tokens: 1 } });
+    return new Response(JSON.stringify({ id: 'x', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '\n\nHi', reasoning_content: 'think' } }], usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, reasoning_tokens: 1 } }), { headers: { 'content-type': 'application/json', 'x-minute-rate-limit': '60', 'x-minute-rate-limit-remaining': '45', 'x-day-rate-limit': '86400', 'x-day-rate-limit-remaining': '86400' } });
   } });
   assert.deepEqual(await provider.listModels(), ['k-exaone_v2.5']);
   const result = await provider.complete({ model: 'k-exaone_v2.5', messages, providerOptions: prepared.providerOptions });
@@ -172,4 +172,9 @@ test('EXAONE maps reasoning levels and sends them on the chat completions wire',
   assert.equal(sent.auth, 'Bearer test');
   assert.equal(sent.body.reasoning_effort, 'high');
   assert.match(result.text ?? result.message?.content ?? '', /Hi/);
+  const { latestExaoneRateLimits } = await import('../dist/index.js');
+  assert.deepEqual(latestExaoneRateLimits().windows, [
+    { window: 'minute', limit: 60, remaining: 45 },
+    { window: 'day', limit: 86400, remaining: 86400 },
+  ]);
 });

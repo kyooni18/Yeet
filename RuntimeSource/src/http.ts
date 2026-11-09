@@ -75,6 +75,8 @@ function isRetryableStatus(status: number): boolean {
 }
 
 function retryAfterMs(response: Response): number | undefined {
+  const precise = Number(response.headers.get("retry-after-ms") ?? NaN);
+  if (Number.isFinite(precise)) return Math.max(0, precise);
   const value = response.headers.get("retry-after");
   if (!value) return undefined;
 
