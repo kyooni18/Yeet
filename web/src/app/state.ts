@@ -73,7 +73,8 @@ window.setInterval(() => {
   if (working) tick.value += 1
 }, 180)
 
-export const ease = Animation.snappy(0.28)
+// A short, non-bouncy curve keeps navigation and disclosures responsive.
+export const ease = Animation.easeOut(0.2)
 
 export const connected = () => remote.value.connection === 'connected'
 

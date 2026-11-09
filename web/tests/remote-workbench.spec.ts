@@ -139,3 +139,15 @@ test('transcript follows growing output but preserves a reader’s scroll positi
   await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeInViewport()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
+
+test('reduced motion keeps the working indicator still', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await emit(page, { is_streaming: true })
+  const spinner = page.locator('.activity-spinner').first()
+  await expect(spinner).toBeVisible()
+  await expect(spinner).toHaveCSS('rotate', 'none')
+  await page.waitForTimeout(400) // The working timer advances more than once.
+  await expect(spinner).toHaveCSS('rotate', 'none')
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await expect.poll(() => spinner.evaluate(el => getComputedStyle(el).rotate)).not.toBe('none')
+})

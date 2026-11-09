@@ -8,6 +8,7 @@ export struct Spinner: View {
   var body: some View {
     Circle()
       .style({ width: "12px", height: "12px", border: "1.5px solid var(--line)", borderTopColor: "var(--muted)", borderRadius: "50%", flex: "none" })
+      .withProps({ className: "activity-spinner" })
       .rotationEffect(tick.value * 45)
       .animation(ease, value: tick.value)
       .accessibilityLabel("Working")
