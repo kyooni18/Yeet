@@ -64,7 +64,7 @@
 
 * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
 html, body, #root { height: 100%; margin: 0; overflow: hidden; }
-#root { position: fixed; top: var(--app-top, 0px); left: var(--app-left, 0px); width: var(--app-width, 100%); height: var(--app-height, 100dvh); overflow: hidden; transform: translateZ(0); }
+#root { position: absolute; top: var(--app-top, 0px); left: var(--app-left, 0px); width: var(--app-width, 100%); height: var(--app-height, 100dvh); overflow: hidden; }
 html { overscroll-behavior: none; }
 body { background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { font: inherit; color: inherit; }

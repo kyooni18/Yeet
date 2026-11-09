@@ -6,6 +6,7 @@ test('visual viewport resize and pan keep the shell and keyboard composer aligne
   await page.addInitScript(() => {
     class Viewport extends EventTarget {
       get width() { return innerWidth }; height = innerHeight; offsetTop = 0; offsetLeft = 0; scale = 1
+      get pageTop() { return scrollY + this.offsetTop }; get pageLeft() { return scrollX + this.offsetLeft }
     }
     const viewport = new Viewport()
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
@@ -33,6 +34,21 @@ test('visual viewport resize and pan keep the shell and keyboard composer aligne
   const afterTyping = await page.locator('.composer-surface').boundingBox()
   expect(height + 18 - (afterTyping!.y + afterTyping!.height)).toBeLessThanOrEqual(10)
   expect(afterTyping!.x + afterTyping!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1)
+  // Model Safari scrolling the document to keep its caret visible. The shell
+  // must follow the viewport in document coordinates without resetting scroll.
+  await page.evaluate(() => {
+    ;(window as any).__scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY')
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 120 })
+    window.dispatchEvent(new Event('scroll'))
+  })
+  await expect.poll(() => page.locator('#root').evaluate(el => getComputedStyle(el).top)).toBe('138px')
+  expect(await page.evaluate(() => window.scrollY)).toBe(120)
+  await page.evaluate(() => {
+    const descriptor = (window as any).__scrollYDescriptor
+    if (descriptor) Object.defineProperty(window, 'scrollY', descriptor)
+    else delete (window as any).scrollY
+    window.dispatchEvent(new Event('scroll'))
+  })
   await editor.fill('Send from the mobile keyboard')
   const send = page.getByRole('button', { name: 'Send', exact: true })
   await expect(send).toBeEnabled()

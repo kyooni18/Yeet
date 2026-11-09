@@ -298,7 +298,8 @@ function consumeEffects(onEditDraft: (text: string) => void) {
 }
 
 export function startRemote(onEditDraft: (text: string) => void) {
-  // Safari can both resize and pan the visual viewport when the keyboard opens.
+  // Safari can scroll the document as well as pan the visual viewport.
+  // Anchor the shell in document coordinates rather than fighting caret scroll.
   const viewport = window.visualViewport
   let restingHeight = window.innerHeight
   let keyboardOpen = false
@@ -310,18 +311,26 @@ export function startRemote(onEditDraft: (text: string) => void) {
     root.dataset.keyboardOpen = keyboardOpen ? 'true' : 'false'
     root.style.setProperty('--app-height', `${viewport?.height ?? window.innerHeight}px`)
     root.style.setProperty('--app-width', `${viewport?.width ?? window.innerWidth}px`)
-    root.style.setProperty('--app-top', `${viewport?.offsetTop ?? 0}px`)
-    root.style.setProperty('--app-left', `${viewport?.offsetLeft ?? 0}px`)
+    root.style.setProperty('--app-top', `${viewport?.pageTop ?? window.scrollY}px`)
+    root.style.setProperty('--app-left', `${viewport?.pageLeft ?? window.scrollX}px`)
   }
   viewport?.addEventListener('resize', sizeViewport)
   viewport?.addEventListener('scroll', sizeViewport)
   window.addEventListener('resize', sizeViewport)
-  document.addEventListener('focusin', sizeViewport)
-  document.addEventListener('focusout', () => requestAnimationFrame(sizeViewport))
-  // iOS can scroll the document as well as pan the visual viewport for the caret.
-  window.addEventListener('scroll', () => {
-    if (document.activeElement?.matches('.composer textarea') && (viewport?.scale ?? 1) === 1 && (window.scrollX || window.scrollY)) window.scrollTo(0, 0)
-  }, { passive: true })
+  window.addEventListener('scroll', sizeViewport, { passive: true })
+  // Safari can report the final keyboard geometry after its focus event.
+  let settleFrame = 0
+  const settleViewport = () => {
+    cancelAnimationFrame(settleFrame)
+    const until = performance.now() + 1000
+    const tick = () => {
+      sizeViewport()
+      if (performance.now() < until) settleFrame = requestAnimationFrame(tick)
+    }
+    tick()
+  }
+  document.addEventListener('focusin', settleViewport)
+  document.addEventListener('focusout', settleViewport)
   sizeViewport()
   let lastWorkspace = remote.value.state.workspace_root
   let wasStreaming = remote.value.state.is_streaming
