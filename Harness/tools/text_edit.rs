@@ -455,7 +455,12 @@ fn line_edits(source: &str, spans: &[Span]) -> Vec<Value> {
 }
 
 fn line_of(source: &str, at: usize) -> usize {
-    source[..at].bytes().filter(|byte| *byte == b'\n').count()
+    // `at` can point inside a UTF-8 character (e.g. line_end - 1).
+    // Counting newline bytes does not require a character boundary.
+    source.as_bytes()[..at]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count()
 }
 
 fn line_starts(source: &str) -> Vec<usize> {
@@ -579,6 +584,25 @@ pub(super) fn parse_patch(patch: &str) -> Result<Vec<Value>> {
 #[cfg(test)]
 mod contract_tests {
     use super::*;
+
+    #[test]
+    fn text_edits_handle_multibyte_line_endings() {
+        for source in ["first\n説明。\nlast\n", "first\n説明。"] {
+            for edit in [
+                json!({"kind":"replaceText", "oldText":"説明。", "newText":"更新。"}),
+                json!({"kind":"patchHunk", "oldLines":["説明。"], "newLines":["更新。"]}),
+            ] {
+                let mut edits = vec![edit];
+                concretize_text_edits("locale.txt", source, &mut edits).unwrap();
+                assert_eq!(
+                    edits,
+                    vec![json!({
+                        "kind":"replace", "range":{"start":2,"end":2}, "text":"更新。"
+                    })]
+                );
+            }
+        }
+    }
 
     #[test]
     fn exact_replacement_never_silently_repairs_whitespace() {
