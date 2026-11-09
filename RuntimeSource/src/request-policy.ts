@@ -157,6 +157,26 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
     };
   }
 
+  if (parsed.provider === "exaone") {
+    // K-EXAONE always reasons; reasoning_effort accepts low / high / max.
+    // preserve_thinking keeps prior reasoning across agent tool turns, as the
+    // EXAONE docs recommend for agentic and multi-turn use.
+    const kwargs = record(existing.chat_template_kwargs);
+    const effort = existing.reasoning_effort !== undefined ? undefined
+      : requested === "low" ? "low"
+      : requested === "medium" || requested === "high" ? "high"
+      : requested === "xhigh" || requested === "max" ? "max"
+      : auxiliary ? "low" : undefined;
+    return {
+      ...request,
+      providerOptions: {
+        ...existing,
+        ...(effort ? { reasoning_effort: effort } : {}),
+        chat_template_kwargs: { preserve_thinking: true, ...kwargs },
+      },
+    };
+  }
+
   if (parsed.provider === "openrouter") {
     // Request returned reasoning even at the default effort. OpenRouter can
     // otherwise omit it, leaving the shared transcript with no middle phase.
@@ -183,7 +203,7 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
   // If they reject it, the adapter's selective unsupported-parameter retry removes
   // only `reasoning` while preserving native tools and the rest of the request.
   if ([
-    "openai", "codex-cli", "opencode", "opencode-go", "openrouter",
+    "openai", "codex-cli", "opencode", "opencode-go", "openrouter", "exaone",
     "anthropic", "claude", "claude-api", "antigravity", "gemini", "gemini-web",
   ].includes(parsed.provider)) return request;
 

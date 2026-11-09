@@ -131,13 +131,14 @@ const ENV_KEYS: Record<string, string> = {
   opencode: "OPENCODE_API_KEY",
   "opencode-go": "OPENCODE_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
+  exaone: "EXAONE_API_KEY",
 };
 const CREDENTIAL_ALIASES: Record<string, readonly string[]> = {
   antigravity: ["gemini"],
   opencode: ["opencode-go"],
   "opencode-go": ["opencode"],
 };
-const RESERVED_PROVIDER_IDS = new Set(["openai", "codex-cli", "anthropic", "antigravity", "gemini", "gemini-web", "mistral", "claude", "claude-api", "openrouter", "opencode", "opencode-go"]);
+const RESERVED_PROVIDER_IDS = new Set(["openai", "codex-cli", "anthropic", "antigravity", "gemini", "gemini-web", "mistral", "claude", "claude-api", "openrouter", "opencode", "opencode-go", "exaone"]);
 const BROWSER_PROVIDER_IDS = new Set(["codex-cli", "antigravity", "gemini-web", "claude"]);
 const API_KEY_PROVIDER_IDS = new Set(["openai", "anthropic", "claude-api", "gemini"]);
 

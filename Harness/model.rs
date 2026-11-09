@@ -20,6 +20,10 @@ pub fn reasoning_levels_for_model(model: &str) -> &'static [&'static str] {
         provider_model
     };
 
+    if provider == "exaone" {
+        return EXTENDED;
+    }
+
     if let Some(version) = routed_model.strip_prefix("gpt-") {
         let numeric = version
             .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))

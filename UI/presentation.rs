@@ -12,6 +12,7 @@ pub fn provider_name(provider: &str) -> &str {
         "opencode" => "Opencode",
         "opencode-go" => "Opencode Go",
         "openrouter" => "Openrouter",
+        "exaone" => "EXAONE API",
         _ => provider,
     }
 }

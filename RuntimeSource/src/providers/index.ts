@@ -7,3 +7,4 @@ export * from "./openai.js";
 export * from "./openai-chat.js";
 export * from "./opencode.js";
 export * from "./openrouter.js";
+export * from "./exaone.js";

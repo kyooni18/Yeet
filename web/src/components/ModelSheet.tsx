@@ -9,6 +9,7 @@ function providerDisplayName(provider: string): string {
     case 'openai': return 'OpenAI API'
     case 'opencode': return 'Opencode'
     case 'opencode-go': return 'Opencode Go'
+    case 'exaone': return 'EXAONE API'
     case 'codex-cli':
     case 'codex': return 'OpenAI Codex'
     case 'anthropic': return 'Claude API'

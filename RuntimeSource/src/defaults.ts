@@ -8,6 +8,7 @@ import { MistralProvider } from "./providers/mistral.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
 import { OpenRouterProvider } from "./providers/openrouter.js";
+import { ExaoneProvider } from "./providers/exaone.js";
 
 export interface DefaultCoreOptions {
   openaiApiKey?: string;
@@ -20,6 +21,7 @@ export interface DefaultCoreOptions {
   opencodeApiKey?: string;
   opencodeGoApiKey?: string;
   openrouterApiKey?: string;
+  exaoneApiKey?: string;
   openrouterAppUrl?: string;
   openrouterAppName?: string;
   fetch?: FetchLike;
@@ -42,6 +44,7 @@ export function createDefaultCore(options: DefaultCoreOptions = {}): CallCore {
   const opencodeApiKey = options.opencodeApiKey ?? env("OPENCODE_API_KEY");
   const opencodeGoApiKey = options.opencodeGoApiKey ?? opencodeApiKey;
   const openrouterApiKey = options.openrouterApiKey ?? env("OPENROUTER_API_KEY");
+  const exaoneApiKey = options.exaoneApiKey ?? env("EXAONE_API_KEY");
   const geminiAccessToken = options.geminiAccessToken;
 
   return new CallCore([
@@ -65,5 +68,6 @@ export function createDefaultCore(options: DefaultCoreOptions = {}): CallCore {
       ...fetchOption,
       ...apiCallLoggerOption,
     }),
+    new ExaoneProvider({ ...(exaoneApiKey ? { apiKey: exaoneApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
   ]);
 }

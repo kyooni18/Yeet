@@ -153,3 +153,23 @@ test('Claude initial commentary and OpenRouter hidden reasoning retain their pha
   assert.equal(events.some((event) => event.type === 'reasoning-delta'), false);
   assert.equal(events.at(-1).providerState.data.reasoningDetails[0].data, 'opaque');
 });
+
+test('EXAONE maps reasoning levels and sends them on the chat completions wire', async () => {
+  const { ExaoneProvider } = await import('../dist/index.js');
+  const prepared = withReasoningPolicy({ model: 'exaone/k-exaone_v2.5', messages, metadata: { reasoningLevel: 'medium' } });
+  assert.equal(prepared.providerOptions.reasoning_effort, 'high');
+  assert.deepEqual(prepared.providerOptions.chat_template_kwargs, { preserve_thinking: true });
+  assert.equal(withReasoningPolicy({ model: 'exaone/k-exaone_v2.5', messages, providerOptions: { reasoning_effort: 'low' }, metadata: { reasoningLevel: 'max' } }).providerOptions.reasoning_effort, 'low');
+
+  let sent;
+  const provider = new ExaoneProvider({ apiKey: 'test', fetch: async (url, init) => {
+    sent = { url, body: JSON.parse(init.body), auth: init.headers.authorization };
+    return json({ id: 'x', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '\n\nHi', reasoning_content: 'think' } }], usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, reasoning_tokens: 1 } });
+  } });
+  assert.deepEqual(await provider.listModels(), ['k-exaone_v2.5']);
+  const result = await provider.complete({ model: 'k-exaone_v2.5', messages, providerOptions: prepared.providerOptions });
+  assert.equal(sent.url, 'https://api.exaone.ai/v1/chat/completions');
+  assert.equal(sent.auth, 'Bearer test');
+  assert.equal(sent.body.reasoning_effort, 'high');
+  assert.match(result.text ?? result.message?.content ?? '', /Hi/);
+});

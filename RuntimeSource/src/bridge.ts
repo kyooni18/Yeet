@@ -22,6 +22,7 @@ import { OpenAIChatProvider } from "./providers/openai-chat.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
 import { OpenRouterProvider } from "./providers/openrouter.js";
+import { ExaoneProvider } from "./providers/exaone.js";
 
 import { createRequestCapabilityRegistry } from "./request-capabilities.js";
 import { withReasoningPolicy } from "./request-policy.js";
@@ -290,6 +291,9 @@ async function refreshProvider(providerId: string): Promise<void> {
     case "openrouter":
       core.register(new OpenRouterProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
       return;
+    case "exaone":
+      core.register(new ExaoneProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
+      return;
     case "opencode":
     case "opencode-go":
       core.register(new OpenCodeProvider({ id: providerId, ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
@@ -310,7 +314,7 @@ async function refreshProvider(providerId: string): Promise<void> {
   }));
 }
 
-for (const provider of ["openai", "codex-cli", "antigravity", "claude", "gemini", "mistral", "openrouter", "opencode", "opencode-go"]) await refreshProvider(provider);
+for (const provider of ["openai", "codex-cli", "antigravity", "claude", "gemini", "mistral", "openrouter", "opencode", "opencode-go", "exaone"]) await refreshProvider(provider);
 for (const provider of ["claude-api"]) await refreshProvider(provider);
 for (const provider of await auth.listCustomProviders()) {
   customProviders.set(provider.id, { kind: "openai-compatible", ...provider });
