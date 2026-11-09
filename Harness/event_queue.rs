@@ -97,7 +97,7 @@ impl EventRx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ConversationEntry, ConversationKind, HarnessState};
+    use crate::model::{ConversationEntry, ConversationKind, HarnessState, ShellPermission};
 
     fn snapshot(session: &str, full: bool, revision: usize) -> HarnessEvent {
         HarnessEvent {
@@ -106,6 +106,13 @@ mod tests {
             state: Some(HarnessState {
                 current_session_id: Some(session.into()),
                 active_assistant_text: revision.to_string(),
+                pending_shell_permission: (revision == 8191).then(|| ShellPermission {
+                    id: "approval".into(),
+                    kind: "shell".into(),
+                    command: "example".into(),
+                    operation: "execute".into(),
+                    reason: "regression probe".into(),
+                }),
                 conversation: full.then(|| {
                     vec![ConversationEntry {
                         id: "user".into(),
@@ -136,6 +143,7 @@ mod tests {
         assert_eq!(forwarder.pending.lock().unwrap().events.len(), 1);
         let state = second.try_recv().unwrap().state.unwrap();
         assert_eq!(state.active_assistant_text, "8191");
+        assert_eq!(state.pending_shell_permission.unwrap().id, "approval");
         assert_eq!(state.conversation.unwrap().len(), 1);
         assert!(matches!(second.try_recv(), Err(mpsc::TryRecvError::Empty)));
         drop(forwarder);

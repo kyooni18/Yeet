@@ -1,10 +1,60 @@
 # Remote session memory-growth investigation — 2026-11-09
 
-Status: **reproducible defects identified; no runtime fix applied**.
-Code inspected: `d91e4e0`. The affected backend files are unchanged from
+Status: **reproduced paths repaired in `215f2f9`; not deployed to running services**.
+Original code inspected: `d91e4e0`. The affected backend files were unchanged from
 `a8bbb7b`, the checkout preceding the incident's UI work.
 
-## Findings
+## Repair and verification
+
+- Settings refresh now uses `try_lock()` rather than waiting on the active
+  coordinator. Idle coordinators update immediately; persisted Web settings
+  are also loaded at the beginning of every top-level/autonomous cycle. A
+  change during a busy cycle therefore applies at the next safe boundary,
+  rather than blocking control commands or being silently discarded.
+- Both internal event hops use `Harness/event_queue.rs`. Adjacent cumulative
+  snapshots for the same session replace one another **at the producer**.
+  A compact replacement inherits the last complete transcript by ownership
+  transfer. Errors/discrete replies and session transitions are barriers.
+  Producers never wait for consumer capacity under the live-state mutex.
+  Downstream transcript inheritance also checks session identity.
+- Tool-argument deltas still update the authoritative transcript on every
+  fragment, but publish transcript previews at most once per 50 ms during
+  consecutive deltas. The first delta and non-delta events publish immediately;
+  run completion always publishes the final full transcript. This reduces
+  cloning/serialization without a protocol change or invisible tool calls.
+- Sparse diagnostics report `pending_events` and `coalesced_snapshots` at
+  power-of-two thresholds (backlog >=64; replacements >=4096). They do not
+  serialize transcripts to estimate heap size. These are queue-retention
+  diagnostics, not a retained-byte measurement or heap profiler.
+
+Three regression tests cover the important boundaries:
+
+1. A paused consumer receives 4,096 full snapshots of a 64 KiB transcript:
+   **one queued snapshot**, not 4,096. At the second hop, another 4,096 compact
+   updates retain one snapshot and preserve the complete transcript plus the
+   latest approval request. Retained user-content bytes are 65,536, independent
+   of pending update count, rather than 268,435,456 for this full-snapshot load.
+2. Discrete replies/errors remain ordered, different-session snapshots do not
+   inherit each other's transcript, and channel disconnection remains visible.
+3. A real service with a held coordinator accepts `RequestSettings` followed
+   by `Interrupt` without waiting for the coordinator; cancellation reaches
+   the registered run. A capped 4,096-fragment real tool projection preserves
+   every argument byte and delivers one final, non-streaming transcript to a
+   paused consumer. The service probe runs in a child with private configuration
+   and temporary workspace, with no provider calls.
+
+Verification: `cargo check --lib`, focused service/runtime/queue tests, and
+`cargo test --lib --quiet` with private `YEET_CONFIG_DIR`: **511 passed**.
+No live daemon, Remote server, or user session was restarted or modified.
+
+Remaining limits: discrete replies and session transitions are deliberately
+lossless, not globally memory-capped. A malicious/unbounded discrete-command
+stream or one enormous live transcript can still consume memory. This repair
+removes the reproduced per-fragment snapshot accumulation, not every possible
+cause of memory pressure. The original incident still has no heap dump proving
+its exact trigger; profile the heap if growth persists after deploying this fix.
+
+## Original findings (before repair)
 
 A settings refresh can block the runtime's event consumer for the entire
 remaining agent run. Meanwhile, streamed tool-call arguments produce full
