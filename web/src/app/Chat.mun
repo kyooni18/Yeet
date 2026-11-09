@@ -332,7 +332,7 @@ struct EmptyState: View {
       Text(workspaceLine()).fontSize(13).foregroundStyle(color.faint)
     }
     .withProps({ className: "empty-conversation" })
-    .style({ flex: "1", justifyContent: "center", minHeight: "0", textAlign: "center" })
+    .style({ flex: "1", width: "100%", justifyContent: "center", minHeight: "0", textAlign: "center" })
     .transition(Transition.opacity)
   }
 }
@@ -550,7 +550,12 @@ struct Composer: View {
             IconButton(icon: "plus", label: "Attach files", action: { pickFiles() })
               .disabled(!connected() || remote.value.state.is_streaming)
           }
-          Chip(title: shortModel(remote.value.state.active_model) || "Model", action: { openSheet("model") })
+          Button(action: { openSheet("model") }, label: {
+            HStack(spacing: 4) {
+              Text(shortModel(remote.value.state.active_model) || "Model").lineLimit(1).style({ minWidth: "0" })
+              Icon(workIcon("chevron"), { width: 12, height: 12 }).style({ transform: "rotate(90deg)" })
+            }
+          }).withProps({ className: "model-trigger", "aria-label": "Choose model", title: remote.value.state.active_model || "Choose model" }).disabled(!connected())
           ToolbarChoice(id: "reasoning")
           Spacer()
           Button(action: { primary() }, label: {
@@ -567,7 +572,7 @@ struct Composer: View {
             .opacity(remote.value.composer?.primary_control.enabled ? 1 : 0.35)
             .animation(ease, value: remote.value.state.is_streaming)
             .disabled(!connected() || !remote.value.composer?.primary_control.enabled)
-        }
+        }.withProps({ className: "composer-controls" })
       }
       .padding({ top: 14, bottom: 10, leading: 16, trailing: 10 })
       .background(color.composer)

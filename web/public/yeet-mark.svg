@@ -1,17 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-label="Yeet">
-  <path
-    d="M4 5H12 M20 5H28
-       M5 7.5H12.8 M19.2 7.5H27
-       M6 10H13.6 M18.4 10H26
-       M7 12.5H14.4 M17.6 12.5H25
-       M8 15H15.2 M16.8 15H24
-       M10 17.5H22
-       M12 20H20
-       M12 22.5H20
-       M12 25H20
-       M12 27.5H20"
-    stroke="#6366f1"
-    stroke-width="1.45"
-    stroke-linecap="square"
-  />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect x="2" y="2" width="60" height="60" rx="19" fill="#49413e"/>
+  <path d="M17 17.5 31.9 33 47 17.5M32 33v14" stroke="#fffaf4" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M40.5 42.5 47 36" stroke="#e2aa8a" stroke-width="4" stroke-linecap="round"/>
 </svg>

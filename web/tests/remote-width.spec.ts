@@ -38,6 +38,23 @@ test('shell and composer fill available width, including empty chats and short d
   })
   await expect(page.getByText('Interface ready')).toHaveCount(0)
   await check()
+  const center = await page.getByRole('region', { name: 'Conversation', exact: true }).locator('.empty-conversation').evaluate(el => {
+    const area = el.getBoundingClientRect(), logo = el.querySelector('img')!.getBoundingClientRect()
+    return { area: area.x + area.width / 2, logo: logo.x + logo.width / 2 }
+  })
+  expect(center.logo).toBeCloseTo(center.area, 0)
+  await page.getByRole('button', { name: 'Choose model', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Model', exact: true })
+  await expect(dialog.locator('.model-row').first()).toBeVisible()
+  const alignment = await dialog.evaluate(el => {
+    const bounds = el.getBoundingClientRect(), root = document.querySelector('#root')!.getBoundingClientRect()
+    const search = el.querySelector<HTMLInputElement>('.model-search')!.getBoundingClientRect()
+    const row = el.querySelector('.model-row')!.getBoundingClientRect()
+    return { dialog: bounds.x + bounds.width / 2, center: root.x + root.width / 2, search: search.width, row: row.width }
+  })
+  expect(alignment.dialog).toBeCloseTo(alignment.center, 0)
+  expect(alignment.row).toBeCloseTo(alignment.search, 0)
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click()
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Hi')
   await check()
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('A long draft '.repeat(100))

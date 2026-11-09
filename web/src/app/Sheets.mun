@@ -29,13 +29,13 @@ struct ListRow: View {
   var body: some View {
     Button(action: action, label: {
       HStack(spacing: 10) {
-        Text(title).lineLimit(1)
-        Spacer()
-        Text(detail).fontSize(12).foregroundStyle(color.faint)
+        Text(title).lineLimit(1).style({ minWidth: "0", flex: "1" })
+        Text(detail).fontSize(12).foregroundStyle(color.faint).lineLimit(1).style({ maxWidth: "35%" })
         Text(selected ? "✓" : "").foregroundStyle(color.text).frame(width: 12)
       }
     })
-    .padding({ top: 7, bottom: 7, leading: 10, trailing: 10 })
+    .withProps({ className: "model-row", "aria-pressed": selected, title: title + (detail ? " · " + detail : "") })
+    .padding({ top: 9, bottom: 9, leading: 10, trailing: 10 })
     .background(hovering.value ? color.hover : "transparent")
     .style({ borderRadius: "6px" })
     .onHover(inside => { hovering.value = inside })
@@ -46,6 +46,8 @@ struct ModelSheet: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 8) {
       TextField(Binding(modelQuery), "Search models")
+        .accessibilityLabel("Search models")
+        .withProps({ className: "model-search", type: "search" })
         .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
         .background(color.raised)
         .style({ border: "0", outline: "none", borderRadius: "8px", font: "inherit", color: "inherit" })
@@ -58,9 +60,9 @@ struct ModelSheet: View {
             ListRow(title: shortModel(item.model || item.id), detail: item.provider === item.id ? "" : item.provider, selected: item.id === remote.value.state.active_model, action: { chooseModel(item.id) })
               .disabled(!connected())
           }
-        }
+        }.style({ width: "100%", minWidth: "0" })
       }
-      .style({ maxHeight: "min(420px, calc(var(--app-height, 100dvh) - 180px))", minHeight: "0" })
+      .style({ maxHeight: "min(420px, calc(var(--app-height, 100dvh) - 180px))", minHeight: "0", width: "100%" })
     }
     .style({ minHeight: "0", width: "100%" })
   }
@@ -207,6 +209,6 @@ export struct SheetLayer: View {
       .style({ borderRadius: "14px", maxWidth: "calc(100vw - 24px)", position: "relative" })
       .transition(Transition.opacity.combined(Transition.scale(0.97)))
     }
-    .style({ position: "fixed", inset: "0", zIndex: "20" })
+    .style({ position: "fixed", inset: "0", width: "100%", height: "100%", zIndex: "20" })
   }
 }

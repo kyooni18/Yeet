@@ -297,10 +297,17 @@ function consumeEffects(onEditDraft: (text: string) => void) {
 }
 
 export function startRemote(onEditDraft: (text: string) => void) {
-  // Follow the visible viewport rather than placing the composer under the iOS keyboard.
+  // Safari can both resize and pan the visual viewport when the keyboard opens.
   const viewport = window.visualViewport
-  const sizeViewport = () => document.documentElement.style.setProperty('--app-height', `${viewport?.height ?? window.innerHeight}px`)
+  const sizeViewport = () => {
+    const root = document.documentElement
+    root.style.setProperty('--app-height', `${viewport?.height ?? window.innerHeight}px`)
+    root.style.setProperty('--app-width', `${viewport?.width ?? window.innerWidth}px`)
+    root.style.setProperty('--app-top', `${viewport?.offsetTop ?? 0}px`)
+    root.style.setProperty('--app-left', `${viewport?.offsetLeft ?? 0}px`)
+  }
   viewport?.addEventListener('resize', sizeViewport)
+  viewport?.addEventListener('scroll', sizeViewport)
   window.addEventListener('resize', sizeViewport)
   sizeViewport()
   let lastWorkspace = remote.value.state.workspace_root
