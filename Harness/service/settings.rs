@@ -210,8 +210,11 @@ impl HarnessService {
         let sandbox = SandboxStore::new(&self.workspace_root).and_then(|store| store.load());
         let active_model = self.shared.lock_or_recover().state.active_model.clone();
         let runtime = runtime_settings_state(&self.config, &active_model);
+        // A reconnect/read refresh must not wait for provider/tool execution.
+        // Busy-run changes remain persisted and are applied by RunWorker at
+        // its next safe cycle boundary.
         if let Ok(project) = project.as_ref()
-            && let Ok(mut coordinator) = self.coordinator.lock()
+            && let Ok(mut coordinator) = self.coordinator.try_lock()
         {
             coordinator.configure_web_backend(project.web.backend, project.web.server.clone());
             coordinator.configure_searxng_url(project.web.searxng_url.clone());

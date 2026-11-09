@@ -596,6 +596,7 @@ pub fn run_daemon(workspace: PathBuf, scope: Option<String>) -> Result<()> {
                 if let Some(previous) = pending_state.take()
                     && let (Some(next), Some(previous)) = (envelope.state.as_mut(), previous.state)
                     && next.conversation.is_none()
+                    && next.current_session_id == previous.current_session_id
                 {
                     next.conversation = previous.conversation;
                 }

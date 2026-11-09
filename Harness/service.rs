@@ -5,7 +5,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver},
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -162,7 +162,7 @@ pub(crate) struct HarnessService {
     run_manager: RunManager,
     agent_groups: AgentGroupSupervisor,
     goal_mode: Arc<AtomicBool>,
-    events: Receiver<ServiceEvent>,
+    events: crate::harness::event_queue::EventRx,
     tx: EventSender,
     closed: bool,
 }
@@ -244,7 +244,7 @@ impl HarnessService {
                 .set_agent_group(Some(agent_groups.handle()));
         }
         let shared = Arc::new(Mutex::new(session));
-        let (tx, events) = mpsc::channel();
+        let (tx, events) = crate::harness::event_queue::event_channel();
         let tx = EventSender::new(tx, wake);
         {
             let shared = shared.clone();
@@ -638,7 +638,7 @@ impl HarnessService {
         if let Some(event) = self.bridge.try_recv_event() {
             self.handle_bridge_event(event);
         }
-        self.events.try_recv().ok()
+        self.events.try_recv().ok().map(ServiceEvent::Envelope)
     }
 
     fn handle_bridge_event(&self, event: BridgeEvent) {

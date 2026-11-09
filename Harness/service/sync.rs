@@ -67,19 +67,23 @@ pub(super) fn apply_session_catalog_locked(state: &mut SharedSession, catalog: &
 /// state reaches clients immediately instead of on the next polling tick.
 #[derive(Clone)]
 pub(crate) struct EventSender {
-    tx: mpsc::Sender<ServiceEvent>,
+    tx: crate::harness::event_queue::EventTx,
     wake: Option<Wake>,
 }
 
 impl EventSender {
-    pub(super) fn new(tx: mpsc::Sender<ServiceEvent>, wake: Option<Wake>) -> Self {
+    pub(super) fn new(tx: crate::harness::event_queue::EventTx, wake: Option<Wake>) -> Self {
         Self { tx, wake }
     }
 
     // Mirrors `mpsc::Sender::send` so existing call sites are unchanged.
     #[allow(clippy::result_large_err)]
     pub(crate) fn send(&self, event: ServiceEvent) -> Result<(), mpsc::SendError<ServiceEvent>> {
-        let result = self.tx.send(event);
+        let ServiceEvent::Envelope(envelope) = event;
+        let result = self
+            .tx
+            .send(envelope)
+            .map_err(|e| mpsc::SendError(ServiceEvent::Envelope(e.0)));
         if let Some(wake) = &self.wake {
             wake.notify();
         }

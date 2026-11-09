@@ -4,7 +4,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender, TryRecvError},
+        mpsc::{self, Sender, TryRecvError},
     },
     thread,
     time::Duration,
@@ -13,6 +13,7 @@ use std::{
 use anyhow::{Result, anyhow};
 
 use super::Wake;
+use crate::harness::event_queue::{EventRx, EventTx, event_channel};
 use crate::{
     harness::{HarnessService, ServiceEvent, SessionCatalog},
     model::{FrontendCommand, HarnessEvent, HarnessState},
@@ -40,7 +41,7 @@ enum RuntimeCommand {
 pub(super) struct RuntimeProcess {
     command_tx: Sender<RuntimeCommand>,
     command_wake: Wake,
-    events: Receiver<HarnessEvent>,
+    events: EventRx,
     failed: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
     last_state: HarnessState,
@@ -52,7 +53,7 @@ impl RuntimeProcess {
         let runtime_wake = Wake::new();
         let command_wake = runtime_wake.clone();
         let (command_tx, command_rx) = mpsc::channel::<RuntimeCommand>();
-        let (event_tx, events) = mpsc::channel::<HarnessEvent>();
+        let (event_tx, events) = event_channel();
         let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<HarnessState, String>>(1);
         let failed = Arc::new(AtomicBool::new(false));
         let closed = Arc::new(AtomicBool::new(false));
@@ -149,7 +150,9 @@ impl RuntimeProcess {
                     // Streaming envelopes intentionally omit the transcript on most
                     // tokens. Keep the last complete conversation in the daemon cache
                     // so reconnects always receive a complete semantic snapshot.
-                    if published.conversation.is_none() {
+                    if published.conversation.is_none()
+                        && published.current_session_id == self.last_state.current_session_id
+                    {
                         published.conversation = self.last_state.conversation.clone();
                     }
                     published.session_activity = self.last_state.session_activity.clone();
@@ -257,7 +260,7 @@ impl Drop for RuntimeProcess {
 fn handle_runtime_command(
     service: &mut HarnessService,
     command: RuntimeCommand,
-    event_tx: &Sender<HarnessEvent>,
+    event_tx: &EventTx,
     daemon_wake: &Wake,
 ) -> bool {
     let result = match command {
@@ -282,11 +285,7 @@ fn handle_runtime_command(
     true
 }
 
-fn drain_backend_events(
-    service: &mut HarnessService,
-    event_tx: &Sender<HarnessEvent>,
-    daemon_wake: &Wake,
-) {
+fn drain_backend_events(service: &mut HarnessService, event_tx: &EventTx, daemon_wake: &Wake) {
     while let Some(event) = service.try_recv() {
         let ServiceEvent::Envelope(envelope) = event;
         if event_tx.send(envelope).is_err() {
@@ -296,7 +295,7 @@ fn drain_backend_events(
     }
 }
 
-fn send_runtime_error(event_tx: &Sender<HarnessEvent>, daemon_wake: &Wake, error: anyhow::Error) {
+fn send_runtime_error(event_tx: &EventTx, daemon_wake: &Wake, error: anyhow::Error) {
     let _ = event_tx.send(HarnessEvent {
         kind: "error".into(),
         state: None,
@@ -312,7 +311,7 @@ mod activity_tests {
     #[test]
     fn daemon_activity_survives_worker_updates_and_clears_on_completion() {
         let (command_tx, _) = mpsc::channel();
-        let (event_tx, events) = mpsc::channel();
+        let (event_tx, events) = event_channel();
         let mut runtime = RuntimeProcess {
             command_tx,
             command_wake: Wake::new(),

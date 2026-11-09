@@ -102,6 +102,8 @@ pub(super) fn settle_run_state(
 
 /// Worker-side dependencies of one top-level run.
 struct RunWorker {
+    last_tool_snapshot: Mutex<Option<Instant>>,
+    project_settings: ProjectSettingsStore,
     shared: Arc<Mutex<SharedSession>>,
     coordinator: Arc<Mutex<AgentCoordinator>>,
     tx: EventSender,
@@ -253,6 +255,8 @@ impl HarnessService {
         }
 
         let worker = RunWorker {
+            last_tool_snapshot: Mutex::new(None),
+            project_settings: self.project_settings.clone(),
             shared: self.shared.clone(),
             coordinator: self.coordinator.clone(),
             tx: self.tx.clone(),
@@ -326,6 +330,11 @@ impl RunWorker {
         let mut cycle_images = std::mem::take(&mut run.images);
         let mut cycle_continuation = run.continuation;
         loop {
+            // Apply persisted settings at every safe cycle boundary, including
+            // changes deferred by a refresh while this coordinator was busy.
+            let project = self.project_settings.load()?;
+            coordinator.configure_web_backend(project.web.backend, project.web.server);
+            coordinator.configure_searxng_url(project.web.searxng_url);
             let self_directed_cycle = cycle_input == AUTONOMOUS_NEXT_OBJECTIVE_PROMPT;
             let outcome = coordinator.run(
                 AgentRunRequest {
@@ -388,6 +397,24 @@ impl RunWorker {
     /// appends its durable evidence to the session event log.
     fn project_event(&self, run_id: &str, event: AgentEvent) {
         let log_event = agent_event_log_value(&event);
+        // Tool arguments live in the transcript, unlike assistant text. Keep
+        // their live preview at 20 Hz rather than cloning all history per byte.
+        // Non-delta events (including completion) always publish immediately.
+        let publish = {
+            let mut last = self.last_tool_snapshot.lock_or_recover();
+            if matches!(&event, AgentEvent::ToolCallDelta { .. }) {
+                let now = Instant::now();
+                if last.is_some_and(|at| now.duration_since(at) < Duration::from_millis(50)) {
+                    false
+                } else {
+                    *last = Some(now);
+                    true
+                }
+            } else {
+                *last = None;
+                true
+            }
+        };
         let projected = {
             let mut state = self.shared.lock_or_recover();
             if state.meta.current_turn.as_deref() != Some(run_id) {
@@ -413,16 +440,20 @@ impl RunWorker {
             state.state.pending_shell_permission = self.permission.pending_shell();
             state.state.pending_native_app_permission = self.permission.pending_native_app();
             state.state.pending_user_question = self.permission.pending_question();
-            let envelope = if omit_conversation {
-                state_envelope_without_conversation(&state.state)
-            } else {
-                state_envelope(&state.state)
-            };
+            let envelope = publish.then(|| {
+                if omit_conversation {
+                    state_envelope_without_conversation(&state.state)
+                } else {
+                    state_envelope(&state.state)
+                }
+            });
             (session_id, envelope)
         };
 
         let (session_id, envelope) = projected;
-        let _ = self.tx.send(ServiceEvent::Envelope(envelope));
+        if let Some(envelope) = envelope {
+            let _ = self.tx.send(ServiceEvent::Envelope(envelope));
+        }
 
         // Event-log writes happen outside the live-state mutex (see
         // `SessionWriter`).
@@ -536,6 +567,101 @@ impl RunWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn busy_settings_refresh_preserves_interrupt_and_tool_state() {
+        const CHILD: &str = "YEET_MEMORY_REGRESSION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // Config is process-global. Run in a child instead of mutating the
+            // parallel test runner's environment or touching the user's store.
+            let config = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "harness::service::run::tests::busy_settings_refresh_preserves_interrupt_and_tool_state", "--nocapture"])
+                .env(CHILD, "1").env("YEET_CONFIG_DIR", config.path())
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        let workspace = tempfile::tempdir().unwrap();
+        let mut service = HarnessService::spawn(workspace.path().into(), None).unwrap();
+        service.shared.lock_or_recover().state.is_streaming = true;
+        let cancel = Arc::new(AtomicBool::new(false));
+        service.run_manager.register("probe", cancel.clone());
+        let coordinator = service.coordinator.clone();
+        let (ready_tx, ready) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let holder = thread::spawn(move || {
+            let _guard = coordinator.lock_or_recover();
+            ready_tx.send(()).unwrap();
+            // A regression must fail, not hang the test process indefinitely.
+            let _ = released.recv_timeout(Duration::from_secs(3));
+        });
+        ready.recv().unwrap();
+        let start = Instant::now();
+        service.send(FrontendCommand::RequestSettings).unwrap();
+        service.send(FrontendCommand::Interrupt).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "settings blocked control delivery"
+        );
+        assert!(cancel.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        service.run_manager.remove_matching("probe", &cancel);
+        let worker = RunWorker {
+            last_tool_snapshot: Mutex::new(None),
+            project_settings: service.project_settings.clone(),
+            shared: service.shared.clone(),
+            coordinator: service.coordinator.clone(),
+            tx: service.tx.clone(),
+            writer: service.session_writer(),
+            run_manager: service.run_manager.clone(),
+            goal_mode: service.goal_mode.clone(),
+            permission: service.permission.clone(),
+            bridge: service.bridge.clone(),
+            agent_groups: service.agent_groups.clone(),
+        };
+        {
+            let mut shared = service.shared.lock_or_recover();
+            shared.meta.current_turn = Some("probe".into());
+            shared.append(ConversationKind::User {
+                content: "x".repeat(65_536),
+            });
+        }
+        while service.try_recv().is_some() {}
+        for _ in 0..4096 {
+            worker.project_event(
+                "probe",
+                AgentEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("call".into()),
+                    name: Some("read_file".into()),
+                    arguments_delta: Some("x".into()),
+                },
+            );
+        }
+        {
+            let mut shared = service.shared.lock_or_recover();
+            assert_eq!(shared.meta.pending_tool_calls[&0].arguments.len(), 4096);
+            settle_run_state(&mut shared, Ok(AgentRunOutcome::Completed), false, false);
+            worker
+                .tx
+                .send(ServiceEvent::Envelope(state_envelope(&shared.state)))
+                .unwrap();
+        }
+        let ServiceEvent::Envelope(final_event) = service.try_recv().unwrap();
+        let final_state = final_event.state.unwrap();
+        assert!(!final_state.is_streaming);
+        let transcript = serde_json::to_string(&final_state.conversation).unwrap();
+        assert!(
+            transcript.contains(&"x".repeat(4096)),
+            "final arguments lost"
+        );
+        assert!(
+            service.try_recv().is_none(),
+            "paused consumer retained redundant snapshots"
+        );
+    }
 
     fn streaming_session() -> SharedSession {
         let mut session = SharedSession::new("openai/test".into(), "auto".into());
