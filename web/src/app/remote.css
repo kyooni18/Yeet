@@ -1,63 +1,63 @@
 /* Experimental browser client. Native UI design remains in OpenPencil. */
 :root {
-  --bg: #faf9f6;
-  --sidebar: #f0efeb;
-  --field: #e8e7e2;
-  --nav-hover: #e6e5df;
-  --nav-select: #e2e1da;
-  --session-select: #e2e1da;
-  --row-hover: #efeee9;
-  --row-select: #e8e7e1;
-  --bubble: #eeede7;
-  --rule: #dedcd4;
+  --bg: #fafafa;
+  --sidebar: #ffffff;
+  --field: #f6f5f4;
+  --nav-hover: #f6f5f4;
+  --nav-select: #cce8ff;
+  --session-select: #cce8ff;
+  --row-hover: #f6f5f4;
+  --row-select: #cce8ff;
+  --bubble: #d3f4e3;
+  --rule: #c0bfbc;
   --composer: #ffffff;
-  --panel: #f1f0eb;
-  --raised: #e9e7e0;
-  --text: #292823;
-  --text2: #4c4b44;
-  --muted: #737167;
-  --faint: #79766d;
-  --line: rgba(51, 47, 32, 0.1);
-  --hover: rgba(51, 47, 32, 0.055);
-  --accent: #44403c;
-  --accent-hover: #292524;
+  --panel: #ffffff;
+  --raised: #f6f5f4;
+  --text: #2e3436;
+  --text2: #5e5c64;
+  --muted: #5e5c64;
+  --faint: #5e5c64;
+  --line: #dad8d5;
+  --hover: rgba(46, 52, 54, 0.06);
+  --accent: #1a5fb4;
+  --accent-hover: #1c71d8;
   --accent-ink: #ffffff;
-  --add: #48734c;
+  --add: #186735;
   --add-bg: #eaf1e7;
-  --del: #a34c42;
+  --del: #c01c28;
   --del-bg: #f8ebe7;
   --scrim: rgba(24, 24, 22, 0.24);
-  --focus: #8171c4;
-  --inspector: #f6f5f1;
-  --shadow: 0 4px 24px -8px rgba(50, 45, 30, 0.13), 0 1px 3px rgba(50, 45, 30, 0.04);
+  --focus: #1a5fb4;
+  --inspector: #ffffff;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --motion-fast: 150ms cubic-bezier(.2, 0, 0, 1);
   color-scheme: light;
 }
 :root[data-appearance="dark"] {
-  --bg: #262624; --sidebar: #20201e; --field: #2c2c29; --nav-hover: #2c2c29; --nav-select: #363632;
-  --session-select: #33332f; --row-hover: #30302c; --row-select: #393932; --bubble: #343430;
-  --rule: #43433c; --composer: #30302d; --panel: #2d2d29; --raised: #3d3d37;
-  --text: #eeede8; --text2: #ceccc2; --muted: #a3a197; --faint: #9a988e;
-  --line: rgba(235, 230, 210, 0.09); --hover: rgba(235, 230, 210, 0.055);
-  --accent: #e4dfd2; --accent-hover: #f6f2e9; --accent-ink: #292823;
-  --add: #a1c292; --add-bg: #2d382a; --del: #e6a196; --del-bg: #402e29;
-  --scrim: rgba(0, 0, 0, 0.45); --focus: #aa9de5; --inspector: #232320;
-  --shadow: 0 4px 24px -8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.12);
+  --bg: #101010; --sidebar: #181818; --field: #222222; --nav-hover: #222222; --nav-select: #2c2c2c;
+  --session-select: #2c2c2c; --row-hover: #222222; --row-select: #2c2c2c; --bubble: #1e1e1e;
+  --rule: #363636; --composer: #181818; --panel: #181818; --raised: #222222;
+  --text: #f2f2f2; --text2: #bcbcbc; --muted: #bcbcbc; --faint: #868686;
+  --line: #363636; --hover: rgba(242, 242, 242, 0.06);
+  --accent: #529cff; --accent-hover: #7ab6ff; --accent-ink: #101010;
+  --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
+  --scrim: rgba(0, 0, 0, 0.5); --focus: #529cff; --inspector: #181818;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-appearance="light"]) {
-    --bg: #262624; --sidebar: #20201e; --field: #2c2c29; --nav-hover: #2c2c29; --nav-select: #363632;
-    --session-select: #33332f; --row-hover: #30302c; --row-select: #393932; --bubble: #343430;
-    --rule: #43433c; --composer: #30302d; --panel: #2d2d29; --raised: #3d3d37;
-    --text: #eeede8; --text2: #ceccc2; --muted: #a3a197; --faint: #9a988e;
-    --line: rgba(235, 230, 210, 0.09); --hover: rgba(235, 230, 210, 0.055);
-    --accent: #e4dfd2; --accent-hover: #f6f2e9; --accent-ink: #292823;
-    --add: #a1c292; --add-bg: #2d382a; --del: #e6a196; --del-bg: #402e29;
-    --scrim: rgba(0, 0, 0, 0.45); --focus: #aa9de5; --inspector: #232320;
-    --shadow: 0 4px 24px -8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.12);
+    --bg: #101010; --sidebar: #181818; --field: #222222; --nav-hover: #222222; --nav-select: #2c2c2c;
+    --session-select: #2c2c2c; --row-hover: #222222; --row-select: #2c2c2c; --bubble: #1e1e1e;
+    --rule: #363636; --composer: #181818; --panel: #181818; --raised: #222222;
+    --text: #f2f2f2; --text2: #bcbcbc; --muted: #bcbcbc; --faint: #868686;
+    --line: #363636; --hover: rgba(242, 242, 242, 0.06);
+    --accent: #529cff; --accent-hover: #7ab6ff; --accent-ink: #101010;
+    --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
+    --scrim: rgba(0, 0, 0, 0.5); --focus: #529cff; --inspector: #181818;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
     color-scheme: dark;
   }
 }
@@ -142,6 +142,9 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .message-actions:focus-within { opacity: 1 !important; }
 .message-actions { min-height: 28px; }
 .composer { padding-bottom: max(12px, env(safe-area-inset-bottom)) !important; flex-shrink: 0; }
+:root[data-keyboard-open="true"] .composer { padding-bottom: 8px !important; }
+:root[data-keyboard-open="true"] .composer-hint { display: none; }
+.composer textarea { max-height: min(180px, calc(var(--app-height, 100dvh) * 0.3)) !important; }
 .composer-surface { border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); transition: border-color var(--motion-fast), box-shadow var(--motion-fast); }
 .composer-surface:focus-within { border-color: color-mix(in srgb, var(--focus) 50%, var(--line)); box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--focus) 8%, transparent); }
 .composer textarea { line-height: 1.6; overflow-y: auto; }

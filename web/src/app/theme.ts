@@ -48,9 +48,8 @@ export function applyTheme(settings: RuntimeSettingsState | null | undefined) {
   root.dataset.appearance = appearance
   applied.forEach(token => root.style.removeProperty(token))
   applied = []
-  // Keep the browser's warm default. An explicit non-default theme follows
-  // exactly the same resolved palette as the terminal, including file themes.
-  if (!palette || !name || name === 'yeet') return
+  // The Rust palette is authoritative for the default theme too.
+  if (!palette || !name) return
   const mapping: Record<string, keyof ThemePaletteState> = {
     bg: 'background', sidebar: 'surface', inspector: 'surface', composer: 'surface', panel: 'surface',
     field: 'surfaceRaised', raised: 'surfaceRaised', 'nav-hover': 'surfaceRaised', 'row-hover': 'surfaceRaised',

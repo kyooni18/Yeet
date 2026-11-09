@@ -8,7 +8,7 @@ import {
   showJumpToLatest, jumpToLatest,
 } from "./state"
 import {
-  text, attachments, canAttach, setText, primary, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
+  text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
   removeAttachment, pickFiles, addFiles,
 } from "./composer"
 import { Spinner, PageHeader, Chip, IconButton } from "./Common.mun"
@@ -569,9 +569,9 @@ struct Composer: View {
             .withProps({ className: "send-button", title: remote.value.state.is_streaming ? "Stop generating" : "Send message" })
             .background(remote.value.state.is_streaming ? color.raised : color.accent)
             .foregroundStyle(remote.value.state.is_streaming ? color.text : color.accentInk)
-            .opacity(remote.value.composer?.primary_control.enabled ? 1 : 0.35)
+            .opacity(primaryEnabled() ? 1 : 0.35)
             .animation(ease, value: remote.value.state.is_streaming)
-            .disabled(!connected() || !remote.value.composer?.primary_control.enabled)
+            .disabled(!primaryEnabled())
         }.withProps({ className: "composer-controls" })
       }
       .padding({ top: 14, bottom: 10, leading: 16, trailing: 10 })

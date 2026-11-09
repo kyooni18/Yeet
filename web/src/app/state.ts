@@ -300,8 +300,14 @@ function consumeEffects(onEditDraft: (text: string) => void) {
 export function startRemote(onEditDraft: (text: string) => void) {
   // Safari can both resize and pan the visual viewport when the keyboard opens.
   const viewport = window.visualViewport
+  let restingHeight = window.innerHeight
+  let keyboardOpen = false
   const sizeViewport = () => {
     const root = document.documentElement
+    const editing = document.activeElement?.matches('.composer textarea') ?? false
+    if (!editing && !keyboardOpen) restingHeight = window.innerHeight
+    keyboardOpen = (editing || keyboardOpen) && Math.max(restingHeight, window.innerHeight) - (viewport?.height ?? window.innerHeight) > 80
+    root.dataset.keyboardOpen = keyboardOpen ? 'true' : 'false'
     root.style.setProperty('--app-height', `${viewport?.height ?? window.innerHeight}px`)
     root.style.setProperty('--app-width', `${viewport?.width ?? window.innerWidth}px`)
     root.style.setProperty('--app-top', `${viewport?.offsetTop ?? 0}px`)
@@ -310,6 +316,12 @@ export function startRemote(onEditDraft: (text: string) => void) {
   viewport?.addEventListener('resize', sizeViewport)
   viewport?.addEventListener('scroll', sizeViewport)
   window.addEventListener('resize', sizeViewport)
+  document.addEventListener('focusin', sizeViewport)
+  document.addEventListener('focusout', () => requestAnimationFrame(sizeViewport))
+  // iOS can scroll the document as well as pan the visual viewport for the caret.
+  window.addEventListener('scroll', () => {
+    if (document.activeElement?.matches('.composer textarea') && (viewport?.scale ?? 1) === 1 && (window.scrollX || window.scrollY)) window.scrollTo(0, 0)
+  }, { passive: true })
   sizeViewport()
   let lastWorkspace = remote.value.state.workspace_root
   let wasStreaming = remote.value.state.is_streaming

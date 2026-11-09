@@ -62,6 +62,15 @@ export function submit() {
   remoteStore.sendComposerUi({ type: 'submit', value: editor() })
 }
 
+/** Allow a freshly typed draft while its projection is in flight; Rust still validates submission. */
+export function primaryEnabled(): boolean {
+  const view = remote.value.composer
+  if (!connected() || !view) return false
+  if (remote.value.state.is_streaming) return view.primary_control.enabled
+  if (same(view.editor, editor())) return view.primary_control.enabled
+  return !!text.value.trim() && attachments.value.every(item => !!item.remoteId && !item.error)
+}
+
 export function primary() {
   const control = remote.value.composer?.primary_control
   if (control?.action.type === 'interrupt') remoteStore.sendComposerUi(control.action)
