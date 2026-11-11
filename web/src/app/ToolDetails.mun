@@ -153,17 +153,18 @@ struct RawDetails: View {
   let trace: Any
   var body: some View {
     VStack(alignment: .stretch, spacing: 8) {
+      // Keep the toggle in its own conditional branch: a sibling branch that
+      // changes content must not rebuild the focused control.
       if trace.raw?.length {
-        Button("Raw input and output") { remoteStore.sendConversationUi({ type: "toggle", value: trace.raw_id || "raw:" + trace.id }) }
-          .id("raw-toggle")
+        Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.raw_id || "raw:" + trace.id }) }, label: { Text("Raw input and output") })
           .withProps({ className: "tool-raw-toggle", "aria-expanded": !!trace.raw_expanded, "aria-controls": "raw-details-" + encodeURIComponent(trace.id) })
-        if trace.raw_expanded {
-          VStack(alignment: .stretch, spacing: 12) {
-            ForEach(indexed(trace.raw), { id: row => row.key }) { row in
-              DetailSection(detail: row.value)
-            }
-          }.id("raw-content").withProps({ id: "raw-details-" + encodeURIComponent(trace.id), className: "tool-raw" })
-        }
+      }
+      if trace.raw_expanded {
+        VStack(alignment: .stretch, spacing: 12) {
+          ForEach(indexed(trace.raw), { id: row => row.key }) { row in
+            DetailSection(detail: row.value)
+          }
+        }.id("raw-content-" + encodeURIComponent(trace.id)).withProps({ id: "raw-details-" + encodeURIComponent(trace.id), className: "tool-raw" })
       }
     }.style({ width: "100%", minWidth: "0" })
   }
