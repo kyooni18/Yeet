@@ -175,17 +175,7 @@ impl ToolRegistry {
             restricted_operation(&command)
         };
         let requested_working_directory = object.get("workingDirectory").and_then(Value::as_str);
-        let persisted_cwd = self
-            .shell_cwd
-            .clone()
-            .filter(|_| requested_working_directory.is_none())
-            .filter(|path| path.is_dir());
-        let effective_cwd = match persisted_cwd {
-            Some(path) => path,
-            None => self
-                .context
-                .resolve_session_path(requested_working_directory.unwrap_or("."))?,
-        };
+        let effective_cwd = self.shell_working_directory(requested_working_directory)?;
         if !effective_cwd.is_dir() {
             bail!(
                 "Invalid shell working directory: {}",

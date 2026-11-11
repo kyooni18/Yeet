@@ -3,6 +3,15 @@
 use super::*;
 
 impl ToolRegistry {
+    pub(crate) fn shell_working_directory(&self, requested: Option<&str>) -> Result<PathBuf> {
+        if requested.is_none()
+            && let Some(path) = self.shell_cwd.as_ref().filter(|path| path.is_dir())
+        {
+            return Ok(path.clone());
+        }
+        self.context.resolve_session_path(requested.unwrap_or("."))
+    }
+
     pub fn session_environment(&self) -> (String, Vec<String>) {
         (
             self.context

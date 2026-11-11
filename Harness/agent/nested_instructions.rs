@@ -70,6 +70,17 @@ fn touched_paths(call: &ToolCall) -> Vec<String> {
             .map(str::to_owned)
             .collect(),
         "outline" => path().map(str::to_owned).into_iter().collect(),
+        "run_shell" => vec![
+            Path::new(
+                arguments
+                    .get("workingDirectory")
+                    .and_then(Value::as_str)
+                    .unwrap_or("."),
+            )
+            .join(".yeet-instruction-scope")
+            .to_string_lossy()
+            .into_owned(),
+        ],
         _ => Vec::new(),
     }
 }

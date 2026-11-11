@@ -70,6 +70,17 @@ impl AgentCoordinator {
         input: DispatchInput<'_>,
     ) -> Result<(String, bool)> {
         let call = input.call;
+        if matches!(call.name.as_str(), "apply_file_edits" | "run_shell") {
+            let instructions = self.directory_instructions(std::slice::from_ref(call));
+            if !instructions.is_empty() {
+                return Ok((json!({
+                    "error": "New directory instructions apply. No action was executed. Review these instructions and retry or revise the call.",
+                    "code": "directory_instructions_required",
+                    "mutationOutcome": "not_applied",
+                    "instructions": instructions.iter().filter_map(|message| message.content.as_deref()).collect::<Vec<_>>(),
+                }).to_string(), false));
+            }
+        }
         if call.name == tool_discovery::SEARCH_TOOL {
             let content = if supports_anthropic_deferred_tool_references(input.model) {
                 input.tool_discovery.search_with_deferred(
@@ -118,6 +129,29 @@ impl AgentCoordinator {
         })
     }
 
+    fn directory_instructions(&self, calls: &[ToolCall]) -> Vec<Message> {
+        let (session_cwd, _) = self.registry.session_environment();
+        let mut scoped = calls.to_vec();
+        for call in &mut scoped {
+            if call.name == "run_shell"
+                && let Ok(cwd) = self.registry.shell_working_directory(
+                    call.arguments
+                        .get("workingDirectory")
+                        .and_then(Value::as_str),
+                )
+                && let Some(arguments) = call.arguments.as_object_mut()
+            {
+                arguments.insert("workingDirectory".into(), json!(cwd));
+            }
+        }
+        nested_instructions::overlays_for_round(
+            &self.history,
+            &self.registry.workspace_root().to_string_lossy(),
+            &session_cwd,
+            &scoped,
+        )
+    }
+
     /// Persists the window, keeps the warmed tool surface, and attaches any
     /// nested AGENTS.md instructions for directories the round touched.
     pub(super) fn finish_tool_round(
@@ -128,13 +162,7 @@ impl AgentCoordinator {
         self.context_memory.flush()?;
         self.warm_tool_names = tool_discovery.loaded_names().to_vec();
         self.warm_tool_search_enabled = tool_discovery.search_enabled();
-        let (session_cwd, _) = self.registry.session_environment();
-        let nested = nested_instructions::overlays_for_round(
-            &self.history,
-            &self.registry.workspace_root().to_string_lossy(),
-            &session_cwd,
-            calls,
-        );
+        let nested = self.directory_instructions(calls);
         self.history.extend(nested);
         if let Some(context) = self.run_hooks(super::hooks::HookEvent::PostToolRound) {
             self.history.push(Message::system(context).request_only());

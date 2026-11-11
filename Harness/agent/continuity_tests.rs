@@ -186,6 +186,57 @@ fn assert_append_only(requests: &[CallRequest]) -> usize {
 }
 
 #[test]
+fn first_mutations_wait_for_nested_instructions_before_execution() {
+    let Some(mut harness) = Harness::start() else {
+        return;
+    };
+    let directory = harness.workspace.join("guarded");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("AGENTS.md"),
+        "Never create marker files in this subtree.",
+    )
+    .unwrap();
+    harness.script(json!([
+        {"toolCalls": [
+            {"id": "edit", "name": "apply_file_edits", "arguments": {
+                "patch": "*** Begin Patch\n*** Add File: guarded/edit-marker\n+blocked\n*** End Patch"
+            }},
+            {"id": "shell", "name": "run_shell", "arguments": {
+                "command": "echo blocked > shell-marker", "workingDirectory": "guarded"
+            }}
+        ]},
+        {"text": "The directory rules prohibit these files; I have not created them."}
+    ]));
+    harness.turn("Create marker files in guarded.");
+    assert!(!directory.join("edit-marker").exists());
+    assert!(!directory.join("shell-marker").exists());
+    let requests = harness.requests();
+    let results: Vec<_> = requests
+        .last()
+        .unwrap()
+        .messages
+        .iter()
+        .filter(|message| message.role == MessageRole::Tool)
+        .map(|message| message.content.as_deref().unwrap())
+        .collect();
+    assert_eq!(results.len(), 2);
+    for result in results {
+        assert!(result.contains("directory_instructions_required"));
+        assert!(result.contains("mutation outcome: not_applied"));
+    }
+    assert!(requests.last().unwrap().messages.iter().any(|message| {
+        message.role == MessageRole::System
+            && message
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Never create marker")
+    }));
+    assert_eq!(assert_append_only(&requests), 0);
+}
+
+#[test]
 fn ordinary_turns_tool_results_and_tool_surface_changes_stay_append_only() {
     let Some(mut harness) = Harness::start() else {
         return;
