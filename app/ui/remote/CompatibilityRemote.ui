@@ -9,7 +9,6 @@ Shell
     NewSession: prominent full-width action
     ScrollRegion: independently scrollable, min-height 0
       Navigation: Sessions, Files, Diff, Agents; icon + label + optional count
-      WorkspaceDisclosure: current workspace, expandable bounded scrollable list
       SessionSearch
       RecentSessions: title, relative age, selected and running state
     Footer: connection status, Settings; always reachable
@@ -27,7 +26,8 @@ Shell
           Edit: per-file unified diff, old/new line numbers, +/− and green/red rows, warnings
           Read: per-file source with line numbers and captured range; explicit preview/missing states
           Diagnostics: severity, file location, message; never hidden in raw JSON
-          OtherTools: labeled input/result/error sections, literal safe text
+          Search: query/scope and individually readable source or web matches
+          OtherTools: labeled human-readable fields/text; never raw JSON by default
           RawInspection: secondary disclosure for original input/output; backend owns expansion
           PartialData: truncation, tail, background handoff, and artifact references remain explicit
         State: only active progress and consequential exceptions; no routine success badges
@@ -36,16 +36,34 @@ Shell
       EmptyState: centered greeting and workspace context
       FollowOutput: pinned only while near bottom; floating Jump to latest when reading history
     Composer: same column alignment, raised rounded surface, auto-growing field
+      NewChatWorkspace: labeled native workspace choice beside input, only for an empty new chat
+        Open another workspace path action; never a workspace selector in left sidebar
       Controls: attachment, model, reasoning, send/stop
+      Context: compact percentage plus accessible used/limit token information
       Hint: keyboard behavior; not shown on touch devices
   WorkspacePanel: 320px, collapsible, visible by default at >=1280px
-    Header: workspace name, close; workspace path and branch
-    Tabs: Changes, Files; count for changes
+    Header: Session status, refresh, close; workspace path and branch
+    Tabs: Status (default), Changes, Files; count for changes
+    Status: model, runtime, context, tokens, cache, provider quota and reset windows
+      Cost: backend-reported estimate only for metered/API usage; hidden for subscriptions
+      MissingData: explicit not reported; never invent cost from credits or token counts
     ScrollRegion: live backend-provided entries, selection and empty states
       Changes: file paths, additions/deletions, selected patch, full-page review action
       Files: directory navigation, selected file metadata, full-page browse action
     Footer: model and context usage, agents activity link
     Overlay: below 1280px; scrim, Escape dismissal, focus containment and restoration
+  DiffPage: narrow 190–220px file rail, flexible independently scrolling patch
+    FileIdentity: basename and directory context; selection and +/- counts
+    Compact: horizontal file choices above patch on narrow layouts
+  FilesPage: TUI-like directory list and file preview/metadata, independently scrolling
+    Path: breadcrumbs and parent navigation; folder/file glyphs and separate change status
+    Preview: bounded backend-provided numbered text; binary/large/error states explicit
+
+Responsiveness
+  Composer-only updates do not rebuild transcript; linear item spacing computation
+  Coalesce editor synchronization while typing; submit carries exact latest text
+  Shell-job output does not invalidate unrelated application views
+  Navigation feedback is immediate; never fake completion to conceal network latency
 
 VisualLanguage
   Existing theme palette; distinct navigation and composer; subtle borders, flat supporting controls.

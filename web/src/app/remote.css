@@ -294,3 +294,16 @@ button.trace-disclosure__row:hover, button.activity-group__header:hover { backgr
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }
   .activity-spinner { rotate: none !important; }
 }
+
+/* Status belongs beside the conversation; workspace choice belongs to its draft. */
+.status-row { width: 100% !important; font-size: 12px; line-height: 1.5; min-width: 0; }
+.status-section { padding-top: 16px; border-top: 1px solid var(--line); margin-top: 4px; }
+.status-caption { font-size: 11px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.session-status .panel-model { padding: 4px 0; width: 100%; }
+.composer-workspace { width: 100% !important; min-width: 0; padding: 0 4px 8px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
+.composer-workspace-picker { flex: 1; min-width: 0; max-width: none !important; padding: 5px 0; color: var(--text); background: transparent; border: 0; font: inherit; font-size: 13px; }
+.composer-context { flex: none; font: 11px/1.5 var(--sans); color: var(--muted); white-space: nowrap; }
+.composer-controls { flex-wrap: wrap; }
+/* Mün passes camel-case stroke attributes through; CSS is reliable across hosts. */
+svg { stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 380px) { .composer-context { font-size: 10px; } .composer-controls { column-gap: 2px !important; } }

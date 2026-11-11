@@ -1,6 +1,6 @@
 import { Transition } from "@mun/core"
 import { color } from "./theme"
-import { remote, page, sheet, sidebarOpen, inspectorOpen, isWide, isDesktop, toast } from "./state"
+import { connection, page, sheet, sidebarOpen, inspectorOpen, isWide, isDesktop, toast } from "./state"
 import { AuthView } from "./Auth.mun"
 import { Sidebar, Scrim } from "./Sidebar.mun"
 import { WorkspacePanel, InspectorScrim } from "./Inspector.mun"
@@ -88,7 +88,7 @@ struct Shell: View {
 struct App: View {
   var body: some View {
     Group() {
-      if remote.value.connection === "auth-required" || location.pathname === "/enroll" {
+      if connection.value === "auth-required" || location.pathname === "/enroll" {
         AuthView()
       } else {
         Shell()

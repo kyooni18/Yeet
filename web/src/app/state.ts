@@ -3,8 +3,25 @@ import type { ToolbarControl } from '@/remote/protocol'
 import { remoteStore } from '@/store/remoteStore'
 import { bindElement } from './dom'
 
-/** Mirror of the shared RemoteStore snapshot; every View reads `remote.value`. */
+/** Full snapshot for effects and small controls. Heavy views use stable slices. */
 export const remote = State(remoteStore.getSnapshot())
+export const connection = State(remote.value.connection)
+export const runtimeState = State(remote.value.state)
+export const conversationView = State(remote.value.conversation)
+export const workspaceFiles = State(remote.value.workspaceFiles)
+export const workspaceChanges = State(remote.value.workspaceChanges)
+export const toolbarView = State(remote.value.ui?.toolbar)
+export const currentSessions = State(remote.value.currentWorkspaceSessions)
+export const activeAgents = State(remote.value.agents?.active_count ?? 0)
+export const statusSnapshot = State(remote.value)
+export const streaming = State(remote.value.state.is_streaming)
+// One linear pass, not a findIndex for every item on every editor acknowledgement.
+function spacedItems(view: typeof remote.value.conversation) {
+  return (view?.items ?? []).map((item, index, items) => ({
+    ...item, spacing: !index || (item.type !== 'entry' && items[index - 1].type !== 'entry') ? '0' : '24px',
+  }))
+}
+export const transcriptItems = State(spacedItems(remote.value.conversation))
 
 export type Page = 'chat' | 'files' | 'diff' | 'agents' | 'tasks' | 'debate' | 'extensions'
 export type Sheet = 'none' | 'settings' | 'model' | 'reasoning' | 'permissions' | 'auth' | 'providers' | 'capabilities' | 'agent-settings' | 'session' | 'workspace'
@@ -25,8 +42,7 @@ export const sidebarOpen = State(wide())
 export const isWide = State(wide())
 export const isDesktop = State(desktop())
 export const inspectorOpen = State(desktop() && (preferredInspector ?? true))
-export const inspectorTab = State<'changes' | 'files'>('changes')
-export const workspaceMenu = State(false)
+export const inspectorTab = State<'status' | 'changes' | 'files'>('status')
 export const toast = State('')
 export const sessionQuery = State('')
 /** Local draft, initialized only when the shared settings editor opens. */
@@ -76,7 +92,7 @@ window.setInterval(() => {
 // A short, non-bouncy curve keeps navigation and disclosures responsive.
 export const ease = Animation.easeOut(0.2)
 
-export const connected = () => remote.value.connection === 'connected'
+export const connected = () => connection.value === 'connected'
 
 export function toggleSidebar(open = !sidebarOpen.value) {
   withAnimation(ease, () => {
@@ -87,6 +103,7 @@ export function toggleSidebar(open = !sidebarOpen.value) {
 
 export function refreshInspector() {
   if (!connected()) return
+  if (inspectorTab.value === 'status') remoteStore.refreshProviderUsage()
   remoteStore.requestChanges(remote.value.workspaceChanges?.selected ?? null, false)
   if (inspectorTab.value === 'files') remoteStore.requestFiles(remote.value.workspaceFiles?.path ?? '', remote.value.workspaceFiles?.selected ?? null)
 }
@@ -101,7 +118,7 @@ export function toggleInspector(open = !inspectorOpen.value) {
   if (open) refreshInspector()
 }
 
-export function selectInspectorTab(tab: 'changes' | 'files') {
+export function selectInspectorTab(tab: 'status' | 'changes' | 'files') {
   inspectorTab.value = tab
   if (tab === 'files' && connected()) remoteStore.requestFiles(remote.value.workspaceFiles?.path ?? '', remote.value.workspaceFiles?.selected ?? null)
 }
@@ -137,7 +154,7 @@ export function showToast(message: string) {
 }
 
 export function toolbarControl(id: string): ToolbarControl | null {
-  for (const group of remote.value.ui?.toolbar?.groups ?? []) {
+  for (const group of toolbarView.value?.groups ?? []) {
     const control = group.controls.find(item => item.id === id)
     if (control) return control
   }
@@ -162,7 +179,6 @@ export function chooseWorkspace(path: string, id: string) {
   } else {
     remoteStore.switchWorkspace(path)
   }
-  workspaceMenu.value = false
 }
 
 export function workspaces(): { id: string; path: string; label: string; selected: boolean }[] {
@@ -197,7 +213,7 @@ export function workspaceLine(): string {
 
 export function filteredSessions() {
   const needle = sessionQuery.value.trim().toLowerCase()
-  const sessions = remote.value.currentWorkspaceSessions
+  const sessions = currentSessions.value
   return needle ? sessions.filter(session => (session.title || '').toLowerCase().includes(needle)) : sessions
 }
 
@@ -206,8 +222,20 @@ export function shortModel(model: string): string {
 }
 
 export function contextLabel(): string {
-  const percent = remote.value.contextPercent
+  const percent = statusSnapshot.value.contextPercent
   return percent == null ? '' : `${Math.round(percent)}% context`
+}
+
+export function contextDescription(): string {
+  const state = runtimeState.value
+  return state.current_context_tokens == null || state.active_model_context_length == null
+    ? 'Context usage not reported'
+    : `${state.current_context_tokens.toLocaleString()} / ${state.active_model_context_length.toLocaleString()} context tokens`
+}
+
+export function isNewChat(): boolean {
+  const view = conversationView.value
+  return !streaming.value && !view?.items.length && !view?.streaming_text
 }
 
 export const showJumpToLatest = State(false)
@@ -335,10 +363,13 @@ export function startRemote(onEditDraft: (text: string) => void) {
   let lastWorkspace = remote.value.state.workspace_root
   let wasStreaming = remote.value.state.is_streaming
   let refreshFrame = 0
+  let priorSnapshot = remoteStore.getSnapshot()
   remoteStore.subscribe(() => {
-    const previous = remote.value
-    const previousEditor = remote.value.settings?.editor
+    // Compare raw store references, not Mün's reactive proxies.
+    const previous = priorSnapshot
+    const previousEditor = previous.settings?.editor
     const snapshot = remoteStore.getSnapshot()
+    priorSnapshot = snapshot
     const editor = snapshot.settings?.editor
     if (editor && (!previousEditor || previousEditor.kind !== editor.kind)) {
       settingsEditorValue.value = editor.value
@@ -346,6 +377,21 @@ export function startRemote(onEditDraft: (text: string) => void) {
       settingsEditorValue.value = ''
     }
     remote.value = snapshot
+    connection.value = snapshot.connection
+    runtimeState.value = snapshot.state
+    workspaceFiles.value = snapshot.workspaceFiles
+    workspaceChanges.value = snapshot.workspaceChanges
+    toolbarView.value = snapshot.ui?.toolbar
+    currentSessions.value = snapshot.currentWorkspaceSessions
+    activeAgents.value = snapshot.agents?.active_count ?? 0
+    streaming.value = snapshot.state.is_streaming
+    if (snapshot.conversation !== previous.conversation) {
+      conversationView.value = snapshot.conversation
+      transcriptItems.value = spacedItems(snapshot.conversation)
+    }
+    if (snapshot.state !== previous.state || snapshot.connection !== previous.connection || snapshot.agents !== previous.agents) {
+      statusSnapshot.value = snapshot
+    }
     if (inspectorOpen.value && snapshot.connection === 'connected' && (
       previous.connection !== 'connected' || lastWorkspace !== snapshot.state.workspace_root ||
       (wasStreaming && !snapshot.state.is_streaming)

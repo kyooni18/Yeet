@@ -4,8 +4,8 @@ import { workIcon } from "./workIcons"
 import { sidebarRef } from "./drawer"
 import { Spinner, IconButton } from "./Common.mun"
 import {
-  remote, page, workspaceMenu, isWide, ease, connected, openPage, openSheet, newSession, openSession,
-  chooseWorkspace, workspaces, toggleSidebar, age, sessionQuery, filteredSessions, manageSession,
+  runtimeState, workspaceChanges, activeAgents, connection, page, isWide, ease, connected, openPage, openSheet, newSession, openSession,
+  toggleSidebar, age, sessionQuery, filteredSessions, manageSession,
 } from "./state"
 
 struct NavItem: View {
@@ -33,47 +33,15 @@ struct SessionRow: View {
   var body: some View {
     Button(action: { openSession(session.id) }, label: {
       HStack(spacing: 8) {
-        if session.id === remote.value.state.current_session_id && remote.value.state.is_streaming {
+        if session.id === runtimeState.value.current_session_id && runtimeState.value.is_streaming {
           Spinner()
         }
         Text(session.title || "Untitled").lineLimit(1).style({ flex: "1", minWidth: "0" })
         Text(age(session.updated_at)).fontSize(11).foregroundStyle(color.faint)
       }
     })
-    .withProps({ className: "session-row", title: session.title || "Untitled", "aria-current": session.id === remote.value.state.current_session_id ? "true" : undefined })
+    .withProps({ className: "session-row", title: session.title || "Untitled", "aria-current": session.id === runtimeState.value.current_session_id ? "true" : undefined })
     .disabled(!connected())
-  }
-}
-
-struct WorkspaceRow: View {
-  let item: Any
-  var body: some View {
-    Button(action: { chooseWorkspace(item.path, item.id) }, label: {
-      HStack(spacing: 8) {
-        Icon(workIcon("folder"), { width: 15, height: 15, strokeWidth: 1.6 })
-        Text(item.label).lineLimit(1).style({ flex: "1", minWidth: "0" })
-        if item.selected {
-          Icon(workIcon("check"), { width: 14, height: 14 })
-        }
-      }
-    })
-    .withProps({ className: "workspace-choice", title: item.path, "aria-current": item.selected ? "true" : undefined })
-    .disabled(!connected())
-  }
-}
-
-struct WorkspaceMenu: View {
-  var body: some View {
-    ScrollView() {
-      VStack(alignment: .stretch, spacing: 2) {
-        ForEach(workspaces(), { id: item => item.id }) { item in
-          WorkspaceRow(item: item)
-        }
-      }
-    }
-    .withProps({ id: "workspace-list", role: "region", "aria-label": "Workspaces", tabindex: "0" })
-    .style({ maxHeight: "min(240px, 32dvh)", flexShrink: "0", marginTop: "6px" })
-    .transition(Transition.opacity.combined(Transition.move("top", 4)))
   }
 }
 
@@ -95,40 +63,15 @@ struct Navigation: View {
     VStack(alignment: .stretch, spacing: 2) {
       NavItem(id: "chat", title: "Sessions", icon: "chat", badge: "")
       NavItem(id: "files", title: "Files", icon: "folder", badge: "")
-      NavItem(id: "diff", title: "Diff", icon: "diff", badge: remote.value.workspaceChanges?.files.length ? String(remote.value.workspaceChanges.files.length) : "")
-      NavItem(id: "agents", title: "Agents", icon: "agents", badge: remote.value.agents?.active_count ? String(remote.value.agents.active_count) : "")
+      NavItem(id: "diff", title: "Diff", icon: "diff", badge: workspaceChanges.value?.files.length ? String(workspaceChanges.value.files.length) : "")
+      NavItem(id: "agents", title: "Agents", icon: "agents", badge: activeAgents.value ? String(activeAgents.value) : "")
       NavItem(id: "tasks", title: "Scheduled tasks", icon: "calendar", badge: "")
       NavItem(id: "debate", title: "Debate", icon: "debate", badge: "")
-      if remote.value.state.extension_commands?.length {
+      if runtimeState.value.extension_commands?.length {
         NavItem(id: "extensions", title: "Extensions", icon: "extensions", badge: "")
       }
     }
     .padding({ top: 12, bottom: 16 })
-  }
-}
-
-struct WorkspaceSelection: View {
-  var body: some View {
-    VStack(alignment: .stretch, spacing: 0) {
-      Text("Workspace").withProps({ className: "section-label" })
-      Button(action: { withAnimation(ease) { workspaceMenu.value = !workspaceMenu.value } }, label: {
-        HStack(spacing: 8) {
-          Icon(workIcon("folder"), { width: 16, height: 16, strokeWidth: 1.6 })
-          Text(remote.value.currentWorkspace?.display_name || "Workspace").lineLimit(1).style({ flex: "1", minWidth: "0" })
-          Icon(workIcon("chevron"), { width: 14, height: 14 })
-            .rotationEffect(workspaceMenu.value ? 270 : 90)
-            .animation(ease, value: workspaceMenu.value)
-        }
-      })
-      .withProps({ className: "workspace-toggle", "aria-label": "Switch workspace", "aria-expanded": workspaceMenu.value, "aria-controls": "workspace-list" })
-      .disabled(!connected())
-      if workspaceMenu.value {
-        WorkspaceMenu()
-        Button("Open another workspace…") { openSheet("workspace") }
-          .withProps({ className: "workspace-choice" }).fontSize(13).disabled(!connected())
-      }
-    }
-    .padding({ bottom: 18 })
   }
 }
 
@@ -173,7 +116,7 @@ struct Footer: View {
       }).withProps({ className: "sidebar-settings" })
       Spacer()
       if !connected() {
-        Text(remote.value.connection).fontSize(12).foregroundStyle(color.muted)
+        Text(connection.value).fontSize(12).foregroundStyle(color.muted)
       }
     }
     .withProps({ className: "sidebar-footer" })
@@ -196,11 +139,10 @@ export struct Sidebar: View {
       ScrollView() {
         VStack(alignment: .stretch, spacing: 0) {
           Navigation()
-          WorkspaceSelection()
           Sessions()
         }
       }
-      .withProps({ className: "sidebar-scroll", role: "region", "aria-label": "Workspaces and sessions" })
+      .withProps({ className: "sidebar-scroll", role: "region", "aria-label": "Sessions and navigation" })
       .style({ flex: "1 1 0", minHeight: "0" })
       Footer()
     }

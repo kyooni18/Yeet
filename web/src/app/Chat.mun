@@ -3,9 +3,10 @@ import { workIcon } from "./workIcons"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
-  remote, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
+  remote, statusSnapshot, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
   toolbarControl, conversationRef, workspaceLine, elapsed, inspectorOpen, toggleInspector,
-  showJumpToLatest, jumpToLatest,
+  showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
+  chooseWorkspace, workspaces, isNewChat, contextDescription,
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
@@ -27,9 +28,9 @@ function submitCustomAnswer(question: any) {
 }
 
 function connectionLabel(): string {
-  switch (remote.value.connection) {
+  switch (statusSnapshot.value.connection) {
     case "connected": return ""
-    case "failed": return remote.value.connectionError || "Connection failed"
+    case "failed": return statusSnapshot.value.connectionError || "Connection failed"
     case "offline": return "Offline"
     case "reconnecting": return "Reconnecting…"
     default: return "Connecting…"
@@ -45,13 +46,13 @@ export struct TopBar: View {
           .withProps({ "aria-controls": "sidebar", "aria-expanded": sidebarOpen.value })
           .transition(Transition.opacity)
       }
-      Text(page.value === "chat" ? remote.value.currentSession?.title || "New session" : page.value === "files" ? "Files" : page.value === "diff" ? "Review changes" : page.value === "tasks" ? "Scheduled tasks" : page.value === "debate" ? "Debate" : page.value === "extensions" ? "Extensions" : "Agents")
+      Text(page.value === "chat" ? statusSnapshot.value.currentSession?.title || "New session" : page.value === "files" ? "Files" : page.value === "diff" ? "Review changes" : page.value === "tasks" ? "Scheduled tasks" : page.value === "debate" ? "Debate" : page.value === "extensions" ? "Extensions" : "Agents")
         .fontSize(14).fontWeight("medium").lineLimit(1)
         .style({ minWidth: "0" })
       Spacer()
       Text(connectionLabel())
         .fontSize(12)
-        .foregroundStyle(remote.value.connection === "failed" ? color.del : color.faint)
+        .foregroundStyle(statusSnapshot.value.connection === "failed" ? color.del : color.faint)
         .withProps({ role: "status", className: "connection-label" })
       IconButton(icon: "inspector", label: "Toggle workspace panel", action: { toggleInspector() })
         .withProps({ "aria-controls": "workspace-panel", "aria-expanded": inspectorOpen.value, "aria-keyshortcuts": "Control+Shift+B Meta+Shift+B" })
@@ -285,17 +286,9 @@ struct Message: View {
   }
 }
 
-function itemSpacing(item: Any): string {
-  const items = remote.value.conversation?.items ?? []
-  const index = items.findIndex(candidate => candidate.id === item.id)
-  if (index <= 0) return "0"
-  const previous = items[index - 1]
-  return item.type !== "entry" && previous.type !== "entry" ? "0" : "24px"
-}
-
 function showWorking(): boolean {
-  const view = remote.value.conversation
-  return !!view?.preparing || !!(remote.value.state.is_streaming && !view?.streaming_text && !view?.items.some(item =>
+  const view = conversationView.value
+  return !!view?.preparing || !!(streaming.value && !view?.streaming_text && !view?.items.some(item =>
     item.type === "activity" ? item.group.active || item.group.awaits_permission : item.type === "reasoning" && item.trace.active))
 }
 
@@ -312,7 +305,7 @@ struct Item: View {
       }
     }
     .withProps({ className: item.type === "activity" ? "activity-group" : item.type === "reasoning" ? "reasoning-trace" : "message-block message-block--" + item.entry.kind.type })
-    .style({ minWidth: "0", marginTop: itemSpacing(item) })
+    .style({ minWidth: "0", marginTop: item.spacing })
   }
 }
 
@@ -321,7 +314,7 @@ struct Working: View {
   var body: some View {
     HStack(spacing: 8) {
       Spinner()
-      Text([remote.value.conversation?.preparing_label || "Working", elapsed()].filter(Boolean).join(" · "))
+      Text([conversationView.value?.preparing_label || "Working", elapsed()].filter(Boolean).join(" · "))
         .fontSize(13)
         .foregroundStyle(color.faint)
       Spacer()
@@ -344,18 +337,18 @@ struct EmptyState: View {
 }
 
 function hasConversation(): boolean {
-  return !!(remote.value.conversation?.items.length || remote.value.conversation?.streaming_text)
+  return !!(conversationView.value?.items.length || conversationView.value?.streaming_text)
 }
 
 struct Thread: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
       if hasConversation() === true {
-        ForEach(remote.value.conversation?.items ?? [], { id: item => item.id }) { item in
+        ForEach(transcriptItems.value, { id: item => item.id }) { item in
           Item(item: item)
         }
-        if remote.value.conversation?.streaming_text {
-          Element("yeet-markdown", { source: remote.value.conversation.streaming_text })
+        if conversationView.value?.streaming_text {
+          Element("yeet-markdown", { source: conversationView.value.streaming_text })
             .style({ width: "100%", marginTop: "24px" })
         }
       } else {
@@ -364,8 +357,8 @@ struct Thread: View {
       if showWorking() === true {
         Working().padding({ top: 12 })
       }
-      if remote.value.conversation?.error {
-        Text(remote.value.conversation.error).foregroundStyle(color.del).padding({ top: 12 })
+      if conversationView.value?.error {
+        Text(conversationView.value.error).foregroundStyle(color.del).padding({ top: 12 })
       }
     }
     .padding({ top: 32, bottom: 32, leading: 24, trailing: 24 })
@@ -540,6 +533,16 @@ struct Composer: View {
         .transition(Transition.opacity)
       }
       VStack(alignment: .stretch, spacing: 8) {
+        if isNewChat() {
+          HStack(spacing: 8) {
+            Icon(workIcon("folder"), { width: 15, height: 15 })
+            Picker(Binding(() => runtimeState.value.workspace_root || "", value => chooseWorkspace(value, workspaces().find(item => item.path === value)?.id || value)), workspaces().map(item => ({ value: item.path, label: item.label })))
+              .accessibilityLabel("Workspace for new chat")
+              .withProps({ className: "composer-workspace-picker" })
+              .disabled(!connected())
+            Button("Open path…") { openSheet("workspace") }.withProps({ className: "panel-link" }).disabled(!connected())
+          }.withProps({ className: "composer-workspace" })
+        }
         if attachments.value.length {
           AttachmentStrip()
         }
@@ -554,7 +557,7 @@ struct Composer: View {
         HStack(spacing: 4) {
           if canAttach.value {
             IconButton(icon: "plus", label: "Attach files", action: { pickFiles() })
-              .disabled(!connected() || remote.value.state.is_streaming)
+              .disabled(!connected() || streaming.value)
           }
           Button(action: { openSheet("model") }, label: {
             HStack(spacing: 4) {
@@ -564,19 +567,21 @@ struct Composer: View {
           }).withProps({ className: "model-trigger", "aria-label": "Choose model", title: remote.value.state.active_model || "Choose model" }).disabled(!connected())
           ToolbarChoice(id: "reasoning")
           Spacer()
+          Text(contextLabel() || "Context —")
+            .withProps({ className: "composer-context", title: contextDescription(), "aria-label": contextDescription() })
           Button(action: { primary() }, label: {
-            if remote.value.state.is_streaming {
+            if streaming.value {
               RoundedRectangle(3).style({ width: "12px", height: "12px", background: "currentColor" })
             } else {
               Icon(workIcon("arrow"), { width: 19, height: 19, strokeWidth: 2 })
             }
           })
             .accessibilityLabel(remote.value.composer?.primary_control.label || "Send")
-            .withProps({ className: "send-button", title: remote.value.state.is_streaming ? "Stop generating" : "Send message" })
-            .background(remote.value.state.is_streaming ? color.raised : color.accent)
-            .foregroundStyle(remote.value.state.is_streaming ? color.text : color.accentInk)
+            .withProps({ className: "send-button", title: streaming.value ? "Stop generating" : "Send message" })
+            .background(streaming.value ? color.raised : color.accent)
+            .foregroundStyle(streaming.value ? color.text : color.accentInk)
             .opacity(primaryEnabled() ? 1 : 0.35)
-            .animation(ease, value: remote.value.state.is_streaming)
+            .animation(ease, value: streaming.value)
             .disabled(!primaryEnabled())
         }.withProps({ className: "composer-controls" })
       }
