@@ -361,21 +361,13 @@ pub(crate) async fn serve_socket(mut socket: WebSocket, hub: Arc<RemoteHub>) {
                                     break;
                                 }
                             }
-                            ClientMessage::Command { request_id, mut command, .. } => {
+                            ClientMessage::Command { request_id, command, .. } => {
                                 if !command_allowed(&command) {
                                     let _ = send_json(&mut socket, &ServerMessage::error(
                                         "command_forbidden",
                                         "shutdown is not exposed through the Remote frontend protocol",
                                         false,
                                         request_id,
-                                    )).await;
-                                    continue;
-                                }
-                                if let Err(error) =
-                                    resolve_remote_attachments(&hub, &workspace, &mut command)
-                                {
-                                    let _ = send_json(&mut socket, &ServerMessage::error(
-                                        "attachment_invalid", error.to_string(), false, request_id,
                                     )).await;
                                     continue;
                                 }

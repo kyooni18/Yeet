@@ -64,14 +64,14 @@ struct PendingRemoteAttachment {
 
 pub(crate) struct RemoteHub {
     clients: Mutex<HashMap<ClientRuntimeKey, Arc<RemoteClientRuntime>>>,
-    attachments: Mutex<HashMap<String, PendingRemoteAttachment>>,
+    attachments: Arc<Mutex<HashMap<String, PendingRemoteAttachment>>>,
 }
 
 impl RemoteHub {
     pub(crate) fn new() -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),
-            attachments: Mutex::new(HashMap::new()),
+            attachments: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -137,44 +137,6 @@ impl RemoteHub {
         Ok(attachments.remove(id).is_some())
     }
 
-    fn take_attachments(&self, ids: &[String]) -> Result<Vec<(String, PendingRemoteAttachment)>> {
-        if ids.len() > MAX_ATTACHMENTS_PER_SUBMIT {
-            return Err(anyhow!(
-                "at most {MAX_ATTACHMENTS_PER_SUBMIT} attachments may be attached to one message"
-            ));
-        }
-
-        let mut seen = HashSet::new();
-        if ids.iter().any(|id| !seen.insert(id.as_str())) {
-            return Err(anyhow!("duplicate Remote attachment ID"));
-        }
-
-        let mut attachments = self
-            .attachments
-            .lock()
-            .map_err(|_| anyhow!("remote attachment store lock poisoned"))?;
-        prune_attachments(&mut attachments, Instant::now());
-
-        let mut total = 0usize;
-        for id in ids {
-            let Some(value) = attachments.get(id) else {
-                return Err(anyhow!("Remote attachment is missing or expired: {id}"));
-            };
-            total = total.saturating_add(value.byte_len);
-        }
-        if total > MAX_SUBMIT_ATTACHMENT_BYTES {
-            return Err(anyhow!("combined attachments exceed 20 MiB"));
-        }
-
-        let mut resolved = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(value) = attachments.remove(id) {
-                resolved.push((id.clone(), value));
-            }
-        }
-        Ok(resolved)
-    }
-
     pub(crate) fn resolve_workspace(&self, requested: Option<&str>) -> Result<PathBuf> {
         let requested = requested.map(str::trim).filter(|value| !value.is_empty());
         let home = dirs::home_dir().ok_or_else(|| {
@@ -219,7 +181,10 @@ impl RemoteHub {
         }
         // Backend construction can touch workspace/session metadata. Keep it
         // outside the client registry lock so one new client never stalls others.
-        let runtime = Arc::new(RemoteClientRuntime::spawn(workspace)?);
+        let runtime = Arc::new(RemoteClientRuntime::spawn(
+            workspace,
+            Arc::clone(&self.attachments),
+        )?);
         let mut clients = self.lock_clients();
         if let Some(existing) = clients.get(&key) {
             // A concurrent reconnect of the same client won the race.
@@ -237,6 +202,46 @@ impl RemoteHub {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+fn take_attachments(
+    store: &Mutex<HashMap<String, PendingRemoteAttachment>>,
+    ids: &[String],
+) -> Result<Vec<(String, PendingRemoteAttachment)>> {
+    if ids.len() > MAX_ATTACHMENTS_PER_SUBMIT {
+        return Err(anyhow!(
+            "at most {MAX_ATTACHMENTS_PER_SUBMIT} attachments may be attached to one message"
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    if ids.iter().any(|id| !seen.insert(id.as_str())) {
+        return Err(anyhow!("duplicate Remote attachment ID"));
+    }
+
+    let mut attachments = store
+        .lock()
+        .map_err(|_| anyhow!("remote attachment store lock poisoned"))?;
+    prune_attachments(&mut attachments, Instant::now());
+
+    let mut total = 0usize;
+    for id in ids {
+        let Some(value) = attachments.get(id) else {
+            return Err(anyhow!("Remote attachment is missing or expired: {id}"));
+        };
+        total = total.saturating_add(value.byte_len);
+    }
+    if total > MAX_SUBMIT_ATTACHMENT_BYTES {
+        return Err(anyhow!("combined attachments exceed 20 MiB"));
+    }
+
+    let mut resolved = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(value) = attachments.remove(id) {
+            resolved.push((id.clone(), value));
+        }
+    }
+    Ok(resolved)
 }
 
 fn prune_attachments(attachments: &mut HashMap<String, PendingRemoteAttachment>, now: Instant) {
@@ -319,7 +324,10 @@ struct RemoteClientRuntime {
 }
 
 impl RemoteClientRuntime {
-    fn spawn(workspace: &Path) -> Result<Self> {
+    fn spawn(
+        workspace: &Path,
+        attachments: Arc<Mutex<HashMap<String, PendingRemoteAttachment>>>,
+    ) -> Result<Self> {
         // Use the same workspace daemon as the TUI. An independent service
         // would restore a live session from disk and mark its running turn
         // orphaned, potentially overwriting the actual owner's transcript.
@@ -371,6 +379,7 @@ impl RemoteClientRuntime {
                     thread_ui,
                     thread_workspace,
                     git,
+                    attachments,
                 );
             })
             .context("start semantic Remote client runtime")?;
@@ -747,6 +756,7 @@ fn runtime_loop(
     ui: Arc<Mutex<crate::shared_ui::application_session::ApplicationSession>>,
     workspace: std::path::PathBuf,
     mut git: crate::harness::resources::GitRefresh,
+    attachments: Arc<Mutex<HashMap<String, PendingRemoteAttachment>>>,
 ) {
     let mut shutdown = false;
     let mut recent = crate::shared_ui::home::RecentViews::default();
@@ -762,7 +772,11 @@ fn runtime_loop(
                     }
                     let new_session = matches!(command, FrontendCommand::NewSession);
                     let theme_command = command.clone();
-                    let result = service.send(&command).map_err(|error| format!("{error:#}"));
+                    let result =
+                        deliver_remote_command(&attachments, &workspace, command, |command| {
+                            service.send(command)
+                        })
+                        .map_err(|error| format!("{error:#}"));
                     if result.is_ok()
                         && let Ok(mut state) = shared.lock()
                     {
@@ -869,20 +883,31 @@ fn runtime_loop(
                         continue;
                     }
                     let result = (|| -> Result<(), String> {
-                        let mut state = shared
+                        let state = shared
                             .lock()
                             .map_err(|_| "remote runtime state lock poisoned")?;
-                        let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
-                        let prepared = ui.prepare_composer(action, &state.state);
+                        let application = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
+                        let prepared = application.prepare_composer(action, &state.state);
+                        drop(application);
+                        drop(state);
                         let new_session =
                             matches!(prepared.effect.command, Some(FrontendCommand::NewSession));
                         if let Some(command) = prepared.effect.command.clone() {
                             let theme_command = command.clone();
-                            service
-                                .send(&command)
-                                .map_err(|error| format!("{error:#}"))?;
-                            state.theme_cache.invalidate_for_command(&theme_command);
+                            deliver_remote_command(&attachments, &workspace, command, |command| {
+                                service.send(command)
+                            })
+                            .map_err(|error| format!("{error:#}"))?;
+                            shared
+                                .lock()
+                                .map_err(|_| "remote runtime state lock poisoned")?
+                                .theme_cache
+                                .invalidate_for_command(&theme_command);
                         }
+                        let state = shared
+                            .lock()
+                            .map_err(|_| "remote runtime state lock poisoned")?;
+                        let mut ui = ui.lock().map_err(|_| "remote UI state lock poisoned")?;
                         let (mut projection, effect) = ui.commit_composer(prepared, &state.state);
                         if new_session {
                             ui.observe_composer_new_session(&state.state);
@@ -1167,7 +1192,9 @@ fn retain_history(shared: &mut RuntimeShared, outgoing: &[ServerMessage]) {
             let Some(dropped) = shared.history.pop_front() else {
                 break;
             };
-            shared.history_bytes = shared.history_bytes.saturating_sub(retained_bytes(&dropped));
+            shared.history_bytes = shared
+                .history_bytes
+                .saturating_sub(retained_bytes(&dropped));
         }
     }
 }
@@ -1408,8 +1435,32 @@ fn command_allowed(command: &FrontendCommand) -> bool {
     !matches!(command, FrontendCommand::Shutdown)
 }
 
+/// Resolve before acknowledging composer acceptance. Failed validation or delivery
+/// returns the reserved uploads to the cache so the same draft can be retried.
+fn deliver_remote_command(
+    attachments: &Mutex<HashMap<String, PendingRemoteAttachment>>,
+    workspace: &Path,
+    mut command: FrontendCommand,
+    deliver: impl FnOnce(&FrontendCommand) -> Result<()>,
+) -> Result<()> {
+    let ids = match &command {
+        FrontendCommand::Submit { attachment_ids, .. } => attachment_ids.as_slice(),
+        _ => &[],
+    };
+    let reserved = take_attachments(attachments, ids)?;
+    let result = resolve_remote_attachments(&reserved, workspace, &mut command)
+        .and_then(|()| deliver(&command));
+    if result.is_err() {
+        let mut pending = attachments
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        pending.extend(reserved);
+    }
+    result
+}
+
 fn resolve_remote_attachments(
-    hub: &RemoteHub,
+    resolved: &[(String, PendingRemoteAttachment)],
     workspace: &Path,
     command: &mut FrontendCommand,
 ) -> Result<()> {
@@ -1432,7 +1483,6 @@ fn resolve_remote_attachments(
         return Ok(());
     }
 
-    let resolved = hub.take_attachments(attachment_ids)?;
     let mut files = Vec::new();
 
     for (id, attachment) in resolved {
@@ -1441,14 +1491,14 @@ fn resolve_remote_attachments(
             "image/png" | "image/jpeg" | "image/webp" | "image/gif"
         ) {
             images.push(ImageAttachment::from_bytes(
-                attachment.media_type,
+                attachment.media_type.clone(),
                 &attachment.bytes,
-                attachment.name,
+                attachment.name.clone(),
             )?);
             continue;
         }
 
-        files.push(materialize_remote_file(workspace, &id, attachment)?);
+        files.push(materialize_remote_file(workspace, id, attachment)?);
     }
 
     if !files.is_empty() {
@@ -1465,7 +1515,7 @@ fn resolve_remote_attachments(
 fn materialize_remote_file(
     workspace: &Path,
     id: &str,
-    attachment: PendingRemoteAttachment,
+    attachment: &PendingRemoteAttachment,
 ) -> Result<Value> {
     let root = workspace.join(".yeet").join("remote-attachments");
     fs::create_dir_all(&root).context("create Remote attachment directory")?;
@@ -1540,6 +1590,78 @@ pub(crate) use socket::serve_socket;
 mod tests {
     use super::RemoteHub;
 
+    #[test]
+    fn composer_uploads_resolve_before_acceptance_and_survive_failed_delivery() {
+        use super::*;
+        use crate::shared_ui::composer::{ComposerAction, ComposerAttachment, EditorSnapshot};
+        let root = tempfile::tempdir().unwrap();
+        let hub = RemoteHub::new();
+        let id = hub
+            .store_attachment(
+                "text/plain".into(),
+                b"attachment contents".to_vec(),
+                Some("note.txt".into()),
+            )
+            .unwrap();
+        let state = BridgeState::default();
+        let mut ui = crate::shared_ui::application_session::ApplicationSession::new(&state);
+        configure_composer_host(&mut ui, &state, Some(root.path().display().to_string()));
+        let editor = EditorSnapshot {
+            context: ui.composer_environment().context.clone(),
+            text: "Read this file".into(),
+            revision: 1,
+            attachments: vec![ComposerAttachment {
+                id: "local".into(),
+                name: "note.txt".into(),
+                attachment_id: Some(id.clone()),
+                ready: true,
+                error: None,
+            }],
+            ..Default::default()
+        };
+        let prepared = ui.prepare_composer(ComposerAction::UpdateEditor(editor.clone()), &state);
+        ui.commit_composer(prepared, &state);
+        let prepared = ui.prepare_composer(ComposerAction::Submit(editor.clone()), &state);
+        let command = prepared.effect.command.clone().unwrap();
+        // Simulate a delivery failure after materializing the upload.
+        assert!(
+            deliver_remote_command(&hub.attachments, root.path(), command.clone(), |_| bail!(
+                "offline"
+            ))
+            .is_err()
+        );
+        assert_eq!(ui.projection().composer.view.editor.text, editor.text);
+        assert!(hub.attachments.lock().unwrap().contains_key(&id));
+        deliver_remote_command(&hub.attachments, root.path(), command, |command| {
+            let FrontendCommand::Submit {
+                text,
+                attachment_ids,
+                ..
+            } = command
+            else {
+                panic!("expected submit")
+            };
+            assert!(attachment_ids.is_empty());
+            assert!(text.contains(REMOTE_FILE_CONTEXT_OPEN));
+            assert!(text.contains("note.txt"));
+            assert_eq!(
+                fs::read(
+                    root.path()
+                        .join(".yeet/remote-attachments")
+                        .join(&id)
+                        .join("note.txt")
+                )
+                .unwrap(),
+                b"attachment contents"
+            );
+            Ok(())
+        })
+        .unwrap();
+        let (_, effect) = ui.commit_composer(prepared, &state);
+        assert_eq!(effect.ui.accepted_editor.unwrap().text, editor.text);
+        assert!(!hub.attachments.lock().unwrap().contains_key(&id));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn opening_a_tui_session_routes_to_its_live_daemon_and_keeps_streaming() {
@@ -1609,7 +1731,8 @@ mod tests {
             command.clear();
             assert_eq!(reader.read_line(&mut command).unwrap(), 0);
         });
-        let runtime = RemoteClientRuntime::spawn(&workspace).unwrap();
+        let runtime =
+            RemoteClientRuntime::spawn(&workspace, Arc::new(Mutex::new(HashMap::new()))).unwrap();
         runtime.ensure_session(Some("tui-live")).await.unwrap();
         assert!(runtime.is_streaming());
         assert_eq!(
@@ -1981,7 +2104,10 @@ mod tests {
                 guard.history_bytes
             );
             // The newest message always survives so the replay cursor stays valid.
-            assert_eq!(guard.history.back().and_then(ServerMessage::sequence), Some(3));
+            assert_eq!(
+                guard.history.back().and_then(ServerMessage::sequence),
+                Some(3)
+            );
         }
         // Small messages still replay up to the count limit, not the byte limit.
         let small = |sequence: u64| ServerMessage::AssistantDelta {
