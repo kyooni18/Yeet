@@ -170,7 +170,6 @@ export class RemoteStore {
   private initialized = false
   private revision = 0
   private sessionResetRevision = 0
-  private eventQueue: Parameters<RemoteClientTransport['markApplied']>[0][] = []
   private flushFrame = 0
   private snapshot = this.makeSnapshot()
 
@@ -262,7 +261,6 @@ export class RemoteStore {
     this.initialized = false
     if (this.flushFrame) this.options.cancelFrame(this.flushFrame)
     this.flushFrame = 0
-    this.eventQueue = []
     this.transport?.close()
     this.transport = null
     this.unsubscribeConnectivity?.()
@@ -279,19 +277,21 @@ export class RemoteStore {
   }
 
   private enqueue(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
-    this.eventQueue.push(message)
+    // Reconcile immediately even while a background tab suspends animation
+    // frames. Only rendering is deferred; cumulative snapshots never queue up.
+    if (message.type === 'shell_job') {
+      for (const listener of this.shellJobListeners) listener(message.payload)
+      return
+    }
+    this.applyMessage(message)
+    this.transport?.markApplied(message)
     if (this.flushFrame) return
     this.flushFrame = this.options.scheduleFrame(() => this.flushEvents())
   }
 
   private flushEvents(): void {
     this.flushFrame = 0
-    const batch = this.eventQueue.splice(0)
-    for (const message of batch) {
-      this.applyMessage(message)
-      this.transport?.markApplied(message)
-    }
-    if (batch.length) this.emit()
+    this.emit()
   }
 
   private shellJobListeners = new Set<(response: ShellJobResponse) => void>()
@@ -304,9 +304,6 @@ export class RemoteStore {
 
   private applyMessage(message: Parameters<RemoteClientTransport['markApplied']>[0]): void {
     switch (message.type) {
-      case 'shell_job':
-        for (const listener of this.shellJobListeners) listener(message.payload)
-        return
       case 'ui_home':
         if (message.home_revision < this.homeRevision) return
         this.homeRevision = message.home_revision

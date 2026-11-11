@@ -81,7 +81,7 @@ export class RemoteTransport {
   private lastMessageAt = 0
   private welcomed = false
   private pendingInterrupt = false
-  private intentionalClosures = new WeakSet<RemoteSocket>()
+  private generation = 0
   private resume: RemoteResumeState
   private lastReceivedSequence: number | null
   private protocolInfo: RemoteProtocolInfo | null = null
@@ -95,23 +95,29 @@ export class RemoteTransport {
   }
 
   async connect(): Promise<void> {
+    const generation = ++this.generation
+    this.clearReconnect()
+    this.detachSocket()
     this.closedByClient = false
     this.events.onStatus(this.reconnectAttempt > 0 ? 'reconnecting' : 'connecting')
     try {
       const auth = await this.adapter.request<{ required: boolean; authenticated: boolean }>('/api/auth/status')
+      if (generation !== this.generation || this.closedByClient) return
       if (auth.required && !auth.authenticated) {
         this.events.onStatus('auth-required')
         return
       }
       const protocol = await this.adapter.request<RemoteProtocolInfo>('/api/protocol')
+      if (generation !== this.generation || this.closedByClient) return
       this.protocolInfo = protocol
       if (protocol.maxVersion < 1 || protocol.minVersion > 1) {
         this.events.onStatus('failed')
         this.events.onError(`Remote protocol ${protocol.minVersion}..${protocol.maxVersion} is not supported by this WebUI.`)
         return
       }
-      this.openSocket(protocol)
+      this.openSocket(protocol, generation)
     } catch (error) {
+      if (generation !== this.generation || this.closedByClient) return
       this.events.onError(error instanceof Error ? error.message : String(error))
       this.scheduleReconnect()
     }
@@ -132,15 +138,7 @@ export class RemoteTransport {
     this.lastReceivedSequence = null
     writeResumeState(this.adapter, this.resume)
     this.reconnectAttempt = 0
-    this.stopHeartbeat()
-    const socket = this.socket
-    if (socket) {
-      this.intentionalClosures.add(socket)
-      socket.close(1000, 'workspace switch')
-    }
-    this.socket = null
-    this.welcomed = false
-    this.closedByClient = false
+    this.pendingInterrupt = false
     void this.connect()
   }
 
@@ -227,15 +225,23 @@ export class RemoteTransport {
   }
 
   close(): void {
+    ++this.generation
     this.closedByClient = true
+    this.clearReconnect()
+    this.detachSocket()
+  }
+
+  private clearReconnect(): void {
+    if (this.reconnectTimer !== undefined) this.adapter.clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = undefined
+  }
+
+  private detachSocket(): void {
+    this.stopHeartbeat()
     this.welcomed = false
-    if (this.reconnectTimer) this.adapter.clearTimeout(this.reconnectTimer)
-    if (this.heartbeatTimer) this.adapter.clearInterval(this.heartbeatTimer)
-    if (this.socket) {
-      this.intentionalClosures.add(this.socket)
-      this.socket.close(1000, 'client closed')
-    }
+    const socket = this.socket
     this.socket = null
+    socket?.close(1000, 'connection replaced')
   }
 
   markApplied(message: RemoteServerMessage): void {
@@ -251,19 +257,21 @@ export class RemoteTransport {
     writeResumeState(this.adapter, this.resume)
   }
 
-  private openSocket(protocolInfo: RemoteProtocolInfo): void {
-    this.socket?.close()
+  private openSocket(protocolInfo: RemoteProtocolInfo, generation: number): void {
     this.welcomed = false
     this.lastReceivedSequence = this.resume.lastSequence ?? null
     const socket = this.adapter.createSocket(this.adapter.websocketUrl(protocolInfo.websocket), 'yeet.remote.v1')
     this.socket = socket
+    const current = () => generation === this.generation && this.socket === socket && !this.closedByClient
 
     socket.addEventListener('open', () => {
+      if (!current()) return
       this.lastMessageAt = this.adapter.now()
       socket.send(encodeHello(this.resume))
     })
 
     socket.addEventListener('message', (event) => {
+      if (!current()) return
       this.lastMessageAt = this.adapter.now()
       if (typeof event.data !== 'string') return
       const message = decodeServerMessage(event.data)
@@ -276,19 +284,11 @@ export class RemoteTransport {
             this.resume = {}
             this.lastReceivedSequence = null
             writeResumeState(this.adapter, this.resume)
-            this.intentionalClosures.add(socket)
-            socket.close(1000, 'workspace changed')
-            this.socket = null
-            this.welcomed = false
-            this.adapter.setTimeout(() => {
-              this.closedByClient = false
-              void this.connect()
-            }, 0)
+            void this.connect()
             return
           }
           this.events.onStatus('failed')
-          this.closedByClient = true
-          socket.close(4002, message.code)
+          this.close()
           return
         }
       }
@@ -322,18 +322,15 @@ export class RemoteTransport {
     })
 
     socket.addEventListener('error', () => {
+      if (!current()) return
       this.events.onError('Remote connection failed.')
     })
 
     socket.addEventListener('close', () => {
+      if (!current()) return
       this.stopHeartbeat()
-      const intentional = this.intentionalClosures.has(socket)
-      if (this.socket === socket) {
-        this.socket = null
-        this.welcomed = false
-      }
-      if (intentional || (this.socket && this.socket !== socket)) return
-      if (this.closedByClient) return
+      this.socket = null
+      this.welcomed = false
       this.scheduleReconnect()
     })
   }
@@ -358,8 +355,11 @@ export class RemoteTransport {
     this.reconnectAttempt += 1
     this.events.onStatus(this.adapter.isOnline() ? 'reconnecting' : 'offline')
     const delay = Math.min(12_000, 500 * 2 ** Math.min(this.reconnectAttempt - 1, 5))
-    if (this.reconnectTimer) this.adapter.clearTimeout(this.reconnectTimer)
-    this.reconnectTimer = this.adapter.setTimeout(() => void this.connect(), delay)
+    this.clearReconnect()
+    const generation = this.generation
+    this.reconnectTimer = this.adapter.setTimeout(() => {
+      if (generation === this.generation && !this.closedByClient) void this.connect()
+    }, delay)
   }
 
   private startHeartbeat(): void {

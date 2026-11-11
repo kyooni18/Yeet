@@ -7,6 +7,92 @@ import {
   type WorkspaceSummary,
 } from '../src/remote/protocol'
 
+test('superseded discovery and socket callbacks cannot affect the active connection', async () => {
+  const { RemoteTransport } = await import('../../frontend/shared/remote/transport')
+  const requests: Array<(value: unknown) => void> = []
+  const sockets: Array<any> = []
+  const messages: unknown[] = []
+  const intervals = new Map<number, () => void>()
+  let timer = 0
+  const transport = new RemoteTransport({
+    onOpen() {}, onStatus() {}, onError() {}, onMessage: message => messages.push(message),
+  }, {
+    request: <T,>() => new Promise<T>(resolve => requests.push(resolve as (value: unknown) => void)),
+    websocketUrl: () => 'ws://test',
+    createSocket: () => {
+      const handlers: Record<string, (event?: any) => void> = {}
+      const socket = { readyState: 1, send() {}, close() {},
+        addEventListener: (type: string, handler: (event?: any) => void) => { handlers[type] = handler },
+        fire: (type: string, message?: unknown) => handlers[type]?.({ data: JSON.stringify(message) }),
+      }
+      sockets.push(socket)
+      return socket
+    },
+    storage: { getItem: () => null, setItem() {} }, isOnline: () => true,
+    now: () => 0, requestId: () => 'test',
+    setTimeout: () => ++timer, clearTimeout() {},
+    setInterval: callback => { intervals.set(++timer, callback); return timer },
+    clearInterval: handle => { intervals.delete(handle) },
+  })
+  const abandoned = transport.connect()
+  transport.close()
+  requests.shift()!({ required: false })
+  await abandoned
+  expect(sockets).toHaveLength(0)
+  const connect = async () => {
+    const pending = transport.connect()
+    requests.shift()!({ required: false })
+    await Promise.resolve()
+    requests.shift()!({ minVersion: 1, maxVersion: 1 })
+    await pending
+    sockets.at(-1).fire('message', { type: 'welcome', version: 1, client_id: 'test',
+      workspace: '/workspace', sequence: 0, revision: 0, resumed: false })
+  }
+  await connect()
+  const obsolete = sockets[0]
+  await connect()
+  const count = messages.length
+  obsolete.fire('close')
+  obsolete.fire('message', { type: 'snapshot', version: 1, sequence: 99, revision: 99, state: emptyBridgeState() })
+  expect(intervals.size).toBe(1)
+  expect(messages).toHaveLength(count)
+  transport.close()
+  expect(intervals.size).toBe(0)
+})
+
+test('suspended rendering retains current state without queuing snapshots or invalidating for shell output', async () => {
+  const { RemoteStore } = await import('../../frontend/shared/state/remoteStore')
+  let events!: import('../../frontend/shared/remote/transport').RemoteTransportEvents
+  let frame!: () => void
+  let scheduled = 0, applied = 0, notified = 0, shellReplies = 0
+  const store = new RemoteStore({
+    createTransport: handlers => {
+      events = handlers
+      return { connect: async () => {}, close() {}, send: () => true,
+        markApplied: () => { applied++ }, switchWorkspace() {}, reconnectAfterAuth() {} }
+    },
+    scheduleFrame: callback => { frame = callback; return ++scheduled }, cancelFrame() {},
+  })
+  store.init()
+  store.subscribe(() => { notified++ })
+  store.subscribeShellJobs(() => { shellReplies++ })
+  for (let sequence = 1; sequence <= 1000; sequence++) {
+    events.onMessage({ type: 'snapshot', version: 1, sequence, revision: sequence,
+      state: { ...emptyBridgeState(), active_model: `model-${sequence}` } })
+  }
+  expect(applied).toBe(1000)
+  expect(scheduled).toBe(1)
+  expect(notified).toBe(0)
+  frame()
+  expect(store.getSnapshot().state.active_model).toBe('model-1000')
+  expect(notified).toBe(1)
+  for (let i = 0; i < 10; i++) events.onMessage({ type: 'shell_job', version: 1, payload: {} } as any)
+  expect(shellReplies).toBe(10)
+  expect(notified).toBe(1)
+  expect(scheduled).toBe(1)
+  store.destroy()
+})
+
 test('protocol v1 semantic catalogs default cleanly and carry structured identity', () => {
   const state = emptyBridgeState()
   expect(REMOTE_PROTOCOL_VERSION).toBe(1)
