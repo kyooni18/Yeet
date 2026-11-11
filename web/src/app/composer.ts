@@ -96,6 +96,13 @@ export function suggestions(): ComposerSuggestion[] {
   return text.value.startsWith('/') ? (remote.value.composer?.suggestions ?? []).slice(0, 6) : []
 }
 
+/** Mobile: the whole bubble focuses the field; controls keep their own behavior. */
+export function focusComposer(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button, select, textarea, input, a, [role="button"]')) return
+  ;(event.currentTarget as HTMLElement | null)?.querySelector('textarea')?.focus()
+}
+
 export function onKeyDown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
   const touch = window.matchMedia('(hover: none) and (pointer: coarse)').matches

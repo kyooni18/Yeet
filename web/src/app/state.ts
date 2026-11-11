@@ -15,6 +15,49 @@ export const currentSessions = State(remote.value.currentWorkspaceSessions)
 export const activeAgents = State(remote.value.agents?.active_count ?? 0)
 export const statusSnapshot = State(remote.value)
 export const streaming = State(remote.value.state.is_streaming)
+
+/** Session list entry. The client shows one list, never one list per workspace. */
+export interface ListedSession {
+  id: string
+  title: string
+  updated_at: string
+  model: string
+  message_count: number
+  workspace_path: string
+  workspace_label: string
+}
+
+function workspaceLabel(state: typeof remote.value.state, path: string): string {
+  const workspace = state.known_workspaces.find(item => item.id === path || item.path === path)
+  return workspace?.display_name || path.split('/').filter(Boolean).pop() || path
+}
+
+function sessionCatalogFrom(snapshot: typeof remote.value): ListedSession[] {
+  const byId = new Map<string, ListedSession>()
+  const add = (session: any, workspacePath: string) => {
+    if (session?.id && !byId.has(session.id)) {
+      byId.set(session.id, { ...session, workspace_path: workspacePath, workspace_label: workspaceLabel(snapshot.state, workspacePath) })
+    }
+  }
+  for (const group of snapshot.state.workspace_session_groups ?? []) {
+    const workspace = snapshot.state.known_workspaces.find(item => item.id === group.workspace_id)
+    const path = workspace?.path || group.workspace_id
+    for (const session of group.sessions) add(session, path)
+  }
+  // Servers without a workspace catalog still list the current workspace.
+  if (!byId.size) for (const session of snapshot.currentWorkspaceSessions) add(session, snapshot.state.workspace_root || '')
+  return [...byId.values()].sort((left, right) => (right.updated_at || '').localeCompare(left.updated_at || ''))
+}
+
+export const sessionCatalog = State(sessionCatalogFrom(remoteStore.getSnapshot()))
+
+/** Only label rows when the single list actually mixes workspaces. */
+export function spansWorkspaces(): boolean {
+  return new Set(sessionCatalog.value.map(session => session.workspace_path)).size > 1
+}
+
+/** A cross-workspace pick waits for its workspace handshake before loading. */
+let pendingSession: { id: string; workspace: string } | null = null
 // One linear pass, not a findIndex for every item on every editor acknowledgement.
 function spacedItems(view: typeof remote.value.conversation) {
   return (view?.items ?? []).map((item, index, items) => ({
@@ -167,8 +210,15 @@ export function newSession() {
   openPage('chat')
 }
 
-export function openSession(id: string) {
-  remoteStore.loadSession(id)
+export function openSession(id: string, workspacePath?: string) {
+  const target = (workspacePath ?? '').trim()
+  if (target && target !== remote.value.state.workspace_root) {
+    // A session belongs to its own workspace: land there before loading it.
+    pendingSession = { id, workspace: target }
+    remoteStore.switchWorkspace(target)
+  } else {
+    remoteStore.loadSession(id)
+  }
   openPage('chat')
 }
 
@@ -213,8 +263,10 @@ export function workspaceLine(): string {
 
 export function filteredSessions() {
   const needle = sessionQuery.value.trim().toLowerCase()
-  const sessions = currentSessions.value
-  return needle ? sessions.filter(session => (session.title || '').toLowerCase().includes(needle)) : sessions
+  const sessions = sessionCatalog.value
+  if (!needle) return sessions
+  return sessions.filter(session => [session.title, session.model, session.workspace_label, session.workspace_path]
+    .some(value => (value || '').toLowerCase().includes(needle)))
 }
 
 export function shortModel(model: string): string {
@@ -364,6 +416,7 @@ export function startRemote(onEditDraft: (text: string) => void) {
   let wasStreaming = remote.value.state.is_streaming
   let refreshFrame = 0
   let priorSnapshot = remoteStore.getSnapshot()
+  let catalogInput: { groups: unknown; sessions: unknown; workspaces: unknown } = { groups: null, sessions: null, workspaces: null }
   remoteStore.subscribe(() => {
     // Compare raw store references, not Mün's reactive proxies.
     const previous = priorSnapshot
@@ -382,6 +435,21 @@ export function startRemote(onEditDraft: (text: string) => void) {
     workspaceFiles.value = snapshot.workspaceFiles
     workspaceChanges.value = snapshot.workspaceChanges
     toolbarView.value = snapshot.ui?.toolbar
+    if (catalogInput.groups !== snapshot.state.workspace_session_groups
+      || catalogInput.sessions !== snapshot.currentWorkspaceSessions
+      || catalogInput.workspaces !== snapshot.state.known_workspaces) {
+      catalogInput = {
+        groups: snapshot.state.workspace_session_groups,
+        sessions: snapshot.currentWorkspaceSessions,
+        workspaces: snapshot.state.known_workspaces,
+      }
+      sessionCatalog.value = sessionCatalogFrom(snapshot)
+    }
+    if (pendingSession && snapshot.connection === 'connected' && snapshot.state.workspace_root === pendingSession.workspace) {
+      const pending = pendingSession
+      pendingSession = null
+      remoteStore.loadSession(pending.id)
+    }
     currentSessions.value = snapshot.currentWorkspaceSessions
     activeAgents.value = snapshot.agents?.active_count ?? 0
     streaming.value = snapshot.state.is_streaming

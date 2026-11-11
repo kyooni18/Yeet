@@ -5,7 +5,7 @@ import { sidebarRef } from "./drawer"
 import { Spinner, IconButton } from "./Common.mun"
 import {
   runtimeState, workspaceChanges, activeAgents, connection, page, isWide, ease, connected, openPage, openSheet, newSession, openSession,
-  toggleSidebar, age, sessionQuery, filteredSessions, manageSession,
+  toggleSidebar, age, sessionQuery, filteredSessions, manageSession, spansWorkspaces,
 } from "./state"
 
 struct NavItem: View {
@@ -30,13 +30,19 @@ struct NavItem: View {
 
 struct SessionRow: View {
   let session: Any
+  let showWorkspace: Bool
   var body: some View {
-    Button(action: { openSession(session.id) }, label: {
+    Button(action: { openSession(session.id, session.workspace_path) }, label: {
       HStack(spacing: 8) {
         if session.id === runtimeState.value.current_session_id && runtimeState.value.is_streaming {
           Spinner()
         }
         Text(session.title || "Untitled").lineLimit(1).style({ flex: "1", minWidth: "0" })
+        // One list, not one list per workspace: label the row instead.
+        if showWorkspace {
+          Text(session.workspace_label).fontSize(11).foregroundStyle(color.faint).lineLimit(1)
+            .withProps({ className: "session-workspace", title: session.workspace_path })
+        }
         Text(age(session.updated_at)).fontSize(11).foregroundStyle(color.faint)
       }
     })
@@ -91,7 +97,7 @@ struct Sessions: View {
         .padding({ top: 12, bottom: 4 })
       ForEach(filteredSessions(), { id: session => session.id }) { session in
         HStack(spacing: 0) {
-          SessionRow(session: session).style({ flex: "1", minWidth: "0" })
+          SessionRow(session: session, showWorkspace: spansWorkspaces()).style({ flex: "1", minWidth: "0" })
           IconButton(icon: "more", label: "Manage " + (session.title || "Untitled"), action: { manageSession(session.id, session.title || "Untitled") })
             .withProps({ className: "icon-button session-menu" })
         }.withProps({ className: "session-item" })

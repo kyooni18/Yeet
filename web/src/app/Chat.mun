@@ -10,7 +10,7 @@ import {
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
-  removeAttachment, pickFiles, addFiles,
+  removeAttachment, pickFiles, addFiles, focusComposer,
 } from "./composer"
 import { Spinner, PageHeader, Chip, IconButton } from "./Common.mun"
 import { ToolDetails } from "./ToolDetails.mun"
@@ -587,7 +587,7 @@ struct Composer: View {
       }
       .padding({ top: 14, bottom: 10, leading: 16, trailing: 10 })
       .background(color.composer)
-      .withProps({ className: "composer-surface" })
+      .withProps({ className: "composer-surface", onClick: focusComposer })
       .style({ width: "100%", minWidth: "0" })
       Text("Enter to send · Shift + Enter for a new line").withProps({ className: "composer-hint" })
     }

@@ -66,3 +66,62 @@ test('file previews have numbered source and diff leaves room for the patch', as
   await page.screenshot({ path: info.outputPath('diff-review.png') })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
+
+const workspaces = [
+  { id: '/Users/test/Code/Rust/Yeet', path: '/Users/test/Code/Rust/Yeet', display_name: 'Yeet', updated_at: '2026-09-20T01:00:00.000Z', session_count: 1, is_current: true },
+  { id: '/work/atlas', path: '/work/atlas', display_name: 'Atlas', updated_at: '2026-09-19T01:00:00.000Z', session_count: 1, is_current: false },
+]
+
+const grouped = (id: string, title: string, updated: string) => ({ id, title, updated_at: updated, model: 'gpt-5.6-sol', message_count: 2 })
+
+/** The client shows one session list; a workspace is a row label, not a divider. */
+test('the session list spans every workspace and opens into the session workspace', async ({ page }) => {
+  await emit(page, {
+    known_workspaces: workspaces,
+    workspace_session_groups: [
+      { workspace_id: workspaces[0].id, sessions: [grouped('session-a', 'Fix the limiter', '2026-09-20T01:00:00.000Z')] },
+      { workspace_id: workspaces[1].id, sessions: [grouped('session-b', 'Atlas refactor', '2026-09-21T01:00:00.000Z')] },
+    ],
+    saved_sessions: [grouped('session-a', 'Fix the limiter', '2026-09-20T01:00:00.000Z')],
+  })
+  if (!await page.locator('#sidebar').isVisible()) await page.getByRole('button', { name: 'Toggle sidebar', exact: true }).click()
+  const sidebar = page.locator('#sidebar')
+  const rows = sidebar.locator('.session-row')
+  await expect(rows).toHaveCount(2)
+  // Newest first, across workspaces, with the owning workspace as a quiet label.
+  await expect(rows.nth(0)).toContainText('Atlas refactor')
+  await expect(rows.nth(0).locator('.session-workspace')).toHaveText('Atlas')
+  await expect(rows.nth(1)).toContainText('Fix the limiter')
+  await expect(rows.nth(1).locator('.session-workspace')).toHaveText('Yeet')
+  await expect(sidebar).not.toContainText('WORKSPACES')
+  await sidebar.getByRole('searchbox', { name: 'Search sessions' }).fill('atlas')
+  await expect(rows).toHaveCount(1)
+  await sidebar.getByRole('searchbox', { name: 'Search sessions' }).fill('')
+  await rows.nth(0).click()
+  // The session is loaded after its workspace handshake, never into the old one.
+  await expect.poll(() => page.evaluate(() => (window as any).__yeetSent.filter((message: any) => message.type === 'command').map((message: any) => message.command?.type)))
+    .toContain('load_session')
+  const loaded = await page.evaluate(() => (window as any).__yeetSent.filter((message: any) => message.type === 'command' && message.command?.type === 'load_session').at(-1)?.command?.session_id)
+  expect(loaded).toBe('session-b')
+  await expect.poll(() => page.evaluate(() => (window as any).__yeetSent.filter((message: any) => message.type === 'hello').at(-1)?.workspace)).toBe('/work/atlas')
+})
+
+/** Touch-first phones get a field they can hit: one control row, 44px targets. */
+test('the phone composer keeps touch-sized controls and focuses from the whole surface', async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1000) >= 900)
+  const surface = page.locator('.composer-surface')
+  await expect(page.locator('.composer-hint')).toBeHidden()
+  await expect(page.locator('.composer-context')).toBeVisible()
+  const targets = await surface.evaluate(element => [...element.querySelectorAll('button, select')]
+    .filter(node => node.getClientRects().length > 0)
+    .map(node => ({ label: node.getAttribute('aria-label') || node.tagName, height: Math.round(node.getBoundingClientRect().height) })))
+  expect(targets.length).toBeGreaterThan(2)
+  for (const target of targets) expect(target.height, target.label).toBeGreaterThanOrEqual(44)
+  const field = page.getByRole('textbox', { name: 'Message', exact: true })
+  expect(Math.round((await field.boundingBox())!.height)).toBeGreaterThanOrEqual(44)
+  // Tapping the bubble itself focuses the field instead of doing nothing.
+  await surface.click({ position: { x: 8, y: 4 } })
+  await expect(field).toBeFocused()
+  await surface.getByRole('button', { name: 'Choose model' }).click()
+  await expect(field).not.toBeFocused()
+})
