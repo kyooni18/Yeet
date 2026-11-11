@@ -1526,7 +1526,7 @@ fn browser_key_code(key: &str, shift: bool) -> Option<KeyCode> {
         "Tab" if shift => KeyCode::BackTab,
         "Tab" => KeyCode::Tab,
         "Insert" => KeyCode::Insert,
-        _ if key.starts_with('F') => key
+        _ if key.len() > 1 && key.starts_with('F') => key
             .strip_prefix('F')
             .and_then(|value| value.parse::<u8>().ok())
             .filter(|value| (1..=12).contains(value))
