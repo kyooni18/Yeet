@@ -2,7 +2,15 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests',
+  // The legacy React contracts remain runnable with YEET_LEGACY_TESTS=1 while
+  // they are migrated; default checks exercise the shipped Mün client.
   testIgnore: '**/real-*.spec.ts',
+  testMatch: process.env.YEET_LEGACY_TESTS ? '**/*.spec.ts' : [
+    '**/minimal-mun.spec.ts', '**/remote-workbench.spec.ts', '**/remote-refinements.spec.ts',
+    '**/remote-features.spec.ts', '**/tool-details.spec.ts', '**/semantic-protocol.spec.ts',
+    '**/composer-draft-context.spec.ts', '**/auth-gate-*.spec.ts',
+    '**/shared-conversation-actions.spec.ts', '**/remote-viewport.spec.ts',
+  ],
   fullyParallel: false,
   timeout: 30_000,
   expect: { timeout: 5_000 },

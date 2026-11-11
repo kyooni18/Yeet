@@ -10,7 +10,8 @@
     "prebuild": "node scripts/link-mun.mjs",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:legacy": "YEET_LEGACY_TESTS=1 playwright test"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
