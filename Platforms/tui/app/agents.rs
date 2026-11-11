@@ -225,13 +225,21 @@ mod tests {
         for character in "floor 3 km".chars() {
             app.handle_agents_key(key(KeyCode::Char(character)));
         }
+        for newline in [
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+        ] {
+            assert!(app.handle_agents_key(newline).is_none());
+        }
+        app.handle_agents_key(key(KeyCode::Char('x')));
         let sent = app.handle_agents_key(key(KeyCode::Enter));
         assert!(matches!(
             sent,
             Some(FrontendCommand::MessageAgent { ref agent_id, ref message })
-                if agent_id == "planner" && message == "floor 3 km"
+                if agent_id == "planner" && message == "floor 3 km\n\n\nx"
         ));
-        assert_eq!(app.input, "floor 3 km", "draft remains until delivery");
+        assert_eq!(app.input, "floor 3 km\n\n\nx", "draft remains until delivery");
         app.complete_agent_delivery();
         assert!(app.input.is_empty());
 

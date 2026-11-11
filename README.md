@@ -84,6 +84,12 @@ Start the TUI:
 yeet
 ```
 
+In the chat and agent composers, Enter sends and Shift+Enter inserts a newline
+when the terminal reports it distinctly. Ctrl+J or Alt+Enter also inserts a
+newline. Some terminals send the same bytes for Enter and Shift+Enter; in that
+case, configure the terminal's Shift+Enter binding to send LF (`0x0a`), or use
+Ctrl+J. A terminal multiplexer or SSH connection must forward the binding too.
+
 Use `/tasks` to manage scheduled agent jobs: run once at a timestamp, at an
 interval, or at the next reported 5h quota reset, with a browsable working folder.
 The background service runs jobs independently of the terminal; it does not

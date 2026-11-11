@@ -732,6 +732,28 @@ fn terminal_editing_line_kills_preserve_the_other_side_of_cursor() {
 }
 
 #[test]
+fn terminal_composer_accepts_lf_and_alt_enter_as_newlines() {
+    let mut app = App {
+        input: "ab".into(),
+        cursor: 1,
+        ..App::default()
+    };
+    // LF (including a terminal-mapped Shift+Enter) is decoded as Ctrl+J.
+    for key in [
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT),
+    ] {
+        assert!(app.handle_chat_editing_key(&key));
+    }
+    assert_eq!(app.input, "a\n\nb");
+    assert_eq!(app.cursor, 3);
+    assert!(!app.handle_chat_editing_key(&KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+}
+
+#[test]
 fn terminal_editing_chords_map_without_stealing_empty_input_scroll_keys() {
     let ctrl = |character| KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL);
     let alt = |code| KeyEvent::new(code, KeyModifiers::ALT);

@@ -233,6 +233,17 @@ impl App {
     }
 
     pub(super) fn handle_chat_editing_key(&mut self, event: &KeyEvent) -> bool {
+        // In raw mode crossterm decodes LF (0x0a) as Ctrl+J. Some terminals
+        // send LF for Shift+Enter; it is also a portable newline shortcut when
+        // a terminal cannot distinguish Shift+Enter from Enter at all.
+        if event.code == KeyCode::Char('j') && event.modifiers == KeyModifiers::CONTROL {
+            self.insert_char('\n');
+            return true;
+        }
+        if event.code == KeyCode::Enter && event.modifiers == KeyModifiers::ALT {
+            self.insert_char('\n');
+            return true;
+        }
         if event.modifiers.contains(KeyModifiers::CONTROL) {
             match event.code {
                 KeyCode::Char('a') => self.cursor = 0,

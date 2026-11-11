@@ -835,7 +835,7 @@ fn help_rect(frame_area: Rect) -> Rect {
 fn compact_help_rows() -> [&'static str; 13] {
     [
         "Enter  send",
-        "Shift+Enter  newline",
+        "Shift+Enter / Ctrl+J  newline",
         "Esc/Ctrl+C  interrupt",
         "Ctrl+D  quit",
         "Alt+M/S/R/K  pickers",
@@ -862,7 +862,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>) {
     } else {
         let left = [
             "Enter  send",
-            "Shift+Enter  newline",
+            "Shift+Enter / Ctrl+J  newline",
             "Esc/Ctrl+C  interrupt",
             "Ctrl+A/E  line ends",
             "Ctrl+B/F  char move",
