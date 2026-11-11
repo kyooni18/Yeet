@@ -118,10 +118,23 @@ fn trace(
         icon,
         active,
         expanded: state.expanded_for(id, false),
-        details: sections,
+        details: sections
+            .iter()
+            .flat_map(|section| {
+                let mut readable = super::readable::sections(&section.title, &section.content);
+                for item in &mut readable {
+                    item.is_error = section.is_error;
+                }
+                readable
+            })
+            .collect(),
         rich: Vec::new(),
-        raw: Vec::new(),
-        raw_expanded: false,
+        raw: sections
+            .iter()
+            .filter(|section| serde_json::from_str::<serde_json::Value>(&section.content).is_ok())
+            .cloned()
+            .collect(),
+        raw_expanded: state.expanded_for(&format!("raw:{id}"), false),
     }
 }
 fn append_tool(

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-11
+
+- Add the EXAONE API provider to the runtime and report its rate limits as provider usage.
+- Render semantic tool details in the Remote workbench, with a literal, readable fallback for structured tools that only offer raw inspection.
+- Refine the remote workbench and conversation surfaces: work-history organization, transcript update isolation, shell and workspace panel improvements, brand and navigation icon polish, and spacing and motion.
+- Fix remote composer and mobile layout issues, preserve the embedded terminal across UI updates, and follow Safari document and visual-viewport scrolling.
+- Connect remote settings, tasks, debate, agents and session management, harden task saves, and apply server themes with verified feature persistence; coalesce runtime snapshots and avoid settings lock stalls.
+- Accept terminal line feeds as composer newlines in the TUI and avoid a UTF-8 panic in text-edit line mapping.
+
 ## [0.1.8] - 2026-11-07
 
 - Add headless provider OAuth login with `--no-browser`, automatic SSH detection, and callback forwarding instructions.

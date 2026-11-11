@@ -149,6 +149,26 @@ struct SourceFile: View {
   }
 }
 
+struct RawDetails: View {
+  let trace: Any
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 8) {
+      if trace.raw?.length {
+        Button("Raw input and output") { remoteStore.sendConversationUi({ type: "toggle", value: trace.raw_id || "raw:" + trace.id }) }
+          .id("raw-toggle")
+          .withProps({ className: "tool-raw-toggle", "aria-expanded": !!trace.raw_expanded, "aria-controls": "raw-details-" + encodeURIComponent(trace.id) })
+        if trace.raw_expanded {
+          VStack(alignment: .stretch, spacing: 12) {
+            ForEach(indexed(trace.raw), { id: row => row.key }) { row in
+              DetailSection(detail: row.value)
+            }
+          }.id("raw-content").withProps({ id: "raw-details-" + encodeURIComponent(trace.id), className: "tool-raw" })
+        }
+      }
+    }.style({ width: "100%", minWidth: "0" })
+  }
+}
+
 /** Explicit host components for the Rust rich-detail union, not a tool parser. */
 export struct ToolDetails: View {
   let trace: Any
@@ -183,22 +203,12 @@ export struct ToolDetails: View {
             Text(row.value.message).withProps({ className: row.value.is_error ? "tool-notice is-error" : "tool-notice" })
           }
         }
-        if trace.raw?.length {
-          Button("Raw input and output") { remoteStore.sendConversationUi({ type: "toggle", value: trace.raw_id || "raw:" + trace.id }) }
-            .withProps({ className: "tool-raw-toggle", "aria-expanded": !!trace.raw_expanded, "aria-controls": "raw-details-" + encodeURIComponent(trace.id) })
-          if trace.raw_expanded {
-            VStack(alignment: .stretch, spacing: 12) {
-              ForEach(indexed(trace.raw), { id: row => row.key }) { row in
-                DetailSection(detail: row.value)
-              }
-            }.withProps({ id: "raw-details-" + encodeURIComponent(trace.id), className: "tool-raw" })
-          }
-        }
       } else {
         ForEach(indexed(trace.details), { id: row => row.key }) { row in
           DetailSection(detail: row.value)
         }
       }
+      RawDetails(trace: trace)
     }.withProps({ className: "tool-details" })
   }
 }

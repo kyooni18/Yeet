@@ -1,5 +1,5 @@
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
+import type { Terminal } from '@xterm/xterm'
+import type { FitAddon } from '@xterm/addon-fit'
 import xtermCss from '@xterm/xterm/css/xterm.css?inline'
 import { remoteStore } from '@/store/remoteStore'
 import type { ShellJobOutputPage, ShellJobResponse } from '@/remote/protocol'
@@ -35,6 +35,7 @@ class YeetShellJob extends HTMLElement {
   private observer: ResizeObserver | null = null
   private status: HTMLElement | null = null
   private wasConnected = false
+  private generation = 0
   private retryTimer: number | null = null
 
   constructor() {
@@ -45,8 +46,9 @@ class YeetShellJob extends HTMLElement {
     this.content.adoptedStyleSheets = [style]
   }
 
-  connectedCallback() {
+  async connectedCallback() {
     if (this.term) return
+    const generation = ++this.generation
     const container = document.createElement('div')
     container.className = 'shell-job-terminal'
     container.setAttribute('role', 'region')
@@ -66,6 +68,16 @@ class YeetShellJob extends HTMLElement {
     stop.onclick = () => this.send('stop')
     controls.append(interrupt, stop, this.status)
     this.content.replaceChildren(container, controls)
+    // Historical tool rows shouldn't make every initial page load parse xterm.
+    let Terminal: typeof import('@xterm/xterm').Terminal
+    let FitAddon: typeof import('@xterm/addon-fit').FitAddon
+    try {
+      ;[{ Terminal }, { FitAddon }] = await Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')])
+    } catch {
+      if (generation === this.generation && this.status) this.status.textContent = 'Terminal could not load. Collapse and reopen to retry.'
+      return
+    }
+    if (!this.isConnected || generation !== this.generation) return
     this.term = new Terminal({ convertEol: false, scrollback: 5000, fontSize: 12, cursorBlink: true, screenReaderMode: true })
     this.fit = new FitAddon()
     this.term.loadAddon(this.fit)
@@ -101,6 +113,7 @@ class YeetShellJob extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.generation++
     this.clearRetry()
     this.unsubscribe?.(); this.unsubscribe = null
     this.unsubscribeState?.(); this.unsubscribeState = null

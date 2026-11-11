@@ -168,11 +168,11 @@ struct SessionStatus: View {
       StatusRow(label: "Cached input", value: tokenCount(remote.value.state.token_usage.cached_input_tokens))
       StatusRow(label: "Cache writes", value: tokenCount(remote.value.state.token_usage.cache_creation_input_tokens))
       StatusRow(label: "Model calls", value: tokenCount(remote.value.state.token_usage.model_calls))
-      if !subscription(remote.value.state) {
+      if (!subscription(remote.value.state)) {
         StatusRow(label: "Cost", value: "Not reported by server")
       }
       Text("PROVIDER LIMITS").withProps({ className: "section-label status-section" })
-      if activeProvider(remote.value.state) {
+      if (activeProvider(remote.value.state)) {
         StatusRow(label: "Provider", value: activeProvider(remote.value.state).provider)
         if activeProvider(remote.value.state).usage?.plan {
           StatusRow(label: "Plan", value: activeProvider(remote.value.state).usage.plan)

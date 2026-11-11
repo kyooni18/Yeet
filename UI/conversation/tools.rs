@@ -183,16 +183,7 @@ fn summary(
             field(args, &["query", "q", "search", "text", "pattern"]).or_else(fallback)
         }
         "web_read" => field(args, &["url", "href", "ref_id", "refId"]).or_else(fallback),
-        _ => fallback().or_else(|| {
-            let raw = tool.arguments.trim();
-            (!raw.is_empty()).then(|| {
-                if raw.chars().count() > 100 {
-                    format!("{}…", raw.chars().take(97).collect::<String>())
-                } else {
-                    raw.to_owned()
-                }
-            })
-        }),
+        _ => fallback().or_else(|| field(args, &["query", "path", "url", "service", "name", "id", "action"])),
     }
 }
 fn section(title: &str, content: String, monospaced: bool) -> DetailSection {
@@ -400,7 +391,29 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
         failed: matches!(tool.status, Failed | TimedOut),
         awaits_permission: matches!(tool.status, AwaitingPermission),
         icon,
-        details: details(tool, args.as_ref(), &files),
+        details: if rich.is_empty() {
+            let mut readable = super::readable::sections("Input", &tool.arguments);
+            let output = tool
+                .raw_result
+                .as_deref()
+                .filter(|raw| serde_json::from_str::<Value>(raw).is_ok())
+                .or(tool.result.as_deref());
+            if let Some(output) = output {
+                readable.extend(super::readable::sections("Output", output));
+            }
+            if let Some(error) = tool.error.as_deref() {
+                readable.push(DetailSection {
+                    title: "Error".into(),
+                    content: error.into(),
+                    monospaced: false,
+                    is_error: true,
+                    has_background: false,
+                });
+            }
+            readable
+        } else {
+            details(tool, args.as_ref(), &files)
+        },
         rich,
         raw,
     }

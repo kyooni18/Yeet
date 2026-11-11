@@ -50,13 +50,13 @@ Shell
     ScrollRegion: live backend-provided entries, selection and empty states
       Changes: file paths, additions/deletions, selected patch, full-page review action
       Files: directory navigation, selected file metadata, full-page browse action
-    Footer: model and context usage, agents activity link
+    StatusNavigation: Manage providers & authentication; agents available in main navigation
     Overlay: below 1280px; scrim, Escape dismissal, focus containment and restoration
-  DiffPage: narrow 190–220px file rail, flexible independently scrolling patch
-    FileIdentity: basename and directory context; selection and +/- counts
-    Compact: horizontal file choices above patch on narrow layouts
+  DiffPage: narrow 180px file rail, flexible independently scrolling patch
+    FileIdentity: workspace-relative paths, selection and +/- counts
+    Compact: bounded file list above patch on narrow layouts
   FilesPage: TUI-like directory list and file preview/metadata, independently scrolling
-    Path: breadcrumbs and parent navigation; folder/file glyphs and separate change status
+    Path: current directory and parent navigation; folder/file glyphs and separate change status
     Preview: bounded backend-provided numbered text; binary/large/error states explicit
 
 Responsiveness
@@ -70,7 +70,7 @@ VisualLanguage
   Light/dark via existing appearance setting; no new business logic or protocol.
   Consistent outline icons, 8px spacing rhythm, readable sentence-case section labels.
   Shared reading-column tokens align conversation, tool lists, and composer text.
-  Sidebar: clear workspace/session grouping, quiet selection, labeled Settings footer.
+  Sidebar: clear session grouping, quiet selection, labeled Settings footer.
   Inspector: flat tab strip and bounded patch preview; no unnecessary nested surfaces.
   Restrained panel entrances, hover/press/focus feedback; respect reduced motion.
   Touch targets >=44px; safe-area padding; no horizontal document overflow.

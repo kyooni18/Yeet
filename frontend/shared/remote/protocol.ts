@@ -694,6 +694,7 @@ export interface WorkspaceFileRow {
 export interface WorkspaceFileInfo {
   path: string; name: string; size: number; modified: number | null; created: number | null
   permissions: string | null; lines: number | null; status: string | null
+  preview?: { lines: string[]; truncated: boolean; message: string | null } | null
   added: number | null; removed: number | null
 }
 export interface WorkspaceFilesView {

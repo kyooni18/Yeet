@@ -17,6 +17,8 @@ export const canAttach = State(false)
 let revision = 0
 let lastSignature = ''
 let stashedDraft = ''
+let editorFrame = 0
+const cancelSync = () => { cancelAnimationFrame(editorFrame); editorFrame = 0 }
 
 /**
  * The Rust composer projection owns submit/edit/slash-command rules; the
@@ -49,15 +51,18 @@ const same = (a: EditorSnapshot, b: EditorSnapshot) =>
   a.revision === b.revision && a.text === b.text && JSON.stringify(a.context) === JSON.stringify(b.context)
 
 function sync() {
+  cancelSync()
   if (connected() && remote.value.composer) remoteStore.sendComposerUi({ type: 'update_editor', value: editor() })
 }
 
 export function setText(value: string) {
   text.value = value
-  sync()
+  // Coalesce same-frame input events without delaying local input or submit.
+  if (!editorFrame) editorFrame = requestAnimationFrame(sync)
 }
 
 export function submit() {
+  cancelSync()
   if (!remote.value.composer?.can_submit && !text.value.trim()) return
   remoteStore.sendComposerUi({ type: 'submit', value: editor() })
 }
@@ -78,10 +83,12 @@ export function primary() {
 }
 
 export function cancelEdit() {
+  cancelSync()
   remoteStore.sendComposerUi({ type: 'cancel_edit', value: editor() })
 }
 
 export function chooseSuggestion(item: ComposerSuggestion) {
+  cancelSync()
   remoteStore.sendComposerUi({ type: 'select_suggestion', value: { editor: editor(), command: item.command } })
 }
 

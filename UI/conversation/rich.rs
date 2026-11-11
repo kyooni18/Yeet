@@ -54,10 +54,10 @@ pub(super) fn project(
         "apply_file_edits" => edit(tool, args),
         "run_shell" | "shell_job" => terminal(tool, args),
         "read_file" | "read_files" => source(tool, args),
-        _ => return (Vec::new(), Vec::new()),
+        _ => return (Vec::new(), raw_sections(tool, args)),
     };
     if rich.is_empty() {
-        return (rich, Vec::new());
+        return (rich, raw_sections(tool, args));
     }
     if let Some(error) = tool
         .error
@@ -802,6 +802,8 @@ mod tests {
         );
         assert!(project_for(&tool).is_empty());
         let view = super::super::project_tool(&tool);
-        assert!(view.rich.is_empty() && view.details.iter().any(|d| d.title == "Result"));
+        assert!(view.rich.is_empty() && view.details.iter().any(|d| d.title == "Output"));
+        assert!(view.details[0].content.contains("Query: x"));
+        assert!(!view.raw.is_empty());
     }
 }

@@ -255,7 +255,8 @@ export async function installMockRemote(page: Page): Promise<void> {
         root: 'Yeet', path, parent: path ? '' : null, branch: 'main', entries,
         selected: file ? selected : null,
         info: file ? { path: selected, name: file.name, size: file.size, modified: file.modified, created: file.modified,
-          permissions: 'rw-r--r--', lines: 71, status: file.status, added: file.status ? 11 : null, removed: file.status ? 4 : null } : null,
+          permissions: 'rw-r--r--', lines: 3,
+          preview: { lines: ['const label = "<img onerror=alert(1)>"', 'const value = 42', 'export { value }'], truncated: false, message: null }, status: file.status, added: file.status ? 11 : null, removed: file.status ? 4 : null } : null,
       }
     }
     const mockPatch = [

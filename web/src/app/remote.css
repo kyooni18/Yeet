@@ -307,3 +307,23 @@ button.trace-disclosure__row:hover, button.activity-group__header:hover { backgr
 /* Mün passes camel-case stroke attributes through; CSS is reliable across hosts. */
 svg { stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 380px) { .composer-context { font-size: 10px; } .composer-controls { column-gap: 2px !important; } }
+
+.resource-header { padding: 20px 24px 16px; width: 100% !important; min-width: 0; border-bottom: 1px solid var(--line); }
+.resource-row { text-align: left; font-size: 12px; }
+.resource-row > * { min-width: 0; width: 100% !important; }
+.resource-row span { font-size: 12px !important; }
+.file-tree { width: 220px; flex: none; border-right: 1px solid var(--line); min-height: 0; }
+.file-preview { background: var(--panel); }
+.file-source { flex: 1; max-height: none; padding: 8px 0; border-top: 1px solid var(--line); }
+.resource-empty { margin: auto; padding: 32px; text-align: center; font-size: 13px; color: var(--muted); }
+.diff-files { border-right: 1px solid var(--line); padding: 8px; }
+.workspace-patch { font: 12px/1.75 var(--mono); tab-size: 4; background: var(--panel); }
+.patch-path { display: block; padding: 10px 16px; font-size: 12px; color: var(--muted); position: sticky; left: 0; background: var(--field); overflow-wrap: anywhere; }
+.tool-diff__line--meta { color: var(--muted); background: var(--field); }
+.tool-diff__line--meta .tool-code { padding-top: 4px; padding-bottom: 4px; }
+@media (max-width: 699px) {
+  .files-layout { flex-direction: column !important; }
+  .file-tree { width: 100%; max-height: 28vh; min-height: 100px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .diff-files { min-height: 80px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .diff-layout { padding-right: 0; }
+}

@@ -36,6 +36,8 @@ pub struct FileInfo {
     pub created: Option<u64>,
     /// Unix permission string such as `rw-r--r--`.
     pub permissions: Option<String>,
+    #[serde(default)]
+    pub preview: Option<resources::FilePreview>,
     pub lines: Option<usize>,
     pub status: Option<String>,
     pub added: Option<usize>,
@@ -173,6 +175,7 @@ pub fn files_view(workspace: &Path, path: &str, selected: Option<&str>) -> Resul
                     modified: unix(meta.modified().ok()),
                     created: unix(extra.created),
                     permissions: permission_string(extra.permissions),
+                    preview: Some(resources::file_preview(&file)),
                     lines: resources::count_text_lines(&file),
                     status: changes.get(&file_name).cloned(),
                     added: stats.map(|(added, _)| added),
@@ -273,7 +276,9 @@ mod tests {
 
         let src = files_view(dir.path(), "src", Some("src/lib.rs")).unwrap();
         assert_eq!(src.parent.as_deref(), Some(""));
-        assert_eq!(src.info.unwrap().lines, Some(1));
+        let info = src.info.unwrap();
+        assert_eq!(info.lines, Some(1));
+        assert_eq!(info.preview.unwrap().lines, ["fn main() {}"]);
 
         assert!(files_view(dir.path(), "..", None).is_err());
         assert!(files_view(dir.path(), "/etc", None).is_err());

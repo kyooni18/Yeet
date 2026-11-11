@@ -533,7 +533,7 @@ struct Composer: View {
         .transition(Transition.opacity)
       }
       VStack(alignment: .stretch, spacing: 8) {
-        if isNewChat() {
+        if (isNewChat()) {
           HStack(spacing: 8) {
             Icon(workIcon("folder"), { width: 15, height: 15 })
             Picker(Binding(() => runtimeState.value.workspace_root || "", value => chooseWorkspace(value, workspaces().find(item => item.path === value)?.id || value)), workspaces().map(item => ({ value: item.path, label: item.label })))

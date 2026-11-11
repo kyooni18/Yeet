@@ -17,6 +17,55 @@ pub struct FileMetadata {
     pub permissions: Option<u32>,
 }
 
+/// Bounded text content for resource inspectors. No decoding of binary files.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FilePreview {
+    pub lines: Vec<String>,
+    pub truncated: bool,
+    pub message: Option<String>,
+}
+
+pub fn file_preview(path: &Path) -> FilePreview {
+    use std::io::Read;
+    const BYTES: usize = 256 * 1024;
+    const LINES: usize = 400;
+    let unavailable = |message: &str| FilePreview {
+        lines: Vec::new(),
+        truncated: false,
+        message: Some(message.into()),
+    };
+    let Ok(file) = std::fs::File::open(path) else {
+        return unavailable("File content could not be read");
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take((BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return unavailable("File content could not be read");
+    }
+    let cut = bytes.len() > BYTES;
+    bytes.truncate(BYTES);
+    if bytes.contains(&0) {
+        return unavailable("Binary file · text preview unavailable");
+    }
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        Err(error) if cut && error.error_len().is_none() => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap_or_default()
+        }
+        Err(_) => return unavailable("Non-UTF-8 file · text preview unavailable"),
+    };
+    let mut lines = text.lines();
+    let preview = lines.by_ref().take(LINES).map(str::to_owned).collect();
+    FilePreview {
+        lines: preview,
+        truncated: cut || lines.next().is_some(),
+        message: None,
+    }
+}
+
 /// Read a directory in the stable directory-first order used by resource browsing.
 pub fn directory_entries(dir: &Path) -> Vec<FileEntry> {
     let mut entries: Vec<FileEntry> = std::fs::read_dir(dir)
@@ -159,6 +208,13 @@ mod tests {
         std::fs::write(&file, "one\n").unwrap();
 
         assert_eq!(directory_entry_count(dir.path()), 1);
+        assert_eq!(file_preview(&file).lines, ["one"]);
+        std::fs::write(&file, "line\n".repeat(401)).unwrap();
+        let preview = file_preview(&file);
+        assert_eq!(preview.lines.len(), 400);
+        assert!(preview.truncated);
+        std::fs::write(&file, [0, 1, 2]).unwrap();
+        assert!(file_preview(&file).message.unwrap().contains("Binary"));
         assert!(path_is_dir(dir.path()));
         assert!(path_is_file(&file));
         assert!(file_metadata(&file).is_some());
