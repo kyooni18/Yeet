@@ -261,6 +261,11 @@ button.trace-disclosure__row:hover, button.activity-group__header:hover { backgr
 .tool-raw-toggle:hover { color: var(--text); background: var(--hover); }
 .tool-raw { min-width: 0; }
 yeet-shell-job { padding: 8px 12px; }
+.shell-job-terminal { border-radius: 6px; color-scheme: dark; }
+.shell-job-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 0 0; font-size: 12px; }
+.shell-job-controls button { min-height: 32px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
+.shell-job-controls button:hover { background: var(--hover); }
+.shell-job-status { flex: 1 1 120px; padding: 4px; color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 1279px) { #workspace-panel { box-shadow: -12px 0 48px rgba(0, 0, 0, 0.12); } }
 @media (max-width: 899px) { #sidebar { box-shadow: 12px 0 48px rgba(0, 0, 0, 0.12); } }
 @media (hover: none), (pointer: coarse) {
@@ -269,6 +274,7 @@ yeet-shell-job { padding: 8px 12px; }
   .icon-button, .send-button { width: 44px; height: 44px; }
   .nav-item, .session-row, .workspace-choice, .workspace-toggle, .panel-row { min-height: 44px; }
   .trace-disclosure__row, .activity-group__header { min-height: 44px; }
+  .shell-job-controls button { min-height: 44px; }
   .message-actions { opacity: 1 !important; }
   .session-menu { opacity: 1; }
   .composer-hint { display: none; }

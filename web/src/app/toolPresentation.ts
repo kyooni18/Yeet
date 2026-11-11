@@ -9,8 +9,20 @@ export function terminalStatus(detail: ToolTerminalDetail): string {
   const label = {
     waiting: 'Waiting for execution', running: 'Running', background_job: 'Running in background',
     succeeded: 'Finished', failed: 'Failed', cancelled: 'Cancelled', timed_out: 'Timed out', interrupted: 'Interrupted',
-  }[detail.state]
-  return detail.exit_code == null ? label : `${label} · exit ${detail.exit_code}`
+  }[detail.state] ?? 'Shell'
+  const duration = detail.duration_ms == null ? '' : detail.duration_ms < 1000 ? `${detail.duration_ms} ms` : `${(detail.duration_ms / 1000).toFixed(1)} s`
+  return [label, detail.exit_code == null ? '' : `exit ${detail.exit_code}`, duration].filter(Boolean).join(' · ')
+}
+
+/** WebKit on touch devices doesn't reliably arrow-scroll focused code regions.
+ * Only handle horizontal arrows on the region itself, never nested inputs. */
+export function onCodeKeyDown(event: KeyboardEvent) {
+  if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  const element = event.currentTarget as HTMLElement
+  if (element.scrollWidth <= element.clientWidth) return
+  event.preventDefault()
+  element.scrollLeft += event.key === 'ArrowLeft' ? -48 : 48
 }
 
 export function streamNote(stream: ToolOutputStream): string {

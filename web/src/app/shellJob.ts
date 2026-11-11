@@ -29,10 +29,15 @@ class YeetShellJob extends HTMLElement {
     this.style.minWidth = '0'
     this.style.width = '100%'
     const container = document.createElement('div')
+    container.className = 'shell-job-terminal'
+    container.setAttribute('role', 'region')
+    container.setAttribute('aria-label', 'Interactive shell output')
     container.style.cssText = 'height:220px;min-width:0;overflow:hidden;background:#111;padding:6px'
     const controls = document.createElement('div')
-    controls.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0'
+    controls.className = 'shell-job-controls'
     this.status = document.createElement('span')
+    this.status.className = 'shell-job-status'
+    this.status.setAttribute('role', 'status')
     this.status.textContent = 'Connecting to job…'
     const interrupt = document.createElement('button')
     interrupt.textContent = 'Ctrl-C'

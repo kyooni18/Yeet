@@ -32,7 +32,7 @@ for (const appearance of ['light', 'dark'] as const) {
       await expect(editor).toHaveCount(0)
       if (view === 'Files') await expect(page.locator('#main')).toContainText('Files')
       if (view === 'Diff') await expect(page.locator('#main')).toContainText('Review changes')
-      if (view === 'Agents') await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeVisible()
+      if (view === 'Agents') await expect(page.getByRole('button', { name: 'Create group', exact: true })).toBeVisible()
       await page.screenshot({ path: testInfo.outputPath(`${view.toLowerCase()}-${appearance}.png`) })
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     }

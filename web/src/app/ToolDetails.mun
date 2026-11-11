@@ -1,5 +1,5 @@
 import { remoteStore } from "@/store/remoteStore"
-import { indexed, terminalStatus, streamNote, diffStats, hunkLabel, sourceRange } from "./toolPresentation"
+import { indexed, terminalStatus, streamNote, diffStats, hunkLabel, sourceRange, onCodeKeyDown } from "./toolPresentation"
 
 /** Literal text, never markdown/HTML. Generic tools and older records stay readable. */
 struct DetailSection: View {
@@ -7,7 +7,7 @@ struct DetailSection: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 6) {
       Text(detail.title).withProps({ className: "trace-detail__heading" })
-      Element("pre", { className: detail.monospaced ? "tool-pre" : "tool-pre tool-pre--prose", tabindex: "0", "aria-label": detail.title }) {
+      Element("pre", { className: detail.monospaced ? "tool-pre" : "tool-pre tool-pre--prose", tabindex: "0", "aria-label": detail.title, onKeyDown: onCodeKeyDown }) {
         Text(detail.content)
       }
     }.withProps({ className: detail.is_error ? "trace-detail is-error" : "trace-detail" })
@@ -23,7 +23,7 @@ struct OutputStream: View {
         Text(label).withProps({ className: "trace-detail__heading" })
         Text(streamNote(stream)).withProps({ className: "tool-caption" })
       }.withProps({ className: "tool-stream__heading" })
-      Element("pre", { className: "tool-pre tool-terminal__output", tabindex: "0", "aria-label": label }) {
+      Element("pre", { className: "tool-pre tool-terminal__output", tabindex: "0", "aria-label": label, onKeyDown: onCodeKeyDown }) {
         Text(stream.text || "(empty)")
       }
     }.withProps({ className: "tool-stream" })
@@ -86,7 +86,7 @@ struct DiffFile: View {
         }
       }.withProps({ className: "tool-embed__header" })
       if file.hunks.length {
-        Element("div", { className: "tool-code-scroll", tabindex: "0", role: "region", "aria-label": "Diff for " + file.path }) {
+        Element("div", { className: "tool-code-scroll", tabindex: "0", role: "region", "aria-label": "Diff for " + file.path, onKeyDown: onCodeKeyDown }) {
           ForEach(indexed(file.hunks), { id: row => row.key }) { row in
             Text(hunkLabel(row.value)).withProps({ className: "tool-diff__hunk" })
             ForEach(indexed(row.value.lines), { id: line => line.key }) { line in
@@ -121,7 +121,7 @@ struct SourceFile: View {
         Text(sourceRange(file)).withProps({ className: "tool-caption" })
       }.withProps({ className: "tool-embed__header" })
       if file.lines.length {
-        Element("div", { className: "tool-code-scroll", tabindex: "0", role: "region", "aria-label": "Source for " + file.path }) {
+        Element("div", { className: "tool-code-scroll", tabindex: "0", role: "region", "aria-label": "Source for " + file.path, onKeyDown: onCodeKeyDown }) {
           ForEach(file.lines, { id: line => line.number }) { line in
             Element("div", { className: "tool-source__line" }) {
               Text(line.number).withProps({ className: "tool-line-number" })

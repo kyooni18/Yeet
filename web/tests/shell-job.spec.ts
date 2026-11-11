@@ -53,12 +53,18 @@ test('shell viewer pages output and sends interactive controls over Remote', asy
   await page.goto('/')
   await expect(page.getByText('Interface ready')).toBeVisible()
   await page.evaluate(() => {
-    const trace = { id: 'trace-job', title: 'Interactive job', summary: null, status_label: 'running', metadata: null, icon: 'terminal', active: true, expanded: true, details: [{title:'Command',content:'shell',monospaced:true,is_error:false,has_background:false}], rich: [{type:'terminal',job_id:'job-test'}] }
-    ;(window as any).__yeetEmit({type:'ui_conversation', version:1, conversation_revision:10000, view: {
-      items:[{type:'activity',id:'group-job',group:{id:'group-job',events:[{type:'tool',key:'trace-job',trace}],summary:'Interactive job',active:true,failed:false,awaits_permission:false,expanded:true}}],
-      last_user_id:null,last_assistant_id:null,streaming_text:'',streaming:false,preparing:false,preparing_label:'',error:null,selected:null,
-    }})
+    // Exercise the real Rust projection rather than a partial hand-written
+    // rich record that no production server would send.
+    ;(window as any).__yeetEmit({ type: 'conversation_reset', version: 1, sequence: 2, revision: 2, conversation: [
+      { id: 'interactive-job', kind: { type: 'toolCall', toolCall: {
+        id: 'interactive-job', name: 'run_shell', arguments: '{"command":"npm run watch"}', status: 'completed',
+        rawResult: JSON.stringify({ jobId: 'job-test', status: 'running', outputHandedOff: true }),
+      } } },
+    ] })
   })
+  const header = page.locator('.activity-group__header')
+  await expect(header).toContainText('npm run watch')
+  await header.click()
   await expect(page.locator('.activity-group yeet-shell-job')).toBeVisible()
   const command = async (action: string) => page.evaluate(action => {
     const sent = (window as any).__yeetSent as Array<{ type: string; command?: any }>

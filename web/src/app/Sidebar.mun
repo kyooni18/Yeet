@@ -110,7 +110,7 @@ struct Navigation: View {
 struct WorkspaceSelection: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
-      Text("WORKSPACE").withProps({ className: "section-label" })
+      Text("Workspace").withProps({ className: "section-label" })
       Button(action: { withAnimation(ease) { workspaceMenu.value = !workspaceMenu.value } }, label: {
         HStack(spacing: 8) {
           Icon(workIcon("folder"), { width: 16, height: 16, strokeWidth: 1.6 })
