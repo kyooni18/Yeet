@@ -752,7 +752,7 @@ pub(super) fn shell_is_inspection(command: &str) -> bool {
 }
 
 impl ToolRegistry {
-    /// Requests a one-time, exact-command shell permit from the user.
+    /// Asks the user a question with up to three options and returns the answer.
     pub(super) fn ask_user_tool(
         &mut self,
         object: &Map<String, Value>,
@@ -805,6 +805,7 @@ impl ToolRegistry {
         .to_string())
     }
 
+    /// Requests a one-time, exact-command shell permit from the user.
     pub(super) fn request_shell_permission_tool(
         &mut self,
         object: &Map<String, Value>,
