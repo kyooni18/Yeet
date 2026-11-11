@@ -2,9 +2,10 @@
 //!
 //! Root-level files are loaded by turn setup. Instructions that live deeper in
 //! the tree apply only to their subtree, so they are attached lazily: the first
-//! time a tool round reads or edits a file under that directory, all ancestor
+//! time a tool round touches a file or shell working directory, all ancestor
 //! instruction files are appended parent-first as request-only overlays. History is
 //! append-only, so a byte-identical copy already present is not attached again.
+//! Mutations defer until newly discovered overlays reach the next model request.
 
 use std::path::{Path, PathBuf};
 
@@ -66,7 +67,15 @@ fn touched_paths(call: &ToolCall) -> Vec<String> {
             .collect(),
         "apply_file_edits" => crate::tools::file_edit_changes(arguments)
             .iter()
-            .filter_map(|change| change.get("path").and_then(Value::as_str))
+            .flat_map(|change| {
+                [
+                    change.get("path"),
+                    change.get("fileOp").and_then(|op| op.get("destination")),
+                ]
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            })
             .map(str::to_owned)
             .collect(),
         "outline" => path().map(str::to_owned).into_iter().collect(),
@@ -196,6 +205,15 @@ mod tests {
         );
         history.extend(overlays);
         assert!(overlays_for_round(&history, &root_text, &root_text, &calls).is_empty());
+        let move_call = ToolCall {
+            id: "move".into(),
+            name: "apply_file_edits".into(),
+            arguments: json!({"patch": "*** Begin Patch\n*** Update File: root.txt\n*** Move to: crates/core/moved.txt\n*** End Patch"}),
+        };
+        assert_eq!(
+            overlays_for_round(&[], &root_text, &root_text, &[move_call]).len(),
+            2
+        );
         // Root-level instructions are turn setup's job; escaping paths find nothing.
         assert!(overlays_for_round(&[], &root_text, &root_text, &[read("main.rs")]).is_empty());
         assert!(
