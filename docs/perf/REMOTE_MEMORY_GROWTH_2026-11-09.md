@@ -1,6 +1,7 @@
 # Remote session memory-growth investigation — 2026-11-09
 
-Status: **reproduced paths repaired in `215f2f9`; not deployed to running services**.
+Status: **reproduced paths repaired in `215f2f9` (shipped in v0.1.9);
+reconnect replay bounded by bytes on 2026-11-11**.
 Original code inspected: `d91e4e0`. The affected backend files were unchanged from
 `a8bbb7b`, the checkout preceding the incident's UI work.
 
@@ -53,6 +54,27 @@ stream or one enormous live transcript can still consume memory. This repair
 removes the reproduced per-fragment snapshot accumulation, not every possible
 cause of memory pressure. The original incident still has no heap dump proving
 its exact trigger; profile the heap if growth persists after deploying this fix.
+
+## Follow-up: bounded reconnect replay (2026-11-11)
+
+`src/remote/websocket.rs` retained the last 1024 sequenced messages per
+connected client for reconnect replay. Sequenced messages can carry a whole
+transcript (`conversation_reset`, `snapshot`, `state_update` with a
+conversation), so the count limit alone bounded message count, not bytes: one
+long session could pin hundreds of megabytes per client, and each attached
+device holds its own `RuntimeShared`.
+
+Replay is now bounded by bytes as well as count (`EVENT_HISTORY_BYTES`,
+8 MiB), weighed with an allocation-free serializer counter. The newest message
+always survives, and evicting past the count limit is safe: `resume_plan`
+already answers a client whose cursor falls outside the retained window with a
+fresh snapshot instead of a replay. Covered by
+`replay_history_is_bounded_by_bytes_as_well_as_message_count`.
+
+Client-side measurement (Chromium, forced GC, synthetic workloads): status and
+composer updates, 4,000 assistant deltas, repeated conversation resets,
+workspace switches and 50 terminal mount/unmount cycles all plateau; the
+browser app grows only with retained transcript content, not per update.
 
 ## Original findings (before repair)
 

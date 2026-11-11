@@ -29,6 +29,12 @@ use super::protocol::{
 };
 
 const EVENT_HISTORY_LIMIT: usize = 1024;
+/// Replay exists for a brief reconnect, not as an archive. Sequenced messages
+/// can carry a whole transcript, so the count limit alone would let one long
+/// session pin hundreds of megabytes per connected client. Evicting past the
+/// count limit only costs a resuming client a fresh snapshot, which
+/// `resume_plan` already serves.
+const EVENT_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 const CLIENT_RUNTIME_TTL: Duration = Duration::from_secs(15 * 60);
 const CLIENT_HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(8);
@@ -242,6 +248,7 @@ pub(super) struct RuntimeShared {
     pub(super) state: BridgeState,
     sequence: u64,
     history: VecDeque<ServerMessage>,
+    history_bytes: usize,
     last_touched: Instant,
 }
 
@@ -343,6 +350,7 @@ impl RemoteClientRuntime {
             state: initial_state,
             sequence: 0,
             history: VecDeque::new(),
+            history_bytes: 0,
             last_touched: Instant::now(),
         }));
         let (events, _) = broadcast::channel(EVENT_HISTORY_LIMIT);
@@ -1136,18 +1144,50 @@ fn process_state_update(
 
     shared.state = next;
     shared.last_touched = Instant::now();
-    for message in &outgoing {
-        if message.sequence().is_some() {
-            shared.history.push_back(message.clone());
-            while shared.history.len() > EVENT_HISTORY_LIMIT {
-                shared.history.pop_front();
-            }
-        }
-    }
+    retain_history(&mut shared, &outgoing);
     drop(shared);
     for message in outgoing {
         let _ = events.send(message);
     }
+}
+
+/// Retain sequenced messages for reconnect replay under a count *and* byte
+/// budget. The newest message always stays so the replay cursor remains valid.
+fn retain_history(shared: &mut RuntimeShared, outgoing: &[ServerMessage]) {
+    for message in outgoing {
+        if message.sequence().is_none() {
+            continue;
+        }
+        shared.history.push_back(message.clone());
+        shared.history_bytes += retained_bytes(message);
+        while shared.history.len() > 1
+            && (shared.history.len() > EVENT_HISTORY_LIMIT
+                || shared.history_bytes > EVENT_HISTORY_BYTES)
+        {
+            let Some(dropped) = shared.history.pop_front() else {
+                break;
+            };
+            shared.history_bytes = shared.history_bytes.saturating_sub(retained_bytes(&dropped));
+        }
+    }
+}
+
+/// Weight a message by the bytes it serializes to, without allocating a copy.
+fn retained_bytes(message: &ServerMessage) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, message)
+        .map(|()| counter.0)
+        .unwrap_or(256)
 }
 
 fn append_conversation_updates(
@@ -1610,6 +1650,7 @@ mod tests {
             state: BridgeState::default(),
             sequence: 0,
             history: VecDeque::new(),
+            history_bytes: 0,
             last_touched: Instant::now(),
         }));
         let (events, mut receiver) = broadcast::channel(8);
@@ -1670,6 +1711,7 @@ mod tests {
             state: initial.clone(),
             sequence: 0,
             history: VecDeque::new(),
+            history_bytes: 0,
             last_touched: Instant::now(),
         }));
         let (events, mut receiver) = broadcast::channel(32);
@@ -1903,5 +1945,60 @@ mod tests {
             serde_json::from_value::<super::ClientMessage>(action).unwrap(),
             super::ClientMessage::UiDiffAction { .. }
         ));
+    }
+
+    #[test]
+    fn replay_history_is_bounded_by_bytes_as_well_as_message_count() {
+        use super::*;
+        let shared = Arc::new(Mutex::new(RuntimeShared {
+            theme_cache: crate::theme::ThemeProjectionCache::default(),
+            state: BridgeState::default(),
+            sequence: 0,
+            history: VecDeque::new(),
+            history_bytes: 0,
+            last_touched: Instant::now(),
+        }));
+        // A long transcript used to be pinned by count alone: 1024 messages,
+        // each carrying a whole conversation, is hundreds of megabytes.
+        let half_budget = "y".repeat(EVENT_HISTORY_BYTES / 2);
+        let big = |sequence: u64| ServerMessage::AssistantDelta {
+            version: REMOTE_PROTOCOL_VERSION,
+            sequence,
+            revision: sequence,
+            entry_id: Some("stream".into()),
+            delta: half_budget.clone(),
+            content: half_budget.clone(),
+            reset: false,
+        };
+        {
+            let mut guard = shared.lock().unwrap();
+            retain_history(&mut guard, &[big(1), big(2), big(3)]);
+            assert!(guard.history.len() < 3);
+            let newest = retained_bytes(guard.history.back().unwrap());
+            assert!(
+                guard.history_bytes <= newest,
+                "retained {} bytes for a {newest}-byte newest message",
+                guard.history_bytes
+            );
+            // The newest message always survives so the replay cursor stays valid.
+            assert_eq!(guard.history.back().and_then(ServerMessage::sequence), Some(3));
+        }
+        // Small messages still replay up to the count limit, not the byte limit.
+        let small = |sequence: u64| ServerMessage::AssistantDelta {
+            version: REMOTE_PROTOCOL_VERSION,
+            sequence,
+            revision: sequence,
+            entry_id: None,
+            delta: "a".into(),
+            content: "a".into(),
+            reset: false,
+        };
+        let batch: Vec<ServerMessage> = (100..(100 + EVENT_HISTORY_LIMIT as u64 + 20))
+            .map(small)
+            .collect();
+        let mut guard = shared.lock().unwrap();
+        retain_history(&mut guard, &batch);
+        assert_eq!(guard.history.len(), EVENT_HISTORY_LIMIT);
+        assert!(guard.history_bytes < EVENT_HISTORY_BYTES);
     }
 }
