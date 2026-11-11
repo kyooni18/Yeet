@@ -25,9 +25,9 @@ async function sentCommands(page: Page) {
 }
 
 async function openSessions(page: Page) {
-  await page.getByRole('button', { name: 'Open sidebar' }).click()
-  const sidebar = page.locator('.remote-sidebar')
-  await expect(sidebar).toHaveClass(/is-open/)
+  const sidebar = page.locator('#sidebar')
+  if (!await sidebar.isVisible()) await page.getByRole('button', { name: 'Toggle sidebar', exact: true }).click()
+  await expect(sidebar).toBeVisible()
   return sidebar
 }
 
@@ -98,7 +98,8 @@ test('real sidebar session navigation swaps drafts', async ({ page }) => {
   await composer.fill('draft that belongs to session A')
 
   let sidebar = await openSessions(page)
-  await sidebar.locator('.sidebar-session').filter({ hasText: 'Protocol review' }).click()
+  await sidebar.locator('.session-row').filter({ hasText: 'Protocol review' }).click()
+  if ((page.viewportSize()?.width ?? 0) < 900) await expect(sidebar).toHaveCount(0)
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'load_session', session_id: 'session-b' }),
   ]))
@@ -107,7 +108,7 @@ test('real sidebar session navigation swaps drafts', async ({ page }) => {
 
   await composer.fill('draft that belongs to session B')
   sidebar = await openSessions(page)
-  await sidebar.locator('.sidebar-session').filter({ hasText: 'Remote WebUI' }).click()
+  await sidebar.locator('.session-row').filter({ hasText: 'Remote WebUI' }).click()
   await expect.poll(async () => sentCommands(page)).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'load_session', session_id: 'session-a' }),
   ]))
@@ -152,8 +153,33 @@ test('opening Settings and returning keeps the active draft', async ({ page }) =
   await sidebar.getByRole('button', { name: 'Settings' }).click()
   const settings = page.getByRole('dialog', { name: 'Settings' })
   await expect(settings).toBeVisible()
-  await settings.getByRole('button', { name: 'Close' }).click()
+  await page.keyboard.press('Escape')
   await expect(settings).toHaveCount(0)
 
   await expect(composer).toHaveValue('draft survives settings')
+})
+
+test('an upload finishing after navigation stays with its original draft', async ({ page }) => {
+  let finishUpload!: () => void
+  const gate = new Promise<void>(resolve => { finishUpload = resolve })
+  await page.route('**/api/attachments?*', async route => {
+    await gate
+    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 'upload-a', name: 'session-a.txt', media_type: 'text/plain', size: 5 }) })
+  })
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: 'Attach files' }).click()
+  await (await chooser).setFiles({ name: 'session-a.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') })
+  await expect(page.getByText('uploading…')).toBeVisible()
+  await emitState(page, 2, { current_session_id: 'session-b' })
+  await expect(page.getByText('session-a.txt')).toHaveCount(0)
+  finishUpload()
+  await page.getByRole('textbox', { name: 'Message' }).fill('B has no attachment')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect.poll(() => sentCommands(page)).toContainEqual(expect.objectContaining({ type: 'submit', text: 'B has no attachment' }))
+  await emitState(page, 3, { current_session_id: 'session-a' })
+  await expect(page.getByText('session-a.txt')).toBeVisible()
+  await expect(page.getByText('uploading…')).toHaveCount(0)
+  await page.getByRole('textbox', { name: 'Message' }).fill('A owns the attachment')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect.poll(() => sentCommands(page)).toContainEqual(expect.objectContaining({ type: 'submit', text: 'A owns the attachment', attachment_ids: ['upload-a'] }))
 })

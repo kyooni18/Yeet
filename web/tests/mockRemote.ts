@@ -195,7 +195,7 @@ export async function installMockRemote(page: Page): Promise<void> {
           __yeetProjectComposer(input: unknown): Promise<{ ui_state: Record<string, unknown>; view: unknown; effect: unknown; command?: unknown }>
         }
         const result = await host.__yeetProjectComposer({ state: harnessState, ui_state: composerUiState, action,
-          environment: { context: { workspace: composerWorkspace, session_id: harnessState.current_session_id ?? null, unsaved_generation: unsavedGeneration },
+          environment: { context: { workspace: harnessState.workspace_root ?? composerWorkspace, session_id: harnessState.current_session_id ?? null, unsaved_generation: unsavedGeneration },
             available: true, supported_destinations: ['models', 'sessions', 'settings', 'permissions', 'auth', 'providers', 'capabilities'], allow_commands_while_streaming: false } })
         composerUiState = result.ui_state
         if (result.command) {
@@ -336,6 +336,9 @@ export async function installMockRemote(page: Page): Promise<void> {
             projectComposerUi(this)
             projectSettingsUi(this)
           })
+        } else if (message.type === 'command' && (message.command as { type?: string }).type === 'new_session') {
+          unsavedGeneration++
+          projectComposerUi(this)
         } else if (message.type === 'workspace_files_request') {
           const view = mockFiles(String(message.path ?? ''), (message.selected as string | null) ?? null)
           queueMicrotask(() => this.emit({ type: 'workspace_files', version: 1, request_id: message.request_id, view }))

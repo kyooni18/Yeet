@@ -338,7 +338,19 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 599px) {
   /* Deterministic phone composer: context on its own quiet line, then one row
      of touch-sized controls, instead of wrapping wherever the text ends. */
-  .composer-controls { flex-wrap: wrap; row-gap: 4px; }
+  .composer-controls { display: grid !important; grid-template-columns: 44px minmax(0, 1fr) minmax(44px, 90px) 44px; gap: 4px !important; }
+  .composer-controls > [data-mun="Spacer"] { display: none; }
+  .composer-controls > .icon-button { grid-row: 2; grid-column: 1; }
+  .composer-controls > .model-trigger { grid-row: 2; grid-column: 2; max-width: none; width: 100%; }
+  .composer-controls > select { grid-row: 2; grid-column: 3; width: 100%; }
+  .composer-controls > .send-button { grid-row: 2; grid-column: 4; }
+  .composer-controls > .composer-context { grid-row: 1; grid-column: 1 / -1; }
   .composer-context { order: -1; flex: 1 0 100%; text-align: left; }
   .composer-surface { padding-right: 8px !important; }
+}
+
+.auth-input, .auth-action { min-width: 0; font: inherit; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--panel); }
+.auth-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+@media (max-width: 899px), (hover: none) and (pointer: coarse) {
+  .auth-input, .auth-action { min-height: 44px; font-size: 16px; }
 }

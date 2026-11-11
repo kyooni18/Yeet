@@ -117,6 +117,11 @@ test('the phone composer keeps touch-sized controls and focuses from the whole s
     .map(node => ({ label: node.getAttribute('aria-label') || node.tagName, height: Math.round(node.getBoundingClientRect().height) })))
   expect(targets.length).toBeGreaterThan(2)
   for (const target of targets) expect(target.height, target.label).toBeGreaterThanOrEqual(44)
+  const controls = surface.locator('.composer-controls')
+  const send = await controls.getByRole('button', { name: 'Send', exact: true }).boundingBox()
+  const model = await controls.getByRole('button', { name: 'Choose model' }).boundingBox()
+  expect(Math.abs(send!.y - model!.y)).toBeLessThanOrEqual(2)
+  expect(send!.x).toBeGreaterThan(model!.x)
   const field = page.getByRole('textbox', { name: 'Message', exact: true })
   expect(Math.round((await field.boundingBox())!.height)).toBeGreaterThanOrEqual(44)
   // Tapping the bubble itself focuses the field instead of doing nothing.

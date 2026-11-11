@@ -20,7 +20,7 @@ const sync = () => {
   const snapshot = remote.value
   applyTheme(snapshot.state.runtime_settings)
   const session = snapshot.currentSession?.title
-  const title = snapshot.connection === 'auth-required' ? 'Authorize · Yeet' : session ? `${session} · Yeet` : 'Yeet'
+  const title = snapshot.connection === 'auth-required' || location.pathname === '/enroll' ? 'Authorize · Yeet' : session ? `${session} · Yeet` : 'Yeet'
   if (title !== lastTitle) document.title = lastTitle = title
 }
 remoteStore.subscribe(sync)

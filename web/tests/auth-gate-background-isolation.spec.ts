@@ -32,7 +32,7 @@ for (const routeCase of [
 
     await expect(dialog).toBeVisible()
     await expect(dialog).toHaveAttribute('aria-modal', 'true')
-    await expect(page.locator('.remote-stage')).toHaveCount(0)
+    await expect(page.locator('#main')).toHaveCount(0)
     await expect(key).toBeFocused()
 
     await page.keyboard.press('Tab')

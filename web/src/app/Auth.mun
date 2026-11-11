@@ -1,73 +1,50 @@
-import { Transition } from "@mun/core"
-import { loginWithAccessKey, loginWithPasskey, registerPasskey } from "@/remote/auth"
-import { remoteStore } from "@/store/remoteStore"
+import { key, error, status, loading, busy, enrolling, authorize, loadStatus, authRef } from "./authState"
 import { color } from "./theme"
-
-const key = State("")
-const error = State("")
-
-async function submitKey() {
-  error.value = ""
-  try { await loginWithAccessKey(key.value.trim()); key.value = ""; remoteStore.reconnectAfterAuth() }
-  catch (failure) { error.value = failure instanceof Error ? failure.message : String(failure) }
-}
-
-async function usePasskey() {
-  error.value = ""
-  try { await loginWithPasskey(); remoteStore.reconnectAfterAuth() }
-  catch (failure) { error.value = failure instanceof Error ? failure.message : String(failure) }
-}
-
-const params = new URLSearchParams(location.search)
-const enrollToken = location.pathname === "/enroll" ? params.get("token") || params.get("enroll") : null
-
-async function enroll() {
-  error.value = ""
-  try { await registerPasskey(enrollToken); location.replace("/") }
-  catch (failure) {
-    // Already registered on this device: sign in with it instead.
-    if (failure?.name === "InvalidStateError") {
-      try { await loginWithPasskey(enrollToken); location.replace("/"); return } catch (again) { failure = again }
-    }
-    error.value = failure instanceof Error ? failure.message : String(failure)
-  }
-}
 
 export struct AuthView: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 12) {
-      Text("Yeet").fontSize(20).fontWeight("semibold")
-      Text("Enter the access key printed by `yeet remote`, or use a passkey.").foregroundStyle(color.muted)
-      TextField(Binding(key), "Access key")
-        .withProps({ type: "password", autocomplete: "current-password", onKeyDown: event => { if (event.key === "Enter") submitKey() } })
-        .padding({ top: 10, bottom: 10, leading: 12, trailing: 12 })
-        .background(color.panel)
-        .style({ border: "1px solid var(--line)", outline: "none", borderRadius: "8px", font: "inherit", color: "inherit" })
-      if enrollToken {
-        Button("Register this device's passkey") { enroll() }
-          .padding(10)
-          .background(color.accent)
-          .foregroundStyle(color.accentInk)
-          .style({ borderRadius: "8px", textAlign: "center" })
+    VStack(alignment: .stretch, spacing: 0) {
+      VStack(alignment: .stretch, spacing: 12) {
+        Text(enrolling ? "Register a passkey" : "Authorization required")
+          .withProps({ role: "heading", "aria-level": 1 }).fontSize(20).fontWeight("semibold")
+        if loading.value {
+          Text("Loading authentication methods…")
+            .withProps({ role: "status", "aria-label": "Loading authentication methods" })
+        } else if !status.value {
+          Text(enrolling ? "Yeet Remote could not verify this enrollment link." : "Yeet Remote could not load authentication methods.")
+          Button("Retry") { loadStatus() }.withProps({ className: "auth-action" })
+        } else if enrolling {
+          Text(status.value.enrollmentValid ? "This enrollment was authorized from the local Yeet terminal." : "This enrollment link is invalid or has expired.")
+          if status.value.enrollmentValid {
+            Button("Register this device's passkey") { authorize("enroll") }
+              .withProps({ className: "auth-action auth-primary" }).disabled(busy.value)
+          }
+        } else {
+          if status.value.key {
+            Text("Enter the access key printed by `yeet remote`.").foregroundStyle(color.muted)
+            TextField(Binding(key), "Access key")
+              .withProps({ type: "password", "aria-label": "Access key", autocomplete: "current-password", className: "auth-input", onKeyDown: event => { if (event.key === "Enter") authorize("key") } })
+              .disabled(busy.value)
+            Button("Authorize") { authorize("key") }
+              .withProps({ className: "auth-action auth-primary" }).disabled(busy.value || !key.value.trim())
+          }
+          if status.value.passkey {
+            Button("Use passkey") { authorize("passkey") }
+              .withProps({ className: "auth-action" }).disabled(busy.value)
+          }
+          if !status.value.key && !status.value.passkey {
+            Text("No sign-in methods are available. Check the local Yeet terminal.")
+          }
+        }
+        if error.value {
+          Text(error.value).withProps({ role: "alert" }).foregroundStyle(color.del)
+        }
       }
-      HStack(spacing: 8) {
-        Button("Sign in") { submitKey() }
-          .padding({ top: 8, bottom: 8, leading: 16, trailing: 16 })
-          .background(color.accent)
-          .foregroundStyle(color.accentInk)
-          .style({ borderRadius: "8px" })
-          .disabled(!key.value.trim())
-        Button("Use passkey") { usePasskey() }
-          .padding({ top: 8, bottom: 8, leading: 16, trailing: 16 })
-          .background(color.raised)
-          .style({ borderRadius: "8px" })
-      }
-      if error.value {
-        Text(error.value).foregroundStyle(color.del).transition(Transition.opacity)
-      }
+      .padding(20)
+      .withProps({ className: "auth-card" })
+      .style({ width: "100%", maxWidth: "420px", margin: "auto", flexShrink: 0 })
     }
-    .padding(20)
-    .style({ maxWidth: "380px" })
-    .style({ margin: "18vh auto 0" })
+    .withProps({ role: "dialog", "aria-modal": "true", "aria-label": enrolling ? "Register a passkey" : "Authorization required", tabindex: -1, ref: authRef })
+    .style({ height: "var(--app-height, 100dvh)", overflowY: "auto", padding: "16px", color: "var(--text)", background: "var(--bg)" })
   }
 }
