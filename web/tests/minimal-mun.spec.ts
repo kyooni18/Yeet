@@ -16,11 +16,16 @@ for (const appearance of ['light', 'dark'] as const) {
     await expect(reasoning).not.toContainText('I checked the semantic state')
     const editor = page.getByRole('textbox', { name: 'Message', exact: true })
     await expect(editor).toBeVisible()
-    const geometry = await page.evaluate(() => ({
-      width: innerWidth, scroll: document.documentElement.scrollWidth,
-      editor: document.querySelector('textarea')?.getBoundingClientRect().toJSON(),
-    }))
+    const geometry = await page.evaluate(() => {
+      const content = document.querySelector('.conversation-content')!
+      const editor = document.querySelector('textarea')!.getBoundingClientRect()
+      return {
+        width: innerWidth, scroll: document.documentElement.scrollWidth,
+        alignment: Math.abs(editor.left - content.getBoundingClientRect().left - parseFloat(getComputedStyle(content).paddingLeft)),
+      }
+    })
     expect(geometry.scroll).toBeLessThanOrEqual(geometry.width)
+    expect(geometry.alignment).toBeLessThanOrEqual(2) // Surface border, not a wandering reading column.
     await page.screenshot({ path: testInfo.outputPath(`conversation-${appearance}.png`) })
     const header = page.locator('.activity-group__header').first()
     await header.click()

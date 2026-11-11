@@ -45,6 +45,6 @@ export function hunkLabel(hunk: ToolDiffHunk): string {
 }
 
 export function sourceRange(file: ToolSourceFile): string {
-  return [file.start_line == null ? '' : `Lines ${file.start_line}${file.end_line == null ? '' : `–${file.end_line}`}`,
+  return [file.availability === 'preview' ? 'Preview' : '', file.start_line == null ? '' : `Lines ${file.start_line}${file.end_line == null ? '' : `–${file.end_line}`}`,
     file.total_lines == null ? '' : `${file.total_lines.toLocaleString()} total`].filter(Boolean).join(' · ')
 }

@@ -82,6 +82,11 @@ test('shell viewer pages output and sends interactive controls over Remote', asy
   }, request)
   await expect(page.locator('yeet-shell-job')).toContainText('hello')
   await expect(page.locator('yeet-shell-job')).toContainText('Running')
+  // A normal application refresh must not wipe xterm's imperative DOM or
+  // reset its cursor. This used to intermittently leave an empty custom element.
+  await page.evaluate(() => (window as any).__yeetEmit({ type: 'state_update', version: 1, sequence: 3, revision: 3, patch: { credit_usage: 1 } }))
+  await expect(page.locator('yeet-shell-job .xterm-rows')).toContainText('hello')
+  await expect.poll(() => command('output')).toMatchObject({ offset: 6 })
   await page.locator('yeet-shell-job').getByRole('button', { name: 'Interrupt interactive shell' }).click()
   await expect.poll(() => command('interrupt')).not.toBeNull()
   await page.locator('yeet-shell-job').getByRole('button', { name: 'Stop job' }).click()

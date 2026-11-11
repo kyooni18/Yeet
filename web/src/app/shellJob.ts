@@ -1,12 +1,26 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import '@xterm/xterm/css/xterm.css'
+import xtermCss from '@xterm/xterm/css/xterm.css?inline'
 import { remoteStore } from '@/store/remoteStore'
 import type { ShellJobOutputPage, ShellJobResponse } from '@/remote/protocol'
+
+const style = new CSSStyleSheet()
+style.replaceSync(`${xtermCss}
+  :host { display: block; min-width: 0; width: 100%; padding: 8px 12px; }
+  * { box-sizing: border-box; }
+  .shell-job-terminal { height: 220px; min-width: 0; overflow: hidden; padding: 6px; border-radius: 6px; background: #111; color-scheme: dark; }
+  .shell-job-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 0 0; font: 12px/1.5 var(--sans); }
+  button { min-height: 32px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--text); font: inherit; cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .shell-job-status { flex: 1 1 120px; padding: 4px; color: var(--muted); overflow-wrap: anywhere; }
+  @media (hover: none), (pointer: coarse) { button { min-height: 44px; } }
+`)
 
 /** A viewer for an existing approved job; it never launches a command. */
 class YeetShellJob extends HTMLElement {
   static observedAttributes = ['job-id']
+  private readonly content: ShadowRoot
   private term: Terminal | null = null
   private fit: FitAddon | null = null
   private job = ''
@@ -23,16 +37,20 @@ class YeetShellJob extends HTMLElement {
   private wasConnected = false
   private retryTimer: number | null = null
 
+  constructor() {
+    super()
+    // Mün owns light-DOM children and may reconcile them on any state update.
+    // Like yeet-markdown, the imperative renderer must own a shadow root.
+    this.content = this.attachShadow({ mode: 'open' })
+    this.content.adoptedStyleSheets = [style]
+  }
+
   connectedCallback() {
     if (this.term) return
-    this.style.display = 'block'
-    this.style.minWidth = '0'
-    this.style.width = '100%'
     const container = document.createElement('div')
     container.className = 'shell-job-terminal'
     container.setAttribute('role', 'region')
     container.setAttribute('aria-label', 'Interactive shell output')
-    container.style.cssText = 'height:220px;min-width:0;overflow:hidden;background:#111;padding:6px'
     const controls = document.createElement('div')
     controls.className = 'shell-job-controls'
     this.status = document.createElement('span')
@@ -47,7 +65,7 @@ class YeetShellJob extends HTMLElement {
     stop.textContent = 'Stop job'
     stop.onclick = () => this.send('stop')
     controls.append(interrupt, stop, this.status)
-    this.replaceChildren(container, controls)
+    this.content.replaceChildren(container, controls)
     this.term = new Terminal({ convertEol: false, scrollback: 5000, fontSize: 12, cursorBlink: true, screenReaderMode: true })
     this.fit = new FitAddon()
     this.term.loadAddon(this.fit)
@@ -178,13 +196,13 @@ class YeetShellJob extends HTMLElement {
           this.flushInput()
         }
       }
-      if (response.error && this.status) this.status.textContent = response.error
+      if (response.error && this.status && this.status.textContent !== response.error) this.status.textContent = response.error
       return
     }
     if (response.requestId !== this.pending) return
     this.pending = null
     if (response.error) {
-      if (this.status) this.status.textContent = response.error
+      if (this.status && this.status.textContent !== response.error) this.status.textContent = response.error
       if (response.retryable) {
         this.retryTimer = window.setTimeout(() => {
           this.retryTimer = null
@@ -212,7 +230,9 @@ class YeetShellJob extends HTMLElement {
     this.done = page.finished && this.offset >= page.totalBytes
     if (this.status) {
       const state = page.status === 'completed' ? 'Completed' : page.status === 'failed' ? 'Failed' : page.status === 'interrupted' ? 'Interrupted' : page.finished ? 'Job finished' : 'Running'
-      this.status.textContent = page.truncated ? `${state}; output truncated` : state
+      const label = page.truncated ? `${state}; output truncated` : state
+      // The live region reports state transitions, not every output poll.
+      if (this.status.textContent !== label) this.status.textContent = label
     }
     if (!this.done) this.poll()
   }

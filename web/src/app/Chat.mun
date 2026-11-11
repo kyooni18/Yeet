@@ -148,7 +148,7 @@ struct Trace: View {
         .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row", "aria-expanded": trace.expanded, "aria-controls": traceRegion(trace.id) })
       } else {
         TraceLabel(trace: trace, groupHeader: groupHeader, disclosure: false)
-          .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row" })
+          .withProps({ className: groupHeader ? "trace-disclosure__summary trace-disclosure__row activity-group__header" : "trace-disclosure__summary trace-disclosure__row" })
       }
       if trace.expanded {
         VStack(alignment: .stretch, spacing: 10) {
@@ -219,7 +219,7 @@ struct Activity: View {
             VStack(alignment: .stretch, spacing: 4) {
               ForEach(group.events, { id: event => event.key }) { event in
                 Trace(trace: event.trace, groupHeader: false)
-                  .withProps({ className: "activity-group__event" })
+                  .withProps({ className: "trace-disclosure activity-group__event" })
               }
             }
             .withProps({ className: "activity-group__events", id: traceRegion(group.id), role: "group", "aria-label": "Tool steps" })
@@ -586,9 +586,9 @@ struct Composer: View {
       .style({ width: "100%", minWidth: "0" })
       Text("Enter to send · Shift + Enter for a new line").withProps({ className: "composer-hint" })
     }
-    .padding({ top: 4, bottom: 16, leading: 16, trailing: 16 })
+    .padding({ top: 4, bottom: 16, leading: 8, trailing: 8 })
     .withProps({ className: "composer" })
-    .style({ maxWidth: "calc(var(--thread-width) + 16px)", margin: "0 auto", width: "100%" })
+    .style({ maxWidth: "var(--thread-width)", margin: "0 auto", width: "100%" })
   }
 }
 
