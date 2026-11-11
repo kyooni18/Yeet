@@ -1,0 +1,204 @@
+import { remoteStore } from "@/store/remoteStore"
+import { indexed, terminalStatus, streamNote, diffStats, hunkLabel, sourceRange } from "./toolPresentation"
+
+/** Literal text, never markdown/HTML. Generic tools and older records stay readable. */
+struct DetailSection: View {
+  let detail: Any
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 6) {
+      Text(detail.title).withProps({ className: "trace-detail__heading" })
+      Element("pre", { className: detail.monospaced ? "tool-pre" : "tool-pre tool-pre--prose", tabindex: "0", "aria-label": detail.title }) {
+        Text(detail.content)
+      }
+    }.withProps({ className: detail.is_error ? "trace-detail is-error" : "trace-detail" })
+  }
+}
+
+struct OutputStream: View {
+  let stream: Any
+  let label: String
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 4) {
+      HStack(spacing: 8) {
+        Text(label).withProps({ className: "trace-detail__heading" })
+        Text(streamNote(stream)).withProps({ className: "tool-caption" })
+      }.withProps({ className: "tool-stream__heading" })
+      Element("pre", { className: "tool-pre tool-terminal__output", tabindex: "0", "aria-label": label }) {
+        Text(stream.text || "(empty)")
+      }
+    }.withProps({ className: "tool-stream" })
+  }
+}
+
+struct TerminalDetail: View {
+  let detail: Any
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 0) {
+      HStack(spacing: 8) {
+        Text(detail.working_directory || "Shell").withProps({ className: "tool-embed__path" })
+        Text(terminalStatus(detail)).withProps({ className: "tool-terminal__state", "data-state": detail.state })
+      }.withProps({ className: "tool-embed__header" })
+      if detail.command {
+        HStack(alignment: .top, spacing: 10) {
+          Text("$").withProps({ className: "tool-terminal__prompt", "aria-hidden": "true" })
+          Element("pre", { className: "tool-pre tool-terminal__command", tabindex: "0", "aria-label": "Shell command" }) {
+            Text(detail.command)
+          }
+        }.withProps({ className: "tool-terminal__command-line" })
+      }
+      if detail.stdout {
+        OutputStream(stream: detail.stdout, label: "stdout")
+      }
+      if detail.stderr {
+        OutputStream(stream: detail.stderr, label: "stderr")
+      }
+      if detail.combined {
+        Element("pre", { className: "tool-pre tool-terminal__output", tabindex: "0", "aria-label": "Command output (stream not recorded)" }) {
+          Text(detail.combined)
+        }
+      }
+      if !detail.stdout && !detail.stderr && !detail.combined && detail.state === "succeeded" {
+        Text("No output recorded").withProps({ className: "tool-notice" })
+      }
+      if detail.windowed {
+        Text("Showing an output window, not the full transcript.").withProps({ className: "tool-notice" })
+      }
+      if detail.artifact_id {
+        Text("Full output: artifact " + detail.artifact_id).withProps({ className: "tool-notice" })
+      }
+      if detail.job_id {
+        Text("Job " + detail.job_id).withProps({ className: "tool-notice" })
+        Element("yeet-shell-job", { "job-id": detail.job_id })
+      }
+    }.withProps({ className: "tool-embed tool-terminal" })
+  }
+}
+
+struct DiffFile: View {
+  let file: Any
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 0) {
+      HStack(spacing: 8) {
+        Text(file.previous_path ? file.previous_path + " → " + file.path : file.path).withProps({ className: "tool-embed__path" })
+        Text(file.operation).withProps({ className: "tool-caption" })
+        if file.has_diff {
+          Text(diffStats(file)).withProps({ className: "tool-diff__stats" })
+        }
+      }.withProps({ className: "tool-embed__header" })
+      if file.hunks.length {
+        Element("div", { className: "tool-code-scroll", tabindex: "0", role: "region", "aria-label": "Diff for " + file.path }) {
+          ForEach(indexed(file.hunks), { id: row => row.key }) { row in
+            Text(hunkLabel(row.value)).withProps({ className: "tool-diff__hunk" })
+            ForEach(indexed(row.value.lines), { id: line => line.key }) { line in
+              Element("div", { className: "tool-diff__line tool-diff__line--" + line.value.kind }) {
+                Text(line.value.old ?? "").withProps({ className: "tool-line-number", "aria-hidden": "true" })
+                Text(line.value.new ?? "").withProps({ className: "tool-line-number", "aria-hidden": "true" })
+                Text(line.value.kind === "added" ? "+" : line.value.kind === "removed" ? "−" : line.value.kind === "omitted" ? "⋯" : " ").withProps({ className: "tool-diff__sign" })
+                Text(line.value.text).withProps({ className: "tool-code" })
+              }
+            }
+          }
+        }
+      } else {
+        Text(file.has_diff ? "No text hunks recorded for this operation." : "No diff recorded. Inspect raw input/output for details.").withProps({ className: "tool-notice" })
+      }
+      if file.truncated {
+        Text("Diff preview truncated; counts include only the shown lines.").withProps({ className: "tool-notice" })
+      }
+      ForEach(indexed(file.warnings), { id: row => row.key }) { row in
+        Text(row.value).withProps({ className: "tool-notice" })
+      }
+    }.withProps({ className: "tool-embed tool-diff" })
+  }
+}
+
+struct SourceFile: View {
+  let file: Any
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 0) {
+      HStack(spacing: 8) {
+        Text(file.path).withProps({ className: "tool-embed__path" })
+        Text(sourceRange(file)).withProps({ className: "tool-caption" })
+      }.withProps({ className: "tool-embed__header" })
+      if file.lines.length {
+        Element("div", { className: "tool-code-scroll", tabindex: "0", role: "region", "aria-label": "Source for " + file.path }) {
+          ForEach(file.lines, { id: line => line.number }) { line in
+            Element("div", { className: "tool-source__line" }) {
+              Text(line.number).withProps({ className: "tool-line-number" })
+              Text(line.text).withProps({ className: "tool-code" })
+            }
+          }
+        }
+      }
+      if file.availability === "pending" {
+        Text("No source lines recorded yet.").withProps({ className: "tool-notice" })
+      }
+      if file.error || file.availability === "failed" {
+        Text(file.error || "Source unavailable.").withProps({ className: "tool-notice is-error" })
+      }
+      if file.availability === "preview" {
+        Text("Partial source preview").withProps({ className: "tool-notice" })
+      }
+      if file.next_start_line != null {
+        Text("More lines available from line " + file.next_start_line).withProps({ className: "tool-notice" })
+      }
+      if file.artifact_id {
+        Text("Full source: artifact " + file.artifact_id).withProps({ className: "tool-notice" })
+      }
+    }.withProps({ className: "tool-embed tool-source" })
+  }
+}
+
+/** Explicit host components for the Rust rich-detail union, not a tool parser. */
+export struct ToolDetails: View {
+  let trace: Any
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 12) {
+      if trace.rich?.length {
+        ForEach(indexed(trace.rich), { id: row => row.key }) { row in
+          if row.value.type === "terminal" {
+            TerminalDetail(detail: row.value)
+          } else if row.value.type === "diff" {
+            ForEach(indexed(row.value.files), { id: file => file.key }) { file in
+              DiffFile(file: file.value)
+            }
+            if row.value.externalized {
+              Text("Diff stored externally" + (row.value.externalized.artifact_id ? " · artifact " + row.value.externalized.artifact_id : "") + (row.value.externalized.bytes != null ? " · " + row.value.externalized.bytes + " bytes" : "")).withProps({ className: "tool-notice" })
+            }
+          } else if row.value.type === "source" {
+            ForEach(indexed(row.value.files), { id: file => file.key }) { file in
+              SourceFile(file: file.value)
+            }
+          } else if row.value.type === "diagnostics" {
+            VStack(alignment: .stretch, spacing: 8) {
+              Text("Diagnostics").withProps({ className: "trace-detail__heading" })
+              ForEach(indexed(row.value.items), { id: item => item.key }) { item in
+                VStack(alignment: .stretch, spacing: 2) {
+                  Text(item.value.severity + (item.value.path ? " · " + item.value.path : "") + (item.value.line != null ? ":" + item.value.line : "") + (item.value.column != null ? ":" + item.value.column : "")).withProps({ className: "tool-caption" })
+                  Text(item.value.message)
+                }.withProps({ className: item.value.severity === "error" ? "tool-diagnostic is-error" : "tool-diagnostic" })
+              }
+            }
+          } else if row.value.type === "notice" {
+            Text(row.value.message).withProps({ className: row.value.is_error ? "tool-notice is-error" : "tool-notice" })
+          }
+        }
+        if trace.raw?.length {
+          Button("Raw input and output") { remoteStore.sendConversationUi({ type: "toggle", value: trace.raw_id || "raw:" + trace.id }) }
+            .withProps({ className: "tool-raw-toggle", "aria-expanded": !!trace.raw_expanded, "aria-controls": "raw-details-" + encodeURIComponent(trace.id) })
+          if trace.raw_expanded {
+            VStack(alignment: .stretch, spacing: 12) {
+              ForEach(indexed(trace.raw), { id: row => row.key }) { row in
+                DetailSection(detail: row.value)
+              }
+            }.withProps({ id: "raw-details-" + encodeURIComponent(trace.id), className: "tool-raw" })
+          }
+        }
+      } else {
+        ForEach(indexed(trace.details), { id: row => row.key }) { row in
+          DetailSection(detail: row.value)
+        }
+      }
+    }.withProps({ className: "tool-details" })
+  }
+}

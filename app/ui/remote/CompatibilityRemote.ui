@@ -17,6 +17,22 @@ Shell
     TopBar: navigation toggle, session/view title, connection, workspace-panel toggle
     Conversation: independently scrollable, centered readable column (~760px)
       Messages: generous rhythm, quiet tool disclosures, keyboard-visible actions
+      ToolLists: Codex-style compact steps; flat, not a stack of cards
+        Summary: tool icon, action and distinct context, step count for groups, disclosure chevron
+        Context: single-line preview; full value available in expanded details
+        ExpandedGroup: indented steps on a quiet vertical rail, in backend order
+        ExpandedStep: labeled arguments/output, selectable literal text, bounded scroll region
+          Shell: working directory, literal command with prompt, separate stdout/stderr, exit state
+            Live jobs: existing shell viewer; no command is launched by expanding a record
+          Edit: per-file unified diff, old/new line numbers, +/− and green/red rows, warnings
+          Read: per-file source with line numbers and captured range; explicit preview/missing states
+          Diagnostics: severity, file location, message; never hidden in raw JSON
+          OtherTools: labeled input/result/error sections, literal safe text
+          RawInspection: secondary disclosure for original input/output; backend owns expansion
+          PartialData: truncation, tail, background handoff, and artifact references remain explicit
+        State: only active progress and consequential exceptions; no routine success badges
+        Interaction: native buttons, Enter/Space, expanded state and controlled-region relationship
+        Mobile: >=44px disclosure targets; exception text wraps without crowding context
       EmptyState: centered greeting and workspace context
       FollowOutput: pinned only while near bottom; floating Jump to latest when reading history
     Composer: same column alignment, raised rounded surface, auto-growing field
@@ -32,9 +48,12 @@ Shell
     Overlay: below 1280px; scrim, Escape dismissal, focus containment and restoration
 
 VisualLanguage
-  Warm neutral canvas; distinct navigation and raised composer; subtle borders.
+  Existing theme palette; distinct navigation and composer; subtle borders, flat supporting controls.
   Light/dark via existing appearance setting; no new business logic or protocol.
-  Consistent outline icons, 8px spacing rhythm, readable muted labels.
+  Consistent outline icons, 8px spacing rhythm, readable sentence-case section labels.
+  Shared reading-column tokens align conversation, tool lists, and composer text.
+  Sidebar: clear workspace/session grouping, quiet selection, labeled Settings footer.
+  Inspector: flat tab strip and bounded patch preview; no unnecessary nested surfaces.
   Restrained panel entrances, hover/press/focus feedback; respect reduced motion.
   Touch targets >=44px; safe-area padding; no horizontal document overflow.
   Navigation and workspace drawers are mutually exclusive on narrow screens.

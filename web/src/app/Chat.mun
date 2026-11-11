@@ -12,6 +12,7 @@ import {
   removeAttachment, pickFiles, addFiles,
 } from "./composer"
 import { Spinner, PageHeader, Chip, IconButton } from "./Common.mun"
+import { ToolDetails } from "./ToolDetails.mun"
 
 const questionAnswer = State("")
 
@@ -59,20 +60,6 @@ export struct TopBar: View {
   }
 }
 
-struct Detail: View {
-  let detail: Any
-  var body: some View {
-    VStack(alignment: .stretch, spacing: 4) {
-      Text(detail.title).fontSize(11).foregroundStyle(color.faint)
-      Text(detail.content)
-        .fontSize(detail.monospaced ? 12 : 14)
-        .foregroundStyle(detail.is_error ? color.del : detail.monospaced ? color.text : color.muted)
-        .withProps({ className: "trace-detail__content" })
-        .style({ width: "100%", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontFamily: detail.monospaced ? mono : "inherit" })
-    }
-  }
-}
-
 function rawTraceLabel(trace: Any): string {
   return trace.summary && trace.summary !== trace.title ? trace.title + " · " + trace.summary : trace.title
 }
@@ -93,11 +80,23 @@ function traceStatus(trace: Any): string {
   return /permission|approv|fail|error|denied|timed|cancel|interrupt/i.test(trace.status_label || "") ? trace.status_label : ""
 }
 
+function traceContext(trace: Any): string {
+  return !isOpaqueWorkLabel(rawTraceLabel(trace)) && trace.summary !== trace.title ? trace.summary || "" : ""
+}
+
+function hasTraceDetails(trace: Any): boolean {
+  return !!(trace.details.length || trace.metadata || trace.rich?.length)
+}
+
+function traceRegion(id: string): string {
+  return "trace-details-" + encodeURIComponent(id)
+}
 
 /** Work content is visible inline, with its tool or reasoning icon. */
 struct TraceLabel: View {
   let trace: Any
   let groupHeader: Bool
+  let disclosure: Bool
   var body: some View {
     HStack(spacing: 6) {
       // Stroke geometry goes through CSS: Mün writes SVG attributes in camelCase, which browsers ignore.
@@ -105,23 +104,34 @@ struct TraceLabel: View {
         .frame(width: 14, height: 14)
         .foregroundStyle(color.faint)
         .withProps({ "aria-hidden": "true", className: "trace-disclosure__icon" })
-        .style({ flex: "none", alignSelf: "flex-start", marginTop: "3px", strokeWidth: "1.8px", strokeLinecap: "round", strokeLinejoin: "round" })
-      Text(traceLabel(trace))
-        .fontSize(13)
-        .foregroundStyle(color.faint)
-        .withProps({ className: groupHeader ? (trace.active ? "trace-disclosure__label activity-group__summary is-active" : "trace-disclosure__label activity-group__summary") : "trace-disclosure__label" })
-        .style({ flex: "1", minWidth: "0", whiteSpace: "pre-wrap", overflowWrap: "anywhere", textAlign: "left" })
-      if traceStatus(trace) !== "" {
-        Text(traceStatus(trace))
-          .fontSize(12)
-          .foregroundStyle(/approv|permission/i.test(traceStatus(trace)) ? color.text2 : color.del)
-          .withProps({ className: "trace-disclosure__status" })
-          .style({ whiteSpace: "nowrap", flex: "none" })
+        .style({ flex: "none", strokeWidth: "1.8px", strokeLinecap: "round", strokeLinejoin: "round" })
+      VStack(alignment: .stretch, spacing: 2) {
+        HStack(spacing: 6) {
+          Text(isOpaqueWorkLabel(rawTraceLabel(trace)) ? "Working" : trace.title)
+            .withProps({ className: "trace-disclosure__title" })
+          if traceContext(trace) !== "" {
+            Text(traceContext(trace)).withProps({ className: "trace-disclosure__context" })
+          }
+        }.withProps({ className: "trace-disclosure__caption" })
+        if traceStatus(trace) !== "" {
+          Text(traceStatus(trace))
+            .foregroundStyle(/approv|permission/i.test(traceStatus(trace)) ? color.text2 : color.del)
+            .withProps({ className: "trace-disclosure__status" })
+        }
+      }
+      .withProps({ className: groupHeader ? (trace.active ? "trace-disclosure__label activity-group__summary is-active" : "trace-disclosure__label activity-group__summary") : "trace-disclosure__label", title: traceLabel(trace) })
+      if trace.stepCount > 1 {
+        Text(trace.stepCount + " steps").withProps({ className: "activity-group__count" })
       }
       if trace.active && /approv|permission/i.test(traceStatus(trace)) === false {
         Spinner().withProps({ role: "img", "aria-label": "Running" })
       }
+      if disclosure {
+        Icon(workIcon("chevron"), { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor" })
+          .withProps({ className: "trace-disclosure__chevron", "aria-hidden": "true" })
+      }
     }
+    .withProps({ className: "trace-disclosure__summary" })
     .style({ minWidth: "0", width: "100%" })
   }
 }
@@ -131,29 +141,23 @@ struct Trace: View {
   let groupHeader: Bool
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
-      if trace.details.length || trace.metadata {
+      if hasTraceDetails(trace) === true {
         Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) }, label: {
-          TraceLabel(trace: trace, groupHeader: groupHeader)
+          TraceLabel(trace: trace, groupHeader: groupHeader, disclosure: true)
         })
-        .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row", "aria-expanded": trace.expanded })
+        .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row", "aria-expanded": trace.expanded, "aria-controls": traceRegion(trace.id) })
       } else {
-        TraceLabel(trace: trace, groupHeader: groupHeader)
+        TraceLabel(trace: trace, groupHeader: groupHeader, disclosure: false)
           .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row" })
       }
       if trace.expanded {
         VStack(alignment: .stretch, spacing: 10) {
-          ForEach(trace.details, { id: detail => detail.title + ":" + detail.content.length }) { detail in
-            Detail(detail: detail)
-          }
-          ForEach((trace.rich || []).filter(detail => detail.type === "terminal" && detail.job_id), { id: detail => detail.job_id }) { detail in
-            Element("yeet-shell-job", { "job-id": detail.job_id })
-          }
+          ToolDetails(trace: trace)
           if trace.metadata {
-            Text("Duration: " + trace.metadata).fontSize(12).foregroundStyle(color.faint)
+            Text("Duration: " + trace.metadata).withProps({ className: "trace-disclosure__timing" })
           }
         }
-        .padding({ leading: 20, bottom: 10 })
-        .withProps({ className: "trace-disclosure__details" })
+        .withProps({ className: "trace-disclosure__details", id: traceRegion(trace.id), role: "region", "aria-label": traceLabel(trace) + " details" })
         .transition(Transition.opacity.combined(Transition.move("top", 4)))
       }
     }
@@ -169,12 +173,13 @@ struct Reasoning: View {
       .fontSize(13)
       .foregroundStyle(trace.active ? color.muted : color.faint)
       .style({ whiteSpace: "pre-wrap", overflowWrap: "anywhere", lineHeight: "1.65" })
-      .padding({ top: 8, bottom: 12, leading: 20 })
+      .padding({ top: 8, bottom: 12, leading: 0 })
   }
 }
 
 function singleTrace(group: Any): Any {
-  return { ...group.events[0].trace, id: group.id, expanded: group.expanded }
+  const trace = group.events[0].trace
+  return { ...trace, raw_id: "raw:" + trace.id, id: group.id, expanded: group.expanded }
 }
 
 function groupTrace(group: Any): Any {
@@ -188,12 +193,13 @@ function groupTrace(group: Any): Any {
       || reversed.find(event => !isOpaqueWorkLabel(rawTraceLabel(event.trace))))
     : reversed.find(event => rawTraceLabel(event.trace) === group.summary)
   return {
-    title: opaque ? (preferred ? rawTraceLabel(preferred.trace) : "Working") : group.summary,
-    summary: null,
+    title: preferred ? preferred.trace.title : opaque ? "Working" : group.summary,
+    summary: preferred ? preferred.trace.summary : null,
     details: [],
     icon: preferred?.trace.icon || events[events.length - 1]?.trace.icon,
     active: group.active,
     status_label: group.status_label,
+    stepCount: events.length,
   }
 }
 
@@ -206,9 +212,9 @@ struct Activity: View {
       } else {
         VStack(alignment: .stretch, spacing: 4) {
           Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: group.id }) }, label: {
-            TraceLabel(trace: groupTrace(group), groupHeader: true)
+            TraceLabel(trace: groupTrace(group), groupHeader: true, disclosure: true)
           })
-          .withProps({ className: "activity-group__header", "aria-expanded": group.expanded })
+          .withProps({ className: "activity-group__header", "aria-expanded": group.expanded, "aria-controls": traceRegion(group.id) })
           if group.expanded {
             VStack(alignment: .stretch, spacing: 4) {
               ForEach(group.events, { id: event => event.key }) { event in
@@ -216,7 +222,7 @@ struct Activity: View {
                   .withProps({ className: "activity-group__event" })
               }
             }
-            .withProps({ className: "activity-group__events" })
+            .withProps({ className: "activity-group__events", id: traceRegion(group.id), role: "group", "aria-label": "Tool steps" })
             .transition(Transition.opacity.combined(Transition.move("top", 4)))
           }
         }
@@ -255,7 +261,7 @@ struct Message: View {
         Element("yeet-markdown", { source: item.prompt && !item.prompt.expanded ? item.prompt.preview : item.entry.kind.content })
           .padding({ top: 12, bottom: 12, leading: 16, trailing: 16 })
           .background(color.bubble)
-          .style({ borderRadius: "14px", maxWidth: "min(460px, 85%)" })
+          .withProps({ className: "user-message" })
       } else if item.entry.kind.type === "assistant" {
         Element("yeet-markdown", { source: item.entry.kind.content })
           .style({ width: "100%" })
@@ -305,7 +311,7 @@ struct Item: View {
         Message(item: item)
       }
     }
-    .withProps({ className: item.type === "activity" ? "activity-group" : item.type === "reasoning" ? "reasoning-trace" : "message-block" })
+    .withProps({ className: item.type === "activity" ? "activity-group" : item.type === "reasoning" ? "reasoning-trace" : "message-block message-block--" + item.entry.kind.type })
     .style({ minWidth: "0", marginTop: itemSpacing(item) })
   }
 }
@@ -364,7 +370,7 @@ struct Thread: View {
     }
     .padding({ top: 32, bottom: 32, leading: 24, trailing: 24 })
     .withProps({ className: "conversation-content" })
-    .style({ maxWidth: "800px", margin: "0 auto", minHeight: "100%", width: "100%" })
+    .style({ maxWidth: "var(--thread-width)", margin: "0 auto", minHeight: "100%", width: "100%" })
   }
 }
 
@@ -582,7 +588,7 @@ struct Composer: View {
     }
     .padding({ top: 4, bottom: 16, leading: 16, trailing: 16 })
     .withProps({ className: "composer" })
-    .style({ maxWidth: "816px", margin: "0 auto", width: "100%" })
+    .style({ maxWidth: "calc(var(--thread-width) + 16px)", margin: "0 auto", width: "100%" })
   }
 }
 

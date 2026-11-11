@@ -143,14 +143,15 @@ struct Sessions: View {
           .withProps({ className: "session-search", type: "search" })
       }
       .withProps({ className: "search-field" })
-      Text(sessionQuery.value ? "SEARCH RESULTS" : "RECENT SESSIONS")
+      Text(sessionQuery.value ? "Search results" : "Recent sessions")
         .withProps({ className: "section-label" })
         .padding({ top: 12, bottom: 4 })
       ForEach(filteredSessions(), { id: session => session.id }) { session in
         HStack(spacing: 0) {
           SessionRow(session: session).style({ flex: "1", minWidth: "0" })
           IconButton(icon: "more", label: "Manage " + (session.title || "Untitled"), action: { manageSession(session.id, session.title || "Untitled") })
-        }
+            .withProps({ className: "icon-button session-menu" })
+        }.withProps({ className: "session-item" })
       }
       if filteredSessions().length === 0 {
         Text(sessionQuery.value ? "No matching sessions" : "Your sessions will appear here")
@@ -164,11 +165,16 @@ struct Sessions: View {
 struct Footer: View {
   var body: some View {
     HStack(spacing: 8) {
+      Button(action: { openSheet("settings") }, label: {
+        HStack(spacing: 10) {
+          Icon(workIcon("settings"), { width: 16, height: 16 })
+          Text("Settings")
+        }
+      }).withProps({ className: "sidebar-settings" })
+      Spacer()
       if !connected() {
         Text(remote.value.connection).fontSize(12).foregroundStyle(color.muted)
       }
-      Spacer()
-      IconButton(icon: "settings", label: "Settings", action: { openSheet("settings") })
     }
     .withProps({ className: "sidebar-footer" })
   }
