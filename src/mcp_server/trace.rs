@@ -80,7 +80,12 @@ fn trace_list(values: &[String], fallback: &str) -> String {
         joined.push_str(",...");
     }
     if joined.len() > 320 {
-        joined.truncate(320);
+        // `String::truncate` panics inside a multi-byte character.
+        let mut end = 320;
+        while !joined.is_char_boundary(end) {
+            end -= 1;
+        }
+        joined.truncate(end);
         joined.push_str("...");
     }
     joined
