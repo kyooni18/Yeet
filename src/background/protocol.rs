@@ -12,8 +12,8 @@
 //! Versions are deliberately separate:
 //! - `protocol_version`: framing and the command/envelope transport itself.
 //!   A mismatch means the peers cannot exchange frames safely.
-//! - `state_schema_version`: the semantic `HarnessState` (`HarnessState`)
-//!   carried in envelopes. A client accepts any schema in
+//! - `state_schema_version`: the semantic `HarnessState` carried in
+//!   envelopes. A client accepts any schema in
 //!   `MIN_STATE_SCHEMA_VERSION..=STATE_SCHEMA_VERSION`.
 //! - `features`: additive capabilities a client may gate optional behavior
 //!   on without bumping either version.
