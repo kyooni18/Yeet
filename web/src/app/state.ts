@@ -92,7 +92,14 @@ export const sessionQuery = State('')
 export const settingsEditorValue = State('')
 export const managedSession = State<{ id: string; title: string } | null>(null)
 
+export const sessionTitle = State('')
+export const sessionWorkspace = State('')
+export const sessionConfirming = State(false)
+
 export function manageSession(id: string, title: string) {
+  sessionTitle.value = title
+  sessionWorkspace.value = ''
+  sessionConfirming.value = false
   managedSession.value = { id, title }
   openSheet('session')
 }

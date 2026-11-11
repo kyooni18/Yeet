@@ -1,5 +1,5 @@
 import { remoteStore } from "@/store/remoteStore"
-import { remote, sheet, connected, openSheet, openPage, managedSession, toolbarControl } from "./state"
+import { remote, sheet, connected, openSheet, openPage, managedSession, sessionTitle, sessionWorkspace, sessionConfirming, toolbarControl } from "./state"
 import { color } from "./theme"
 import { PrimaryButton, Chip } from "./Common.mun"
 import { SandboxSheet } from "./Sandbox.mun"
@@ -173,32 +173,29 @@ struct AgentSettingsSheet: View {
 }
 
 struct SessionSheet: View {
-  @State var title: String = managedSession.value?.title || ""
-  @State var workspace: String = ""
-  @State var confirming: Bool = false
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
       Text("Session title").fontSize(13)
-      TextField(Binding(title), "Session title").accessibilityLabel("Session title").withProps({ className: "form-field" })
+      TextField(Binding(sessionTitle), "Session title").accessibilityLabel("Session title").withProps({ className: "form-field" })
       Button("Rename session") {
-        remoteStore.send({ type: "rename_session", session_id: managedSession.value.id, title: title.value.trim() })
-      }.withProps({ className: "form-action" }).disabled(!connected() || !title.value.trim())
+        remoteStore.send({ type: "rename_session", session_id: managedSession.value.id, title: sessionTitle.value.trim() })
+      }.withProps({ className: "form-action" }).disabled(!connected() || !sessionTitle.value.trim())
       Text("Move to workspace").fontSize(13)
-      TextField(Binding(workspace), "Absolute path on the Yeet server")
+      TextField(Binding(sessionWorkspace), "Absolute path on the Yeet server")
         .accessibilityLabel("Destination workspace").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
       Button("Move session") {
-        remoteStore.send({ type: "move_session", session_id: managedSession.value.id, workspace_path: workspace.value.trim() })
-      }.withProps({ className: "form-action" }).disabled(!connected() || !workspace.value.trim())
+        remoteStore.send({ type: "move_session", session_id: managedSession.value.id, workspace_path: sessionWorkspace.value.trim() })
+      }.withProps({ className: "form-action" }).disabled(!connected() || !sessionWorkspace.value.trim())
       Text("Deleting a session permanently removes its saved history.").withProps({ className: "form-help" })
-      if confirming.value {
+      if sessionConfirming.value {
         HStack(spacing: 8) {
           Button("Permanently delete") {
             if (remoteStore.send({ type: "delete_session", session_id: managedSession.value.id })) { openSheet("none") }
           }.withProps({ className: "form-action destructive" }).disabled(!connected())
-          Button("Keep session") { confirming.value = false }.withProps({ className: "form-action" })
+          Button("Keep session") { sessionConfirming.value = false }.withProps({ className: "form-action" })
         }
       } else {
-        Button("Delete session…") { confirming.value = true }.withProps({ className: "form-action destructive" }).disabled(!connected())
+        Button("Delete session…") { sessionConfirming.value = true }.withProps({ className: "form-action destructive" }).disabled(!connected())
       }
       if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
     }
