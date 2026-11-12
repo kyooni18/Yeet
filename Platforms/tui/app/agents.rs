@@ -239,7 +239,10 @@ mod tests {
             Some(FrontendCommand::MessageAgent { ref agent_id, ref message })
                 if agent_id == "planner" && message == "floor 3 km\n\n\nx"
         ));
-        assert_eq!(app.input, "floor 3 km\n\n\nx", "draft remains until delivery");
+        assert_eq!(
+            app.input, "floor 3 km\n\n\nx",
+            "draft remains until delivery"
+        );
         app.complete_agent_delivery();
         assert!(app.input.is_empty());
 

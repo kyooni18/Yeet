@@ -183,7 +183,12 @@ fn summary(
             field(args, &["query", "q", "search", "text", "pattern"]).or_else(fallback)
         }
         "web_read" => field(args, &["url", "href", "ref_id", "refId"]).or_else(fallback),
-        _ => fallback().or_else(|| field(args, &["query", "path", "url", "service", "name", "id", "action"])),
+        _ => fallback().or_else(|| {
+            field(
+                args,
+                &["query", "path", "url", "service", "name", "id", "action"],
+            )
+        }),
     }
 }
 fn section(title: &str, content: String, monospaced: bool) -> DetailSection {

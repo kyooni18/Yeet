@@ -10,6 +10,7 @@ Yeet treats macOS, Linux, and Windows as native desktop/server targets. Platform
 | macOS | x86_64 | Release build | sandbox-exec | Unix socket | `.tar.gz` |
 | Linux | x86_64 | Full | Landlock via `nono` | Unix socket | `.tar.gz`, `.deb` |
 | Linux | arm64 | Full native | Landlock via `nono` | Unix socket | `.tar.gz`, `.deb` |
+| Linux | i686 (32-bit x86) | Release build + smoke | Unavailable (fails closed) | Unix socket | `.tar.gz`, `.deb` (i386) |
 | Windows | x86_64 | Full | AppContainer via `io-harness` | authenticated loopback TCP | `.zip` |
 | Windows | arm64 | Full native | AppContainer via `io-harness` | authenticated loopback TCP | `.zip` |
 
@@ -99,7 +100,9 @@ Yeet's built-in Computer Use uses the independent [Open Computer Use](https://gi
 
 ## Releases and integrity
 
-Tag pushes matching `v*` first verify that the tag matches the synchronized Cargo, RuntimeSource, and WebUI package versions, then run the focused release checks. Release artifacts are built on native macOS arm64/x64, Linux arm64/x64, and Windows arm64/x64 runners; each staged archive must report the expected version and pass `yeet doctor` against its bundled runtime before upload. Unix packaging additionally smoke-tests the bundled installer into a temporary prefix. Each package gets a SHA-256 sidecar and the release gets an aggregate `SHA256SUMS`. GitHub build-provenance attestations are emitted for release artifacts. Windows Authenticode signing is enabled automatically when the release environment provides `WINDOWS_SIGN_CERTIFICATE_BASE64` and `WINDOWS_SIGN_CERTIFICATE_PASSWORD`; unsigned development releases remain possible when no certificate is configured.
+Linux i686 requires a separately supplied compatible Node.js 20+ installation. The current `nono` sandbox backend supports only x86_64 and aarch64: i686 reports sandboxing as unavailable and refuses sandboxed shell commands. Unrestricted shell execution requires the user's explicit `yeet sandbox mode unlimited` opt-in.
+
+Tag pushes matching `v*` first verify that the tag matches the synchronized Cargo, RuntimeSource, and WebUI package versions, then run the focused release checks. Release artifacts are built on native macOS arm64/x64, Linux arm64/x64, and Windows arm64/x64 runners, plus Linux i686 using the x64 runner's multilib toolchain; Linux i686 binaries are smoke-tested on that runner before upload. Each staged archive must report the expected version and pass `yeet doctor` against its bundled runtime before upload. Unix packaging additionally smoke-tests the bundled installer into a temporary prefix. Each package gets a SHA-256 sidecar and the release gets an aggregate `SHA256SUMS`. GitHub build-provenance attestations are emitted for release artifacts. Windows Authenticode signing is enabled automatically when the release environment provides `WINDOWS_SIGN_CERTIFICATE_BASE64` and `WINDOWS_SIGN_CERTIFICATE_PASSWORD`; unsigned development releases remain possible when no certificate is configured.
 
 Extracted Unix archives include `install.sh`, which requires Node.js 20 or newer and installs the prebuilt binary plus bundled runtime without a Rust toolchain. The Windows release zip carries the same `bin\yeet.exe` plus `share\yeet\runtime` layout; `install.ps1` installs it into a user prefix (no administrator rights), verifies the release SHA-256 before installing, and can also build from source with `-Build`. Linux CI additionally creates Debian packages when `dpkg-deb` is available. Published macOS/Linux checksums are also used to render the Homebrew formula for the external tap.
 

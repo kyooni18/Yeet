@@ -6,7 +6,12 @@ OUT=${YEET_PACKAGE_OUT:-"$ROOT/target/packages"}
 VERSION=${YEET_VERSION:-$(sed -n '/^\[package\]/,/^\[/{s/^version = "\([^"]*\)"/\1/p;}' "$ROOT/Cargo.toml" | head -n 1)}
 VERSION=${VERSION#v}
 node "$ROOT/Scripts/verify-release-version.mjs" "$VERSION"
-TARGET=$(rustc -vV | sed -n 's/^host: //p')
+TARGET=${YEET_BUILD_TARGET:-$(rustc -vV | sed -n 's/^host: //p')}
+if [ -n "${YEET_BUILD_TARGET:-}" ]; then
+  BINARY="$ROOT/target/$TARGET/release/yeet"
+else
+  BINARY="$ROOT/target/release/yeet"
+fi
 NAME="yeet-$VERSION-$TARGET"
 STAGE_BASE="$ROOT/target/package-stage"
 STAGE="$STAGE_BASE/$NAME"
@@ -25,11 +30,15 @@ cd "$ROOT"
 npm --prefix RuntimeSource ci
 npm --prefix RuntimeSource run build
 unset YEET_EXPERIMENTAL_WEBUI YEET_FRONTEND_DIST
-cargo build --release
+if [ -n "${YEET_BUILD_TARGET:-}" ]; then
+  cargo build --release --locked --target "$TARGET"
+else
+  cargo build --release --locked
+fi
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/bin" "$STAGE/share/yeet/runtime" "$OUT"
-install -m 755 target/release/yeet "$STAGE/bin/yeet"
+install -m 755 "$BINARY" "$STAGE/bin/yeet"
 cp -R RuntimeSource/dist "$STAGE/share/yeet/runtime/dist"
 cp -R RuntimeSource/skills "$STAGE/share/yeet/runtime/skills"
 cp RuntimeSource/package.json "$STAGE/share/yeet/runtime/package.json"
@@ -76,12 +85,13 @@ case "$TARGET" in
       case "$TARGET" in
         x86_64-*) DEB_ARCH=amd64 ;;
         aarch64-*) DEB_ARCH=arm64 ;;
-        *) DEB_ARCH=all ;;
+        i686-*) DEB_ARCH=i386 ;;
+        *) echo "Unsupported Debian target: $TARGET" >&2; exit 1 ;;
       esac
       DEB_ROOT="$ROOT/target/deb-stage/$NAME"
       rm -rf "$DEB_ROOT"
       mkdir -p "$DEB_ROOT/DEBIAN" "$DEB_ROOT/usr/bin" "$DEB_ROOT/usr/share/yeet/runtime" "$DEB_ROOT/usr/share/doc/yeet"
-      install -m 755 target/release/yeet "$DEB_ROOT/usr/bin/yeet"
+      install -m 755 "$BINARY" "$DEB_ROOT/usr/bin/yeet"
       cp -R RuntimeSource/dist "$DEB_ROOT/usr/share/yeet/runtime/dist"
       cp -R RuntimeSource/skills "$DEB_ROOT/usr/share/yeet/runtime/skills"
       cp RuntimeSource/package.json "$DEB_ROOT/usr/share/yeet/runtime/package.json"

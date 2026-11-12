@@ -200,7 +200,12 @@ fn doctor() -> Result<()> {
     let bridge = BridgeClient::start()?;
     let providers = bridge.list_providers()?;
     bridge.shutdown();
-    #[cfg(target_os = "linux")]
+    #[cfg(all(
+        target_os = "linux",
+        not(any(target_arch = "x86_64", target_arch = "aarch64"))
+    ))]
+    let sandbox_status = "unavailable (unsupported architecture; sandboxed shell fails closed)";
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
     let sandbox_status = match nono::Sandbox::detect_abi() {
         Ok(detected) => format!("landlock {:?}", detected.abi),
         Err(_) => "unavailable (Landlock is not exposed by this kernel/container; sandboxed shell fails closed)".into(),

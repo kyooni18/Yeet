@@ -747,10 +747,7 @@ fn terminal_composer_accepts_lf_and_alt_enter_as_newlines() {
     }
     assert_eq!(app.input, "a\n\nb");
     assert_eq!(app.cursor, 3);
-    assert!(!app.handle_chat_editing_key(&KeyEvent::new(
-        KeyCode::Enter,
-        KeyModifiers::NONE,
-    )));
+    assert!(!app.handle_chat_editing_key(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE,)));
 }
 
 #[test]

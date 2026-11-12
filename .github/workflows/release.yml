@@ -44,6 +44,10 @@ jobs:
           - os: ubuntu-latest
             label: linux-x64
             shell: sh
+          - os: ubuntu-latest
+            label: linux-i686
+            target: i686-unknown-linux-gnu
+            shell: sh
           - os: ubuntu-24.04-arm
             label: linux-arm64
             shell: sh
@@ -62,7 +66,14 @@ jobs:
           cache: npm
           cache-dependency-path: RuntimeSource/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.label }}
+      - name: Install Linux i686 toolchain
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
       - name: Prepare Windows signing certificate
         if: runner.os == 'Windows'
         shell: pwsh
@@ -79,6 +90,7 @@ jobs:
         shell: sh
         env:
           YEET_VERSION: ${{ github.ref_name }}
+          YEET_BUILD_TARGET: ${{ matrix.target }}
         run: ./Scripts/package-release.sh
       - name: Package Windows release
         if: runner.os == 'Windows'

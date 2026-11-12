@@ -790,7 +790,20 @@ fn linux_sandbox_plan(
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "x86_64", target_arch = "aarch64"))
+))]
+pub fn run_linux_sandbox_shell_helper(_plan_path: &Path, _command: &str) -> Result<i32> {
+    bail!(
+        "Linux sandbox unavailable on this architecture; sandboxed shell execution fails closed. To explicitly allow unrestricted shell execution, use `yeet sandbox mode unlimited`."
+    )
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 pub fn run_linux_sandbox_shell_helper(plan_path: &Path, command: &str) -> Result<i32> {
     use nono::{AccessMode, CapabilitySet, Sandbox};
 

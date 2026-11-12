@@ -283,6 +283,10 @@ esac
 case "$(uname -m)" in
   arm64|aarch64) arch=aarch64 ;;
   x86_64|amd64) arch=x86_64 ;;
+  i386|i486|i586|i686)
+    [ "$os" = unknown-linux-gnu ] || die "32-bit x86 releases require Linux"
+    arch=i686
+    ;;
   *) die "unsupported CPU architecture: $(uname -m)" ;;
 esac
 

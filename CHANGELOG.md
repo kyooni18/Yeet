@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-11-12
+
+- Add Linux i686 (32-bit x86) release archives, i386 Debian packages, and installer architecture detection; report the unsupported 32-bit sandbox and fail closed unless unrestricted execution is explicitly enabled.
+- Isolate Remote connections and reconcile streams without frame queues; resolve composer uploads before accepting submissions.
+- Preserve session-management input across rerenders, isolate drafts, and restore authentication recovery.
+- Load directory instructions before the first mutation and check instructions for move destinations.
+- Fix dropped uppercase F key events in Remote and a UTF-8 truncation panic in MCP trace lists.
+- Apply frontend dependency security fixes and clarify active versus historical browser test contracts.
+
 ## [0.1.9] - 2026-11-11
 
 - Add the EXAONE API provider to the runtime and report its rate limits as provider usage.
