@@ -39,7 +39,7 @@ trap cleanup EXIT INT TERM
 
 set +e
 /root/.local/bin/harbor run \
-  --dataset terminal-bench@2.0 \
+  --dataset "${YEET_TB_DATASET:-terminal-bench@2.0}" \
   --agent benchmarks.terminalbench.yeet_agent:YeetAgent \
   "$@"
 rc=$?

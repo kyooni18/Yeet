@@ -97,6 +97,21 @@ The wrapper checks host free space before allowing the dedicated sparse disk to 
 
 For reproducible comparisons, hold model, reasoning level, concurrency, task set, Harbor version, retry policy, and provider endpoint constant across agents.
 
+## Terminal-Bench 2.1
+
+The wrapper defaults to `terminal-bench@2.0`. Select 2.1 (89 tasks) with `YEET_TB_DATASET`, and use `-k` for attempts per task:
+
+```bash
+YEET_TB_DATASET=terminal-bench/terminal-bench-2-1 \
+./benchmarks/terminalbench/run.sh \
+  --model openai/gpt-6-luna \
+  --ak reasoning=medium \
+  -k 2 --n-concurrent 4 \
+  --job-name yeet-luna-tb21
+```
+
+Community leaderboard submissions need at least 5 trials per task and a public Harbor Hub upload, so a `-k 2` run is a local comparison only.
+
 ## Benchmark behavior
 
 Harbor creates the task environment in the dedicated Docker daemon and invokes `YeetAgent`. The adapter does not run a blanket `apt-get install` during startup; the Yeet bundle is self-contained and only falls back to installing `tar` if a task image does not provide it. This is especially important for amd64 task images running under emulation on Apple Silicon.

@@ -25,7 +25,7 @@ env_args=()
 for key in \
   OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY \
   OPENROUTER_API_KEY OPENCODE_API_KEY \
-  HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY; do
+  YEET_TB_DATASET HTTP_PROXY HTTPS_PROXY NO_PROXY ALL_PROXY; do
   if [[ -n "${!key:-}" ]]; then
     env_args+=(--env "$key")
   fi
