@@ -147,11 +147,16 @@ test('transcript follows growing output but preserves a reader’s scroll positi
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
-test('reduced motion keeps the working indicator still', async ({ page }) => {
+test('working indicator is hollow and respects reduced motion', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await emit(page, { is_streaming: true })
   const spinner = page.locator('.activity-spinner').first()
   await expect(spinner).toBeVisible()
+  await expect(spinner).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(spinner.locator('svg')).toHaveCount(0)
+  await expect(spinner).toHaveCSS('border-top-style', 'solid')
+  expect(await spinner.evaluate(el => getComputedStyle(el).borderTopColor !== getComputedStyle(el).borderBottomColor)).toBe(true)
+  await expect(page.locator('.composer-hint')).toHaveCount(0)
   await expect(spinner).toHaveCSS('rotate', 'none')
   await page.waitForTimeout(400) // The working timer advances more than once.
   await expect(spinner).toHaveCSS('rotate', 'none')

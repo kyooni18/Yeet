@@ -589,7 +589,6 @@ struct Composer: View {
       .background(color.composer)
       .withProps({ className: "composer-surface", onClick: focusComposer })
       .style({ width: "100%", minWidth: "0" })
-      Text("Enter to send · Shift + Enter for a new line").withProps({ className: "composer-hint" })
     }
     .padding({ top: 4, bottom: 16, leading: 8, trailing: 8 })
     .withProps({ className: "composer" })

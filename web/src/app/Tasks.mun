@@ -84,18 +84,15 @@ struct TaskEditor: View {
       Picker(Binding(kind), [{ value: "interval", label: "Repeating interval" }, { value: "at", label: "Once at a date and time" }, { value: "quota_reset", label: "Next quota reset" }])
         .accessibilityLabel("Task schedule").disabled(!!pending.value).withProps({ className: "form-field" })
       if kind.value === "at" {
-        Text("Date and time in your local timezone").withProps({ className: "form-help" })
+        Text("Date and time (local)").fontSize(13)
         TextField(Binding(at), "Date and time").accessibilityLabel("Task date and time").disabled(!!pending.value).withProps({ className: "form-field", type: "datetime-local" })
       } else if kind.value === "interval" {
         TextField(Binding(seconds), "Interval in seconds").accessibilityLabel("Interval in seconds").disabled(!!pending.value).withProps({ className: "form-field", type: "number", min: 1 })
-      } else {
-        Text("One run at the next provider quota reset. The server resolves the time when saving.").withProps({ className: "form-help" })
       }
       HStack(spacing: 8) {
         PrimaryButton(title: pending.value ? "Saving…" : "Save task", enabled: connected() && !pending.value, action: { saveTask() })
         Button("Close editor") { editing.value = false }.withProps({ className: "form-action" }).disabled(!!pending.value)
       }
-      Text("Tasks run on the server while its scheduler is active. Your draft is kept until the server confirms the save.").withProps({ className: "form-help" })
     }.withProps({ className: "feature-card" }).style({ width: "100%" })
   }
 }
@@ -128,7 +125,7 @@ export struct TasksPage: View {
   var body: some View {
     ScrollView() {
       VStack(alignment: .stretch, spacing: 20) {
-        PageHeader(title: "Scheduled tasks", subtitle: "Give Yeet work to do later")
+        PageHeader(title: "Scheduled tasks")
         HStack(spacing: 8) {
           PrimaryButton(title: "New task", enabled: connected() && !pending.value, action: { editTask(null) })
           Button("Refresh tasks") { remoteStore.send({ type: "request_tasks" }) }.withProps({ className: "form-action" }).disabled(!connected())

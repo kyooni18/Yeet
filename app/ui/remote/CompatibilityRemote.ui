@@ -40,7 +40,7 @@ Shell
         Open another workspace path action; never a workspace selector in left sidebar
       Controls: attachment, model, reasoning, send/stop
       Context: compact percentage plus accessible used/limit token information
-      Hint: keyboard behavior; not shown on touch devices
+      No explanatory helper copy beneath the composer
   WorkspacePanel: 320px, collapsible, visible by default at >=1280px
     Header: Session status, refresh, close; workspace path and branch
     Tabs: Status (default), Changes, Files; count for changes
@@ -75,3 +75,5 @@ VisualLanguage
   Restrained panel entrances, hover/press/focus feedback; respect reduced motion.
   Touch targets >=44px; safe-area padding; no horizontal document overflow.
   Navigation and workspace drawers are mutually exclusive on narrow screens.
+  Activity: small hollow spinner ring with transparent center; respect reduced motion.
+  Copy: omit explanatory subtitles and helper paragraphs; retain labels, live context, errors and consequential warnings.

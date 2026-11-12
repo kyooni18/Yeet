@@ -10,7 +10,7 @@ export struct DebatePage: View {
   var body: some View {
     ScrollView() {
       VStack(alignment: .stretch, spacing: 18) {
-        PageHeader(title: "Debate", subtitle: "Explore a question with opposing agents and a jury")
+        PageHeader(title: "Debate")
         TextEditor(Binding(topic), "What should the agents debate?", 3).accessibilityLabel("Debate topic").withProps({ className: "form-field" })
         Text("Pro model").fontSize(13)
         TextField(Binding(pro), "Pro model ID").accessibilityLabel("Pro model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
@@ -54,7 +54,7 @@ export struct ExtensionsPage: View {
   var body: some View {
     ScrollView() {
       VStack(alignment: .stretch, spacing: 18) {
-        PageHeader(title: "Extensions", subtitle: "Commands supplied by installed Yeet extensions")
+        PageHeader(title: "Extensions")
         TextEditor(Binding(args), "Arguments (one per line)", 2).accessibilityLabel("Extension arguments").withProps({ className: "form-field" })
         ForEach(remote.value.state.extension_commands ?? [], { id: item => item.extensionId + ":" + item.command }) { item in
           VStack(alignment: .stretch, spacing: 8) {

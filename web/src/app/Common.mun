@@ -6,8 +6,8 @@ import { ease, tick } from "./state"
 /** A small, neutral activity ring; never attached to provider narration. */
 export struct Spinner: View {
   var body: some View {
-    Circle()
-      .style({ width: "12px", height: "12px", border: "1.5px solid var(--line)", borderTopColor: "var(--muted)", borderRadius: "50%", flex: "none" })
+    Element("span")
+      .style({ width: "12px", height: "12px", boxSizing: "border-box", background: "transparent", border: "1.5px solid var(--line)", borderTopColor: "var(--muted)", borderRadius: "50%", flex: "none" })
       .withProps({ className: "activity-spinner" })
       .rotationEffect(tick.value * 45)
       .animation(ease, value: tick.value)
@@ -15,14 +15,16 @@ export struct Spinner: View {
   }
 }
 
-/** Page title with a muted subtitle (mockup: 20pt medium over 13pt). */
+/** Page title with optional live context. */
 export struct PageHeader: View {
   let title: String
-  let subtitle: String
+  let subtitle: String = ""
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
       Text(title).fontSize(20).fontWeight("medium").lineLimit(1)
-      Text(subtitle).fontSize(13).foregroundStyle(color.faint).lineLimit(1)
+      if subtitle {
+        Text(subtitle).fontSize(13).foregroundStyle(color.faint).lineLimit(1)
+      }
     }
   }
 }

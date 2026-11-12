@@ -28,7 +28,6 @@ export struct ResponseControls: View {
           }
         }
       }
-      Text("Changes apply to this session. Context window and persistent defaults are in Settings.").withProps({ className: "form-help" })
     }
   }
 }
@@ -52,7 +51,9 @@ struct ProviderAuth: View {
             .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.auth_working)
         }
       }
-      Text(provider.error || (provider.authenticated ? "Signed in with " + provider.method : "Use provider login or an API key.")).withProps({ className: "form-help" })
+      if provider.error || provider.authenticated {
+        Text(provider.error || "Signed in with " + provider.method).withProps({ className: "form-help" })
+      }
       ForEach(provider.usage?.windows ?? [], { id: window => window.id }) { window in
         Text(window.label + ": " + Math.round(window.remainingPercent) + "% remaining" + (window.resetsAt ? " · resets " + new Date(window.resetsAt).toLocaleString() : "")).withProps({ className: "form-help" })
       }
@@ -72,7 +73,6 @@ struct ProviderAuth: View {
 struct AuthenticationSheet: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 14) {
-      Text("Credentials are saved on the Yeet server, not in browser storage. Provider login may require completing the flow in the server terminal.").withProps({ className: "form-help" })
       if remote.value.state.auth_notice {
         Text(remote.value.state.auth_notice).withProps({ role: "status", className: "form-notice" })
       }
@@ -95,7 +95,6 @@ struct ProvidersSheet: View {
   @State var removing: String = ""
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
-      Text("Connect an OpenAI-compatible endpoint. Saved providers appear in the model picker.").withProps({ className: "form-help" })
       if remote.value.state.providers_notice {
         Text(remote.value.state.providers_notice).withProps({ role: "status", className: "form-notice" })
       }
@@ -206,8 +205,7 @@ struct WorkspaceSheet: View {
   @State var path: String = ""
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
-      Text("Enter an existing folder on the Yeet server, not a folder on this browser's device.").withProps({ className: "form-help" })
-      TextField(Binding(path), "Absolute workspace path")
+      TextField(Binding(path), "Absolute workspace path on the server")
         .accessibilityLabel("Workspace folder").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
       PrimaryButton(title: "Open workspace", enabled: connected() && !!path.value.trim(), action: {
         remoteStore.switchWorkspace(path.value.trim())
