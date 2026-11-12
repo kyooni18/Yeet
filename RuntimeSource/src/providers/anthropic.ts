@@ -43,6 +43,7 @@ function mapToolChoice(choice: ToolChoice | undefined, model: string): unknown {
 
 const EPHEMERAL_CACHE_CONTROL = { type: "ephemeral" } as const;
 const CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27";
+const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
 // Newer models reject subscription requests from Claude Code clients older than
 // the version they launched with. Used only when no local Claude Code is found.
 const FALLBACK_CLAUDE_CODE_VERSION = "2.1.296";
@@ -178,6 +179,23 @@ function anthropicProviderState(blocks: any[], provider: string, model: string):
   return { provider, protocol: "anthropic-messages", model, data: { thinkingBlocks } };
 }
 
+function thinkingBindingForRequest(request: ProviderCallRequest, provider: string): Record<string, unknown> | undefined {
+  const replayingThinking = request.messages.some((message) => message.role === "assistant"
+    && anthropicThinkingBlocks(message, provider, request.model).length > 0);
+  if (!replayingThinking) return undefined;
+  const thinking = request.providerOptions?.thinking as Record<string, unknown> | undefined;
+  // Tool discovery, context rollover and regenerated prefixes can invalidate a
+  // signed block. Let Anthropic verify and drop only mismatches rather than
+  // deleting all reasoning state (including valid tool-round-trip state).
+  return {
+    ...(thinking ?? { type: "disabled" }),
+    block_binding: {
+      ...(thinking?.block_binding as Record<string, unknown> | undefined),
+      prefix_mismatch_behavior: "drop_block",
+    },
+  };
+}
+
 function mapMessages(
   messages: Message[],
   promptCacheEnabled: boolean,
@@ -263,6 +281,7 @@ function requestBody(
   const promptCacheEnabled = request.promptCache !== false;
   const requestedCacheControl = request.providerOptions?.cache_control;
   const contextManagement = contextManagementForRequest(request);
+  const thinkingBinding = thinkingBindingForRequest(request, providerId);
   const {
     cache_control: _cacheControl,
     context_management: _contextManagement,
@@ -293,6 +312,7 @@ function requestBody(
     : Math.max(0, (cacheCapabilities.maxExplicitBreakpoints ?? 0) - reservedPrefixBreakpoints);
   return {
     ...providerOptions,
+    ...(thinkingBinding ? { thinking: thinkingBinding } : {}),
     model: request.model,
     max_tokens: request.maxTokens ?? 4_096,
     messages: mapMessages(
@@ -368,6 +388,8 @@ export class AnthropicProvider implements ProviderAdapter {
     const betas = [
       ...(this.#accessToken ? ["oauth-2025-04-20"] : []),
       ...(request && contextManagementForRequest(request) !== undefined ? [CONTEXT_MANAGEMENT_BETA] : []),
+      ...(request && (thinkingBindingForRequest(request, this.id)
+        || (request.providerOptions?.thinking as any)?.block_binding) ? [THINKING_BINDING_BETA] : []),
     ];
     return {
       ...(this.#accessToken

@@ -76,6 +76,40 @@ test('Claude signed thinking and native chat reasoning survive a streamed tool r
   assert.equal(chatBody.messages[1].reasoning_content, undefined);
 });
 
+test('Claude thinking replay tolerates tool discovery with matching binding beta on both transports', async () => {
+  for (const credentials of [{ id: 'claude-api', apiKey: 'test' }, { id: 'claude', accessToken: 'test' }]) {
+    for (const stream of [false, true]) {
+      let sent;
+      const provider = new AnthropicProvider({ ...credentials, fetch: async (_url, init) => {
+        sent = { body: JSON.parse(init.body), headers: init.headers };
+        return sent.body.stream ? sse([]) : json({ content: [], usage: {} });
+      } });
+      const block = { type: 'thinking', thinking: 'Find a tool', signature: 'bound-to-old-tools' };
+      const state = { provider: credentials.id, protocol: 'anthropic-messages', model: 'claude-sonnet-4-6', data: { thinkingBlocks: [block] } };
+      for (const thinking of [undefined, { type: 'disabled' }, { type: 'adaptive', display: 'summarized' }]) {
+        const request = {
+          model: state.model,
+          messages: [...messages, { role: 'assistant', content: '', providerState: state, toolCalls: [{ id: 'search', name: 'search_tools', arguments: {} }] }, { role: 'tool', toolCallId: 'search', content: 'read_file loaded' }],
+          tools: [{ name: 'search_tools', inputSchema: {} }, { name: 'read_file', inputSchema: {} }],
+          providerOptions: thinking ? { thinking } : undefined,
+        };
+        if (stream) await collect(provider.stream(request));
+        else await provider.complete(request);
+        assert.deepEqual(sent.body.thinking, { ...(thinking ?? { type: 'disabled' }), block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+        assert.ok(sent.headers['anthropic-beta'].split(',').includes('thinking-binding-controls-2026-08-01'));
+        if (credentials.accessToken) assert.ok(sent.headers['anthropic-beta'].includes('oauth-2025-04-20'));
+        assert.deepEqual(sent.body.messages[1].content[0], block);
+        assert.equal(sent.body.messages[1].content[1].type, 'tool_use');
+        assert.equal(sent.body.messages[2].content[0].type, 'tool_result');
+        assert.deepEqual(request.providerOptions, thinking ? { thinking } : undefined);
+      }
+      await provider.complete({ model: state.model, messages });
+      assert.equal(sent.body.thinking, undefined);
+      assert.equal(sent.headers['anthropic-beta']?.includes('thinking-binding-controls'), credentials.accessToken ? false : undefined);
+    }
+  }
+});
+
 test('provider streams expose hidden reasoning phases, managed operations, and summarized Gemini thoughts', async () => {
   const openai = new OpenAIProvider({ apiKey: 'test', fetch: async () => sse([
     { type: 'response.created', response: { id: 'r' } },
