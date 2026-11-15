@@ -1,5 +1,13 @@
 # TUI tool-call presentation
 
+Tool usage reads top-to-bottom in backend order, with no aggregate header,
+action count or group disclosure. Every call remains visible; its own disclosure
+opens details without hiding neighboring calls. Align sibling icons and action
+text at the same column (no extra group nesting). Detail bodies use a quiet
+inset rail and vertical breathing room; routine rows stay compact. Navigation
+and pointer hit rows follow these visible individual disclosures, including raw
+inspection toggles. Preserve lifecycle/exception labels and bounded live previews.
+
 # TUI scheduled tasks
 
 `/tasks` opens the terminal Tasks manager without sending a chat message.

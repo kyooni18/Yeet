@@ -31,86 +31,36 @@ pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {
     ["|", "/", "-", "\\"][(tick % 4) as usize]
 }
 
-/// Paint a single disclosure per event; child IDs follow the shared work order.
+/// Calls are always visible in backend order, without an aggregate title row.
+/// Each call owns its disclosure and exact keyboard/pointer hit geometry.
 pub(super) fn activity_group_lines(
     group: &crate::shared_ui::conversation::ActivityGroup,
     width: u16,
     selected: Option<&str>,
 ) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
-    let mut rows = vec![(0, group.id.clone())];
-    if let Some(trace) = group.single_trace() {
+    let mut lines = Vec::new();
+    let mut rows = Vec::new();
+    let singleton = group.single_trace();
+    // Borrow grouped payloads: output can be large and this path runs each frame.
+    let traces = singleton.iter().chain(
+        group
+            .events
+            .iter()
+            .filter(|_| singleton.is_none())
+            .map(|event| event.trace()),
+    );
+    for trace in traces {
+        if group.events.len() == 1 || !trace.details.is_empty() || trace.metadata.is_some() {
+            rows.push((lines.len(), trace.id.clone()));
+        }
         let raw_selected = trace
             .raw_id()
             .is_some_and(|id| selected == Some(id.as_str()));
-        let rendered = trace_lines(&trace, width, selected == Some(&group.id), raw_selected);
+        let rendered = trace_lines(trace, width, selected == Some(&trace.id), raw_selected);
         if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
-            rows.push((row, id));
+            rows.push((lines.len() + row, id));
         }
-        return (rendered.lines, rows);
-    }
-    // While a grouped command is running, do not squeeze its command into an
-    // abbreviated header. Give the actual command a few wrapped rows instead.
-    let running_summary = (group.active && !group.expanded && group.status_label.is_none())
-        .then(|| group.summary.split_once(" · "))
-        .flatten();
-    let count = group.events.len().to_string();
-    let title = if group.expanded {
-        format!("{count} actions")
-    } else {
-        format!(
-            "{} {}",
-            icons::conversation(group.events.last().unwrap().trace().icon),
-            running_summary.map_or(group.summary.as_str(), |(action, _)| action)
-        )
-    };
-    let status = if group.expanded {
-        None
-    } else {
-        group.status_label.as_deref()
-    };
-    let mut lines = vec![work_row(
-        &title,
-        if group.expanded { None } else { Some(&count) },
-        group.active && !group.expanded,
-        status,
-        Some(group.expanded),
-        width,
-        selected == Some(&group.id),
-    )];
-    if let Some((_, summary)) = running_summary {
-        lines.extend(active_summary_lines(summary, width));
-    }
-    if group.expanded {
-        for event in &group.events {
-            let trace = event.trace();
-            if !trace.details.is_empty() || trace.metadata.is_some() {
-                rows.push((lines.len(), trace.id.clone()));
-            }
-            let indent = " ".repeat(usize::from(width.min(2)));
-            let raw_selected = trace
-                .raw_id()
-                .is_some_and(|id| selected == Some(id.as_str()));
-            let rendered = trace_lines(
-                trace,
-                width.saturating_sub(2),
-                selected == Some(&trace.id),
-                raw_selected,
-            );
-            if let (Some(row), Some(id)) = (rendered.raw_row, trace.raw_id()) {
-                rows.push((lines.len() + row, id));
-            }
-            for line in rendered.lines {
-                let style = line.style;
-                lines.push(
-                    Line::from(
-                        std::iter::once(Span::raw(indent.clone()))
-                            .chain(line.spans)
-                            .collect::<Vec<_>>(),
-                    )
-                    .style(style),
-                );
-            }
-        }
+        lines.extend(rendered.lines);
     }
     (lines, rows)
 }
@@ -118,7 +68,6 @@ pub(super) fn activity_group_lines(
 /// One line of meaningful copy, with space reserved for exceptional status first.
 fn work_row(
     title: &str,
-    count: Option<&str>,
     active: bool,
     status: Option<&str>,
     expanded: Option<bool>,
@@ -137,9 +86,6 @@ fn work_row(
     let mut suffix = String::new();
     if let Some(status) = status {
         suffix.push_str(&format!(" · {status}"));
-    }
-    if let Some(count) = count {
-        suffix.push_str(&format!(" · {count}"));
     }
     if active && status.is_none() {
         suffix.push_str(" · running");
@@ -259,7 +205,6 @@ pub(super) fn trace_lines(
     let expandable = !trace.details.is_empty() || trace.metadata.is_some();
     let mut lines = vec![work_row(
         &title,
-        None,
         trace.active,
         status,
         expandable.then_some(trace.expanded),
@@ -270,6 +215,12 @@ pub(super) fn trace_lines(
         lines.extend(active_summary_lines(summary.unwrap_or_default(), width));
     }
     if trace.expanded && expandable {
+        // Keep detail content inset from sibling calls, with a quiet rail and
+        // breathing room. Reserve its cells before wrapping, even in tiny panes.
+        lines.push(Line::default());
+        let detail_start = lines.len();
+        let rail_width = width.min(2);
+        let width = width.saturating_sub(rail_width);
         if let Some(metadata) = &trace.metadata {
             lines.extend(prefixed_wrapped_line(
                 Span::raw("  "),
@@ -328,6 +279,12 @@ pub(super) fn trace_lines(
                 ));
             }
         }
+        for line in &mut lines[detail_start..] {
+            let rail = task::fit("│ ", usize::from(rail_width));
+            line.spans
+                .insert(0, Span::styled(rail, Style::default().fg(theme::muted())));
+        }
+        lines.push(Line::default());
         return TraceLines { lines, raw_row };
     }
     TraceLines {
@@ -537,6 +494,59 @@ mod tool_summary_layout_tests {
                 .iter()
                 .all(|line| !line.to_string().contains("actions"))
         );
+    }
+
+    #[test]
+    fn headerless_group_rows_match_navigation_and_inset_details_fit() {
+        use crate::shared_ui::conversation::{ConversationAction, ConversationState, DisplayItem};
+        let mut first = call("run_shell", ToolCallStatus::Completed);
+        first.result = Some("command output".into());
+        let last = call("read_file", ToolCallStatus::Failed);
+        let entries = vec![tool_entry(&first), tool_entry(&last)];
+        let harness = crate::model::HarnessState::default();
+        let mut state = ConversationState::default();
+        let view = state.project(&entries, &harness);
+        let DisplayItem::Activity { group, .. } = &view.items[0] else {
+            panic!("group")
+        };
+        assert!(!group.expanded);
+        let (lines, rows) = activity_group_lines(group, 80, None);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].to_string().contains("Command"));
+        assert!(lines[1].to_string().contains("Read file"));
+        assert_eq!(
+            rows.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>(),
+            view.work_ids()
+        );
+        state.apply(
+            ConversationAction::Toggle(rows[0].1.clone()),
+            &view,
+            &harness,
+        );
+        let view = state.project(&entries, &harness);
+        let DisplayItem::Activity { group, .. } = &view.items[0] else {
+            panic!("group")
+        };
+        for width in [0, 1, 2, 8, 24, 40, 80] {
+            let (lines, rows) = activity_group_lines(group, width, None);
+            assert!(
+                lines.iter().all(|line| line.width() <= usize::from(width)),
+                "width {width}: {lines:?}"
+            );
+            assert_eq!(
+                rows.iter().map(|(_, id)| id.clone()).collect::<Vec<_>>(),
+                view.work_ids()
+            );
+            assert!(rows.iter().all(|(row, _)| *row < lines.len()));
+            if width == 80 {
+                assert!(lines.iter().any(|line| line.to_string().starts_with("│ ")));
+                assert!(
+                    lines[rows.last().unwrap().0]
+                        .to_string()
+                        .contains("Read file")
+                );
+            }
+        }
     }
 
     #[test]

@@ -257,7 +257,7 @@ fn native_application_session_is_configured_to_show_individual_calls() {
 }
 
 #[test]
-fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
+fn headerless_groups_expose_child_disclosures_without_expanding_group() {
     let harness = HarnessState::default();
     let mut state = ConversationState::default();
     let make = |id: &str, status: &str| {
@@ -270,7 +270,7 @@ fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
     };
     let entries = vec![make("first", "completed"), make("last", "completed")];
     let view = state.project(&entries, &harness);
-    let DisplayItem::Activity { id, group } = &view.items[0] else {
+    let DisplayItem::Activity { group, .. } = &view.items[0] else {
         panic!("tool group")
     };
     assert!(group.summary.contains("check-last"));
@@ -281,12 +281,7 @@ fn compact_groups_keep_meaningful_copy_and_expose_child_disclosures() {
             .iter()
             .all(|event| event.trace().status_label.as_deref() == Some("Completed"))
     );
-    state.apply(ConversationAction::Toggle(id.clone()), &view, &harness);
-    let view = state.project(&entries, &harness);
-    assert_eq!(
-        view.work_ids(),
-        ["activity-group:tool:first", "tool:first", "tool:last"]
-    );
+    assert_eq!(view.work_ids(), ["tool:first", "tool:last"]);
     state.apply(
         ConversationAction::Select(Some("tool:first".into())),
         &view,

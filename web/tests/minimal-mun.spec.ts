@@ -27,7 +27,7 @@ for (const appearance of ['light', 'dark'] as const) {
     expect(geometry.scroll).toBeLessThanOrEqual(geometry.width)
     expect(geometry.alignment).toBeLessThanOrEqual(2) // Surface border, not a wandering reading column.
     await page.screenshot({ path: testInfo.outputPath(`conversation-${appearance}.png`) })
-    const header = page.locator('.activity-group__header').first()
+    const header = page.locator('button.trace-disclosure__row').first()
     await header.click()
     await expect(header).toHaveAttribute('aria-expanded', 'true')
     await expect(page.locator('.activity-group__events').first()).toBeVisible()

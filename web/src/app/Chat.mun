@@ -96,7 +96,6 @@ function traceRegion(id: string): string {
 /** Work content is visible inline, with its tool or reasoning icon. */
 struct TraceLabel: View {
   let trace: Any
-  let groupHeader: Bool
   let disclosure: Bool
   var body: some View {
     HStack(spacing: 6) {
@@ -120,10 +119,7 @@ struct TraceLabel: View {
             .withProps({ className: "trace-disclosure__status" })
         }
       }
-      .withProps({ className: groupHeader ? (trace.active ? "trace-disclosure__label activity-group__summary is-active" : "trace-disclosure__label activity-group__summary") : "trace-disclosure__label", title: traceLabel(trace) })
-      if trace.stepCount > 1 {
-        Text(trace.stepCount + " steps").withProps({ className: "activity-group__count" })
-      }
+      .withProps({ className: "trace-disclosure__label", title: traceLabel(trace) })
       if trace.active && /approv|permission/i.test(traceStatus(trace)) === false {
         Spinner().withProps({ role: "img", "aria-label": "Running" })
       }
@@ -139,17 +135,16 @@ struct TraceLabel: View {
 
 struct Trace: View {
   let trace: Any
-  let groupHeader: Bool
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
       if hasTraceDetails(trace) === true {
         Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) }, label: {
-          TraceLabel(trace: trace, groupHeader: groupHeader, disclosure: true)
+          TraceLabel(trace: trace, disclosure: true)
         })
-        .withProps({ className: groupHeader ? "trace-disclosure__row activity-group__header" : "trace-disclosure__row", "aria-expanded": trace.expanded, "aria-controls": traceRegion(trace.id) })
+        .withProps({ className: "trace-disclosure__row", "aria-expanded": trace.expanded, "aria-controls": traceRegion(trace.id) })
       } else {
-        TraceLabel(trace: trace, groupHeader: groupHeader, disclosure: false)
-          .withProps({ className: groupHeader ? "trace-disclosure__summary trace-disclosure__row activity-group__header" : "trace-disclosure__summary trace-disclosure__row" })
+        TraceLabel(trace: trace, disclosure: false)
+          .withProps({ className: "trace-disclosure__summary trace-disclosure__row" })
       }
       if trace.expanded {
         VStack(alignment: .stretch, spacing: 10) {
@@ -183,52 +178,21 @@ function singleTrace(group: Any): Any {
   return { ...trace, raw_id: "raw:" + trace.id, id: group.id, expanded: group.expanded }
 }
 
-function groupTrace(group: Any): Any {
-  const events = group.events || []
-  const reversed = [...events].reverse()
-  // Keep the backend's semantic summary where possible. If it is only a count
-  // and a phase, surface the latest actual action from the same group instead.
-  const opaque = isOpaqueWorkLabel(group.summary || "")
-  const preferred = opaque
-    ? (reversed.find(event => event.type !== "activity" && !isOpaqueWorkLabel(rawTraceLabel(event.trace)))
-      || reversed.find(event => !isOpaqueWorkLabel(rawTraceLabel(event.trace))))
-    : reversed.find(event => rawTraceLabel(event.trace) === group.summary)
-  return {
-    title: preferred ? preferred.trace.title : opaque ? "Working" : group.summary,
-    summary: preferred ? preferred.trace.summary : null,
-    details: [],
-    icon: preferred?.trace.icon || events[events.length - 1]?.trace.icon,
-    active: group.active,
-    status_label: group.status_label,
-    stepCount: events.length,
-  }
-}
-
+/** Calls stay visible in backend order; only their individual details collapse. */
 struct Activity: View {
   let group: Any
   var body: some View {
-    Group() {
+    VStack(alignment: .stretch, spacing: 4) {
       if group.events.length === 1 {
-        Trace(trace: singleTrace(group), groupHeader: true)
+        Trace(trace: singleTrace(group))
       } else {
-        VStack(alignment: .stretch, spacing: 4) {
-          Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: group.id }) }, label: {
-            TraceLabel(trace: groupTrace(group), groupHeader: true, disclosure: true)
-          })
-          .withProps({ className: "activity-group__header", "aria-expanded": group.expanded, "aria-controls": traceRegion(group.id) })
-          if group.expanded {
-            VStack(alignment: .stretch, spacing: 4) {
-              ForEach(group.events, { id: event => event.key }) { event in
-                Trace(trace: event.trace, groupHeader: false)
-                  .withProps({ className: "trace-disclosure activity-group__event" })
-              }
-            }
-            .withProps({ className: "activity-group__events", id: traceRegion(group.id), role: "group", "aria-label": "Tool steps" })
-            .transition(Transition.opacity.combined(Transition.move("top", 4)))
-          }
+        ForEach(group.events, { id: event => event.key }) { event in
+          Trace(trace: event.trace)
+            .withProps({ className: "trace-disclosure activity-group__event" })
         }
       }
     }
+    .withProps({ className: "activity-group__events", role: "group", "aria-label": "Tool calls" })
   }
 }
 

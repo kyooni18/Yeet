@@ -12,6 +12,7 @@ async function reset(page: Page, entries: unknown[]) {
   await page.evaluate(conversation => {
     (window as any).__yeetEmit({ type: 'conversation_reset', version: 1, sequence: 2, revision: 2, conversation })
   }, entries)
+  await expect(page.locator('.trace-disclosure__row')).toHaveCount(entries.length)
 }
 
 async function noOverflow(page: Page) {
@@ -19,7 +20,7 @@ async function noOverflow(page: Page) {
     const main = document.querySelector('#main')!.getBoundingClientRect()
     return {
       document: document.documentElement.scrollWidth > innerWidth,
-      embeds: [...document.querySelectorAll('.tool-embed, .activity-group__header, .composer-surface')].some(node => {
+      embeds: [...document.querySelectorAll('.tool-embed, .trace-disclosure__row, .composer-surface')].some(node => {
         const box = node.getBoundingClientRect()
         return box.left < main.left - 1 || box.right > main.right + 1
       }),
@@ -43,7 +44,7 @@ test('shell embed separates command, streams and exit state; raw inspection is k
   await reset(page, [tool('shell', 'run_shell', { command: 'cargo test --workspace', workingDirectory: '/work/Yeet' }, {
     workingDirectory: '/work/Yeet', exitCode: 0, stdout: 'tests passed\nliteral **text** <script>not executable</script>\n', stderr: 'warning: unused import\n',
   })])
-  const header = page.locator('.activity-group__header')
+  const header = page.locator('.trace-disclosure__row')
   await expect(header).toContainText('cargo test --workspace')
   await expect(header.locator('.trace-disclosure__chevron')).toBeVisible()
   await header.focus()
@@ -81,8 +82,8 @@ test('edits show captured unified hunks, line numbers, rename and diagnostics wi
       { path: 'old.ts', destination: 'new.ts', operation: 'rename', diff: { hunks: [] } },
     ], diagnostics: [{ severity: 'warning', path: 'src/layout.ts', line: 11, column: 1, message: 'Review spacing at this breakpoint.' }],
   })])
-  await expect(page.locator('.activity-group__header')).toContainText('Edit files')
-  await page.locator('.activity-group__header').click()
+  await expect(page.locator('.trace-disclosure__row')).toContainText('Edit files')
+  await page.locator('.trace-disclosure__row').click()
   const diff = page.locator('.tool-diff').first()
   await expect(diff).toContainText('src/layout.ts')
   await expect(diff).toContainText('+1 −1')
@@ -110,8 +111,8 @@ test('source reads retain real numbering, escaped code and partial/missing state
     { path: 'large.ts', externalized: true, artifactId: 'source-artifact', startLine: 1, endLine: 900, totalLines: 900,
       preview: '1:aa|first line\n2:bb|second line\n3:cc|incomplete' },
   ])])
-  await expect(page.locator('.activity-group__header')).toContainText('src/日本語.ts')
-  await page.locator('.activity-group__header').click()
+  await expect(page.locator('.trace-disclosure__row')).toContainText('src/日本語.ts')
+  await page.locator('.trace-disclosure__row').click()
   const source = page.locator('.tool-source').first()
   await expect(source).toContainText('Lines 10–12 · 90 total')
   await expect(source.locator('.tool-line-number')).toHaveText(['10', '11', '12'])
@@ -138,13 +139,26 @@ test('grouped tools preserve partial-output notices and readable generic errors'
     tool('external', 'apply_file_edits', { changes: [{ path: 'big.rs' }] }, { externalized: true, artifactId: 'diff-artifact', bytes: 90000 }),
     { id: 'search', kind: { type: 'toolCall', toolCall: { id: 'search', name: 'search_workspace', arguments: '{"query":"layout"}', status: 'failed', error: 'Workspace is unavailable. Reconnect and retry.' } } },
   ])
-  const header = page.locator('.activity-group__header')
-  await expect(header).toContainText('3 steps')
-  await expect(header).toContainText('Failed')
-  await header.click()
-  const rows = page.locator('.activity-group__event .trace-disclosure__row')
+  // All calls are immediately visible, in backend order, without a group title.
+  await expect(page.locator('.activity-group__header')).toHaveCount(0)
+  const rows = page.locator('.trace-disclosure__row')
   await expect(rows).toHaveCount(3)
-  for (const row of await rows.all()) await row.click()
+  await expect(rows.nth(0)).toContainText('cargo check')
+  await expect(rows.nth(1)).toContainText('big.rs')
+  await expect(rows.nth(2)).toContainText('Failed')
+  const positions = await rows.evaluateAll(nodes => nodes.map(node => {
+    const box = node.getBoundingClientRect()
+    return { left: box.left, top: box.top, bottom: box.bottom, height: box.height }
+  }))
+  expect(positions.every(pos => pos.left === positions[0].left)).toBe(true)
+  expect(positions[1].top).toBeGreaterThanOrEqual(positions[0].bottom + 4)
+  expect(positions[2].top).toBeGreaterThanOrEqual(positions[1].bottom + 4)
+  expect(positions.every(pos => pos.height >= 36)).toBe(true)
+  await rows.nth(0).focus()
+  await page.keyboard.press('Enter')
+  await expect(rows.nth(0)).toHaveAttribute('aria-expanded', 'true')
+  await expect(rows.nth(1)).toHaveAttribute('aria-expanded', 'false')
+  for (const row of (await rows.all()).slice(1)) await row.click()
   await expect(page.locator('.tool-terminal')).toContainText('Latest output · 90,000 bytes total')
   await expect(page.locator('.tool-terminal')).toContainText('checking sources…')
   await expect(page.locator('.tool-terminal')).not.toContainText('Finished')

@@ -416,8 +416,9 @@ impl ConversationView {
                 DisplayItem::Entry { .. } => {}
                 DisplayItem::Reasoning { .. } => {}
                 DisplayItem::Activity { id, group } => {
-                    ids.push(id.clone());
-                    if group.expanded && group.events.len() > 1 {
+                    // Headerless groups expose each call regardless of the
+                    // legacy aggregate expansion flag.
+                    if group.events.len() > 1 {
                         for event in group.events.iter().filter(|event| {
                             !event.trace().details.is_empty() || event.trace().metadata.is_some()
                         }) {
@@ -426,10 +427,11 @@ impl ConversationView {
                                 ids.extend(event.trace().raw_id());
                             }
                         }
-                    } else if group.expanded
-                        && let Some(trace) = group.single_trace()
-                    {
-                        ids.extend(trace.raw_id());
+                    } else if let Some(trace) = group.single_trace() {
+                        ids.push(id.clone());
+                        if trace.expanded {
+                            ids.extend(trace.raw_id());
+                        }
                     }
                 }
             }

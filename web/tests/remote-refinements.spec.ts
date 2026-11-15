@@ -17,7 +17,6 @@ test('structured search, MCP and unknown tools are readable until raw inspection
     tool('mcp', 'mcp_foundation_search', { query: 'interface' }, { results: [{ text: 'Remember the navigation rule', source_id: 'source-1' }] }),
     tool('unknown', 'inspect_service', { service: 'worker' }, { content: [{ type: 'text', text: '{"state":"ready","jobs":3}' }] }),
   ])
-  await page.locator('.activity-group__header').click()
   const rows = page.locator('.activity-group__event .trace-disclosure__row')
   await expect(rows).toHaveCount(3)
   for (let index = 0; index < 3; index++) await rows.nth(index).click()
