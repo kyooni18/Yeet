@@ -1918,7 +1918,12 @@ test("Gemini provider discovers paginated models and removes resource prefixes",
     apiKey: "test",
     fetch: async (url) => {
       requests.push(String(url));
-      if (requests.length === 1) return jsonResponse({ models: [{ name: "models/gemini-a" }], nextPageToken: "next" });
+      if (requests.length === 1) return jsonResponse({ models: [
+        { name: "models/gemini-a", supportedGenerationMethods: ["generateContent", "countTokens"] },
+        { name: "models/embedding", supportedGenerationMethods: ["embedContent"] },
+        { name: "models/live", supportedGenerationMethods: ["bidiGenerateContent"] },
+        { name: "models/disabled", supportedGenerationMethods: [] },
+      ], nextPageToken: "next" });
       return jsonResponse({ models: [{ name: "models/gemini-b" }, { name: "models/gemini-a" }] });
     },
   });
@@ -2198,12 +2203,71 @@ test("Gemini replays function call ids and thought signatures on tool results", 
   assert.equal(sent[1].contents[2].parts[0].functionResponse.id, "fc-17");
 });
 
+test("Gemini groups parallel tool results and resolves names from call history", async () => {
+  let sent;
+  const provider = new GeminiProvider({ apiKey: "test", fetch: async (_url, init) => {
+    sent = JSON.parse(init.body);
+    return jsonResponse({ candidates: [{ content: { parts: [{ text: "done" }] }, finishReason: "STOP" }] });
+  } });
+  await provider.complete({ model: "gemini-test", messages: [
+    { role: "user", content: "find both" },
+    { role: "assistant", toolCalls: [
+      { id: "call-a", name: "lookup", arguments: { q: "a" } },
+      { id: "call-b", name: "lookup", arguments: { q: "b" } },
+    ] },
+    { role: "tool", toolCallId: "call-a", content: '["a"]' },
+    { role: "tool", toolCallId: "call-b", content: '{"value":"b"}' },
+    { role: "assistant", content: "" },
+    { role: "user", content: "continue" },
+  ] });
+  assert.deepEqual(sent.contents.map(({ role, parts }) => [role, parts.length]), [
+    ["user", 1], ["model", 2], ["user", 2], ["user", 1],
+  ]);
+  assert.deepEqual(sent.contents[2].parts, [
+    { functionResponse: { name: "lookup", response: { result: ["a"] } } },
+    { functionResponse: { name: "lookup", response: { value: "b" } } },
+  ]);
+});
+
+test("Gemini streaming rejects API errors and broken streams instead of reporting success", async () => {
+  for (const [response, pattern, retryable] of [
+    [sseResponse([{ error: { code: 503, message: "Service unavailable" } }]), /Service unavailable/, true],
+    [sseResponse([{ error: { code: 400, message: "Invalid request" } }]), /Invalid request/, false],
+    [new Response('data: not-json\n\n', { headers: { "content-type": "text/event-stream" } }), /Invalid JSON/, false],
+    [sseResponse([]), /without a candidate/, true],
+  ]) {
+    const provider = new GeminiProvider({ apiKey: "test", fetch: async () => response });
+    const events = [];
+    await assert.rejects(async () => {
+      for await (const event of provider.stream({ model: "gemini-test", messages: [{ role: "user", content: "hi" }] })) events.push(event);
+    }, (error) => pattern.test(error.message) && error.provider === "gemini" && error.retryable === retryable);
+    assert.ok(!events.some((event) => event.type === "finish"));
+  }
+});
+
+test("Gemini streaming retains textless signatures and recognizes blocked prompts", async () => {
+  for (const blocked of [false, true]) {
+    const provider = new GeminiProvider({ apiKey: "test", fetch: async () => sseResponse(blocked
+      ? [{ promptFeedback: { blockReason: "SAFETY" } }]
+      : [
+        { candidates: [{ content: { parts: [{ text: "answer" }] } }] },
+        { candidates: [{ content: { parts: [{ thoughtSignature: "sig-tail" }] }, finishReason: "STOP" }] },
+      ]) });
+    const events = [];
+    for await (const event of provider.stream({ model: "gemini-test", messages: [{ role: "user", content: "hi" }] })) events.push(event);
+    const finish = events.at(-1);
+    assert.equal(finish.type, "finish");
+    assert.equal(finish.finishReason, blocked ? "content_filter" : "stop");
+    if (!blocked) assert.equal(finish.providerState.data.textThoughtSignature, "sig-tail");
+  }
+});
+
 test("Gemini preserves text thought signatures across provider instances", async () => {
   const firstProvider = new GeminiProvider({
     apiKey: "test",
     fetch: async () => jsonResponse({
       candidates: [{
-        content: { parts: [{ text: "first answer", thoughtSignature: "sig-text" }] },
+        content: { parts: [{ text: "first answer" }, { thoughtSignature: "sig-text" }] },
         finishReason: "STOP",
       }],
     }),

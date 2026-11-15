@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ProviderError } from "../errors.js";
 import { fetchEmbeddings } from "../embeddings.js";
 import type { EmbeddingRequest, EmbeddingResult } from "../types.js";
 import { providerFetch, providerFetchAttempts, readJson } from "../http.js";
@@ -99,22 +100,28 @@ function mapContents(
   provider: string,
   model: string,
 ): unknown[] {
-  return messages.map((message) => {
+  const toolNames = new Map(messages.flatMap((message) =>
+    (message.toolCalls ?? []).map((tool) => [tool.id, tool.name] as const),
+  ));
+  const contents: { role: string; parts: any[] }[] = [];
+  for (const message of messages) {
     if (message.role === "tool") {
       const parsed = safeJsonParse(toolResultContent(message));
       const callMetadata = message.toolCallId ? metadata.get(message.toolCallId) : undefined;
-      return {
-        role: "user",
-        parts: [
-          {
-            functionResponse: {
-              name: functionNameForToolResult(message),
-              ...(callMetadata?.providerId ? { id: callMetadata.providerId } : {}),
-              response: typeof parsed === "object" && parsed !== null ? parsed : { result: parsed },
-            },
-          },
-        ],
+      const part = {
+        functionResponse: {
+          name: (message.toolCallId ? toolNames.get(message.toolCallId) : undefined)
+            ?? functionNameForToolResult(message),
+          ...(callMetadata?.providerId ? { id: callMetadata.providerId } : {}),
+          response: typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? parsed : { result: parsed },
+        },
       };
+      // Parallel function responses belong to one user turn.
+      const previous = contents.at(-1);
+      if (previous?.parts.every((part) => part.functionResponse)) previous.parts.push(part);
+      else contents.push({ role: "user", parts: [part] });
+      continue;
     }
 
     if (message.role === "assistant") {
@@ -137,17 +144,20 @@ function mapContents(
           ...(callMetadata?.thoughtSignature ? { thoughtSignature: callMetadata.thoughtSignature } : {}),
         });
       }
-      return { role: "model", parts };
+      if (parts.length) contents.push({ role: "model", parts });
+      continue;
     }
 
-    return {
+    const content = {
       role: "user",
       parts: [
         ...(message.content ? [{ text: message.content }] : []),
         ...(message.images ?? []).map((image) => ({ inlineData: { mimeType: image.mediaType, data: image.data } })),
       ],
     };
-  });
+    if (content.parts.length) contents.push(content);
+  }
+  return contents;
 }
 
 function toolConfig(choice: ToolChoice | undefined): unknown {
@@ -512,7 +522,16 @@ export class GeminiProvider implements ProviderAdapter {
   }
 
   #unwrapResponse(value: any): any {
-    return this.#codeAssist ? value?.response ?? {} : value;
+    const raw = this.#codeAssist ? value?.response ?? {} : value;
+    const error = value?.error ?? raw?.error;
+    if (error) {
+      throw new ProviderError(error.message ?? "Gemini generation failed", {
+        provider: this.id,
+        retryable: [429, 500, 502, 503, 504].includes(error.code),
+        cause: error,
+      });
+    }
+    return raw;
   }
 
   #rememberFunctionMetadata(part: any, normalizedId: string): GeminiFunctionMetadata | undefined {
@@ -601,7 +620,12 @@ export class GeminiProvider implements ProviderAdapter {
         },
       );
       const raw = await readJson<any>(response);
-      for (const model of normalizeModelInfo(raw)) {
+      // Embedding and bidi/live models cannot use generateContent.
+      const entries = Array.isArray(raw.models) ? raw.models.filter((model: any) =>
+        !Array.isArray(model?.supportedGenerationMethods)
+        || model.supportedGenerationMethods.includes("generateContent"),
+      ) : [];
+      for (const model of normalizeModelInfo({ models: entries })) {
         if (!seen.has(model.id)) {
           seen.add(model.id);
           models.push(model);
@@ -648,7 +672,7 @@ export class GeminiProvider implements ProviderAdapter {
       });
     const textThoughtSignature = [...parts].reverse().find((part: any) =>
       part?.thought !== true
-      && typeof part?.text === "string"
+      && !part?.functionCall
       && typeof part?.thoughtSignature === "string"
       && part.thoughtSignature
     )?.thoughtSignature;
@@ -700,15 +724,19 @@ export class GeminiProvider implements ProviderAdapter {
     // Contiguous thought parts form one reasoning phase, like a Responses
     // reasoning item; answer text or a function call ends the phase.
     let inReasoning = false;
+    let receivedCandidate = false;
 
     for await (const event of parseSSE(response)) {
-      let raw: any;
+      if (event.data === "[DONE]") continue;
+      let envelope: any;
       try {
-        raw = this.#unwrapResponse(JSON.parse(event.data));
-      } catch {
-        continue;
+        envelope = JSON.parse(event.data);
+      } catch (cause) {
+        throw new ProviderError("Invalid JSON in Gemini stream", { provider: this.id, cause });
       }
+      const raw = this.#unwrapResponse(envelope);
       const candidate = raw.candidates?.[0];
+      if (raw.promptFeedback?.blockReason) finish = "content_filter";
       if (raw.usageMetadata) {
         finalUsage = usage(
           geminiInputTokens(raw.usageMetadata),
@@ -721,10 +749,16 @@ export class GeminiProvider implements ProviderAdapter {
         );
       }
       if (!candidate) continue;
+      receivedCandidate = true;
 
       const parts = candidate.content?.parts ?? [];
       let hasTools = false;
       for (const part of parts) {
+        // Signatures may arrive in a separate, textless final part.
+        if (!part.functionCall && part.thought !== true
+          && typeof part.thoughtSignature === "string" && part.thoughtSignature) {
+          textThoughtSignature = part.thoughtSignature;
+        }
         if (typeof part.text === "string" && part.text) {
           if (part.thought === true) {
             if (!inReasoning) {
@@ -734,9 +768,6 @@ export class GeminiProvider implements ProviderAdapter {
             yield { type: "reasoning-summary-delta", delta: part.text };
           } else {
             inReasoning = false;
-            if (typeof part.thoughtSignature === "string" && part.thoughtSignature) {
-              textThoughtSignature = part.thoughtSignature;
-            }
             yield { type: "text-delta", delta: part.text };
           }
         }
@@ -755,6 +786,9 @@ export class GeminiProvider implements ProviderAdapter {
       else if (hasTools) finish = "tool_call";
     }
 
+    if (!receivedCandidate && finish !== "content_filter") {
+      throw new ProviderError("Gemini stream ended without a candidate", { provider: this.id, retryable: true });
+    }
     const providerState = geminiProviderState(turnFunctionMetadata, this.id, request.model, textThoughtSignature);
     yield {
       type: "finish",
