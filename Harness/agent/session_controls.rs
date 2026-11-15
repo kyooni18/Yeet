@@ -221,8 +221,11 @@ pub(super) fn wait_for_goal(cancel: &AtomicBool, enabled: &AtomicBool, delay: Du
     !cancel.load(Ordering::Acquire) && enabled.load(Ordering::Acquire)
 }
 
-pub(super) fn retryable_goal_error(message: &str) -> bool {
-    let value = message.to_ascii_lowercase();
+pub(super) fn retryable_goal_error(error: &anyhow::Error) -> bool {
+    if let Some(retryable) = crate::core::remote_error_retryable(error) {
+        return retryable;
+    }
+    let value = error.to_string().to_ascii_lowercase();
     if [
         "cancelled",
         "canceled",
@@ -238,6 +241,9 @@ pub(super) fn retryable_goal_error(message: &str) -> bool {
         "exceed the fresh working-context budget",
         "workspace mutation lease",
         "previously submitted context changed",
+        "quota or credits exhausted",
+        "insufficient_quota",
+        "credit_balance_exhausted",
     ]
     .iter()
     .any(|needle| value.contains(needle))
@@ -318,7 +324,7 @@ mod retry_tests {
             "connection reset",
             "request timed out",
         ] {
-            assert!(retryable_goal_error(error), "{error}");
+            assert!(retryable_goal_error(&anyhow!(error)), "{error}");
         }
         for error in [
             "cancelled",
@@ -327,8 +333,11 @@ mod retry_tests {
             "HTTP 400 invalid request",
             "workspace mutation lease is held by another active Yeet task",
             "Previously submitted context changed within this window",
+            "ProviderHTTPError [gemini]: API quota or credits exhausted — response: {\"code\":429}",
+            "HTTP 429 insufficient_quota",
+            "HTTP 429 credit_balance_exhausted",
         ] {
-            assert!(!retryable_goal_error(error), "{error}");
+            assert!(!retryable_goal_error(&anyhow!(error)), "{error}");
         }
     }
 

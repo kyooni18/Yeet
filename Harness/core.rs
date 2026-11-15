@@ -27,6 +27,7 @@ mod mcp_runtime;
 mod provider_bridge;
 mod runtime;
 pub(crate) use detached_requests::run_detached;
+pub(crate) use provider_bridge::remote_error_retryable;
 pub use provider_bridge::{
     BridgeClient, BridgeEvent, BridgeStream, NativeAppApprovalRequest, StreamPoll,
 };

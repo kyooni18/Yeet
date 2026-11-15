@@ -132,7 +132,7 @@ impl AgentCoordinator {
                         break Err(error);
                     }
                     let message = error.to_string();
-                    if !retryable_goal_error(&message) {
+                    if !retryable_goal_error(&error) {
                         if goal_mode.load(Ordering::Acquire) {
                             break Ok(AgentRunOutcome::GoalPaused { reason: message });
                         }

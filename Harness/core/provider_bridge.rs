@@ -1009,6 +1009,26 @@ fn ensure_success(frame: Value) -> Result<Value> {
     Ok(frame)
 }
 
+/// Retain transport retry policy across anyhow contexts instead of inferring it
+/// from numbers or phrases in the provider's diagnostic response body.
+#[derive(Debug)]
+struct RemoteBridgeError {
+    message: String,
+    retryable: Option<bool>,
+}
+
+impl std::fmt::Display for RemoteBridgeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RemoteBridgeError {}
+
+pub(crate) fn remote_error_retryable(error: &anyhow::Error) -> Option<bool> {
+    error.downcast_ref::<RemoteBridgeError>()?.retryable
+}
+
 fn remote_error(frame: &Value) -> anyhow::Error {
     let error = frame.get("error").cloned().unwrap_or(Value::Null);
     let name = error
@@ -1032,10 +1052,15 @@ fn remote_error(frame: &Value) -> anyhow::Error {
     } else {
         format!("{name}: {message}")
     };
-    if body.trim().is_empty() {
-        anyhow!(prefix)
+    let message = if body.trim().is_empty() {
+        prefix
     } else {
         let bounded: String = body.chars().take(800).collect();
-        anyhow!("{prefix} — response: {bounded}")
+        format!("{prefix} — response: {bounded}")
+    };
+    RemoteBridgeError {
+        message,
+        retryable: error.get("retryable").and_then(Value::as_bool),
     }
+    .into()
 }

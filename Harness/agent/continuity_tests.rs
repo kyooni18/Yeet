@@ -449,3 +449,52 @@ fn stalled_model_stream_times_out_into_api_retry() {
     assert!(error.contains("timed out"), "{error}");
     assert!(started.elapsed() < std::time::Duration::from_secs(30));
 }
+
+#[test]
+fn provider_retryability_survives_bridge_and_agent_recovery() {
+    for retryable in [false, true] {
+        let Some(mut harness) = Harness::start() else {
+            return;
+        };
+        harness.script(json!([{"error": {
+            "name": "ProviderHTTPError",
+            "provider": "gemini",
+            "message": "Gemini quota rejected the request",
+            "status": 429,
+            "retryable": retryable,
+            "responseBody": "{\"error\":{\"code\":429,\"message\":\"Free tier quota limit: 0\"}}"
+        }}]));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut retry_seen = false;
+        let result = harness.coordinator.run(
+            AgentRunRequest {
+                input: "hi",
+                images: Vec::new(),
+                model: "gemini/gemini-4-carbon",
+                reasoning_level: "auto",
+                attached_capabilities: None,
+                disabled_capabilities: Vec::new(),
+                goal_mode: Arc::new(AtomicBool::new(false)),
+                cancel: cancel.clone(),
+                continuation: false,
+            },
+            |event| {
+                if matches!(event, AgentEvent::GoalRetry { .. }) {
+                    retry_seen = true;
+                    cancel.store(true, Ordering::Release);
+                }
+            },
+        );
+        assert_eq!(retry_seen, retryable);
+        assert_eq!(harness.requests().len(), 1);
+        let error = result
+            .err()
+            .expect("provider error must not report success");
+        if !retryable {
+            assert!(
+                error.to_string().contains("Free tier quota limit: 0"),
+                "{error}"
+            );
+        }
+    }
+}
