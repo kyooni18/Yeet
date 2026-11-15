@@ -7,6 +7,10 @@ text at the same column (no extra group nesting). Detail bodies use a quiet
 inset rail and vertical breathing room; routine rows stay compact. Navigation
 and pointer hit rows follow these visible individual disclosures, including raw
 inspection toggles. Preserve lifecycle/exception labels and bounded live previews.
+Do not echo the latest tool in the mutable run-activity row beneath the user's
+message, including failed tools. The real chronological call owns its status and
+error. Keep standalone progress before calls arrive and suppression notices for
+calls whose own records are hidden.
 
 # TUI scheduled tasks
 

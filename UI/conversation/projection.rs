@@ -38,11 +38,14 @@ pub fn should_display_activity(activity: &ModelActivity) -> bool {
     ) && !detail.is_empty()
         && terminal_label(detail))
 }
-/// Routine tool progress mirrors a real tool call, not a separate action.
-/// Failures and suppressed calls remain explicit exceptional state even when
-/// the session also contains other tools.
+/// The mutable run activity mirrors a real tool call, not a separate action.
+/// Its failure echo is redundant too: the actual call retains its error/status.
+/// Keep suppression notices because suppressed calls themselves are hidden.
 fn routine_tool_phase(activity: &ModelActivity) -> bool {
-    matches!(activity.phase.as_str(), Some("tool" | "tool-complete"))
+    matches!(
+        activity.phase.as_str(),
+        Some("tool" | "tool-complete" | "tool-failed")
+    )
 }
 
 /// A provider can update the first activity row throughout a turn, while

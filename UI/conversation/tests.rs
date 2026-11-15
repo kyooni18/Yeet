@@ -323,6 +323,86 @@ fn headerless_groups_expose_child_disclosures_without_expanding_group() {
 }
 
 #[test]
+fn latest_failed_tool_is_not_echoed_at_the_top_of_the_turn() {
+    let harness = HarnessState {
+        is_streaming: true,
+        active_activity_entry_id: Some("progress".into()),
+        ..Default::default()
+    };
+    let mut first = tool("completed");
+    first.id = "first".into();
+    let mut last = tool("failed");
+    last.id = "last".into();
+    last.error = Some("Command exited with code 1".into());
+    let user = entry(
+        "user",
+        ConversationKind::User {
+            content: "Check".into(),
+        },
+    );
+    // Harness updates this row in place, ahead of all subsequent calls.
+    let progress = entry(
+        "progress",
+        ConversationKind::Activity {
+            activity: crate::model::ModelActivity {
+                phase: serde_json::json!("tool-failed"),
+                title: "Command failed".into(),
+                detail: Some("latest-command".into()),
+                run_id: Some("run-1".into()),
+            },
+        },
+    );
+    for individual_work_rows in [false, true] {
+        let mut state = ConversationState::default();
+        state.individual_work_rows = individual_work_rows;
+        let view = state.view(
+            &[
+                user.clone(),
+                progress.clone(),
+                entry(
+                    "first",
+                    ConversationKind::ToolCall {
+                        tool_call: first.clone(),
+                    },
+                ),
+                entry(
+                    "last",
+                    ConversationKind::ToolCall {
+                        tool_call: last.clone(),
+                    },
+                ),
+            ],
+            &harness,
+        );
+        let events: Vec<_> = view
+            .items
+            .iter()
+            .flat_map(|item| match item {
+                DisplayItem::Activity { group, .. } => group.events.as_slice(),
+                _ => &[],
+            })
+            .collect();
+        assert_eq!(
+            events.iter().map(|event| event.key()).collect::<Vec<_>>(),
+            ["tool:first", "tool:last"]
+        );
+        assert!(events[1].failed());
+        assert!(
+            events[1]
+                .trace()
+                .details
+                .iter()
+                .any(|detail| detail.content.contains("Command exited with code 1"))
+        );
+        // No real call: do not discard a provider's standalone error report.
+        let standalone = state.view(&[user.clone(), progress.clone()], &harness);
+        assert!(standalone.items.iter().any(|item| matches!(item,
+            DisplayItem::Activity { group, .. } if group.summary.contains("Command failed")
+        )));
+    }
+}
+
+#[test]
 fn active_tool_progress_does_not_repeat_real_tool_calls() {
     let harness = HarnessState {
         is_streaming: true,
