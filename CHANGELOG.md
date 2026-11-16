@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-11-16
+
 - Avoid Claude thinking-signature failures after tool or conversation changes, including when thinking is off.
+- Keep the Remote WebUI responsive in long sessions: only the newest 120 transcript rows are mounted (older rows load on request), unchanged rows are not re-rendered while a reply streams, and the activity spinner no longer drives view updates.
+- Simplify the Remote WebUI: a flatter workspace panel that lists only status you act on, a single-row composer, full-width tool-call details, one corner scale and sentence-case labels.
+- Fix the Remote WebUI losing follow-output when a transcript is replaced.
 
 ## [0.1.12] - 2026-11-16
 
