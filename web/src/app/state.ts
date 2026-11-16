@@ -68,6 +68,12 @@ const TRANSCRIPT_WINDOW = 120
 type SpacedItem = NonNullable<typeof remote.value.conversation>['items'][number] & { spacing: string }
 let spacedCache = new Map<string, { signature: string; item: SpacedItem }>()
 let transcriptLimit = TRANSCRIPT_WINDOW
+// Mün's keyed reconciler misplaces rows when a list is prepended to twice in a
+// row, so each reveal remounts the window under fresh keys instead.
+let transcriptGeneration = 0
+export function transcriptKey(item: { id: string | number }): string {
+  return transcriptGeneration + ':' + item.id
+}
 export const hiddenTranscriptCount = State(0)
 function spacedItems(view: typeof remote.value.conversation): SpacedItem[] {
   const items = view?.items ?? []
@@ -90,13 +96,29 @@ function spacedItems(view: typeof remote.value.conversation): SpacedItem[] {
 }
 export const transcriptItems = State(spacedItems(remote.value.conversation))
 
+const TRANSCRIPT_ROWS = ':scope > .message-block, :scope > .activity-group, :scope > .reasoning-trace'
 /** Reveal older rows without moving what the reader is looking at. */
 export function showEarlierTranscript() {
   const element = conversationElement
-  const before = element ? element.scrollHeight - element.scrollTop : 0
+  const content = element?.firstElementChild
+  const top = (node: Element) => node.getBoundingClientRect().top
+  const previousFirst = content?.querySelector(TRANSCRIPT_ROWS)
+  const offset = element && previousFirst ? top(previousFirst) - top(element) : 0
+  const hiddenBefore = hiddenTranscriptCount.value
   transcriptLimit += TRANSCRIPT_WINDOW
+  transcriptGeneration += 1
   transcriptItems.value = spacedItems(conversationView.value)
-  if (element) requestAnimationFrame(() => { element.scrollTop = element.scrollHeight - before })
+  const revealed = hiddenBefore - hiddenTranscriptCount.value
+  if (!element || !content || !previousFirst || revealed <= 0) return
+  // The row that was first is now `revealed` rows down. Re-pin it for a few
+  // frames: rows near the viewport take their real height once laid out.
+  let frames = 4
+  const settle = () => {
+    const anchor = content.querySelectorAll(TRANSCRIPT_ROWS)[revealed]
+    if (anchor) element.scrollTop += top(anchor) - top(element) - offset
+    if (--frames > 0) requestAnimationFrame(settle)
+  }
+  requestAnimationFrame(settle)
 }
 
 function resetTranscriptWindow() {

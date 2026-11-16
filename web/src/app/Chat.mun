@@ -6,7 +6,7 @@ import {
   remote, statusSnapshot, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
   toolbarControl, conversationRef, workspaceLine, elapsed, inspectorOpen, toggleInspector,
   showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
-  chooseWorkspace, workspaces, isNewChat, contextDescription, hiddenTranscriptCount, showEarlierTranscript,
+  chooseWorkspace, workspaces, isNewChat, contextDescription, hiddenTranscriptCount, showEarlierTranscript, transcriptKey,
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
@@ -314,7 +314,7 @@ struct Thread: View {
           })
           .withProps({ className: "transcript-earlier", "aria-label": "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)" })
         }
-        ForEach(transcriptItems.value, { id: item => item.id }) { item in
+        ForEach(transcriptItems.value, { id: item => transcriptKey(item) }) { item in
           Item(item: item)
         }
         if conversationView.value?.streaming_text {
