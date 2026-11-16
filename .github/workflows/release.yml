@@ -16,6 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Require a release tag
+        if: github.ref_type != 'tag'
+        run: echo 'Dispatch this workflow on a v<version> tag.' >&2; exit 1
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -29,34 +32,40 @@ jobs:
       - run: cargo build --bin yeet
       - run: cargo test --lib --bins -- --test-threads=1
 
-  package:
+  prepare-release:
     needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --prerelease --generate-notes --title "$GITHUB_REF_NAME"
+          fi
+
+  package:
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             label: macos-arm64
-            shell: sh
           - os: macos-15-intel
             label: macos-x64
-            shell: sh
           - os: ubuntu-latest
             label: linux-x64
-            shell: sh
           - os: ubuntu-latest
             label: linux-i686
             target: i686-unknown-linux-gnu
-            shell: sh
           - os: ubuntu-24.04-arm
             label: linux-arm64
-            shell: sh
           - os: windows-latest
             label: windows-x64
-            shell: pwsh
           - os: windows-11-arm
             label: windows-arm64
-            shell: pwsh
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -109,22 +118,33 @@ jobs:
           name: yeet-${{ matrix.label }}
           path: target/packages/*
           if-no-files-found: error
+      - name: Publish this platform as soon as it is ready
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" target/packages/* --clobber
+          # The prerelease becomes visible only after one platform is complete.
+          gh release edit "$GITHUB_REF_NAME" --draft=false
 
-  publish:
+  finalize:
     needs: package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: yeet-*
-          path: release-assets
-          merge-multiple: true
+      - name: Download published platform assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$GITHUB_REF_NAME" --dir release-assets --pattern 'yeet-*' --pattern 'yeet_*'
       - name: Generate aggregate checksums
         shell: bash
         run: |
           cd release-assets
-          find . -maxdepth 1 -type f ! -name '*.sha256' -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum --check ./*.sha256
+          find . -maxdepth 1 -type f ! -name '*.sha256' ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+          test -s SHA256SUMS
       - name: Attest aggregate checksums
         uses: actions/attest@v4
         with:
@@ -132,16 +152,12 @@ jobs:
       - name: Render Homebrew formula
         shell: bash
         run: ./Scripts/render-homebrew-formula.sh "$GITHUB_REF_NAME" release-assets target/homebrew/Formula/yeet.rb
-      - name: Publish GitHub release
+      - name: Publish aggregate checksums
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" release-assets/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
-          fi
+          gh release upload "$GITHUB_REF_NAME" release-assets/SHA256SUMS --clobber
       - name: Update Homebrew tap
         shell: bash
         env:
@@ -175,3 +191,7 @@ jobs:
           git add Formula/yeet.rb
           git commit -m "yeet $GITHUB_REF_NAME"
           git push origin HEAD:main
+      - name: Promote the complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --prerelease=false --latest

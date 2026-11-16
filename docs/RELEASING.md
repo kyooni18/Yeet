@@ -32,9 +32,17 @@ git tag -a v0.1.0 -m "Yeet v0.1.0"
 git push origin v0.1.0
 ```
 
-The release workflow runs a focused functional gate (`cargo test --lib --bins -- --test-threads=1`, and RuntimeSource checks), then builds macOS, Linux, and Windows packages for ARM64 and x64. Rust release tests are serialized because the Remote lifecycle tests intentionally override process-global Yeet configuration while exercising detached child processes; parallel execution can interfere with unrelated tests that instantiate `ConfigStore`. The source-layout architecture guard remains enforced by normal push/PR CI instead of blocking tag packaging on file-length policy. Unix release archives include the binary installer and bundled runtime; Linux jobs also produce `.deb` packages. Release assets include per-file SHA-256 sidecars, an aggregate `SHA256SUMS`, and GitHub provenance attestations.
+The release workflow runs a focused functional gate (`cargo test --lib --bins -- --test-threads=1`, and RuntimeSource checks), then queues independent macOS, Linux, and Windows platform builds (including Linux i686). Each successful job immediately uploads its packages and SHA-256 sidecars to a prerelease, so other platforms do not block it. The prerelease becomes visible once the first platform finishes; the previous stable release remains `latest` until all platforms and the finalization job succeed. Re-run failed jobs to complete a partial release. GitHub provenance attestations accompany the platform assets.
 
-The publish job renders `Formula/yeet.rb` from the four macOS/Linux archive checksums and updates `kyooni18/homebrew-tap` over SSH using the repository secret `HOMEBREW_TAP_DEPLOY_KEY`. That secret contains a dedicated Ed25519 deploy key whose public half has write access only to the tap repository; no personal access token is required. Tap publication is a required release step, so a missing or invalid deploy key fails the release instead of silently leaving Homebrew stale.
+To install an already completed Unix platform from a partial prerelease without waiting for the other platforms, explicitly select its tag (the default installer uses the latest stable release):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kyooni18/Yeet/main/install.sh | YEET_VERSION=v0.1.0 sh
+```
+
+Rust release tests are serialized because the Remote lifecycle tests intentionally override process-global Yeet configuration while exercising detached child processes; parallel execution can interfere with unrelated tests that instantiate `ConfigStore`. The source-layout architecture guard remains enforced by normal push/PR CI instead of blocking tag packaging on file-length policy. Unix archives include the binary installer and bundled runtime; Linux jobs also produce `.deb` packages.
+
+The finalization job generates and attests aggregate `SHA256SUMS`, renders `Formula/yeet.rb` from the four macOS/Linux archive checksums, and updates `kyooni18/homebrew-tap` over SSH using the repository secret `HOMEBREW_TAP_DEPLOY_KEY` before promoting the release to stable. That secret contains a dedicated Ed25519 deploy key whose public half has write access only to the tap repository; no personal access token is required. Tap publication is a required release step, so a missing or invalid deploy key fails the release instead of silently leaving Homebrew stale.
 
 Windows packages are Authenticode-signed when signing secrets are configured. macOS Developer ID notarization is not currently configured.
 

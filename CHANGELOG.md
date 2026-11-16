@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-11-16
+
+- Fix Claude thinking replay when thinking is disabled.
+- Fix Codex discovery on Linux and bound provider model requests and streaming completion.
+- Publish each platform's release package as soon as its GitHub Actions build finishes.
+
 ## [0.1.11] - 2026-11-12
 
 - Include the prebuilt compatibility Remote WebUI in release binaries on macOS, Linux, and Windows; no frontend build is required for binary installs.
