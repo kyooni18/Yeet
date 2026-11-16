@@ -71,6 +71,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.label }}
+      - uses: ./.github/actions/setup-mun
       - name: Install Linux i686 toolchain
         if: matrix.target == 'i686-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-11-12
+
+- Include the prebuilt compatibility Remote WebUI in release binaries on macOS, Linux, and Windows; no frontend build is required for binary installs.
+- Show headerless, chronological tool calls in the TUI and Remote WebUI, and remove duplicate latest-tool failure activity.
+- Fix Gemini tool-result turns, model discovery, and streaming failures; honor provider retry policy instead of retrying exhausted quota.
+- Recover from Anthropic thinking-binding mismatches after tool discovery.
+- Fix the Remote spinner center and remove redundant explanatory UI copy.
+- Add a host-side Terminal-Bench runner using a Rosetta Docker-in-Docker daemon and dataset overrides for 2.1 runs.
+
 ## [0.1.10] - 2026-11-12
 
 - Add Linux i686 (32-bit x86) release archives, i386 Debian packages, and installer architecture detection; report the unsupported 32-bit sandbox and fail closed unless unrestricted execution is explicitly enabled.

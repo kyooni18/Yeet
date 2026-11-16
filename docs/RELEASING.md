@@ -4,7 +4,7 @@ Release tags use `v<version>`. The version must match `Cargo.toml`, `RuntimeSour
 
 ## Prepare
 
-The experimental compatibility WebUI requires a built Mün workspace. Set `MUN_PATH` to its absolute path (for example, `MUN_PATH=/Users/kyooni18/Code/misutgaru/packages/modules/Mun`). CI builds the compatible revision pinned in `.github/actions/setup-mun/action.yml` and exports `MUN_PATH` automatically. Export this variable before an opt-in WebUI build. Standard release packages omit the WebUI.
+The experimental compatibility WebUI requires a built Mün workspace. Set `MUN_PATH` to its absolute path (for example, `MUN_PATH=/Users/kyooni18/Code/misutgaru/packages/modules/Mun`). CI builds the compatible revision pinned in `.github/actions/setup-mun/action.yml` and exports `MUN_PATH` automatically. Export this variable before a local package build or an opt-in WebUI source install. Both packaging scripts build the compatibility WebUI and embed it in every release binary; the release workflow sets up the pinned Mün workspace on each packaging runner. End users of prebuilt packages need neither Mün nor a frontend build.
 
 1. Update the three package versions and `CHANGELOG.md`.
 2. Commit the intended release with a clean working tree.
@@ -21,7 +21,7 @@ npm --prefix RuntimeSource run check
 ./Scripts/package-release.sh
 ```
 
-The packaging script checks the staged version, runs `yeet doctor`, verifies the bundled `install.sh` through a temporary-prefix install, and then creates the archive.
+The packaging script checks the staged version, runs `yeet doctor`, tests the bundled installer lifecycle in mocked process fixtures (without stopping host services), and then creates the archive.
 
 ## Publish
 

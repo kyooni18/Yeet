@@ -28,9 +28,13 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "RuntimeSource dependency install failed." }
     npm --prefix RuntimeSource run build
     if ($LASTEXITCODE -ne 0) { throw "Runtime build failed." }
-    $env:YEET_EXPERIMENTAL_WEBUI = $null
-    $env:YEET_FRONTEND_DIST = $null
-    cargo build --release
+    npm --prefix web ci
+    if ($LASTEXITCODE -ne 0) { throw "WebUI dependency install failed." }
+    npm --prefix web run build
+    if ($LASTEXITCODE -ne 0) { throw "WebUI build failed." }
+    $env:YEET_EXPERIMENTAL_WEBUI = "1"
+    $env:YEET_FRONTEND_DIST = Join-Path $Root "web\dist"
+    cargo build --release --locked
     if ($LASTEXITCODE -ne 0) { throw "Rust release build failed." }
 
     $BuiltBinary = Join-Path $Root "target\release\yeet.exe"

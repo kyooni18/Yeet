@@ -67,7 +67,7 @@ yeet install status
 
 The built-in `computer_use` tool uses [Open Computer Use](https://github.com/iFurySt/open-computer-use), installed by `yeet install computer-use`. This requires npm and installs the pinned upstream package in `<Yeet state>/computer-use`, independently of Codex. `YEET_CONFIG_DIR` controls the state directory; `YEET_NPM` overrides npm. No source checkout or separate MCP registration is required. Use `yeet install status` to check it and `yeet uninstall computer-use` to remove it. Restart active Yeet sessions after installing or removing the runtime. macOS requires 14+ with Accessibility and Screen Recording permissions; Linux and Windows need a logged-in graphical session.
 
-`mcp` is a mode of the main Yeet binary; its install/uninstall commands start and stop the local MCP server daemon rather than building a separate executable. The Remote server is also built into the binary; its experimental WebUI requires an opt-in source build.
+`mcp` is a mode of the main Yeet binary; its install/uninstall commands start and stop the local MCP server daemon rather than building a separate executable. The Remote server and prebuilt compatibility WebUI are included in release binaries.
 
 ## Use
 
@@ -138,7 +138,7 @@ as `Authorization: Bearer ...`; use `add-http --header` for other authentication
 
 ### Experimental Remote WebUI
 
-Standard installers, release packages, and Docker builds omit the Remote WebUI. To build it into Yeet from a source checkout, first build the compatible Mün workspace and set `MUN_PATH` as described in [`docs/RELEASING.md`](docs/RELEASING.md), then run:
+Release packages include the prebuilt Remote WebUI embedded in the binary, so standard binary installers need no frontend build. Source and Docker builds remain opt-in. To build it into Yeet from a source checkout, first build the compatible Mün workspace and set `MUN_PATH` as described in [`docs/RELEASING.md`](docs/RELEASING.md), then run:
 
 ```sh
 ./install.sh --build --experimental-webui

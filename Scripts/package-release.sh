@@ -29,7 +29,10 @@ checksum() {
 cd "$ROOT"
 npm --prefix RuntimeSource ci
 npm --prefix RuntimeSource run build
-unset YEET_EXPERIMENTAL_WEBUI YEET_FRONTEND_DIST
+npm --prefix web ci
+npm --prefix web run build
+export YEET_EXPERIMENTAL_WEBUI=1
+export YEET_FRONTEND_DIST="$ROOT/web/dist"
 if [ -n "${YEET_BUILD_TARGET:-}" ]; then
   cargo build --release --locked --target "$TARGET"
 else
