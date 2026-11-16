@@ -6,7 +6,7 @@ import {
   remote, statusSnapshot, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
   toolbarControl, conversationRef, workspaceLine, elapsed, inspectorOpen, toggleInspector,
   showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
-  chooseWorkspace, workspaces, isNewChat, contextDescription,
+  chooseWorkspace, workspaces, isNewChat, contextDescription, hiddenTranscriptCount, showEarlierTranscript,
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
@@ -308,6 +308,12 @@ struct Thread: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
       if hasConversation() === true {
+        if hiddenTranscriptCount.value > 0 {
+          Button(action: { showEarlierTranscript() }, label: {
+            Text("Show " + Math.min(hiddenTranscriptCount.value, 120) + " earlier " + (hiddenTranscriptCount.value === 1 ? "item" : "items"))
+          })
+          .withProps({ className: "transcript-earlier", "aria-label": "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)" })
+        }
         ForEach(transcriptItems.value, { id: item => item.id }) { item in
           Item(item: item)
         }

@@ -352,3 +352,12 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 899px), (hover: none) and (pointer: coarse) {
   .auth-input, .auth-action { min-height: 44px; font-size: 16px; }
 }
+
+/* Long transcripts: older rows load on request; off-screen rows skip layout and paint. */
+.transcript-earlier { align-self: center; margin-bottom: 24px; padding: 6px 14px; min-height: 32px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--muted); transition: background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
+.transcript-earlier:hover { background: var(--hover); color: var(--text); }
+.transcript-earlier:active { transform: scale(0.97); }
+.conversation-content > .message-block, .conversation-content > .activity-group, .conversation-content > .reasoning-trace { content-visibility: auto; contain-intrinsic-size: auto 120px; }
+@keyframes activity-spin { from { rotate: 0deg; } to { rotate: 360deg; } }
+.activity-spinner { animation: activity-spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .activity-spinner { animation: none; } }

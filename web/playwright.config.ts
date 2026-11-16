@@ -9,7 +9,7 @@ export default defineConfig({
     '**/minimal-mun.spec.ts', '**/remote-workbench.spec.ts', '**/remote-refinements.spec.ts',
     '**/remote-features.spec.ts', '**/tool-details.spec.ts', '**/semantic-protocol.spec.ts',
     '**/composer-draft-context.spec.ts', '**/auth-gate-*.spec.ts',
-    '**/shared-conversation-actions.spec.ts', '**/remote-viewport.spec.ts',
+    '**/shared-conversation-actions.spec.ts', '**/remote-viewport.spec.ts', '**/transcript-window.spec.ts',
   ],
   fullyParallel: false,
   timeout: 30_000,

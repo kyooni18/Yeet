@@ -59,12 +59,51 @@ export function spansWorkspaces(): boolean {
 /** A cross-workspace pick waits for its workspace handshake before loading. */
 let pendingSession: { id: string; workspace: string } | null = null
 // One linear pass, not a findIndex for every item on every editor acknowledgement.
-function spacedItems(view: typeof remote.value.conversation) {
-  return (view?.items ?? []).map((item, index, items) => ({
-    ...item, spacing: !index || (item.type !== 'entry' && items[index - 1].type !== 'entry') ? '0' : '24px',
-  }))
+// Every projection arrives as freshly parsed JSON, so unchanged rows are reused
+// by content: views keyed on an identical object skip re-rendering entirely,
+// which keeps streaming cost proportional to what changed, not transcript size.
+// Only the newest rows are mounted; older ones are revealed on request, so DOM
+// size and per-update work stay bounded during long sessions.
+const TRANSCRIPT_WINDOW = 120
+type SpacedItem = NonNullable<typeof remote.value.conversation>['items'][number] & { spacing: string }
+let spacedCache = new Map<string, { signature: string; item: SpacedItem }>()
+let transcriptLimit = TRANSCRIPT_WINDOW
+export const hiddenTranscriptCount = State(0)
+function spacedItems(view: typeof remote.value.conversation): SpacedItem[] {
+  const items = view?.items ?? []
+  const start = Math.max(0, items.length - transcriptLimit)
+  hiddenTranscriptCount.value = start
+  const next = new Map<string, { signature: string; item: SpacedItem }>()
+  const result: SpacedItem[] = []
+  for (let index = start; index < items.length; index++) {
+    const item = items[index]
+    const spacing = !index || (item.type !== 'entry' && items[index - 1].type !== 'entry') ? '0' : '24px'
+    const signature = spacing + JSON.stringify(item)
+    const key = String(item.id)
+    const cached = spacedCache.get(key)
+    const entry = cached && cached.signature === signature ? cached : { signature, item: Object.freeze({ ...item, spacing }) }
+    next.set(key, entry)
+    result.push(entry.item)
+  }
+  spacedCache = next
+  return result
 }
 export const transcriptItems = State(spacedItems(remote.value.conversation))
+
+/** Reveal older rows without moving what the reader is looking at. */
+export function showEarlierTranscript() {
+  const element = conversationElement
+  const before = element ? element.scrollHeight - element.scrollTop : 0
+  transcriptLimit += TRANSCRIPT_WINDOW
+  transcriptItems.value = spacedItems(conversationView.value)
+  if (element) requestAnimationFrame(() => { element.scrollTop = element.scrollHeight - before })
+}
+
+function resetTranscriptWindow() {
+  if (transcriptLimit === TRANSCRIPT_WINDOW) return
+  transcriptLimit = TRANSCRIPT_WINDOW
+  transcriptItems.value = spacedItems(conversationView.value)
+}
 
 export type Page = 'chat' | 'files' | 'diff' | 'agents' | 'tasks' | 'debate' | 'extensions'
 export type Sheet = 'none' | 'settings' | 'model' | 'reasoning' | 'permissions' | 'auth' | 'providers' | 'capabilities' | 'agent-settings' | 'session' | 'workspace'
@@ -313,9 +352,16 @@ function pinToBottom(element: HTMLElement) {
   showJumpToLatest.value = false
   let pinned = true
   const follow = () => { if (pinned) element.scrollTop = element.scrollHeight }
+  // Streaming mutates the DOM many times per frame. Reading scrollHeight after
+  // each mutation forces a synchronous layout, so settle once before paint.
+  let followFrame = 0
+  const scheduleFollow = () => {
+    if (followFrame || !pinned) return
+    followFrame = requestAnimationFrame(() => { followFrame = 0; follow() })
+  }
   const onScroll = () => {
     pinned = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-    showJumpToLatest.value = !pinned
+    if (showJumpToLatest.value !== !pinned) showJumpToLatest.value = !pinned
   }
   const context = () => {
     const snapshot = remoteStore.getSnapshot()
@@ -327,13 +373,14 @@ function pinToBottom(element: HTMLElement) {
     const next = context()
     if (next === lastContext) return
     lastContext = next
+    resetTranscriptWindow()
     pinned = true
     showJumpToLatest.value = false
     cancelAnimationFrame(frame)
     frame = requestAnimationFrame(follow)
   })
-  const observer = new MutationObserver(follow)
-  const resize = new ResizeObserver(follow)
+  const observer = new MutationObserver(scheduleFollow)
+  const resize = new ResizeObserver(scheduleFollow)
   if (element.firstElementChild) resize.observe(element.firstElementChild)
   resize.observe(element)
   element.addEventListener('scroll', onScroll, { passive: true })
@@ -342,6 +389,7 @@ function pinToBottom(element: HTMLElement) {
   return () => {
     unsubscribe()
     cancelAnimationFrame(frame)
+    cancelAnimationFrame(followFrame)
     observer.disconnect()
     resize.disconnect()
     element.removeEventListener('scroll', onScroll)
@@ -436,6 +484,11 @@ export function startRemote(onEditDraft: (text: string) => void) {
     } else if (!editor && previousEditor) {
       settingsEditorValue.value = ''
     }
+    // The store replaces these containers instead of mutating them. A shallow
+    // freeze stops Mün's ownership walk at their root, so a streaming update no
+    // longer costs a traversal of every transcript entry and projected row.
+    if (snapshot.entries && !Object.isFrozen(snapshot.entries)) Object.freeze(snapshot.entries)
+    if (snapshot.conversation && !Object.isFrozen(snapshot.conversation)) Object.freeze(snapshot.conversation)
     remote.value = snapshot
     connection.value = snapshot.connection
     runtimeState.value = snapshot.state
