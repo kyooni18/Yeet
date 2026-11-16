@@ -84,6 +84,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: none; color: var(--muted); border-radius: 8px; transition: background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
 .icon-button:hover:not(:disabled), .icon-button[aria-expanded="true"] { background: var(--hover); color: var(--text); }
 .icon-button:active:not(:disabled) { transform: scale(0.94); }
+.activity-spinner { animation: activity-spin 720ms linear infinite; will-change: transform; }
+@keyframes activity-spin { to { transform: rotate(1turn); } }
 .section-label { font-size: 11px; font-weight: 600; letter-spacing: 0.025em; color: var(--muted); padding: 0 10px; }
 
 /* Forms grow with their container, not with the width of their placeholder. */
@@ -294,7 +296,7 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }
-  .activity-spinner { rotate: none !important; }
+  .activity-spinner { animation: none !important; }
 }
 
 /* Status belongs beside the conversation; workspace choice belongs to its draft. */
