@@ -180,15 +180,18 @@ function anthropicProviderState(blocks: any[], provider: string, model: string):
 }
 
 function thinkingBindingForRequest(request: ProviderCallRequest, provider: string): Record<string, unknown> | undefined {
+  const thinking = request.providerOptions?.thinking as Record<string, unknown> | undefined;
+  // Binding controls are only valid for active thinking configurations. Replayed
+  // blocks do not enable thinking, and `disabled` rejects block_binding entirely.
+  if (thinking?.type !== "enabled" && thinking?.type !== "adaptive") return undefined;
   const replayingThinking = request.messages.some((message) => message.role === "assistant"
     && anthropicThinkingBlocks(message, provider, request.model).length > 0);
   if (!replayingThinking) return undefined;
-  const thinking = request.providerOptions?.thinking as Record<string, unknown> | undefined;
   // Tool discovery, context rollover and regenerated prefixes can invalidate a
   // signed block. Let Anthropic verify and drop only mismatches rather than
   // deleting all reasoning state (including valid tool-round-trip state).
   return {
-    ...(thinking ?? { type: "disabled" }),
+    ...thinking,
     block_binding: {
       ...(thinking?.block_binding as Record<string, unknown> | undefined),
       prefix_mismatch_behavior: "drop_block",

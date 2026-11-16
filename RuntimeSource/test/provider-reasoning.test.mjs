@@ -86,7 +86,7 @@ test('Claude thinking replay tolerates tool discovery with matching binding beta
       } });
       const block = { type: 'thinking', thinking: 'Find a tool', signature: 'bound-to-old-tools' };
       const state = { provider: credentials.id, protocol: 'anthropic-messages', model: 'claude-sonnet-4-6', data: { thinkingBlocks: [block] } };
-      for (const thinking of [undefined, { type: 'disabled' }, { type: 'adaptive', display: 'summarized' }]) {
+      for (const thinking of [undefined, { type: 'disabled' }, { type: 'enabled', budget_tokens: 1024 }, { type: 'adaptive', display: 'summarized' }]) {
         const request = {
           model: state.model,
           messages: [...messages, { role: 'assistant', content: '', providerState: state, toolCalls: [{ id: 'search', name: 'search_tools', arguments: {} }] }, { role: 'tool', toolCallId: 'search', content: 'read_file loaded' }],
@@ -95,8 +95,11 @@ test('Claude thinking replay tolerates tool discovery with matching binding beta
         };
         if (stream) await collect(provider.stream(request));
         else await provider.complete(request);
-        assert.deepEqual(sent.body.thinking, { ...(thinking ?? { type: 'disabled' }), block_binding: { prefix_mismatch_behavior: 'drop_block' } });
-        assert.ok(sent.headers['anthropic-beta'].split(',').includes('thinking-binding-controls-2026-08-01'));
+        const activeThinking = thinking?.type === 'enabled' || thinking?.type === 'adaptive';
+        assert.deepEqual(sent.body.thinking, activeThinking
+          ? { ...thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } }
+          : thinking);
+        assert.equal((sent.headers['anthropic-beta'] ?? '').split(',').includes('thinking-binding-controls-2026-08-01'), activeThinking);
         if (credentials.accessToken) assert.ok(sent.headers['anthropic-beta'].includes('oauth-2025-04-20'));
         assert.deepEqual(sent.body.messages[1].content[0], block);
         assert.equal(sent.body.messages[1].content[1].type, 'tool_use');
