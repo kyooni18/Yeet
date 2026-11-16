@@ -245,7 +245,7 @@ async function refreshProvider(providerId: string): Promise<void> {
   switch (providerId) {
     case "openai":
     case "codex-cli": {
-      const clientVersion = credential?.kind === "oauth" ? codexCliVersion() : undefined;
+      const clientVersion = credential?.kind === "oauth" ? await codexCliVersion() : undefined;
       core.register(new OpenAIProvider({
         id: providerId,
         ...openAIProviderOptions(credential),

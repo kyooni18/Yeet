@@ -452,6 +452,9 @@ export class OpenAIProvider implements ProviderAdapter {
       { method: "GET", headers: this.#headers() },
       {
         provider: this.id,
+        // One deadline covers retries and the JSON body, not just headers.
+        // A stalled catalog must not leave /model refreshing indefinitely.
+        signal: AbortSignal.timeout(15_000),
         ...(this.#fetch ? { fetch: this.#fetch } : {}),
         ...(this.#apiCallLogger ? { apiCallLogger: this.#apiCallLogger } : {}),
       },
@@ -678,6 +681,9 @@ export class OpenAIProvider implements ProviderAdapter {
         tools.set(index, current);
       } else if (raw.type === "response.completed" || raw.type === "response.incomplete") {
         completedRaw = raw.response;
+        // Terminal events end the response even if the server or a proxy keeps
+        // the SSE connection open. Closing the iterator also cancels its body.
+        break;
       }
     }
 
