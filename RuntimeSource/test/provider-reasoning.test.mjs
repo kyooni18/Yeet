@@ -32,7 +32,7 @@ test('Claude display handling preserves execution policy and explicit thinking c
   assert.equal(withReasoningPolicy({ model: 'antigravity/antigravity-preview-09-2026', messages, metadata: { reasoningLevel: 'high' } }).providerOptions, undefined);
 });
 
-test('Claude signed thinking and native chat reasoning survive a streamed tool round trip', async () => {
+test('Claude signed thinking survives a streamed tool round trip while thinking remains active', async () => {
   let claudeBody;
   const claude = new AnthropicProvider({ id: 'claude-api', apiKey: 'test', fetch: async (_url, init) => {
     claudeBody = JSON.parse(init.body);
@@ -50,7 +50,11 @@ test('Claude signed thinking and native chat reasoning survive a streamed tool r
   assert.ok(events.some((event) => event.type === 'reasoning-start'));
   assert.equal(events.filter((event) => event.type === 'reasoning-summary-delta').map((event) => event.delta).join(''), 'Checking the file');
   assert.deepEqual(events.at(-1).providerState.data.thinkingBlocks, [{ type: 'thinking', thinking: 'Checking the file', signature: 'signed-state' }]);
-  await collect(claude.stream({ model: 'claude-sonnet-4-6', messages: [...messages, { role: 'assistant', content: '', providerState: events.at(-1).providerState }, { role: 'user', content: 'Continue' }] }));
+  await collect(claude.stream({
+    model: 'claude-sonnet-4-6',
+    messages: [...messages, { role: 'assistant', content: '', providerState: events.at(-1).providerState }, { role: 'user', content: 'Continue' }],
+    providerOptions: { thinking: { type: 'adaptive', display: 'summarized' } },
+  }));
   assert.equal(claudeBody.messages[1].content[0].signature, 'signed-state');
 
   let chatBody;
@@ -101,8 +105,13 @@ test('Claude thinking replay tolerates tool discovery with matching binding beta
           : thinking);
         assert.equal((sent.headers['anthropic-beta'] ?? '').split(',').includes('thinking-binding-controls-2026-08-01'), activeThinking);
         if (credentials.accessToken) assert.ok(sent.headers['anthropic-beta'].includes('oauth-2025-04-20'));
-        assert.deepEqual(sent.body.messages[1].content[0], block);
-        assert.equal(sent.body.messages[1].content[1].type, 'tool_use');
+        const replayedBlock = sent.body.messages[1].content[0];
+        if (activeThinking) {
+          assert.deepEqual(replayedBlock, block);
+          assert.equal(sent.body.messages[1].content[1].type, 'tool_use');
+        } else {
+          assert.equal(replayedBlock.type, 'tool_use');
+        }
         assert.equal(sent.body.messages[2].content[0].type, 'tool_result');
         assert.deepEqual(request.providerOptions, thinking ? { thinking } : undefined);
       }

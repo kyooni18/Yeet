@@ -179,11 +179,16 @@ function anthropicProviderState(blocks: any[], provider: string, model: string):
   return { provider, protocol: "anthropic-messages", model, data: { thinkingBlocks } };
 }
 
+function hasActiveThinking(request: ProviderCallRequest): boolean {
+  const type = (request.providerOptions?.thinking as Record<string, unknown> | undefined)?.type;
+  return type === "enabled" || type === "adaptive";
+}
+
 function thinkingBindingForRequest(request: ProviderCallRequest, provider: string): Record<string, unknown> | undefined {
   const thinking = request.providerOptions?.thinking as Record<string, unknown> | undefined;
   // Binding controls are only valid for active thinking configurations. Replayed
   // blocks do not enable thinking, and `disabled` rejects block_binding entirely.
-  if (thinking?.type !== "enabled" && thinking?.type !== "adaptive") return undefined;
+  if (!hasActiveThinking(request)) return undefined;
   const replayingThinking = request.messages.some((message) => message.role === "assistant"
     && anthropicThinkingBlocks(message, provider, request.model).length > 0);
   if (!replayingThinking) return undefined;
@@ -207,6 +212,7 @@ function mapMessages(
   deferredToolNames: Set<string>,
   provider: string,
   model: string,
+  includeThinking: boolean,
 ): unknown[] {
   const breakpointCandidates = promptCacheEnabled
     ? messages
@@ -236,7 +242,10 @@ function mapMessages(
 
     if (message.role === "assistant") {
       const content: any[] = [];
-      content.push(...anthropicThinkingBlocks(message, provider, model));
+      // Signatures bind reasoning to the exact message prefix and tool list.
+      // A follow-up that no longer enables thinking cannot use the binding
+      // controls, so it must not replay signed blocks from an earlier turn.
+      if (includeThinking) content.push(...anthropicThinkingBlocks(message, provider, model));
       if (message.content) content.push({ type: "text", text: message.content });
       for (const tool of message.toolCalls ?? []) {
         content.push({ type: "tool_use", id: tool.id, name: tool.name, input: tool.arguments });
@@ -326,6 +335,7 @@ function requestBody(
       deferredToolNames,
       providerId,
       request.model,
+      hasActiveThinking(request),
     ),
     stream,
     ...(split.system || claudeCodeIdentity

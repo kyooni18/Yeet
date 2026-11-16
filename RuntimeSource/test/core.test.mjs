@@ -1442,7 +1442,7 @@ test("Anthropic keeps harness metadata private and forwards only provider metada
   assert.equal("metadata" in requests[1], false);
 });
 
-test("Anthropic replays thinking signature state across provider instances", async () => {
+test("Anthropic replays thinking signature state across provider instances when thinking remains active", async () => {
   const firstProvider = new AnthropicProvider({
     apiKey: "test",
     fetch: async () => jsonResponse({
@@ -1474,6 +1474,7 @@ test("Anthropic replays thinking signature state across provider instances", asy
       { role: "assistant", content: "", toolCalls: first.toolCalls, providerState: first.providerState },
       { role: "tool", toolCallId: "toolu-1", name: "lookup", content: '{"value":42}' },
     ],
+    providerOptions: { thinking: { type: "enabled", budget_tokens: 1024 } },
   });
   const assistant = replayed.messages.find((message) => message.role === "assistant");
   assert.equal(assistant.content[0].type, "thinking");
