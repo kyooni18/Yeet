@@ -90,7 +90,7 @@ test('Claude thinking replay tolerates tool discovery with matching binding beta
       } });
       const block = { type: 'thinking', thinking: 'Find a tool', signature: 'bound-to-old-tools' };
       const state = { provider: credentials.id, protocol: 'anthropic-messages', model: 'claude-sonnet-4-6', data: { thinkingBlocks: [block] } };
-      for (const thinking of [undefined, { type: 'disabled' }, { type: 'enabled', budget_tokens: 1024 }, { type: 'adaptive', display: 'summarized' }]) {
+      for (const thinking of [undefined, { type: 'disabled' }, { type: 'between_tools' }, { type: 'enabled', budget_tokens: 1024 }, { type: 'adaptive', display: 'summarized' }]) {
         const request = {
           model: state.model,
           messages: [...messages, { role: 'assistant', content: '', providerState: state, toolCalls: [{ id: 'search', name: 'search_tools', arguments: {} }] }, { role: 'tool', toolCallId: 'search', content: 'read_file loaded' }],
@@ -120,6 +120,29 @@ test('Claude thinking replay tolerates tool discovery with matching binding beta
       assert.equal(sent.headers['anthropic-beta']?.includes('thinking-binding-controls'), credentials.accessToken ? false : undefined);
     }
   }
+});
+
+test('Claude removes thinking-only turns without invalid empty messages and normalizes the deprecated binding alias', async () => {
+  let sent;
+  const provider = new AnthropicProvider({ id: 'claude-api', apiKey: 'test', fetch: async (_url, init) => {
+    sent = { body: JSON.parse(init.body), headers: init.headers };
+    return json({ content: [], usage: {} });
+  } });
+  const state = {
+    provider: 'claude-api', protocol: 'anthropic-messages', model: 'claude-sonnet-5-5',
+    data: { thinkingBlocks: [{ type: 'redacted_thinking', data: 'signed' }] },
+  };
+  const history = [...messages, { role: 'assistant', content: '', providerState: state }, { role: 'user', content: 'Continue' }];
+  await provider.complete({ model: state.model, messages: history, providerOptions: { thinking: { type: 'disabled' } } });
+  assert.deepEqual(sent.body.messages, [{ role: 'user', content: 'Inspect the file' }, { role: 'user', content: 'Continue' }]);
+  assert.equal(state.data.thinkingBlocks[0].data, 'signed');
+
+  const thinking = { type: 'adaptive', block_binding: { mismatch_behavior: 'error' } };
+  await provider.complete({ model: state.model, messages: history, providerOptions: { thinking } });
+  assert.deepEqual(sent.body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+  assert.ok(sent.headers['anthropic-beta'].split(',').includes('thinking-binding-controls-2026-08-01'));
+  assert.equal(sent.body.messages[1].content[0].type, 'redacted_thinking');
+  assert.deepEqual(thinking.block_binding, { mismatch_behavior: 'error' });
 });
 
 test('provider streams expose hidden reasoning phases, managed operations, and summarized Gemini thoughts', async () => {

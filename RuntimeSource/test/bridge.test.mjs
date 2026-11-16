@@ -162,6 +162,74 @@ test("bridge exposes complete and stream over NDJSON", async (t) => {
   await bridge.close();
 });
 
+test("bridge sends Claude thinking-binding controls or removes stale blocks after tool discovery", async (t) => {
+  const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const configDir = await mkdtemp(join(tmpdir(), "yeet-claude-binding-"));
+  t.after(() => rm(configDir, { recursive: true, force: true }));
+  const preload = join(configDir, "preload.mjs");
+  await writeFile(preload, `
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (url, init) => String(url).startsWith('https://api.anthropic.com/v1/messages')
+      ? originalFetch(process.env.YEET_TEST_ANTHROPIC_URL, init)
+      : Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
+  `);
+
+  const sent = [];
+  const server = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body);
+    sent.push({ body: request, headers: req.headers });
+    const blocks = request.messages.flatMap((message) => Array.isArray(message.content) ? message.content : []);
+    const hasThinking = blocks.some((block) => block.type === "thinking");
+    const hasBinding = request.thinking?.block_binding?.prefix_mismatch_behavior === "drop_block"
+      && req.headers["anthropic-beta"]?.split(",").includes("thinking-binding-controls-2026-08-01");
+    if (hasThinking && !hasBinding) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Invalid signature: the tools list differs" } }));
+    } else if (request.stream) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify({ type: "message_start", message: { id: "m", model: request.model, usage: {} } })}\n\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: {} })}\n\n`);
+    } else {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "m", model: request.model, content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: {} }));
+    }
+  });
+  const address = await listen(server);
+  t.after(() => server.close());
+  const bridge = createBridge({
+    YEET_CONFIG_DIR: configDir, ANTHROPIC_API_KEY: "test",
+    NODE_OPTIONS: `--import=${preload}`,
+    YEET_TEST_ANTHROPIC_URL: `http://127.0.0.1:${address.port}/v1/messages`,
+  });
+  t.after(() => bridge.child.kill());
+  const model = "claude-sonnet-5-5";
+  const request = {
+    model: `claude-api/${model}`, attachedCapabilities: [],
+    messages: [
+      { role: "user", content: "Find a tool" },
+      { role: "assistant", content: "", toolCalls: [{ id: "t1", name: "search_tools", arguments: {} }],
+        providerState: { provider: "claude-api", protocol: "anthropic-messages", model, data: { thinkingBlocks: [{ type: "thinking", thinking: "Find a tool", signature: "old-tools" }] } } },
+      { role: "tool", toolCallId: "t1", content: "read_file loaded" },
+    ],
+    tools: [{ name: "search_tools", inputSchema: {} }, { name: "read_file", inputSchema: {} }],
+  };
+  for (const [id, op, toolChoice] of [["inactive", "complete", "required"], ["active", "stream", "auto"]]) {
+    bridge.send({ v: 1, id, op, request: { ...request, toolChoice } });
+    const response = await bridge.waitFor((message) => message.id === id && (message.type === "result" || message.type === "done" || message.type === "error"));
+    assert.equal(response.type, op === "stream" ? "done" : "result", JSON.stringify(response));
+  }
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].body.thinking, undefined);
+  assert.equal(sent[0].body.messages[1].content[0].type, "tool_use");
+  assert.equal(sent[1].body.messages[1].content[0].signature, "old-tools");
+  assert.deepEqual(sent[1].body.thinking.block_binding, { prefix_mismatch_behavior: "drop_block" });
+  assert.ok(sent[1].headers["anthropic-beta"].includes("thinking-binding-controls-2026-08-01"));
+  await bridge.close();
+});
+
 test("bridge cancellation aborts an in-flight provider request", async (t) => {
   let sawRequest;
   const requestSeen = new Promise((resolve) => { sawRequest = resolve; });

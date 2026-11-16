@@ -195,10 +195,13 @@ function thinkingBindingForRequest(request: ProviderCallRequest, provider: strin
   // Tool discovery, context rollover and regenerated prefixes can invalidate a
   // signed block. Let Anthropic verify and drop only mismatches rather than
   // deleting all reasoning state (including valid tool-round-trip state).
+  // The deprecated mismatch_behavior alias cannot coexist with its replacement.
+  const { mismatch_behavior: _legacyMismatchBehavior, ...binding } =
+    (thinking?.block_binding as Record<string, unknown> | undefined) ?? {};
   return {
     ...thinking,
     block_binding: {
-      ...(thinking?.block_binding as Record<string, unknown> | undefined),
+      ...binding,
       prefix_mismatch_behavior: "drop_block",
     },
   };
@@ -242,14 +245,18 @@ function mapMessages(
 
     if (message.role === "assistant") {
       const content: any[] = [];
+      const thinkingBlocks = anthropicThinkingBlocks(message, provider, model);
       // Signatures bind reasoning to the exact message prefix and tool list.
       // A follow-up that no longer enables thinking cannot use the binding
       // controls, so it must not replay signed blocks from an earlier turn.
-      if (includeThinking) content.push(...anthropicThinkingBlocks(message, provider, model));
+      if (includeThinking) content.push(...thinkingBlocks);
       if (message.content) content.push({ type: "text", text: message.content });
       for (const tool of message.toolCalls ?? []) {
         content.push({ type: "tool_use", id: tool.id, name: tool.name, input: tool.arguments });
       }
+      // A thinking-only assistant turn becomes empty after stripping. Anthropic
+      // rejects empty content arrays, so omit that now-empty historical turn.
+      if (!includeThinking && thinkingBlocks.length > 0 && content.length === 0) continue;
       output.push({ role: "assistant", content: markLastCacheableBlock(content, cacheBreakpoint, cacheControl) });
       continue;
     }

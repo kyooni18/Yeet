@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Avoid Claude thinking-signature failures after tool or conversation changes, including when thinking is off.
+
 ## [0.1.12] - 2026-11-16
 
 - Fix Claude thinking replay when thinking is disabled.
