@@ -24,11 +24,13 @@ pub(in crate::platforms::tui::ui) fn tool_icon(name: &str) -> &'static str {
 }
 
 pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {
+    // Braille dot frames advance every 80 ms, one terminal cell wide.
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let tick = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() / 180)
+        .map(|duration| duration.as_millis() / 80)
         .unwrap_or(0);
-    ["|", "/", "-", "\\"][(tick % 4) as usize]
+    FRAMES[(tick % FRAMES.len() as u128) as usize]
 }
 
 /// Calls are always visible in backend order, without an aggregate title row.
