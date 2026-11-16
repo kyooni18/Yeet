@@ -1,7 +1,7 @@
 import { Icon } from "@mun/core"
 import { workIcon } from "./workIcons"
 import { color, mono } from "./theme"
-import { ease } from "./state"
+import { ease, tick } from "./state"
 
 /** A small, neutral activity ring; never attached to provider narration. */
 export struct Spinner: View {
@@ -9,6 +9,8 @@ export struct Spinner: View {
     Element("span")
       .style({ width: "12px", height: "12px", boxSizing: "border-box", background: "transparent", border: "1.5px solid var(--line)", borderTopColor: "var(--muted)", borderRadius: "50%", flex: "none" })
       .withProps({ className: "activity-spinner" })
+      .rotationEffect(tick.value * 45)
+      .animation(ease, value: tick.value)
       .accessibilityLabel("Working")
   }
 }

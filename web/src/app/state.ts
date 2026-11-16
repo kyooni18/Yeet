@@ -112,8 +112,9 @@ export function navigateDestination(destination: string) {
   else if (['settings', 'reasoning', 'permissions', 'auth', 'providers', 'capabilities'].includes(destination)) openSheet(destination as Sheet)
 }
 
-/** A low-frequency clock for the elapsed status text, not the spinner itself. */
-export const elapsedTick = State(0)
+/** Spinner frames shared with the TUI (`| / - \` every 180 ms). */
+const FRAMES = ['|', '/', '-', '\\']
+export const tick = State(0)
 let runStartedAt = 0
 
 export function isWorking(): boolean {
@@ -121,10 +122,11 @@ export function isWorking(): boolean {
   return snapshot.state.is_streaming || !!snapshot.conversation?.preparing || (snapshot.agents?.active_count ?? 0) > 0
 }
 
+export function spinnerFrame(): string {
+  return FRAMES[tick.value % FRAMES.length]
+}
+
 export function elapsed(): string {
-  // Track this clock so the status label advances without causing every active
-  // spinner to rerender. The ring is composited by CSS instead.
-  elapsedTick.value
   if (!runStartedAt) return ''
   const seconds = Math.max(0, Math.floor((Date.now() - runStartedAt) / 1000))
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
@@ -134,8 +136,8 @@ window.setInterval(() => {
   const working = isWorking()
   if (working && !runStartedAt) runStartedAt = Date.now()
   if (!working) runStartedAt = 0
-  if (working) elapsedTick.value += 1
-}, 1000)
+  if (working) tick.value += 1
+}, 180)
 
 // A short, non-bouncy curve keeps navigation and disclosures responsive.
 export const ease = Animation.easeOut(0.2)
