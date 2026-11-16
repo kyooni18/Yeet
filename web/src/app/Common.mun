@@ -42,7 +42,7 @@ export struct PrimaryButton: View {
       .padding({ top: 8, bottom: 8, leading: 16, trailing: 16 })
       .background(hovering.value && enabled ? color.accentHover : color.accent)
       .opacity(enabled ? 1 : 0.4)
-      .style({ borderRadius: "10px", whiteSpace: "nowrap", flex: "none" })
+      .style({ borderRadius: "var(--r-control)", whiteSpace: "nowrap", flex: "none" })
       .animation(ease, value: hovering.value)
       .onHover(inside => { hovering.value = inside })
       .disabled(!enabled)

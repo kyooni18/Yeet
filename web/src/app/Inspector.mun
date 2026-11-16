@@ -58,7 +58,7 @@ struct Changes: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
       HStack(spacing: 8) {
-        Text("WORKING CHANGES").withProps({ className: "section-label" })
+        Text("Working changes").withProps({ className: "section-label" })
         Spacer()
         IconButton(icon: "expand", label: "Open full diff", action: { openPage("diff") })
       }
@@ -77,7 +77,7 @@ struct Changes: View {
         }
         if workspaceChanges.value.patch.length {
           VStack(alignment: .stretch, spacing: 0) {
-            Text("DIFF PREVIEW").withProps({ className: "section-label" }).padding({ top: 14, bottom: 10 })
+            Text("Diff preview").withProps({ className: "section-label" }).padding({ top: 14, bottom: 10 })
             Patch().withProps({ className: "inspector-patch", tabindex: "0", "aria-label": "Diff preview" })
           }
           .style({ height: "280px", minHeight: "0" })
@@ -115,7 +115,7 @@ struct Files: View {
       }
       if workspaceFiles.value?.info {
         VStack(alignment: .stretch, spacing: 6) {
-          Text("FILE DETAILS").withProps({ className: "section-label" })
+          Text("File details").withProps({ className: "section-label" })
           Text(workspaceFiles.value.info.name).fontSize(14).fontWeight("medium")
           Text([Math.ceil(workspaceFiles.value.info.size / 1024) + " KB", workspaceFiles.value.info.lines ? workspaceFiles.value.info.lines + " lines" : ""].filter(Boolean).join(" · "))
             .fontSize(12).foregroundStyle(color.muted)
@@ -145,38 +145,66 @@ struct StatusRow: View {
   }
 }
 
+/** Connection states read as sentence-case status, not protocol identifiers. */
+function connectionState(value: string): string {
+  const label = (value || "offline").replace(/-/g, " ")
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
+/** Ready is the quiet default; only working or disconnected states are shown. */
+function stateMatters(): boolean {
+  return remote.value.state.is_streaming || !connected()
+}
+
+function activeAgents(): number {
+  return remote.value.agents?.active_count ?? 0
+}
+
+function reported(value: unknown): boolean {
+  return value !== null && value !== undefined
+}
+
+/** Only what a reader acts on: what is running, how full it is, what is left. */
 struct SessionStatus: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
-      Text("SESSION").withProps({ className: "section-label" })
-      StatusRow(label: "State", value: remote.value.state.is_streaming ? "Working" : connected() ? "Ready" : remote.value.connection)
+      if stateMatters() === true {
+        StatusRow(label: "State", value: remote.value.state.is_streaming ? "Working" : connectionState(remote.value.connection))
+      }
       Button(action: { openSheet("model") }, label: {
         StatusRow(label: "Model", value: shortModel(remote.value.state.active_model) || "Choose a model")
       }).withProps({ className: "panel-model", title: remote.value.state.active_model }).disabled(!connected())
       StatusRow(label: "Reasoning", value: remote.value.state.active_reasoning_level || "Default")
-      StatusRow(label: "Agents", value: String(remote.value.agents?.active_count ?? 0))
-      Text("CONTEXT").withProps({ className: "section-label status-section" })
+      if activeAgents() > 0 {
+        StatusRow(label: "Agents", value: String(activeAgents()))
+      }
+      Text("Context").withProps({ className: "section-label status-section" })
       StatusRow(label: "Window used", value: contextLabel() || "Not reported")
       if remote.value.contextPercent !== null {
         Element("meter", { min: 0, max: 100, value: remote.value.contextPercent, "aria-label": "Context usage" }).style({ width: "100%" })
       }
       Text(tokenCount(remote.value.state.current_context_tokens) + " / " + tokenCount(remote.value.state.active_model_context_length) + " tokens").withProps({ className: "status-caption" })
-      Text("SESSION USAGE").withProps({ className: "section-label status-section" })
+      Text("Usage").withProps({ className: "section-label status-section" })
       StatusRow(label: "Input tokens", value: tokenCount(remote.value.state.token_usage.input_tokens))
       StatusRow(label: "Output tokens", value: tokenCount(remote.value.state.token_usage.output_tokens))
-      StatusRow(label: "Reasoning tokens", value: tokenCount(remote.value.state.token_usage.reasoning_tokens))
-      StatusRow(label: "Cached input", value: tokenCount(remote.value.state.token_usage.cached_input_tokens))
-      StatusRow(label: "Cache writes", value: tokenCount(remote.value.state.token_usage.cache_creation_input_tokens))
-      StatusRow(label: "Model calls", value: tokenCount(remote.value.state.token_usage.model_calls))
+      if reported(remote.value.state.token_usage.reasoning_tokens) === true {
+        StatusRow(label: "Reasoning tokens", value: tokenCount(remote.value.state.token_usage.reasoning_tokens))
+      }
+      if reported(remote.value.state.token_usage.cached_input_tokens) === true {
+        StatusRow(label: "Cached input", value: tokenCount(remote.value.state.token_usage.cached_input_tokens))
+      }
+      if reported(remote.value.state.token_usage.cache_creation_input_tokens) === true {
+        StatusRow(label: "Cache writes", value: tokenCount(remote.value.state.token_usage.cache_creation_input_tokens))
+      }
+      if reported(remote.value.state.token_usage.model_calls) === true {
+        StatusRow(label: "Model calls", value: tokenCount(remote.value.state.token_usage.model_calls))
+      }
       if (!subscription(remote.value.state)) {
         StatusRow(label: "Cost", value: "Not reported by server")
       }
-      Text("PROVIDER LIMITS").withProps({ className: "section-label status-section" })
+      Text("Limits").withProps({ className: "section-label status-section" })
       if (activeProvider(remote.value.state)) {
-        StatusRow(label: "Provider", value: activeProvider(remote.value.state).provider)
-        if activeProvider(remote.value.state).usage?.plan {
-          StatusRow(label: "Plan", value: activeProvider(remote.value.state).usage.plan)
-        }
+        StatusRow(label: "Provider", value: [activeProvider(remote.value.state).provider, activeProvider(remote.value.state).usage?.plan].filter(Boolean).join(" · "))
         ForEach(activeProvider(remote.value.state).usage?.windows ?? [], { id: window => window.id }) { window in
           VStack(alignment: .stretch, spacing: 6) {
             StatusRow(label: window.label, value: Math.round(window.remainingPercent) + "% remaining")
@@ -186,9 +214,6 @@ struct SessionStatus: View {
         }
         if !activeProvider(remote.value.state).usage?.windows.length {
           Text(activeProvider(remote.value.state).usage?.message || "Usage limits not reported").withProps({ className: "status-caption" })
-        }
-        if activeProvider(remote.value.state).usage?.fetchedAt {
-          Text("Updated " + new Date(activeProvider(remote.value.state).usage.fetchedAt).toLocaleTimeString()).withProps({ className: "status-caption" })
         }
       } else {
         Text("Provider usage not reported for this model").withProps({ className: "status-caption" })
@@ -202,23 +227,22 @@ export struct WorkspacePanel: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
       HStack(spacing: 8) {
-        Text("Session status").fontSize(14).fontWeight("semibold")
+        Text(remote.value.currentWorkspace?.display_name || "Workspace").fontSize(14).fontWeight("semibold").lineLimit(1).style({ minWidth: "0" })
         Spacer()
         IconButton(icon: "refresh", label: "Refresh workspace", action: { refreshInspector() }).disabled(!connected())
         IconButton(icon: "inspector", label: "Hide workspace panel", action: { toggleInspector(false) })
       }.withProps({ className: "panel-header" }).style({ width: "100%" })
       ScrollView() {
         VStack(alignment: .stretch, spacing: 0) {
-          VStack(alignment: .stretch, spacing: 6) {
-            Text(remote.value.currentWorkspace?.display_name || "Workspace").fontSize(16).fontWeight("medium").lineLimit(1)
-            Text(displayPath(remote.value.state.workspace_root)).fontSize(12).foregroundStyle(color.muted).lineLimit(1)
-              .withProps({ title: remote.value.state.workspace_root })
-            if workspaceChanges.value?.branch || workspaceFiles.value?.branch {
-              HStack(spacing: 5) {
+          VStack(alignment: .stretch, spacing: 2) {
+            HStack(spacing: 6) {
+              Text(displayPath(remote.value.state.workspace_root)).lineLimit(1).style({ minWidth: "0" })
+                .withProps({ title: remote.value.state.workspace_root })
+              if workspaceChanges.value?.branch || workspaceFiles.value?.branch {
                 Icon(workIcon("branch"), { width: 13, height: 13, strokeWidth: 1.6 })
-                Text(workspaceChanges.value?.branch || workspaceFiles.value?.branch).fontSize(12).lineLimit(1)
-              }.foregroundStyle(color.muted).style({ width: "100%", minWidth: "0" })
-            }
+                Text(workspaceChanges.value?.branch || workspaceFiles.value?.branch).lineLimit(1).style({ flex: "none", maxWidth: "50%" })
+              }
+            }.fontSize(12).foregroundStyle(color.muted).style({ width: "100%", minWidth: "0" })
             Text(changeSummary()).fontSize(12).foregroundStyle(color.muted).withProps({ className: "panel-summary" })
           }.withProps({ className: "panel-context" }).style({ width: "100%", minWidth: "0" })
           HStack(spacing: 4) {

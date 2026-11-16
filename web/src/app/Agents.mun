@@ -61,7 +61,7 @@ struct Member: View {
     })
     .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
     .background(row.selected ? color.rowSelect : "transparent")
-    .style({ borderRadius: "10px" })
+    .style({ borderRadius: "var(--r-control)" })
     .animation(ease, value: row.selected)
   }
 }

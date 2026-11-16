@@ -37,16 +37,19 @@ Shell
         Mobile: >=44px disclosure targets; exception text wraps without crowding context
       EmptyState: centered greeting and workspace context
       FollowOutput: pinned only while near bottom; floating Jump to latest when reading history
-    Composer: same column alignment, raised rounded surface, auto-growing field
+    Composer: same column alignment, one bordered flat surface, auto-growing field
       NewChatWorkspace: labeled native workspace choice beside input, only for an empty new chat
         Open another workspace path action; never a workspace selector in left sidebar
-      Controls: attachment, model, reasoning, send/stop
+      Controls: one quiet row; attachment, model, reasoning, context, send/stop
+        Phone: same single row; context does not take a line of its own
       Context: compact percentage plus accessible used/limit token information
       No explanatory helper copy beneath the composer
   WorkspacePanel: 320px, collapsible, visible by default at >=1280px
-    Header: Session status, refresh, close; workspace path and branch
+    Header: workspace name, refresh, close; one line for path and branch, one for change summary
     Tabs: Status (default), Changes, Files; count for changes
-    Status: model, runtime, context, tokens, cache, provider quota and reset windows
+    Status: flat rows without dividers; model, reasoning, context, usage, provider limits and reset windows
+      Quiet defaults omitted: state only while working or disconnected; agents only when active
+      Usage: input and output tokens always; reasoning, cache and model-call rows only when reported
       Cost: backend-reported estimate only for metered/API usage; hidden for subscriptions
       MissingData: explicit not reported; never invent cost from credits or token counts
     ScrollRegion: live backend-provided entries, selection and empty states
@@ -77,5 +80,6 @@ VisualLanguage
   Restrained panel entrances, hover/press/focus feedback; respect reduced motion.
   Touch targets >=44px; safe-area padding; no horizontal document overflow.
   Navigation and workspace drawers are mutually exclusive on narrow screens.
+  Corners: three radii by role (inline 6, control 8, surface 12); no pills or glow rings.
   Activity: small hollow spinner ring with transparent center; respect reduced motion.
   Copy: omit explanatory subtitles and helper paragraphs; retain labels, live context, errors and consequential warnings.

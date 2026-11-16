@@ -289,9 +289,8 @@ struct Working: View {
 
 struct EmptyState: View {
   var body: some View {
-    VStack(alignment: .center, spacing: 6) {
-      Image("/yeet-mark.svg").style({ width: "44px", height: "44px", marginBottom: "12px" })
-      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(30).fontWeight("medium")
+    VStack(alignment: .center, spacing: 4) {
+      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(20).fontWeight("medium")
       Text(workspaceLine()).fontSize(13).foregroundStyle(color.faint)
     }
     .withProps({ className: "empty-conversation" })
@@ -358,14 +357,14 @@ struct Permission: View {
             .padding({ top: 7, bottom: 7, leading: 14, trailing: 14 })
             .background(control.icon === "allow" ? color.accent : color.raised)
             .foregroundStyle(control.icon === "allow" ? color.accentInk : color.text)
-            .style({ borderRadius: "10px" })
+            .style({ borderRadius: "var(--r-control)" })
             .disabled(!control.enabled || !connected())
         }
       }
     }
     .padding(14)
     .background(color.panel)
-    .style({ borderRadius: "14px" })
+    .style({ borderRadius: "var(--r-surface)" })
     .transition(Transition.opacity.combined(Transition.move("bottom", 8)))
   }
 }
@@ -384,7 +383,7 @@ struct Question: View {
             .padding({ top: 8, bottom: 8, leading: 14, trailing: 14 })
             .background(color.raised)
             .foregroundStyle(color.text)
-            .style({ borderRadius: "10px", textAlign: "left" })
+            .style({ borderRadius: "var(--r-control)", textAlign: "left" })
             .disabled(!question.enabled || !connected())
         }
       }
@@ -396,14 +395,14 @@ struct Question: View {
             .fontSize(14)
             .padding({ top: 8, bottom: 8, leading: 12, trailing: 12 })
             .background(color.composer)
-            .style({ flex: "1", minWidth: "0", border: "0", outline: "none", borderRadius: "10px", color: "inherit" })
+            .style({ flex: "1", minWidth: "0", border: "0", outline: "none", borderRadius: "var(--r-control)", color: "inherit" })
           Button("Answer") { submitCustomAnswer(question) }
             .fontSize(14)
             .fontWeight("medium")
             .padding({ top: 7, bottom: 7, leading: 14, trailing: 14 })
             .background(color.accent)
             .foregroundStyle(color.accentInk)
-            .style({ borderRadius: "10px" })
+            .style({ borderRadius: "var(--r-control)" })
             .disabled(!question.enabled || !connected() || !questionAnswer.value.trim())
         }
       }
@@ -417,7 +416,7 @@ struct Question: View {
     }
     .padding(14)
     .background(color.panel)
-    .style({ borderRadius: "14px" })
+    .style({ borderRadius: "var(--r-surface)" })
     .transition(Transition.opacity.combined(Transition.move("bottom", 8)))
   }
 }
@@ -438,7 +437,7 @@ struct Suggestions: View {
     }
     .padding({ top: 6, bottom: 6 })
     .background(color.panel)
-    .style({ borderRadius: "14px" })
+    .style({ borderRadius: "var(--r-surface)" })
     .transition(Transition.opacity.combined(Transition.move("bottom", 6)))
   }
 }
@@ -522,8 +521,8 @@ struct Composer: View {
             onKeyDown,
             onPaste: event => { if (canAttach.value && event.clipboardData?.files.length) { event.preventDefault(); addFiles(event.clipboardData.files) } },
           })
-          .fontSize(16)
-          .style({ width: "100%", minHeight: "26px", border: "0", outline: "none", background: "transparent", resize: "none", fieldSizing: "content", maxHeight: "40vh", color: "inherit", padding: "0" })
+          .fontSize(15)
+          .style({ width: "100%", minHeight: "24px", border: "0", outline: "none", background: "transparent", resize: "none", fieldSizing: "content", maxHeight: "40vh", color: "inherit", padding: "0" })
         HStack(spacing: 4) {
           if canAttach.value {
             IconButton(icon: "plus", label: "Attach files", action: { pickFiles() })
@@ -555,7 +554,7 @@ struct Composer: View {
             .disabled(!primaryEnabled())
         }.withProps({ className: "composer-controls" })
       }
-      .padding({ top: 14, bottom: 10, leading: 16, trailing: 10 })
+      .padding({ top: 12, bottom: 8, leading: 16, trailing: 8 })
       .background(color.composer)
       .withProps({ className: "composer-surface", onClick: focusComposer })
       .style({ width: "100%", minWidth: "0" })

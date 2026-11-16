@@ -374,8 +374,8 @@ function pinToBottom(element: HTMLElement) {
   showJumpToLatest.value = false
   let pinned = true
   const follow = () => { if (pinned) element.scrollTop = element.scrollHeight }
-  // Streaming mutates the DOM many times per frame. Reading scrollHeight after
-  // each mutation forces a synchronous layout, so settle once before paint.
+  // Streaming mutates the DOM in many tasks per frame, and reading scrollHeight
+  // after each one forces a layout. Mutations settle once per frame instead.
   let followFrame = 0
   const scheduleFollow = () => {
     if (followFrame || !pinned) return
@@ -402,7 +402,10 @@ function pinToBottom(element: HTMLElement) {
     frame = requestAnimationFrame(follow)
   })
   const observer = new MutationObserver(scheduleFollow)
-  const resize = new ResizeObserver(scheduleFollow)
+  // Resize callbacks already run once per frame on a clean layout. Following
+  // there, before paint, means the next scroll event sees a settled position
+  // and a replaced transcript cannot unpin the reader.
+  const resize = new ResizeObserver(follow)
   if (element.firstElementChild) resize.observe(element.firstElementChild)
   resize.observe(element)
   element.addEventListener('scroll', onScroll, { passive: true })

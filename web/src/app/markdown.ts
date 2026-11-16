@@ -9,13 +9,15 @@ style.replaceSync(`
   .body > :first-child { margin-top: 0; }
   .body > :last-child { margin-bottom: 0; }
   p, ul, ol, pre, blockquote, table { margin: 0 0 0.75em; }
-  pre { padding: 10px 12px; border-radius: 6px; background: var(--panel); overflow-x: auto; font: 12.5px/1.5 var(--mono); }
+  pre { padding: 10px 12px; border-radius: var(--r-inline, 6px); background: var(--panel); overflow-x: auto; font: 12.5px/1.5 var(--mono); }
   code { font-family: var(--mono); font-size: 0.92em; }
   h1, h2, h3, h4 { margin: 1em 0 0.5em; font-size: 1.05em; font-weight: 600; }
   a { color: inherit; }
   blockquote { padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
   table { border-collapse: collapse; }
-  th, td { padding: 4px 8px; border: 1px solid var(--line); }
+  th, td { padding: 6px 16px 6px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { font-weight: 600; }
+  tr:last-child > td { border-bottom: 0; }
 `)
 
 /**

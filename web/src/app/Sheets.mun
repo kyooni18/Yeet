@@ -206,7 +206,7 @@ export struct SheetLayer: View {
       .background(color.bg)
       .border(color.line, 1)
       .shadow("rgba(0, 0, 0, 0.18)", 24, 0, 8)
-      .style({ borderRadius: "14px", maxWidth: "calc(100vw - 24px)", position: "relative" })
+      .style({ borderRadius: "var(--r-surface)", maxWidth: "calc(100vw - 24px)", position: "relative" })
       .transition(Transition.opacity.combined(Transition.scale(0.97)))
     }
     .style({ position: "fixed", inset: "0", width: "100%", height: "100%", zIndex: "20" })

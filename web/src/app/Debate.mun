@@ -28,7 +28,7 @@ export struct DebatePage: View {
         }
         if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
         if remote.value.state.debate {
-          Text(remote.value.state.debate.topic).fontSize(18).fontWeight("medium")
+          Text(remote.value.state.debate.topic).fontSize(15).fontWeight("medium")
           Text(remote.value.state.debate.status).withProps({ role: "status", className: "form-help" })
           ForEach(remote.value.state.debate.speeches.map((speech, index) => ({ ...speech, index })), { id: speech => speech.index }) { speech in
             VStack(alignment: .stretch, spacing: 8) {
@@ -37,7 +37,7 @@ export struct DebatePage: View {
             }.withProps({ className: "feature-card" }).style({ width: "100%" })
           }
           if remote.value.state.debate.verdict {
-            Text("Verdict").fontSize(17).fontWeight("medium")
+            Text("Verdict").fontSize(15).fontWeight("medium")
             Element("yeet-markdown", { source: remote.value.state.debate.verdict })
           }
           ForEach(remote.value.state.debate.ballots.map((ballot, index) => ({ ...ballot, index })), { id: ballot => ballot.index }) { ballot in

@@ -54,9 +54,9 @@ struct SessionRow: View {
 struct Header: View {
   var body: some View {
     HStack(spacing: 8) {
-      Image("/yeet-mark.svg").style({ width: "28px", height: "28px" })
-      Text("Yeet").fontSize(20).fontWeight("semibold").style({ letterSpacing: "-0.6px" })
-      Text("REMOTE").withProps({ className: "brand-tag" })
+      Image("/yeet-mark.svg").style({ width: "24px", height: "24px" })
+      Text("Yeet").fontSize(17).fontWeight("semibold")
+      Text("Remote").withProps({ className: "brand-tag" })
       Spacer()
       IconButton(icon: "sidebar", label: "Hide sidebar", action: { toggleSidebar(false) })
     }
