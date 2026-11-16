@@ -14,7 +14,6 @@ older reasoning in the live status.
 | `openai` (API) | Responses | Summary deltas and done-only summaries, compatible plaintext reasoning, hosted-tool activity | Reasoning items including encrypted state replayed only for the same provider/model; stable context cache affinity |
 | `claude` (subscription), `anthropic`, `claude-api` | Messages over OAuth or API key | Visible thinking summaries and progress updates; hidden thinking phase; server-managed tool activity | Existing thinking mode, budgets, sampling controls, and authentication routes preserved; signed/redacted blocks replayed unchanged; four cache breakpoints; one-hour cache write pricing shared by aliases |
 | `gemini` (API), `gemini-web` (Code Assist) | GenerateContent, optionally Code Assist envelope | `thought: true` text is a model summary | `includeThoughts` requested for supported models; explicit opt-outs preserved; thought signatures retained for continuation; output usage includes thinking tokens and input usage includes tool-use prompts |
-| `antigravity` | Gemini Interactions managed-agent API | Thought-step summaries, explicit reasoning phases, remote managed-tool activity | Interaction/environment IDs and function-name mapping preserved; provider options forwarded; no unsupported GenerateContent or generic reasoning parameters invented |
 | `openrouter` | OpenAI-compatible chat | Native reasoning fields and structured reasoning details | Opaque reasoning details and native `reasoning_content` preserved; logical blocks kept separate; context/session affinity and content cache boundaries retained |
 | `exaone` (K-EXAONE) | OpenAI-compatible chat at `api.exaone.ai/v1` | Native `reasoning_content` | Levels map to `reasoning_effort` low/high/max; `chat_template_kwargs.preserve_thinking` keeps reasoning across tool turns; static model list (no `/models`); quota status comes from the latest `x-{second,minute,day}-rate-limit[-remaining]` response headers, and `retry-after-ms` is honored on 429 |
 | `opencode`, `opencode-go` | Catalog-selected Responses, Messages, Google, or chat | Corresponding native protocol's reasoning/summary information | Uses the selected protocol rather than forcing every model through chat; native reasoning continuation survives tool turns |
@@ -50,7 +49,6 @@ was actually returned.
 
 - [Claude thinking configuration, display, streaming, and signed replay](https://platform.claude.com/docs/en/build-with-claude/thinking)
 - [Gemini thought summaries and signatures](https://ai.google.dev/gemini-api/docs/thinking)
-- [Antigravity managed-agent API](https://ai.google.dev/gemini-api/docs/antigravity-agent)
 - [OpenRouter reasoning fields and replay](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)
 - [OpenCode Go protocol-specific endpoints](https://opencode.ai/docs/go/)
 - [DeepSeek thinking-mode continuation requirements](https://api-docs.deepseek.com/guides/thinking_mode/)

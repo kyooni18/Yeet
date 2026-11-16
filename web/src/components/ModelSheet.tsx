@@ -13,7 +13,6 @@ function providerDisplayName(provider: string): string {
     case 'codex-cli':
     case 'codex': return 'OpenAI Codex'
     case 'anthropic': return 'Claude API'
-    case 'antigravity': return 'Google Antigravity'
     case 'claude': return 'Claude Code'
     case 'google': return 'Gemini API'
     case 'gemini': return 'Gemini API'

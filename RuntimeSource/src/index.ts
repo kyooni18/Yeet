@@ -1,5 +1,4 @@
 export * from "./auth.js";
-export * from "./antigravity-local.js";
 export * from "./capabilities.js";
 export * from "./vision.js";
 export * from "./core.js";

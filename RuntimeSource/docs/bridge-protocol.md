@@ -60,7 +60,7 @@ mode. Existing requests without this option retain single-response behavior.
 The URL is interactive data, not a stderr diagnostic; do not persist it in logs.
 For loopback providers the host can derive the callback port from `redirect_uri`
 or `callback_url` to show SSH forwarding instructions. State, PKCE, timeouts and
-credential persistence are unchanged. Claude and Antigravity report their
+credential persistence are unchanged. Claude reports its
 external-application requirements rather than pretending to support this mode.
 
 ## Native-app approval

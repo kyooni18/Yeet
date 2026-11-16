@@ -133,7 +133,7 @@ fn stable_selection_and_editor_delivery_preserve_failed_changes() {
 fn projected_choices_and_provider_identity_drive_actions_without_native_policy() {
     let harness = HarnessState {
         auth_providers: vec![crate::model::AuthProviderItem {
-            provider: "antigravity".into(),
+            provider: "mistral".into(),
             authenticated: false,
             method: String::new(),
             expires_at: None,
@@ -147,12 +147,12 @@ fn projected_choices_and_provider_identity_drive_actions_without_native_policy()
     let view = state.view(&env, &harness);
     let control = view
         .controls()
-        .find(|control| control.provider.as_deref() == Some("antigravity"))
+        .find(|control| control.provider.as_deref() == Some("mistral"))
         .unwrap();
-    assert_eq!(control.label, "Google Antigravity");
+    assert_eq!(control.label, "Mistral Vibe");
     assert_eq!(control.action_label, "Log in");
     assert!(
-        matches!(state.apply(control.action.clone(),&env,&harness).command,Some(HarnessCommand::AuthLogin{provider})if provider=="antigravity")
+        matches!(state.apply(control.action.clone(),&env,&harness).command,Some(HarnessCommand::AuthLogin{provider})if provider=="mistral")
     );
     assert!(
         state

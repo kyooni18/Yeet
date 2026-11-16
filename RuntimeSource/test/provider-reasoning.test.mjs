@@ -29,7 +29,6 @@ test('Claude display handling preserves execution policy and explicit thinking c
   assert.equal(withReasoningPolicy({ model: 'anthropic/claude-sonnet-4-5', messages, maxTokens: 1024 }).providerOptions, undefined);
   const openai = withReasoningPolicy({ model: 'codex-cli/gpt-6-sol', messages, providerOptions: { reasoning: { effort: 'high' } } });
   assert.deepEqual(openai.providerOptions.reasoning, { effort: 'high', summary: 'auto' });
-  assert.equal(withReasoningPolicy({ model: 'antigravity/antigravity-preview-09-2026', messages, metadata: { reasoningLevel: 'high' } }).providerOptions, undefined);
 });
 
 test('Claude signed thinking survives a streamed tool round trip while thinking remains active', async () => {

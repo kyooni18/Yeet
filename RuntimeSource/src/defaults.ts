@@ -1,7 +1,6 @@
 import { CallCore } from "./core.js";
 import type { ProviderFetchLogger } from "./http.js";
 import type { FetchLike } from "./types.js";
-import { AntigravityProvider } from "./providers/antigravity.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { GeminiProvider } from "./providers/gemini.js";
 import { MistralProvider } from "./providers/mistral.js";
@@ -15,7 +14,6 @@ export interface DefaultCoreOptions {
   anthropicApiKey?: string;
   geminiApiKey?: string;
   mistralApiKey?: string;
-  antigravityApiKey?: string;
   geminiAccessToken?: string;
   geminiProjectId?: string;
   opencodeApiKey?: string;
@@ -40,7 +38,6 @@ export function createDefaultCore(options: DefaultCoreOptions = {}): CallCore {
   const anthropicApiKey = options.anthropicApiKey ?? env("ANTHROPIC_API_KEY");
   const geminiApiKey = options.geminiApiKey ?? env("GEMINI_API_KEY");
   const mistralApiKey = options.mistralApiKey ?? env("MISTRAL_API_KEY");
-  const antigravityApiKey = options.antigravityApiKey ?? geminiApiKey;
   const opencodeApiKey = options.opencodeApiKey ?? env("OPENCODE_API_KEY");
   const opencodeGoApiKey = options.opencodeGoApiKey ?? opencodeApiKey;
   const openrouterApiKey = options.openrouterApiKey ?? env("OPENROUTER_API_KEY");
@@ -50,7 +47,6 @@ export function createDefaultCore(options: DefaultCoreOptions = {}): CallCore {
   return new CallCore([
     new MistralProvider({ ...(mistralApiKey ? { apiKey: mistralApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new OpenAIProvider({ ...(openaiApiKey ? { apiKey: openaiApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
-    new AntigravityProvider({ ...(antigravityApiKey ? { apiKey: antigravityApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new AnthropicProvider({ id: "claude-api", ...(anthropicApiKey ? { apiKey: anthropicApiKey } : {}), ...fetchOption, ...apiCallLoggerOption }),
     new GeminiProvider({
       ...(geminiApiKey ? { apiKey: geminiApiKey } : {}),

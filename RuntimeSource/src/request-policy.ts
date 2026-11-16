@@ -204,7 +204,7 @@ export function withReasoningPolicy(request: CallRequest): CallRequest {
   // only `reasoning` while preserving native tools and the rest of the request.
   if ([
     "openai", "codex-cli", "opencode", "opencode-go", "openrouter", "exaone",
-    "anthropic", "claude", "claude-api", "antigravity", "gemini", "gemini-web",
+    "anthropic", "claude", "claude-api", "gemini", "gemini-web",
   ].includes(parsed.provider)) return request;
 
   if (requested && existing.reasoning === undefined

@@ -4,7 +4,6 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import process from "node:process";
 import { AuthManager, type ResolvedCredential } from "./auth.js";
-import { AntigravityLocalClient } from "./antigravity-local.js";
 import { createDefaultCore } from "./defaults.js";
 import { OpenComputerUse } from "./open-computer-use.js";
 import { claudeCodeVersion } from "./claude-version.js";
@@ -13,8 +12,6 @@ import type { ProviderFetchLog } from "./http.js";
 import { McpManager } from "./mcp.js";
 import { ModelMetadataCatalog } from "./model-metadata.js";
 import { applyCacheCostPolicy, applyOpenAIFlexAuthPolicy, cheapestModel, estimateUsageCostUsd, estimatedRequestTokens, inputCostEquivalentTokens } from "./pricing.js";
-import { AntigravityProvider } from "./providers/antigravity.js";
-import { AntigravityLocalProvider } from "./providers/antigravity-local.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { GeminiProvider } from "./providers/gemini.js";
 import { MistralProvider } from "./providers/mistral.js";
@@ -40,8 +37,7 @@ import {
   type SerializedBridgeError,
 } from "./bridge-protocol.js";
 
-const antigravityLocal = new AntigravityLocalClient();
-const auth = new AuthManager({ antigravityLocalClient: antigravityLocal });
+const auth = new AuthManager();
 await auth.ensure();
 const skills = new SkillRegistry({ configDir: auth.configDir });
 await skills.ensure();
@@ -254,15 +250,6 @@ async function refreshProvider(providerId: string): Promise<void> {
       }));
       return;
     }
-    case "antigravity": {
-      const localStatus = await antigravityLocal.getAuthStatus().catch(() => undefined);
-      if (localStatus?.hasValidAuth || !credential) {
-        core.register(new AntigravityLocalProvider({ client: antigravityLocal }));
-      } else {
-        core.register(new AntigravityProvider({ ...apiKeyOption(credential), apiCallLogger: writeApiCallLog }));
-      }
-      return;
-    }
     case "claude":
       core.register(new AnthropicProvider({
         id: "claude",
@@ -314,7 +301,7 @@ async function refreshProvider(providerId: string): Promise<void> {
   }));
 }
 
-for (const provider of ["openai", "codex-cli", "antigravity", "claude", "gemini", "mistral", "openrouter", "opencode", "opencode-go", "exaone"]) await refreshProvider(provider);
+for (const provider of ["openai", "codex-cli", "claude", "gemini", "mistral", "openrouter", "opencode", "opencode-go", "exaone"]) await refreshProvider(provider);
 for (const provider of ["claude-api"]) await refreshProvider(provider);
 for (const provider of await auth.listCustomProviders()) {
   customProviders.set(provider.id, { kind: "openai-compatible", ...provider });

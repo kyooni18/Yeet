@@ -23,7 +23,6 @@ const sources: Record<string, string> = {
   'codex-cli': codexIcon,
   codex: codexIcon,
   anthropic: anthropicIcon,
-  antigravity: googleIcon,
   claude: claudeIcon,
   google: googleIcon,
   gemini: geminiIcon,

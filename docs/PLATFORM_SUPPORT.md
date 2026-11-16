@@ -86,8 +86,7 @@ new login and use its new URL; old callbacks cannot complete a new attempt.
 
 Mistral polls for approval and needs no loopback tunnel. Claude authentication is
 delegated to Claude Code: run `claude auth login` on the server or supply
-`CLAUDE_CODE_OAUTH_TOKEN`. Antigravity requires its local application and does not
-support headless browser login. `--no-browser` reports these limitations instead
+`CLAUDE_CODE_OAUTH_TOKEN`. `--no-browser` reports this limitation instead
 of silently launching a desktop app.
 
 When a desktop browser opener is unavailable, the runtime also falls back to a
