@@ -32,6 +32,8 @@ git tag -a v0.1.0 -m "Yeet v0.1.0"
 git push origin v0.1.0
 ```
 
+Linux x64 is built outside Actions. Before pushing the tag, run `./Scripts/package-release.sh` on an x86_64 Linux host at the release commit and push the contents of `target/packages` (archive, `.deb` and their `.sha256` files, nothing else) as the root of a branch named `release-assets/v<version>`. The workflow's linux-x64 job downloads that branch, checks the checksums and the reported version, and publishes the files; it fails if the branch is missing, and can be re-run once it exists. These packages carry no GitHub provenance attestation.
+
 The release workflow runs a focused functional gate (`cargo test --lib --bins -- --test-threads=1`, and RuntimeSource checks), then queues independent macOS, Linux, and Windows platform builds (including Linux i686). Each successful job immediately uploads its packages and SHA-256 sidecars to a prerelease, so other platforms do not block it. The prerelease becomes visible once the first platform finishes; the previous stable release remains `latest` until all platforms and the finalization job succeed. Re-run failed jobs to complete a partial release. GitHub provenance attestations accompany the platform assets.
 
 To install an already completed Unix platform from a partial prerelease without waiting for the other platforms, explicitly select its tag (the default installer uses the latest stable release):

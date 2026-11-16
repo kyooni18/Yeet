@@ -55,8 +55,10 @@ jobs:
             label: macos-arm64
           - os: macos-15-intel
             label: macos-x64
+          # Built outside Actions and published from release-assets/<tag>.
           - os: ubuntu-latest
             label: linux-x64
+            prebuilt: true
           - os: ubuntu-latest
             label: linux-i686
             target: i686-unknown-linux-gnu
@@ -69,18 +71,38 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch and verify prebuilt packages
+        if: matrix.prebuilt
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git fetch --depth 1 origin "refs/heads/release-assets/$GITHUB_REF_NAME"
+          mkdir -p target/packages
+          git archive FETCH_HEAD | tar -x -C target/packages
+          cd target/packages
+          sha256sum --check ./*.sha256
+          archive="yeet-$version-x86_64-unknown-linux-gnu.tar.gz"
+          test -f "$archive" && test -f "yeet_${version}_amd64.deb"
+          # The package must be this release, and must run on the hosted image.
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          actual="$("$RUNNER_TEMP/yeet-$version-x86_64-unknown-linux-gnu/bin/yeet" --version)"
+          [ "$actual" = "$version" ] || { echo "Prebuilt Yeet reports $actual, expected $version" >&2; exit 1; }
       - uses: actions/setup-node@v4
+        if: ${{ !matrix.prebuilt }}
         with:
           node-version: lts/*
           cache: npm
           cache-dependency-path: RuntimeSource/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !matrix.prebuilt }}
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        if: ${{ !matrix.prebuilt }}
         with:
           key: ${{ matrix.label }}
       - uses: ./.github/actions/setup-mun
+        if: ${{ !matrix.prebuilt }}
       - name: Install Linux i686 toolchain
         if: matrix.target == 'i686-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
@@ -96,7 +118,7 @@ jobs:
             "YEET_SIGN_PFX=$Pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
       - name: Package Unix release
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && !matrix.prebuilt
         shell: sh
         env:
           YEET_VERSION: ${{ github.ref_name }}
@@ -109,7 +131,9 @@ jobs:
           YEET_VERSION: ${{ github.ref_name }}
           YEET_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERTIFICATE_PASSWORD }}
         run: .\Scripts\package-release.ps1
+      # Provenance only covers what this workflow built itself.
       - name: Attest release artifacts
+        if: ${{ !matrix.prebuilt }}
         uses: actions/attest@v4
         with:
           subject-path: target/packages/*
