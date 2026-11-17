@@ -10,5 +10,5 @@ mod tools;
 mod types;
 pub use projection::{should_display_activity, should_display_reasoning};
 pub use state::ConversationState;
-pub use tools::project_tool;
+pub use tools::{icon_for_kind, icon_for_tool, project_tool};
 pub use types::*;

@@ -5,22 +5,10 @@ pub(in crate::platforms::tui::ui) use crate::shared_ui::conversation::compact::{
 };
 use crate::tui::ui::support::icons;
 
+/// Agent feed rows know only a tool name; use the same kind-based glyph as
+/// transcript rows.
 pub(in crate::platforms::tui::ui) fn tool_icon(name: &str) -> &'static str {
-    // Font Awesome's Nerd Font codepoints cover the mockup's pixel icons in a
-    // terminal cell. The active terminal font controls their final shape.
-    match name {
-        "apply_file_edits" => "\u{f040}",
-        "search_workspace" | "search_artifact" | "search_tools" | "web_search" => "\u{f002}",
-        "read_file" | "read_files" | "read_artifact" | "read_document" => "\u{f15c}",
-        "web_read" => "\u{f02d}",
-        "run_shell" | "shell_job" => "\u{f120}",
-        "list_files" => "\u{f07b}",
-        "analyze_data" => "\u{f080}",
-        "computer_use" | "desktop_control" => "\u{f108}",
-        "activate_capability" => "\u{f0e7}",
-        "context_history" => "\u{f1da}",
-        _ => "\u{f013}",
-    }
+    icons::conversation(crate::shared_ui::conversation::icon_for_tool(name))
 }
 
 pub(in crate::platforms::tui::ui) fn spinner() -> &'static str {

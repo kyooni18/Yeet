@@ -266,16 +266,7 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
             );
             // Derive presentation from the existing call, without another model turn.
             // Only successful execution gets a past-tense completion label.
-            let (completed_title, failed_title) = match call.name.rsplit('.').next().unwrap_or("") {
-                "web_search" => ("Searched web", "Web search failed"),
-                "web_read" => ("Read web page", "Web page read failed"),
-                "search_workspace" => ("Searched workspace", "Workspace search failed"),
-                "read_file" => ("Read file", "File read failed"),
-                "apply_file_edits" => ("Applied file edits", "File edits failed"),
-                "run_shell" => ("Ran command", "Command failed"),
-                "activate_capability" => ("Activated capability", "Capability activation failed"),
-                _ => ("Tool completed", "Tool failed"),
-            };
+            let labels = crate::tools::tool_presentation(&call.name).1;
             state.set_activity(
                 if succeeded {
                     "tool-complete"
@@ -283,9 +274,9 @@ pub(super) fn apply_agent_event(state: &mut SharedSession, event: AgentEvent) {
                     "tool-failed"
                 },
                 if succeeded {
-                    completed_title
+                    labels.done
                 } else {
-                    failed_title
+                    labels.failed
                 },
                 tool_detail(&call),
             );

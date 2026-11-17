@@ -27,12 +27,28 @@ local file paths out of provider payloads.
 
 ## Direct tools
 
-The base tool surface lives in `Harness/tools.rs`. A direct tool needs:
+A direct tool is declared in three places under `Harness/tools/`:
 
-1. a `ToolDefinition` in `base_tool_definitions()`;
-2. an execution branch in `ToolRegistry::execute()`;
-3. a bounded result contract;
-4. tests for validation, repeat suppression, or state mutation as appropriate.
+1. a `ToolSpec` row in `spec.rs`: access class (`Read`, `Write`, `Shell`,
+   `Runtime`), whether it is part of the default surface, whether research may
+   call it, its owning capability, its semantic kind and its four labels
+   (title, active, done, failed);
+2. a `ToolDefinition` (description and JSON schema) in
+   `definitions.rs::base_tool_definitions()`;
+3. an execution branch in `ToolRegistry::execute_gated()` in `Harness/tools.rs`.
+
+Add a bounded result contract, and tests for validation, repeat suppression,
+or state mutation as appropriate.
+
+The spec row is the only place that names the tool for policy and
+presentation. Scoped-agent write/shell prohibition, the research allowlist,
+the default tool surface and its order, capability toggles, progress and
+completion titles, transcript titles and icons in the TUI and web all read it.
+Do not add a `match` on the tool name elsewhere for those concerns. Basic
+tools are a provider-visible prefix: append to them, never reorder. A tool
+with a specialized transcript view (diff, terminal, source) adds its parser in
+`UI/conversation/rich.rs`; everything else renders through the generic
+readable sections.
 
 Repository reads should go through the edit daemon so snapshots and hash-line
 anchors remain consistent with transactional edits. Large results should be
@@ -44,8 +60,8 @@ exact-command permission path. Never add an unsandboxed fallback.
 ## Lazy Skills and MCP
 
 Skill and MCP metadata is discovered cheaply through the Node bridge. The agent
-uses `find_capabilities`, followed by `activate_capability` for one exact
-capability. Activation adds only that Skill's file reader or that MCP server's
+attaches `find_capabilities` and `activate_capability` through `search_tools`
+(neither is in the default surface), then activates one exact capability. Activation adds only that Skill's file reader or that MCP server's
 tool schemas to subsequent agent rounds.
 
 Keep generated tool names ASCII-only and collision-safe. Tool protocol errors

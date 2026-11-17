@@ -26,130 +26,35 @@ fn humanize_tool_name(name: &str) -> String {
     }
 }
 
+/// Row title for constrained layouts: the spec's active or done label, or
+/// the provider's own label when it supplied one.
 pub fn tool_activity_title(call: &crate::model::ConversationToolCall) -> String {
-    tool_activity_title_with_style(call, false)
-}
-
-fn tool_activity_title_with_style(
-    call: &crate::model::ConversationToolCall,
-    legacy: bool,
-) -> String {
     let active = matches!(
         call.status,
         ToolCallStatus::Preparing | ToolCallStatus::AwaitingPermission | ToolCallStatus::Running
     );
+    let (kind, labels) = crate::tools::tool_presentation(&call.name);
     let fallback_verb = humanize_tool_name(&call.name);
-    let verb = match call.name.as_str() {
-        "apply_file_edits" => {
-            if active {
-                "Editing"
-            } else {
-                "Edited"
-            }
-        }
-        "search_workspace" | "search_artifact" | "web_search" => {
-            if active {
-                "Searching"
-            } else {
-                "Searched"
-            }
-        }
-        "search_tools" => {
-            if active {
-                "Finding tools"
-            } else {
-                "Found tools"
-            }
-        }
-        "context_history" => {
-            if active {
-                "Reading context"
-            } else {
-                "Read context"
-            }
-        }
-        "read_file" | "read_files" => {
-            if active {
-                "Reading File"
-            } else {
-                "Read File"
-            }
-        }
-        "read_artifact" => {
-            if active {
-                "Reading output"
-            } else {
-                "Read output"
-            }
-        }
-        "read_document" => {
-            if active {
-                "Reading document"
-            } else {
-                "Read document"
-            }
-        }
-        "web_read" => {
-            if active {
-                "Reading Website"
-            } else {
-                "Read Website"
-            }
-        }
-        "run_shell" => {
-            if active {
-                "Running Shell"
-            } else {
-                "Ran Shell"
-            }
-        }
-        "shell_job" => {
-            if active {
-                "Checking command"
-            } else {
-                "Checked command"
-            }
-        }
-        "list_files" => {
-            if active {
-                "Listing files"
-            } else {
-                "Listed files"
-            }
-        }
-        "analyze_data" => {
-            if active {
-                "Analyzing data"
-            } else {
-                "Analyzed data"
-            }
-        }
-        "computer_use" | "desktop_control" => {
-            if active {
-                "Using computer"
-            } else {
-                "Used computer"
-            }
-        }
-        _ => fallback_verb.as_str(),
-    };
-
-    let verb = if legacy {
-        verb
+    let verb = if kind == crate::tools::ToolKind::Other {
+        fallback_verb.as_str()
+    } else if active {
+        labels.active
     } else {
-        call.label
-            .as_deref()
-            .map(str::trim)
-            .filter(|label| !label.is_empty())
-            .unwrap_or(verb)
+        labels.done
     };
+    let verb = call
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or(verb);
     let outcome = match call.status {
         ToolCallStatus::Failed => Some("Failed"),
         ToolCallStatus::TimedOut => Some("Timed out"),
         ToolCallStatus::Cancelled => Some("Cancelled"),
         ToolCallStatus::Interrupted => Some("Interrupted"),
-        ToolCallStatus::AwaitingPermission if !legacy => Some("Approval needed"),
-        ToolCallStatus::Preparing if !legacy => Some("Preparing"),
+        ToolCallStatus::AwaitingPermission => Some("Approval needed"),
+        ToolCallStatus::Preparing => Some("Preparing"),
         _ => None,
     };
     outcome
@@ -158,14 +63,7 @@ fn tool_activity_title_with_style(
 }
 
 pub fn tool_activity_summary(call: &crate::model::ConversationToolCall) -> Option<String> {
-    tool_activity_summary_with_style(call, false)
-}
-
-fn tool_activity_summary_with_style(
-    call: &crate::model::ConversationToolCall,
-    legacy: bool,
-) -> Option<String> {
-    let mut summary = tool_target_with_style(call, legacy);
+    let mut summary = tool_target(call);
     if matches!(
         call.status,
         ToolCallStatus::Failed
@@ -188,16 +86,9 @@ fn tool_activity_summary_with_style(
 
 /// What a trace row points at. Failures are shown by the row's icon colour.
 pub fn tool_target(call: &crate::model::ConversationToolCall) -> Option<String> {
-    tool_target_with_style(call, false)
-}
-
-fn tool_target_with_style(
-    call: &crate::model::ConversationToolCall,
-    legacy: bool,
-) -> Option<String> {
-    let explicit_detail = (!legacy)
-        .then_some(call.detail.as_deref())
-        .flatten()
+    let explicit_detail = call
+        .detail
+        .as_deref()
         .map(str::trim)
         .filter(|detail| !detail.is_empty())
         .map(str::to_owned);
@@ -556,29 +447,6 @@ pub fn reasoning_summary_items(summary: &str) -> Vec<String> {
         .filter(|line| !line.is_empty())
         .map(str::to_owned)
         .collect()
-}
-
-pub fn tool_action_label(name: &str, active: bool) -> String {
-    let (past, present) = match name {
-        "apply_file_edits" => ("Edited Files", "Editing Files"),
-        "search_workspace" => ("Searched Files", "Searching Files"),
-        "search_artifact" => ("Searched Output", "Searching Output"),
-        "search_tools" => ("Searched Tools", "Searching Tools"),
-        "web_search" => ("Searched Web", "Searching Web"),
-        "read_file" | "read_files" => ("Read File", "Reading File"),
-        "read_artifact" => ("Read Output", "Reading Output"),
-        "read_document" => ("Read Document", "Reading Document"),
-        "web_read" => ("Read Website", "Reading Website"),
-        "run_shell" => ("Ran Shell", "Running Shell"),
-        "shell_job" => ("Checked Shell Job", "Checking Shell Job"),
-        "context_history" => ("Read Context", "Reading Context"),
-        "list_files" => ("Listed Files", "Listing Files"),
-        "analyze_data" => ("Analyzed Data", "Analyzing Data"),
-        "computer_use" | "desktop_control" => ("Used Computer", "Using Computer"),
-        "activate_capability" => ("Activated Capability", "Activating Capability"),
-        _ => return humanize_tool_name(name),
-    };
-    if active { present } else { past }.to_owned()
 }
 
 pub fn is_active(call: &crate::model::ConversationToolCall) -> bool {

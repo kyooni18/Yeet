@@ -109,30 +109,9 @@ pub(super) fn cache_status_line(usage: &Usage) -> String {
     }
 }
 
-/// Maps a tool name to the short activity title shown while it runs.
+/// The spec table's active label for a tool: the title shown while it runs.
 pub(super) fn tool_activity_title(name: &str) -> String {
-    match name {
-        "read_file" | "read_files" => "Reading",
-        "list_files" => "Scanning",
-        "search_workspace" => "Searching",
-        "outline" => "Outlining",
-        "find_symbol" => "Finding symbol",
-        "web_search" => "Searching web",
-        "web_read" => "Reading web source",
-        "read_artifact" => "Reading output",
-        "search_artifact" => "Searching output",
-        "apply_file_edits" => "Editing",
-        "find_capabilities" => "Finding tools",
-        "activate_capability" => "Loading",
-        "run_shell" => "Running command",
-        "request_shell_permission" => "Requesting permission",
-        "ask_user" => "Asking you",
-        _ if name.starts_with("mcp_") => "Using MCP",
-        _ if name.starts_with("worker_") => "Running worker",
-        _ if name.starts_with("skill_") => "Reading skill",
-        _ => "Running",
-    }
-    .into()
+    crate::tools::tool_presentation(name).1.active.into()
 }
 
 /// Extracts the most useful short argument for a running tool activity row.

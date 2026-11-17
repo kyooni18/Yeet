@@ -1,7 +1,30 @@
 //! Shared tool trace copy and semantic details, preserved from the working Web view.
 use super::types::{ConversationIcon, DetailSection, ToolView};
 use crate::model::{ConversationToolCall, ToolCallStatus};
+use crate::tools::{ToolKind, tool_presentation};
 use serde_json::Value;
+
+/// One icon per semantic tool kind, shared by every renderer.
+pub fn icon_for_kind(kind: ToolKind) -> ConversationIcon {
+    use ConversationIcon::*;
+    match kind {
+        ToolKind::Shell => Terminal,
+        ToolKind::Edit => Edit,
+        ToolKind::Read => File,
+        ToolKind::Search => Search,
+        ToolKind::Listing => Folder,
+        ToolKind::Web => Web,
+        ToolKind::Screen => Screen,
+        ToolKind::Mcp => Mcp,
+        ToolKind::Skill => Skill,
+        _ => Tool,
+    }
+}
+
+/// Icon for a tool name, for rows that only know the name.
+pub fn icon_for_tool(name: &str) -> ConversationIcon {
+    icon_for_kind(tool_presentation(name).0)
+}
 
 fn record(value: &str) -> Option<Value> {
     serde_json::from_str::<Value>(value)
@@ -321,25 +344,12 @@ fn details(
     sections
 }
 pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
-    use ConversationIcon::*;
     use ToolCallStatus::*;
     let active = matches!(tool.status, Preparing | Running);
     let name = tool.name.trim();
-    let title = match name {
-        "web_search" => "Web search",
-        "web_read" => "Web page",
-        "run_shell" => "Command",
-        "shell_job" => "Command",
-        "read_file" | "read_files" | "read_artifact" | "read_document" => "Read file",
-        "apply_file_edits" => "Edit files",
-        "search_workspace" | "search_artifact" | "search_tools" => "Code search",
-        "list_files" => "File list",
-        "computer_use" | "desktop_control" => "Screen control",
-        _ if name.starts_with("mcp_") => "MCP",
-        _ if name.starts_with("skill_") => "Skill",
-        _ => "",
-    };
-    let title = if title.is_empty() {
+    let (kind, labels) = tool_presentation(name);
+    // Tools without a spec keep the provider's label or a readable name.
+    let title = if kind == ToolKind::Other {
         tool.label
             .clone()
             .filter(|label| !label.is_empty())
@@ -351,20 +361,9 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
                 }
             })
     } else {
-        title.into()
+        labels.title.into()
     };
-    let icon = match name {
-        "run_shell" | "shell_job" => Terminal,
-        "apply_file_edits" => Edit,
-        "read_file" | "read_files" | "read_artifact" | "read_document" => File,
-        "search_workspace" | "search_artifact" | "search_tools" => Search,
-        "list_files" => Folder,
-        "computer_use" | "desktop_control" => Screen,
-        "web_search" | "web_read" => Web,
-        _ if name.starts_with("mcp_") => Mcp,
-        _ if name.starts_with("skill_") => Skill,
-        _ => Tool,
-    };
+    let icon = icon_for_kind(kind);
     let status_label = match tool.status {
         Completed => Some("Completed"),
         Failed => Some("Failed"),
