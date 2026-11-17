@@ -115,39 +115,38 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .feature-page { width: 100% !important; max-width: 880px !important; margin: 0 auto; padding: 24px clamp(16px, 4vw, 32px) 40px; min-width: 0; }
 .feature-actions { flex-wrap: wrap; width: 100% !important; }
 
-/* Navigation: a fixed header/footer around an actually shrinkable scroll region. */
-#sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+/* Navigation: a source list. The header shares the title bar's height so the
+   window reads as one toolbar line; only the list between header and footer scrolls. */
+#sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: env(safe-area-inset-top) 8px max(8px, env(safe-area-inset-bottom)); }
 #sidebar > :not(.sidebar-scroll) { flex-shrink: 0; }
-.sidebar-header { width: 100% !important; min-width: 0; min-height: 40px; padding: 0 2px 0 6px; margin-bottom: 16px; }
+.sidebar-header { width: 100% !important; min-width: 0; min-height: var(--titlebar-height); padding: 0 0 0 8px; }
 .sidebar-header img { flex: none; display: block; object-fit: contain; }
-.brand-tag { font-size: 13px; color: var(--muted); padding-top: 2px; }
-.new-session { padding: 9px 12px; border-radius: var(--r-control); min-height: 40px; background: var(--field); transition: background var(--motion-fast); }
+.brand-tag { font-size: 12px; color: var(--muted); }
+.new-session { padding: 0 8px; border-radius: var(--r-control); min-height: var(--row-height); background: var(--field); transition: background var(--motion-fast); }
 .new-session:hover:not(:disabled) { background: var(--hover); }
-.nav-item, .workspace-choice, .workspace-toggle, .session-row, .panel-row { width: 100%; border-radius: var(--r-control); color: var(--text2); transition: background var(--motion-fast), color var(--motion-fast); }
-.nav-item { padding: 8px 12px; min-height: 38px; }
-.nav-item:hover, .workspace-choice:hover:not(:disabled), .workspace-toggle:hover:not(:disabled), .session-row:hover:not(:disabled), .panel-row:hover:not(:disabled) { background: var(--hover); color: var(--text); }
-.nav-item[aria-current="page"] { background: var(--nav-select); color: var(--text); font-weight: 500; }
-.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; font-size: 11px; color: var(--muted); border-radius: var(--r-inline); background: var(--hover); }
-.sidebar-scroll { overscroll-behavior: contain; padding: 0 2px 16px; margin: 4px -2px 0; }
-#workspace-list { overscroll-behavior: contain; border-left: 1px solid var(--line); margin-left: 16px; padding-left: 6px; scrollbar-gutter: stable; }
-.workspace-choice { padding: 8px; min-height: 36px; font-size: 13px; }
-.workspace-choice[aria-current="true"] { background: var(--session-select); color: var(--text); }
-.workspace-toggle { padding: 8px 10px; min-height: 38px; font-size: 13px; font-weight: 500; }
-.search-field { border: 1px solid transparent; border-radius: var(--r-control); padding: 7px 10px; background: var(--field); min-height: 36px; transition: border-color var(--motion-fast); }
+.nav-item, .session-row, .panel-row { width: 100%; border-radius: var(--r-inline); color: var(--text2); transition: background var(--motion-fast), color var(--motion-fast); }
+.sidebar-nav { padding: 8px 0 12px; }
+.nav-item { padding: 0 8px; min-height: var(--row-height); }
+.nav-item:hover, .session-row:hover:not(:disabled), .panel-row:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+/* Selection is a fill plus weight, so it does not depend on hue alone. */
+.nav-item[aria-current="page"] { background: var(--nav-select); color: var(--text); font-weight: 600; }
+.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; color: var(--muted); border-radius: var(--r-inline); background: var(--hover); }
+.sidebar-scroll { overscroll-behavior: contain; padding: 0 2px 12px; margin: 4px -2px 0; }
+.search-field { border: 1px solid transparent; border-radius: var(--r-control); padding: 0 8px; background: var(--field); min-height: 28px; transition: border-color var(--motion-fast); }
 .search-field:focus-within { border-color: var(--focus); }
 .session-search { min-width: 0; width: 100%; border: 0; padding: 0; background: none; outline: none; font-size: 13px; }
-.session-row { padding: 9px 10px; font-size: 13px; min-height: 38px; }
-.session-row[aria-current="true"] { background: var(--session-select); color: var(--text); }
-.session-item { width: 100% !important; min-width: 0; border-radius: var(--r-control); }
+.sidebar-section { padding: 14px 8px 4px; }
+.sidebar-empty { padding: 6px 8px; }
+.session-row { padding: 0 8px; min-height: var(--row-height); }
+.session-row[aria-current="true"] { background: var(--session-select); color: var(--text); font-weight: 600; }
+.session-item { width: 100% !important; min-width: 0; border-radius: var(--r-inline); }
 .session-item:has([aria-current="true"]) { background: var(--session-select); }
 .session-item .session-row { background: none; }
 .session-menu { opacity: 0; transition: opacity var(--motion-fast); }
 .session-item:hover .session-menu, .session-item:focus-within .session-menu { opacity: 1; }
-.sidebar-footer { padding: 12px 4px 0 10px; border-top: 1px solid var(--line); min-height: 48px; }
-.sidebar-settings { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-left: -10px; border-radius: var(--r-control); font-size: 13px; color: var(--muted); }
+.sidebar-footer { padding: 8px 4px 0 0; border-top: 1px solid var(--line); }
+.sidebar-settings { display: flex; align-items: center; padding: 0 8px; min-height: var(--row-height); border-radius: var(--r-inline); color: var(--text2); }
 .sidebar-settings:hover { color: var(--text); background: var(--hover); }
-.connection-dot { width: 6px; height: 6px; flex: none; background: var(--faint); border-radius: 50%; }
-.connection-dot.is-connected { background: var(--add); }
 
 /* App frame. Chrome (title bar, footer, navigation) is compact and not
    selectable; only the panes inside it scroll. */
@@ -295,7 +294,8 @@ button.trace-disclosure__row:hover { background: var(--hover); }
   input, textarea, select { font-size: 16px !important; }
   button { min-height: 44px; }
   .icon-button, .send-button { width: 44px; height: 44px; }
-  .nav-item, .session-row, .workspace-choice, .workspace-toggle, .panel-row { min-height: 44px; }
+  .nav-item, .session-row, .panel-row, .new-session, .sidebar-settings { min-height: 44px; }
+  .search-field { min-height: 44px; }
   .trace-disclosure__row { min-height: 44px; }
   .message-actions { opacity: 1 !important; }
   .session-menu { opacity: 1; }
