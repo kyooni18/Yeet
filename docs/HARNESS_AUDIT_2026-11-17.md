@@ -148,3 +148,26 @@ Foundation Memory was not reachable from this session.
 - **Not changed:** shell execution, permissions, background-job behavior,
   storage formats, provider authentication, and Remote compatibility
   guarantees. All protocol additions are optional fields.
+
+## Results
+
+Recorded here and in Git because Foundation Memory was not reachable from
+this session (no memory tool was exposed).
+
+- `cargo test --lib`: 525 passed after the spec-table and label changes; the
+  conversation projection change added one test (18 conversation tests pass).
+- Default browser suite: laptop + desktop 84 passed, 8 skipped; Chromium at
+  390×844 and 320×568 (stand-in for the WebKit phone projects) 90 passed,
+  2 skipped. The skips are viewport-inapplicable cases.
+- The legacy `navigation-shell` spec fails 3/3 before and after; it targets
+  the removed React client.
+- Web frame findings: Mün's `ScrollView` writes an inline `width: 100%`, so a
+  class width on a ScrollView needs `!important`. That had left the Files
+  page preview at zero width. A `//` comment directly inside an `if` block in
+  a `.mun` view, and a call expression leading an `if` condition, both fail
+  to compile; move the comment out and wrap the condition in a function.
+- Mün at the pinned revision builds with the CI recipe in
+  `.github/actions/setup-mun`, not with a bare `pnpm build`.
+- Default chrome contrast (token values): muted text on panel 6.58:1 light,
+  9.35:1 dark; focus ring 6.29:1 / 6.39:1. Custom theme palettes were not
+  measured.
