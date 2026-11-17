@@ -14,6 +14,26 @@ pub(super) struct ToolDiscovery {
     loaded_order: Vec<String>,
 }
 
+/// Names the built-in tools this turn can still attach, in spec order, so the
+/// model searches for a real name instead of guessing one. Only tools present
+/// in the current catalog are listed; external tools are found by keyword.
+fn search_tool_description(catalog: &[ToolDefinition], loaded: &HashSet<String>) -> String {
+    let available: HashSet<&str> = catalog.iter().map(|tool| tool.name.as_str()).collect();
+    let builtins = crate::tools::tool_specs()
+        .iter()
+        .map(|spec| spec.name)
+        .filter(|name| available.contains(name) && !loaded.contains(*name))
+        .collect::<Vec<_>>();
+    let mut description = String::from("Attach more tools by name or keyword.");
+    if !builtins.is_empty() {
+        description.push_str(" Built-in tools not attached yet: ");
+        description.push_str(&builtins.join(", "));
+        description.push('.');
+    }
+    description.push_str(" Keywords also find activated MCP, Skill and Worker tools.");
+    description
+}
+
 impl Default for ToolDiscovery {
     fn default() -> Self {
         Self {
@@ -86,7 +106,7 @@ impl ToolDiscovery {
         if self.search_enabled {
             tools.push(ToolDefinition::new(
                 SEARCH_TOOL,
-                "Find and attach more tools by name or keyword (e.g. MCP, Skills, context_history, find_capabilities).",
+                search_tool_description(catalog, &self.loaded),
                 json!({"type":"object","properties":{"query":{"type":"string","minLength":1}},"required":["query"],"additionalProperties":false}),
             ));
         }
@@ -235,6 +255,29 @@ mod tests {
                 .iter()
                 .any(|name| name.starts_with("web_"))
         );
+    }
+
+    #[test]
+    fn search_tool_names_only_unattached_builtins_in_the_catalog() {
+        let catalog = vec![
+            tool("read_file"),
+            tool("outline"),
+            tool("mcp_docs_search"),
+            tool("find_symbol"),
+        ];
+        let mut discovery = ToolDiscovery::basic();
+        let description = |discovery: &ToolDiscovery| {
+            discovery
+                .attached(&catalog)
+                .pop()
+                .and_then(|tool| tool.description)
+                .unwrap()
+        };
+        let before = description(&discovery);
+        assert!(before.contains("not attached yet: outline, find_symbol."));
+        assert!(!before.contains("mcp_docs_search") && !before.contains("memory_save"));
+        discovery.load(["outline"]);
+        assert!(description(&discovery).contains("not attached yet: find_symbol."));
     }
 
     #[test]

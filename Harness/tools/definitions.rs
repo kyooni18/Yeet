@@ -44,7 +44,7 @@ pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
     BuiltinCapabilityDescriptor {
         id: "builtin:computer-use",
         name: "Computer Use",
-        description: "Control native macOS applications with Codex's installed Computer Use runtime. Yeet launches it directly as a built-in capability; no MCP server needs to be configured or linked.",
+        description: "Control native desktop apps on macOS, Linux, and Windows through the installed Open Computer Use runtime. Yeet launches it directly as a built-in capability; no MCP server needs to be configured or linked.",
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:document-read",
@@ -83,17 +83,17 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "find_capabilities",
-            "Find up to 8 matching lazy Skills, MCPs, or Workers. Refine the query if needed. Built-in schemas come from search_tools; web_search is not activated here.",
+            "Find up to 8 Skills, MCP servers, or Workers matching a query; refine the query if needed. Built-in tools are attached with search_tools, not here.",
             json!({"type":"object","properties":{"query":{"type":"string"}},"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "activate_capability",
-            "Activate one exact Skill/MCP/Worker ID returned by find_capabilities. Never invent IDs; this does not enable built-ins or web_search.",
+            "Activate one Skill, MCP server, or Worker by the exact ID find_capabilities returned. Never invent IDs. Built-in tools are not activated here.",
             json!({"type":"object","properties":{"capability":{"type":"string"}},"required":["capability"],"additionalProperties":false}),
         ),
         ToolDefinition::new(
             "read_file",
-            "Read one UTF-8 file or up to 8 ranges with requests as numbered lines. Use inclusive startLine/endLine or startLine/lineCount. Reads always use current contents; nextStartLine continues this page and firstUnreadLine identifies earlier gaps. Relative paths resolve from the cwd.",
+            "Read one UTF-8 file, or up to 8 files or ranges with `requests`, as numbered lines. Give a range as inclusive startLine/endLine or as startLine/lineCount. Reads always return current contents. nextStartLine continues after this page; firstUnreadLine is the earliest line not yet read. Relative paths resolve from the cwd.",
             native_read_file_schema(),
         ),
         ToolDefinition::new(
@@ -153,12 +153,12 @@ pub(super) fn base_tool_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::new(
             "run_shell",
-            "Run exactly one shell command or executable with literal args (no shell). Shell defaults to clean non-interactive initialization; loadConfig/login are opt-ins. Direct execution retains sandbox checks. Only cwd persists, not environment variables or functions; workingDirectory selects this call's directory. yieldSeconds (default 120) ends the foreground wait while the process keeps running; timeoutSeconds is a hard deadline. Completed and running output is retained under jobId; use shell_job action=output to page it, or action=wait for event-driven completion. Inspect capture completeness and retention limits. mode controls output routing, not how the process launches.",
+            "Run one command: `command` (shell syntax) or `executable` with literal `args` (no shell parsing). Both run under the same sandbox and approval rules. The shell starts clean and non-interactive; loadConfig and login opt in. Only the working directory persists between calls, not variables or functions; workingDirectory sets it for this call. yieldSeconds (default 120) ends the foreground wait and leaves the process running under its jobId; timeoutSeconds is a hard deadline. Output of finished and running commands is retained under jobId: page it with shell_job action=output, or wait with action=wait. Check the capture fields before treating an excerpt as complete. mode routes output; it does not change how the process launches.",
             shell_execution_schema(),
         ),
         ToolDefinition::new(
             "shell_job",
-            "Inspect, wait for, list, stop, or forget running and retained completed jobs. output returns decoded text pages by byte offset; format=events preserves raw base64 events. Continue with nextOffset and inspect hasMore/captureComplete. For Unix PTY jobs, input sends text, resize changes terminal dimensions, and interrupt sends Ctrl-C. A stop request is distinct from confirmed process exit.",
+            "Check, wait for, list, stop, or forget run_shell jobs, running or retained after completion. action=output pages decoded text by byte offset (format=events returns raw base64 events); continue from nextOffset while hasMore, and check captureComplete. Unix PTY jobs accept input (text), resize (rows, cols) and interrupt (Ctrl-C). An accepted stop does not prove the process exited.",
             shell_job_schema(),
         ),
         ToolDefinition::new(

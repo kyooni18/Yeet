@@ -212,7 +212,7 @@ pub(super) fn attached_web_search_capability_result(
                 return Some(json!([{
                     "id":"web-search",
                     "kind":"attached-local",
-                    "description":"Web search is enabled. Use search_tools with query web_search to attach its schema; capability activation is not required."
+                    "description":"Web search is enabled and web_search is already attached. Call it directly; no activation is needed."
                 }]).to_string());
             }
         }
@@ -225,7 +225,7 @@ pub(super) fn attached_web_search_capability_result(
                     "activated":"web-search",
                     "alreadyActive":true,
                     "tools":["web_search"],
-                    "hint":"Use search_tools with query web_search to attach its schema, then call web_search."
+                    "hint":"web_search is already attached. Call it directly."
                 })
                 .to_string(),
             );
