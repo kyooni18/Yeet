@@ -1,6 +1,6 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, connected, openSession } from "./state"
-import { PrimaryButton, PageHeader } from "./Common.mun"
+import { PrimaryButton } from "./Common.mun"
 
 function dateLabel(value: string | null) { return value ? new Date(value).toLocaleString() : "Not scheduled" }
 function scheduleLabel(schedule: Any) {
@@ -125,7 +125,6 @@ export struct TasksPage: View {
   var body: some View {
     ScrollView() {
       VStack(alignment: .stretch, spacing: 20) {
-        PageHeader(title: "Scheduled tasks")
         HStack(spacing: 8) {
           PrimaryButton(title: "New task", enabled: connected() && !pending.value, action: { editTask(null) })
           Button("Refresh tasks") { remoteStore.send({ type: "request_tasks" }) }.withProps({ className: "form-action" }).disabled(!connected())

@@ -1,10 +1,10 @@
 import { Icon, Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
-import { workspaceFiles, workspaceChanges, ease, displayPath, workspaceLine, openPage, connected } from "./state"
+import { workspaceFiles, workspaceChanges, ease, openPage, connected } from "./state"
 import { workIcon } from "./workIcons"
 import { onCodeKeyDown, unifiedRows } from "./toolPresentation"
-import { PageHeader, Chip } from "./Common.mun"
+import { Chip } from "./Common.mun"
 
 function size(bytes: number): string {
   if (bytes < 1024) return bytes + " B"
@@ -20,14 +20,7 @@ function modified(seconds: number | null): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
 }
 
-function changeTotals(): string {
-  const files = workspaceChanges.value?.files ?? []
-  const added = files.reduce((sum, file) => sum + (file.added ?? 0), 0)
-  const removed = files.reduce((sum, file) => sum + (file.removed ?? 0), 0)
-  return files.length + (files.length === 1 ? " file" : " files") + " · +" + added + " −" + removed
-}
-
-/** Mockup list row: 38pt, 10pt radius, beige hover and selection. */
+/** Pane list row: one line, monospaced for paths, selection as fill plus pressed state. */
 struct ListRow: View {
   let title: String
   let detail: String
@@ -40,12 +33,12 @@ struct ListRow: View {
     Button(action: action, label: {
       HStack(spacing: 8) {
         Icon(workIcon(icon), { width: 15, height: 15 }).foregroundStyle(color.muted).style({ flex: "none" })
-        Text(title).fontSize(mono ? 13 : 15).lineLimit(1).style({ fontFamily: mono ? "var(--mono)" : "inherit", minWidth: "0" })
+        Text(title).fontSize(mono ? 12 : 13).lineLimit(1).style({ fontFamily: mono ? "var(--mono)" : "inherit", minWidth: "0" })
         Spacer()
-        Text(detail).fontSize(13).foregroundStyle(color.faint).style({ whiteSpace: "nowrap" })
+        Text(detail).fontSize(12).foregroundStyle(color.muted).style({ whiteSpace: "nowrap" })
       }
     })
-    .padding({ top: 9, bottom: 9, leading: 12, trailing: 12 })
+    .padding({ top: 5, bottom: 5, leading: 8, trailing: 8 })
     .background(selected ? color.rowSelect : hovering.value ? color.rowHover : "transparent")
     .withProps({ className: "resource-row", title, "aria-pressed": selected })
     .disabled(!connected())
@@ -59,10 +52,10 @@ struct FileInfo: View {
   let info: Any
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
-      Text(info.name).fontSize(15).fontWeight("medium")
+      Text(info.name).withProps({ className: "section-heading" })
       Text([size(info.size), info.lines != null ? info.lines + " lines" : "", modified(info.modified), info.permissions || "", info.status ? "Changed" : ""].filter(Boolean).join(" · "))
-        .fontSize(13)
-        .foregroundStyle(color.faint)
+        .fontSize(12)
+        .foregroundStyle(color.muted)
       if info.status {
         HStack(spacing: 0) {
           Chip(title: "Review changes", action: { remoteStore.requestChanges(info.path, false); openPage("diff") })
@@ -71,7 +64,7 @@ struct FileInfo: View {
         .style({ marginLeft: "-8px" })
       }
     }
-    .padding({ top: 8, bottom: 16 })
+    .padding({ top: 10, bottom: 10 })
     .transition(Transition.opacity.combined(Transition.move("top", 6)))
   }
 }
@@ -102,26 +95,23 @@ export struct SourcePreview: View {
 export struct FilesPage: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
-      HStack(spacing: 8) {
-        PageHeader(title: "Files", subtitle: displayPath(workspaceFiles.value?.root) + (workspaceFiles.value?.path ? "/" + workspaceFiles.value.path : ""))
-        if workspaceFiles.value?.parent !== null && workspaceFiles.value?.parent !== undefined {
-          Chip(title: "Up", action: { remoteStore.requestFiles(workspaceFiles.value.parent) })
-        }
-      }.withProps({ className: "resource-header" })
       HStack(alignment: .stretch, spacing: 0) {
         ScrollView() {
-          VStack(alignment: .stretch, spacing: 2) {
+          VStack(alignment: .stretch, spacing: 1) {
+            if workspaceFiles.value?.parent !== null && workspaceFiles.value?.parent !== undefined {
+              ListRow(title: "Parent folder", detail: "", selected: false, mono: false, icon: "arrow", action: { remoteStore.requestFiles(workspaceFiles.value.parent) })
+            }
             ForEach(workspaceFiles.value?.entries ?? [], { id: entry => entry.path }) { entry in
               ListRow(title: entry.name, detail: entry.directory ? "›" : entry.status ? entry.status.trim() : "", selected: entry.path === workspaceFiles.value.selected, mono: true, icon: entry.directory ? "folder" : "file", action: { entry.directory ? remoteStore.requestFiles(entry.path) : remoteStore.requestFiles(workspaceFiles.value.path, entry.path) })
             }
             if !workspaceFiles.value?.entries.length {
               Text(workspaceFiles.value ? "Empty folder" : connected() ? "Loading files…" : "Files unavailable offline").withProps({ className: "tool-notice" })
             }
-          }.padding(8)
+          }.padding(6)
         }.withProps({ className: "file-tree", role: "region", "aria-label": "Directory contents", tabindex: "0" })
         VStack(alignment: .stretch, spacing: 0) {
           if workspaceFiles.value?.info {
-            FileInfo(info: workspaceFiles.value.info).padding({ leading: 16, trailing: 16 })
+            FileInfo(info: workspaceFiles.value.info).padding({ leading: 14, trailing: 14 })
             SourcePreview(info: workspaceFiles.value.info)
           } else {
             Text("Select a file to preview its content").withProps({ className: "resource-empty" })
@@ -152,22 +142,10 @@ export struct Patch: View {
 
 export struct DiffPage: View {
   var body: some View {
-    VStack(alignment: .stretch, spacing: 16) {
-      HStack(spacing: 8) {
-        PageHeader(title: "Review changes", subtitle: workspaceChanges.value ? changeTotals() : workspaceLine())
-        if workspaceChanges.value?.selected {
-          Chip(title: workspaceChanges.value.full ? "Changes only" : "Full file", action: {
-            remoteStore.requestChanges(workspaceChanges.value.selected, !workspaceChanges.value.full)
-          })
-        }
-      }
-      .padding({ leading: 32, trailing: 32 })
-      if workspaceChanges.value?.message {
-        Text(workspaceChanges.value.message).foregroundStyle(color.faint).padding({ leading: 32 })
-      }
+    VStack(alignment: .stretch, spacing: 0) {
       HStack(alignment: .stretch, spacing: 0) {
         ScrollView() {
-          VStack(alignment: .stretch, spacing: 2) {
+          VStack(alignment: .stretch, spacing: 1) {
             ForEach(workspaceChanges.value?.files ?? [], { id: file => file.path }) { file in
               ListRow(
                 title: file.path,
@@ -180,18 +158,17 @@ export struct DiffPage: View {
             }
           }
         }
-        .withProps({ className: "diff-files" })
+        .withProps({ className: "diff-files", role: "region", "aria-label": "Changed files", tabindex: "0" })
         .style({ width: "180px", flex: "none" })
         if workspaceChanges.value?.patch.length {
           Patch()
         } else {
-          Text(workspaceChanges.value?.files.length ? "Select a changed file to review" : "No uncommitted changes").withProps({ className: "resource-empty" })
+          Text(workspaceChanges.value?.message || (workspaceChanges.value?.files.length ? "Select a changed file to review" : workspaceChanges.value ? "No uncommitted changes" : connected() ? "Loading changes…" : "Changes unavailable offline")).withProps({ className: "resource-empty" })
         }
       }
       .withProps({ className: "diff-layout" })
       .style({ flex: "1", minHeight: "0" })
     }
-    .padding({ top: 20 })
     .style({ flex: "1", minHeight: "0", width: "100%" })
   }
 }

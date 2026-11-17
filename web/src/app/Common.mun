@@ -14,17 +14,35 @@ export struct Spinner: View {
   }
 }
 
-/** Page title with optional live context. */
-export struct PageHeader: View {
+/** Heading for content inside a pane. The page's own name lives in the title bar. */
+export struct SectionHeading: View {
   let title: String
   let subtitle: String = ""
   var body: some View {
-    VStack(alignment: .stretch, spacing: 4) {
-      Text(title).fontSize(20).fontWeight("medium").lineLimit(1)
+    VStack(alignment: .stretch, spacing: 2) {
+      Text(title).lineLimit(1).withProps({ className: "section-heading", role: "heading", "aria-level": "2" })
       if subtitle {
-        Text(subtitle).fontSize(13).foregroundStyle(color.faint).lineLimit(1)
+        Text(subtitle).fontSize(12).foregroundStyle(color.muted).lineLimit(1)
       }
     }
+  }
+}
+
+/** One choice among a few peers. The selected segment is raised and heavier,
+ * and exposes its state as a pressed button. */
+export struct Segmented: View {
+  let label: String
+  let options: Any
+  let value: String
+  let onChange: (value: string) => void
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(options, { id: option => option.value }) { option in
+        Button(option.label) { onChange(option.value) }
+          .withProps({ className: "segment", "aria-pressed": option.value === value })
+      }
+    }
+    .withProps({ className: "segmented", role: "group", "aria-label": label })
   }
 }
 

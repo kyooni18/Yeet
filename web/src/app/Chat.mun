@@ -235,8 +235,8 @@ struct Working: View {
 struct EmptyState: View {
   var body: some View {
     VStack(alignment: .center, spacing: 4) {
-      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(20).fontWeight("medium")
-      Text(workspaceLine()).fontSize(13).foregroundStyle(color.faint)
+      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(16).fontWeight("medium")
+      Text(workspaceLine()).fontSize(13).foregroundStyle(color.muted)
     }
     .withProps({ className: "empty-conversation" })
     .style({ flex: "1", width: "100%", justifyContent: "center", minHeight: "0", textAlign: "center" })

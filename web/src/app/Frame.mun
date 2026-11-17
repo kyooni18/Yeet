@@ -1,7 +1,8 @@
 import { Icon, Transition } from "@mun/core"
 import { workIcon } from "./workIcons"
 import { color } from "./theme"
-import { Spinner, IconButton } from "./Common.mun"
+import { remoteStore } from "@/store/remoteStore"
+import { Spinner, IconButton, Segmented } from "./Common.mun"
 import {
   statusSnapshot, page, sidebarOpen, inspectorOpen, toggleSidebar, toggleInspector, workspaceFiles, workspaceChanges,
   displayPath, openPage, elapsed, isWorking, runtimeState,
@@ -9,6 +10,12 @@ import {
 
 const PAGE_TITLES: Record<string, string> = {
   files: "Files", diff: "Review changes", agents: "Agents", tasks: "Scheduled tasks", debate: "Debate", extensions: "Extensions",
+}
+
+const DIFF_MODES = [{ value: "changes", label: "Changes" }, { value: "full", label: "Full file" }]
+
+function chooseDiffMode(value: string) {
+  remoteStore.requestChanges(workspaceChanges.value?.selected ?? null, value === "full")
 }
 
 function pageTitle(): string {
@@ -77,6 +84,9 @@ export struct TitleBar: View {
         })
         .accessibilityLabel("Session is working. Open conversation")
         .withProps({ className: "titlebar-run", title: "Open conversation" })
+      }
+      if page.value === "diff" && workspaceChanges.value?.selected {
+        Segmented(label: "Diff content", options: DIFF_MODES, value: workspaceChanges.value.full ? "full" : "changes", onChange: chooseDiffMode)
       }
       Text(connectionLabel())
         .foregroundStyle(statusSnapshot.value.connection === "failed" ? color.del : color.muted)

@@ -96,6 +96,15 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .icon-button:hover:not(:disabled), .icon-button[aria-expanded="true"] { background: var(--hover); color: var(--text); }
 .icon-button:active:not(:disabled) { transform: scale(0.94); }
 .section-label { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 10px; }
+.section-heading { font-size: 14px; font-weight: 600; }
+
+/* Segmented control: a few peer choices. The selected segment is raised and
+   heavier, and reports aria-pressed; selection never rests on color alone. */
+.segmented { flex: none; padding: 2px; border-radius: var(--r-control); background: var(--field); }
+.segment { flex: 1 1 auto; min-height: 24px; padding: 0 10px; border-radius: var(--r-inline); font-size: 12px; text-align: center; white-space: nowrap; color: var(--muted); transition: background var(--motion-fast), color var(--motion-fast); }
+.segment:hover:not([aria-pressed="true"]) { color: var(--text); }
+.segment[aria-pressed="true"] { background: var(--composer); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+.segment:focus-visible { outline-offset: -2px; }
 
 /* Forms grow with their container, not with the width of their placeholder. */
 .form-field { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--composer); color: var(--text); font-size: 16px; }
@@ -112,7 +121,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .sheet-scroll { overscroll-behavior: contain; scrollbar-gutter: stable; padding: 4px 8px 12px 2px; }
 .sheet-dialog [data-mun="Toggle"] { display: flex; align-items: center; gap: 10px; font-size: 13px; min-height: 40px; }
 .sheet-dialog [data-mun="Toggle"] input { accent-color: var(--accent); width: 18px; height: 18px; flex-shrink: 0; }
-.feature-page { width: 100% !important; max-width: 880px !important; margin: 0 auto; padding: 24px clamp(16px, 4vw, 32px) 40px; min-width: 0; }
+.feature-page { width: 100% !important; max-width: 880px !important; margin: 0 auto; padding: 20px clamp(16px, 4vw, 28px) 32px; min-width: 0; }
 .feature-actions { flex-wrap: wrap; width: 100% !important; }
 
 /* Navigation: a source list. The header shares the title bar's height so the
@@ -204,16 +213,12 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 /* Workspace inspector: real Remote files/changes, not a static decorative rail. */
 #workspace-panel { background: var(--inspector); border-left: 1px solid var(--line); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
 #workspace-panel > :not(.panel-scroll) { flex-shrink: 0; }
-.panel-header { height: 56px; padding: 0 12px 0 20px; }
-.panel-context { padding: 14px 20px 12px; }
-.panel-tabs { width: calc(100% - 32px) !important; min-width: 0; margin: 0 16px 12px; border-bottom: 1px solid var(--line); }
-.panel-tab { flex: 1; padding: 9px 8px; min-height: 36px; border-bottom: 2px solid transparent; text-align: center; font-size: 12px; color: var(--muted); transition: background var(--motion-fast), color var(--motion-fast); }
-.panel-tab:hover { background: var(--hover); }
-.panel-tab[aria-pressed="true"] { border-bottom-color: var(--text); color: var(--text); font-weight: 500; }
+.panel-header { box-sizing: content-box; height: var(--titlebar-height); padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }
+.panel-context { padding: 12px 16px 10px; }
+.panel-tabs { width: calc(100% - 32px) !important; min-width: 0; margin: 0 16px 12px; }
 .panel-scroll { overscroll-behavior: contain; }
-.panel-content { padding: 4px 16px 20px; }
 .panel-summary { margin-top: 4px; }
-.panel-row { font-size: 12px; padding: 9px 10px; min-height: 36px; }
+.panel-row { font-size: 12px; padding: 0 8px; min-height: var(--row-height); }
 .panel-row[aria-pressed="true"] { background: var(--row-select); color: var(--text); }
 .panel-empty { padding: 40px 10px; }
 .panel-empty > svg { margin-bottom: 4px; }
@@ -222,7 +227,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .file-details .section-label { padding: 0; margin-bottom: 4px; }
 .panel-link { color: var(--muted); font-size: 12px; border-radius: var(--r-inline); padding: 5px 0; }
 .panel-link:hover { color: var(--text); }
-.panel-footer { padding: 16px 20px 24px; }
+.panel-footer { padding: 16px 16px 20px; }
 .panel-footer .section-label { padding: 0; }
 .panel-model { width: calc(100% + 16px); min-width: 0; margin: -6px -8px; padding: 6px 8px; border-radius: var(--r-control); transition: background var(--motion-fast); }
 .panel-model:hover:not(:disabled), .panel-agent-link:hover { background: var(--hover); }
@@ -318,7 +323,7 @@ button.trace-disclosure__row:hover { background: var(--hover); }
   .tool-embed__header { padding: 8px 10px; }
 }
 @media (max-width: 699px) {
-  .diff-layout { flex-direction: column !important; padding-right: 20px; gap: 12px !important; }
+  .diff-layout { flex-direction: column !important; }
   .diff-files { width: 100% !important; max-height: 28vh; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -339,24 +344,23 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 svg { stroke-linecap: round; stroke-linejoin: round; }
 @media (max-width: 380px) { .composer-context { font-size: 10px; } .composer-controls { column-gap: 2px !important; } }
 
-.resource-header { padding: 20px 24px 16px; width: 100% !important; min-width: 0; border-bottom: 1px solid var(--line); }
 .resource-row { text-align: left; font-size: 12px; }
 .resource-row > * { min-width: 0; width: 100% !important; }
 .resource-row span { font-size: 12px !important; }
-.file-tree { width: 220px; flex: none; border-right: 1px solid var(--line); min-height: 0; }
+/* ScrollView sets an inline 100% width; the tree is a fixed rail beside the preview. */
+.file-tree { width: 240px !important; flex: none; border-right: 1px solid var(--line); min-height: 0; }
 .file-preview { background: var(--panel); }
 .file-source { flex: 1; max-height: none; padding: 8px 0; border-top: 1px solid var(--line); }
-.resource-empty { margin: auto; padding: 32px; text-align: center; font-size: 13px; color: var(--muted); }
-.diff-files { border-right: 1px solid var(--line); padding: 8px; }
+.resource-empty { margin: auto; padding: 24px; text-align: center; color: var(--muted); }
+.diff-files { border-right: 1px solid var(--line); padding: 6px; }
 .workspace-patch { font: 12px/1.75 var(--mono); tab-size: 4; background: var(--panel); }
 .patch-path { display: block; padding: 10px 16px; font-size: 12px; color: var(--muted); position: sticky; left: 0; background: var(--field); overflow-wrap: anywhere; }
 .tool-diff__line--meta { color: var(--muted); background: var(--field); }
-.tool-diff__line--meta .tool-code { padding-top: 4px; padding-bottom: 4px; }
+.tool-diff__line--meta .tool-code { padding-top: 1px; padding-bottom: 1px; }
 @media (max-width: 699px) {
   .files-layout { flex-direction: column !important; }
-  .file-tree { width: 100%; max-height: 28vh; min-height: 100px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .file-tree { width: 100% !important; max-height: 28vh; min-height: 100px; border-right: 0; border-bottom: 1px solid var(--line); }
   .diff-files { min-height: 80px; border-right: 0; border-bottom: 1px solid var(--line); }
-  .diff-layout { padding-right: 0; }
 }
 
 /* One session list: the workspace reads as a row label, not a divider. */
@@ -408,9 +412,8 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
 .trace-disclosure__label { flex: 0 1 auto; }
 .trace-disclosure__context { flex: 0 1 auto; }
 .reasoning-trace > yeet-markdown { padding: 4px 0 !important; }
-/* Inspector: labels, rows and the header share one 20px edge. */
-.panel-content { padding: 4px 20px 20px; }
-.panel-tabs { width: calc(100% - 40px) !important; margin: 0 20px 12px; }
+/* Inspector: labels, rows and the header share one 16px edge. */
+.panel-content { padding: 4px 16px 16px; }
 .session-status .section-label, .panel-content > .section-label { padding: 0; }
 .trace-disclosure__details .trace-detail, .trace-disclosure__details .tool-embed, .trace-disclosure__details .tool-pre { width: 100% !important; }
 

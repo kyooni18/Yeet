@@ -1,7 +1,7 @@
 import { Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color } from "./theme"
-import { Spinner, PrimaryButton, PageHeader } from "./Common.mun"
+import { Spinner, PrimaryButton, SectionHeading } from "./Common.mun"
 import { remote, ease, connected, openSheet } from "./state"
 
 const objective = State("")
@@ -85,7 +85,7 @@ struct AgentsContent: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 20) {
       HStack(spacing: 10) {
-        PageHeader(title: remote.value.agents.headline || remote.value.agents.title, subtitle: remote.value.agents.group_status.label)
+        SectionHeading(title: remote.value.agents.headline || remote.value.agents.title, subtitle: remote.value.agents.group_status.label)
       }
       HStack(spacing: 8) {
         AgentButton(control: remote.value.agents.create_control)
