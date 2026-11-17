@@ -138,6 +138,10 @@ fn trace(
             .cloned()
             .collect(),
         raw_expanded: state.expanded_for(&format!("raw:{id}"), false),
+        label: String::new(),
+        context: None,
+        attention: None,
+        has_details: false,
     }
 }
 fn append_tool(
@@ -169,6 +173,10 @@ fn append_tool(
             .get(&format!("raw:{key}"))
             .copied()
             .unwrap_or(false),
+        label: String::new(),
+        context: None,
+        attention: None,
+        has_details: false,
     };
     pending.push(ActivityEvent::Tool {
         key,
@@ -468,6 +476,18 @@ pub fn project(
     } else {
         String::new()
     };
+    // Presentation fields are derived once here so no host re-parses status copy.
+    for item in &mut items {
+        match item {
+            DisplayItem::Activity { group, .. } => {
+                for event in &mut group.events {
+                    event.trace_mut().finish();
+                }
+            }
+            DisplayItem::Reasoning { trace, .. } => trace.finish(),
+            DisplayItem::Entry { .. } => {}
+        }
+    }
     ConversationView {
         items,
         last_user_id,

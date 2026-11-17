@@ -384,13 +384,7 @@ pub fn project_tool(tool: &ConversationToolCall) -> ToolView {
         title,
         summary: summary(tool, args.as_ref(), &files),
         status_label,
-        metadata: tool.duration_ms.map(|duration| {
-            if duration < 1000 {
-                format!("{duration} ms")
-            } else {
-                format!("{:.1} s", duration as f64 / 1000.0)
-            }
-        }),
+        metadata: tool.duration_ms.map(super::types::format_duration_ms),
         active,
         failed: matches!(tool.status, Failed | TimedOut),
         awaits_permission: matches!(tool.status, AwaitingPermission),

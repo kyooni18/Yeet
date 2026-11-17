@@ -61,32 +61,11 @@ export struct TopBar: View {
   }
 }
 
-function rawTraceLabel(trace: Any): string {
-  return trace.summary && trace.summary !== trace.title ? trace.title + " · " + trace.summary : trace.title
-}
-
-/** Some providers expose only a count and a generic phase (e.g. "6 · Running").
- * Neither is a useful work description; never present them as an action. */
-function isOpaqueWorkLabel(label: string): boolean {
-  const parts = (label || "").trim().split(/\s*(?:[·•]|\.)\s*/).filter(Boolean)
-  return !parts.length || parts.every(part => /^(?:\d+(?:\s+(?:actions?|activities|tools?|calls?|events?))?|running|working|preparing|pending|in progress)$/i.test(part.trim()))
-}
-
+// Label, context, attention and detail availability are projected by Rust
+// (UI/conversation). This view only joins them for accessible names.
 function traceLabel(trace: Any): string {
-  const label = rawTraceLabel(trace)
-  return isOpaqueWorkLabel(label) ? "Working" : label
-}
-
-function traceStatus(trace: Any): string {
-  return /permission|approv|fail|error|denied|timed|cancel|interrupt/i.test(trace.status_label || "") ? trace.status_label : ""
-}
-
-function traceContext(trace: Any): string {
-  return !isOpaqueWorkLabel(rawTraceLabel(trace)) && trace.summary !== trace.title ? trace.summary || "" : ""
-}
-
-function hasTraceDetails(trace: Any): boolean {
-  return !!(trace.details.length || trace.metadata || trace.rich?.length)
+  const label = trace.label || trace.title
+  return trace.context ? label + " · " + trace.context : label
 }
 
 function traceRegion(id: string): string {
@@ -107,20 +86,20 @@ struct TraceLabel: View {
         .style({ flex: "none", strokeWidth: "1.8px", strokeLinecap: "round", strokeLinejoin: "round" })
       VStack(alignment: .stretch, spacing: 2) {
         HStack(spacing: 6) {
-          Text(isOpaqueWorkLabel(rawTraceLabel(trace)) ? "Working" : trace.title)
+          Text(trace.label || trace.title)
             .withProps({ className: "trace-disclosure__title" })
-          if traceContext(trace) !== "" {
-            Text(traceContext(trace)).withProps({ className: "trace-disclosure__context" })
+          if trace.context {
+            Text(trace.context).withProps({ className: "trace-disclosure__context" })
           }
         }.withProps({ className: "trace-disclosure__caption" })
-        if traceStatus(trace) !== "" {
-          Text(traceStatus(trace))
-            .foregroundStyle(/approv|permission/i.test(traceStatus(trace)) ? color.text2 : color.del)
-            .withProps({ className: "trace-disclosure__status" })
+        if trace.attention {
+          Text(trace.attention.label)
+            .foregroundStyle(trace.attention.kind === "approval" ? color.text2 : color.del)
+            .withProps({ className: "trace-disclosure__status", "data-attention": trace.attention.kind })
         }
       }
       .withProps({ className: "trace-disclosure__label", title: traceLabel(trace) })
-      if trace.active && /approv|permission/i.test(traceStatus(trace)) === false {
+      if trace.active && trace.attention?.kind !== "approval" {
         Spinner().withProps({ role: "img", "aria-label": "Running" })
       }
       if disclosure {
@@ -137,7 +116,7 @@ struct Trace: View {
   let trace: Any
   var body: some View {
     VStack(alignment: .stretch, spacing: 4) {
-      if hasTraceDetails(trace) === true {
+      if trace.has_details {
         Button(action: { remoteStore.sendConversationUi({ type: "toggle", value: trace.id }) }, label: {
           TraceLabel(trace: trace, disclosure: true)
         })

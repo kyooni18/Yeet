@@ -755,14 +755,16 @@ export interface ConversationDetail { title: string; content: string; monospaced
 // these records; they must not reconstruct edits or re-read current files.
 export interface ToolExternalized { artifact_id: string | null; bytes: number | null }
 export interface ToolDiffLine { kind: 'context' | 'added' | 'removed' | 'omitted'; old: number | null; new: number | null; text: string }
-export interface ToolDiffHunk { old_start: number; old_end: number | null; new_start: number; new_end: number | null; lines: ToolDiffLine[]; truncated: boolean }
-export interface ToolDiffFile { path: string; previous_path: string | null; operation: string; hunks: ToolDiffHunk[]; warnings: string[]; has_diff: boolean; truncated: boolean }
+export interface ToolDiffHunk { old_start: number; old_end: number | null; new_start: number; new_end: number | null; lines: ToolDiffLine[]; truncated: boolean; header?: string }
+export interface ToolDiffFile { path: string; previous_path: string | null; operation: string; hunks: ToolDiffHunk[]; warnings: string[]; has_diff: boolean; truncated: boolean; added?: number; removed?: number }
 export interface ToolOutputStream { text: string; bytes: number | null; truncated: boolean; tail: boolean }
 export interface ToolTerminalDetail {
   type: 'terminal'; working_directory: string | null; command: string | null
   state: 'waiting' | 'running' | 'background_job' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
   exit_code: number | null; duration_ms: number | null; stdout: ToolOutputStream | null; stderr: ToolOutputStream | null
   combined: string | null; job_id: string | null; artifact_id: string | null; windowed: boolean
+  /** State, exit code and duration as one caption, projected by Rust. */
+  status?: string
 }
 export interface ToolSourceFile {
   path: string; start_line: number | null; end_line: number | null; total_lines: number | null; next_start_line: number | null
@@ -777,6 +779,8 @@ export type ConversationRichDetail =
 export interface ConversationTrace {
   id: string; title: string; summary: string | null; status_label: string | null; metadata: string | null; icon: ConversationIcon; active: boolean; expanded: boolean; details: ConversationDetail[]
   rich?: ConversationRichDetail[]; raw?: ConversationDetail[]; raw_expanded?: boolean
+  /** Presentation derived by Rust: hosts render these instead of parsing status copy. */
+  label?: string; context?: string; attention?: { label: string; kind: 'approval' | 'problem' }; has_details?: boolean
 }
 export interface ConversationActivityEvent { type: 'activity' | 'tool' | 'skill' | 'mcp'; key: string; trace: ConversationTrace }
 export interface ConversationActivityGroup { id: string; events: ConversationActivityEvent[]; summary: string; status_label?: string | null; active: boolean; failed: boolean; awaits_permission: boolean; expanded: boolean }

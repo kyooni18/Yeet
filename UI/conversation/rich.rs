@@ -182,31 +182,39 @@ fn diff_file(file: &Value) -> Option<DiffFile> {
         .map(|hunk| {
             let old_start = index(hunk, "oldStart").unwrap_or(1);
             let new_start = index(hunk, "newStart").unwrap_or(1);
-            DiffHunk {
+            let mut hunk = DiffHunk {
                 old_start,
                 old_end: index(hunk, "oldEnd"),
                 new_start,
                 new_end: index(hunk, "newEnd"),
                 lines: diff_lines(hunk, old_start, new_start),
                 truncated: flag(hunk, "truncated"),
-            }
+                header: String::new(),
+            };
+            hunk.header = hunk.unified_header();
+            hunk
         })
         .collect();
-    Some(DiffFile {
-        previous_path: destination.and(source).filter(|source| *source != path),
-        truncated: hunks.iter().any(|hunk| hunk.truncated),
-        has_diff: hunks_json.is_some(),
-        warnings: file
-            .get("warnings")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|warning| warning.as_str().map(str::to_owned))
-            .collect(),
-        path,
-        operation,
-        hunks,
-    })
+    Some(
+        DiffFile {
+            previous_path: destination.and(source).filter(|source| *source != path),
+            truncated: hunks.iter().any(|hunk| hunk.truncated),
+            has_diff: hunks_json.is_some(),
+            warnings: file
+                .get("warnings")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|warning| warning.as_str().map(str::to_owned))
+                .collect(),
+            path,
+            operation,
+            hunks,
+            added: 0,
+            removed: 0,
+        }
+        .with_counts(),
+    )
 }
 
 fn edit(tool: &ConversationToolCall, args: Option<&Value>) -> Vec<RichDetail> {
@@ -367,7 +375,7 @@ fn terminal(tool: &ConversationToolCall, args: Option<&Value>) -> Vec<RichDetail
     let duration_ms = number(&value, "durationMilliseconds")
         .or_else(|| number(&value, "elapsedMilliseconds"))
         .or(tool.duration_ms);
-    vec![RichDetail::Terminal(TerminalDetail {
+    let mut detail = TerminalDetail {
         working_directory,
         command,
         state,
@@ -379,7 +387,10 @@ fn terminal(tool: &ConversationToolCall, args: Option<&Value>) -> Vec<RichDetail
         job_id: text(&value, "jobId").or_else(|| tool.job_id.clone()),
         artifact_id: text(&value, "artifactId"),
         windowed: flag(&value, "outputWindowed") || flag(&value, "outputHandedOff"),
-    })]
+        status: String::new(),
+    };
+    detail.status = detail.status_caption();
+    vec![RichDetail::Terminal(detail)]
 }
 
 // ---- read_file / read_files --------------------------------------------

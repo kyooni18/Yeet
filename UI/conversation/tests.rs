@@ -538,3 +538,59 @@ fn long_prompts_default_to_preview_and_toggle_without_truncating_copy() {
         DisplayItem::Entry { prompt: None, .. }
     ));
 }
+#[test]
+fn traces_serialize_label_context_and_attention_so_hosts_do_not_parse_status_copy() {
+    let harness = HarnessState::default();
+    let call = |id: &str, name: &str, status: &str, arguments: &str| {
+        let tool_call: ConversationToolCall = serde_json::from_value(serde_json::json!({
+            "id": id, "name": name, "arguments": arguments, "status": status
+        }))
+        .unwrap();
+        entry(id, ConversationKind::ToolCall { tool_call })
+    };
+    let activity = |id: &str, title: &str| {
+        entry(
+            id,
+            ConversationKind::Activity {
+                activity: serde_json::from_value(serde_json::json!({
+                    "phase": "running", "title": title, "detail": "Running", "run_id": "run"
+                }))
+                .unwrap(),
+            },
+        )
+    };
+    let entries = vec![
+        call("done", "read_file", "completed", r#"{"path":"src/lib.rs"}"#),
+        call(
+            "wait",
+            "run_shell",
+            "awaiting_permission",
+            r#"{"command":"ls"}"#,
+        ),
+        call("bad", "run_shell", "timed_out", r#"{"command":"sleep 9"}"#),
+        activity("opaque", "6"),
+    ];
+    let mut state = ConversationState::default();
+    state.individual_work_rows = true;
+    let view = state.project(&entries, &harness);
+    let traces: Vec<_> = view
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::Activity { group, .. } => Some(group.events[0].trace().clone()),
+            _ => None,
+        })
+        .collect();
+    let wire = serde_json::to_value(&traces).unwrap();
+    // Routine success: a title and its object, no status copy.
+    assert_eq!(wire[0]["label"], "Read file");
+    assert_eq!(wire[0]["context"], "src/lib.rs");
+    assert!(wire[0].get("attention").is_none());
+    assert_eq!(wire[1]["attention"]["kind"], "approval");
+    assert_eq!(wire[2]["attention"]["kind"], "problem");
+    assert_eq!(wire[2]["attention"]["label"], "Timed out");
+    // A bare count and phase is not an action.
+    let opaque = traces.last().unwrap();
+    assert_eq!(opaque.label, "Working");
+    assert_eq!(opaque.context, None);
+}

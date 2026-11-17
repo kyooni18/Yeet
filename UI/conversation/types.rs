@@ -63,6 +63,12 @@ pub struct DiffFile {
     /// False when the call has no recorded result (pending/failed) or it was externalized.
     pub has_diff: bool,
     pub truncated: bool,
+    /// Added and removed line counts of the hunks held here, for hosts that
+    /// show them without walking every line.
+    #[serde(default)]
+    pub added: usize,
+    #[serde(default)]
+    pub removed: usize,
 }
 impl DiffFile {
     pub fn added(&self) -> usize {
@@ -70,6 +76,12 @@ impl DiffFile {
     }
     pub fn removed(&self) -> usize {
         self.count(DiffLineKind::Removed)
+    }
+    /// Fills the serialized counts once the hunks are final.
+    pub fn with_counts(mut self) -> Self {
+        self.added = self.added();
+        self.removed = self.removed();
+        self
     }
     fn count(&self, kind: DiffLineKind) -> usize {
         self.hunks
@@ -87,6 +99,22 @@ pub struct DiffHunk {
     pub new_end: Option<usize>,
     pub lines: Vec<DiffLine>,
     pub truncated: bool,
+    /// Unified-diff header for the recorded ranges: `@@ -4,3 +4,5 @@`.
+    #[serde(default)]
+    pub header: String,
+}
+impl DiffHunk {
+    pub fn unified_header(&self) -> String {
+        let range = |start: usize, end: Option<usize>| match end {
+            Some(end) => format!("{start},{}", (end + 1).saturating_sub(start)),
+            None => start.to_string(),
+        };
+        format!(
+            "@@ -{} +{} @@",
+            range(self.old_start, self.old_end),
+            range(self.new_start, self.new_end)
+        )
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -125,6 +153,21 @@ pub enum TerminalState {
     TimedOut,
     Interrupted,
 }
+impl TerminalState {
+    /// Sentence-case state copy shared by every host.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Waiting => "Waiting for execution",
+            Self::Running => "Running",
+            Self::BackgroundJob => "Running in background",
+            Self::Succeeded => "Finished",
+            Self::Failed => "Failed",
+            Self::Cancelled => "Cancelled",
+            Self::TimedOut => "Timed out",
+            Self::Interrupted => "Interrupted",
+        }
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OutputStream {
     pub text: String,
@@ -151,6 +194,29 @@ pub struct TerminalDetail {
     pub artifact_id: Option<String>,
     /// The visible output is a window onto a larger transcript.
     pub windowed: bool,
+    /// State, exit code and duration as one caption: `Failed · exit 2 · 1.4 s`.
+    #[serde(default)]
+    pub status: String,
+}
+impl TerminalDetail {
+    pub fn status_caption(&self) -> String {
+        let mut parts = vec![self.state.label().to_owned()];
+        if let Some(code) = self.exit_code {
+            parts.push(format!("exit {code}"));
+        }
+        if let Some(duration) = self.duration_ms {
+            parts.push(format_duration_ms(duration));
+        }
+        parts.join(" · ")
+    }
+}
+/// `820 ms` below one second, `1.4 s` above.
+pub fn format_duration_ms(duration: u64) -> String {
+    if duration < 1000 {
+        format!("{duration} ms")
+    } else {
+        format!("{:.1} s", duration as f64 / 1000.0)
+    }
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceDetail {
@@ -219,8 +285,94 @@ pub struct TraceView {
     pub raw: Vec<DetailSection>,
     #[serde(default)]
     pub raw_expanded: bool,
+    /// Text for the row: `title`, or "Working" when the provider only sent a
+    /// count or a generic phase.
+    #[serde(default)]
+    pub label: String,
+    /// Single-line object of the action (path, command, query), when distinct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// Exceptional state worth visible copy; routine success has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<TraceAttention>,
+    /// Whether opening the row reveals anything.
+    #[serde(default)]
+    pub has_details: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionKind {
+    /// Waiting on the user; not an error and not progress.
+    Approval,
+    /// Failed, denied, timed out, cancelled or interrupted.
+    Problem,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceAttention {
+    pub label: String,
+    pub kind: AttentionKind,
+}
+/// Some providers report only a count and a generic phase ("6 · Running").
+/// That is not a description of work and is never shown as an action.
+fn is_opaque_work_label(label: &str) -> bool {
+    const PHASES: [&str; 5] = ["running", "working", "preparing", "pending", "in progress"];
+    const UNITS: [&str; 9] = [
+        "action",
+        "actions",
+        "activities",
+        "tool",
+        "tools",
+        "call",
+        "calls",
+        "event",
+        "events",
+    ];
+    label
+        .split(['·', '•', '.'])
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .all(|part| {
+            let part = part.to_ascii_lowercase();
+            if PHASES.contains(&part.as_str()) {
+                return true;
+            }
+            let digits = part.trim_start_matches(|ch: char| ch.is_ascii_digit());
+            digits.len() < part.len() && (digits.is_empty() || UNITS.contains(&digits.trim()))
+        })
 }
 impl TraceView {
+    /// Derives the presentation fields from the semantic ones. Called once
+    /// per projection, after every adapter-specific adjustment.
+    pub fn finish(&mut self) {
+        let summary = self
+            .summary
+            .as_deref()
+            .filter(|summary| !summary.is_empty() && *summary != self.title);
+        let full = match summary {
+            Some(summary) => format!("{} · {summary}", self.title),
+            None => self.title.clone(),
+        };
+        let opaque = is_opaque_work_label(&full);
+        self.context = (!opaque).then(|| summary.map(str::to_owned)).flatten();
+        self.label = if opaque {
+            "Working".into()
+        } else {
+            self.title.clone()
+        };
+        self.attention = self.attention_label().map(|label| {
+            let lower = label.to_ascii_lowercase();
+            TraceAttention {
+                label: label.to_owned(),
+                kind: if lower.contains("approv") || lower.contains("permission") {
+                    AttentionKind::Approval
+                } else {
+                    AttentionKind::Problem
+                },
+            }
+        });
+        self.has_details =
+            !self.details.is_empty() || self.metadata.is_some() || !self.rich.is_empty();
+    }
     /// Stable ID of the raw-inspection disclosure shown beneath a rich view.
     pub fn raw_id(&self) -> Option<String> {
         (!self.rich.is_empty() && !self.raw.is_empty()).then(|| format!("raw:{}", self.id))
@@ -290,6 +442,14 @@ impl ActivityEvent {
         }
     }
     pub fn trace(&self) -> &TraceView {
+        match self {
+            Self::Activity { trace, .. }
+            | Self::Tool { trace, .. }
+            | Self::Skill { trace, .. }
+            | Self::Mcp { trace, .. } => trace,
+        }
+    }
+    pub fn trace_mut(&mut self) -> &mut TraceView {
         match self {
             Self::Activity { trace, .. }
             | Self::Tool { trace, .. }

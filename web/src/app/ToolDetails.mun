@@ -1,5 +1,5 @@
 import { remoteStore } from "@/store/remoteStore"
-import { indexed, terminalStatus, streamNote, diffStats, hunkLabel, sourceRange, onCodeKeyDown } from "./toolPresentation"
+import { indexed, streamNote, diffStats, sourceRange, onCodeKeyDown } from "./toolPresentation"
 
 /** Literal text, never markdown/HTML. Generic tools and older records stay readable. */
 struct DetailSection: View {
@@ -36,7 +36,7 @@ struct TerminalDetail: View {
     VStack(alignment: .stretch, spacing: 0) {
       HStack(spacing: 8) {
         Text(detail.working_directory || "Shell").withProps({ className: "tool-embed__path" })
-        Text(terminalStatus(detail)).withProps({ className: "tool-terminal__state", "data-state": detail.state })
+        Text(detail.status || "Shell").withProps({ className: "tool-terminal__state", "data-state": detail.state })
       }.withProps({ className: "tool-embed__header" })
       if detail.command {
         HStack(alignment: .top, spacing: 10) {
@@ -88,7 +88,7 @@ struct DiffFile: View {
       if file.hunks.length {
         Element("div", { className: "tool-code-scroll", tabindex: "0", role: "region", "aria-label": "Diff for " + file.path, onKeyDown: onCodeKeyDown }) {
           ForEach(indexed(file.hunks), { id: row => row.key }) { row in
-            Text(hunkLabel(row.value)).withProps({ className: "tool-diff__hunk" })
+            Text(row.value.header || "").withProps({ className: "tool-diff__hunk" })
             ForEach(indexed(row.value.lines), { id: line => line.key }) { line in
               Element("div", { className: "tool-diff__line tool-diff__line--" + line.value.kind }) {
                 Text(line.value.old ?? "").withProps({ className: "tool-line-number", "aria-hidden": "true" })

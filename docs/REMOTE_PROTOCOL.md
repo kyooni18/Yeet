@@ -263,7 +263,7 @@ Current `ConversationKind.type` values are `user`, `assistant`, `reasoning`, `ac
 }
 ```
 
-`entry` is the canonical transcript row; `tool_call` is duplicated as a convenience for tool-card stores. Tool statuses are `streaming`, `completed`, or `failed`.
+`entry` is the canonical transcript row; `tool_call` is duplicated as a convenience for tool-card stores. Tool statuses are `preparing`, `awaiting_permission`, `running`, `completed`, `failed`, `cancelled`, `interrupted`, `timed_out`, or `suppressed` (`Harness/model.rs::ToolCallStatus`). Suppressed calls are never shown.
 
 ### Activity update
 
@@ -309,6 +309,53 @@ Treat `entry` as the canonical conversation representation and `activity` as a c
 ```
 
 This is uncommon. Replace the conversation array when its identity/order can no longer be represented as entry additions/updates. A session change normally produces a full `snapshot` instead.
+
+## Per-client UI projections
+
+Alongside the shared runtime state above, each connection receives UI
+projections computed by the Rust `UI/` layer for that client. They carry their
+own revisions and never advance `sequence` or `revision`.
+
+| Server message | Revision field | Client action |
+| --- | --- | --- |
+| `ui_state` (shell, navigation, toolbar) | `ui_revision` | `ui_action`, `ui_toolbar_action` |
+| `ui_conversation` | `conversation_revision` | `ui_conversation_action` |
+| `ui_composer` | `composer_revision` | `ui_composer_action` |
+| `ui_settings` | `settings_revision` | `ui_settings_action` |
+| `ui_agents` | `agents_revision` | `ui_agent_action` |
+| `ui_home` | `home_revision` | `ui_home_action` |
+| `ui_diff` | `diff_revision` | `ui_diff_action` |
+
+A rejected action is answered with `ui_action_failed`; a host without a UI
+session answers `ui_unavailable`. The exact TypeScript shapes are in
+`frontend/shared/remote/protocol.ts`.
+
+### Conversation traces
+
+`ui_conversation.view.items` is the transcript as the client should paint it.
+Each tool call, activity, Skill or MCP event carries a `trace`. Clients render
+these fields; they do not parse `status_label`, count diff lines, or build
+captions from other fields.
+
+| Field | Meaning |
+| --- | --- |
+| `title` | Tool noun from the harness tool spec: `Command`, `Read file`. |
+| `label` | Text for the row. Equals `title`, or `Working` when a provider reported only a count or a generic phase. |
+| `context` | Optional single-line object of the action (path, command, query). |
+| `attention` | Optional `{ label, kind }` for exceptional states only. `kind` is `approval` (waiting on the user) or `problem` (failed, denied, timed out, cancelled, interrupted). Routine success has no attention. |
+| `has_details` | Whether opening the row reveals anything. |
+| `active` | The call is preparing or running. |
+| `icon` | Semantic icon chosen from the tool's kind. |
+| `rich` | Specialized details: `terminal`, `diff`, `source`, `diagnostics`, `notice`. |
+| `details`, `raw` | Readable sections, and the original input/output for secondary inspection. |
+
+Rich details carry their own captions: `terminal.status` is the state, exit
+code and duration as one string (`Failed · exit 2 · 1.4 s`); each diff file has
+`added` and `removed` line counts for the hunks it holds; each hunk has its
+unified `header` (`@@ -4,3 +4,5 @@`). `label`, `context`, `attention`,
+`has_details`, `status`, `added`, `removed` and `header` were added without a
+version change: they are optional, and a client that ignores them keeps
+working.
 
 ## Workspace views (`workspace-views-v1`)
 

@@ -1,17 +1,8 @@
-import type { ToolDiffFile, ToolDiffHunk, ToolOutputStream, ToolSourceFile, ToolTerminalDetail } from '@/remote/protocol'
+import type { ToolDiffFile, ToolOutputStream, ToolSourceFile } from '@/remote/protocol'
 
-// Formatting only. Tool semantics, captured source and diff lines come from Rust.
+// Formatting only. Tool semantics, status captions, diff counts and hunk headers come from Rust.
 export function indexed<T>(items: T[] | undefined) {
   return (items ?? []).map((value, key) => ({ value, key }))
-}
-
-export function terminalStatus(detail: ToolTerminalDetail): string {
-  const label = {
-    waiting: 'Waiting for execution', running: 'Running', background_job: 'Running in background',
-    succeeded: 'Finished', failed: 'Failed', cancelled: 'Cancelled', timed_out: 'Timed out', interrupted: 'Interrupted',
-  }[detail.state] ?? 'Shell'
-  const duration = detail.duration_ms == null ? '' : detail.duration_ms < 1000 ? `${detail.duration_ms} ms` : `${(detail.duration_ms / 1000).toFixed(1)} s`
-  return [label, detail.exit_code == null ? '' : `exit ${detail.exit_code}`, duration].filter(Boolean).join(' · ')
 }
 
 /** WebKit on touch devices doesn't reliably arrow-scroll focused code regions.
@@ -31,17 +22,7 @@ export function streamNote(stream: ToolOutputStream): string {
 }
 
 export function diffStats(file: ToolDiffFile): string {
-  let added = 0, removed = 0
-  for (const hunk of file.hunks) for (const line of hunk.lines) {
-    if (line.kind === 'added') added++
-    if (line.kind === 'removed') removed++
-  }
-  return `${file.truncated ? 'Preview · ' : ''}+${added} −${removed}`
-}
-
-export function hunkLabel(hunk: ToolDiffHunk): string {
-  const range = (start: number, end: number | null) => end == null ? `${start}` : `${start},${Math.max(0, end - start + 1)}`
-  return `@@ -${range(hunk.old_start, hunk.old_end)} +${range(hunk.new_start, hunk.new_end)} @@`
+  return `${file.truncated ? 'Preview · ' : ''}+${file.added ?? 0} −${file.removed ?? 0}`
 }
 
 export function sourceRange(file: ToolSourceFile): string {
