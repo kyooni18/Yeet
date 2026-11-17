@@ -38,6 +38,13 @@
   --r-control: 8px;
   --r-surface: 12px;
   --thread-width: 800px;
+  /* App frame: compact chrome around a comfortable reading column. */
+  --chrome-text: 13px;
+  --reading-text: 15px;
+  --titlebar-height: 44px;
+  --statusbar-height: 28px;
+  --row-height: 30px;
+  --chrome: var(--panel);
   color-scheme: light;
 }
 :root[data-appearance="dark"] {
@@ -71,9 +78,9 @@
 html, body, #root { height: 100%; margin: 0; overflow: hidden; }
 #root { position: absolute; top: var(--app-top, 0px); left: var(--app-left, 0px); width: var(--app-width, 100%); height: var(--app-height, 100dvh); overflow: hidden; }
 html { overscroll-behavior: none; }
-body { background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+body { background: var(--bg); color: var(--text); font: var(--chrome-text)/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { font: inherit; color: inherit; }
-button { border: 0; background: none; padding: 0; cursor: pointer; text-align: left; -webkit-tap-highlight-color: transparent; }
+button { border: 0; background: none; padding: 0; cursor: default; text-align: left; -webkit-tap-highlight-color: transparent; }
 button:disabled { cursor: default; opacity: 0.45; }
 button svg { flex-shrink: 0; }
 /* VectorSymbol's width/height options describe geometry, not its DOM frame. */
@@ -81,11 +88,11 @@ svg[data-mun="VectorSymbol"] { width: 18px; height: 18px; flex: none; }
 .panel-empty svg[data-mun="VectorSymbol"] { width: 28px; height: 28px; }
 .panel-context svg[data-mun="VectorSymbol"] { width: 13px; height: 13px; }
 input::placeholder, textarea::placeholder { color: var(--faint); }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 ::selection { background: color-mix(in srgb, var(--focus) 25%, transparent); }
 #main, #sidebar, #workspace-panel { min-height: 0; }
 #main { isolation: isolate; }
-.icon-button { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: none; color: var(--muted); border-radius: var(--r-control); transition: background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
+.icon-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none; color: var(--muted); border-radius: var(--r-control); transition: background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
 .icon-button:hover:not(:disabled), .icon-button[aria-expanded="true"] { background: var(--hover); color: var(--text); }
 .icon-button:active:not(:disabled) { transform: scale(0.94); }
 .section-label { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 10px; }
@@ -142,15 +149,33 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .connection-dot { width: 6px; height: 6px; flex: none; background: var(--faint); border-radius: 50%; }
 .connection-dot.is-connected { background: var(--add); }
 
-/* Conversation shares a baseline with the input rather than wandering on wide screens. */
-.topbar { min-height: 56px; flex: none; padding: max(10px, env(safe-area-inset-top)) 18px 10px 24px; border-bottom: 1px solid var(--line); }
-.connection-label { max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; }
+/* App frame. Chrome (title bar, footer, navigation) is compact and not
+   selectable; only the panes inside it scroll. */
+.titlebar, .statusbar, #sidebar, .panel-header, .panel-tabs { user-select: none; -webkit-user-select: none; }
+.topbar { box-sizing: content-box; min-height: var(--titlebar-height); flex: none; padding: env(safe-area-inset-top) 8px 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); }
+.titlebar-location { flex: 0 1 auto; min-width: 0; align-items: baseline !important; }
+.titlebar-title { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 600; }
+.titlebar-context { flex: 0 10000 auto; min-width: 0; font-size: 12px; color: var(--muted); }
+.titlebar-run { display: flex; align-items: center; flex: none; min-height: 28px; padding: 0 8px; border-radius: var(--r-control); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.titlebar-run:hover { background: var(--hover); color: var(--text); }
+.connection-label { max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; font-size: 12px; }
+.connection-label:empty { display: none; }
+.statusbar { box-sizing: border-box; height: var(--statusbar-height); flex: none; padding: 0 14px; border-top: 1px solid var(--line); background: var(--chrome); font-size: 12px; color: var(--muted); overflow: hidden; }
+.statusbar svg[data-mun="VectorSymbol"] { width: 13px; height: 13px; }
+.statusbar-item { flex: none; min-width: 0; white-space: nowrap; }
+.statusbar-path { flex: 0 1 auto; overflow: hidden; }
+.statusbar-action { display: flex; align-items: center; min-height: 24px; padding: 0 6px; margin: 0 -6px; border-radius: var(--r-inline); color: inherit; }
+.statusbar-action:hover { background: var(--hover); color: var(--text); }
+/* The footer is pointer-density chrome. Compact and touch layouts keep the
+   composer on the bottom edge; the workspace panel carries the same facts. */
+@media (max-width: 899px), (hover: none), (pointer: coarse) { .statusbar { display: none !important; } }
+@media (max-width: 599px) { .titlebar-run-label, .titlebar-context { display: none; } }
 .thread-scroll { overscroll-behavior: contain; scroll-padding: 24px; }
 .jump-latest-anchor { height: 0; flex: none; position: relative; z-index: 2; overflow: visible; }
 .jump-to-latest { position: absolute; bottom: 12px; left: 50%; translate: -50% 0; border: 1px solid var(--line); border-radius: var(--r-surface); background: var(--composer); box-shadow: var(--shadow); padding: 7px 12px; color: var(--muted); white-space: nowrap; }
 .jump-to-latest:hover { color: var(--text); }
 .jump-to-latest svg[data-mun="VectorSymbol"] { width: 14px; height: 14px; }
-.conversation-content { line-height: 1.7; }
+.conversation-content { font-size: var(--reading-text); line-height: 1.7; }
 .user-message { border-radius: var(--r-surface); max-width: min(560px, 88%); }
 .message-block { min-width: 0; }
 .message-actions:focus-within { opacity: 1 !important; }
@@ -266,6 +291,7 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 @media (max-width: 1279px) { #workspace-panel { box-shadow: -12px 0 48px rgba(0, 0, 0, 0.12); } }
 @media (max-width: 899px) { #sidebar { box-shadow: 12px 0 48px rgba(0, 0, 0, 0.12); } }
 @media (hover: none), (pointer: coarse) {
+  body { font-size: 15px; }
   input, textarea, select { font-size: 16px !important; }
   button { min-height: 44px; }
   .icon-button, .send-button { width: 44px; height: 44px; }
@@ -281,7 +307,7 @@ button.trace-disclosure__row:hover { background: var(--hover); }
   .model-trigger { min-height: 44px; }
 }
 @media (max-width: 599px) {
-  .topbar { padding-left: 12px; padding-right: 12px; gap: 6px !important; }
+  .topbar { padding-left: 8px; padding-right: 4px; gap: 6px !important; }
   .conversation-content { padding: 24px 18px !important; }
   .composer { padding-left: 6px !important; padding-right: 6px !important; }
   .composer select { max-width: 90px !important; }

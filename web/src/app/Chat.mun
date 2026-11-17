@@ -3,8 +3,8 @@ import { workIcon } from "./workIcons"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
-  remote, statusSnapshot, ease, isWide, sidebarOpen, page, connected, toggleSidebar, openSheet, contextLabel, shortModel,
-  toolbarControl, conversationRef, workspaceLine, elapsed, inspectorOpen, toggleInspector,
+  remote, ease, isWide, connected, openSheet, contextLabel, shortModel,
+  toolbarControl, conversationRef, workspaceLine, elapsed,
   showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
   chooseWorkspace, workspaces, isNewChat, contextDescription, hiddenTranscriptCount, showEarlierTranscript, transcriptKey,
 } from "./state"
@@ -12,7 +12,7 @@ import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
   removeAttachment, pickFiles, addFiles, focusComposer,
 } from "./composer"
-import { Spinner, PageHeader, Chip, IconButton } from "./Common.mun"
+import { Spinner, Chip, IconButton } from "./Common.mun"
 import { ToolDetails } from "./ToolDetails.mun"
 
 const questionAnswer = State("")
@@ -25,40 +25,6 @@ function answerQuestion(question: any, answer: string | null) {
 function submitCustomAnswer(question: any) {
   const value = questionAnswer.value.trim()
   if (value) answerQuestion(question, value)
-}
-
-function connectionLabel(): string {
-  switch (statusSnapshot.value.connection) {
-    case "connected": return ""
-    case "failed": return statusSnapshot.value.connectionError || "Connection failed"
-    case "offline": return "Offline"
-    case "reconnecting": return "Reconnecting…"
-    default: return "Connecting…"
-  }
-}
-
-/** Stable shell controls stay available on every page and viewport. */
-export struct TopBar: View {
-  var body: some View {
-    HStack(spacing: 10) {
-      if !sidebarOpen.value {
-        IconButton(icon: "sidebar", label: "Toggle sidebar", action: { toggleSidebar(true) })
-          .withProps({ "aria-controls": "sidebar", "aria-expanded": sidebarOpen.value })
-          .transition(Transition.opacity)
-      }
-      Text(page.value === "chat" ? statusSnapshot.value.currentSession?.title || "New session" : page.value === "files" ? "Files" : page.value === "diff" ? "Review changes" : page.value === "tasks" ? "Scheduled tasks" : page.value === "debate" ? "Debate" : page.value === "extensions" ? "Extensions" : "Agents")
-        .fontSize(14).fontWeight("medium").lineLimit(1)
-        .style({ minWidth: "0" })
-      Spacer()
-      Text(connectionLabel())
-        .fontSize(12)
-        .foregroundStyle(statusSnapshot.value.connection === "failed" ? color.del : color.faint)
-        .withProps({ role: "status", className: "connection-label" })
-      IconButton(icon: "inspector", label: "Toggle workspace panel", action: { toggleInspector() })
-        .withProps({ "aria-controls": "workspace-panel", "aria-expanded": inspectorOpen.value, "aria-keyshortcuts": "Control+Shift+B Meta+Shift+B" })
-    }
-    .withProps({ className: "topbar" })
-  }
 }
 
 // Label, context, attention and detail availability are projected by Rust

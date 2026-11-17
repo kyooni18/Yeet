@@ -4,7 +4,8 @@ import { connection, page, sheet, sidebarOpen, inspectorOpen, isWide, isDesktop,
 import { AuthView } from "./Auth.mun"
 import { Sidebar, Scrim } from "./Sidebar.mun"
 import { WorkspacePanel, InspectorScrim } from "./Inspector.mun"
-import { TopBar, Chat } from "./Chat.mun"
+import { Chat } from "./Chat.mun"
+import { TitleBar, StatusBar } from "./Frame.mun"
 import { FilesPage, DiffPage } from "./Pages.mun"
 import { AgentsPage } from "./Agents.mun"
 import { TasksPage } from "./Tasks.mun"
@@ -58,8 +59,9 @@ struct Shell: View {
         Scrim().id("scrim")
       }
       VStack(alignment: .stretch, spacing: 0) {
-        TopBar()
+        TitleBar()
         Content()
+        StatusBar()
       }
       .id("main")
       .withProps({ id: "main", role: "main" })

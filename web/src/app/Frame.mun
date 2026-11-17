@@ -1,0 +1,131 @@
+import { Icon, Transition } from "@mun/core"
+import { workIcon } from "./workIcons"
+import { color } from "./theme"
+import { Spinner, IconButton } from "./Common.mun"
+import {
+  statusSnapshot, page, sidebarOpen, inspectorOpen, toggleSidebar, toggleInspector, workspaceFiles, workspaceChanges,
+  displayPath, openPage, elapsed, isWorking, runtimeState,
+} from "./state"
+
+const PAGE_TITLES: Record<string, string> = {
+  files: "Files", diff: "Review changes", agents: "Agents", tasks: "Scheduled tasks", debate: "Debate", extensions: "Extensions",
+}
+
+function pageTitle(): string {
+  return page.value === "chat" ? statusSnapshot.value.currentSession?.title || "New session" : PAGE_TITLES[page.value] || "Yeet"
+}
+
+function changeTotals(): string {
+  const files = workspaceChanges.value?.files ?? []
+  const added = files.reduce((sum, file) => sum + (file.added ?? 0), 0)
+  const removed = files.reduce((sum, file) => sum + (file.removed ?? 0), 0)
+  return files.length + (files.length === 1 ? " file" : " files") + " · +" + added + " −" + removed
+}
+
+/** Where the page is looking, beside its title: one line, never a second header. */
+function pageContext(): string {
+  if (page.value === "files") {
+    const files = workspaceFiles.value
+    return files ? displayPath(files.root) + (files.path ? "/" + files.path : "") : ""
+  }
+  if (page.value === "diff") {
+    const changes = workspaceChanges.value
+    return !changes ? "" : changes.message || (changes.files.length ? changeTotals() : "No uncommitted changes")
+  }
+  return ""
+}
+
+/** Shown only when the connection needs the reader's attention. */
+function connectionLabel(): string {
+  switch (statusSnapshot.value.connection) {
+    case "connected": return ""
+    case "failed": return statusSnapshot.value.connectionError || "Connection failed"
+    case "offline": return "Offline"
+    case "reconnecting": return "Reconnecting…"
+    default: return "Connecting…"
+  }
+}
+
+/** The transcript shows its own progress; other pages would hide a running session. */
+function workingElsewhere(): boolean {
+  return isWorking() && page.value !== "chat"
+}
+
+/** Window title bar: navigation toggle, location, run and connection state when they matter, inspector toggle. */
+export struct TitleBar: View {
+  var body: some View {
+    HStack(spacing: 8) {
+      if !sidebarOpen.value {
+        IconButton(icon: "sidebar", label: "Toggle sidebar", action: { toggleSidebar(true) })
+          .withProps({ "aria-controls": "sidebar", "aria-expanded": sidebarOpen.value })
+          .transition(Transition.opacity)
+      }
+      HStack(spacing: 8) {
+        Text(pageTitle()).lineLimit(1)
+          .withProps({ className: "titlebar-title", role: "heading", "aria-level": "1" })
+        if pageContext() !== "" {
+          Text(pageContext()).lineLimit(1).withProps({ className: "titlebar-context", title: pageContext() })
+        }
+      }.withProps({ className: "titlebar-location" })
+      Spacer()
+      if workingElsewhere() === true {
+        Button(action: { openPage("chat") }, label: {
+          HStack(spacing: 6) {
+            Spinner()
+            Text(["Working", elapsed()].filter(Boolean).join(" · ")).withProps({ className: "titlebar-run-label" })
+          }
+        })
+        .accessibilityLabel("Session is working. Open conversation")
+        .withProps({ className: "titlebar-run", title: "Open conversation" })
+      }
+      Text(connectionLabel())
+        .foregroundStyle(statusSnapshot.value.connection === "failed" ? color.del : color.muted)
+        .withProps({ role: "status", className: "connection-label" })
+      IconButton(icon: "inspector", label: "Toggle workspace panel", action: { toggleInspector() })
+        .withProps({ "aria-controls": "workspace-panel", "aria-expanded": inspectorOpen.value, "aria-keyshortcuts": "Control+Shift+B Meta+Shift+B" })
+    }
+    .withProps({ className: "topbar titlebar" })
+  }
+}
+
+function branch(): string {
+  return workspaceChanges.value?.branch || workspaceFiles.value?.branch || ""
+}
+
+function changedCount(): number {
+  return workspaceChanges.value?.files.length ?? 0
+}
+
+/**
+ * Window footer for wide pointer layouts: the workspace and branch the agent
+ * acts on, and a way into its uncommitted changes. Nominal states (connected,
+ * idle, no changes) are deliberately absent.
+ */
+export struct StatusBar: View {
+  var body: some View {
+    HStack(spacing: 14) {
+      HStack(spacing: 5) {
+        Icon(workIcon("folder"), { width: 13, height: 13 })
+        Text(displayPath(runtimeState.value.workspace_root) || "No workspace").lineLimit(1)
+      }.withProps({ className: "statusbar-item statusbar-path", title: runtimeState.value.workspace_root || undefined })
+      if branch() !== "" {
+        HStack(spacing: 5) {
+          Icon(workIcon("branch"), { width: 13, height: 13 })
+          Text(branch()).lineLimit(1)
+        }.withProps({ className: "statusbar-item", title: "Branch " + branch() })
+      }
+      if changedCount() > 0 && page.value !== "diff" {
+        Button(action: { openPage("diff") }, label: {
+          HStack(spacing: 5) {
+            Icon(workIcon("diff"), { width: 13, height: 13 })
+            Text(changeTotals())
+          }
+        })
+        .accessibilityLabel("Open changes: " + changeTotals())
+        .withProps({ className: "statusbar-item statusbar-action", title: "Review uncommitted changes" })
+      }
+      Spacer()
+    }
+    .withProps({ className: "statusbar", role: "group", "aria-label": "Workspace status" })
+  }
+}
