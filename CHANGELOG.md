@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-11-17
+
+- Redesign the Remote WebUI as a standalone app: a fixed window frame with a title bar, a workspace status footer on wide screens, a compact source-list sidebar, segmented controls, and pages without large headers. Only the transcript, lists and file/diff panes scroll.
+- Fix the Files page in the Remote WebUI, where the directory list filled the page and left no room for the file preview.
+- Declare each built-in tool once, so progress, completion, transcript and TUI labels and icons agree.
+- Shorten the shell, file-read and capability prompts; the tool-search prompt lists the real tools that can still be attached.
+- Send tool-call status, attention and diff counts from Rust so the TUI and Remote WebUI show the same thing.
+- Remove the unused React web client.
+
 ## [0.1.13] - 2026-11-16
 
 - Avoid Claude thinking-signature failures after tool or conversation changes, including when thinking is off.
