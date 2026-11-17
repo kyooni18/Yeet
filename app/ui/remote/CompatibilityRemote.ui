@@ -3,17 +3,24 @@ CompatibilityRemote
 # User-requested design refresh for Experimental Yeet Remote (web) only.
 # The native ContentView remains reserved for the user's OpenPencil design.
 
-Shell
-  LeftNavigation: 264px, collapsible; overlay below 900px
-    Header: Yeet wordmark, close navigation
-    NewSession: prominent full-width action
+Shell: fixed app frame; the document never scrolls, only panes do
+  LeftNavigation: 264px source list, collapsible; overlay below 900px
+    Header: 44px, on the title-bar line; Yeet mark, close navigation
+    NewSession: full-width row action
     ScrollRegion: independently scrollable, min-height 0
-      Navigation: Sessions, Files, Diff, Agents; icon + label + optional count
+      Navigation: Sessions, Files, Diff, Agents, Scheduled tasks, Debate; icon + label + optional count
+        Rows: 30px pointer, 44px touch; selection is fill plus weight
       SessionSearch
       RecentSessions: title, relative age, selected and running state
-    Footer: connection status, Settings; always reachable
+    Footer: connection state only while not connected, Settings; always reachable
   Main: flexible, min-width 0
-    TopBar: navigation toggle, session/view title, connection, workspace-panel toggle
+    TitleBar: 44px; navigation toggle, page title + one line of context, page controls, run state, connection problem, workspace-panel toggle
+      Context: current folder (Files), change totals (Review changes); never a second page header
+      PageControls: segmented choice owned by the page (Review changes: Changes / Full file)
+      RunState: spinner + elapsed when a session works and the page is not the conversation; opens it
+      Connection: text only when not connected
+    StatusBar: 28px, wide pointer layouts only; workspace path, branch, changed-files action
+      No nominal states (connected, idle, no changes); hidden below 900px and on touch
     Conversation: independently scrollable, centered readable column (~760px)
       Messages: generous rhythm, quiet tool disclosures, keyboard-visible actions
       ToolLists: Codex-style compact steps; flat, not a stack of cards
@@ -33,6 +40,7 @@ Shell
           RawInspection: secondary disclosure for original input/output; backend owns expansion
           PartialData: truncation, tail, background handoff, and artifact references remain explicit
         State: only active progress and consequential exceptions; no routine success badges
+          Label, context and attention {approval | problem} come from the Rust trace projection
         Interaction: native buttons, Enter/Space, expanded state and controlled-region relationship
         Mobile: >=44px disclosure targets; exception text wraps without crowding context
       EmptyState: centered greeting and workspace context
@@ -45,8 +53,9 @@ Shell
       Context: compact percentage plus accessible used/limit token information
       No explanatory helper copy beneath the composer
   WorkspacePanel: 320px, collapsible, visible by default at >=1280px
-    Header: workspace name, refresh, close; one line for path and branch, one for change summary
-    Tabs: Status (default), Changes, Files; count for changes
+    Header: 44px, on the title-bar line; workspace name, refresh, close
+    Context: one line for path and branch, one for change summary
+    Tabs: segmented Status (default), Changes, Files; count for changes
     Status: flat rows without dividers; model, reasoning, context, usage, provider limits and reset windows
       Quiet defaults omitted: state only while working or disconnected; agents only when active
       Usage: input and output tokens always; reasoning, cache and model-call rows only when reported
@@ -57,11 +66,12 @@ Shell
       Files: directory navigation, selected file metadata, full-page browse action
     StatusNavigation: Manage providers & authentication; agents available in main navigation
     Overlay: below 1280px; scrim, Escape dismissal, focus containment and restoration
+  Pages: content starts at the top of the pane; the title bar names the page
   DiffPage: narrow 180px file rail, flexible independently scrolling patch
     FileIdentity: workspace-relative paths, selection and +/- counts
     Compact: bounded file list above patch on narrow layouts
-  FilesPage: TUI-like directory list and file preview/metadata, independently scrolling
-    Path: current directory and parent navigation; folder/file glyphs and separate change status
+  FilesPage: 240px directory rail beside file preview/metadata, each independently scrolling
+    Path: current directory in the title bar; Parent folder is the first list row; folder/file glyphs and separate change status
     Preview: bounded backend-provided numbered text; binary/large/error states explicit
 
 Responsiveness
@@ -71,7 +81,10 @@ Responsiveness
   Navigation feedback is immediate; never fake completion to conceal network latency
 
 VisualLanguage
+  Standalone app, not a website: app chrome at 13px, reading column at 15px; chrome text is not selectable.
   Existing theme palette; distinct navigation and composer; subtle borders, flat supporting controls.
+  Segmented control for few peer choices; selected segment raised and bold, aria-pressed.
+  Icon toolbar buttons: 28px pointer, 44px touch, accessible name and tooltip.
   Light/dark via existing appearance setting; no new business logic or protocol.
   Consistent outline icons, 8px spacing rhythm, readable sentence-case section labels.
   Shared reading-column tokens align conversation, tool lists, and composer text.
