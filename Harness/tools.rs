@@ -46,6 +46,7 @@ mod session_tools;
 mod shell_jobs;
 pub(crate) use shell_jobs::ShellJobAccess;
 mod shell_runtime;
+mod spec;
 mod support;
 mod symbol_tools;
 pub mod symbols;
@@ -59,11 +60,14 @@ use context::ToolExecutionContext;
 use definitions::BUILTIN_CAPABILITIES;
 pub(crate) use definitions::direct_mcp_tool_definitions;
 use definitions::{base_tool_definitions, web_read_tool_definition, web_search_tool_definition};
-pub use definitions::{is_coding_builtin_tool, is_general_builtin_tool};
 use evidence::{EditReadCoverage, MutationValidation, ToolEvidence};
 use paths::canonicalize_existing_ancestor;
 pub(crate) use paths::workspace_revision_for_path;
 use service_backends::ToolServiceConfiguration;
+pub use spec::{
+    ToolAccess, ToolKind, ToolLabels, ToolSpec, basic_tool_names, tool_presentation, tool_spec,
+    tool_specs,
+};
 pub(crate) use support::canonical_web_source_key;
 use support::{
     ArtifactStore, McpServerIdentity, ReadCacheEntry, allocate_stable_tool_name,
@@ -91,7 +95,6 @@ pub struct BuiltinCapabilityDescriptor {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
-    tools: &'static [&'static str],
 }
 
 /// Returns apply_file_edits change objects whether the call used `changes` or `patch`.

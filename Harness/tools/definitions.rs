@@ -2,6 +2,7 @@
 //!
 //! Keeping JSON schemas here prevents execution logic from becoming coupled to
 //! long provider-facing descriptions and makes capability review straightforward.
+//! Policy, default attachment, capability ownership and labels live in `spec`.
 
 use serde_json::json;
 
@@ -14,62 +15,46 @@ pub(super) const BUILTIN_CAPABILITIES: &[BuiltinCapabilityDescriptor] = &[
         id: "builtin:memory",
         name: "Memory",
         description: "Save durable workspace knowledge and recall enabled native memories. Memory settings independently control access. Protected agent recall is not yet available.",
-        tools: &[
-            "memory_save",
-            "memory_search",
-            "memory_get",
-            "memory_forget",
-        ],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:file-read",
         name: "File Read",
         description: "Read one or several UTF-8 files with read_file. Outside-project paths trigger project approval unless unlimited or auto-approval mode is enabled. Reads return snapshot-safe line anchors for later edits.",
-        // read_files is a hidden legacy alias so old restored calls inherit
-        // the same disable/approval policy without re-exposing a second schema.
-        tools: &["read_file", "read_files"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:file-write",
         name: "File Write",
         description: "Create, modify, move, or delete files with snapshot-safe apply_file_edits. Relative paths resolve from the session cwd; paths outside active context roots require approval unless unlimited or auto-approval mode is enabled. Existing files require fresh read coverage; the runtime binds the cached snapshot automatically.",
-        tools: &["apply_file_edits"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:workspace-search",
         name: "Workspace Search",
         description: "Search workspace source with search_workspace. Matching is literal by default; narrow the path and use regex only when needed.",
-        tools: &["search_workspace"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:code-symbols",
         name: "Code Symbols",
         description: "Navigate Rust/TypeScript/JavaScript code by declaration: outline lists a file's declarations with line numbers; find_symbol finds definitions and identifier references by exact name (best-effort, not type-aware).",
-        tools: &["outline", "find_symbol"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:shell",
         name: "Shell",
         description: "Run commands with run_shell. In sandboxed mode, mutating or outside-project execution asks for approval; unlimited mode runs without sandbox restrictions. Builds/tests/noisy commands can use actor mode. Use run_shell background=true for detached work, then shell_job action=wait for event-driven completion or fixed-rate monitoring without model polling.",
-        tools: &["run_shell", "shell_job", "request_shell_permission"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:computer-use",
         name: "Computer Use",
         description: "Control native macOS applications with Codex's installed Computer Use runtime. Yeet launches it directly as a built-in capability; no MCP server needs to be configured or linked.",
-        tools: &["computer_use", "computer_use_reset"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:document-read",
         name: "Document Read",
         description: "Extract readable content from documents without treating them as source code. Supports PDF, DOCX, spreadsheets, CSV/TSV, JSON, Markdown, and UTF-8 text, with large content stored as typed artifacts.",
-        tools: &["read_document"],
     },
     BuiltinCapabilityDescriptor {
         id: "builtin:data-analysis",
         name: "Data Analysis",
         description: "Analyze structured local data directly. Supports CSV, TSV, JSON arrays of objects, Excel workbooks, and ODS with summaries, value counts, grouped aggregates, and Pearson correlation.",
-        tools: &["analyze_data"],
     },
 ];
 
@@ -372,24 +357,6 @@ pub(super) fn ask_user_tool_definition() -> ToolDefinition {
             "required":["question","options"],
             "additionalProperties":false
         }),
-    )
-}
-
-/// Returns whether a built-in tool is primarily useful for general document/data tasks.
-pub fn is_general_builtin_tool(name: &str) -> bool {
-    matches!(name, "read_document" | "analyze_data" | "artifact_info")
-}
-
-/// Returns whether a built-in tool belongs to the coding/workspace surface.
-pub fn is_coding_builtin_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "read_file"
-            | "search_workspace"
-            | "run_shell"
-            | "shell_job"
-            | "request_shell_permission"
-            | "apply_file_edits"
     )
 }
 

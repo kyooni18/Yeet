@@ -48,9 +48,11 @@ pub(super) enum ExternalRoute {
 
 impl ToolCatalog {
     pub(super) fn execution_prohibited(&self, name: &str) -> bool {
-        (self.deny_writes && matches!(name, "apply_file_edits" | "memory_save" | "memory_forget"))
-            || (self.deny_shell
-                && matches!(name, "run_shell" | "shell_job" | "request_shell_permission"))
+        tool_spec(name).is_some_and(|spec| match spec.access {
+            ToolAccess::Write => self.deny_writes,
+            ToolAccess::Shell => self.deny_shell,
+            ToolAccess::Read | ToolAccess::Runtime => false,
+        })
     }
     pub(super) fn with_builtin_tools() -> Self {
         Self {
@@ -153,21 +155,8 @@ impl ToolCatalog {
     /// Tools research may call: read-only built-ins, Skill reads and MCP
     /// tools explicitly annotated read-only.
     pub(super) fn research_tool_allowed(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "find_capabilities"
-                | "activate_capability"
-                | "read_file"
-                | "list_files"
-                | "search_workspace"
-                | "web_search"
-                | "web_read"
-                | "read_document"
-                | "analyze_data"
-                | "artifact_info"
-                | "read_artifact"
-                | "search_artifact"
-        ) || self.skill_tool_map.contains_key(name)
+        tool_spec(name).is_some_and(|spec| spec.research)
+            || self.skill_tool_map.contains_key(name)
             || self.read_only_mcp_tools.contains(name)
     }
 

@@ -5,21 +5,6 @@ use std::collections::{HashMap, HashSet};
 
 pub(super) const SEARCH_TOOL: &str = "search_tools";
 
-/// The basic surface every turn starts with, in a fixed order so the provider
-/// sees one stable tool prefix. Web tools drop out when the catalog lacks them
-/// (web search disabled); everything else stays reachable through search_tools.
-const BASIC_TOOLS: [&str; 9] = [
-    "read_file",
-    "search_workspace",
-    "apply_file_edits",
-    "run_shell",
-    "shell_job",
-    "read_artifact",
-    "web_search",
-    "web_read",
-    "ask_user",
-];
-
 pub(super) struct ToolDiscovery {
     loaded: HashSet<String>,
     search_enabled: bool,
@@ -40,11 +25,13 @@ impl Default for ToolDiscovery {
 }
 
 impl ToolDiscovery {
-    /// Every turn gets the same basic tools plus the search_tools gateway.
+    /// Every turn gets the spec table's basic tools, in its fixed order so the
+    /// provider sees one stable tool prefix, plus the search_tools gateway.
+    /// Web tools drop out when the catalog lacks them (web search disabled).
     /// Request wording never narrows this surface; it can only add tools.
     pub fn basic() -> Self {
         let mut discovery = Self::default();
-        discovery.load(BASIC_TOOLS);
+        discovery.load(crate::tools::basic_tool_names());
         discovery
     }
 
@@ -231,8 +218,9 @@ mod tests {
 
     #[test]
     fn basic_surface_attaches_core_tools_and_discovery_up_front() {
-        let catalog: Vec<_> = BASIC_TOOLS.iter().map(|name| tool(name)).collect();
-        let mut expected: Vec<String> = BASIC_TOOLS.iter().map(|name| name.to_string()).collect();
+        let basic: Vec<_> = crate::tools::basic_tool_names().collect();
+        let catalog: Vec<_> = basic.iter().map(|name| tool(name)).collect();
+        let mut expected: Vec<String> = basic.iter().map(|name| name.to_string()).collect();
         expected.push(SEARCH_TOOL.to_owned());
         let discovery = ToolDiscovery::basic();
         assert_eq!(names(&discovery, &catalog), expected);

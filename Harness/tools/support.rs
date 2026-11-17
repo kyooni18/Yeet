@@ -250,9 +250,10 @@ pub(super) fn web_search_queries(object: &Map<String, Value>) -> Result<Vec<Stri
 pub(super) fn builtin_capability_for_tool(
     tool_name: &str,
 ) -> Option<&'static BuiltinCapabilityDescriptor> {
+    let id = super::spec::tool_spec(tool_name)?.capability?;
     BUILTIN_CAPABILITIES
         .iter()
-        .find(|capability| capability.tools.contains(&tool_name))
+        .find(|capability| capability.id == id)
 }
 
 pub(super) fn string_arg<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a str> {
