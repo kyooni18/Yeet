@@ -48,6 +48,15 @@ const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
 // the version they launched with. Used only when no local Claude Code is found.
 const FALLBACK_CLAUDE_CODE_VERSION = "2.1.296";
 
+// Without an explicit maxTokens, the old 4k fallback left no room for adaptive
+// thinking plus the answer, so turns stopped with `max_tokens`. Use each
+// family's documented output cap; newer Claude 4+ models accept 32k.
+function defaultMaxTokens(model: string): number {
+  if (/^claude-3-(?:haiku|opus|sonnet)(?:-|$)/.test(model)) return 4_096;
+  if (/^claude-3-5-/.test(model)) return 8_192;
+  return 32_000;
+}
+
 function contextManagementForRequest(request: ProviderCallRequest): unknown | undefined {
   // Recoverable windows own their capacity and immutable history. Provider-side
   // tool clearing would rewrite that history even though our request is unchanged.
@@ -333,7 +342,7 @@ function requestBody(
     ...providerOptions,
     ...(thinkingBinding ? { thinking: thinkingBinding } : {}),
     model: request.model,
-    max_tokens: request.maxTokens ?? 4_096,
+    max_tokens: request.maxTokens ?? defaultMaxTokens(request.model),
     messages: mapMessages(
       split.messages,
       promptCacheEnabled,

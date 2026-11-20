@@ -2056,6 +2056,19 @@ test("Anthropic Messages normalizes tool use", async () => {
   assert.equal(result.toolCalls[0].name, "read_file");
 });
 
+test("Anthropic default output cap leaves room for thinking and answers", async () => {
+  let sent;
+  const provider = new AnthropicProvider({
+    apiKey: "test",
+    fetch: async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse({ model: "claude-sonnet-4-6", content: [], stop_reason: "end_turn", usage: {} });
+    },
+  });
+  await provider.complete({ model: "claude-sonnet-4-6", messages: [{ role: "user", content: "go" }] });
+  assert.equal(sent.max_tokens, 32_000);
+});
+
 test("Gemini generateContent normalizes function calls", async () => {
   let requestedUrl;
   let sent;
