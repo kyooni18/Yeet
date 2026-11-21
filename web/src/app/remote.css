@@ -29,10 +29,12 @@
   --scrim: rgba(24, 24, 22, 0.24);
   --focus: #2349c9;
   --inspector: #ffffff;
-  /* Button material: a lit top edge, a hairline ring and a short drop shadow give a
-     small physical lift that the pressed state removes. Flat fills; no gradients. */
-  --btn-fill: #ffffff; --btn-fill-hover: #f9f8f6; --btn-fill-active: #efeeec;
-  --btn-ring: rgba(46, 52, 54, 0.16); --btn-hi: rgba(255, 255, 255, 0.9); --btn-drop: rgba(0, 0, 0, 0.07);
+  /* Button material: a sheen from a lit top to a shaded bottom, a bevel (light inside the
+     top edge, shade inside the bottom edge) and a soft cast shadow. Pressing flips the
+     sheen and sinks the button into its surface. */
+  --btn-top: #ffffff; --btn-bottom: #efede9; --btn-edge: rgba(46, 52, 54, 0.08);
+  --btn-hi: rgba(255, 255, 255, 0.95); --btn-lo: rgba(46, 52, 54, 0.10); --btn-drop: rgba(40, 36, 30, 0.12);
+  --btn-hover: brightness(0.975); --btn-press: brightness(0.94);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.08);
   /* Helvetica Neue where installed (Apple platforms), then Helvetica and its metric-compatible stand-ins. */
@@ -79,8 +81,9 @@
   --accent: #7aa2ff; --accent-hover: #9cb9ff; --accent-ink: #101010;
   --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
   --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
-  --btn-fill: #262626; --btn-fill-hover: #2e2e2e; --btn-fill-active: #1f1f1f;
-  --btn-ring: rgba(242, 242, 242, 0.12); --btn-hi: rgba(255, 255, 255, 0.07); --btn-drop: rgba(0, 0, 0, 0.45);
+  --btn-top: #343434; --btn-bottom: #262626; --btn-edge: rgba(0, 0, 0, 0.5);
+  --btn-hi: rgba(255, 255, 255, 0.10); --btn-lo: rgba(0, 0, 0, 0.45); --btn-drop: rgba(0, 0, 0, 0.55);
+  --btn-hover: brightness(1.14); --btn-press: brightness(0.88);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-pane: 0 0 0 1px rgba(242, 242, 242, 0.08), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.4);
@@ -96,8 +99,9 @@
     --accent: #7aa2ff; --accent-hover: #9cb9ff; --accent-ink: #101010;
     --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
     --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
-    --btn-fill: #262626; --btn-fill-hover: #2e2e2e; --btn-fill-active: #1f1f1f;
-  --btn-ring: rgba(242, 242, 242, 0.12); --btn-hi: rgba(255, 255, 255, 0.07); --btn-drop: rgba(0, 0, 0, 0.45);
+    --btn-top: #343434; --btn-bottom: #262626; --btn-edge: rgba(0, 0, 0, 0.5);
+  --btn-hi: rgba(255, 255, 255, 0.10); --btn-lo: rgba(0, 0, 0, 0.45); --btn-drop: rgba(0, 0, 0, 0.55);
+  --btn-hover: brightness(1.14); --btn-press: brightness(0.88);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-pane: 0 0 0 1px rgba(242, 242, 242, 0.08), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.4);
@@ -501,35 +505,47 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
 
 /* Buttons. Primary is the one action a view wants; secondary is any other action;
    quiet is a text action inside a toolbar or message. Class names, not inline fills,
-   so every button shares one material and one set of states (CONTROL-02). */
+   so every button shares one material and one set of states (CONTROL-02). The sheen is a
+   deliberate texture, not decoration on every surface: it marks what can be pressed. */
 .btn, .form-action, .auth-action, .setting-action {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
   min-height: 32px; padding: 0 14px; border: 0; border-radius: var(--r-control);
   font-size: 13px; font-weight: 500; line-height: 1.2; white-space: nowrap; text-align: center;
-  color: var(--text); background: var(--btn-fill);
-  box-shadow: 0 0 0 1px var(--btn-ring), 0 1px 2px var(--btn-drop), inset 0 1px 0 var(--btn-hi);
-  transition: background var(--motion-fast), color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+  color: var(--text); background: linear-gradient(180deg, var(--btn-top), var(--btn-bottom));
+  box-shadow: 0 0 0 0.5px var(--btn-edge), inset 0 1px 0 var(--btn-hi), inset 0 -1px 0 var(--btn-lo), 0 1px 1px var(--btn-drop), 0 3px 8px var(--btn-drop);
+  text-shadow: 0 1px 0 var(--btn-hi);
+  transition: filter var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast), color var(--motion-fast);
 }
-.btn:hover:not(:disabled), .form-action:hover:not(:disabled), .auth-action:hover:not(:disabled), .setting-row:hover:not(:disabled) .setting-action { background: var(--btn-fill-hover); }
+.btn:hover:not(:disabled), .form-action:hover:not(:disabled), .auth-action:hover:not(:disabled), .setting-row:hover:not(:disabled) .setting-action { filter: var(--btn-hover); }
 .btn:active:not(:disabled), .form-action:active:not(:disabled), .auth-action:active:not(:disabled), .setting-row:active:not(:disabled) .setting-action {
-  background: var(--btn-fill-active); transform: translateY(0.5px);
-  box-shadow: 0 0 0 1px var(--btn-ring), inset 0 1px 2px var(--btn-drop);
+  filter: var(--btn-press); transform: translateY(0.5px);
+  box-shadow: 0 0 0 0.5px var(--btn-edge), inset 0 2px 4px var(--btn-lo), inset 0 0 0 1px var(--btn-edge);
 }
 .btn-small, .setting-action { min-height: 28px; padding: 0 10px; font-size: 12px; }
 .btn-block { width: 100%; justify-content: flex-start; }
-.btn-primary, .auth-primary { color: var(--accent-ink); background: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 78%, #000), 0 1px 2px color-mix(in srgb, var(--accent) 38%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.22); }
-.btn-primary:hover:not(:disabled), .auth-primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn-primary:active:not(:disabled), .auth-primary:active:not(:disabled) { background: var(--accent-hover);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 78%, #000), inset 0 1px 3px rgba(0, 0, 0, 0.3); }
-.btn-quiet { color: var(--muted); background: transparent; box-shadow: none; font-weight: 400; }
-.btn-quiet:hover:not(:disabled) { color: var(--text); background: var(--hover); }
-.btn-quiet:active:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); box-shadow: none; }
+/* Primary: accent fill under a translucent sheen, so it follows the accent in either theme. */
+.btn-primary, .auth-primary, .send-button:not(:disabled) {
+  background-color: var(--accent);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 52%, rgba(0, 0, 0, 0.14));
+}
+.btn-primary, .auth-primary {
+  color: var(--accent-ink); text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.18);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--accent) 70%, #000), inset 0 1px 0 rgba(255, 255, 255, 0.34), inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    0 1px 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 4px 10px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.btn-primary:active:not(:disabled), .auth-primary:active:not(:disabled) {
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--accent) 70%, #000), inset 0 2px 5px rgba(0, 0, 0, 0.38);
+}
+.btn-quiet { color: var(--muted); background: transparent; box-shadow: none; text-shadow: none; font-weight: 400; filter: none; }
+.btn-quiet:hover:not(:disabled) { color: var(--text); background: var(--hover); filter: none; }
+.btn-quiet:active:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); box-shadow: none; filter: none; }
 .destructive { color: var(--del); }
 .btn:disabled, .form-action:disabled, .auth-action:disabled { opacity: 0.45; }
-/* The send control is a primary button with an icon: same lit edge, same press. */
-.send-button:not(:disabled) { box-shadow: 0 0 0 1px var(--btn-ring), 0 1px 2px var(--btn-drop), inset 0 1px 0 rgba(255, 255, 255, 0.2); }
-.send-button:active:not(:disabled) { box-shadow: 0 0 0 1px var(--btn-ring), inset 0 1px 2px var(--btn-drop); }
+/* The send control is a primary button with an icon: same sheen and bevel, same press. */
+.send-button:not(:disabled) { box-shadow: 0 0 0 0.5px var(--btn-edge), inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.2), 0 1px 1px var(--btn-drop), 0 3px 8px var(--btn-drop); }
+.send-button:active:not(:disabled) { box-shadow: 0 0 0 0.5px var(--btn-edge), inset 0 2px 4px rgba(0, 0, 0, 0.3); filter: var(--btn-press); }
+/* The selected segment reads as a pressed-in-place key of the same material. */
+.segment[aria-pressed="true"] { background: linear-gradient(180deg, var(--btn-top), var(--btn-bottom)); box-shadow: 0 0 0 0.5px var(--btn-edge), inset 0 1px 0 var(--btn-hi), 0 1px 2px var(--btn-drop); }
 /* Touch and narrow layouts keep 44px targets; this must follow the button rules above. */
 @media (max-width: 899px), (hover: none) and (pointer: coarse) {
   .auth-action { min-height: 44px; font-size: 16px; }
