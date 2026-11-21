@@ -4,6 +4,13 @@ CompatibilityRemote
 # The native ContentView remains reserved for the user's OpenPencil design.
 
 Shell: fixed app frame; the document never scrolls, only panes do
+  Layers, low to high (named z tokens, no ad-hoc values): canvas and Main, floating bars, scrim, panes, sheet, toast
+    Canvas: the app background; Main is flat on it, with no frame or border of its own
+    Panes: LeftNavigation and WorkspacePanel are inset 8px from the window, 16px corners, a hairline ring plus soft shadow instead of borders
+      Wide: stay in the layout so no content is covered; narrow: the same surface overlays Main above a scrim
+    Corners: 6px inline (code, chips), 8px controls and rows inside a pane (16px surface minus 8px inset), 16px surfaces (panes, composer, sheets, bubbles)
+    Blur: ProgressiveBlur is the only blur material and marks "above what scrolls beneath": under the title bar and above the composer on the conversation, behind drawers (edge) and sheets (uniform)
+      Blur layers are siblings of animated views, never descendants (an ancestor's opacity hides the backdrop); prefers-reduced-transparency turns blur off for solid bars
   LeftNavigation: 264px source list, collapsible; overlay below 900px
     Header: 44px, on the title-bar line; Yeet mark, close navigation
     NewSession: full-width row action
@@ -14,14 +21,14 @@ Shell: fixed app frame; the document never scrolls, only panes do
       RecentSessions: title, relative age, selected and running state
     Footer: connection state only while not connected, Settings; always reachable
   Main: flexible, min-width 0
-    TitleBar: 44px; navigation toggle, page title + one line of context, page controls, run state, connection problem, workspace-panel toggle
+    TitleBar: 44px; floats over the transcript on a top blur on the conversation, solid with a rule on other pages; navigation toggle, page title + one line of context, page controls, run state, connection problem, workspace-panel toggle
       Context: current folder (Files), change totals (Review changes); never a second page header
       PageControls: segmented choice owned by the page (Review changes: Changes / Full file)
       RunState: spinner + elapsed when a session works and the page is not the conversation; opens it
       Connection: text only when not connected
     StatusBar: 28px, wide pointer layouts only; workspace path, branch, changed-files action
       No nominal states (connected, idle, no changes); hidden below 900px and on touch
-    Conversation: independently scrollable, centered readable column (~760px)
+    Conversation: independently scrollable, centered readable column (~760px); runs the full height of Main, padded so its first and last lines clear the floating bars
       Messages: generous rhythm, quiet tool disclosures, keyboard-visible actions
       ToolLists: Codex-style compact steps; flat, not a stack of cards
         Order: always-visible calls from top to bottom in backend order; no aggregate header/title or step count
@@ -45,7 +52,7 @@ Shell: fixed app frame; the document never scrolls, only panes do
         Mobile: >=44px disclosure targets; exception text wraps without crowding context
       EmptyState: centered greeting and workspace context
       FollowOutput: pinned only while near bottom; floating Jump to latest when reading history
-    Composer: same column alignment, one bordered flat surface, auto-growing field
+    Composer: floats over the bottom of the transcript on a bottom blur; its measured height pads the transcript and positions Jump to latest; same column alignment, one bordered flat surface, auto-growing field
       NewChatWorkspace: labeled native workspace choice beside input, only for an empty new chat
         Open another workspace path action; never a workspace selector in left sidebar
       Controls: one quiet row; attachment, model, reasoning, context, send/stop
