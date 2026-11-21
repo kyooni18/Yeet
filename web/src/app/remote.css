@@ -29,6 +29,10 @@
   --scrim: rgba(24, 24, 22, 0.24);
   --focus: #2349c9;
   --inspector: #ffffff;
+  /* Button material: a lit top edge, a hairline ring and a short drop shadow give a
+     small physical lift that the pressed state removes. Flat fills; no gradients. */
+  --btn-fill: #ffffff; --btn-fill-hover: #f9f8f6; --btn-fill-active: #efeeec;
+  --btn-ring: rgba(46, 52, 54, 0.16); --btn-hi: rgba(255, 255, 255, 0.9); --btn-drop: rgba(0, 0, 0, 0.07);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.08);
   /* Helvetica Neue where installed (Apple platforms), then Helvetica and its metric-compatible stand-ins. */
@@ -75,6 +79,8 @@
   --accent: #7aa2ff; --accent-hover: #9cb9ff; --accent-ink: #101010;
   --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
   --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
+  --btn-fill: #262626; --btn-fill-hover: #2e2e2e; --btn-fill-active: #1f1f1f;
+  --btn-ring: rgba(242, 242, 242, 0.12); --btn-hi: rgba(255, 255, 255, 0.07); --btn-drop: rgba(0, 0, 0, 0.45);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-pane: 0 0 0 1px rgba(242, 242, 242, 0.08), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.4);
@@ -90,7 +96,9 @@
     --accent: #7aa2ff; --accent-hover: #9cb9ff; --accent-ink: #101010;
     --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
     --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --btn-fill: #262626; --btn-fill-hover: #2e2e2e; --btn-fill-active: #1f1f1f;
+  --btn-ring: rgba(242, 242, 242, 0.12); --btn-hi: rgba(255, 255, 255, 0.07); --btn-drop: rgba(0, 0, 0, 0.45);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-pane: 0 0 0 1px rgba(242, 242, 242, 0.08), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
@@ -133,9 +141,6 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .form-field { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--composer); color: var(--text); font-size: 16px; }
 .form-field:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
 textarea.form-field { resize: vertical; min-height: 96px; }
-.form-action { padding: 7px 12px; border: 1px solid var(--line); border-radius: var(--r-control); background: var(--composer); font-size: 13px; flex-shrink: 0; }
-.form-action:hover:not(:disabled) { background: var(--hover); }
-.destructive { color: var(--del); }
 .form-help { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .form-notice { padding: 10px 12px; border-left: 2px solid var(--focus); background: var(--panel); font-size: 13px; overflow-wrap: anywhere; }
 .feature-card { padding: 14px; border: 1px solid var(--line); border-radius: var(--r-control); min-width: 0; }
@@ -149,8 +154,8 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 
 /* Pressed is distinct from hover and selected (CONTROL-02). */
 .nav-item:active:not(:disabled), .session-row:active:not(:disabled), .panel-row:active:not(:disabled),
-.new-session:active:not(:disabled), .form-action:active:not(:disabled), .trace-disclosure__row:active { background: color-mix(in srgb, var(--text) 10%, transparent); }
-.form-action, .segment, .composer-controls select { transition: background var(--motion-fast), color var(--motion-fast); }
+.trace-disclosure__row:active { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.segment, .composer-controls select { transition: background var(--motion-fast), color var(--motion-fast); }
 
 /* Navigation: a source list. The header shares the title bar's height so the
    window reads as one toolbar line; only the list between header and footer scrolls. */
@@ -163,8 +168,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .sidebar-header { width: 100% !important; min-width: 0; min-height: var(--titlebar-height); padding: 0 0 0 8px; }
 .sidebar-header img { flex: none; display: block; object-fit: contain; }
 .brand-tag { font-size: 12px; color: var(--muted); }
-.new-session { padding: 0 8px; border-radius: var(--r-control); min-height: var(--row-height); background: var(--field); transition: background var(--motion-fast); }
-.new-session:hover:not(:disabled) { background: var(--hover); }
+.new-session { padding: 0 10px; justify-content: flex-start; width: 100%; }
 .nav-item, .session-row, .panel-row { width: 100%; border-radius: var(--r-control); color: var(--text2); transition: background var(--motion-fast), color var(--motion-fast); }
 .sidebar-nav { padding: 8px 0 12px; }
 .nav-item { padding: 0 8px; min-height: var(--row-height); }
@@ -428,10 +432,10 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
   .composer-surface { padding-right: 8px !important; }
 }
 
-.auth-input, .auth-action { min-width: 0; font: inherit; color: var(--text); border: 1px solid var(--line); border-radius: var(--r-control); padding: 8px 12px; background: var(--panel); }
-.auth-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.auth-input { min-width: 0; font: inherit; color: var(--text); border: 1px solid var(--line); border-radius: var(--r-control); padding: 8px 12px; background: var(--panel); }
 @media (max-width: 899px), (hover: none) and (pointer: coarse) {
   .auth-input, .auth-action { min-height: 44px; font-size: 16px; }
+  .btn-small { min-height: 44px; }
 }
 
 /* Long transcripts: older rows load on request; off-screen rows skip layout and paint. */
@@ -492,6 +496,45 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
 .setting-row:hover:not(:disabled) { background: var(--hover); }
 .setting-row:active:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
 .setting-row .setting-detail, .setting-row [data-mun="VStack"] > :nth-child(2) { overflow-wrap: break-word; }
-.setting-action { flex: none; padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-control); font-size: 12px; color: var(--text); background: var(--composer); }
 .setting-value { flex: none; max-width: 40%; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 .setting-choice { width: fit-content; max-width: 100%; flex-wrap: wrap; }
+
+/* Buttons. Primary is the one action a view wants; secondary is any other action;
+   quiet is a text action inside a toolbar or message. Class names, not inline fills,
+   so every button shares one material and one set of states (CONTROL-02). */
+.btn, .form-action, .auth-action, .setting-action {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
+  min-height: 32px; padding: 0 14px; border: 0; border-radius: var(--r-control);
+  font-size: 13px; font-weight: 500; line-height: 1.2; white-space: nowrap; text-align: center;
+  color: var(--text); background: var(--btn-fill);
+  box-shadow: 0 0 0 1px var(--btn-ring), 0 1px 2px var(--btn-drop), inset 0 1px 0 var(--btn-hi);
+  transition: background var(--motion-fast), color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+.btn:hover:not(:disabled), .form-action:hover:not(:disabled), .auth-action:hover:not(:disabled), .setting-row:hover:not(:disabled) .setting-action { background: var(--btn-fill-hover); }
+.btn:active:not(:disabled), .form-action:active:not(:disabled), .auth-action:active:not(:disabled), .setting-row:active:not(:disabled) .setting-action {
+  background: var(--btn-fill-active); transform: translateY(0.5px);
+  box-shadow: 0 0 0 1px var(--btn-ring), inset 0 1px 2px var(--btn-drop);
+}
+.btn-small, .setting-action { min-height: 28px; padding: 0 10px; font-size: 12px; }
+.btn-block { width: 100%; justify-content: flex-start; }
+.btn-primary, .auth-primary { color: var(--accent-ink); background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 78%, #000), 0 1px 2px color-mix(in srgb, var(--accent) 38%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.22); }
+.btn-primary:hover:not(:disabled), .auth-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-primary:active:not(:disabled), .auth-primary:active:not(:disabled) { background: var(--accent-hover);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 78%, #000), inset 0 1px 3px rgba(0, 0, 0, 0.3); }
+.btn-quiet { color: var(--muted); background: transparent; box-shadow: none; font-weight: 400; }
+.btn-quiet:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.btn-quiet:active:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); box-shadow: none; }
+.destructive { color: var(--del); }
+.btn:disabled, .form-action:disabled, .auth-action:disabled { opacity: 0.45; }
+/* The send control is a primary button with an icon: same lit edge, same press. */
+.send-button:not(:disabled) { box-shadow: 0 0 0 1px var(--btn-ring), 0 1px 2px var(--btn-drop), inset 0 1px 0 rgba(255, 255, 255, 0.2); }
+.send-button:active:not(:disabled) { box-shadow: 0 0 0 1px var(--btn-ring), inset 0 1px 2px var(--btn-drop); }
+/* Touch and narrow layouts keep 44px targets; this must follow the button rules above. */
+@media (max-width: 899px), (hover: none) and (pointer: coarse) {
+  .auth-action { min-height: 44px; font-size: 16px; }
+}
+@media (hover: none), (pointer: coarse) {
+  .btn, .btn-small, .form-action, .auth-action { min-height: 44px; }
+  .btn-small { padding: 0 12px; }
+}

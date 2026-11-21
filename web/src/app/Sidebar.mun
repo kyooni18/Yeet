@@ -146,7 +146,7 @@ export struct Sidebar: View {
           Spacer()
         }
       })
-      .withProps({ className: "new-session" })
+      .withProps({ className: "btn new-session" })
       .disabled(!connected())
       ScrollView() {
         VStack(alignment: .stretch, spacing: 0) {

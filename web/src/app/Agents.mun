@@ -32,10 +32,7 @@ struct AgentButton: View {
   let control: Any
   var body: some View {
     Button(control.label) { remoteStore.sendAgentUi(control.action) }
-      .fontSize(12)
-      .padding({ top: 5, bottom: 5, leading: 10, trailing: 10 })
-      .background(color.raised)
-      .style({ borderRadius: "var(--r-control)" })
+      .withProps({ className: "btn btn-small" })
       .disabled(!control.enabled || !connected())
   }
 }
