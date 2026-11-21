@@ -4,11 +4,11 @@
   --sidebar: #ffffff;
   --field: #f6f5f4;
   --nav-hover: #f6f5f4;
-  --nav-select: #cce8ff;
-  --session-select: #cce8ff;
+  --nav-select: #ebeae8;
+  --session-select: #ebeae8;
   --row-hover: #f6f5f4;
-  --row-select: #cce8ff;
-  --bubble: #d3f4e3;
+  --row-select: #ebeae8;
+  --bubble: #efeeec;
   --rule: #c0bfbc;
   --composer: #ffffff;
   --panel: #ffffff;
@@ -29,10 +29,15 @@
   --scrim: rgba(24, 24, 22, 0.24);
   --focus: #1a5fb4;
   --inspector: #ffffff;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.08);
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --motion-fast: 150ms cubic-bezier(.2, 0, 0, 1);
+  /* Motion scale: one curve, two durations. Fast for state changes on a control,
+     base for something entering or leaving. Nothing in the UI is slower than base. */
+  --ease-out: cubic-bezier(.2, 0, 0, 1);
+  --motion-fast: 120ms var(--ease-out);
+  --motion-base: 200ms var(--ease-out);
   /* Corners by role: inline chips and code, controls and rows, standalone surfaces. */
   --r-inline: 6px;
   --r-control: 8px;
@@ -56,7 +61,8 @@
   --accent: #529cff; --accent-hover: #7ab6ff; --accent-ink: #101010;
   --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
   --scrim: rgba(0, 0, 0, 0.5); --focus: #529cff; --inspector: #181818;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -69,7 +75,8 @@
     --accent: #529cff; --accent-hover: #7ab6ff; --accent-ink: #101010;
     --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
     --scrim: rgba(0, 0, 0, 0.5); --focus: #529cff; --inspector: #181818;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
     color-scheme: dark;
   }
 }
@@ -123,6 +130,11 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .sheet-dialog [data-mun="Toggle"] input { accent-color: var(--accent); width: 18px; height: 18px; flex-shrink: 0; }
 .feature-page { width: 100% !important; max-width: 880px !important; margin: 0 auto; padding: 20px clamp(16px, 4vw, 28px) 32px; min-width: 0; }
 .feature-actions { flex-wrap: wrap; width: 100% !important; }
+
+/* Pressed is distinct from hover and selected (CONTROL-02). */
+.nav-item:active:not(:disabled), .session-row:active:not(:disabled), .panel-row:active:not(:disabled),
+.new-session:active:not(:disabled), .form-action:active:not(:disabled), .trace-disclosure__row:active { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.form-action, .segment, .composer-controls select { transition: background var(--motion-fast), color var(--motion-fast); }
 
 /* Navigation: a source list. The header shares the title bar's height so the
    window reads as one toolbar line; only the list between header and footer scrolls. */
@@ -180,7 +192,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 @media (max-width: 599px) { .titlebar-run-label, .titlebar-context { display: none; } }
 .thread-scroll { overscroll-behavior: contain; scroll-padding: 24px; }
 .jump-latest-anchor { height: 0; flex: none; position: relative; z-index: 2; overflow: visible; }
-.jump-to-latest { position: absolute; bottom: 12px; left: 50%; translate: -50% 0; border: 1px solid var(--line); border-radius: var(--r-surface); background: var(--composer); box-shadow: var(--shadow); padding: 7px 12px; color: var(--muted); white-space: nowrap; }
+.jump-to-latest { position: absolute; bottom: 12px; left: 50%; translate: -50% 0; border: 1px solid var(--line); border-radius: var(--r-surface); background: var(--composer); box-shadow: var(--shadow-float); transition: color var(--motion-fast), background var(--motion-fast); padding: 7px 12px; color: var(--muted); white-space: nowrap; }
 .jump-to-latest:hover { color: var(--text); }
 .jump-to-latest svg[data-mun="VectorSymbol"] { width: 14px; height: 14px; }
 .conversation-content { font-size: var(--reading-text); line-height: 1.7; }
@@ -192,8 +204,8 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 :root[data-keyboard-open="true"] .composer { padding-bottom: 8px !important; }
 :root[data-keyboard-open="true"] .composer-hint { display: none; }
 .composer textarea { max-height: min(180px, calc(var(--app-height, 100dvh) * 0.3)) !important; }
-.composer-surface { border: 1px solid var(--line); border-radius: var(--r-surface); transition: border-color var(--motion-fast); }
-.composer-surface:focus-within { border-color: color-mix(in srgb, var(--focus) 55%, var(--line)); }
+.composer-surface { border: 1px solid var(--line); border-radius: var(--r-surface); box-shadow: var(--shadow); transition: border-color var(--motion-fast), box-shadow var(--motion-base); }
+.composer-surface:focus-within { border-color: color-mix(in srgb, var(--focus) 55%, var(--line)); box-shadow: var(--shadow), 0 0 0 3px color-mix(in srgb, var(--focus) 12%, transparent); }
 .composer textarea { line-height: 1.6; overflow-y: auto; }
 .composer-surface > :last-child { min-width: 0; }
 .composer-controls { width: 100% !important; min-width: 0; }
@@ -205,7 +217,8 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .model-row { width: 100%; min-width: 0; }
 .model-row > * { min-width: 0; }
 .composer select { min-width: 0; text-overflow: ellipsis; }
-.send-button { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: var(--r-control); transition: transform var(--motion-fast), filter var(--motion-fast); }
+.send-button:disabled { background: var(--field) !important; color: var(--faint) !important; opacity: 1; }
+.send-button { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: var(--r-control); transition: transform var(--motion-fast), filter var(--motion-fast), background var(--motion-fast), color var(--motion-fast); }
 .send-button:not(:disabled):hover { filter: brightness(1.12); }
 .send-button:not(:disabled):active { transform: scale(0.94); }
 .composer-hint { font-size: 11px; color: var(--faint); text-align: center; }
@@ -292,8 +305,8 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 .tool-raw-toggle[aria-expanded="true"]::before { rotate: 90deg; }
 .tool-raw-toggle:hover { color: var(--text); background: var(--hover); }
 .tool-raw { min-width: 0; }
-@media (max-width: 1279px) { #workspace-panel { box-shadow: -12px 0 48px rgba(0, 0, 0, 0.12); } }
-@media (max-width: 899px) { #sidebar { box-shadow: 12px 0 48px rgba(0, 0, 0, 0.12); } }
+@media (max-width: 1279px) { #workspace-panel { box-shadow: var(--shadow-float); } }
+@media (max-width: 899px) { #sidebar { box-shadow: var(--shadow-float); } }
 @media (hover: none), (pointer: coarse) {
   body { font-size: 15px; }
   input, textarea, select { font-size: 16px !important; }
