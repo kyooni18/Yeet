@@ -258,7 +258,7 @@ struct Thread: View {
           Button(action: { showEarlierTranscript() }, label: {
             Text("Show " + Math.min(hiddenTranscriptCount.value, 120) + " earlier " + (hiddenTranscriptCount.value === 1 ? "item" : "items"))
           })
-          .withProps({ className: "transcript-earlier", "aria-label": "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)" })
+          .withProps({ className: "btn btn-small transcript-earlier", "aria-label": "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)" })
         }
         ForEach(transcriptItems.value, { id: item => transcriptKey(item) }) { item in
           Item(item: item)
@@ -515,7 +515,7 @@ export struct Chat: View {
               Text("Jump to latest").fontSize(12)
             }
           })
-          .withProps({ className: "jump-to-latest" })
+          .withProps({ className: "btn jump-to-latest" })
           Spacer()
         }
         .withProps({ className: "jump-latest-anchor" })
