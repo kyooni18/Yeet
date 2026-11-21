@@ -217,7 +217,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .model-row { width: 100%; min-width: 0; }
 .model-row > * { min-width: 0; }
 .composer select { min-width: 0; text-overflow: ellipsis; }
-.send-button:disabled { background: var(--field) !important; color: var(--faint) !important; opacity: 1; }
+.send-button:disabled { background: color-mix(in srgb, var(--text) 8%, transparent) !important; color: var(--muted) !important; opacity: 1; }
 .send-button { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: var(--r-control); transition: transform var(--motion-fast), filter var(--motion-fast), background var(--motion-fast), color var(--motion-fast); }
 .send-button:not(:disabled):hover { filter: brightness(1.12); }
 .send-button:not(:disabled):active { transform: scale(0.94); }
