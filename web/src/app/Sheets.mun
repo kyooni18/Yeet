@@ -90,25 +90,22 @@ struct Switch: View {
 
 struct SettingControl: View {
   let control: Any
+  let section: String
   var body: some View {
     VStack(alignment: .stretch, spacing: 6) {
       if control.kind === "choice" {
-        Text(control.label).fontSize(13)
+        // A choice that repeats its section's name needs no second label.
+        if control.label !== section {
+          Text(control.label).fontSize(13)
+        }
         HStack(spacing: 2) {
           ForEach(control.options, { id: option => option.value }) { option in
             Button(option.label) { remoteStore.sendSettingsUi(option.action) }
-              .fontSize(12)
-              .padding({ top: 4, bottom: 4, leading: 10, trailing: 10 })
-              .background(option.selected ? color.bg : "transparent")
-              .foregroundStyle(option.selected ? color.text : color.muted)
-              .style({ borderRadius: "var(--r-inline)" })
-              .animation(ease, value: option.selected)
+              .withProps({ className: "segment", "aria-pressed": option.selected })
               .disabled(!connected() || !control.enabled)
           }
         }
-        .padding(2)
-        .background(color.raised)
-        .style({ borderRadius: "var(--r-control)", flexWrap: "wrap", width: "100%" })
+        .withProps({ className: "segmented setting-choice", role: "group", "aria-label": control.label })
       } else {
         Button(action: { remoteStore.sendSettingsUi(control.action) }, label: {
           HStack(spacing: 10) {
@@ -121,15 +118,17 @@ struct SettingControl: View {
             if control.kind === "toggle" {
               Switch(on: !!control.checked)
             } else {
-              Text(control.action_label || control.value || "›").fontSize(12).foregroundStyle(color.muted).lineLimit(1).style({ maxWidth: "35%", minWidth: "0" })
+              Text(control.action_label || control.value || "›")
+                .lineLimit(1)
+                .withProps({ className: control.action_label ? "setting-action" : "setting-value" })
             }
           }
         })
-        .withProps({ role: control.kind === "toggle" ? "switch" : "button", "aria-label": control.label, "aria-checked": control.kind === "toggle" ? !!control.checked : undefined })
+        .withProps({ className: "setting-row", role: control.kind === "toggle" ? "switch" : "button", "aria-label": control.label, "aria-checked": control.kind === "toggle" ? !!control.checked : undefined })
         .disabled(!connected() || !control.enabled)
       }
     }
-    .padding({ top: 6, bottom: 6 })
+    .style({ width: "100%", minWidth: "0" })
   }
 }
 
@@ -167,11 +166,11 @@ struct SettingsSheet: View {
         }
         ForEach(remote.value.settings?.sections ?? [], { id: section => section.id }) { section in
           VStack(alignment: .stretch, spacing: 2) {
-            Text(section.label).fontSize(12).foregroundStyle(color.faint)
+            Text(section.label).withProps({ className: "section-label setting-section" })
             ForEach(section.controls, { id: control => control.id }) { control in
-              SettingControl(control: control)
+              SettingControl(control: control, section: section.label)
             }
-          }
+          }.style({ width: "100%", minWidth: "0" })
         }
       }.style({ width: "100%", minWidth: "0" })
     }
@@ -192,7 +191,7 @@ export struct SheetLayer: View {
         HStack(spacing: 0) {
           Text(sheetTitle()).fontWeight("semibold")
           Spacer()
-          Button("Done") { openSheet("none") }.foregroundStyle(color.muted)
+          Button("Done") { openSheet("none") }.withProps({ className: "form-action" })
         }
         if sheet.value === "model" {
           ModelSheet()

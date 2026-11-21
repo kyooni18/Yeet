@@ -2,17 +2,17 @@
 :root {
   --bg: #f5f4f2;
   --sidebar: #ffffff;
-  --field: #f6f5f4;
-  --nav-hover: #f6f5f4;
+  --field: #efeeec;
+  --nav-hover: #efeeec;
   --nav-select: #ebeae8;
   --session-select: #ebeae8;
-  --row-hover: #f6f5f4;
+  --row-hover: #efeeec;
   --row-select: #ebeae8;
   --bubble: #e9e7e4;
   --rule: #c0bfbc;
   --composer: #ffffff;
   --panel: #ffffff;
-  --raised: #f6f5f4;
+  --raised: #ebe9e6;
   --text: #2e3436;
   --text2: #5e5c64;
   --muted: #5e5c64;
@@ -480,3 +480,18 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
   .composer-controls > .composer-context { grid-column: 4; order: 0; flex: none; text-align: right; align-self: center; padding: 0 4px; }
   .composer-controls > .send-button { grid-column: 5; }
 }
+
+/* Settings: a label and its explanation on the left, the control on the right,
+   every row the same width and rhythm. */
+.setting-section { padding: 14px 0 4px; }
+.sheet-scroll .setting-section:first-child { padding-top: 0; }
+.setting-row { display: flex; align-items: center; align-self: stretch; margin: 0 -10px; padding: 8px 10px; min-height: 44px; border-radius: var(--r-control); transition: background var(--motion-fast); }
+.setting-row > * { width: 100%; }
+.setting-row [data-mun="Spacer"] { display: none; }
+.setting-row [data-mun="VStack"] { flex: 1 1 0; }
+.setting-row:hover:not(:disabled) { background: var(--hover); }
+.setting-row:active:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.setting-row .setting-detail, .setting-row [data-mun="VStack"] > :nth-child(2) { overflow-wrap: break-word; }
+.setting-action { flex: none; padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-control); font-size: 12px; color: var(--text); background: var(--composer); }
+.setting-value { flex: none; max-width: 40%; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.setting-choice { width: fit-content; max-width: 100%; flex-wrap: wrap; }

@@ -35,7 +35,7 @@ struct AgentButton: View {
       .fontSize(12)
       .padding({ top: 5, bottom: 5, leading: 10, trailing: 10 })
       .background(color.raised)
-      .style({ borderRadius: "var(--r-inline)" })
+      .style({ borderRadius: "var(--r-control)" })
       .disabled(!control.enabled || !connected())
   }
 }
