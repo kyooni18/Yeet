@@ -9,7 +9,7 @@ import { Patch } from "./Pages.mun"
 import { tokenCount, activeProvider, subscription, resetLabel } from "./status"
 import {
   statusSnapshot as remote, workspaceFiles, workspaceChanges, connected, isDesktop, inspectorTab, toggleInspector, selectInspectorTab,
-  refreshInspector, displayPath, openPage, openSheet, contextLabel, shortModel,
+  refreshInspector, displayPath, openPage, openSheet, manageSession, contextLabel, shortModel,
 } from "./state"
 
 function changeSummary(): string {
@@ -139,6 +139,25 @@ struct Files: View {
   }
 }
 
+/** A setting that opens its own sheet: label, current value, and a chevron that says "more". */
+struct SettingRow: View {
+  let label: String
+  let value: String
+  let sheet: String
+  var body: some View {
+    Button(action: { openSheet(sheet) }, label: {
+      HStack(spacing: 8) {
+        Text(label).foregroundStyle(color.muted)
+        Spacer()
+        if value {
+          Text(value).style({ textAlign: "right", overflowWrap: "anywhere", minWidth: "0" })
+        }
+        Icon(workIcon("chevron"), { width: 12, height: 12 }).withProps({ "aria-hidden": "true", className: "panel-action__chevron" })
+      }
+    }).withProps({ className: "panel-action", "aria-haspopup": "dialog" }).disabled(!connected())
+  }
+}
+
 struct StatusRow: View {
   let label: String
   let value: String
@@ -166,6 +185,12 @@ function activeAgents(): number {
   return remote.value.agents?.active_count ?? 0
 }
 
+function manageCurrentSession() {
+  const id = remote.value.state.current_session_id
+  const known = remote.value.currentWorkspaceSessions.find(item => item.id === id)
+  manageSession(id, known?.title || "Untitled")
+}
+
 function reported(value: unknown): boolean {
   return value !== null && value !== undefined
 }
@@ -177,10 +202,21 @@ struct SessionStatus: View {
       if stateMatters() === true {
         StatusRow(label: "State", value: remote.value.state.is_streaming ? "Working" : connectionState(remote.value.connection))
       }
-      Button(action: { openSheet("model") }, label: {
-        StatusRow(label: "Model", value: shortModel(remote.value.state.active_model) || "Choose a model")
-      }).withProps({ className: "panel-model", title: remote.value.state.active_model }).disabled(!connected())
-      StatusRow(label: "Reasoning", value: remote.value.state.active_reasoning_level || "Default")
+      Text("Session settings").withProps({ className: "section-label status-section" })
+      SettingRow(label: "Model", value: shortModel(remote.value.state.active_model) || "Choose a model", sheet: "model")
+        .withProps({ title: remote.value.state.active_model })
+      SettingRow(label: "Response", value: remote.value.state.active_reasoning_level || "Default", sheet: "reasoning")
+      SettingRow(label: "Sandbox & permissions", value: "", sheet: "permissions")
+      SettingRow(label: "Capabilities", value: "", sheet: "capabilities")
+      if remote.value.state.current_session_id {
+        Button(action: { manageCurrentSession() }, label: {
+          HStack(spacing: 8) {
+            Text("Manage session")
+            Spacer()
+            Icon(workIcon("chevron"), { width: 12, height: 12 }).withProps({ "aria-hidden": "true", className: "panel-action__chevron" })
+          }
+        }).withProps({ className: "panel-action", "aria-haspopup": "dialog" }).disabled(!connected())
+      }
       if activeAgents() > 0 {
         StatusRow(label: "Agents", value: String(activeAgents()))
       }

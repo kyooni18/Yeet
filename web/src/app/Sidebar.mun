@@ -29,6 +29,24 @@ struct NavItem: View {
   }
 }
 
+/** An entry that opens a sheet rather than a page. */
+struct NavSheet: View {
+  let sheet: String
+  let title: String
+  let icon: String
+  var body: some View {
+    Button(action: { openSheet(sheet) }, label: {
+      HStack(spacing: 8) {
+        Icon(workIcon(icon), { width: 16, height: 16, strokeWidth: 1.6 })
+        Text(title).lineLimit(1).style({ minWidth: "0" })
+        Spacer()
+      }
+    })
+    .withProps({ className: "nav-item", "aria-haspopup": "dialog" })
+    .disabled(!connected())
+  }
+}
+
 struct SessionRow: View {
   let session: Any
   let showWorkspace: Bool
@@ -73,6 +91,7 @@ struct Navigation: View {
       NavItem(id: "diff", title: "Diff", icon: "diff", badge: workspaceChanges.value?.files.length ? String(workspaceChanges.value.files.length) : "")
       NavItem(id: "agents", title: "Agents", icon: "agents", badge: activeAgents.value ? String(activeAgents.value) : "")
       NavItem(id: "tasks", title: "Scheduled tasks", icon: "calendar", badge: "")
+      NavSheet(sheet: "capabilities", title: "Capabilities", icon: "extensions")
       NavItem(id: "debate", title: "Debate", icon: "debate", badge: "")
       if runtimeState.value.extension_commands?.length {
         NavItem(id: "extensions", title: "Extensions", icon: "extensions", badge: "")

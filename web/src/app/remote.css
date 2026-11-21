@@ -554,3 +554,13 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
   .btn, .btn-small, .form-action, .auth-action { min-height: 44px; }
   .btn-small { padding: 0 12px; }
 }
+
+/* Settings that open a sheet: the whole row is the target, the chevron says so. */
+.panel-action { display: flex; align-items: center; width: calc(100% + 16px); margin: 0 -8px; padding: 0 8px; min-height: var(--row-height); border-radius: var(--r-control); font-size: 12px; transition: background var(--motion-fast); }
+.panel-action:hover:not(:disabled) { background: var(--hover); }
+.panel-action:active:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.panel-action > * { width: 100%; }
+.panel-action__chevron { width: 12px !important; height: 12px !important; flex: none; color: var(--muted); }
+@media (hover: none), (pointer: coarse) { .panel-action { min-height: 44px; } }
+/* The stop glyph is a shape view, not an icon: centre it in the button explicitly. */
+.send-button > [data-mun="RoundedRectangle"] { align-self: center; margin: auto; flex: none; border-radius: 3px; }

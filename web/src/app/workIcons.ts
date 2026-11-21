@@ -35,6 +35,8 @@ const paths: Record<string, string> = {
   reasoning: 'M9 18h6M10 21h4M8.5 14.5C7 13.4 6 11.7 6 9.8a6 6 0 1 1 12 0c0 1.9-1 3.6-2.5 4.7-.8.6-1.1 1.3-1.2 2H9.7c-.1-.7-.4-1.4-1.2-2z',
   info: 'M12 11v6M12 7h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
   error: 'M12 7v6M12 17h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
+  shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4',
+  sliders: 'M4 7h9M17 7h3M4 17h3M11 17h9M15 4v6M9 14v6',
 }
 
 const icons = Object.fromEntries(Object.entries(paths).map(([name, d]) => [name, [['path', { d }]] as readonly SVGIconNode[]]))

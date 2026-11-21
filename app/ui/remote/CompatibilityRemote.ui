@@ -15,13 +15,13 @@ Shell: fixed app frame; the document never scrolls, only panes do
     Header: 44px, on the title-bar line; Yeet mark, close navigation
     NewSession: full-width row action
     ScrollRegion: independently scrollable, min-height 0
-      Navigation: Sessions, Files, Diff, Agents, Scheduled tasks, Debate; icon + label + optional count
+      Navigation: Sessions, Files, Diff, Agents, Scheduled tasks, Capabilities (opens its sheet), Debate; icon + label + optional count
         Rows: 30px pointer, 44px touch; selection is fill plus weight
       SessionSearch
       RecentSessions: title, relative age, selected and running state
     Footer: connection state only while not connected, Settings; always reachable
   Main: flexible, min-width 0
-    TitleBar: 44px; floats over the transcript on a top blur on the conversation, solid with a rule on other pages; navigation toggle, page title + one line of context, page controls, run state, connection problem, workspace-panel toggle
+    TitleBar: 44px; Session settings button beside the session title (opens Manage session); floats over the transcript on a top blur on the conversation, solid with a rule on other pages; navigation toggle, page title + one line of context, page controls, run state, connection problem, workspace-panel toggle
       Context: current folder (Files), change totals (Review changes); never a second page header
       PageControls: segmented choice owned by the page (Review changes: Changes / Full file)
       RunState: spinner + elapsed when a session works and the page is not the conversation; opens it
@@ -63,7 +63,8 @@ Shell: fixed app frame; the document never scrolls, only panes do
     Header: 44px, on the title-bar line; workspace name, refresh, close
     Context: one line for path and branch, one for change summary
     Tabs: segmented Status (default), Changes, Files; count for changes
-    Status: flat rows without dividers; model, reasoning, context, usage, provider limits and reset windows
+    Status: Session settings group first: Model, Response (reasoning and goal), Sandbox & permissions, Capabilities, Manage session; each row opens its sheet and shows a chevron
+      Then flat rows without dividers; context, usage, provider limits and reset windows
       Quiet defaults omitted: state only while working or disconnected; agents only when active
       Usage: input and output tokens always; reasoning, cache and model-call rows only when reported
       Cost: backend-reported estimate only for metered/API usage; hidden for subscriptions

@@ -6,7 +6,7 @@ import { Spinner, IconButton, Segmented } from "./Common.mun"
 import { TopBarBlur } from "./Blur.mun"
 import {
   statusSnapshot, page, sidebarOpen, inspectorOpen, toggleSidebar, toggleInspector, workspaceFiles, workspaceChanges,
-  displayPath, openPage, elapsed, isWorking, runtimeState,
+  displayPath, openPage, openSheet, manageSession, elapsed, isWorking, runtimeState,
 } from "./state"
 
 const PAGE_TITLES: Record<string, string> = {
@@ -78,6 +78,10 @@ export struct TitleBar: View {
           Text(pageContext()).lineLimit(1).withProps({ className: "titlebar-context", title: pageContext() })
         }
       }.withProps({ className: "titlebar-location" })
+      if page.value === "chat" && runtimeState.value.current_session_id {
+        IconButton(icon: "sliders", label: "Session settings", action: { manageSession(runtimeState.value.current_session_id, pageTitle()) })
+          .withProps({ "aria-haspopup": "dialog" })
+      }
       Spacer()
       if workingElsewhere() === true {
         Button(action: { openPage("chat") }, label: {
