@@ -19,15 +19,15 @@
   --faint: #5e5c64;
   --line: #dad8d5;
   --hover: rgba(46, 52, 54, 0.06);
-  --accent: #1a5fb4;
-  --accent-hover: #1c71d8;
+  --accent: #2349c9;
+  --accent-hover: #1c3ba6;
   --accent-ink: #ffffff;
   --add: #186735;
   --add-bg: #eaf1e7;
   --del: #c01c28;
   --del-bg: #f8ebe7;
   --scrim: rgba(24, 24, 22, 0.24);
-  --focus: #1a5fb4;
+  --focus: #2349c9;
   --inspector: #ffffff;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.08);
@@ -61,9 +61,9 @@
   --rule: #363636; --composer: #181818; --panel: #181818; --raised: #222222;
   --text: #f2f2f2; --text2: #bcbcbc; --muted: #bcbcbc; --faint: #868686;
   --line: #363636; --hover: rgba(242, 242, 242, 0.06);
-  --accent: #529cff; --accent-hover: #7ab6ff; --accent-ink: #101010;
+  --accent: #7aa2ff; --accent-hover: #9cb9ff; --accent-ink: #101010;
   --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
-  --scrim: rgba(0, 0, 0, 0.5); --focus: #529cff; --inspector: #181818;
+  --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
   color-scheme: dark;
@@ -75,9 +75,9 @@
     --rule: #363636; --composer: #181818; --panel: #181818; --raised: #222222;
     --text: #f2f2f2; --text2: #bcbcbc; --muted: #bcbcbc; --faint: #868686;
     --line: #363636; --hover: rgba(242, 242, 242, 0.06);
-    --accent: #529cff; --accent-hover: #7ab6ff; --accent-ink: #101010;
+    --accent: #7aa2ff; --accent-hover: #9cb9ff; --accent-ink: #101010;
     --add: #6cd28c; --add-bg: #1a3021; --del: #ff6666; --del-bg: #331d1d;
-    --scrim: rgba(0, 0, 0, 0.5); --focus: #529cff; --inspector: #181818;
+    --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
     color-scheme: dark;
@@ -270,6 +270,12 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 .trace-disclosure__chevron { width: 12px !important; height: 12px !important; color: var(--muted); stroke-width: 1.8px; stroke-linecap: round; stroke-linejoin: round; transition: rotate var(--motion-fast); }
 [aria-expanded="true"] > .trace-disclosure__summary > .trace-disclosure__chevron { rotate: 90deg; }
 .activity-group__events { margin: 0; padding: 0; min-width: 0; }
+/* Progressive enhancement: engines that can interpolate to auto height grow the
+   details open; the others keep the fade-and-move from the view layer. */
+@supports (interpolate-size: allow-keywords) {
+  .trace-disclosure__details { interpolate-size: allow-keywords; overflow: clip; overflow-clip-margin: 4px; transition: height var(--motion-base); }
+  @starting-style { .trace-disclosure__details { height: 0; } }
+}
 .trace-disclosure__details { min-width: 0; margin: 0 8px 8px 15px; padding: 8px 0 8px 14px; border-left: 1px solid var(--line); color: var(--muted); }
 .trace-disclosure__timing { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
 .tool-details, .trace-detail { width: 100%; min-width: 0; }
@@ -324,7 +330,7 @@ button.trace-disclosure__row:hover { background: var(--hover); }
   .composer-hint { display: none; }
   .session-search { font-size: 16px; }
   /* Touch-sized composer: the field, the pickers and the row all reach 44px. */
-  .composer textarea { min-height: 44px !important; }
+  .composer textarea { min-height: 28px !important; }
   .composer select, .composer-workspace-picker { height: 44px; padding: 0 4px; }
   .model-trigger { min-height: 44px; }
 }
