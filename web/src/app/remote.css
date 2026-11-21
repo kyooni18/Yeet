@@ -1,6 +1,6 @@
 /* Experimental browser client. Native UI design remains in OpenPencil. */
 :root {
-  --bg: #fafafa;
+  --bg: #f5f4f2;
   --sidebar: #ffffff;
   --field: #f6f5f4;
   --nav-hover: #f6f5f4;
@@ -8,7 +8,7 @@
   --session-select: #ebeae8;
   --row-hover: #f6f5f4;
   --row-select: #ebeae8;
-  --bubble: #efeeec;
+  --bubble: #e9e7e4;
   --rule: #c0bfbc;
   --composer: #ffffff;
   --panel: #ffffff;
@@ -43,9 +43,20 @@
   --motion-base: 200ms var(--ease-out);
   /* Corners by role: inline chips and code, controls and rows, standalone surfaces. */
   --r-inline: 6px;
-  --r-control: 8px;
-  --r-surface: 12px;
+  --r-control: 8px; /* also the radius of a row inset 8px inside a 16px surface */
+  --r-surface: 16px;
   --thread-width: 800px;
+  /* Layers, lowest to highest. Panes sit above the main area; nothing else is allowed an ad-hoc value. */
+  --z-main: 1;
+  --z-bar: 3;
+  --z-scrim: 20;
+  --z-pane: 21;
+  --z-sheet: 30;
+  --z-toast: 40;
+  --bar-h: calc(var(--titlebar-height) + env(safe-area-inset-top, 0px));
+  --composer-h: 0px;
+  /* Panes: a hairline ring plus soft depth, in place of a border on every edge. */
+  --shadow-pane: 0 0 0 1px rgba(46, 52, 54, 0.07), 0 2px 6px rgba(0, 0, 0, 0.04), 0 14px 36px rgba(0, 0, 0, 0.07);
   /* App frame: compact chrome around a comfortable reading column. */
   --chrome-text: 13px;
   --reading-text: 15px;
@@ -66,6 +77,7 @@
   --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-pane: 0 0 0 1px rgba(242, 242, 242, 0.08), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -80,6 +92,7 @@
     --scrim: rgba(0, 0, 0, 0.5); --focus: #7aa2ff; --inspector: #181818;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-pane: 0 0 0 1px rgba(242, 242, 242, 0.08), 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
 }
@@ -141,14 +154,18 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 
 /* Navigation: a source list. The header shares the title bar's height so the
    window reads as one toolbar line; only the list between header and footer scrolls. */
-#sidebar { background: var(--sidebar); border-right: 1px solid var(--line); padding: env(safe-area-inset-top) 8px max(8px, env(safe-area-inset-bottom)); }
+/* Panes are their own layer: inset, rounded, lifted above the main area. In wide
+   layouts they stay in the flow (no content is covered); in narrow ones the same
+   surface overlays the main area. */
+#sidebar, #workspace-panel { border-radius: var(--r-surface); box-shadow: var(--shadow-pane); height: auto !important; top: 0; bottom: 0; overflow: hidden; }
+#sidebar { background: var(--sidebar); margin: max(8px, env(safe-area-inset-top)) 0 max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); padding: 0 8px 8px; }
 #sidebar > :not(.sidebar-scroll) { flex-shrink: 0; }
 .sidebar-header { width: 100% !important; min-width: 0; min-height: var(--titlebar-height); padding: 0 0 0 8px; }
 .sidebar-header img { flex: none; display: block; object-fit: contain; }
 .brand-tag { font-size: 12px; color: var(--muted); }
 .new-session { padding: 0 8px; border-radius: var(--r-control); min-height: var(--row-height); background: var(--field); transition: background var(--motion-fast); }
 .new-session:hover:not(:disabled) { background: var(--hover); }
-.nav-item, .session-row, .panel-row { width: 100%; border-radius: var(--r-inline); color: var(--text2); transition: background var(--motion-fast), color var(--motion-fast); }
+.nav-item, .session-row, .panel-row { width: 100%; border-radius: var(--r-control); color: var(--text2); transition: background var(--motion-fast), color var(--motion-fast); }
 .sidebar-nav { padding: 8px 0 12px; }
 .nav-item { padding: 0 8px; min-height: var(--row-height); }
 .nav-item:hover, .session-row:hover:not(:disabled), .panel-row:hover:not(:disabled) { background: var(--hover); color: var(--text); }
@@ -163,13 +180,13 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .sidebar-empty { padding: 6px 8px; }
 .session-row { padding: 0 8px; min-height: var(--row-height); }
 .session-row[aria-current="true"] { background: var(--session-select); color: var(--text); font-weight: 600; }
-.session-item { width: 100% !important; min-width: 0; border-radius: var(--r-inline); }
+.session-item { width: 100% !important; min-width: 0; border-radius: var(--r-control); }
 .session-item:has([aria-current="true"]) { background: var(--session-select); }
 .session-item .session-row { background: none; }
 .session-menu { opacity: 0; transition: opacity var(--motion-fast); }
 .session-item:hover .session-menu, .session-item:focus-within .session-menu { opacity: 1; }
 .sidebar-footer { padding: 8px 4px 0 0; border-top: 1px solid var(--line); }
-.sidebar-settings { display: flex; align-items: center; padding: 0 8px; min-height: var(--row-height); border-radius: var(--r-inline); color: var(--text2); }
+.sidebar-settings { display: flex; align-items: center; padding: 0 8px; min-height: var(--row-height); border-radius: var(--r-control); color: var(--text2); }
 .sidebar-settings:hover { color: var(--text); background: var(--hover); }
 
 /* App frame. Chrome (title bar, footer, navigation) is compact and not
@@ -193,8 +210,23 @@ textarea.form-field { resize: vertical; min-height: 96px; }
    composer on the bottom edge; the workspace panel carries the same facts. */
 @media (max-width: 899px), (hover: none), (pointer: coarse) { .statusbar { display: none !important; } }
 @media (max-width: 599px) { .titlebar-run-label, .titlebar-context { display: none; } }
-.thread-scroll { overscroll-behavior: contain; scroll-padding: 24px; }
-.jump-latest-anchor { height: 0; flex: none; position: relative; z-index: 2; overflow: visible; }
+/* The transcript runs the full height of the chat page; the title bar and the
+   composer float over its edges on a progressive blur, so text scrolls beneath
+   them instead of being cut by a rule. */
+.chat-surface { position: relative; margin-top: calc(-1 * var(--bar-h)); z-index: var(--z-main); }
+.thread-scroll { position: absolute !important; inset: 0; overscroll-behavior: contain; padding-top: var(--bar-h); padding-bottom: var(--composer-h); scroll-padding: calc(var(--bar-h) + 24px) 24px calc(var(--composer-h) + 24px); }
+.topbar { position: relative; z-index: var(--z-bar); }
+.topbar--floating { background: transparent; border-bottom-color: transparent; }
+.bar-blur, .composer-blur { position: absolute; left: 0; right: 0; pointer-events: none; }
+.bar-blur { top: 0; height: calc(100% + 24px); z-index: -1; background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 80%, transparent) 0, color-mix(in srgb, var(--bg) 55%, transparent) 60%, transparent 100%); }
+.composer-blur { bottom: 0; height: calc(var(--composer-h) + 32px); z-index: 1; background: linear-gradient(to top, color-mix(in srgb, var(--bg) 85%, transparent) 0, color-mix(in srgb, var(--bg) 55%, transparent) 60%, transparent 100%); }
+.chat-surface > .composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; }
+/* Depth that cannot be blurred still reads as solid. */
+@media (prefers-reduced-transparency: reduce) {
+  [data-pb-amount] { display: none; }
+  .bar-blur, .composer-blur { background: var(--bg); }
+}
+.jump-latest-anchor { position: absolute; left: 0; right: 0; bottom: var(--composer-h); height: 0; z-index: 3; overflow: visible; }
 .jump-to-latest { position: absolute; bottom: 12px; left: 50%; translate: -50% 0; border: 1px solid var(--line); border-radius: var(--r-surface); background: var(--composer); box-shadow: var(--shadow-float); transition: color var(--motion-fast), background var(--motion-fast); padding: 7px 12px; color: var(--muted); white-space: nowrap; }
 .jump-to-latest:hover { color: var(--text); }
 .jump-to-latest svg[data-mun="VectorSymbol"] { width: 14px; height: 14px; }
@@ -204,7 +236,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .message-block { min-width: 0; }
 .message-actions:focus-within { opacity: 1 !important; }
 .message-actions { min-height: 28px; }
-.composer { padding-bottom: max(12px, env(safe-area-inset-bottom)) !important; flex-shrink: 0; }
+.composer { padding-bottom: max(12px, env(safe-area-inset-bottom)) !important; }
 :root[data-keyboard-open="true"] .composer { padding-bottom: 8px !important; }
 :root[data-keyboard-open="true"] .composer-hint { display: none; }
 .composer textarea { max-height: min(180px, calc(var(--app-height, 100dvh) * 0.3)) !important; }
@@ -228,7 +260,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .composer-hint { font-size: 11px; color: var(--faint); text-align: center; }
 
 /* Workspace inspector: real Remote files/changes, not a static decorative rail. */
-#workspace-panel { background: var(--inspector); border-left: 1px solid var(--line); padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+#workspace-panel { background: var(--inspector); margin: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) 0; padding: 0; }
 #workspace-panel > :not(.panel-scroll) { flex-shrink: 0; }
 .panel-header { box-sizing: content-box; height: var(--titlebar-height); padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }
 .panel-context { padding: 12px 16px 10px; }
@@ -253,7 +285,8 @@ meter { appearance: none; border: 0; border-radius: 4px; background: var(--field
 meter::-webkit-meter-bar { background: var(--field); border: 0; height: 4px; }
 meter::-webkit-meter-optimum-value { background: var(--muted); border-radius: 4px; }
 meter::-moz-meter-bar { background: var(--muted); border-radius: 4px; }
-.drawer-scrim { position: fixed; inset: 0; z-index: 11; width: 100%; height: 100%; background: var(--scrim); cursor: default; }
+.drawer-scrim-layer { position: fixed; inset: 0; z-index: var(--z-scrim); width: 100%; height: 100%; }
+.drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--scrim); cursor: default; }
 
 /* Flat, scannable work history. The action, object and disclosure have distinct roles. */
 .activity-group, .trace-disclosure { width: 100%; min-width: 0; }
@@ -309,8 +342,6 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 .tool-raw-toggle[aria-expanded="true"]::before { rotate: 90deg; }
 .tool-raw-toggle:hover { color: var(--text); background: var(--hover); }
 .tool-raw { min-width: 0; }
-@media (max-width: 1279px) { #workspace-panel { box-shadow: var(--shadow-float); } }
-@media (max-width: 899px) { #sidebar { box-shadow: var(--shadow-float); } }
 @media (hover: none), (pointer: coarse) {
   body { font-size: 15px; }
   input, textarea, select { font-size: 16px !important; }

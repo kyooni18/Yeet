@@ -78,7 +78,7 @@ export struct Chip: View {
       .foregroundStyle(hovering.value ? color.text : color.faint)
       .padding({ top: 3, bottom: 3, leading: 8, trailing: 8 })
       .background(hovering.value ? color.hover : "transparent")
-      .style({ borderRadius: "8px", whiteSpace: "nowrap" })
+      .style({ borderRadius: "var(--r-control)", whiteSpace: "nowrap" })
       .animation(ease, value: hovering.value)
       .onHover(inside => { hovering.value = inside })
   }

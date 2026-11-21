@@ -3,6 +3,7 @@ import { workIcon } from "./workIcons"
 import { color } from "./theme"
 import { remoteStore } from "@/store/remoteStore"
 import { Spinner, IconButton, Segmented } from "./Common.mun"
+import { TopBarBlur } from "./Blur.mun"
 import {
   statusSnapshot, page, sidebarOpen, inspectorOpen, toggleSidebar, toggleInspector, workspaceFiles, workspaceChanges,
   displayPath, openPage, elapsed, isWorking, runtimeState,
@@ -62,6 +63,9 @@ function workingElsewhere(): boolean {
 export struct TitleBar: View {
   var body: some View {
     HStack(spacing: 8) {
+      if page.value === "chat" {
+        TopBarBlur()
+      }
       if !sidebarOpen.value {
         IconButton(icon: "sidebar", label: "Toggle sidebar", action: { toggleSidebar(true) })
           .withProps({ "aria-controls": "sidebar", "aria-expanded": sidebarOpen.value })
@@ -94,7 +98,7 @@ export struct TitleBar: View {
       IconButton(icon: "inspector", label: "Toggle workspace panel", action: { toggleInspector() })
         .withProps({ "aria-controls": "workspace-panel", "aria-expanded": inspectorOpen.value, "aria-keyshortcuts": "Control+Shift+B Meta+Shift+B" })
     }
-    .withProps({ className: "topbar titlebar" })
+    .withProps({ className: page.value === "chat" ? "topbar titlebar topbar--floating" : "topbar titlebar" })
   }
 }
 

@@ -14,6 +14,8 @@ import {
 } from "./composer"
 import { Spinner, Chip, IconButton } from "./Common.mun"
 import { ToolDetails } from "./ToolDetails.mun"
+import { ComposerBlur } from "./Blur.mun"
+import { composerRef } from "./composerHeight"
 
 const questionAnswer = State("")
 
@@ -398,7 +400,7 @@ struct AttachmentStrip: View {
         }
         .padding({ top: 4, bottom: 4, leading: 10, trailing: 8 })
         .background(color.raised)
-        .style({ borderRadius: "8px", maxWidth: "240px" })
+        .style({ borderRadius: "var(--r-control)", maxWidth: "240px" })
         .transition(Transition.scale(0.9).combined(Transition.opacity))
       }
       Spacer()
@@ -505,7 +507,7 @@ struct Composer: View {
       .style({ width: "100%", minWidth: "0" })
     }
     .padding({ top: 4, bottom: 16, leading: 8, trailing: 8 })
-    .withProps({ className: "composer" })
+    .withProps({ className: "composer", ref: composerRef })
     .style({ maxWidth: "var(--thread-width)", margin: "0 auto", width: "100%" })
   }
 }
@@ -533,8 +535,10 @@ export struct Chat: View {
         .withProps({ className: "jump-latest-anchor" })
         .transition(Transition.opacity.combined(Transition.move("bottom", 4)))
       }
+      ComposerBlur()
       Composer()
     }
+    .withProps({ className: "chat-surface" })
     .style({ flex: "1", minHeight: "0" })
   }
 }

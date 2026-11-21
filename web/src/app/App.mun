@@ -42,7 +42,7 @@ struct Toast: View {
       .padding({ top: 8, bottom: 8, leading: 14, trailing: 14 })
       .background(color.accent)
       .foregroundStyle(color.accentInk)
-      .style({ position: "fixed", bottom: "96px", left: "50%", translate: "-50% 0", borderRadius: "var(--r-control)", boxShadow: "var(--shadow-float)", zIndex: "30" })
+      .style({ position: "fixed", bottom: "96px", left: "50%", translate: "-50% 0", borderRadius: "var(--r-control)", boxShadow: "var(--shadow-float)", zIndex: "var(--z-toast)" })
       .transition(Transition.opacity.combined(Transition.move("bottom", 6)))
   }
 }

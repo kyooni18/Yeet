@@ -42,7 +42,7 @@ struct ListRow: View {
     .background(selected ? color.rowSelect : hovering.value ? color.rowHover : "transparent")
     .withProps({ className: "resource-row", title, "aria-pressed": selected })
     .disabled(!connected())
-    .style({ borderRadius: "6px", width: "100%", minWidth: "0" })
+    .style({ borderRadius: "var(--r-inline)", width: "100%", minWidth: "0" })
     .animation(ease, value: hovering.value || selected)
     .onHover(inside => { hovering.value = inside })
   }

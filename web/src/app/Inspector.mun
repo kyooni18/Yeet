@@ -1,4 +1,5 @@
 import { Icon, Transition } from "@mun/core"
+import { DrawerBlur } from "./Blur.mun"
 import { remoteStore } from "@/store/remoteStore"
 import { workIcon } from "./workIcons"
 import { color } from "./theme"
@@ -260,15 +261,18 @@ export struct WorkspacePanel: View {
         .style({ flex: "1 1 0", minHeight: "0", width: "100%" })
     }
     .withProps({ id: "workspace-panel", role: isDesktop.value ? "complementary" : "dialog", "aria-modal": isDesktop.value ? undefined : "true", "aria-label": "Workspace panel", ref: inspectorRef })
-    .style({ width: "320px", maxWidth: "calc(100vw - 24px)", height: "100%", flex: "none", position: isDesktop.value ? "relative" : "fixed", top: "0", right: "0", zIndex: "12" })
+    .style({ width: "320px", maxWidth: "calc(100vw - 24px)", height: "100%", flex: "none", position: isDesktop.value ? "relative" : "fixed", top: "0", right: "0", zIndex: "var(--z-pane)" })
   }
 }
 
 export struct InspectorScrim: View {
   var body: some View {
-    Button("") { toggleInspector(false) }
-      .accessibilityLabel("Close workspace panel")
-      .withProps({ className: "drawer-scrim", tabindex: "-1" })
-      .transition(Transition.opacity)
+    ZStack(alignment: .center) {
+      DrawerBlur(edge: "trailing")
+      Button("") { toggleInspector(false) }
+        .accessibilityLabel("Close workspace panel")
+        .withProps({ className: "drawer-scrim", tabindex: "-1" })
+        .transition(Transition.opacity)
+    }.withProps({ className: "drawer-scrim-layer" })
   }
 }

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const web = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const mun = resolve(process.env.MUN_PATH ?? resolve(web, '../../Mun'))
-const packages = ['core', 'web', 'vite', 'compiler', 'animation', 'execution']
+const packages = ['core', 'web', 'vite', 'compiler', 'animation', 'execution', 'progressive-blur']
 
 if (!existsSync(resolve(mun, 'packages/core/dist'))) {
   console.error(`Mün checkout not built at ${mun}. Run \`pnpm build\` there or set MUN_PATH.`)

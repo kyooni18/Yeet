@@ -1,0 +1,39 @@
+import { BlurProfile, ProgressiveBlur } from "@mun-ui/progressive-blur"
+
+// The interface's blur material. These are the only recipes in use: a blur says
+// "this surface sits above what scrolls or sits beneath it", so it appears at bars
+// and scrims and nowhere else. Keep these siblings of animated views, never
+// descendants: an ancestor's opacity would hide the backdrop from the blur.
+
+/** Under the title bar: strongest at the top edge, gone by the time content is readable. */
+export struct TopBarBlur: View {
+  var body: some View {
+    Element("div", {}) {
+      ProgressiveBlur(BlurProfile.edge("top", 72).easing("smooth"), { radius: 14 })
+    }.withProps({ className: "bar-blur", "aria-hidden": "true" })
+  }
+}
+
+/** Above the composer, mirrored. */
+export struct ComposerBlur: View {
+  var body: some View {
+    Element("div", {}) {
+      ProgressiveBlur(BlurProfile.edge("bottom", 96).easing("smooth"), { radius: 14 })
+    }.withProps({ className: "composer-blur", "aria-hidden": "true" })
+  }
+}
+
+/** Behind a drawer: most blurred next to the drawer, clearing toward the far side. */
+export struct DrawerBlur: View {
+  let edge: String
+  var body: some View {
+    ProgressiveBlur(BlurProfile.edge(edge, 420).easing("smooth"), { radius: 10 })
+  }
+}
+
+/** Behind a centered sheet: an even, light blur. */
+export struct SheetBlur: View {
+  var body: some View {
+    ProgressiveBlur(BlurProfile.uniform(), { radius: 6 })
+  }
+}

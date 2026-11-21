@@ -1,4 +1,5 @@
 import { Icon, Transition, withAnimation } from "@mun/core"
+import { DrawerBlur } from "./Blur.mun"
 import { color } from "./theme"
 import { workIcon } from "./workIcons"
 import { sidebarRef } from "./drawer"
@@ -158,15 +159,18 @@ export struct Sidebar: View {
       Footer()
     }
     .withProps({ id: "sidebar", role: isWide.value ? "navigation" : "dialog", "aria-modal": isWide.value ? undefined : "true", "aria-label": "Workspace navigation", ref: sidebarRef })
-    .style({ width: "264px", maxWidth: "calc(100vw - 40px)", height: "100%", flex: "none", position: isWide.value ? "relative" : "fixed", top: "0", left: "0", zIndex: "12" })
+    .style({ width: "264px", maxWidth: "calc(100vw - 40px)", height: "100%", flex: "none", position: isWide.value ? "relative" : "fixed", top: "0", left: "0", zIndex: "var(--z-pane)" })
   }
 }
 
 export struct Scrim: View {
   var body: some View {
-    Button("") { toggleSidebar(false) }
-      .accessibilityLabel("Close navigation")
-      .withProps({ className: "drawer-scrim", tabindex: "-1" })
-      .transition(Transition.opacity)
+    ZStack(alignment: .center) {
+      DrawerBlur(edge: "leading")
+      Button("") { toggleSidebar(false) }
+        .accessibilityLabel("Close navigation")
+        .withProps({ className: "drawer-scrim", tabindex: "-1" })
+        .transition(Transition.opacity)
+    }.withProps({ className: "drawer-scrim-layer" })
   }
 }
