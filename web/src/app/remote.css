@@ -270,12 +270,6 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 .trace-disclosure__chevron { width: 12px !important; height: 12px !important; color: var(--muted); stroke-width: 1.8px; stroke-linecap: round; stroke-linejoin: round; transition: rotate var(--motion-fast); }
 [aria-expanded="true"] > .trace-disclosure__summary > .trace-disclosure__chevron { rotate: 90deg; }
 .activity-group__events { margin: 0; padding: 0; min-width: 0; }
-/* Progressive enhancement: engines that can interpolate to auto height grow the
-   details open; the others keep the fade-and-move from the view layer. */
-@supports (interpolate-size: allow-keywords) {
-  .trace-disclosure__details { interpolate-size: allow-keywords; overflow: clip; overflow-clip-margin: 4px; transition: height var(--motion-base); }
-  @starting-style { .trace-disclosure__details { height: 0; } }
-}
 .trace-disclosure__details { min-width: 0; margin: 0 8px 8px 15px; padding: 8px 0 8px 14px; border-left: 1px solid var(--line); color: var(--muted); }
 .trace-disclosure__timing { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
 .tool-details, .trace-detail { width: 100%; min-width: 0; }
