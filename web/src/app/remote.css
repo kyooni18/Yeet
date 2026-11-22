@@ -263,7 +263,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 :root[data-keyboard-open="true"] .composer-hint { display: none; }
 .composer textarea { max-height: min(180px, calc(var(--app-height, 100dvh) * 0.3)) !important; }
 .composer-surface { border-radius: var(--r-surface); box-shadow: var(--shadow-pane); transition: box-shadow var(--motion-base); }
-.composer-surface:focus-within { box-shadow: var(--shadow-pane), 0 0 0 2px color-mix(in srgb, var(--focus) 45%, transparent); }
+.composer-surface:focus-within { box-shadow: var(--shadow-pane), 0 0 0 2px var(--focus); }
 .composer textarea { line-height: 1.6; overflow-y: auto; }
 .composer-surface > :last-child { min-width: 0; }
 .composer-controls { width: 100% !important; min-width: 0; }
@@ -531,3 +531,16 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
   .composer-controls > .send-button, .composer-controls > div:last-child { grid-column: 5; }
   .composer-context__word { display: none; }
 }
+
+/* Composer field polish. */
+/* The whole surface is a text target; its buttons keep the default cursor. */
+.composer-surface { cursor: text; }
+.composer-surface button, .composer-surface select { cursor: default; }
+.composer textarea { cursor: text; scrollbar-width: thin; overscroll-behavior: contain; caret-color: var(--focus); }
+.composer textarea::placeholder { color: var(--muted); opacity: 0.8; }
+/* A picker reads as a picker: the chevron says it opens, as the model button's does. */
+.composer-controls select { padding-right: 22px; background: no-repeat right 7px center / 10px 10px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='%23888' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.5 5 6.5 8 3.5'/%3E%3C/svg%3E"); }
+/* The remove button is 44px on touch; it must not stretch its chip. */
+.attachment-chip { align-items: center; }
+.attachment-chip .icon-button { width: 28px; height: 28px; margin: -8px -2px -8px 0; }
+@media (hover: none), (pointer: coarse) { .attachment-chip .icon-button { width: 44px; height: 44px; margin: -8px -8px -8px -6px; } }

@@ -183,3 +183,19 @@ test('an upload finishing after navigation stays with its original draft', async
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => sentCommands(page)).toContainEqual(expect.objectContaining({ type: 'submit', text: 'A owns the attachment', attachment_ids: ['upload-a'] }))
 })
+
+test('Enter that commits an IME candidate never sends, in Chromium and in Safari\'s keyCode-229 order', async ({ page }) => {
+  const field = page.getByRole('textbox', { name: 'Message', exact: true })
+  await field.fill('안녕하세요')
+  await field.evaluate((element) => {
+    element.dispatchEvent(new CompositionEvent('compositionstart'))
+    element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true }))
+    element.dispatchEvent(new CompositionEvent('compositionend'))
+    // Safari fires the committing keydown after compositionend, flagged only by keyCode 229.
+    const late = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    Object.defineProperty(late, 'keyCode', { value: 229 })
+    element.dispatchEvent(late)
+  })
+  expect((await sentCommands(page)).filter((command) => command.type === 'submit')).toEqual([])
+  await expect(field).toHaveValue('안녕하세요')
+})

@@ -10,7 +10,7 @@ import {
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
-  removeAttachment, pickFiles, addFiles, focusComposer,
+  removeAttachment, pickFiles, addFiles, focusComposer, onCompositionStart, onCompositionEnd,
 } from "./composer"
 import { Spinner, Chip, IconButton, ActionButton, SendButton } from "./Common.mun"
 import { ToolDetails } from "./ToolDetails.mun"
@@ -386,6 +386,7 @@ struct AttachmentStrip: View {
           Text(item.error ? "failed" : item.remoteId ? "" : "uploading…").fontSize(12).foregroundStyle(item.error ? color.del : color.faint)
           IconButton(icon: "close", label: "Remove attachment", action: { removeAttachment(item.id) })
         }
+        .withProps({ className: "attachment-chip" })
         .padding({ top: 4, bottom: 4, leading: 10, trailing: 8 })
         .background(color.raised)
         .style({ borderRadius: "var(--r-control)", maxWidth: "240px" })
@@ -453,7 +454,8 @@ struct Composer: View {
         TextEditor(Binding(() => text.value, setText), remote.value.composer?.placeholder || "Ask anything about your code", 1)
           .accessibilityLabel("Message")
           .withProps({
-            onKeyDown,
+            onKeyDown, onCompositionStart, onCompositionEnd,
+            autocapitalize: "sentences", autocomplete: "off", enterkeyhint: "enter",
             onPaste: event => { if (canAttach.value && event.clipboardData?.files.length) { event.preventDefault(); addFiles(event.clipboardData.files) } },
           })
           .fontSize(15)

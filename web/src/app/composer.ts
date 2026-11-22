@@ -113,12 +113,20 @@ export function setText(value: string) {
   if (!editorFrame) editorFrame = requestAnimationFrame(sync)
 }
 
+let lastSubmit = { revision: -1, at: 0 }
+
 export function submit() {
   reconcileContext()
   cancelSync()
   if (!connected() || !contextReady()) return
   if (!remote.value.composer?.can_submit && !text.value.trim()) return
-  remoteStore.sendComposerUi({ type: 'submit', value: editor() })
+  const snapshot = editor()
+  // A double Enter or double tap must not send the same draft twice while the
+  // first submission is still being accepted. Editing the draft clears the guard.
+  const now = performance.now()
+  if (snapshot.revision === lastSubmit.revision && now - lastSubmit.at < 1500) return
+  lastSubmit = { revision: snapshot.revision, at: now }
+  remoteStore.sendComposerUi({ type: 'submit', value: snapshot })
 }
 
 /** Allow a freshly typed draft while its projection is in flight; Rust still validates submission. */
@@ -157,8 +165,16 @@ export function focusComposer(event: MouseEvent) {
   ;(event.currentTarget as HTMLElement | null)?.querySelector('textarea')?.focus()
 }
 
+let composing = false
+export const onCompositionStart = () => { composing = true }
+export const onCompositionEnd = () => { composing = false }
+
+/** Enter that commits an IME candidate is not a command. Safari reports it after
+ * `compositionend` with `isComposing` false, but with keyCode 229. */
+const committingComposition = (event: KeyboardEvent) => composing || event.isComposing || event.keyCode === 229
+
 export function onKeyDown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+  if (event.key !== 'Enter' || event.shiftKey || committingComposition(event)) return
   const touch = window.matchMedia('(hover: none) and (pointer: coarse)').matches
   if (!event.metaKey && !event.ctrlKey && touch) return
   event.preventDefault()
