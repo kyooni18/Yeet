@@ -1,5 +1,5 @@
 import { Icon, Transition } from "@mun/core"
-import { ActionButton } from "./Common.mun"
+import { ActionButton, Segmented } from "./Common.mun"
 import { workIcon } from "./workIcons"
 import { SheetBlur } from "./Blur.mun"
 import { remoteStore } from "@/store/remoteStore"
@@ -97,6 +97,15 @@ struct Switch: View {
 /** A line under a setting's name is kept only when it explains why the control is
  * unavailable or reports live state (web-search status and setup); descriptions of what
  * a control does are not shown. */
+function selectedOption(control: Any): string {
+  return control.options.find(option => option.selected)?.value ?? ""
+}
+
+function chooseOption(control: Any, value: string) {
+  const option = control.options.find(item => item.value === value)
+  if (option) remoteStore.sendSettingsUi(option.action)
+}
+
 function showsDetail(control: Any): boolean {
   return !!control.detail && (!control.enabled || String(control.id).startsWith("web_"))
 }
@@ -111,14 +120,7 @@ struct SettingControl: View {
         if control.label !== section {
           Text(control.label).fontSize(13)
         }
-        HStack(spacing: 2) {
-          ForEach(control.options, { id: option => option.value }) { option in
-            Button(option.label) { remoteStore.sendSettingsUi(option.action) }
-              .withProps({ className: "segment", "aria-pressed": option.selected })
-              .disabled(!connected() || !control.enabled)
-          }
-        }
-        .withProps({ className: "segmented setting-choice", role: "group", "aria-label": control.label })
+        Segmented(label: control.label, options: control.options, value: selectedOption(control), onChange: value => { chooseOption(control, value) }, enabled: connected() && control.enabled)
       } else {
         Button(action: { remoteStore.sendSettingsUi(control.action) }, label: {
           HStack(spacing: 10) {
@@ -133,9 +135,24 @@ struct SettingControl: View {
             if control.kind === "toggle" {
               Switch(on: !!control.checked)
             } else {
-              Text(control.action_label || control.value || "›")
-                .lineLimit(1)
-                .withProps({ className: control.action_label ? "setting-action" : "setting-value" })
+              if control.action_label {
+                Text(control.action_label)
+                  .lineLimit(1)
+                  .fontSize(12)
+                  .foregroundStyle(color.text)
+                  .padding({ top: 4, bottom: 4, leading: 12, trailing: 12 })
+                  .background(LinearGradient(colors: [Color(color.btnTop), Color(color.btnBottom)], startPoint: .top, endPoint: .bottom))
+                  .border(color.btnEdge, 1)
+                  .cornerRadius(8)
+                  .shadow(color.btnDrop, 6, 0, 2)
+                  .style({ flex: "none" })
+              } else {
+                Text(control.value || "›")
+                  .lineLimit(1)
+                  .fontSize(12)
+                  .foregroundStyle(color.muted)
+                  .style({ flex: "none", maxWidth: "40%", overflow: "hidden", textOverflow: "ellipsis" })
+              }
             }
           }
         })

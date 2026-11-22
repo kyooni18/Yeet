@@ -28,22 +28,78 @@ export struct SectionHeading: View {
   }
 }
 
-/** One choice among a few peers. The selected segment is raised and heavier,
- * and exposes its state as a pressed button. */
+/** One key of a segmented control. The selected key takes the raised button material. */
+struct SegmentKey: View {
+  let label: String
+  let selected: Bool
+  let enabled: Bool
+  let action: () => void
+  @State var hovering: Bool = false
+  var body: some View {
+    Button(label, action)
+      .disabled(!enabled)
+      .withProps({ "aria-pressed": selected })
+      .fontSize(12)
+      .foregroundStyle(selected ? color.text : hovering.value ? color.text : color.muted)
+      .style({ fontWeight: selected ? "var(--w-emphasis)" : "var(--w-base)", whiteSpace: "nowrap", flex: "1 1 auto" })
+      .padding({ top: isRoomy() ? 12 : 4, bottom: isRoomy() ? 12 : 4, leading: 10, trailing: 10 })
+      .background(LinearGradient(colors: [Color(selected ? color.btnTop : "transparent"), Color(selected ? color.btnBottom : "transparent")], startPoint: .top, endPoint: .bottom))
+      .cornerRadius(6)
+      .shadow(selected ? color.btnDrop : "transparent", 4, 0, 1)
+      .opacity(enabled ? 1 : 0.45)
+      .animation(quick, value: selected)
+      .onHover(inside => { hovering.value = inside })
+  }
+}
+
+/** One choice among a few peers; selection is a raised key plus weight, never colour alone. */
 export struct Segmented: View {
   let label: String
   let options: Any
   let value: String
   let onChange: (value: string) => void
+  let enabled: Bool = true
   var body: some View {
     HStack(spacing: 2) {
       ForEach(options, { id: option => option.value }) { option in
-        Button(option.label) { onChange(option.value) }
-          .withProps({ className: "segment", "aria-pressed": option.value === value })
+        SegmentKey(label: option.label, selected: option.value === value, enabled: enabled, action: () => { onChange(option.value) })
       }
     }
-    .withProps({ className: "segmented", role: "group", "aria-label": label })
+    .padding(2)
+    .background(color.field)
+    .cornerRadius(8)
+    .style({ flex: "none", flexWrap: "wrap" })
+    .withProps({ role: "group", "aria-label": label })
   }
+}
+
+function sendPadding(): number {
+  return isRoomy() ? 12.5 : 5.5
+}
+
+/** Primary when it can send; a neutral key while it cannot or while it stops a run. */
+function sendIsPrimary(streaming: boolean, enabled: boolean): boolean {
+  return enabled && !streaming
+}
+
+function sendTextColor(streaming: boolean, enabled: boolean): string {
+  return sendIsPrimary(streaming, enabled) ? color.accentInk : enabled ? color.text : color.faint
+}
+
+function sendTop(streaming: boolean, enabled: boolean): string {
+  return sendIsPrimary(streaming, enabled) ? color.accentTop : color.btnTop
+}
+
+function sendBottom(streaming: boolean, enabled: boolean): string {
+  return sendIsPrimary(streaming, enabled) ? color.accentBottom : color.btnBottom
+}
+
+function sendEdge(streaming: boolean, enabled: boolean): string {
+  return sendIsPrimary(streaming, enabled) ? color.accentEdge : color.btnEdge
+}
+
+function sendDrop(streaming: boolean, enabled: boolean, pressed: boolean): string {
+  return pressed || !enabled ? "transparent" : sendIsPrimary(streaming, enabled) ? color.accentGlow : color.btnDrop
 }
 
 /** Vertical padding that makes the button itself 28/32px (44px on touch and narrow
@@ -151,6 +207,40 @@ export struct Chip: View {
       .style({ flex: "none", whiteSpace: "nowrap" })
       .animation(quick, value: hovering.value)
       .onHover(inside => { hovering.value = inside })
+  }
+}
+
+/** The composer's primary control: send, or stop while a run is streaming. */
+export struct SendButton: View {
+  let streaming: Bool
+  let enabled: Bool
+  let label: String
+  let action: () => void
+  @State var hovering: Bool = false
+  @State var pressed: Bool = false
+  var body: some View {
+    Button(action: action, label: {
+      if streaming {
+        RoundedRectangle(3).fill(color.text).frame(width: 12, height: 12)
+      } else {
+        Icon(workIcon("arrow"), { width: 19, height: 19 })
+      }
+    })
+      .disabled(!enabled)
+      .accessibilityLabel(label)
+      .withProps({ title: streaming ? "Stop generating" : "Send message", className: "send-button" })
+      .foregroundStyle(sendTextColor(streaming, enabled))
+      .padding(sendPadding())
+      .background(LinearGradient(colors: [Color(sendTop(streaming, enabled)), Color(sendBottom(streaming, enabled))], startPoint: .top, endPoint: .bottom))
+      .border(sendEdge(streaming, enabled), 1)
+      .cornerRadius(8)
+      .shadow(sendDrop(streaming, enabled, pressed.value), 8, 0, pressed.value ? 0 : 3)
+      .overlay(RoundedRectangle(8).fill(pressed.value ? color.pressed : hovering.value && enabled ? color.hover : "transparent").allowsHitTesting(false))
+      .style({ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" })
+      .animation(quick, value: hovering.value)
+      .animation(spring, value: streaming)
+      .onHover(inside => { hovering.value = inside })
+      .withProps({ onPointerDown: () => { pressed.value = true }, onPointerUp: () => { pressed.value = false }, onPointerLeave: () => { pressed.value = false }, onPointerCancel: () => { pressed.value = false } })
   }
 }
 

@@ -12,7 +12,7 @@ import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
   removeAttachment, pickFiles, addFiles, focusComposer,
 } from "./composer"
-import { Spinner, Chip, IconButton, ActionButton } from "./Common.mun"
+import { Spinner, Chip, IconButton, ActionButton, SendButton } from "./Common.mun"
 import { ToolDetails } from "./ToolDetails.mun"
 import { ComposerBlur } from "./Blur.mun"
 import { composerRef } from "./composerHeight"
@@ -367,6 +367,10 @@ function earlierLabel(): string {
   return "Show " + Math.min(count, 120) + " earlier " + (count === 1 ? "item" : "items")
 }
 
+function sendLabel(): string {
+  return remote.value.composer?.primary_control.label || "Send"
+}
+
 struct AttachmentStrip: View {
   var body: some View {
     HStack(spacing: 6) {
@@ -463,20 +467,7 @@ struct Composer: View {
           Spacer()
           Text(contextLabel() || "Context —")
             .withProps({ className: "composer-context", title: contextDescription(), "aria-label": contextDescription() })
-          Button(action: { primary() }, label: {
-            if streaming.value {
-              RoundedRectangle(3).style({ width: "12px", height: "12px", background: "currentColor" })
-            } else {
-              Icon(workIcon("arrow"), { width: 19, height: 19, strokeWidth: 2 })
-            }
-          })
-            .accessibilityLabel(remote.value.composer?.primary_control.label || "Send")
-            .withProps({ className: "send-button", title: streaming.value ? "Stop generating" : "Send message" })
-            .background(streaming.value ? color.raised : color.accent)
-            .foregroundStyle(streaming.value ? color.text : color.accentInk)
-            .opacity(primaryEnabled() ? 1 : 0.35)
-            .animation(spring, value: streaming.value)
-            .disabled(!primaryEnabled())
+          SendButton(streaming: streaming.value, enabled: primaryEnabled(), label: sendLabel(), action: { primary() })
         }.withProps({ className: "composer-controls" })
       }
       .padding({ top: 12, bottom: 8, leading: 16, trailing: 8 })
