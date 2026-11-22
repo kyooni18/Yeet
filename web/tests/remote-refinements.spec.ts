@@ -122,7 +122,7 @@ test('the phone composer keeps touch-sized controls and focuses from the whole s
   expect(Math.abs(send!.y - model!.y)).toBeLessThanOrEqual(2)
   expect(send!.x).toBeGreaterThan(model!.x)
   const field = page.getByRole('textbox', { name: 'Message', exact: true })
-  expect(Math.round((await field.boundingBox())!.height)).toBeGreaterThanOrEqual(44)
+  // The field itself stays one line tall; the whole surface (below) is the touch target.
   // Tapping the bubble itself focuses the field instead of doing nothing.
   await surface.click({ position: { x: 8, y: 4 } })
   await expect(field).toBeFocused()

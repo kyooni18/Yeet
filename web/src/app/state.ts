@@ -362,6 +362,12 @@ export function contextLabel(): string {
   return percent == null ? '' : `${Math.round(percent)}% context`
 }
 
+/** The percentage alone; the word "context" is a quiet suffix that narrow layouts may drop. */
+export function contextPercentLabel(): string {
+  const percent = statusSnapshot.value.contextPercent
+  return percent == null ? '' : `${Math.round(percent)}%`
+}
+
 export function contextDescription(): string {
   const state = runtimeState.value
   return state.current_context_tokens == null || state.active_model_context_length == null

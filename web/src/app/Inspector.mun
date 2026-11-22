@@ -37,7 +37,7 @@ struct PanelRow: View {
         Icon(workIcon(icon), { width: 16, height: 16, strokeWidth: 1.6 })
           .foregroundStyle(color.faint)
         Text(title).lineLimit(1).style({ minWidth: "0", flex: "1" })
-        Text(detail).fontSize(11).foregroundStyle(color.muted).style({ whiteSpace: "nowrap" })
+        Text(detail).fontSize(12).foregroundStyle(color.muted).style({ whiteSpace: "nowrap" })
       }
     })
     .withProps({ className: "panel-row", title, "aria-pressed": selected })

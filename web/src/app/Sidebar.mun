@@ -58,10 +58,10 @@ struct SessionRow: View {
         Text(session.title || "Untitled").lineLimit(1).style({ flex: "1", minWidth: "0" })
         // One list, not one list per workspace: label the row instead.
         if showWorkspace {
-          Text(session.workspace_label).fontSize(11).foregroundStyle(color.faint).lineLimit(1)
+          Text(session.workspace_label).fontSize(12).foregroundStyle(color.faint).lineLimit(1)
             .withProps({ className: "session-workspace", title: session.workspace_path })
         }
-        Text(age(session.updated_at)).fontSize(11).foregroundStyle(color.faint)
+        Text(age(session.updated_at)).fontSize(12).foregroundStyle(color.faint)
       }
     })
     .withProps({ className: "session-row", title: session.title || "Untitled", "aria-current": session.id === runtimeState.value.current_session_id ? "true" : undefined })

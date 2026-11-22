@@ -3,7 +3,7 @@ import { workIcon } from "./workIcons"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
-  remote, spring, isWide, connected, openSheet, contextLabel, shortModel,
+  remote, spring, isWide, connected, openSheet, contextPercentLabel, shortModel,
   toolbarControl, conversationRef, workspaceLine, elapsed,
   showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
   chooseWorkspace, workspaces, isNewChat, contextDescription, hiddenTranscriptCount, showEarlierTranscript, transcriptKey,
@@ -471,8 +471,14 @@ struct Composer: View {
           }).withProps({ className: "model-trigger", "aria-label": "Choose model", title: remote.value.state.active_model || "Choose model" }).disabled(!connected())
           ToolbarChoice(id: "reasoning")
           Spacer()
-          Text(contextLabel() || "Context —")
-            .withProps({ className: "composer-context", title: contextDescription(), "aria-label": contextDescription() })
+          HStack(spacing: 0) {
+            if (contextPercentLabel() !== "") {
+              Text(contextPercentLabel())
+              Text(" context").withProps({ className: "composer-context__word" })
+            } else {
+              Text("Context —")
+            }
+          }.withProps({ className: "composer-context", title: contextDescription(), "aria-label": contextDescription() })
           SendButton(streaming: streaming.value, enabled: primaryEnabled(), label: sendLabel(), action: { primary() })
         }.withProps({ className: "composer-controls" })
       }

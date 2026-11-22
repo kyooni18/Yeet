@@ -198,7 +198,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .nav-item:hover, .session-row:hover:not(:disabled), .panel-row:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 /* Selection is a fill plus weight, so it does not depend on hue alone. */
 .nav-item[aria-current="page"] { background: var(--nav-select); color: var(--text); font-weight: var(--w-emphasis); }
-.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; font-size: 11px; font-weight: var(--w-base); font-variant-numeric: tabular-nums; color: var(--muted); border-radius: var(--r-inline); background: var(--hover); }
+.nav-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; font-size: 12px; font-weight: var(--w-base); font-variant-numeric: tabular-nums; color: var(--muted); border-radius: var(--r-inline); background: var(--hover); }
 .sidebar-scroll { overscroll-behavior: contain; padding: 0 2px 12px; margin: 4px -2px 0; }
 .search-field { border-radius: var(--r-control); padding: 0 8px; background: var(--well); border: 0; box-shadow: inset 0 1px 3px var(--well-shadow), inset 0 0 0 0.5px var(--btn-edge), 0 1px 0 var(--btn-hi); min-height: 28px; transition: box-shadow var(--motion-fast); }
 .search-field:focus-within { box-shadow: inset 0 1px 3px var(--well-shadow), 0 0 0 2px var(--focus); }
@@ -275,7 +275,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .model-row { width: 100%; min-width: 0; }
 .model-row > * { min-width: 0; }
 .composer select { min-width: 0; text-overflow: ellipsis; }
-.composer-hint { font-size: 11px; color: var(--faint); text-align: center; }
+.composer-hint { font-size: 12px; color: var(--faint); text-align: center; }
 
 /* Workspace inspector: real Remote files/changes, not a static decorative rail. */
 #workspace-panel { background: var(--inspector); margin: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) 0; padding: 0; }
@@ -327,13 +327,13 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 [aria-expanded="true"] > .trace-disclosure__summary > .trace-disclosure__chevron { rotate: 90deg; }
 .activity-group__events { margin: 0; padding: 0; min-width: 0; }
 .trace-disclosure__details { min-width: 0; margin: 0 8px 8px 15px; padding: 8px 0 8px 14px; border-left: 1px solid var(--line); color: var(--muted); }
-.trace-disclosure__timing { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.trace-disclosure__timing { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
 .tool-details, .trace-detail { width: 100%; min-width: 0; }
-.trace-detail__heading { font: var(--w-emphasis) 11px/1.5 var(--sans); color: var(--muted); }
+.trace-detail__heading { font: var(--w-emphasis) 12px/1.5 var(--sans); color: var(--muted); }
 .tool-embed { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: var(--r-control); overflow: hidden; background: var(--bg); color: var(--text); }
-.tool-embed__header { width: 100% !important; min-width: 0; padding: 9px 12px; gap: 6px 12px !important; flex-wrap: wrap; background: var(--field); border-bottom: 1px solid var(--line); font-size: 11px; }
+.tool-embed__header { width: 100% !important; min-width: 0; padding: 9px 12px; gap: 6px 12px !important; flex-wrap: wrap; background: var(--field); border-bottom: 1px solid var(--line); font-size: 12px; }
 .tool-embed__path { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
-.tool-caption { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.tool-caption { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .tool-pre { display: block; width: 100%; min-width: 0; max-height: 320px; margin: 0; padding: 10px 12px; overflow: auto; overscroll-behavior: contain; white-space: pre; tab-size: 4; font: 12px/1.7 var(--mono); background: var(--field); color: var(--text); border-radius: var(--r-inline); }
 .tool-pre--prose { font: var(--w-base) 13px/1.65 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-pre:focus-visible, .tool-code-scroll:focus-visible { outline-offset: -2px; }
@@ -357,7 +357,7 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 .tool-diff__line--removed { color: var(--del); background: var(--del-bg); }
 .tool-diff__line--omitted { color: var(--muted); background: var(--field); }
 .tool-diff__sign { text-align: center; user-select: none; }
-.tool-diff__stats { white-space: nowrap; font: 11px/1.5 var(--mono); color: var(--muted); }
+.tool-diff__stats { white-space: nowrap; font: 12px/1.5 var(--mono); color: var(--muted); }
 .tool-diagnostic { padding: 8px 12px; border-left: 2px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
 .tool-diagnostic.is-error { border-left-color: var(--del); }
 .tool-raw-toggle { min-height: 32px; padding: 4px 8px; margin-left: -8px; border-radius: var(--r-inline); font-size: 12px; color: var(--muted); }
@@ -405,15 +405,14 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 /* Status belongs beside the conversation; workspace choice belongs to its draft. */
 .status-row { width: 100% !important; font-size: 12px; line-height: 1.5; min-width: 0; }
 .status-section { margin-top: 12px; }
-.status-caption { font-size: 11px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.status-caption { font-size: 12px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
 
 .composer-workspace { width: 100% !important; min-width: 0; padding: 0 4px 0 0; color: var(--muted); }
 .composer-workspace-picker { flex: 1; min-width: 0; max-width: none !important; padding: 5px 0; color: var(--text); background: transparent; border: 0; font: inherit; font-size: 13px; }
-.composer-context { flex: none; font: var(--w-base) 11px/1.5 var(--sans); color: var(--muted); white-space: nowrap; }
+.composer-context { flex: none; font: var(--w-base) 12px/1.5 var(--sans); color: var(--muted); white-space: nowrap; }
 .composer-controls { flex-wrap: wrap; }
 /* Mün passes camel-case stroke attributes through; CSS is reliable across hosts. */
 svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-stroke); }
-@media (max-width: 380px) { .composer-context { font-size: 10px; } .composer-controls { column-gap: 2px !important; } }
 
 .resource-row { text-align: left; font-size: 12px; }
 .resource-row > * { min-width: 0; width: 100% !important; }
@@ -437,19 +436,7 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 /* One session list: the workspace reads as a row label, not a divider. */
 .session-workspace { flex: none; max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
 
-@media (max-width: 599px) {
-  /* Deterministic phone composer: context on its own quiet line, then one row
-     of touch-sized controls, instead of wrapping wherever the text ends. */
-  .composer-controls { display: grid !important; grid-template-columns: 44px minmax(0, 1fr) minmax(44px, 90px) 44px; gap: 4px !important; }
-  .composer-controls > [data-mun="Spacer"] { display: none; }
-  .composer-controls > .icon-button { grid-row: 2; grid-column: 1; }
-  .composer-controls > .model-trigger { grid-row: 2; grid-column: 2; max-width: none; width: 100%; }
-  .composer-controls > select { grid-row: 2; grid-column: 3; width: 100%; }
-  .composer-controls > .send-button { grid-row: 2; grid-column: 4; }
-  .composer-controls > .composer-context { grid-row: 1; grid-column: 1 / -1; }
-  .composer-context { order: -1; flex: 1 0 100%; text-align: left; }
-  .composer-surface { padding-right: 8px !important; }
-}
+@media (max-width: 599px) { .composer-surface { padding-right: 8px !important; } }
 
 .auth-input { min-width: 0; font: inherit; color: var(--text); border-radius: var(--r-control); padding: 8px 12px; background: var(--well); border: 0; box-shadow: inset 0 1px 3px var(--well-shadow), inset 0 0 0 0.5px var(--btn-edge), 0 1px 0 var(--btn-hi); }
 @media (max-width: 899px), (hover: none) and (pointer: coarse) {
@@ -491,15 +478,6 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 .composer-controls select { appearance: none; padding: 5px 8px; border-radius: var(--r-control); cursor: pointer; transition: background var(--motion-fast), color var(--motion-fast); }
 .composer-controls select:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 @media (hover: none), (pointer: coarse) { .composer-controls .icon-button { width: 44px; height: 44px; } }
-@media (max-width: 599px) {
-  /* Phone: context joins the control row instead of taking a line of its own. */
-  .composer-controls { grid-template-columns: 44px minmax(0, 1fr) auto auto 44px; margin-left: 0; width: 100% !important; }
-  .composer-controls > .icon-button, .composer-controls > .model-trigger, .composer-controls > select, .composer-controls > .send-button, .composer-controls > .composer-context { grid-row: 1; }
-  .composer-controls > select { grid-column: 3; width: auto; max-width: 84px !important; }
-  .composer-controls > .composer-context { grid-column: 4; order: 0; flex: none; text-align: right; align-self: center; padding: 0 4px; }
-  .composer-controls > .send-button { grid-column: 5; }
-}
-
 /* Settings: a label and its explanation on the left, the control on the right,
    every row the same width and rhythm. */
 .setting-section { padding: 14px 0 4px; }
@@ -523,3 +501,33 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 /* Every progressive blur fades on the blur spring (the library fades with a fixed ease). */
 [data-pb-amount] > div { transition: opacity var(--blur-duration) var(--blur-spring) !important; }
 .sheet-blur-layer { position: fixed; inset: 0; z-index: calc(var(--z-sheet) - 1); pointer-events: none; }
+
+/* Phone and touch polish. Everything here refines a rule above; nothing re-declares layout. */
+/* The floating title bar owns no rule, so it is exactly one bar tall and the transcript starts at the top edge. */
+.topbar--floating { border-bottom-width: 0; }
+/* Composer row: every control is centred on one line and the send key is a true square. */
+.composer-controls { align-items: center; }
+.send-button { box-sizing: border-box; width: 32px; height: 32px; padding: 0 !important; }
+@media (hover: hover) and (pointer: fine) { .composer-controls .model-trigger { min-height: 32px; } }
+@media (hover: none), (pointer: coarse) {
+  .send-button { width: 44px; height: 44px; }
+  /* Fields and disclosures all reach the 44px touch target. */
+  .form-field:not(textarea), .model-search, .auth-input { min-height: 44px; }
+  .tool-raw-toggle { min-height: 44px; }
+  .message-actions button { min-width: 44px; padding-top: 0 !important; padding-bottom: 0 !important; }
+  /* Always-visible actions sit close to their message instead of adding a blank line to every turn. */
+  .message-actions { margin-top: -6px; margin-bottom: -6px; min-height: 44px; }
+}
+/* Phone: one control row. The context percentage keeps its place; the word "context" yields
+   its width to the model name, which must stay readable on a 320px screen. */
+@media (max-width: 599px) {
+  .composer-controls { display: grid !important; grid-template-columns: 44px minmax(0, 1fr) auto auto 44px; grid-template-rows: auto; gap: 2px !important; margin-left: 0; width: 100% !important; }
+  .composer-controls > [data-mun="Spacer"] { display: none; }
+  .composer-controls > * { grid-row: 1; }
+  .composer-controls > .icon-button { grid-column: 1; }
+  .composer-controls > .model-trigger { grid-column: 2; max-width: none; width: 100%; min-width: 0; }
+  .composer-controls > select { grid-column: 3; width: auto; max-width: 84px !important; }
+  .composer-controls > .composer-context { grid-column: 4; align-self: center; text-align: right; padding: 0 6px; }
+  .composer-controls > .send-button, .composer-controls > div:last-child { grid-column: 5; }
+  .composer-context__word { display: none; }
+}
