@@ -53,6 +53,11 @@
      state.ts as the damped step response Mün itself plays (so CSS-driven pieces settle in
      step with Mün-driven ones). Hover and press stay on the short ease-out tokens. */
   --spring-duration: 0.553s;
+  /* Blur is a material, not a mover: it follows its surface with a much shorter spring
+     (`Animation.spring(0.2, 0.9)`, front-loaded and without visible overshoot) so it never
+     lingers behind the thing it belongs to. */
+  --blur-duration: 0.267s;
+  --blur-spring: linear(0, 0.0193, 0.0683, 0.1358, 0.2136, 0.2956, 0.3775, 0.4563, 0.5302, 0.598, 0.6591, 0.7134, 0.7611, 0.8026, 0.8382, 0.8685, 0.8941, 0.9155, 0.9332, 0.9478, 0.9598, 0.9694, 0.9771, 0.9833, 0.9881, 0.9918, 0.9947, 0.9968, 0.9984, 0.9996, 1.0004, 1.0009, 1.0013, 1.0014, 1.0015, 1.0015, 1.0015, 1.0014, 1.0012, 1.0011, 1);
   --spring: linear(0, 0.0208, 0.0732, 0.1452, 0.2278, 0.3142, 0.4, 0.482, 0.5582, 0.6274, 0.6892, 0.7435, 0.7906, 0.8309, 0.865, 0.8935, 0.9171, 0.9365, 0.9522, 0.9648, 0.9747, 0.9825, 0.9885, 0.993, 0.9964, 0.9988, 1.0005, 1.0017, 1.0024, 1.0028, 1.003, 1.0029, 1.0028, 1.0026, 1.0024, 1.0021, 1.0019, 1.0016, 1.0014, 1.0012, 1);
   --motion-fast: 120ms var(--ease-out);
   --motion-base: 200ms var(--ease-out);
@@ -302,7 +307,7 @@ meter { appearance: none; border: 0; border-radius: 4px; background: var(--field
 meter::-webkit-meter-bar { background: var(--field); border: 0; height: 4px; }
 meter::-webkit-meter-optimum-value { background: var(--muted); border-radius: 4px; }
 meter::-moz-meter-bar { background: var(--muted); border-radius: 4px; }
-.drawer-scrim-layer { position: fixed; inset: 0; z-index: var(--z-scrim); width: 100%; height: 100%; background-color: transparent; pointer-events: none; transition: background-color var(--spring-duration) var(--spring); }
+.drawer-scrim-layer { position: fixed; inset: 0; z-index: var(--z-scrim); width: 100%; height: 100%; background-color: transparent; pointer-events: none; transition: background-color var(--blur-duration) var(--blur-spring); }
 .drawer-scrim-layer[data-open="true"] { background-color: var(--scrim); pointer-events: auto; }
 .drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; cursor: default; }
 /* A pane's space in the layout. The pane slides by transform alone; this slot eases the
@@ -579,6 +584,6 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 /* The stop glyph is a shape view, not an icon: centre it in the button explicitly. */
 .send-button > [data-mun="RoundedRectangle"] { align-self: center; margin: auto; flex: none; border-radius: 3px; }
 
-/* Every progressive blur eases on the shared spring (the library fades with a fixed ease). */
-[data-pb-amount] > div { transition: opacity var(--spring-duration) var(--spring) !important; }
+/* Every progressive blur fades on the blur spring (the library fades with a fixed ease). */
+[data-pb-amount] > div { transition: opacity var(--blur-duration) var(--blur-spring) !important; }
 .sheet-blur-layer { position: fixed; inset: 0; z-index: calc(var(--z-sheet) - 1); pointer-events: none; }
