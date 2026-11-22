@@ -1,7 +1,8 @@
-import { State } from '@mun/core'
+import { State, subscribeState } from '@mun/core'
 import type { ComposerContext, ComposerSuggestion, EditorSnapshot } from '@/remote/protocol'
 import { deleteAttachment, remoteFeatureSet, uploadAttachment } from '@/remote/attachments'
 import { remoteStore } from '@/store/remoteStore'
+import { bindElement } from './dom'
 import { connected, navigateDestination, remote } from './state'
 
 export interface Attachment { id: string; name: string; remoteId: string | null; error: string | null }
@@ -108,6 +109,7 @@ function sync() {
 
 export function setText(value: string) {
   reconcileContext()
+  if (value !== text.value) suggestionIndex.value = 0
   text.value = value
   // Coalesce same-frame input events without delaying local input or submit.
   if (!editorFrame) editorFrame = requestAnimationFrame(sync)
@@ -154,8 +156,77 @@ export function chooseSuggestion(item: ComposerSuggestion) {
   remoteStore.sendComposerUi({ type: 'select_suggestion', value: { editor: editor(), command: item.command } })
 }
 
+/** Highlighted slash-command row; reset whenever the draft changes. */
+export const suggestionIndex = State(0)
+/** Draft text for which the user dismissed the list with Escape. */
+const dismissedFor = State<string | null>(null)
+
 export function suggestions(): ComposerSuggestion[] {
-  return text.value.startsWith('/') ? (remote.value.composer?.suggestions ?? []).slice(0, 6) : []
+  if (!text.value.startsWith('/') || dismissedFor.value === text.value) return []
+  return (remote.value.composer?.suggestions ?? []).slice(0, 6)
+}
+
+export const suggestionId = (index: number) => `composer-suggestion-${index}`
+
+export function highlighted(list: ComposerSuggestion[]): number {
+  return Math.min(Math.max(suggestionIndex.value, 0), list.length - 1)
+}
+
+/**
+ * Fields without `field-sizing: content` (Safari < 26, Firefox) do not grow with
+ * their text, which leaves the message box a single clipped line. Fit it by hand.
+ */
+const nativeAutosize = typeof CSS !== 'undefined' && CSS.supports?.('field-sizing', 'content')
+export const fieldRef = bindElement(element => {
+  const field = element as HTMLTextAreaElement
+  if (nativeAutosize) return () => {}
+  let frame = 0
+  const fit = () => {
+    frame = 0
+    field.style.height = 'auto'
+    field.style.height = `${field.scrollHeight}px`
+  }
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(fit) }
+  field.addEventListener('input', schedule)
+  const resize = new ResizeObserver(schedule) // width changes rewrap lines
+  resize.observe(field)
+  // Programmatic changes (send clears the field, edit loads a prompt) fire no input event.
+  const stop = subscribeState(text, schedule)
+  schedule()
+  return () => {
+    cancelAnimationFrame(frame)
+    field.removeEventListener('input', schedule)
+    resize.disconnect()
+    stop()
+  }
+})
+
+function hasFiles(event: DragEvent) {
+  return canAttach.value && !!event.dataTransfer && Array.from(event.dataTransfer.types).includes('Files')
+}
+const mark = (event: DragEvent, on: boolean) => {
+  const surface = event.currentTarget as HTMLElement | null
+  if (on) surface?.setAttribute('data-dropping', 'true'); else surface?.removeAttribute('data-dropping')
+}
+
+/** Drop files anywhere on the composer to attach them. */
+export const dropHandlers = {
+  onDragOver(event: DragEvent) {
+    if (!hasFiles(event)) return
+    event.preventDefault()
+    event.dataTransfer!.dropEffect = 'copy'
+    mark(event, true)
+  },
+  onDragLeave(event: DragEvent) {
+    const next = event.relatedTarget as Node | null
+    if (!next || !(event.currentTarget as HTMLElement).contains(next)) mark(event, false)
+  },
+  onDrop(event: DragEvent) {
+    mark(event, false)
+    if (!hasFiles(event)) return
+    event.preventDefault()
+    addFiles(event.dataTransfer!.files)
+  },
 }
 
 /** Mobile: the whole bubble focuses the field; controls keep their own behavior. */
@@ -174,12 +245,30 @@ export const onCompositionEnd = () => { composing = false }
 const committingComposition = (event: KeyboardEvent) => composing || event.isComposing || event.keyCode === 229
 
 export function onKeyDown(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.shiftKey || committingComposition(event)) return
+  if (committingComposition(event)) return
+  const list = suggestions()
+  const picking = list.length > 0 && !text.value.includes(' ')
+  if (picking && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    event.preventDefault()
+    const step = event.key === 'ArrowDown' ? 1 : -1
+    suggestionIndex.value = (highlighted(list) + step + list.length) % list.length
+    return
+  }
+  if (picking && event.key === 'Tab' && !event.shiftKey) {
+    event.preventDefault()
+    chooseSuggestion(list[highlighted(list)])
+    return
+  }
+  if (event.key === 'Escape') {
+    if (list.length) { event.preventDefault(); dismissedFor.value = text.value }
+    else if (editingLast.value) { event.preventDefault(); cancelEdit() }
+    return
+  }
+  if (event.key !== 'Enter' || event.shiftKey) return
   const touch = window.matchMedia('(hover: none) and (pointer: coarse)').matches
   if (!event.metaKey && !event.ctrlKey && touch) return
   event.preventDefault()
-  const first = suggestions()[0]
-  if (first && !text.value.includes(' ')) chooseSuggestion(first)
+  if (picking) chooseSuggestion(list[highlighted(list)])
   else submit()
 }
 

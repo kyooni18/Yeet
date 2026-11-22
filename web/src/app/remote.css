@@ -264,6 +264,9 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .composer textarea { max-height: min(180px, calc(var(--app-height, 100dvh) * 0.3)) !important; }
 .composer-surface { border-radius: var(--r-surface); box-shadow: var(--shadow-pane); transition: box-shadow var(--motion-base); }
 .composer-surface:focus-within { box-shadow: var(--shadow-pane), 0 0 0 2px var(--focus); }
+.composer-surface[data-dropping] { box-shadow: var(--shadow-pane), 0 0 0 2px var(--focus); background: color-mix(in srgb, var(--focus) 8%, var(--composer)) !important; }
+.composer-suggestion { width: 100%; text-align: left; }
+.composer-suggestion[aria-selected="true"] { background: var(--hover); }
 .composer textarea { line-height: 1.6; overflow-y: auto; }
 .composer-surface > :last-child { min-width: 0; }
 .composer-controls { width: 100% !important; min-width: 0; }

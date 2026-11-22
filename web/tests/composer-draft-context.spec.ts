@@ -199,3 +199,18 @@ test('Enter that commits an IME candidate never sends, in Chromium and in Safari
   expect((await sentCommands(page)).filter((command) => command.type === 'submit')).toEqual([])
   await expect(field).toHaveValue('안녕하세요')
 })
+
+test('slash commands are keyboard navigable and Escape dismisses them', async ({ page }) => {
+  const field = page.getByRole('textbox', { name: 'Message', exact: true })
+  await field.fill('/')
+  const options = page.getByRole('listbox', { name: 'Commands' }).getByRole('option')
+  await expect(options.first()).toBeVisible()
+  expect(await options.count()).toBeGreaterThan(1)
+  await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true')
+  await field.press('ArrowDown')
+  await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true')
+  await expect(field).toHaveAttribute('aria-activedescendant', 'composer-suggestion-1')
+  await field.press('Escape')
+  await expect(options).toHaveCount(0)
+  await expect(field).toHaveValue('/')
+})
