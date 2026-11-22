@@ -1,7 +1,7 @@
 import { Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color } from "./theme"
-import { Spinner, PrimaryButton, SectionHeading } from "./Common.mun"
+import { Spinner, PrimaryButton, ActionButton, SectionHeading } from "./Common.mun"
 import { remote, spring, connected, openSheet } from "./state"
 
 const objective = State("")
@@ -31,9 +31,7 @@ function submitObjective() {
 struct AgentButton: View {
   let control: Any
   var body: some View {
-    Button(control.label) { remoteStore.sendAgentUi(control.action) }
-      .withProps({ className: "btn btn-small" })
-      .disabled(!control.enabled || !connected())
+    ActionButton(title: control.label, kind: "secondary", small: true, enabled: control.enabled && connected(), action: { remoteStore.sendAgentUi(control.action) })
   }
 }
 
@@ -100,7 +98,7 @@ struct AgentsContent: View {
         HStack(spacing: 8) {
           PrimaryButton(title: remote.value.agents.state.creating_group ? "Create group" : "Send message", enabled: !!objective.value.trim() && connected(), action: { submitObjective() })
           if remote.value.agents.state.creating_group {
-            Button("Cancel") { remoteStore.sendAgentUi({ type: "cancel_draft" }) }.withProps({ className: "form-action" })
+            ActionButton(title: "Cancel", kind: "secondary", small: false, enabled: true, action: () => { remoteStore.sendAgentUi({ type: "cancel_draft" }) })
           }
         }
         }

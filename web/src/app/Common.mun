@@ -1,7 +1,7 @@
 import { Icon } from "@mun/core"
 import { workIcon } from "./workIcons"
 import { color, mono } from "./theme"
-import { spring } from "./state"
+import { spring, quick, isTouch } from "./state"
 
 /** A small, neutral activity ring; never attached to provider narration.
  * Rotation is a compositor-only CSS animation, so it costs no view updates. */
@@ -46,15 +46,79 @@ export struct Segmented: View {
   }
 }
 
-/** The primary action of a view: accent fill with the shared button material. */
+function textColor(kind: string, hovering: boolean): string {
+  return kind === "primary" ? color.accentInk : kind === "danger" ? color.del : kind === "quiet" ? (hovering ? color.text : color.muted) : color.text
+}
+
+function sheenTop(kind: string): string {
+  return kind === "primary" ? color.accentTop : kind === "quiet" ? "transparent" : color.btnTop
+}
+
+function edgeColor(kind: string): string {
+  return kind === "primary" ? color.accentEdge : kind === "quiet" ? "transparent" : color.btnEdge
+}
+
+function dropColor(kind: string, pressed: boolean): string {
+  return pressed || kind === "quiet" ? "transparent" : kind === "primary" ? color.accentGlow : color.btnDrop
+}
+
+function sheenBottom(kind: string): string {
+  return kind === "primary" ? color.accentBottom : kind === "quiet" ? "transparent" : color.btnBottom
+}
+
+/** The button material, written entirely in modifiers: a two-colour sheen, a hairline
+ * edge, a cast shadow, and hover and pressed overlays. `kind` is primary, secondary or quiet. */
+export struct ActionButton: View {
+  let title: String
+  let kind: String
+  let small: Bool
+  let enabled: Bool
+  let action: () => void
+  let icon: String = ""
+  let block: Bool = false
+  let pill: Bool = false
+  let aria: String = ""
+  let role: String = ""
+  let checked: Bool = false
+  @State var hovering: Bool = false
+  @State var pressed: Bool = false
+  var body: some View {
+    Button(action: action, label: {
+      HStack(spacing: 6) {
+        if icon {
+          Icon(workIcon(icon), { width: small ? 12 : 14, height: small ? 12 : 14 })
+        }
+        Text(title).style({ whiteSpace: block ? "normal" : "nowrap", textAlign: block ? "left" : "center" })
+      }
+    })
+      .fontSize(small ? 12 : 13)
+      .foregroundStyle(textColor(kind, hovering.value))
+      .padding({ top: 0, bottom: 0, leading: small ? 10 : 14, trailing: small ? 10 : 14 })
+      .frame(minHeight: isTouch.value ? 44 : small ? 28 : 32)
+      .background(LinearGradient(colors: [Color(sheenTop(kind)), Color(sheenBottom(kind))], startPoint: .top, endPoint: .bottom))
+      .border(edgeColor(kind), 1)
+      .cornerRadius(pill ? 999 : 8)
+      .shadow(dropColor(kind, pressed.value), 8, 0, pressed.value ? 0 : 3)
+      .overlay(RoundedRectangle(pill ? 999 : 8).fill(pressed.value ? color.pressed : hovering.value ? color.hover : "transparent").allowsHitTesting(false))
+      .offset(0, pressed.value ? 0.5 : 0)
+      .opacity(enabled ? 1 : 0.45)
+      .style({ flex: "none", justifyContent: block ? "flex-start" : "center", alignItems: "center", display: "inline-flex", width: block ? "100%" : "auto" })
+      .animation(quick, value: hovering.value)
+      .animation(quick, value: pressed.value)
+      .onHover(inside => { hovering.value = inside })
+      .accessibilityLabel(aria || title)
+      .withProps({ role: role || undefined, "aria-checked": role === "switch" ? checked : undefined, onPointerDown: () => { pressed.value = true }, onPointerUp: () => { pressed.value = false }, onPointerLeave: () => { pressed.value = false }, onPointerCancel: () => { pressed.value = false } })
+      .disabled(!enabled)
+  }
+}
+
+/** The primary action of a view. */
 export struct PrimaryButton: View {
   let title: String
   let enabled: Bool
   let action: () => void
   var body: some View {
-    Button(title, action)
-      .withProps({ className: "btn btn-primary" })
-      .disabled(!enabled)
+    ActionButton(title: title, kind: "primary", small: false, enabled: enabled, action: action)
   }
 }
 
@@ -63,8 +127,7 @@ export struct Chip: View {
   let title: String
   let action: () => void
   var body: some View {
-    Button(title, action)
-      .withProps({ className: "btn btn-quiet btn-small" })
+    ActionButton(title: title, kind: "quiet", small: true, enabled: true, action: action)
   }
 }
 

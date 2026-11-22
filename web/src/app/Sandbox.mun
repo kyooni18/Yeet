@@ -1,4 +1,5 @@
 import { remoteStore } from "@/store/remoteStore"
+import { ActionButton } from "./Common.mun"
 import { remote, connected } from "./state"
 
 function update(action: Any) { return remoteStore.updateSandbox(action) }
@@ -29,8 +30,8 @@ export struct SandboxSheet: View {
         if confirmUnlimited.value {
           Text("Unlimited mode removes sandbox isolation. Only enable it for a trusted agent and workspace.").withProps({ role: "alert", className: "form-help" })
           HStack(spacing: 8) {
-            Button("Enable unlimited") { update({ type: "apply_preset", preset: "unlimited" }); confirmUnlimited.value = false }.withProps({ className: "form-action destructive" }).disabled(!editable())
-            Button("Keep sandbox") { confirmUnlimited.value = false }.withProps({ className: "form-action" })
+            ActionButton(title: "Enable unlimited", kind: "danger", small: false, enabled: !(!editable()), action: () => { update({ type: "apply_preset", preset: "unlimited" }); confirmUnlimited.value = false })
+            ActionButton(title: "Keep sandbox", kind: "secondary", small: false, enabled: true, action: () => { confirmUnlimited.value = false })
           }
         }
         Toggle("Auto approve requests", Binding(() => remote.value.state.sandbox_settings.auto_approve, enabled => update({ type: "set_auto_approve", enabled }))).disabled(!editable())
@@ -46,45 +47,45 @@ export struct SandboxSheet: View {
         ForEach(remote.value.state.sandbox_settings.workspace_paths, { id: item => item }) { item in
           HStack(spacing: 8) {
             Text(item).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
-            Button("Remove path") { update({ type: "remove_workspace_path", path: item }) }.withProps({ className: "form-action" }).disabled(!editable())
+            ActionButton(title: "Remove path", kind: "secondary", small: false, enabled: !(!editable()), action: () => { update({ type: "remove_workspace_path", path: item }) })
           }
         }
         HStack(spacing: 8) {
           TextField(Binding(path), "Relative workspace path").accessibilityLabel("Workspace path").withProps({ className: "form-field" }).style({ flex: "1", minWidth: "0" })
-          Button("Add path") { if (update({ type: "add_workspace_path", path: path.value.trim() })) { path.value = "" } }.withProps({ className: "form-action" }).disabled(!editable() || !path.value.trim())
+          ActionButton(title: "Add path", kind: "secondary", small: false, enabled: !(!editable() || !path.value.trim()), action: () => { if (update({ type: "add_workspace_path", path: path.value.trim() })) { path.value = "" } })
         }
         Text("Allowed network destinations").fontSize(13)
         ForEach(remote.value.state.sandbox_settings.network_allow, { id: item => item.host + ":" + item.port }) { item in
           HStack(spacing: 8) {
             Text(item.host + (item.port ? ":" + item.port : "")).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
-            Button("Remove host") { update({ type: "remove_network", host: item.host, port: item.port }) }.withProps({ className: "form-action" }).disabled(!editable())
+            ActionButton(title: "Remove host", kind: "secondary", small: false, enabled: !(!editable()), action: () => { update({ type: "remove_network", host: item.host, port: item.port }) })
           }
         }
         TextField(Binding(host), "Host").accessibilityLabel("Allowed host").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
         HStack(spacing: 8) {
           TextField(Binding(port), "Port (optional)").accessibilityLabel("Allowed port").withProps({ className: "form-field", type: "number", min: 1, max: 65535 }).style({ flex: "1", minWidth: "0" })
-          Button("Add host") { update({ type: "add_network", host: host.value.trim(), port: port.value ? Number(port.value) : null }) }.withProps({ className: "form-action" }).disabled(!editable() || !host.value.trim() || (!!port.value && (!Number.isInteger(Number(port.value)) || Number(port.value) < 1 || Number(port.value) > 65535)))
+          ActionButton(title: "Add host", kind: "secondary", small: false, enabled: !(!editable() || !host.value.trim() || (!!port.value && (!Number.isInteger(Number(port.value)) || Number(port.value) < 1 || Number(port.value) > 65535))), action: () => { update({ type: "add_network", host: host.value.trim(), port: port.value ? Number(port.value) : null }) })
         }
         Text("Environment variables").fontSize(13)
         ForEach(remote.value.state.sandbox_settings.environment, { id: item => item.key }) { item in
           HStack(spacing: 8) {
             Text(item.key).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
-            Button("Remove variable") { update({ type: "remove_environment", key: item.key }) }.withProps({ className: "form-action" }).disabled(!editable())
+            ActionButton(title: "Remove variable", kind: "secondary", small: false, enabled: !(!editable()), action: () => { update({ type: "remove_environment", key: item.key }) })
           }
         }
         TextField(Binding(envKey), "Variable name").accessibilityLabel("Variable name").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
         TextField(Binding(envValue), "Value").accessibilityLabel("Variable value").withProps({ className: "form-field", type: "password", autocomplete: "off" })
-        Button("Set variable") { if (update({ type: "set_environment", key: envKey.value.trim(), value: envValue.value })) { envValue.value = "" } }.withProps({ className: "form-action" }).disabled(!editable() || !envKey.value.trim())
+        ActionButton(title: "Set variable", kind: "secondary", small: false, enabled: !(!editable() || !envKey.value.trim()), action: () => { if (update({ type: "set_environment", key: envKey.value.trim(), value: envValue.value })) { envValue.value = "" } })
         Text("Secret references").fontSize(13)
         ForEach(remote.value.state.sandbox_settings.secret_ids, { id: item => item }) { item in
           HStack(spacing: 8) {
             Text(item).withProps({ className: "form-help" }).style({ flex: "1", minWidth: "0" })
-            Button("Remove secret") { update({ type: "remove_secret", id: item }) }.withProps({ className: "form-action" }).disabled(!editable())
+            ActionButton(title: "Remove secret", kind: "secondary", small: false, enabled: !(!editable()), action: () => { update({ type: "remove_secret", id: item }) })
           }
         }
         HStack(spacing: 8) {
           TextField(Binding(secret), "Existing secret ID").accessibilityLabel("Secret ID").withProps({ className: "form-field" }).style({ flex: "1", minWidth: "0" })
-          Button("Add secret") { update({ type: "add_secret", id: secret.value.trim() }) }.withProps({ className: "form-action" }).disabled(!editable() || !secret.value.trim())
+          ActionButton(title: "Add secret", kind: "secondary", small: false, enabled: !(!editable() || !secret.value.trim()), action: () => { update({ type: "add_secret", id: secret.value.trim() }) })
         }
         Text("Resource limits").fontSize(13)
         Picker(Binding(limit), [{ value: "wall_time_seconds", label: "Wall time (seconds)" }, { value: "max_stdout_bytes", label: "Standard output (bytes)" }, { value: "max_stderr_bytes", label: "Standard error (bytes)" }, { value: "max_memory_bytes", label: "Memory (bytes)" }, { value: "max_processes", label: "Processes" }])
@@ -92,12 +93,12 @@ export struct SandboxSheet: View {
         Text("Current: " + remote.value.state.sandbox_settings.limits[limit.value]).withProps({ className: "form-help" })
         HStack(spacing: 8) {
           TextField(Binding(limitValue), "New limit").accessibilityLabel("Limit value").withProps({ className: "form-field", type: "number", min: 0 }).style({ flex: "1", minWidth: "0" })
-          Button("Set limit") { update({ type: "set_limit", name: limit.value, value: Number(limitValue.value) }) }.withProps({ className: "form-action" }).disabled(!editable() || !limitValue.value || !Number.isSafeInteger(Number(limitValue.value)) || Number(limitValue.value) < 0)
+          ActionButton(title: "Set limit", kind: "secondary", small: false, enabled: !(!editable() || !limitValue.value || !Number.isSafeInteger(Number(limitValue.value)) || Number(limitValue.value) < 0), action: () => { update({ type: "set_limit", name: limit.value, value: Number(limitValue.value) }) })
         }
-        Button(confirmReset.value ? "Confirm reset policy" : "Reset policy…") {
+        ActionButton(title: confirmReset.value ? "Confirm reset policy" : "Reset policy…", kind: "danger", small: false, enabled: !(!editable()), action: () => {
           if confirmReset.value { update({ type: "reset" }); confirmReset.value = false }
           else { confirmReset.value = true }
-        }.withProps({ className: "form-action destructive" }).disabled(!editable())
+        })
       } else {
         Text("Sandbox settings are not available yet. Connect and try again.").withProps({ className: "form-help" })
       }

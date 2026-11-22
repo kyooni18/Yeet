@@ -1,6 +1,6 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, connected } from "./state"
-import { PrimaryButton } from "./Common.mun"
+import { PrimaryButton, ActionButton } from "./Common.mun"
 
 export struct DebatePage: View {
   @State var topic: String = ""
@@ -22,7 +22,7 @@ export struct DebatePage: View {
             remoteStore.send({ type: "start_debate", topic: topic.value.trim(), models: { pro: pro.value.trim(), con: con.value.trim(), jury: jury.value.trim() } })
           })
           if remote.value.state.is_streaming {
-            Button("Stop generating") { remoteStore.interrupt() }.withProps({ className: "form-action" }).disabled(!connected())
+            ActionButton(title: "Stop generating", kind: "secondary", small: false, enabled: !(!connected()), action: () => { remoteStore.interrupt() })
           }
         }
         if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
@@ -57,8 +57,7 @@ export struct ExtensionsPage: View {
         ForEach(remote.value.state.extension_commands ?? [], { id: item => item.extensionId + ":" + item.command }) { item in
           VStack(alignment: .stretch, spacing: 8) {
             Text(item.command).style({ fontWeight: "var(--w-emphasis)" })
-            Button("Run " + item.command) { remoteStore.send({ type: "extension_command", command: item.command, args: args.value.split("\n").filter(Boolean) }) }
-              .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.is_streaming)
+            ActionButton(title: "Run " + item.command, kind: "secondary", small: false, enabled: !(!connected() || remote.value.state.is_streaming), action: () => { remoteStore.send({ type: "extension_command", command: item.command, args: args.value.split("\n").filter(Boolean) }) })
           }.withProps({ className: "feature-card" }).style({ width: "100%" })
         }
         if !remote.value.state.extension_commands?.length { Text("No extension commands are available on this server.").withProps({ className: "form-help" }) }

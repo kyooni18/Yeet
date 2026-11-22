@@ -29,6 +29,16 @@ export const color = {
   del: 'var(--del)',
   delBg: 'var(--del-bg)',
   scrim: 'var(--scrim)',
+  // Button material (values defined per theme in remote.css).
+  btnTop: 'var(--btn-top)',
+  btnBottom: 'var(--btn-bottom)',
+  btnEdge: 'var(--btn-edge)',
+  btnDrop: 'var(--btn-drop)',
+  pressed: 'color-mix(in srgb, var(--text) 10%, transparent)',
+  accentTop: 'color-mix(in srgb, var(--accent), #fff 18%)',
+  accentBottom: 'color-mix(in srgb, var(--accent), #000 10%)',
+  accentEdge: 'color-mix(in srgb, var(--accent) 70%, #000)',
+  accentGlow: 'color-mix(in srgb, var(--accent) 38%, transparent)',
 }
 export const mono = 'var(--mono)'
 

@@ -12,7 +12,7 @@ import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
   removeAttachment, pickFiles, addFiles, focusComposer,
 } from "./composer"
-import { Spinner, Chip, IconButton } from "./Common.mun"
+import { Spinner, Chip, IconButton, ActionButton } from "./Common.mun"
 import { ToolDetails } from "./ToolDetails.mun"
 import { ComposerBlur } from "./Blur.mun"
 import { composerRef } from "./composerHeight"
@@ -255,10 +255,8 @@ struct Thread: View {
     VStack(alignment: .stretch, spacing: 0) {
       if hasConversation() === true {
         if hiddenTranscriptCount.value > 0 {
-          Button(action: { showEarlierTranscript() }, label: {
-            Text("Show " + Math.min(hiddenTranscriptCount.value, 120) + " earlier " + (hiddenTranscriptCount.value === 1 ? "item" : "items"))
-          })
-          .withProps({ className: "btn btn-small transcript-earlier", "aria-label": "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)" })
+          ActionButton(title: earlierLabel(), kind: "secondary", small: true, enabled: true, action: () => { showEarlierTranscript() }, aria: "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)")
+            .style({ alignSelf: "center", marginBottom: "24px" })
         }
         ForEach(transcriptItems.value, { id: item => transcriptKey(item) }) { item in
           Item(item: item)
@@ -320,10 +318,7 @@ struct Question: View {
       Text(question.question).fontSize(14).style({ fontWeight: "var(--w-emphasis)" }).style({ whiteSpace: "pre-wrap" })
       VStack(alignment: .stretch, spacing: 6) {
         ForEach(question.options, { id: option => option }) { option in
-          Button(option) { answerQuestion(question, option) }
-            .withProps({ className: "btn btn-block" })
-            .style({ whiteSpace: "normal", textAlign: "left" })
-            .disabled(!question.enabled || !connected())
+          ActionButton(title: option, kind: "secondary", small: false, enabled: question.enabled && connected(), action: () => { answerQuestion(question, option) }, block: true)
         }
       }
       if question.allow_custom {
@@ -335,16 +330,12 @@ struct Question: View {
             .padding({ top: 8, bottom: 8, leading: 12, trailing: 12 })
             .background(color.composer)
             .style({ flex: "1", minWidth: "0", border: "0", outline: "none", borderRadius: "var(--r-control)", color: "inherit" })
-          Button("Answer") { submitCustomAnswer(question) }
-            .withProps({ className: "btn btn-primary" })
-            .disabled(!question.enabled || !connected() || !questionAnswer.value.trim())
+          ActionButton(title: "Answer", kind: "primary", small: false, enabled: question.enabled && connected() && !!questionAnswer.value.trim(), action: () => { submitCustomAnswer(question) })
         }
       }
       HStack(spacing: 8) {
         Spacer()
-        Button("Dismiss") { answerQuestion(question, null) }
-          .withProps({ className: "btn btn-quiet" })
-          .disabled(!question.enabled || !connected())
+        ActionButton(title: "Dismiss", kind: "quiet", small: false, enabled: question.enabled && connected(), action: () => { answerQuestion(question, null) })
       }
     }
     .padding(14)
@@ -372,6 +363,11 @@ struct Suggestions: View {
     .style({ borderRadius: "var(--r-surface)" })
     .transition(Transition.opacity.combined(Transition.move("bottom", 6)))
   }
+}
+
+function earlierLabel(): string {
+  const count = hiddenTranscriptCount.value
+  return "Show " + Math.min(count, 120) + " earlier " + (count === 1 ? "item" : "items")
 }
 
 struct AttachmentStrip: View {
@@ -508,13 +504,7 @@ export struct Chat: View {
       if showJumpToLatest.value {
         HStack(spacing: 0) {
           Spacer()
-          Button(action: { jumpToLatest() }, label: {
-            HStack(spacing: 6) {
-              Icon(workIcon("arrow"), { width: 14, height: 14 }).rotationEffect(180)
-              Text("Jump to latest").fontSize(12)
-            }
-          })
-          .withProps({ className: "btn jump-to-latest" })
+          ActionButton(title: "Jump to latest", kind: "secondary", small: true, enabled: true, action: () => { jumpToLatest() }, icon: "arrow-down", pill: true)
           Spacer()
         }
         .withProps({ className: "jump-latest-anchor" })

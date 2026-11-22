@@ -1,4 +1,5 @@
 import { Icon, Transition } from "@mun/core"
+import { ActionButton } from "./Common.mun"
 import { workIcon } from "./workIcons"
 import { SheetBlur } from "./Blur.mun"
 import { remoteStore } from "@/store/remoteStore"
@@ -203,7 +204,7 @@ export struct SheetLayer: View {
         HStack(spacing: 0) {
           Text(sheetTitle()).style({ fontWeight: "var(--w-emphasis)" })
           Spacer()
-          Button("Done") { openSheet("none") }.withProps({ className: "form-action" })
+          ActionButton(title: "Done", kind: "secondary", small: false, enabled: true, action: () => { openSheet("none") })
         }
         if sheet.value === "model" {
           ModelSheet()

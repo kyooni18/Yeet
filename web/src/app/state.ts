@@ -132,6 +132,7 @@ export type Sheet = 'none' | 'settings' | 'model' | 'reasoning' | 'permissions' 
 
 const wide = () => window.matchMedia('(min-width: 900px)').matches
 const desktop = () => window.matchMedia('(min-width: 1280px)').matches
+const touch = () => window.matchMedia('(hover: none), (pointer: coarse)').matches
 function panelPreference(): boolean | null {
   try {
     const saved = localStorage.getItem('yeet.remote.inspector')
@@ -145,6 +146,8 @@ export const sheet = State<Sheet>('none')
 export const sidebarOpen = State(wide())
 export const isWide = State(wide())
 export const isDesktop = State(desktop())
+/** Coarse or hover-less pointer: controls grow to 44px targets. */
+export const isTouch = State(touch())
 export const inspectorOpen = State(desktop() && (preferredInspector ?? true))
 export const inspectorTab = State<'status' | 'changes' | 'files'>('status')
 export const toast = State('')
@@ -204,6 +207,8 @@ window.setInterval(() => {
 // perceptible overshoot, settled in about 0.55s. CSS-driven motion uses the same curve
 // (--spring in remote.css, generated from this exact spring).
 export const spring = Animation.spring(0.4, 0.88)
+/** Hover and press feedback: short, no overshoot. */
+export const quick = Animation.easeOut(0.12)
 
 export const connected = () => connection.value === 'connected'
 
@@ -565,6 +570,8 @@ export function startRemote(onEditDraft: (text: string) => void) {
     isWide.value = media.matches
     toggleSidebar(media.matches)
   })
+  const touchMedia = window.matchMedia('(hover: none), (pointer: coarse)')
+  touchMedia.addEventListener('change', () => { isTouch.value = touchMedia.matches })
   const desktopMedia = window.matchMedia('(min-width: 1280px)')
   desktopMedia.addEventListener('change', () => {
     isDesktop.value = desktopMedia.matches

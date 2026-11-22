@@ -1,6 +1,6 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, connected, openSession } from "./state"
-import { PrimaryButton } from "./Common.mun"
+import { PrimaryButton, ActionButton } from "./Common.mun"
 
 function dateLabel(value: string | null) { return value ? new Date(value).toLocaleString() : "Not scheduled" }
 function scheduleLabel(schedule: Any) {
@@ -91,7 +91,7 @@ struct TaskEditor: View {
       }
       HStack(spacing: 8) {
         PrimaryButton(title: pending.value ? "Saving…" : "Save task", enabled: connected() && !pending.value, action: { saveTask() })
-        Button("Close editor") { editing.value = false }.withProps({ className: "form-action" }).disabled(!!pending.value)
+        ActionButton(title: "Close editor", kind: "secondary", small: false, enabled: !(!!pending.value), action: () => { editing.value = false })
       }
     }.withProps({ className: "feature-card" }).style({ width: "100%" })
   }
@@ -108,14 +108,14 @@ struct TaskRow: View {
       Text(task.draft.folder + " · " + task.draft.model).withProps({ className: "form-help" })
       if task.last_result { Text(task.last_result).withProps({ className: "form-help" }) }
       HStack(spacing: 8) {
-        Button("Edit task") { editTask(task) }.withProps({ className: "form-action" }).disabled(!!pending.value)
-        Button(task.enabled ? "Pause task" : "Enable task") { manage({ action: "set_enabled", id: task.id, enabled: !task.enabled }) }.withProps({ className: "form-action" }).disabled(!connected() || !!pending.value)
-        if task.session_id { Button("Open result session") { openSession(task.session_id) }.withProps({ className: "form-action" }).disabled(!connected()) }
-        Button(confirmDelete.value ? "Confirm delete task" : "Delete task…") {
+        ActionButton(title: "Edit task", kind: "secondary", small: false, enabled: !(!!pending.value), action: () => { editTask(task) })
+        ActionButton(title: task.enabled ? "Pause task" : "Enable task", kind: "secondary", small: false, enabled: !(!connected() || !!pending.value), action: () => { manage({ action: "set_enabled", id: task.id, enabled: !task.enabled }) })
+        if task.session_id { ActionButton(title: "Open result session", kind: "secondary", small: false, enabled: !(!connected()), action: () => { openSession(task.session_id) }) }
+        ActionButton(title: confirmDelete.value ? "Confirm delete task" : "Delete task…", kind: "danger", small: false, enabled: !(!connected() || !!pending.value), action: () => {
           if confirmDelete.value { manage({ action: "delete", id: task.id }); confirmDelete.value = false }
           else { confirmDelete.value = true }
-        }.withProps({ className: "form-action destructive" }).disabled(!connected() || !!pending.value)
-        if confirmDelete.value { Button("Keep task") { confirmDelete.value = false }.withProps({ className: "form-action" }) }
+        })
+        if confirmDelete.value { ActionButton(title: "Keep task", kind: "secondary", small: false, enabled: true, action: () => { confirmDelete.value = false }) }
       }.withProps({ className: "feature-actions" })
     }.withProps({ className: "feature-card" }).style({ width: "100%" })
   }
@@ -127,7 +127,7 @@ export struct TasksPage: View {
       VStack(alignment: .stretch, spacing: 20) {
         HStack(spacing: 8) {
           PrimaryButton(title: "New task", enabled: connected() && !pending.value, action: { editTask(null) })
-          Button("Refresh tasks") { remoteStore.send({ type: "request_tasks" }) }.withProps({ className: "form-action" }).disabled(!connected())
+          ActionButton(title: "Refresh tasks", kind: "secondary", small: false, enabled: !(!connected()), action: () => { remoteStore.send({ type: "request_tasks" }) })
         }
         if remote.value.state.tasks_scheduler_running === false { Text("The server scheduler is not running. Saved tasks will wait until it starts.").withProps({ className: "form-notice" }) }
         if remote.value.state.tasks_notice { Text(remote.value.state.tasks_notice).withProps({ role: "status", className: "form-notice" }) }

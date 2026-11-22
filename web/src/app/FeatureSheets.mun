@@ -1,7 +1,7 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, sheet, connected, openSheet, openPage, managedSession, sessionTitle, sessionWorkspace, sessionConfirming, toolbarControl } from "./state"
 import { color } from "./theme"
-import { PrimaryButton, Chip } from "./Common.mun"
+import { PrimaryButton, Chip, ActionButton } from "./Common.mun"
 import { SandboxSheet } from "./Sandbox.mun"
 
 export function sheetTitle() {
@@ -21,9 +21,7 @@ export struct ResponseControls: View {
                 .accessibilityLabel(toolbarControl(id).label).withProps({ className: "form-field" })
                 .disabled(!connected() || !toolbarControl(id).enabled)
             } else {
-              Button(toolbarControl(id).pressed ? "Enabled" : "Disabled") { remoteStore.sendToolbarUi({ type: "activate", value: id }) }
-                .withProps({ className: "form-action", role: "switch", "aria-label": toolbarControl(id).label, "aria-checked": !!toolbarControl(id).pressed })
-                .disabled(!connected() || !toolbarControl(id).enabled)
+              ActionButton(title: toolbarControl(id).pressed ? "Enabled" : "Disabled", kind: "secondary", small: false, enabled: connected() && toolbarControl(id).enabled, action: () => { remoteStore.sendToolbarUi({ type: "activate", value: id }) }, aria: toolbarControl(id).label, role: "switch", checked: !!toolbarControl(id).pressed)
             }
           }
         }
@@ -42,13 +40,12 @@ struct ProviderAuth: View {
         Text(provider.provider).style({ fontWeight: "var(--w-emphasis)" })
         Spacer()
         if provider.authenticated {
-          Button(confirmLogout.value ? "Confirm log out" : "Log out") {
+          ActionButton(title: confirmLogout.value ? "Confirm log out" : "Log out", kind: "danger", small: false, enabled: !(!connected() || remote.value.state.auth_working), action: () => {
             if confirmLogout.value { remoteStore.authLogout(provider.provider); confirmLogout.value = false }
             else { confirmLogout.value = true }
-          }.withProps({ className: "form-action destructive" }).disabled(!connected() || remote.value.state.auth_working)
+          })
         } else {
-          Button("Log in") { remoteStore.authLogin(provider.provider) }
-            .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.auth_working)
+          ActionButton(title: "Log in", kind: "secondary", small: false, enabled: !(!connected() || remote.value.state.auth_working), action: () => { remoteStore.authLogin(provider.provider) })
         }
       }
       if provider.error || provider.authenticated {
@@ -62,9 +59,9 @@ struct ProviderAuth: View {
           .accessibilityLabel(provider.provider + " API key")
           .withProps({ className: "form-field", type: "password", autocomplete: "off", spellcheck: false })
           .style({ flex: "1", minWidth: "0" })
-        Button("Save key") {
+        ActionButton(title: "Save key", kind: "secondary", small: false, enabled: !(!connected() || !apiKey.value.trim() || remote.value.state.auth_working), action: () => {
           if (remoteStore.authSetApiKey(provider.provider, apiKey.value.trim())) { apiKey.value = "" }
-        }.withProps({ className: "form-action" }).disabled(!connected() || !apiKey.value.trim() || remote.value.state.auth_working)
+        })
       }
     }.withProps({ className: "feature-card" }).style({ width: "100%" })
   }
@@ -82,8 +79,7 @@ struct AuthenticationSheet: View {
       if !remote.value.state.auth_providers.length {
         Text("No providers returned yet. Refresh after connecting.").withProps({ className: "form-help" })
       }
-      Button("Refresh providers & usage") { remoteStore.send({ type: "request_auth" }); remoteStore.refreshProviderUsage() }
-        .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.auth_working)
+      ActionButton(title: "Refresh providers & usage", kind: "secondary", small: false, enabled: !(!connected() || remote.value.state.auth_working), action: () => { remoteStore.send({ type: "request_auth" }); remoteStore.refreshProviderUsage() })
     }
   }
 }
@@ -103,12 +99,11 @@ struct ProvidersSheet: View {
           Text(provider.id).style({ fontWeight: "var(--w-emphasis)" })
           Text(provider.base_url).withProps({ className: "form-help" })
           HStack(spacing: 8) {
-            Button("Edit") { id.value = provider.id; url.value = provider.base_url; requireKey.value = provider.require_api_key }
-              .withProps({ className: "form-action" })
-            Button(removing.value === provider.id ? "Confirm remove" : "Remove") {
+            ActionButton(title: "Edit", kind: "secondary", small: false, enabled: true, action: () => { id.value = provider.id; url.value = provider.base_url; requireKey.value = provider.require_api_key })
+            ActionButton(title: removing.value === provider.id ? "Confirm remove" : "Remove", kind: "danger", small: false, enabled: !(!connected() || remote.value.state.providers_working), action: () => {
               if removing.value === provider.id { remoteStore.send({ type: "remove_provider", id: provider.id }); removing.value = "" }
               else { removing.value = provider.id }
-            }.withProps({ className: "form-action destructive" }).disabled(!connected() || remote.value.state.providers_working)
+            })
           }
         }.withProps({ className: "feature-card" }).style({ width: "100%" })
       }
@@ -176,25 +171,25 @@ struct SessionSheet: View {
     VStack(alignment: .stretch, spacing: 12) {
       Text("Session title").fontSize(13)
       TextField(Binding(sessionTitle), "Session title").accessibilityLabel("Session title").withProps({ className: "form-field" })
-      Button("Rename session") {
+      ActionButton(title: "Rename session", kind: "secondary", small: false, enabled: !(!connected() || !sessionTitle.value.trim()), action: () => {
         remoteStore.send({ type: "rename_session", session_id: managedSession.value.id, title: sessionTitle.value.trim() })
-      }.withProps({ className: "form-action" }).disabled(!connected() || !sessionTitle.value.trim())
+      })
       Text("Move to workspace").fontSize(13)
       TextField(Binding(sessionWorkspace), "Absolute path on the Yeet server")
         .accessibilityLabel("Destination workspace").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
-      Button("Move session") {
+      ActionButton(title: "Move session", kind: "secondary", small: false, enabled: !(!connected() || !sessionWorkspace.value.trim()), action: () => {
         remoteStore.send({ type: "move_session", session_id: managedSession.value.id, workspace_path: sessionWorkspace.value.trim() })
-      }.withProps({ className: "form-action" }).disabled(!connected() || !sessionWorkspace.value.trim())
+      })
       Text("Deleting a session permanently removes its saved history.").withProps({ className: "form-help" })
       if sessionConfirming.value {
         HStack(spacing: 8) {
-          Button("Permanently delete") {
+          ActionButton(title: "Permanently delete", kind: "danger", small: false, enabled: !(!connected()), action: () => {
             if (remoteStore.send({ type: "delete_session", session_id: managedSession.value.id })) { openSheet("none") }
-          }.withProps({ className: "form-action destructive" }).disabled(!connected())
-          Button("Keep session") { sessionConfirming.value = false }.withProps({ className: "form-action" })
+          })
+          ActionButton(title: "Keep session", kind: "secondary", small: false, enabled: true, action: () => { sessionConfirming.value = false })
         }
       } else {
-        Button("Delete session…") { sessionConfirming.value = true }.withProps({ className: "form-action destructive" }).disabled(!connected())
+        ActionButton(title: "Delete session…", kind: "danger", small: false, enabled: !(!connected()), action: () => { sessionConfirming.value = true })
       }
       if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
     }
