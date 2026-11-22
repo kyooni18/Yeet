@@ -1,7 +1,7 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, sheet, connected, openSheet, openPage, managedSession, sessionTitle, sessionWorkspace, sessionConfirming, toolbarControl } from "./state"
 import { color } from "./theme"
-import { PrimaryButton, Chip, ActionButton } from "./Common.mun"
+import { PrimaryButton, Chip, ActionButton, FieldLabel } from "./Common.mun"
 import { SandboxSheet } from "./Sandbox.mun"
 
 export function sheetTitle() {
@@ -130,11 +130,16 @@ struct CapabilitiesSheet: View {
         .accessibilityLabel("Search capabilities").withProps({ className: "form-field", type: "search" })
       if remote.value.state.is_loading_capabilities { Text("Loading capabilities…").withProps({ className: "form-help" }) }
       ForEach(remote.value.state.available_capabilities.filter(item => (item.name + " " + item.description + " " + item.kind).toLowerCase().includes(query.value.toLowerCase())), { id: item => item.id }) { item in
-        VStack(alignment: .stretch, spacing: 6) {
+        HStack(spacing: 10) {
           Toggle(item.name, Binding(() => item.enabled, value => { if (value !== item.enabled) remoteStore.toggleCapability(item.id) }))
             .disabled(!connected() || remote.value.state.is_loading_capabilities)
-          Text(item.kind).withProps({ className: "form-help" })
-        }.withProps({ className: "feature-card" }).style({ width: "100%" })
+          Spacer()
+          Text(item.kind).fontSize(12).foregroundStyle(color.muted)
+        }
+        .padding({ top: 4, bottom: 4, leading: 12, trailing: 12 })
+        .background(color.field)
+        .cornerRadius(10)
+        .style({ width: "100%" })
       }
       if !remote.value.state.available_capabilities.length {
         Text("No optional capabilities were returned by this server.").withProps({ className: "form-help" })
@@ -169,12 +174,12 @@ struct AgentSettingsSheet: View {
 struct SessionSheet: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
-      Text("Session title").fontSize(13)
+      FieldLabel(text: "Session title")
       TextField(Binding(sessionTitle), "Session title").accessibilityLabel("Session title").withProps({ className: "form-field" })
       ActionButton(title: "Rename session", kind: "secondary", small: false, enabled: !(!connected() || !sessionTitle.value.trim()), action: () => {
         remoteStore.send({ type: "rename_session", session_id: managedSession.value.id, title: sessionTitle.value.trim() })
       })
-      Text("Move to workspace").fontSize(13)
+      FieldLabel(text: "Move to workspace")
       TextField(Binding(sessionWorkspace), "Absolute path on the Yeet server")
         .accessibilityLabel("Destination workspace").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
       ActionButton(title: "Move session", kind: "secondary", small: false, enabled: !(!connected() || !sessionWorkspace.value.trim()), action: () => {

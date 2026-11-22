@@ -29,6 +29,18 @@ export struct SectionHeading: View {
   }
 }
 
+/** A label that belongs to the field right below it: close to that field, and further from
+ * the previous group, so the grouping reads without rules. */
+export struct FieldLabel: View {
+  let text: String
+  var body: some View {
+    Text(text)
+      .fontSize(12)
+      .foregroundStyle(color.muted)
+      .style({ marginBottom: "-6px" })
+  }
+}
+
 /** One key of a segmented control. The selected key takes the raised button material. */
 struct SegmentKey: View {
   let label: String
@@ -111,23 +123,28 @@ function verticalPadding(small: boolean): number {
 }
 
 function textColor(kind: string, hovering: boolean): string {
-  return kind === "primary" ? color.accentInk : kind === "danger" ? color.del : kind === "quiet" ? (hovering ? color.text : color.muted) : color.text
+  return kind === "disabled" ? color.muted : kind === "primary" ? color.accentInk : kind === "danger" ? color.del : kind === "quiet" ? (hovering ? color.text : color.muted) : color.text
+}
+
+/** A primary button that cannot act becomes a neutral key, like the disabled send button. */
+function lookOf(kind: string, enabled: boolean): string {
+  return kind === "primary" && !enabled ? "disabled" : kind
 }
 
 function sheenTop(kind: string): string {
-  return kind === "primary" ? color.accentTop : kind === "quiet" ? "transparent" : color.btnTop
+  return kind === "disabled" ? color.field : kind === "primary" ? color.accentTop : kind === "quiet" ? "transparent" : color.btnTop
 }
 
 function edgeColor(kind: string): string {
-  return kind === "primary" ? color.accentEdge : kind === "quiet" ? "transparent" : color.btnEdge
+  return kind === "disabled" ? "transparent" : kind === "primary" ? color.accentEdge : kind === "quiet" ? "transparent" : color.btnEdge
 }
 
 function dropColor(kind: string, pressed: boolean): string {
-  return pressed || kind === "quiet" ? "transparent" : kind === "primary" ? color.accentGlow : color.btnDrop
+  return pressed || kind === "quiet" || kind === "disabled" ? "transparent" : kind === "primary" ? color.accentGlow : color.btnDrop
 }
 
 function sheenBottom(kind: string): string {
-  return kind === "primary" ? color.accentBottom : kind === "quiet" ? "transparent" : color.btnBottom
+  return kind === "disabled" ? color.field : kind === "primary" ? color.accentBottom : kind === "quiet" ? "transparent" : color.btnBottom
 }
 
 /** The button material, written entirely in modifiers: a two-colour sheen, a hairline
@@ -161,16 +178,16 @@ export struct ActionButton: View {
       .accessibilityLabel(aria || title)
       .withProps({ role: role || undefined, "aria-checked": role === "switch" ? checked : undefined })
       .fontSize(small ? 12 : 13)
-      .foregroundStyle(textColor(kind, hovering.value))
+      .foregroundStyle(textColor(lookOf(kind, enabled), hovering.value))
       .padding({ top: verticalPadding(small), bottom: verticalPadding(small), leading: small ? 10 : 14, trailing: small ? 10 : 14 })
       .style({ flex: "none", justifyContent: block ? "flex-start" : "center", alignItems: "center", display: "inline-flex", width: block ? "100%" : "auto", isolation: "isolate", position: "relative" })
-      .background(LinearGradient(colors: [Color(sheenTop(kind)), Color(sheenBottom(kind))], startPoint: .top, endPoint: .bottom))
-      .border(edgeColor(kind), 1)
+      .background(LinearGradient(colors: [Color(sheenTop(lookOf(kind, enabled))), Color(sheenBottom(lookOf(kind, enabled)))], startPoint: .top, endPoint: .bottom))
+      .border(edgeColor(lookOf(kind, enabled)), 1)
       .cornerRadius(pill ? 999 : 8)
-      .shadow(dropColor(kind, pressed.value), 8, 0, pressed.value ? 0 : 3)
+      .shadow(dropColor(lookOf(kind, enabled), pressed.value), 8, 0, pressed.value ? 0 : 3)
       .overlay(RoundedRectangle(pill ? 999 : 8).fill(pressed.value ? color.pressed : hovering.value ? color.hover : "transparent").allowsHitTesting(false))
       .offset(0, pressed.value ? 0.5 : 0)
-      .opacity(enabled ? 1 : 0.45)
+      .opacity(enabled || kind === "primary" ? 1 : 0.45)
       .animation(quick, value: hovering.value)
       .animation(quick, value: pressed.value)
       .onHover(inside => { hovering.value = inside })

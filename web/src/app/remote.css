@@ -163,7 +163,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
    heavier, and reports aria-pressed; selection never rests on color alone. */
 
 /* Forms grow with their container, not with the width of their placeholder. */
-.form-field { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; padding: 9px 12px; border-radius: var(--r-control); background: var(--well); border: 0; box-shadow: inset 0 1px 3px var(--well-shadow), inset 0 0 0 0.5px var(--btn-edge), 0 1px 0 var(--btn-hi); color: var(--text); font-size: 16px; }
+.form-field { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; padding: 9px 12px; border-radius: var(--r-control); background: var(--well); border: 0; box-shadow: inset 0 1px 3px var(--well-shadow), inset 0 0 0 0.5px var(--btn-edge), 0 1px 0 var(--btn-hi); color: var(--text); font-size: 14px; }
 .form-field:focus { outline: 2px solid var(--focus); outline-offset: 1px; }
 textarea.form-field { resize: vertical; min-height: 96px; }
 .form-help { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
@@ -172,7 +172,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .sheet-dialog { overflow: hidden; }
 .sheet-dialog > :first-child { flex-shrink: 0; }
 .sheet-scroll { overscroll-behavior: contain; scrollbar-gutter: stable; padding: 4px 8px 12px 2px; }
-.sheet-dialog [data-mun="Toggle"] { display: flex; align-items: center; gap: 10px; font-size: 13px; min-height: 40px; }
+.sheet-dialog [data-mun="Toggle"] { display: flex; align-items: center; gap: 10px; font-size: 13px; min-height: 32px; }
 .sheet-dialog [data-mun="Toggle"] input { accent-color: var(--accent); width: 18px; height: 18px; flex-shrink: 0; }
 .feature-page { width: 100% !important; max-width: 880px !important; margin: 0 auto; padding: 20px clamp(16px, 4vw, 28px) 32px; min-width: 0; }
 .feature-actions { flex-wrap: wrap; width: 100% !important; }

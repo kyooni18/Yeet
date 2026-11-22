@@ -1,6 +1,6 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, connected } from "./state"
-import { PrimaryButton, ActionButton } from "./Common.mun"
+import { PrimaryButton, ActionButton, FieldLabel } from "./Common.mun"
 
 export struct DebatePage: View {
   @State var topic: String = ""
@@ -9,13 +9,13 @@ export struct DebatePage: View {
   @State var jury: String = remote.value.state.active_model
   var body: some View {
     ScrollView() {
-      VStack(alignment: .stretch, spacing: 18) {
+      VStack(alignment: .stretch, spacing: 16) {
         TextEditor(Binding(topic), "What should the agents debate?", 3).accessibilityLabel("Debate topic").withProps({ className: "form-field" })
-        Text("Pro model").fontSize(13)
+        FieldLabel(text: "Pro model")
         TextField(Binding(pro), "Pro model ID").accessibilityLabel("Pro model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
-        Text("Con model").fontSize(13)
+        FieldLabel(text: "Con model")
         TextField(Binding(con), "Con model ID").accessibilityLabel("Con model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
-        Text("Jury model").fontSize(13)
+        FieldLabel(text: "Jury model")
         TextField(Binding(jury), "Jury model ID").accessibilityLabel("Jury model").withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
         HStack(spacing: 8) {
           PrimaryButton(title: "Start debate", enabled: connected() && !remote.value.state.is_streaming && !!topic.value.trim() && !!pro.value.trim() && !!con.value.trim() && !!jury.value.trim(), action: {

@@ -1,6 +1,6 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, connected, openSession } from "./state"
-import { PrimaryButton, ActionButton } from "./Common.mun"
+import { PrimaryButton, ActionButton, FieldLabel } from "./Common.mun"
 
 function dateLabel(value: string | null) { return value ? new Date(value).toLocaleString() : "Not scheduled" }
 function scheduleLabel(schedule: Any) {
@@ -77,16 +77,22 @@ struct TaskEditor: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
       Text(taskId.value ? "Edit task" : "New scheduled task").fontSize(15).style({ fontWeight: "var(--w-emphasis)" })
+      FieldLabel(text: "Name")
       TextField(Binding(name), "Task name").accessibilityLabel("Task name").disabled(!!pending.value).withProps({ className: "form-field" })
+      FieldLabel(text: "Prompt")
       TextEditor(Binding(prompt), "What should Yeet do?", 3).accessibilityLabel("Task prompt").disabled(!!pending.value).withProps({ className: "form-field" })
+      FieldLabel(text: "Workspace")
       TextField(Binding(folder), "Workspace path on the server").accessibilityLabel("Task workspace").disabled(!!pending.value).withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      FieldLabel(text: "Model")
       TextField(Binding(model), "Model ID").accessibilityLabel("Task model").disabled(!!pending.value).withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
+      FieldLabel(text: "Schedule")
       Picker(Binding(kind), [{ value: "interval", label: "Repeating interval" }, { value: "at", label: "Once at a date and time" }, { value: "quota_reset", label: "Next quota reset" }])
         .accessibilityLabel("Task schedule").disabled(!!pending.value).withProps({ className: "form-field" })
       if kind.value === "at" {
-        Text("Date and time (local)").fontSize(13)
+        FieldLabel(text: "Date and time (local)")
         TextField(Binding(at), "Date and time").accessibilityLabel("Task date and time").disabled(!!pending.value).withProps({ className: "form-field", type: "datetime-local" })
       } else if kind.value === "interval" {
+        FieldLabel(text: "Interval (seconds)")
         TextField(Binding(seconds), "Interval in seconds").accessibilityLabel("Interval in seconds").disabled(!!pending.value).withProps({ className: "form-field", type: "number", min: 1 })
       }
       HStack(spacing: 8) {
