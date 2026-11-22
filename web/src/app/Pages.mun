@@ -1,7 +1,7 @@
 import { Icon, Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
-import { workspaceFiles, workspaceChanges, ease, openPage, connected } from "./state"
+import { workspaceFiles, workspaceChanges, spring, openPage, connected } from "./state"
 import { workIcon } from "./workIcons"
 import { onCodeKeyDown, unifiedRows } from "./toolPresentation"
 import { Chip } from "./Common.mun"
@@ -43,7 +43,7 @@ struct ListRow: View {
     .withProps({ className: "resource-row", title, "aria-pressed": selected })
     .disabled(!connected())
     .style({ borderRadius: "var(--r-inline)", width: "100%", minWidth: "0" })
-    .animation(ease, value: hovering.value || selected)
+    .animation(spring, value: hovering.value || selected)
     .onHover(inside => { hovering.value = inside })
   }
 }

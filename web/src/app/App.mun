@@ -11,6 +11,7 @@ import { AgentsPage } from "./Agents.mun"
 import { TasksPage } from "./Tasks.mun"
 import { DebatePage, ExtensionsPage } from "./Debate.mun"
 import { SheetLayer } from "./Sheets.mun"
+import { SheetBlur } from "./Blur.mun"
 
 struct Content: View {
   var body: some View {
@@ -43,7 +44,7 @@ struct Toast: View {
       .background(color.accent)
       .foregroundStyle(color.accentInk)
       .style({ position: "fixed", bottom: "96px", left: "50%", translate: "-50% 0", borderRadius: "var(--r-control)", boxShadow: "var(--shadow-float)", zIndex: "var(--z-toast)" })
-      .transition(Transition.opacity.combined(Transition.move("bottom", 6)))
+      .transition(Transition.opacity.combined(Transition.move("bottom", 14)))
   }
 }
 
@@ -78,6 +79,7 @@ struct Shell: View {
             .transition(Transition.move("trailing", 336))
         }
       }.withProps({ className: "pane-slot pane-slot--trailing", "data-open": inspectorOpen.value && isDesktop.value })
+      SheetBlur(open: sheet.value !== "none").id("sheet-blur")
       if sheet.value !== "none" {
         SheetLayer().id("sheet")
       }

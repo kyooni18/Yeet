@@ -49,6 +49,11 @@
   /* Motion scale: one curve, two durations. Fast for state changes on a control,
      base for something entering or leaving. Nothing in the UI is slower than base. */
   --ease-out: cubic-bezier(.2, 0, 0, 1);
+  /* Appear/disappear motion is one spring: this is `Animation.spring(0.4, 0.88)` from
+     state.ts as the damped step response Mün itself plays (so CSS-driven pieces settle in
+     step with Mün-driven ones). Hover and press stay on the short ease-out tokens. */
+  --spring-duration: 0.553s;
+  --spring: linear(0, 0.0208, 0.0732, 0.1452, 0.2278, 0.3142, 0.4, 0.482, 0.5582, 0.6274, 0.6892, 0.7435, 0.7906, 0.8309, 0.865, 0.8935, 0.9171, 0.9365, 0.9522, 0.9648, 0.9747, 0.9825, 0.9885, 0.993, 0.9964, 0.9988, 1.0005, 1.0017, 1.0024, 1.0028, 1.003, 1.0029, 1.0028, 1.0026, 1.0024, 1.0021, 1.0019, 1.0016, 1.0014, 1.0012, 1);
   --motion-fast: 120ms var(--ease-out);
   --motion-base: 200ms var(--ease-out);
   /* Corners by role: inline chips and code, controls and rows, standalone surfaces. */
@@ -297,12 +302,12 @@ meter { appearance: none; border: 0; border-radius: 4px; background: var(--field
 meter::-webkit-meter-bar { background: var(--field); border: 0; height: 4px; }
 meter::-webkit-meter-optimum-value { background: var(--muted); border-radius: 4px; }
 meter::-moz-meter-bar { background: var(--muted); border-radius: 4px; }
-.drawer-scrim-layer { position: fixed; inset: 0; z-index: var(--z-scrim); width: 100%; height: 100%; background-color: transparent; pointer-events: none; transition: background-color var(--motion-base); }
+.drawer-scrim-layer { position: fixed; inset: 0; z-index: var(--z-scrim); width: 100%; height: 100%; background-color: transparent; pointer-events: none; transition: background-color var(--spring-duration) var(--spring); }
 .drawer-scrim-layer[data-open="true"] { background-color: var(--scrim); pointer-events: auto; }
 .drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; cursor: default; }
 /* A pane's space in the layout. The pane slides by transform alone; this slot eases the
    width it occupies so the main area follows it instead of snapping when it leaves. */
-.pane-slot { flex: none; width: 0; transition: width var(--motion-base); }
+.pane-slot { flex: none; display: flex; align-items: stretch; width: 0; transition: width var(--spring-duration) var(--spring); }
 .pane-slot--leading[data-open="true"] { width: 272px; }
 .pane-slot--trailing[data-open="true"] { width: 328px; }
 
@@ -573,3 +578,7 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 @media (hover: none), (pointer: coarse) { .panel-action { min-height: 44px; } }
 /* The stop glyph is a shape view, not an icon: centre it in the button explicitly. */
 .send-button > [data-mun="RoundedRectangle"] { align-self: center; margin: auto; flex: none; border-radius: 3px; }
+
+/* Every progressive blur eases on the shared spring (the library fades with a fixed ease). */
+[data-pb-amount] > div { transition: opacity var(--spring-duration) var(--spring) !important; }
+.sheet-blur-layer { position: fixed; inset: 0; z-index: calc(var(--z-sheet) - 1); pointer-events: none; }

@@ -3,7 +3,7 @@ import { workIcon } from "./workIcons"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
-  remote, ease, isWide, connected, openSheet, contextLabel, shortModel,
+  remote, spring, isWide, connected, openSheet, contextLabel, shortModel,
   toolbarControl, conversationRef, workspaceLine, elapsed,
   showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
   chooseWorkspace, workspaces, isNewChat, contextDescription, hiddenTranscriptCount, showEarlierTranscript, transcriptKey,
@@ -190,7 +190,7 @@ struct Message: View {
       }
       MessageControls(controls: item.controls, trailing: item.entry.kind.type === "user")
         .opacity(hovering.value || !isWide.value ? 1 : 0)
-        .animation(ease, value: hovering.value)
+        .animation(spring, value: hovering.value)
     }
     .style({ alignItems: item.entry.kind.type === "user" ? "flex-end" : "stretch" })
     .onHover(inside => { hovering.value = inside })
@@ -482,7 +482,7 @@ struct Composer: View {
             .background(streaming.value ? color.raised : color.accent)
             .foregroundStyle(streaming.value ? color.text : color.accentInk)
             .opacity(primaryEnabled() ? 1 : 0.35)
-            .animation(ease, value: streaming.value)
+            .animation(spring, value: streaming.value)
             .disabled(!primaryEnabled())
         }.withProps({ className: "composer-controls" })
       }

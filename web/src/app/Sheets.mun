@@ -3,7 +3,7 @@ import { workIcon } from "./workIcons"
 import { SheetBlur } from "./Blur.mun"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
-import { remote, sheet, ease, connected, openSheet, shortModel, settingsEditorValue } from "./state"
+import { remote, sheet, spring, connected, openSheet, shortModel, settingsEditorValue } from "./state"
 import { FeatureSheet, sheetTitle } from "./FeatureSheets.mun"
 import { modalRef } from "./modal"
 
@@ -83,12 +83,12 @@ struct Switch: View {
         .style({ borderRadius: "50%", flex: "none" })
         .background(on ? color.accentInk : color.muted)
         .offset(on ? 14 : 0, 0)
-        .animation(ease, value: on)
+        .animation(spring, value: on)
       Spacer()
     }
     .padding(2)
     .background(on ? color.accent : color.raised)
-    .animation(ease, value: on)
+    .animation(spring, value: on)
     .style({ width: "34px", height: "20px", borderRadius: "999px", flex: "none" })
   }
 }
@@ -195,7 +195,6 @@ struct SettingsSheet: View {
 export struct SheetLayer: View {
   var body: some View {
     ZStack(alignment: .center) {
-      SheetBlur()
       Rectangle()
         .style({ position: "absolute", inset: "0", background: "var(--scrim)" })
         .onTapGesture(() => openSheet("none"))
@@ -220,7 +219,7 @@ export struct SheetLayer: View {
       .background(color.panel)
       .shadow("rgba(0, 0, 0, 0.18)", 24, 0, 8)
       .style({ borderRadius: "var(--r-surface)", maxWidth: "calc(100vw - 24px)", position: "relative" })
-      .transition(Transition.opacity.combined(Transition.scale(0.97)))
+      .transition(Transition.opacity.combined(Transition.scale(0.94)).combined(Transition.move("bottom", 14)))
     }
     .style({ position: "fixed", inset: "0", width: "100%", height: "100%", zIndex: "var(--z-sheet)" })
   }

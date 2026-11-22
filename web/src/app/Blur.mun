@@ -32,9 +32,13 @@ export struct DrawerBlur: View {
   }
 }
 
-/** Behind a centered sheet: an even, light blur. */
+/** Behind a centered sheet: an even, light blur. Always mounted, so opening and closing
+ * ease the amount instead of switching the layer on and off. */
 export struct SheetBlur: View {
+  let open: Bool
   var body: some View {
-    ProgressiveBlur(BlurProfile.uniform(), { radius: 6 })
+    Element("div", {}) {
+      ProgressiveBlur(BlurProfile.uniform(), { radius: 6, amount: open ? 1 : 0 })
+    }.withProps({ className: "sheet-blur-layer", "aria-hidden": "true" })
   }
 }

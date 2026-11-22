@@ -5,7 +5,7 @@ import { workIcon } from "./workIcons"
 import { sidebarRef } from "./drawer"
 import { Spinner, IconButton } from "./Common.mun"
 import {
-  runtimeState, workspaceChanges, activeAgents, connection, page, isWide, ease, connected, openPage, openSheet, newSession, openSession,
+  runtimeState, workspaceChanges, activeAgents, connection, page, isWide, spring, connected, openPage, openSheet, newSession, openSession,
   toggleSidebar, age, sessionQuery, filteredSessions, manageSession, spansWorkspaces,
 } from "./state"
 
@@ -182,7 +182,7 @@ export struct Sidebar: View {
   }
 }
 
-/** Mounted for as long as the layout is narrow, so the blur and tint can ease in and out
+/** Mounted for as long as the layout is narrow, so the blur and tint can spring in and out
  * (blur through its own amount, tint through a CSS colour transition) with no opacity on
  * any ancestor of the blur. */
 export struct Scrim: View {

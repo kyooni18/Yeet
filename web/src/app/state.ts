@@ -200,13 +200,15 @@ window.setInterval(() => {
   if (working) tick.value += 1
 }, 180)
 
-// A short, non-bouncy curve keeps navigation and disclosures responsive.
-export const ease = Animation.easeOut(0.2)
+// One spring for everything that appears, disappears or moves: quick to start, a barely
+// perceptible overshoot, settled in about 0.55s. CSS-driven motion uses the same curve
+// (--spring in remote.css, generated from this exact spring).
+export const spring = Animation.spring(0.4, 0.88)
 
 export const connected = () => connection.value === 'connected'
 
 export function toggleSidebar(open = !sidebarOpen.value) {
-  withAnimation(ease, () => {
+  withAnimation(spring, () => {
     sidebarOpen.value = open
     if (open && !isWide.value) inspectorOpen.value = false
   })
@@ -222,7 +224,7 @@ export function refreshInspector() {
 export function toggleInspector(open = !inspectorOpen.value) {
   preferredInspector = open
   try { localStorage.setItem('yeet.remote.inspector', open ? 'open' : 'closed') } catch { /* Private browsing. */ }
-  withAnimation(ease, () => {
+  withAnimation(spring, () => {
     inspectorOpen.value = open
     if (open && !isWide.value) sidebarOpen.value = false
   })
@@ -254,13 +256,13 @@ export function openSheet(next: Sheet) {
     if (!isWide.value) toggleSidebar(false)
     if (!isDesktop.value && inspectorOpen.value) toggleInspector(false)
   }
-  withAnimation(ease, () => { sheet.value = next })
+  withAnimation(spring, () => { sheet.value = next })
 }
 
 export function showToast(message: string) {
-  withAnimation(ease, () => { toast.value = message })
+  withAnimation(spring, () => { toast.value = message })
   window.setTimeout(() => {
-    if (toast.value === message) withAnimation(ease, () => { toast.value = '' })
+    if (toast.value === message) withAnimation(spring, () => { toast.value = '' })
   }, 1800)
 }
 
@@ -566,7 +568,7 @@ export function startRemote(onEditDraft: (text: string) => void) {
   const desktopMedia = window.matchMedia('(min-width: 1280px)')
   desktopMedia.addEventListener('change', () => {
     isDesktop.value = desktopMedia.matches
-    withAnimation(ease, () => { inspectorOpen.value = desktopMedia.matches && (preferredInspector ?? true) })
+    withAnimation(spring, () => { inspectorOpen.value = desktopMedia.matches && (preferredInspector ?? true) })
     if (inspectorOpen.value) refreshInspector()
   })
   window.addEventListener('keydown', event => {

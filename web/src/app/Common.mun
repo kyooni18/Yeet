@@ -1,7 +1,7 @@
 import { Icon } from "@mun/core"
 import { workIcon } from "./workIcons"
 import { color, mono } from "./theme"
-import { ease } from "./state"
+import { spring } from "./state"
 
 /** A small, neutral activity ring; never attached to provider narration.
  * Rotation is a compositor-only CSS animation, so it costs no view updates. */

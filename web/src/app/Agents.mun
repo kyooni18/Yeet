@@ -2,7 +2,7 @@ import { Transition } from "@mun/core"
 import { remoteStore } from "@/store/remoteStore"
 import { color } from "./theme"
 import { Spinner, PrimaryButton, SectionHeading } from "./Common.mun"
-import { remote, ease, connected, openSheet } from "./state"
+import { remote, spring, connected, openSheet } from "./state"
 
 const objective = State("")
 let handledEffect = -1
@@ -59,7 +59,7 @@ struct Member: View {
     .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
     .background(row.selected ? color.rowSelect : "transparent")
     .style({ borderRadius: "var(--r-control)" })
-    .animation(ease, value: row.selected)
+    .animation(spring, value: row.selected)
   }
 }
 
