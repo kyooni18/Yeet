@@ -182,6 +182,15 @@ impl ToolRegistry {
                 effective_cwd.display()
             );
         }
+        // Commands already start in effective_cwd, so a leading `cd <same dir> &&`
+        // is pure noise (and defeats cache/approval matching); drop it.
+        let command = if direct.is_none() {
+            strip_redundant_cd(&command, &effective_cwd)
+                .map(str::to_owned)
+                .unwrap_or(command)
+        } else {
+            command
+        };
         let context_root = self.context.context_root_for_path(&effective_cwd).cloned();
         let shell_root = context_root
             .clone()
@@ -662,6 +671,54 @@ fn shell_diagnostic_lines(output: &crate::shell::ShellResult, limit: usize) -> V
 
 const CWD_REPORT_MARKER: &str = "__YEET_SHELL_CWD__=";
 
+/// Returns the command without a leading `cd <dir> && ` / `cd <dir>;` when
+/// `<dir>` is a plain literal path naming `cwd` itself. Anything with shell
+/// expansion or a different directory is left untouched.
+fn strip_redundant_cd<'a>(command: &'a str, cwd: &Path) -> Option<&'a str> {
+    let rest = command.strip_prefix("cd")?;
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let rest = match rest.strip_prefix("--") {
+        Some(after) if after.starts_with(char::is_whitespace) => after.trim_start(),
+        _ => rest,
+    };
+    let (target, rest) = match rest.chars().next()? {
+        quote @ ('\'' | '"') => {
+            let inner = &rest[1..];
+            let end = inner.find(quote)?;
+            (&inner[..end], &inner[end + 1..])
+        }
+        _ => {
+            let end = rest
+                .find(|c: char| c.is_whitespace() || ";&|<>()".contains(c))
+                .unwrap_or(rest.len());
+            (&rest[..end], &rest[end..])
+        }
+    };
+    if target.is_empty() || target.contains(['$', '`', '\\', '*', '?', '~', '[', '{', '\n']) {
+        return None;
+    }
+    let rest = rest.trim_start_matches([' ', '\t']);
+    let rest = rest
+        .strip_prefix("&&")
+        .or_else(|| rest.strip_prefix(';'))
+        .or_else(|| rest.strip_prefix('\n'))?
+        .trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let path = Path::new(target);
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let same = candidate.canonicalize().ok()? == cwd.canonicalize().ok()?;
+    same.then_some(rest)
+}
+
 /// Removes a legacy cwd trailer from captured stdout and returns the directory.
 fn take_cwd_report(stdout: &mut String) -> Option<String> {
     let start = stdout.rfind(CWD_REPORT_MARKER)?;
@@ -876,5 +933,31 @@ mod process_execution_tests {
                 .run_shell_tool(invalid.as_object().unwrap(), "", &cancel)
                 .is_err()
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod redundant_cd_tests {
+    use super::strip_redundant_cd;
+
+    #[test]
+    fn strips_only_cd_into_current_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(cwd.join("sub")).unwrap();
+        let abs = cwd.display();
+        assert_eq!(
+            strip_redundant_cd(&format!("cd {abs} && ls"), &cwd),
+            Some("ls")
+        );
+        assert_eq!(
+            strip_redundant_cd(&format!("cd '{abs}'; ls -a"), &cwd),
+            Some("ls -a")
+        );
+        assert_eq!(strip_redundant_cd("cd . && pwd", &cwd), Some("pwd"));
+        assert_eq!(strip_redundant_cd("cd sub && ls", &cwd), None);
+        assert_eq!(strip_redundant_cd(&format!("cd {abs}"), &cwd), None);
+        assert_eq!(strip_redundant_cd("cd $HOME && ls", &cwd), None);
+        assert_eq!(strip_redundant_cd("cdx . && ls", &cwd), None);
     }
 }
