@@ -110,13 +110,20 @@ export function showEarlierTranscript() {
   transcriptItems.value = spacedItems(conversationView.value)
   const revealed = hiddenBefore - hiddenTranscriptCount.value
   if (!element || !content || !previousFirst || revealed <= 0) return
-  // The row that was first is now `revealed` rows down. Re-pin it for a few
-  // frames: rows near the viewport take their real height once laid out.
-  let frames = 4
+  // The row that was first is now `revealed` rows down. Re-pin it until it has held its
+  // place for a few frames in a row (rows near the viewport take their real height once
+  // laid out, which is later on a slow device), within a bounded number of frames.
+  let frames = 36
+  let steady = 0
   const settle = () => {
     const anchor = content.querySelectorAll(TRANSCRIPT_ROWS)[revealed]
-    if (anchor) element.scrollTop += top(anchor) - top(element) - offset
-    if (--frames > 0) requestAnimationFrame(settle)
+    let drift = 0
+    if (anchor) {
+      drift = top(anchor) - top(element) - offset
+      if (Math.abs(drift) > 0.5) element.scrollTop += drift
+    }
+    steady = Math.abs(drift) > 0.5 ? 0 : steady + 1
+    if (--frames > 0 && steady < 6) requestAnimationFrame(settle)
   }
   requestAnimationFrame(settle)
 }

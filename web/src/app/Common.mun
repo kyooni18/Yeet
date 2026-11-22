@@ -129,12 +129,28 @@ export struct PrimaryButton: View {
   }
 }
 
-/** Quiet text button used for toolbars and message actions. */
+/** Quiet text button used for toolbars and message actions. Deliberately light: every
+ * message in a transcript carries several, so it keeps to one hover state and a
+ * background, with none of the raised material's layers. */
 export struct Chip: View {
   let title: String
   let action: () => void
+  let aria: String = ""
+  let enabled: Bool = true
+  @State var hovering: Bool = false
   var body: some View {
-    ActionButton(title: title, kind: "quiet", small: true, enabled: true, action: action)
+    Button(title, action)
+      .disabled(!enabled)
+      .accessibilityLabel(aria || title)
+      .fontSize(12)
+      .foregroundStyle(hovering.value ? color.text : color.muted)
+      .padding({ top: verticalPadding(true), bottom: verticalPadding(true), leading: 10, trailing: 10 })
+      .background(hovering.value ? color.hover : "transparent")
+      .cornerRadius(8)
+      .opacity(enabled ? 1 : 0.45)
+      .style({ flex: "none", whiteSpace: "nowrap" })
+      .animation(quick, value: hovering.value)
+      .onHover(inside => { hovering.value = inside })
   }
 }
 

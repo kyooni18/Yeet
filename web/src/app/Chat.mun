@@ -152,9 +152,7 @@ struct MessageControls: View {
         Spacer()
       }
       ForEach(controls, { id: control => control.action.type }) { control in
-        Chip(title: control.label.replace(" message", "").replace(" response", ""), action: { remoteStore.sendConversationUi(control.action) })
-          .accessibilityLabel(control.label)
-          .disabled(!control.enabled)
+        Chip(title: control.label.replace(" message", "").replace(" response", ""), action: { remoteStore.sendConversationUi(control.action) }, aria: control.label, enabled: control.enabled)
       }
       if !trailing {
         Spacer()
@@ -185,8 +183,7 @@ struct Message: View {
           .foregroundStyle(color.faint)
       }
       if item.prompt {
-        Chip(title: item.prompt.expanded ? "Show less" : "Show full prompt", action: { remoteStore.sendConversationUi({ type: "toggle", value: item.id }) })
-          .accessibilityLabel(item.prompt.expanded ? "Collapse prompt" : "Expand prompt")
+        Chip(title: item.prompt.expanded ? "Show less" : "Show full prompt", action: { remoteStore.sendConversationUi({ type: "toggle", value: item.id }) }, aria: item.prompt.expanded ? "Collapse prompt" : "Expand prompt")
       }
       MessageControls(controls: item.controls, trailing: item.entry.kind.type === "user")
         .opacity(hovering.value || !isWide.value ? 1 : 0)
@@ -255,7 +252,7 @@ struct Thread: View {
     VStack(alignment: .stretch, spacing: 0) {
       if hasConversation() === true {
         if hiddenTranscriptCount.value > 0 {
-          ActionButton(title: earlierLabel(), kind: "secondary", small: true, enabled: true, action: () => { showEarlierTranscript() }, aria: "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)")
+          Chip(title: earlierLabel(), action: { showEarlierTranscript() }, aria: "Show earlier messages (" + hiddenTranscriptCount.value + " hidden)")
             .style({ alignSelf: "center", marginBottom: "24px" })
         }
         ForEach(transcriptItems.value, { id: item => transcriptKey(item) }) { item in
