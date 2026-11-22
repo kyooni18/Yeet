@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-11-23
+
 - Add Infinite goal mode (`/goal infinite`, the Goal toggle's INFINITE option, and Autonomy → Infinite goal in the Remote WebUI). It is a strict Goal that never gives up: transient API errors retry indefinitely and judge-reported blockers keep the agent working instead of pausing. It still ends on judge success, a non-retryable error, or interrupt.
 
 ## [0.1.14] - 2026-11-17
