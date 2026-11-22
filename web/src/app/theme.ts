@@ -35,10 +35,10 @@ export const color = {
   btnEdge: 'var(--btn-edge)',
   btnDrop: 'var(--btn-drop)',
   pressed: 'color-mix(in srgb, var(--text) 10%, transparent)',
-  accentTop: 'color-mix(in srgb, var(--accent), #fff 18%)',
-  accentBottom: 'color-mix(in srgb, var(--accent), #000 10%)',
-  accentEdge: 'color-mix(in srgb, var(--accent) 70%, #000)',
-  accentGlow: 'color-mix(in srgb, var(--accent) 38%, transparent)',
+  accentTop: 'var(--accent-top)',
+  accentBottom: 'var(--accent-bottom)',
+  accentEdge: 'var(--accent-edge)',
+  accentGlow: 'var(--accent-glow)',
 }
 export const mono = 'var(--mono)'
 

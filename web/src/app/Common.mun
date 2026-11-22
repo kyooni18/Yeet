@@ -1,7 +1,7 @@
 import { Icon } from "@mun/core"
 import { workIcon } from "./workIcons"
 import { color, mono } from "./theme"
-import { spring, quick, isTouch } from "./state"
+import { spring, quick, isRoomy } from "./state"
 
 /** A small, neutral activity ring; never attached to provider narration.
  * Rotation is a compositor-only CSS animation, so it costs no view updates. */
@@ -44,6 +44,12 @@ export struct Segmented: View {
     }
     .withProps({ className: "segmented", role: "group", "aria-label": label })
   }
+}
+
+/** Vertical padding that makes the button itself 28/32px (44px on touch and narrow
+ * layouts), so the click target is exactly the visible control. */
+function verticalPadding(small: boolean): number {
+  return isRoomy() ? 14 : small ? 5 : 7
 }
 
 function textColor(kind: string, hovering: boolean): string {
@@ -91,10 +97,13 @@ export struct ActionButton: View {
         Text(title).style({ whiteSpace: block ? "normal" : "nowrap", textAlign: block ? "left" : "center" })
       }
     })
+      // Semantics first: modifiers after the first wrapper-making one would land on the wrapper.
+      .disabled(!enabled)
+      .accessibilityLabel(aria || title)
+      .withProps({ role: role || undefined, "aria-checked": role === "switch" ? checked : undefined })
       .fontSize(small ? 12 : 13)
       .foregroundStyle(textColor(kind, hovering.value))
-      .padding({ top: 0, bottom: 0, leading: small ? 10 : 14, trailing: small ? 10 : 14 })
-      .frame(minHeight: isTouch.value ? 44 : small ? 28 : 32)
+      .padding({ top: verticalPadding(small), bottom: verticalPadding(small), leading: small ? 10 : 14, trailing: small ? 10 : 14 })
       .background(LinearGradient(colors: [Color(sheenTop(kind)), Color(sheenBottom(kind))], startPoint: .top, endPoint: .bottom))
       .border(edgeColor(kind), 1)
       .cornerRadius(pill ? 999 : 8)
@@ -106,9 +115,7 @@ export struct ActionButton: View {
       .animation(quick, value: hovering.value)
       .animation(quick, value: pressed.value)
       .onHover(inside => { hovering.value = inside })
-      .accessibilityLabel(aria || title)
-      .withProps({ role: role || undefined, "aria-checked": role === "switch" ? checked : undefined, onPointerDown: () => { pressed.value = true }, onPointerUp: () => { pressed.value = false }, onPointerLeave: () => { pressed.value = false }, onPointerCancel: () => { pressed.value = false } })
-      .disabled(!enabled)
+      .withProps({ onPointerDown: () => { pressed.value = true }, onPointerUp: () => { pressed.value = false }, onPointerLeave: () => { pressed.value = false }, onPointerCancel: () => { pressed.value = false } })
   }
 }
 

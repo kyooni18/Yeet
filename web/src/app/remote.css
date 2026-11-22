@@ -32,6 +32,10 @@
   /* Button material: a sheen from a lit top to a shaded bottom, a bevel (light inside the
      top edge, shade inside the bottom edge) and a soft cast shadow. Pressing flips the
      sheen and sinks the button into its surface. */
+  --accent-top: color-mix(in srgb, var(--accent), #fff 18%);
+  --accent-bottom: color-mix(in srgb, var(--accent), #000 10%);
+  --accent-edge: color-mix(in srgb, var(--accent) 70%, #000);
+  --accent-glow: color-mix(in srgb, var(--accent) 38%, transparent);
   --btn-top: #ffffff; --btn-bottom: #efede9; --btn-edge: rgba(46, 52, 54, 0.08);
   --btn-hi: rgba(255, 255, 255, 0.95); --btn-lo: rgba(46, 52, 54, 0.10); --btn-drop: rgba(40, 36, 30, 0.12);
   --btn-hover: brightness(0.975); --btn-press: brightness(0.94);

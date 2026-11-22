@@ -148,6 +148,8 @@ export const isWide = State(wide())
 export const isDesktop = State(desktop())
 /** Coarse or hover-less pointer: controls grow to 44px targets. */
 export const isTouch = State(touch())
+/** Controls take 44px targets on touch devices and on narrow layouts. */
+export const isRoomy = () => isTouch.value || !isWide.value
 export const inspectorOpen = State(desktop() && (preferredInspector ?? true))
 export const inspectorTab = State<'status' | 'changes' | 'files'>('status')
 export const toast = State('')
