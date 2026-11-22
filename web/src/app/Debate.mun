@@ -27,16 +27,16 @@ export struct DebatePage: View {
         }
         if remote.value.state.error_message { Text(remote.value.state.error_message).withProps({ role: "alert", className: "form-notice" }) }
         if remote.value.state.debate {
-          Text(remote.value.state.debate.topic).fontSize(15).fontWeight("medium")
+          Text(remote.value.state.debate.topic).fontSize(15).style({ fontWeight: "var(--w-emphasis)" })
           Text(remote.value.state.debate.status).withProps({ role: "status", className: "form-help" })
           ForEach(remote.value.state.debate.speeches.map((speech, index) => ({ ...speech, index })), { id: speech => speech.index }) { speech in
             VStack(alignment: .stretch, spacing: 8) {
-              Text((speech.pro ? "Pro" : "Con") + " · Round " + (speech.stage + 1)).fontSize(13).fontWeight("medium")
+              Text((speech.pro ? "Pro" : "Con") + " · Round " + (speech.stage + 1)).fontSize(13).style({ fontWeight: "var(--w-emphasis)" })
               Element("yeet-markdown", { source: speech.text })
             }.withProps({ className: "feature-card" }).style({ width: "100%" })
           }
           if remote.value.state.debate.verdict {
-            Text("Verdict").fontSize(15).fontWeight("medium")
+            Text("Verdict").fontSize(15).style({ fontWeight: "var(--w-emphasis)" })
             Element("yeet-markdown", { source: remote.value.state.debate.verdict })
           }
           ForEach(remote.value.state.debate.ballots.map((ballot, index) => ({ ...ballot, index })), { id: ballot => ballot.index }) { ballot in
@@ -56,7 +56,7 @@ export struct ExtensionsPage: View {
         TextEditor(Binding(args), "Arguments (one per line)", 2).accessibilityLabel("Extension arguments").withProps({ className: "form-field" })
         ForEach(remote.value.state.extension_commands ?? [], { id: item => item.extensionId + ":" + item.command }) { item in
           VStack(alignment: .stretch, spacing: 8) {
-            Text(item.command).fontWeight("medium")
+            Text(item.command).style({ fontWeight: "var(--w-emphasis)" })
             Text(item.description).withProps({ className: "form-help" })
             Button("Run " + item.command) { remoteStore.send({ type: "extension_command", command: item.command, args: args.value.split("\n").filter(Boolean) }) }
               .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.is_streaming)

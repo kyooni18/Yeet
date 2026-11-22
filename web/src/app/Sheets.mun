@@ -1,4 +1,5 @@
-import { Transition } from "@mun/core"
+import { Icon, Transition } from "@mun/core"
+import { workIcon } from "./workIcons"
 import { SheetBlur } from "./Blur.mun"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
@@ -32,7 +33,11 @@ struct ListRow: View {
       HStack(spacing: 10) {
         Text(title).lineLimit(1).style({ minWidth: "0", flex: "1" })
         Text(detail).fontSize(12).foregroundStyle(color.faint).lineLimit(1).style({ maxWidth: "35%" })
-        Text(selected ? "✓" : "").foregroundStyle(color.text).frame(width: 12)
+        Group() {
+          if selected {
+            Icon(workIcon("check"), { width: 14, height: 14 })
+          }
+        }.frame(width: 14)
       }
     })
     .withProps({ className: "model-row", "aria-pressed": selected, title: title + (detail ? " · " + detail : "") })
@@ -189,7 +194,7 @@ export struct SheetLayer: View {
         .transition(Transition.opacity)
       VStack(alignment: .stretch, spacing: 12) {
         HStack(spacing: 0) {
-          Text(sheetTitle()).fontWeight("semibold")
+          Text(sheetTitle()).style({ fontWeight: "var(--w-emphasis)" })
           Spacer()
           Button("Done") { openSheet("none") }.withProps({ className: "form-action" })
         }

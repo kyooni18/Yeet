@@ -53,7 +53,7 @@ struct PanelEmpty: View {
   var body: some View {
     VStack(alignment: .center, spacing: 8) {
       Icon(workIcon(icon), { width: 28, height: 28, strokeWidth: 1.3 }).foregroundStyle(color.faint)
-      Text(title).fontWeight("medium")
+      Text(title).style({ fontWeight: "var(--w-emphasis)" })
       Text(detail).fontSize(12).foregroundStyle(color.muted).style({ textAlign: "center", maxWidth: "240px" })
     }
     .withProps({ className: "panel-empty" })
@@ -122,7 +122,7 @@ struct Files: View {
       if workspaceFiles.value?.info {
         VStack(alignment: .stretch, spacing: 6) {
           Text("File details").withProps({ className: "section-label" })
-          Text(workspaceFiles.value.info.name).fontWeight("medium")
+          Text(workspaceFiles.value.info.name).style({ fontWeight: "var(--w-emphasis)" })
           Text([Math.ceil(workspaceFiles.value.info.size / 1024) + " KB", workspaceFiles.value.info.lines ? workspaceFiles.value.info.lines + " lines" : ""].filter(Boolean).join(" · "))
             .fontSize(12).foregroundStyle(color.muted)
           if workspaceFiles.value.info.status {
@@ -269,7 +269,7 @@ export struct WorkspacePanel: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 0) {
       HStack(spacing: 8) {
-        Text(remote.value.currentWorkspace?.display_name || "Workspace").fontWeight("semibold").lineLimit(1).style({ minWidth: "0" })
+        Text(remote.value.currentWorkspace?.display_name || "Workspace").style({ fontWeight: "var(--w-emphasis)" }).lineLimit(1).style({ minWidth: "0" })
         Spacer()
         IconButton(icon: "refresh", label: "Refresh workspace", action: { refreshInspector() }).disabled(!connected())
         IconButton(icon: "inspector", label: "Hide workspace panel", action: { toggleInspector(false) })

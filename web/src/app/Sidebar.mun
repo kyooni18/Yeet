@@ -74,7 +74,7 @@ struct Header: View {
   var body: some View {
     HStack(spacing: 8) {
       Image("/yeet-mark.svg").style({ width: "20px", height: "20px" })
-      Text("Yeet").fontSize(14).fontWeight("semibold")
+      Text("Yeet").fontSize(14).style({ fontWeight: "var(--w-emphasis)" })
       Text("Remote").withProps({ className: "brand-tag" })
       Spacer()
       IconButton(icon: "sidebar", label: "Hide sidebar", action: { toggleSidebar(false) })
@@ -161,7 +161,7 @@ export struct Sidebar: View {
       Button(action: { newSession() }, label: {
         HStack(spacing: 8) {
           Icon(workIcon("plus"), { width: 16, height: 16, strokeWidth: 1.8 })
-          Text("New session").fontWeight("medium")
+          Text("New session").style({ fontWeight: "var(--w-emphasis)" })
           Spacer()
         }
       })

@@ -76,7 +76,7 @@ function saveTask() {
 struct TaskEditor: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
-      Text(taskId.value ? "Edit task" : "New scheduled task").fontSize(15).fontWeight("medium")
+      Text(taskId.value ? "Edit task" : "New scheduled task").fontSize(15).style({ fontWeight: "var(--w-emphasis)" })
       TextField(Binding(name), "Task name").accessibilityLabel("Task name").disabled(!!pending.value).withProps({ className: "form-field" })
       TextEditor(Binding(prompt), "What should Yeet do?", 3).accessibilityLabel("Task prompt").disabled(!!pending.value).withProps({ className: "form-field" })
       TextField(Binding(folder), "Workspace path on the server").accessibilityLabel("Task workspace").disabled(!!pending.value).withProps({ className: "form-field", autocapitalize: "none", spellcheck: false })
@@ -102,7 +102,7 @@ struct TaskRow: View {
   @State var confirmDelete: Bool = false
   var body: some View {
     VStack(alignment: .stretch, spacing: 8) {
-      Text(task.draft.name).fontSize(15).fontWeight("medium")
+      Text(task.draft.name).fontSize(15).style({ fontWeight: "var(--w-emphasis)" })
       Text(task.draft.prompt).withProps({ className: "form-help" }).lineLimit(3)
       Text(scheduleLabel(task.draft.schedule) + " · " + (task.running ? "Running" : task.enabled ? "Next: " + dateLabel(task.next_run) : "Paused")).withProps({ className: "form-help" })
       Text(task.draft.folder + " · " + task.draft.model).withProps({ className: "form-help" })

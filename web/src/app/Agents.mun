@@ -133,7 +133,7 @@ struct AgentsContent: View {
       }.withProps({ className: "feature-actions" })
       if remote.value.agents.findings.length {
         VStack(alignment: .stretch, spacing: 10) {
-          Text("Shared findings").fontSize(13).fontWeight("medium")
+          Text("Shared findings").fontSize(13).style({ fontWeight: "var(--w-emphasis)" })
           ForEach(remote.value.agents.findings, { id: item => item.member_id + ":" + item.task_id + ":" + item.at }) { item in
             VStack(alignment: .stretch, spacing: 4) {
               Text(item.actor).fontSize(12).foregroundStyle(color.muted)

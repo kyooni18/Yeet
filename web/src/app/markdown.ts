@@ -11,13 +11,13 @@ style.replaceSync(`
   p, ul, ol, pre, blockquote, table { margin: 0 0 0.75em; }
   pre { padding: 10px 12px; border-radius: var(--r-inline, 6px); background: var(--panel); overflow-x: auto; font: 12.5px/1.5 var(--mono); }
   code { font-family: var(--mono); font-size: 0.92em; }
-  h1, h2, h3, h4 { margin: 1em 0 0.5em; font-size: 1.05em; font-weight: 600; }
-  strong, b { font-weight: 600; }
+  h1, h2, h3, h4 { margin: 1em 0 0.5em; font-size: 1.05em; font-weight: var(--w-emphasis, 400); }
+  strong, b { font-weight: var(--w-emphasis, 400); }
   a { color: inherit; }
   blockquote { padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
   table { border-collapse: collapse; }
   th, td { padding: 6px 16px 6px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-  th { font-weight: 600; }
+  th { font-weight: var(--w-emphasis, 400); }
   tr:last-child > td { border-bottom: 0; }
 `)
 

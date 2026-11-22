@@ -51,7 +51,7 @@ struct TraceLabel: View {
         .frame(width: 14, height: 14)
         .foregroundStyle(color.faint)
         .withProps({ "aria-hidden": "true", className: "trace-disclosure__icon" })
-        .style({ flex: "none", strokeWidth: "1.8px", strokeLinecap: "round", strokeLinejoin: "round" })
+        .style({ flex: "none", strokeWidth: "var(--icon-stroke)", strokeLinecap: "round", strokeLinejoin: "round" })
       VStack(alignment: .stretch, spacing: 2) {
         HStack(spacing: 6) {
           Text(trace.label || trace.title)
@@ -237,7 +237,7 @@ struct Working: View {
 struct EmptyState: View {
   var body: some View {
     VStack(alignment: .center, spacing: 4) {
-      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(16).fontWeight("medium")
+      Text(connected() ? "What should we work on?" : "Waiting for Yeet…").fontSize(16).style({ fontWeight: "var(--w-emphasis)" })
       Text(workspaceLine()).fontSize(13).foregroundStyle(color.muted)
     }
     .withProps({ className: "empty-conversation" })
@@ -287,7 +287,7 @@ struct Permission: View {
   let request: Any
   var body: some View {
     VStack(alignment: .stretch, spacing: 8) {
-      Text(request.title).fontSize(14).fontWeight("medium")
+      Text(request.title).fontSize(14).style({ fontWeight: "var(--w-emphasis)" })
       Text(request.operation || request.detail)
         .fontSize(13)
         .foregroundStyle(color.muted)
@@ -317,7 +317,7 @@ struct Question: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 8) {
       Text("Question from agent").fontSize(12).foregroundStyle(color.faint)
-      Text(question.question).fontSize(14).fontWeight("medium").style({ whiteSpace: "pre-wrap" })
+      Text(question.question).fontSize(14).style({ fontWeight: "var(--w-emphasis)" }).style({ whiteSpace: "pre-wrap" })
       VStack(alignment: .stretch, spacing: 6) {
         ForEach(question.options, { id: option => option }) { option in
           Button(option) { answerQuestion(question, option) }
@@ -382,7 +382,7 @@ struct AttachmentStrip: View {
         HStack(spacing: 6) {
           Text(item.name).fontSize(13).lineLimit(1)
           Text(item.error ? "failed" : item.remoteId ? "" : "uploading…").fontSize(12).foregroundStyle(item.error ? color.del : color.faint)
-          Button("×") { removeAttachment(item.id) }.foregroundStyle(color.faint)
+          IconButton(icon: "close", label: "Remove attachment", action: { removeAttachment(item.id) })
         }
         .padding({ top: 4, bottom: 4, leading: 10, trailing: 8 })
         .background(color.raised)

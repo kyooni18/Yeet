@@ -6,7 +6,7 @@ export struct AuthView: View {
     VStack(alignment: .stretch, spacing: 0) {
       VStack(alignment: .stretch, spacing: 12) {
         Text(enrolling ? "Register a passkey" : "Authorization required")
-          .withProps({ role: "heading", "aria-level": 1 }).fontSize(20).fontWeight("semibold")
+          .withProps({ role: "heading", "aria-level": 1 }).fontSize(20).style({ fontWeight: "var(--w-emphasis)" })
         if loading.value {
           Text("Loading authentication methods…")
             .withProps({ role: "status", "aria-label": "Loading authentication methods" })
