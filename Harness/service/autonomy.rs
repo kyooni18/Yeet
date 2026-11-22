@@ -24,7 +24,7 @@ impl ResumeRun {
     pub(super) fn for_mode(mode: AutonomyMode) -> Option<Self> {
         match mode {
             AutonomyMode::Manual => None,
-            AutonomyMode::Goal => Some(Self {
+            AutonomyMode::Goal | AutonomyMode::Infinite => Some(Self {
                 prompt: GOAL_RESUME_PROMPT,
                 run_kind: "goal-resume",
                 continuation: true,
@@ -89,6 +89,8 @@ impl HarnessService {
 
         let goal_enabled = mode != AutonomyMode::Manual;
         self.goal_mode.store(goal_enabled, Ordering::Release);
+        self.infinite_goal
+            .store(mode == AutonomyMode::Infinite, Ordering::Release);
         let (session_id, resume) = {
             let mut shared = self.shared.lock_or_recover();
             shared.state.goal_mode = goal_enabled;

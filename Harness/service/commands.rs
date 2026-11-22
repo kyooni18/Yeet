@@ -45,7 +45,7 @@ impl HarnessService {
         let arguments: Vec<_> = parts.collect();
         match command {
             "/debate" => return self.start_debate(arguments.join(" "), None),
-            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|toggle|status]  /attach ID  /detach ID  /clear"),
+            "/help" => self.append_system("/new  /model [ID]  /reasoning [auto|low|medium|high]  /login  /provider  /providers  /settings  /permissions  /permission [allow|deny]  /allow  /deny  /sessions  /workspace [cd|add|remove|reset] PATH  /cd PATH  /capabilities  /image PATH|clear  /compact  /context [LENGTH|auto]  /status  /goal [on|off|infinite|toggle|status]  /attach ID  /detach ID  /clear"),
             "/new" => self.new_session(),
             "/model" => {
                 if arguments.is_empty() {
@@ -282,10 +282,14 @@ impl HarnessService {
                         self.set_goal_enabled(false)?;
                         self.append_system("Goal: OFF");
                     }
+                    Some("infinite") => {
+                        self.set_autonomy_mode(AutonomyMode::Infinite)?;
+                        self.append_system("Goal: INFINITE");
+                    }
                     Some("status") => {
                         self.append_system(&format!("Goal: {}", if current { "ON" } else { "OFF" }));
                     }
-                    Some(_) => self.append_system("Usage: /goal [on|off|toggle|status]"),
+                    Some(_) => self.append_system("Usage: /goal [on|off|infinite|toggle|status]"),
                 }
             }
             "/image" => {
@@ -464,6 +468,7 @@ impl HarnessService {
         let autonomy_mode = match state.autonomy_mode {
             AutonomyMode::Manual => "manual",
             AutonomyMode::Goal => "goal",
+            AutonomyMode::Infinite => "infinite",
             AutonomyMode::Autonomous => "autonomous",
         };
         let active_workers = state

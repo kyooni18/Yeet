@@ -184,6 +184,10 @@ pub enum AutonomyMode {
     #[default]
     Manual,
     Goal,
+    /// Goal that never gives up: transient API errors retry indefinitely and
+    /// judge-reported blockers keep the agent working instead of pausing.
+    /// Ends only on judge success, a non-retryable error, or interrupt.
+    Infinite,
     Autonomous,
 }
 

@@ -333,6 +333,7 @@ impl AgentGroupHandle {
                 objective
             };
             let goal_mode = Arc::new(AtomicBool::new(false));
+            let infinite_goal = Arc::new(AtomicBool::new(false));
             let mut usage_sequence = 0u64;
             let monitor_done = AtomicBool::new(false);
             let monitor_cancel = group_cancel.clone();
@@ -355,6 +356,7 @@ impl AgentGroupHandle {
                         attached_capabilities: None,
                         disabled_capabilities: Vec::new(),
                         goal_mode,
+                        infinite_goal,
                         cancel: group_cancel.clone(),
                         continuation: continuation && !fresh_coordinator,
                     },

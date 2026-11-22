@@ -75,7 +75,12 @@ pub(super) fn settle_run_state(
             (RunStatus::CompletedUnverified, Some(reason))
         }
     };
-    if run_status == RunStatus::Completed && state.state.autonomy_mode == AutonomyMode::Goal {
+    if run_status == RunStatus::Completed
+        && matches!(
+            state.state.autonomy_mode,
+            AutonomyMode::Goal | AutonomyMode::Infinite
+        )
+    {
         state.state.autonomy_mode = AutonomyMode::Manual;
         state.state.goal_mode = false;
     }
@@ -110,6 +115,7 @@ struct RunWorker {
     writer: SessionWriter,
     run_manager: RunManager,
     goal_mode: Arc<AtomicBool>,
+    infinite_goal: Arc<AtomicBool>,
     permission: PermissionBroker,
     bridge: BridgeHandle,
     agent_groups: AgentGroupSupervisor,
@@ -164,6 +170,8 @@ impl HarnessService {
         let autonomy_mode = self.shared.lock_or_recover().state.autonomy_mode;
         let goal_enabled = autonomy_mode != AutonomyMode::Manual;
         self.goal_mode.store(goal_enabled, Ordering::Release);
+        self.infinite_goal
+            .store(autonomy_mode == AutonomyMode::Infinite, Ordering::Release);
         let history_start = self
             .coordinator
             .lock_or_recover()
@@ -263,6 +271,7 @@ impl HarnessService {
             writer: self.session_writer(),
             run_manager: self.run_manager.clone(),
             goal_mode: self.goal_mode.clone(),
+            infinite_goal: self.infinite_goal.clone(),
             permission: self.permission.clone(),
             bridge: self.bridge.clone(),
             agent_groups: self.agent_groups.clone(),
@@ -346,6 +355,7 @@ impl RunWorker {
                     disabled_capabilities: disabled_capabilities.clone(),
                     cancel: run.cancel.clone(),
                     goal_mode: self.goal_mode.clone(),
+                    infinite_goal: self.infinite_goal.clone(),
                     continuation: cycle_continuation,
                 },
                 |event| self.project_event(&run.id, event),
@@ -374,6 +384,7 @@ impl RunWorker {
                 autonomy::CycleDecision::Continue => {}
             }
             self.goal_mode.store(true, Ordering::Release);
+            self.infinite_goal.store(false, Ordering::Release);
             {
                 let mut state = self.shared.lock_or_recover();
                 state.state.goal_mode = true;
@@ -617,6 +628,7 @@ mod tests {
             writer: service.session_writer(),
             run_manager: service.run_manager.clone(),
             goal_mode: service.goal_mode.clone(),
+            infinite_goal: service.infinite_goal.clone(),
             permission: service.permission.clone(),
             bridge: service.bridge.clone(),
             agent_groups: service.agent_groups.clone(),

@@ -198,6 +198,7 @@ pub(crate) fn draw_goal(frame: &mut Frame<'_>, app: &App) {
             Line::from(""),
             Line::from("Runs bounded execution epochs until the strict success judge accepts concrete evidence."),
             Line::from("Transient provider errors back off and retry; interrupt or turn Goal off to stop."),
+            Line::from("Infinite never gives up: it retries API errors forever and keeps working past judge blockers."),
         ])),
         chunks[0],
     );

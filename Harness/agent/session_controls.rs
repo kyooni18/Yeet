@@ -203,7 +203,12 @@ impl AgentCoordinator {
     }
 }
 
-pub(super) fn goal_retry_delay(attempt: u32) -> Option<Duration> {
+pub(super) fn goal_retry_delay(attempt: u32, infinite: bool) -> Option<Duration> {
+    // Infinite Goal never gives up on transient API failures; it keeps the same
+    // cooldown as the bounded policy and retries indefinitely.
+    if infinite {
+        return Some(API_RETRY_DELAY);
+    }
     (1..=API_RETRY_LIMIT)
         .contains(&attempt)
         .then_some(API_RETRY_DELAY)
@@ -308,11 +313,15 @@ mod retry_tests {
 
     #[test]
     fn api_retry_allows_five_one_minute_cooldowns() {
-        assert_eq!(goal_retry_delay(0), None);
+        assert_eq!(goal_retry_delay(0, false), None);
         for attempt in 1..=5 {
-            assert_eq!(goal_retry_delay(attempt), Some(Duration::from_secs(60)));
+            assert_eq!(
+                goal_retry_delay(attempt, false),
+                Some(Duration::from_secs(60))
+            );
         }
-        assert_eq!(goal_retry_delay(6), None);
+        assert_eq!(goal_retry_delay(6, false), None);
+        assert_eq!(goal_retry_delay(6, true), Some(Duration::from_secs(60)));
     }
 
     #[test]

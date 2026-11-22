@@ -97,6 +97,7 @@ impl AgentCoordinator {
         &mut self,
         request: AgentTurnRequest<'_>,
         goal_mode: &AtomicBool,
+        infinite_goal: &AtomicBool,
         goal_input: &str,
         emit: &mut F,
     ) -> Result<AgentRunOutcome>
@@ -413,10 +414,11 @@ impl AgentCoordinator {
                     goal_mode.store(false, Ordering::Release);
                     return Ok(AgentRunOutcome::Completed);
                 }
-                if self
-                    .context_memory
-                    .goal()
-                    .is_some_and(goal::GoalJob::needs_user)
+                if !infinite_goal.load(Ordering::Acquire)
+                    && self
+                        .context_memory
+                        .goal()
+                        .is_some_and(goal::GoalJob::needs_user)
                 {
                     return Ok(AgentRunOutcome::GoalPaused {
                         reason: format!("Goal needs user input: {}", verdict.reason),
@@ -445,17 +447,24 @@ impl AgentCoordinator {
                         reason: verdict.reason,
                     });
                 }
-                retry_instruction = Some(if verdict.blocked {
-                    format!(
-                        "Goal checkpoint {goal_epoch}: the judge reports an external blocker ({}). If you can resolve or work around it yourself, do so now. Otherwise stop and state exactly what you need from the user; the goal will pause.",
-                        verdict.reason
-                    )
-                } else {
-                    format!(
-                        "Goal not yet met (checkpoint {goal_epoch}): {}. Keep working.",
-                        verdict.reason
-                    )
-                });
+                retry_instruction = Some(
+                    if verdict.blocked && infinite_goal.load(Ordering::Acquire) {
+                        format!(
+                            "Goal checkpoint {goal_epoch}: the judge reports a blocker ({}). Infinite Goal does not pause for it: find a way around it, or wait and retry, then keep working toward the goal.",
+                            verdict.reason
+                        )
+                    } else if verdict.blocked {
+                        format!(
+                            "Goal checkpoint {goal_epoch}: the judge reports an external blocker ({}). If you can resolve or work around it yourself, do so now. Otherwise stop and state exactly what you need from the user; the goal will pause.",
+                            verdict.reason
+                        )
+                    } else {
+                        format!(
+                            "Goal not yet met (checkpoint {goal_epoch}): {}. Keep working.",
+                            verdict.reason
+                        )
+                    },
+                );
                 continue;
             }
 

@@ -222,8 +222,13 @@ impl ApplicationSession {
                 });
             }
             if id == "goal" && control.options.iter().any(|o| o.value == value) {
-                prepared.effect.command = Some(crate::harness::HarnessCommand::SetGoal {
-                    enabled: value == "true",
+                prepared.effect.command = Some(match value.as_str() {
+                    "infinite" => crate::harness::HarnessCommand::SetAutonomyMode {
+                        mode: crate::model::AutonomyMode::Infinite,
+                    },
+                    _ => crate::harness::HarnessCommand::SetGoal {
+                        enabled: value == "true",
+                    },
                 });
             }
             return prepared;

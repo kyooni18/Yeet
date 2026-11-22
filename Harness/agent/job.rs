@@ -32,6 +32,7 @@ impl AgentCoordinator {
             attached_capabilities,
             disabled_capabilities,
             goal_mode,
+            infinite_goal,
             cancel,
             continuation: initial_continuation,
         } = request;
@@ -100,6 +101,7 @@ impl AgentCoordinator {
                     goal_retry_reason: goal_retry_reason.as_deref(),
                 },
                 &goal_mode,
+                &infinite_goal,
                 &goal_input,
                 &mut |event| {
                     if let AgentEvent::GoalJudge { passed, reason } = &event {
@@ -139,7 +141,9 @@ impl AgentCoordinator {
                         break Err(error);
                     }
                     retry_attempt = retry_attempt.saturating_add(1);
-                    let Some(delay) = goal_retry_delay(retry_attempt) else {
+                    let Some(delay) =
+                        goal_retry_delay(retry_attempt, infinite_goal.load(Ordering::Acquire))
+                    else {
                         if goal_mode.load(Ordering::Acquire) {
                             break Ok(AgentRunOutcome::GoalPaused {
                                 reason: format!(

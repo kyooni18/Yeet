@@ -155,6 +155,7 @@ impl MemberRunner for CoordinatorRunner {
                 attached_capabilities: None,
                 disabled_capabilities: self.role.disabled_capabilities(),
                 goal_mode: Arc::new(AtomicBool::new(true)),
+                infinite_goal: Arc::new(AtomicBool::new(false)),
                 cancel: cancel.clone(),
                 continuation: false,
             },

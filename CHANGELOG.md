@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add Infinite goal mode (`/goal infinite`, the Goal toggle's INFINITE option, and Autonomy → Infinite goal in the Remote WebUI). It is a strict Goal that never gives up: transient API errors retry indefinitely and judge-reported blockers keep the agent working instead of pausing. It still ends on judge success, a non-retryable error, or interrupt.
+
 ## [0.1.14] - 2026-11-17
 
 - Redesign the Remote WebUI as a standalone app: a fixed window frame with a title bar, a workspace status footer on wide screens, a compact source-list sidebar, segmented controls, and pages without large headers. Only the transcript, lists and file/diff panes scroll.

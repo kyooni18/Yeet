@@ -112,6 +112,7 @@ pub(super) struct ToolbarRuntime {
     model: String,
     reasoning: String,
     goal: bool,
+    goal_value: String,
     streaming: bool,
     sandbox: bool,
     sandbox_preset: String,
@@ -126,6 +127,10 @@ impl ToolbarRuntime {
         self.model = h.active_model.clone();
         self.reasoning = h.active_reasoning_level.clone();
         self.goal = h.goal_mode;
+        self.goal_value = match h.autonomy_mode {
+            crate::model::AutonomyMode::Infinite if h.goal_mode => "infinite".into(),
+            _ => h.goal_mode.to_string(),
+        };
         self.streaming = h.is_streaming;
         self.sandbox = h.sandbox_settings.is_some();
         self.sandbox_preset = h
@@ -223,12 +228,19 @@ impl ToolbarRuntime {
             Some(self.goal),
         );
         goal.kind = ToolbarControlKind::Toggle;
-        goal.value = self.goal.to_string();
+        goal.value = self.goal_value.clone();
         goal.options = vec![
             ToolbarOption {
                 value: "true".into(),
                 label: "ON".into(),
                 description: "Strict success judged execution".into(),
+            },
+            ToolbarOption {
+                value: "infinite".into(),
+                label: "INFINITE".into(),
+                description:
+                    "Strict and never gives up: retries API errors indefinitely, no blocker pause"
+                        .into(),
             },
             ToolbarOption {
                 value: "false".into(),

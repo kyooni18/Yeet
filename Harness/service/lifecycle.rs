@@ -140,6 +140,10 @@ impl HarnessService {
             self.agent_groups.restore_checkpoint(checkpoint)?;
         }
         self.goal_mode.store(persisted_goal, Ordering::Release);
+        self.infinite_goal.store(
+            persisted_goal && restored_autonomy == AutonomyMode::Infinite,
+            Ordering::Release,
+        );
         let (working_directory, context_roots) = {
             let mut coordinator = self
                 .coordinator

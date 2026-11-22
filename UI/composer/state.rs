@@ -461,7 +461,7 @@ fn suggestion_arguments(command: &str) -> Option<&'static str> {
         "/debate" => "TOPIC",
         "/model" => "MODEL_ID",
         "/reasoning" => "auto|low|medium|high",
-        "/goal" => "on|off|toggle|status",
+        "/goal" => "on|off|infinite|toggle|status",
         "/context" => "LENGTH|auto",
         "/workspace" => "list|cd|add|remove|reset PATH",
         "/cd" => "PATH",

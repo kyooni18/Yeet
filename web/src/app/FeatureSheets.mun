@@ -156,7 +156,7 @@ struct AgentSettingsSheet: View {
       Picker(Binding(() => remote.value.state.agent_mode, mode => remoteStore.send({ type: "set_agent_mode", mode })), [{ value: "single", label: "Single agent" }, { value: "adaptive", label: "Adaptive group" }])
         .accessibilityLabel("Agent mode").withProps({ className: "form-field" }).disabled(!connected() || remote.value.state.is_streaming)
       Text("Autonomy").fontSize(13)
-      Picker(Binding(() => remote.value.state.autonomy_mode, mode => remoteStore.send({ type: "set_autonomy_mode", mode })), [{ value: "manual", label: "Manual" }, { value: "goal", label: "Goal" }, { value: "autonomous", label: "Autonomous" }])
+      Picker(Binding(() => remote.value.state.autonomy_mode, mode => remoteStore.send({ type: "set_autonomy_mode", mode })), [{ value: "manual", label: "Manual" }, { value: "goal", label: "Goal" }, { value: "infinite", label: "Infinite goal" }, { value: "autonomous", label: "Autonomous" }])
         .accessibilityLabel("Autonomy").withProps({ className: "form-field" }).disabled(!connected() || remote.value.state.is_streaming)
       if remote.value.state.runtime_settings?.agentGroup {
         Text("Defaults for new sessions").fontSize(13).style({ fontWeight: "var(--w-emphasis)" })

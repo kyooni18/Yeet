@@ -96,6 +96,9 @@ pub struct AgentRunRequest<'a> {
     pub attached_capabilities: Option<Vec<String>>,
     pub disabled_capabilities: Vec<String>,
     pub goal_mode: Arc<AtomicBool>,
+    /// With goal_mode: retry transient API errors indefinitely and never pause
+    /// for judge-reported blockers.
+    pub infinite_goal: Arc<AtomicBool>,
     pub cancel: Arc<AtomicBool>,
     pub continuation: bool,
 }

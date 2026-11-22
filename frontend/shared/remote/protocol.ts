@@ -252,7 +252,7 @@ export interface RuntimeSettingsState {
 }
 
 export type AgentMode = 'single' | 'adaptive'
-export type AutonomyMode = 'manual' | 'goal' | 'autonomous'
+export type AutonomyMode = 'manual' | 'goal' | 'infinite' | 'autonomous'
 export interface AgentTaskItem {
   id: string
   role: 'researcher' | 'implementer' | 'verifier' | string
