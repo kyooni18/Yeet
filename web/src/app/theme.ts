@@ -29,6 +29,10 @@ export const color = {
   del: 'var(--del)',
   delBg: 'var(--del-bg)',
   scrim: 'var(--scrim)',
+  // Glass: the tint of a floating surface that sits on a blur.
+  glass: 'var(--glass)',
+  glassToast: 'var(--glass-toast)',
+  glassInk: 'var(--glass-ink)',
   // Button material (values defined per theme in remote.css).
   btnTop: 'var(--btn-top)',
   btnBottom: 'var(--btn-bottom)',

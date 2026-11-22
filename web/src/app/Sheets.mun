@@ -39,7 +39,7 @@ struct ListRow: View {
             Icon(workIcon("check"), { width: 14, height: 14 })
           }
         }.frame(width: 14)
-      }
+      }.style({ width: "100%" })
     })
     .withProps({ className: "model-row", "aria-pressed": selected, title: title + (detail ? " · " + detail : "") })
     .padding({ top: 9, bottom: 9, leading: 10, trailing: 10 })

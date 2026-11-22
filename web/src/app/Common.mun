@@ -2,6 +2,7 @@ import { Icon } from "@mun/core"
 import { workIcon } from "./workIcons"
 import { color, mono } from "./theme"
 import { spring, quick, isRoomy } from "./state"
+import { GlassIf } from "./Blur.mun"
 
 /** A small, neutral activity ring; never attached to provider narration.
  * Rotation is a compositor-only CSS animation, so it costs no view updates. */
@@ -59,16 +60,17 @@ export struct Segmented: View {
   let value: String
   let onChange: (value: string) => void
   let enabled: Bool = true
+  let fill: Bool = false
   var body: some View {
     HStack(spacing: 2) {
       ForEach(options, { id: option => option.value }) { option in
         SegmentKey(label: option.label, selected: option.value === value, enabled: enabled, action: () => { onChange(option.value) })
       }
     }
+    .style({ width: fill ? "100%" : "fit-content", flex: "none", flexWrap: "wrap" })
     .padding(2)
     .background(color.field)
     .cornerRadius(8)
-    .style({ flex: "none", flexWrap: "wrap" })
     .withProps({ role: "group", "aria-label": label })
   }
 }
@@ -83,19 +85,19 @@ function sendIsPrimary(streaming: boolean, enabled: boolean): boolean {
 }
 
 function sendTextColor(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentInk : enabled ? color.text : color.faint
+  return sendIsPrimary(streaming, enabled) ? color.accentInk : enabled ? color.text : color.muted
 }
 
 function sendTop(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentTop : color.btnTop
+  return sendIsPrimary(streaming, enabled) ? color.accentTop : enabled ? color.btnTop : color.field
 }
 
 function sendBottom(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentBottom : color.btnBottom
+  return sendIsPrimary(streaming, enabled) ? color.accentBottom : enabled ? color.btnBottom : color.field
 }
 
 function sendEdge(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentEdge : color.btnEdge
+  return sendIsPrimary(streaming, enabled) ? color.accentEdge : enabled ? color.btnEdge : "transparent"
 }
 
 function sendDrop(streaming: boolean, enabled: boolean, pressed: boolean): string {
@@ -147,6 +149,7 @@ export struct ActionButton: View {
   var body: some View {
     Button(action: action, label: {
       HStack(spacing: 6) {
+        GlassIf(on: kind === "glass", radius: pill ? 999 : 8, tint: color.glass)
         if icon {
           Icon(workIcon(icon), { width: small ? 12 : 14, height: small ? 12 : 14 })
         }
@@ -160,6 +163,7 @@ export struct ActionButton: View {
       .fontSize(small ? 12 : 13)
       .foregroundStyle(textColor(kind, hovering.value))
       .padding({ top: verticalPadding(small), bottom: verticalPadding(small), leading: small ? 10 : 14, trailing: small ? 10 : 14 })
+      .style({ flex: "none", justifyContent: block ? "flex-start" : "center", alignItems: "center", display: "inline-flex", width: block ? "100%" : "auto", isolation: "isolate", position: "relative" })
       .background(LinearGradient(colors: [Color(sheenTop(kind)), Color(sheenBottom(kind))], startPoint: .top, endPoint: .bottom))
       .border(edgeColor(kind), 1)
       .cornerRadius(pill ? 999 : 8)
@@ -167,7 +171,6 @@ export struct ActionButton: View {
       .overlay(RoundedRectangle(pill ? 999 : 8).fill(pressed.value ? color.pressed : hovering.value ? color.hover : "transparent").allowsHitTesting(false))
       .offset(0, pressed.value ? 0.5 : 0)
       .opacity(enabled ? 1 : 0.45)
-      .style({ flex: "none", justifyContent: block ? "flex-start" : "center", alignItems: "center", display: "inline-flex", width: block ? "100%" : "auto" })
       .animation(quick, value: hovering.value)
       .animation(quick, value: pressed.value)
       .onHover(inside => { hovering.value = inside })

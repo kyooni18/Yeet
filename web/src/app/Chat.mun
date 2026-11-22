@@ -14,7 +14,7 @@ import {
 } from "./composer"
 import { Spinner, Chip, IconButton, ActionButton, SendButton } from "./Common.mun"
 import { ToolDetails } from "./ToolDetails.mun"
-import { ComposerBlur } from "./Blur.mun"
+import { ComposerBlur, FloatingGlass } from "./Blur.mun"
 import { composerRef } from "./composerHeight"
 
 const questionAnswer = State("")
@@ -159,6 +159,7 @@ struct MessageControls: View {
       }
     }
     .withProps({ className: "message-actions" })
+    .style({ marginLeft: trailing ? "0" : "-10px", marginRight: trailing ? "-10px" : "0" })
   }
 }
 
@@ -278,6 +279,10 @@ struct Thread: View {
   }
 }
 
+function permissionKind(control: Any): string {
+  return control.icon === "allow" ? "primary" : "secondary"
+}
+
 struct Permission: View {
   let request: Any
   var body: some View {
@@ -293,16 +298,15 @@ struct Permission: View {
       HStack(spacing: 8) {
         Spacer()
         ForEach(request.controls, { id: control => control.label }) { control in
-          Button(control.label) { remoteStore.sendComposerUi(control.action) }
-            .withProps({ className: control.icon === "allow" ? "btn btn-primary" : "btn" })
-            .disabled(!control.enabled || !connected())
+          ActionButton(title: control.label, kind: permissionKind(control), small: false, enabled: control.enabled && connected(), action: () => { remoteStore.sendComposerUi(control.action) })
         }
       }
     }
     .padding(14)
-    .background(color.panel)
-    .style({ borderRadius: "var(--r-surface)" })
-    .transition(Transition.opacity.combined(Transition.move("bottom", 8)))
+    .background(FloatingGlass(radius: 16, tint: color.glass))
+    .cornerRadius(16)
+    .style({ isolation: "isolate" })
+    .transition(Transition.scale(0.96).combined(Transition.move("bottom", 10)))
   }
 }
 
@@ -336,9 +340,10 @@ struct Question: View {
       }
     }
     .padding(14)
-    .background(color.panel)
-    .style({ borderRadius: "var(--r-surface)" })
-    .transition(Transition.opacity.combined(Transition.move("bottom", 8)))
+    .background(FloatingGlass(radius: 16, tint: color.glass))
+    .cornerRadius(16)
+    .style({ isolation: "isolate" })
+    .transition(Transition.scale(0.96).combined(Transition.move("bottom", 10)))
   }
 }
 
@@ -356,9 +361,10 @@ struct Suggestions: View {
       }
     }
     .padding({ top: 6, bottom: 6 })
-    .background(color.panel)
-    .style({ borderRadius: "var(--r-surface)" })
-    .transition(Transition.opacity.combined(Transition.move("bottom", 6)))
+    .background(FloatingGlass(radius: 16, tint: color.glass))
+    .cornerRadius(16)
+    .style({ isolation: "isolate" })
+    .transition(Transition.scale(0.96).combined(Transition.move("bottom", 8)))
   }
 }
 
@@ -492,7 +498,7 @@ export struct Chat: View {
       if showJumpToLatest.value {
         HStack(spacing: 0) {
           Spacer()
-          ActionButton(title: "Jump to latest", kind: "secondary", small: true, enabled: true, action: () => { jumpToLatest() }, icon: "arrow-down", pill: true)
+          ActionButton(title: "Jump to latest", kind: "glass", small: true, enabled: true, action: () => { jumpToLatest() }, icon: "arrow-down", pill: true)
           Spacer()
         }
         .withProps({ className: "jump-latest-anchor" })

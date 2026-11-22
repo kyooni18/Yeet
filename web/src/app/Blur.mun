@@ -1,8 +1,9 @@
 import { BlurProfile, ProgressiveBlur } from "@mun-ui/progressive-blur"
 
 // The interface's blur material. These are the only recipes in use: a blur says
-// "this surface sits above what scrolls or sits beneath it", so it appears at bars
-// and scrims and nowhere else. Keep these siblings of animated views, never
+// "this surface sits above what scrolls or sits beneath it", so it appears at the floating
+// bars, behind sheets, and as the glass of floating surfaces, and nowhere else (not behind
+// the sidebar or inspector). Keep these siblings of animated views, never
 // descendants: an ancestor's opacity would hide the backdrop from the blur.
 
 /** Under the title bar: strongest at the top edge, gone by the time content is readable. */
@@ -23,12 +24,39 @@ export struct ComposerBlur: View {
   }
 }
 
-/** Behind a drawer: most blurred next to the drawer, clearing toward the far side. */
-export struct DrawerBlur: View {
-  let edge: String
-  let open: Bool
+/** Frosted backing for a floating surface (toast, Jump to latest, the cards above the
+ * composer). It is one element carrying the tint and the corners, with an unclipped
+ * uniform blur inside it. Rounding uses `cornerRadius` + `clipped` on this element rather
+ * than a clip shape on the blur: a clip-path (like an opacity) on an ancestor of the blur
+ * makes a backdrop root and the blur would see nothing. Use it as the surface's only
+ * `.background(...)`, give that surface `isolation: isolate` (so the backing stays behind
+ * its content without making a backdrop root) and no opacity transition. */
+export struct FloatingGlass: View {
+  let radius: Number
+  let tint: String
   var body: some View {
-    ProgressiveBlur(BlurProfile.edge(edge, 420).easing("smooth"), { radius: 10, amount: open ? 1 : 0, fadeMs: 200 })
+    Element("div", {}) {
+      ProgressiveBlur(BlurProfile.uniform(), { radius: 12 })
+    }
+    .background(tint)
+    .cornerRadius(radius)
+    .clipped()
+    .style({ position: "absolute", inset: "0px", pointerEvents: "none", zIndex: "-1" })
+    .withProps({ "aria-hidden": "true" })
+  }
+}
+
+/** The glass backing only when a button asks for it (Jump to latest). */
+export struct GlassIf: View {
+  let on: Bool
+  let radius: Number
+  let tint: String
+  var body: some View {
+    Group() {
+      if on {
+        FloatingGlass(radius: radius, tint: tint)
+      }
+    }
   }
 }
 

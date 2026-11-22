@@ -11,7 +11,7 @@ import { AgentsPage } from "./Agents.mun"
 import { TasksPage } from "./Tasks.mun"
 import { DebatePage, ExtensionsPage } from "./Debate.mun"
 import { SheetLayer } from "./Sheets.mun"
-import { SheetBlur } from "./Blur.mun"
+import { SheetBlur, FloatingGlass } from "./Blur.mun"
 
 struct Content: View {
   var body: some View {
@@ -41,10 +41,11 @@ struct Toast: View {
       .withProps({ role: "status" })
       .fontSize(13)
       .padding({ top: 8, bottom: 8, leading: 14, trailing: 14 })
-      .background(color.accent)
-      .foregroundStyle(color.accentInk)
-      .style({ position: "fixed", bottom: "96px", left: "50%", translate: "-50% 0", borderRadius: "var(--r-control)", boxShadow: "var(--shadow-float)", zIndex: "var(--z-toast)" })
-      .transition(Transition.opacity.combined(Transition.move("bottom", 14)))
+      .background(FloatingGlass(radius: 8, tint: color.glassToast))
+      .foregroundStyle(color.glassInk)
+      .cornerRadius(8)
+      .style({ position: "fixed", bottom: "96px", left: "50%", translate: "-50% 0", boxShadow: "var(--shadow-float)", zIndex: "var(--z-toast)", isolation: "isolate" })
+      .transition(Transition.scale(0.9).combined(Transition.move("bottom", 14)))
   }
 }
 

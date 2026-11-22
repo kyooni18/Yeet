@@ -1,5 +1,4 @@
 import { Icon, Transition } from "@mun/core"
-import { DrawerBlur } from "./Blur.mun"
 import { remoteStore } from "@/store/remoteStore"
 import { workIcon } from "./workIcons"
 import { color } from "./theme"
@@ -288,7 +287,7 @@ export struct WorkspacePanel: View {
             Text(changeSummary()).fontSize(12).foregroundStyle(color.muted).withProps({ className: "panel-summary" })
           }.withProps({ className: "panel-context" }).style({ width: "100%", minWidth: "0" })
           VStack(alignment: .stretch, spacing: 0) {
-            Segmented(label: "Workspace view", options: inspectorTabs(), value: inspectorTab.value, onChange: selectInspectorTab)
+            Segmented(label: "Workspace view", options: inspectorTabs(), value: inspectorTab.value, onChange: selectInspectorTab, fill: true)
           }.padding({ leading: 16, trailing: 16, bottom: 12 })
           VStack(alignment: .stretch, spacing: 0) {
             if inspectorTab.value === "status" { SessionStatus() } else if inspectorTab.value === "changes" { Changes() } else { Files() }
@@ -306,7 +305,6 @@ export struct InspectorScrim: View {
   let open: Bool
   var body: some View {
     ZStack(alignment: .center) {
-      DrawerBlur(edge: "trailing", open: open)
       Button("") { toggleInspector(false) }
         .accessibilityLabel("Close workspace panel")
         .withProps({ className: "drawer-scrim", tabindex: "-1" })

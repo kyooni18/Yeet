@@ -1,5 +1,4 @@
 import { Icon, Transition, withAnimation } from "@mun/core"
-import { DrawerBlur } from "./Blur.mun"
 import { color } from "./theme"
 import { workIcon } from "./workIcons"
 import { sidebarRef } from "./drawer"
@@ -181,7 +180,6 @@ export struct Scrim: View {
   let open: Bool
   var body: some View {
     ZStack(alignment: .center) {
-      DrawerBlur(edge: "leading", open: open)
       Button("") { toggleSidebar(false) }
         .accessibilityLabel("Close navigation")
         .withProps({ className: "drawer-scrim", tabindex: "-1" })
