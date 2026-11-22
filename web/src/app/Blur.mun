@@ -26,8 +26,9 @@ export struct ComposerBlur: View {
 /** Behind a drawer: most blurred next to the drawer, clearing toward the far side. */
 export struct DrawerBlur: View {
   let edge: String
+  let open: Bool
   var body: some View {
-    ProgressiveBlur(BlurProfile.edge(edge, 420).easing("smooth"), { radius: 10 })
+    ProgressiveBlur(BlurProfile.edge(edge, 420).easing("smooth"), { radius: 10, amount: open ? 1 : 0, fadeMs: 200 })
   }
 }
 

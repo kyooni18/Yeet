@@ -57,7 +57,6 @@ export struct ExtensionsPage: View {
         ForEach(remote.value.state.extension_commands ?? [], { id: item => item.extensionId + ":" + item.command }) { item in
           VStack(alignment: .stretch, spacing: 8) {
             Text(item.command).style({ fontWeight: "var(--w-emphasis)" })
-            Text(item.description).withProps({ className: "form-help" })
             Button("Run " + item.command) { remoteStore.send({ type: "extension_command", command: item.command, args: args.value.split("\n").filter(Boolean) }) }
               .withProps({ className: "form-action" }).disabled(!connected() || remote.value.state.is_streaming)
           }.withProps({ className: "feature-card" }).style({ width: "100%" })

@@ -297,8 +297,14 @@ meter { appearance: none; border: 0; border-radius: 4px; background: var(--field
 meter::-webkit-meter-bar { background: var(--field); border: 0; height: 4px; }
 meter::-webkit-meter-optimum-value { background: var(--muted); border-radius: 4px; }
 meter::-moz-meter-bar { background: var(--muted); border-radius: 4px; }
-.drawer-scrim-layer { position: fixed; inset: 0; z-index: var(--z-scrim); width: 100%; height: 100%; }
-.drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; background: var(--scrim); cursor: default; }
+.drawer-scrim-layer { position: fixed; inset: 0; z-index: var(--z-scrim); width: 100%; height: 100%; background-color: transparent; pointer-events: none; transition: background-color var(--motion-base); }
+.drawer-scrim-layer[data-open="true"] { background-color: var(--scrim); pointer-events: auto; }
+.drawer-scrim { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; cursor: default; }
+/* A pane's space in the layout. The pane slides by transform alone; this slot eases the
+   width it occupies so the main area follows it instead of snapping when it leaves. */
+.pane-slot { flex: none; width: 0; transition: width var(--motion-base); }
+.pane-slot--leading[data-open="true"] { width: 272px; }
+.pane-slot--trailing[data-open="true"] { width: 328px; }
 
 /* Flat, scannable work history. The action, object and disclosure have distinct roles. */
 .activity-group, .trace-disclosure { width: 100%; min-width: 0; }

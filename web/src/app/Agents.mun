@@ -120,7 +120,6 @@ struct AgentsContent: View {
       } else {
         VStack(alignment: .stretch, spacing: 4) {
           Text(remote.value.agents.empty_title).foregroundStyle(color.muted)
-          Text(remote.value.agents.empty_message).fontSize(12).foregroundStyle(color.faint)
         }
       }
       if remote.value.agents.feed.length {

@@ -93,6 +93,13 @@ struct Switch: View {
   }
 }
 
+/** A line under a setting's name is kept only when it explains why the control is
+ * unavailable or reports live state (web-search status and setup); descriptions of what
+ * a control does are not shown. */
+function showsDetail(control: Any): boolean {
+  return !!control.detail && (!control.enabled || String(control.id).startsWith("web_"))
+}
+
 struct SettingControl: View {
   let control: Any
   let section: String
@@ -116,7 +123,9 @@ struct SettingControl: View {
           HStack(spacing: 10) {
             VStack(alignment: .stretch, spacing: 1) {
               Text(control.label).fontSize(13)
-              Text(control.detail).fontSize(12).foregroundStyle(color.muted)
+              if showsDetail(control) {
+                Text(control.detail).fontSize(12).foregroundStyle(color.muted)
+              }
             }
             .style({ flex: "1", minWidth: "0", overflowWrap: "anywhere" })
             Spacer()
@@ -152,7 +161,6 @@ struct SettingsEditor: View {
           .disabled(!connected() || remote.value.settings.working)
         Button("Cancel") { remoteStore.sendSettingsUi({ type: "cancel_editor" }) }.foregroundStyle(color.muted)
       }
-      Text(remote.value.settings?.editor?.hint || "").fontSize(12).foregroundStyle(color.faint)
     }
     .style({ width: "100%", minWidth: "0" })
     .transition(Transition.opacity)

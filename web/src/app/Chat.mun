@@ -361,7 +361,6 @@ struct Suggestions: View {
         Button(action: { chooseSuggestion(item) }, label: {
           HStack(spacing: 12) {
             Text(item.command).fontSize(13).style({ fontFamily: mono })
-            Text(item.description).fontSize(13).foregroundStyle(color.faint).lineLimit(1)
             Spacer()
           }
         })

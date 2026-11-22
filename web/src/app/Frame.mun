@@ -69,7 +69,7 @@ export struct TitleBar: View {
       if !sidebarOpen.value {
         IconButton(icon: "sidebar", label: "Toggle sidebar", action: { toggleSidebar(true) })
           .withProps({ "aria-controls": "sidebar", "aria-expanded": sidebarOpen.value })
-          .transition(Transition.opacity)
+          .transition(Transition.scale(0.85))
       }
       HStack(spacing: 8) {
         Text(pageTitle()).lineLimit(1)

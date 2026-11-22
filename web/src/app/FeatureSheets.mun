@@ -138,7 +138,7 @@ struct CapabilitiesSheet: View {
         VStack(alignment: .stretch, spacing: 6) {
           Toggle(item.name, Binding(() => item.enabled, value => { if (value !== item.enabled) remoteStore.toggleCapability(item.id) }))
             .disabled(!connected() || remote.value.state.is_loading_capabilities)
-          Text(item.kind + " · " + item.description).withProps({ className: "form-help" })
+          Text(item.kind).withProps({ className: "form-help" })
         }.withProps({ className: "feature-card" }).style({ width: "100%" })
       }
       if !remote.value.state.available_capabilities.length {

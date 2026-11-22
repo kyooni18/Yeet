@@ -182,14 +182,18 @@ export struct Sidebar: View {
   }
 }
 
+/** Mounted for as long as the layout is narrow, so the blur and tint can ease in and out
+ * (blur through its own amount, tint through a CSS colour transition) with no opacity on
+ * any ancestor of the blur. */
 export struct Scrim: View {
+  let open: Bool
   var body: some View {
     ZStack(alignment: .center) {
-      DrawerBlur(edge: "leading")
+      DrawerBlur(edge: "leading", open: open)
       Button("") { toggleSidebar(false) }
         .accessibilityLabel("Close navigation")
         .withProps({ className: "drawer-scrim", tabindex: "-1" })
-        .transition(Transition.opacity)
-    }.withProps({ className: "drawer-scrim-layer" })
+        .disabled(!open)
+    }.withProps({ className: "drawer-scrim-layer", "data-open": open, "aria-hidden": !open })
   }
 }

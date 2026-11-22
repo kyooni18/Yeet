@@ -50,13 +50,15 @@ struct Toast: View {
 struct Shell: View {
   var body: some View {
     HStack(alignment: .stretch, spacing: 0) {
-      if sidebarOpen.value {
-        Sidebar()
-          .id("sidebar")
-          .transition(Transition.opacity.combined(Transition.move("leading", 12)))
-      }
-      if sidebarOpen.value && !isWide.value {
-        Scrim().id("scrim")
+      Element("div", {}) {
+        if sidebarOpen.value {
+          Sidebar()
+            .id("sidebar")
+            .transition(Transition.move("leading", 280))
+        }
+      }.withProps({ className: "pane-slot pane-slot--leading", "data-open": sidebarOpen.value && isWide.value })
+      if !isWide.value {
+        Scrim(open: sidebarOpen.value).id("scrim")
       }
       VStack(alignment: .stretch, spacing: 0) {
         TitleBar()
@@ -66,14 +68,16 @@ struct Shell: View {
       .id("main")
       .withProps({ id: "main", role: "main" })
       .style({ flex: "1", minWidth: "0", height: "100%" })
-      if inspectorOpen.value && !isDesktop.value {
-        InspectorScrim().id("inspector-scrim")
+      if !isDesktop.value {
+        InspectorScrim(open: inspectorOpen.value).id("inspector-scrim")
       }
-      if inspectorOpen.value {
-        WorkspacePanel()
-          .id("workspace-panel")
-          .transition(Transition.opacity.combined(Transition.move("trailing", 12)))
-      }
+      Element("div", {}) {
+        if inspectorOpen.value {
+          WorkspacePanel()
+            .id("workspace-panel")
+            .transition(Transition.move("trailing", 336))
+        }
+      }.withProps({ className: "pane-slot pane-slot--trailing", "data-open": inspectorOpen.value && isDesktop.value })
       if sheet.value !== "none" {
         SheetLayer().id("sheet")
       }

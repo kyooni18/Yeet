@@ -18,7 +18,6 @@ export struct SandboxSheet: View {
   @State var confirmReset: Bool = false
   var body: some View {
     VStack(alignment: .stretch, spacing: 12) {
-      Text("These permissions affect commands run on the Yeet server. Unlimited mode grants normal user authority.").withProps({ className: "form-help" })
       if remote.value.state.sandbox_notice { Text(remote.value.state.sandbox_notice).withProps({ role: "status", className: "form-notice" }) }
       if remote.value.state.sandbox_settings {
         Text("Preset").fontSize(13)

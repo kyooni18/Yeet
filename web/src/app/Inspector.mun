@@ -302,13 +302,14 @@ export struct WorkspacePanel: View {
 }
 
 export struct InspectorScrim: View {
+  let open: Bool
   var body: some View {
     ZStack(alignment: .center) {
-      DrawerBlur(edge: "trailing")
+      DrawerBlur(edge: "trailing", open: open)
       Button("") { toggleInspector(false) }
         .accessibilityLabel("Close workspace panel")
         .withProps({ className: "drawer-scrim", tabindex: "-1" })
-        .transition(Transition.opacity)
-    }.withProps({ className: "drawer-scrim-layer" })
+        .disabled(!open)
+    }.withProps({ className: "drawer-scrim-layer", "data-open": open, "aria-hidden": !open })
   }
 }
