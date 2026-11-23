@@ -32,7 +32,7 @@ pub use provider_bridge::{
     BridgeClient, BridgeEvent, BridgeStream, NativeAppApprovalRequest, StreamPoll,
 };
 use runtime::bridge_script;
-pub use runtime::{edit_daemon_script, node_executable, runtime_directory};
+pub use runtime::{bundled_skills_dir, edit_daemon_script, node_executable, runtime_directory};
 
 pub const BRIDGE_PROTOCOL_VERSION: u64 = 1;
 const BRIDGE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);

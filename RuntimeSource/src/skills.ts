@@ -28,6 +28,8 @@ export interface SkillRegistryOptions {
   roots?: string[];
   projectRoot?: string;
   includeCodexSkills?: boolean;
+  /** Directory holding bundled skills. Defaults to `YEET_BUNDLED_SKILLS_DIR`, then the module-relative `skills/`. */
+  bundledRoot?: string;
 }
 
 export interface SkillInstallResult {
@@ -223,7 +225,12 @@ export class SkillRegistry {
   constructor(options: SkillRegistryOptions = {}) {
     this.configDir = options.configDir ?? defaultConfigDirectory();
     this.userRoot = join(this.configDir, "skills");
-    this.bundledRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "skills");
+    // A compiled single-file runtime has no on-disk module location, so the host passes the skills directory.
+    this.bundledRoot = resolve(
+      options.bundledRoot
+        ?? process.env.YEET_BUNDLED_SKILLS_DIR
+        ?? join(dirname(fileURLToPath(import.meta.url)), "..", "skills"),
+    );
     if (options.roots?.length) {
       this.roots = options.roots.map((root) => resolve(root));
     } else {

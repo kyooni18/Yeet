@@ -69,6 +69,12 @@ pub fn node_executable() -> Result<PathBuf> {
     Ok(PathBuf::from("node"))
 }
 
+/// Bundled skills ship beside the runtime `dist/`. The bridge receives this path
+/// explicitly because a compiled single-file runtime cannot locate it itself.
+pub fn bundled_skills_dir() -> Result<PathBuf> {
+    Ok(runtime_directory()?.join("skills"))
+}
+
 pub(super) fn bridge_script() -> Result<PathBuf> {
     Ok(runtime_directory()?.join("dist/bridge.js"))
 }

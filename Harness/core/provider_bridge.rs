@@ -48,6 +48,7 @@ impl BridgeClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        command.env("YEET_BUNDLED_SKILLS_DIR", bundled_skills_dir()?);
         if let Some(workspace) = workspace {
             command.current_dir(workspace);
             apply_workspace_env(&mut command, workspace)?;
@@ -202,6 +203,7 @@ impl BridgeClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        command.env("YEET_BUNDLED_SKILLS_DIR", bundled_skills_dir()?);
         if let Some(workspace) = &self.workspace {
             command.current_dir(workspace);
             apply_workspace_env(&mut command, workspace)?;
