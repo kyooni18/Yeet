@@ -28,7 +28,6 @@ struct ListRow: View {
   let detail: String
   let selected: Bool
   let action: () => void
-  @State var hovering: Bool = false
   var body: some View {
     Button(action: action, label: {
       HStack(spacing: 10) {
@@ -42,10 +41,6 @@ struct ListRow: View {
       }.style({ width: "100%" })
     })
     .withProps({ className: "model-row", "aria-pressed": selected, title: title + (detail ? " · " + detail : "") })
-    .padding({ top: 9, bottom: 9, leading: 10, trailing: 10 })
-    .background(hovering.value ? color.hover : "transparent")
-    .style({ borderRadius: "var(--r-inline)" })
-    .onHover(inside => { hovering.value = inside })
   }
 }
 
@@ -60,12 +55,10 @@ struct ModelSheet: View {
         StopSlider(label: toolbarControl("reasoning").label, options: toolbarControl("reasoning").options, value: toolbarControl("reasoning").value, onChange: chooseReasoning, enabled: connected() && toolbarControl("reasoning").enabled)
           .withProps({ className: "reasoning-slider" })
       }
+      Text("Model").withProps({ className: "sheet-section-label" })
       TextField(Binding(modelQuery), "Search models")
         .accessibilityLabel("Search models")
         .withProps({ className: "model-search", type: "search" })
-        .padding({ top: 8, bottom: 8, leading: 10, trailing: 10 })
-        .background(color.raised)
-        .style({ border: "0", outline: "none", borderRadius: "var(--r-control)", font: "inherit", color: "inherit" })
       if remote.value.state.is_loading_models {
         Text("Loading models…").fontSize(12).foregroundStyle(color.muted)
       }

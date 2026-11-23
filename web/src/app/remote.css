@@ -263,7 +263,7 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 :root[data-keyboard-open="true"] .composer-hint { display: none; }
 .composer textarea { max-height: min(180px, calc(var(--app-height, 100dvh) * 0.3)) !important; }
 .composer-surface { border-radius: var(--r-surface); box-shadow: var(--shadow-pane); transition: box-shadow var(--motion-base); }
-.composer-surface:focus-within { box-shadow: var(--shadow-pane), 0 0 0 2px var(--focus); }
+.composer-surface:focus-within { box-shadow: 0 0 0 1px color-mix(in srgb, var(--focus) 55%, transparent), 0 2px 6px rgba(0, 0, 0, 0.04), 0 14px 36px rgba(0, 0, 0, 0.07); }
 .composer-surface[data-dropping] { box-shadow: var(--shadow-pane), 0 0 0 2px var(--focus); background: color-mix(in srgb, var(--focus) 8%, var(--composer)) !important; }
 .composer-suggestion { width: 100%; text-align: left; }
 .composer-suggestion[aria-selected="true"] { background: var(--hover); }
@@ -474,7 +474,7 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 
 /* Composer controls are secondary to the message: small, quiet, one row. */
 .composer-controls { margin-left: -6px; width: calc(100% + 6px) !important; }
-.composer-controls .icon-button { width: 30px; height: 30px; }
+.composer-controls .icon-button { width: 28px; height: 28px; }
 .composer-controls .model-trigger, .composer-controls select { font-size: 12px !important; color: var(--muted); }
 .composer-controls select { appearance: none; padding: 5px 8px; border-radius: var(--r-control); cursor: pointer; transition: background var(--motion-fast), color var(--motion-fast); }
 .composer-controls select:hover:not(:disabled) { background: var(--hover); color: var(--text); }
@@ -588,3 +588,38 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 .stop-slider__input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--focus), 0 2px 6px rgba(0, 0, 0, 0.28); }
 .stop-slider__input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(--focus), 0 2px 6px rgba(0, 0, 0, 0.28); }
 @media (hover: none), (pointer: coarse) { .stop-slider { --thumb: 26px; --track-h: 44px; } }
+
+/* Polish pass. Quiet resting states, one hairline for focus, motion only where it explains. */
+.composer-surface { transition: box-shadow var(--motion-base), background var(--motion-base); }
+.model-trigger { gap: 4px; }
+.model-trigger:active:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.model-trigger:disabled { opacity: 0.5; }
+.model-trigger:focus-visible, .send-button:focus-visible, .workspace-chooser__field:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.model-trigger__chevron { flex: none; margin-left: 2px; color: var(--faint); transition: color var(--motion-fast); }
+.model-trigger:hover:not(:disabled) .model-trigger__chevron { color: var(--muted); }
+.send-button svg { transition: transform var(--motion-base); }
+.send-button:hover:not(:disabled) svg { transform: translateY(-1px); }
+.composer-context { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.context-ring { display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 50%; -webkit-mask: radial-gradient(circle, transparent 4px, #000 4.5px); mask: radial-gradient(circle, transparent 4px, #000 4.5px); }
+.workspace-chooser__field { transition: background var(--motion-fast); }
+.workspace-chooser__field:hover { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.workspace-chooser__field:focus-within { outline-offset: 0; }
+.workspace-picker:focus-visible { outline: none; }
+.workspace-picker option { color: initial; }
+
+/* Model sheet: labelled sections, a search field with its glass, and rows that read as one list. */
+.sheet-section-label { font-size: 12px; color: var(--muted); padding: 4px 2px 0; }
+.model-search { box-sizing: border-box; height: 36px; padding: 0 12px 0 34px !important; border: 0; border-radius: var(--r-control); background: var(--well) no-repeat 11px center / 14px 14px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.4 15.4l4.6 4.6'/%3E%3C/svg%3E"); box-shadow: inset 0 0 0 0.5px var(--btn-edge); color: inherit; font: inherit; outline: none; -webkit-appearance: none; appearance: none; transition: box-shadow var(--motion-fast); }
+.model-search:focus { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--focus) 60%, transparent); }
+.model-search::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+.model-search::placeholder { color: var(--muted); opacity: 0.8; }
+.model-row { display: block; padding: 8px 10px; border-radius: var(--r-control); text-align: left; transition: background var(--motion-fast); }
+.model-row:hover { background: var(--hover); }
+.model-row:active { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.model-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.model-row[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 9%, transparent); font-weight: var(--w-emphasis); }
+.model-row[aria-pressed="true"] svg { color: var(--accent); }
+.reasoning-slider { padding: 4px 2px 12px; margin-bottom: 8px; }
+.stop-slider__fill { transition: none; }
+:root[data-appearance="dark"] .stop-slider__input::-webkit-slider-thumb { background: radial-gradient(circle, var(--accent) 0 3px, #f2f2f2 3.5px); }
+@media (hover: none), (pointer: coarse) { .model-row { padding: 12px 10px; } .model-search { height: 44px; } }

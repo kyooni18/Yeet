@@ -4,7 +4,7 @@ import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
   remote, spring, isWide, connected, openSheet, contextPercentLabel, shortModel,
-  reasoningLabel, conversationRef, workspaceLine, elapsed,
+  reasoningLabel, statusSnapshot, conversationRef, workspaceLine, elapsed,
   showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
   contextDescription, hiddenTranscriptCount, showEarlierTranscript, transcriptKey,
 } from "./state"
@@ -383,6 +383,12 @@ function earlierLabel(): string {
   return "Show " + Math.min(count, 120) + " earlier " + (count === 1 ? "item" : "items")
 }
 
+/** A small donut for the context share: the filled arc is the used part. */
+function contextRing(): string {
+  const percent = Math.min(100, Math.max(0, statusSnapshot.value.contextPercent ?? 0))
+  return "conic-gradient(var(--muted) " + percent * 3.6 + "deg, color-mix(in srgb, var(--text) 14%, transparent) 0)"
+}
+
 function sendLabel(): string {
   return remote.value.composer?.primary_control.label || "Send"
 }
@@ -458,12 +464,13 @@ struct Composer: View {
               if reasoningLabel() !== "" {
                 Text(reasoningLabel()).lineLimit(1).withProps({ className: "model-trigger__reasoning" })
               }
-              Icon(workIcon("chevron"), { width: 12, height: 12 }).style({ transform: "rotate(90deg)", flex: "none" })
+              Icon(workIcon("selector"), { width: 12, height: 12 }).withProps({ className: "model-trigger__chevron" })
             }
           }).withProps({ className: "model-trigger", "aria-haspopup": "dialog", "aria-label": "Model and reasoning", title: [remote.value.state.active_model, reasoningLabel()].filter(Boolean).join(" · ") || "Choose model and reasoning" }).disabled(!connected())
           Spacer()
           HStack(spacing: 0) {
             if (contextPercentLabel() !== "") {
+              Element("span").withProps({ className: "context-ring", "aria-hidden": "true" }).style({ background: contextRing() })
               Text(contextPercentLabel())
               Text(" context").withProps({ className: "composer-context__word" })
             } else {

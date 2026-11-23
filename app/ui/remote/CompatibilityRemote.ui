@@ -55,11 +55,12 @@ Shell: fixed app frame; the document never scrolls, only panes do
     Composer: floats over the bottom of the transcript on a bottom blur; its measured height pads the transcript and positions Jump to latest; same column alignment, one bordered flat surface, auto-growing field
       Compact: 10px top, 8px sides and bottom inset; field and controls row sit 4px apart; controls are 28px on pointer, 44px on touch
       Controls: one quiet row; attachment, model-and-reasoning, context, send/stop
-        ModelReasoning: one trigger showing model and reasoning level; opens a sheet with the reasoning slider above the model search and list
+        ModelReasoning: one trigger showing model and reasoning level; opens a sheet with the reasoning slider, then a labelled Model section (search field with glass, rows with the current model tinted and checked)
           ReasoningSlider: discrete stops, filled track, a dot per stop, round thumb, chosen level beside the name, first and last level beneath; keyboard and touch operable
         Send: flat accent key, 8px corners concentric with the 16px surface and 8px inset; neutral when it cannot send; inverted square while stopping
         Phone: same single row; context does not take a line of its own
-      Context: compact percentage plus accessible used/limit token information
+      Context: small donut plus compact percentage, with accessible used/limit token information
+      Focus: one hairline accent ring on the composer surface; controls use a 2px focus outline
       No explanatory helper copy beneath the composer
   WorkspacePanel: 320px, collapsible, visible by default at >=1280px
     Header: 44px, on the title-bar line; workspace name, refresh, close
