@@ -1,10 +1,10 @@
 import { Icon, Transition } from "@mun/core"
-import { ActionButton, Segmented } from "./Common.mun"
+import { ActionButton, Segmented, StopSlider } from "./Common.mun"
 import { workIcon } from "./workIcons"
 import { SheetBlur } from "./Blur.mun"
 import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
-import { remote, sheet, spring, connected, openSheet, shortModel, settingsEditorValue } from "./state"
+import { remote, sheet, spring, connected, openSheet, shortModel, settingsEditorValue, toolbarControl } from "./state"
 import { FeatureSheet, sheetTitle } from "./FeatureSheets.mun"
 import { modalRef } from "./modal"
 
@@ -49,9 +49,17 @@ struct ListRow: View {
   }
 }
 
+function chooseReasoning(value: string) {
+  remoteStore.sendToolbarUi({ type: "choose", value: { id: "reasoning", value } })
+}
+
 struct ModelSheet: View {
   var body: some View {
     VStack(alignment: .stretch, spacing: 8) {
+      if toolbarControl("reasoning")?.options?.length > 1 {
+        StopSlider(label: toolbarControl("reasoning").label, options: toolbarControl("reasoning").options, value: toolbarControl("reasoning").value, onChange: chooseReasoning, enabled: connected() && toolbarControl("reasoning").enabled)
+          .withProps({ className: "reasoning-slider" })
+      }
       TextField(Binding(modelQuery), "Search models")
         .accessibilityLabel("Search models")
         .withProps({ className: "model-search", type: "search" })

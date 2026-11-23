@@ -118,7 +118,7 @@ test('the phone composer keeps touch-sized controls and focuses from the whole s
   for (const target of targets) expect(target.height, target.label).toBeGreaterThanOrEqual(44)
   const controls = surface.locator('.composer-controls')
   const send = await controls.getByRole('button', { name: 'Send', exact: true }).boundingBox()
-  const model = await controls.getByRole('button', { name: 'Choose model' }).boundingBox()
+  const model = await controls.getByRole('button', { name: 'Model and reasoning' }).boundingBox()
   expect(Math.abs(send!.y - model!.y)).toBeLessThanOrEqual(2)
   expect(send!.x).toBeGreaterThan(model!.x)
   const field = page.getByRole('textbox', { name: 'Message', exact: true })
@@ -126,6 +126,24 @@ test('the phone composer keeps touch-sized controls and focuses from the whole s
   // Tapping the bubble itself focuses the field instead of doing nothing.
   await surface.click({ position: { x: 8, y: 4 } })
   await expect(field).toBeFocused()
-  await surface.getByRole('button', { name: 'Choose model' }).click()
+  await surface.getByRole('button', { name: 'Model and reasoning' }).click()
   await expect(field).not.toBeFocused()
+})
+
+test('model and reasoning share one trigger; the reasoning slider sends the chosen level', async ({ page }) => {
+  const trigger = page.getByRole('button', { name: 'Model and reasoning', exact: true })
+  await expect(trigger).toContainText('High')
+  await trigger.click()
+  const dialog = page.getByRole('dialog', { name: 'Model & reasoning', exact: true })
+  const slider = dialog.getByRole('slider', { name: 'Reasoning' })
+  await expect(slider).toBeVisible()
+  await slider.focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect.poll(() => page.evaluate(() => (window as any).__yeetSent.filter((message: any) => message.type === 'ui_toolbar_action' && message.action?.type === 'choose' && message.action.value.id === 'reasoning').length)).toBeGreaterThan(0)
+})
+
+test('an empty new chat chooses its workspace in the title bar, not the composer', async ({ page }) => {
+  await emit(page, { conversation: [], current_session_id: null })
+  await expect(page.locator('.topbar').getByRole('combobox', { name: 'Workspace for new chat' })).toBeVisible()
+  await expect(page.locator('.composer').getByRole('combobox', { name: 'Workspace for new chat' })).toHaveCount(0)
 })

@@ -43,8 +43,8 @@ test('shell and composer fill available width, including empty chats and short d
     return { area: area.x + area.width / 2, logo: logo.x + logo.width / 2 }
   })
   expect(center.logo).toBeCloseTo(center.area, 0)
-  await page.getByRole('button', { name: 'Choose model', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: 'Model', exact: true })
+  await page.getByRole('button', { name: 'Model and reasoning', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Model & reasoning', exact: true })
   await expect(dialog.locator('.model-row').first()).toBeVisible()
   const alignment = await dialog.evaluate(el => {
     const bounds = el.getBoundingClientRect(), root = document.querySelector('#root')!.getBoundingClientRect()

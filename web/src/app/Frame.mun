@@ -7,6 +7,7 @@ import { TopBarBlur } from "./Blur.mun"
 import {
   statusSnapshot, page, sidebarOpen, inspectorOpen, toggleSidebar, toggleInspector, workspaceFiles, workspaceChanges,
   displayPath, openPage, openSheet, manageSession, elapsed, isWorking, runtimeState,
+  chooseWorkspace, workspaces, isNewChat, connected,
 } from "./state"
 
 const PAGE_TITLES: Record<string, string> = {
@@ -59,6 +60,23 @@ function workingElsewhere(): boolean {
   return isWorking() && page.value !== "chat"
 }
 
+/** Workspace for an empty new chat, chosen at the top of the window; never offered once a conversation exists. */
+struct WorkspaceChooser: View {
+  var body: some View {
+    HStack(spacing: 2) {
+      HStack(spacing: 6) {
+        Icon(workIcon("folder"), { width: 15, height: 15 })
+        Picker(Binding(() => runtimeState.value.workspace_root || "", value => chooseWorkspace(value, workspaces().find(item => item.path === value)?.id || value)), workspaces().map(item => ({ value: item.path, label: item.label })))
+          .accessibilityLabel("Workspace for new chat")
+          .withProps({ className: "workspace-picker" })
+          .disabled(!connected())
+      }.withProps({ className: "workspace-chooser__field" })
+      IconButton(icon: "plus", label: "Open another workspace path", action: { openSheet("workspace") })
+        .disabled(!connected())
+    }.withProps({ className: "workspace-chooser" })
+  }
+}
+
 /** Window title bar: navigation toggle, location, run and connection state when they matter, inspector toggle. */
 export struct TitleBar: View {
   var body: some View {
@@ -78,6 +96,9 @@ export struct TitleBar: View {
           Text(pageContext()).lineLimit(1).withProps({ className: "titlebar-context", title: pageContext() })
         }
       }.withProps({ className: "titlebar-location" })
+      if page.value === "chat" && isNewChat() === true {
+        WorkspaceChooser()
+      }
       if page.value === "chat" && runtimeState.value.current_session_id {
         IconButton(icon: "sliders", label: "Session settings", action: { manageSession(runtimeState.value.current_session_id, pageTitle()) })
           .withProps({ "aria-haspopup": "dialog" })

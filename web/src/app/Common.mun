@@ -87,35 +87,6 @@ export struct Segmented: View {
   }
 }
 
-function sendPadding(): number {
-  return isRoomy() ? 12.5 : 5.5
-}
-
-/** Primary when it can send; a neutral key while it cannot or while it stops a run. */
-function sendIsPrimary(streaming: boolean, enabled: boolean): boolean {
-  return enabled && !streaming
-}
-
-function sendTextColor(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentInk : enabled ? color.text : color.muted
-}
-
-function sendTop(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentTop : enabled ? color.btnTop : color.field
-}
-
-function sendBottom(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentBottom : enabled ? color.btnBottom : color.field
-}
-
-function sendEdge(streaming: boolean, enabled: boolean): string {
-  return sendIsPrimary(streaming, enabled) ? color.accentEdge : enabled ? color.btnEdge : "transparent"
-}
-
-function sendDrop(streaming: boolean, enabled: boolean, pressed: boolean): string {
-  return pressed || !enabled ? "transparent" : sendIsPrimary(streaming, enabled) ? color.accentGlow : color.btnDrop
-}
-
 /** Vertical padding that makes the button itself 28/32px (44px on touch and narrow
  * layouts), so the click target is exactly the visible control. */
 function verticalPadding(small: boolean): number {
@@ -230,38 +201,83 @@ export struct Chip: View {
   }
 }
 
-/** The composer's primary control: send, or stop while a run is streaming. */
+/** The composer's primary control: send, or stop while a run is streaming.
+ * One flat key; colour, hover and press come from CSS so the shape stays concentric
+ * with the composer surface (16px surface, 8px inset, 8px key). */
 export struct SendButton: View {
   let streaming: Bool
   let enabled: Bool
   let label: String
   let action: () => void
-  @State var hovering: Bool = false
-  @State var pressed: Bool = false
   var body: some View {
     Button(action: action, label: {
       if streaming {
-        RoundedRectangle(3).fill(color.text).frame(width: 12, height: 12)
+        RoundedRectangle(2).fill("currentColor").frame(width: 10, height: 10)
       } else {
-        Icon(workIcon("arrow"), { width: 19, height: 19 })
+        Icon(workIcon("arrow"), { width: 17, height: 17, strokeWidth: 2 })
       }
     })
       .disabled(!enabled)
       .accessibilityLabel(label)
-      .withProps({ title: streaming ? "Stop generating" : "Send message", className: "send-button" })
-      .foregroundStyle(sendTextColor(streaming, enabled))
-      .padding(sendPadding())
-      .background(LinearGradient(colors: [Color(sendTop(streaming, enabled)), Color(sendBottom(streaming, enabled))], startPoint: .top, endPoint: .bottom))
-      .border(sendEdge(streaming, enabled), 1)
-      .cornerRadius(8)
-      .shadow(sendDrop(streaming, enabled, pressed.value), 8, 0, pressed.value ? 0 : 3)
-      .overlay(RoundedRectangle(8).fill(pressed.value ? color.pressed : hovering.value && enabled ? color.hover : "transparent").allowsHitTesting(false))
-      .style({ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" })
-      .animation(quick, value: hovering.value)
-      .animation(spring, value: streaming)
-      .onHover(inside => { hovering.value = inside })
-      .withProps({ onPointerDown: () => { pressed.value = true }, onPointerUp: () => { pressed.value = false }, onPointerLeave: () => { pressed.value = false }, onPointerCancel: () => { pressed.value = false } })
+      .withProps({ title: streaming ? "Stop generating" : "Send message", className: "send-button", "data-mode": streaming ? "stop" : "send" })
   }
+}
+
+/** Discrete choice as a slider: filled track, a dot per stop, the chosen label beside the name.
+ * The value always round-trips through `onChange`; this view holds no state of its own. */
+export struct StopSlider: View {
+  let label: String
+  let options: Any
+  let value: String
+  let onChange: (value: string) => void
+  let enabled: Bool = true
+  var body: some View {
+    VStack(alignment: .stretch, spacing: 6) {
+      HStack(spacing: 8) {
+        Text(label).fontSize(13).foregroundStyle(color.muted)
+        Spacer()
+        Text(stopLabel(options, value)).fontSize(13).style({ fontWeight: "var(--w-emphasis)" }).withProps({ "aria-hidden": "true" })
+      }
+      ZStack(alignment: .center) {
+        Element("span").withProps({ className: "stop-slider__track", "aria-hidden": "true" })
+        Element("span").withProps({ className: "stop-slider__fill", "aria-hidden": "true" }).style({ width: stopPosition(options, value) })
+        ForEach(stopIndices(options), { id: index => index }) { index in
+          Element("span").withProps({ className: "stop-slider__stop", "aria-hidden": "true", "data-passed": index <= stopIndex(options, value) }).style({ left: stopAt(options, index) })
+        }
+        Slider(Binding(() => stopIndex(options, value), index => { onChange(options[Math.round(index)].value) }), { min: 0, max: options.length - 1, step: 1 })
+          .accessibilityLabel(label)
+          .disabled(!enabled)
+          .withProps({ className: "stop-slider__input", "aria-valuetext": stopLabel(options, value) })
+      }.withProps({ className: "stop-slider" })
+      HStack(spacing: 8) {
+        Text(options[0].label).fontSize(12).foregroundStyle(color.faint)
+        Spacer()
+        Text(options[options.length - 1].label).fontSize(12).foregroundStyle(color.faint)
+      }
+    }
+    .style({ width: "100%", minWidth: "0" })
+  }
+}
+
+function stopIndex(options: Any, value: string): number {
+  return Math.max(0, options.findIndex(option => option.value === value))
+}
+
+function stopIndices(options: Any): Any {
+  return options.map((option, index) => index)
+}
+
+function stopLabel(options: Any, value: string): string {
+  return options[stopIndex(options, value)]?.label ?? ""
+}
+
+/** Thumb centres travel the track minus one thumb width (var(--thumb)). */
+function stopAt(options: Any, index: number): string {
+  return "calc(var(--thumb) / 2 + (100% - var(--thumb)) * " + (options.length > 1 ? index / (options.length - 1) : 0) + ")"
+}
+
+function stopPosition(options: Any, value: string): string {
+  return stopAt(options, stopIndex(options, value))
 }
 
 /** Consistent hit area and native tooltip for shell actions. */

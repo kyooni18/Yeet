@@ -4,9 +4,9 @@ import { remoteStore } from "@/store/remoteStore"
 import { color, mono } from "./theme"
 import {
   remote, spring, isWide, connected, openSheet, contextPercentLabel, shortModel,
-  toolbarControl, conversationRef, workspaceLine, elapsed,
+  reasoningLabel, conversationRef, workspaceLine, elapsed,
   showJumpToLatest, jumpToLatest, conversationView, transcriptItems, streaming, runtimeState,
-  chooseWorkspace, workspaces, isNewChat, contextDescription, hiddenTranscriptCount, showEarlierTranscript, transcriptKey,
+  contextDescription, hiddenTranscriptCount, showEarlierTranscript, transcriptKey,
 } from "./state"
 import {
   text, attachments, canAttach, setText, primary, primaryEnabled, cancelEdit, chooseSuggestion, suggestions, onKeyDown,
@@ -408,23 +408,6 @@ struct AttachmentStrip: View {
   }
 }
 
-struct ToolbarChoice: View {
-  let id: String
-  var body: some View {
-    Group() {
-      if toolbarControl(id) !== null {
-        Picker(Binding(() => toolbarControl(id).value, value => remoteStore.sendToolbarUi({ type: "choose", value: { id, value } })),
-             toolbarControl(id).options.map(option => ({ value: option.value, label: option.label })))
-        .accessibilityLabel(toolbarControl(id).label)
-        .fontSize(13)
-        .foregroundStyle(color.faint)
-        .disabled(!connected() || !toolbarControl(id).enabled)
-        .style({ background: "transparent", border: "0", maxWidth: "160px" })
-      }
-    }
-  }
-}
-
 /** Rounded composer: message field above a quiet control row. */
 struct Composer: View {
   var body: some View {
@@ -447,17 +430,7 @@ struct Composer: View {
         .padding({ leading: 4 })
         .transition(Transition.opacity)
       }
-      VStack(alignment: .stretch, spacing: 8) {
-        if (isNewChat()) {
-          HStack(spacing: 8) {
-            Icon(workIcon("folder"), { width: 15, height: 15 })
-            Picker(Binding(() => runtimeState.value.workspace_root || "", value => chooseWorkspace(value, workspaces().find(item => item.path === value)?.id || value)), workspaces().map(item => ({ value: item.path, label: item.label })))
-              .accessibilityLabel("Workspace for new chat")
-              .withProps({ className: "composer-workspace-picker" })
-              .disabled(!connected())
-            Button("Open path…") { openSheet("workspace") }.withProps({ className: "panel-link" }).disabled(!connected())
-          }.withProps({ className: "composer-workspace" })
-        }
+      VStack(alignment: .stretch, spacing: 4) {
         if attachments.value.length {
           AttachmentStrip()
         }
@@ -482,10 +455,12 @@ struct Composer: View {
           Button(action: { openSheet("model") }, label: {
             HStack(spacing: 4) {
               Text(shortModel(remote.value.state.active_model) || "Model").lineLimit(1).style({ minWidth: "0" })
-              Icon(workIcon("chevron"), { width: 12, height: 12 }).style({ transform: "rotate(90deg)" })
+              if reasoningLabel() !== "" {
+                Text(reasoningLabel()).lineLimit(1).withProps({ className: "model-trigger__reasoning" })
+              }
+              Icon(workIcon("chevron"), { width: 12, height: 12 }).style({ transform: "rotate(90deg)", flex: "none" })
             }
-          }).withProps({ className: "model-trigger", "aria-label": "Choose model", title: remote.value.state.active_model || "Choose model" }).disabled(!connected())
-          ToolbarChoice(id: "reasoning")
+          }).withProps({ className: "model-trigger", "aria-haspopup": "dialog", "aria-label": "Model and reasoning", title: [remote.value.state.active_model, reasoningLabel()].filter(Boolean).join(" · ") || "Choose model and reasoning" }).disabled(!connected())
           Spacer()
           HStack(spacing: 0) {
             if (contextPercentLabel() !== "") {
@@ -498,7 +473,7 @@ struct Composer: View {
           SendButton(streaming: streaming.value, enabled: primaryEnabled(), label: sendLabel(), action: { primary() })
         }.withProps({ className: "composer-controls" })
       }
-      .padding({ top: 12, bottom: 8, leading: 16, trailing: 8 })
+      .padding({ top: 10, bottom: 8, leading: 14, trailing: 8 })
       .background(color.composer)
       .withProps({ className: "composer-surface", onClick: focusComposer, ...dropHandlers })
       .style({ width: "100%", minWidth: "0" })

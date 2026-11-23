@@ -1,11 +1,11 @@
 import { remoteStore } from "@/store/remoteStore"
 import { remote, sheet, connected, openSheet, openPage, managedSession, sessionTitle, sessionWorkspace, sessionConfirming, toolbarControl } from "./state"
 import { color } from "./theme"
-import { PrimaryButton, Chip, ActionButton, FieldLabel } from "./Common.mun"
+import { PrimaryButton, Chip, ActionButton, FieldLabel, StopSlider } from "./Common.mun"
 import { SandboxSheet } from "./Sandbox.mun"
 
 export function sheetTitle() {
-  return ({ model: "Model", settings: "Settings", reasoning: "Response controls", permissions: "Sandbox & permissions", auth: "Authentication", providers: "Custom providers", capabilities: "Capabilities", "agent-settings": "Agent Group settings", session: "Manage session", workspace: "Open workspace" })[sheet.value] || "Settings"
+  return ({ model: "Model & reasoning", settings: "Settings", reasoning: "Response controls", permissions: "Sandbox & permissions", auth: "Authentication", providers: "Custom providers", capabilities: "Capabilities", "agent-settings": "Agent Group settings", session: "Manage session", workspace: "Open workspace" })[sheet.value] || "Settings"
 }
 
 /** Native labelled controls; values always come back from the Rust projection. */
@@ -15,8 +15,12 @@ export struct ResponseControls: View {
       ForEach(["reasoning", "goal"], { id: id => id }) { id in
         if toolbarControl(id) {
           VStack(alignment: .stretch, spacing: 6) {
-            Text(toolbarControl(id).label).fontSize(13)
-            if toolbarControl(id).options.length {
+            if !(id === "reasoning" && toolbarControl(id).options.length > 1) {
+              Text(toolbarControl(id).label).fontSize(13)
+            }
+            if id === "reasoning" && toolbarControl(id).options.length > 1 {
+              StopSlider(label: toolbarControl(id).label, options: toolbarControl(id).options, value: toolbarControl(id).value, onChange: value => { remoteStore.sendToolbarUi({ type: "choose", value: { id, value } }) }, enabled: connected() && toolbarControl(id).enabled)
+            } else if toolbarControl(id).options.length {
               Picker(Binding(() => toolbarControl(id).value, value => remoteStore.sendToolbarUi({ type: "choose", value: { id, value } })), toolbarControl(id).options.map(option => ({ value: option.value, label: option.label })))
                 .accessibilityLabel(toolbarControl(id).label).withProps({ className: "form-field" })
                 .disabled(!connected() || !toolbarControl(id).enabled)

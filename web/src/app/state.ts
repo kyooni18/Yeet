@@ -288,6 +288,12 @@ export function toolbarControl(id: string): ToolbarControl | null {
   return null
 }
 
+/** Label of the selected reasoning level, empty when the model has none to choose. */
+export function reasoningLabel(): string {
+  const control = toolbarControl('reasoning')
+  return control?.options?.find(option => option.value === control.value)?.label ?? ''
+}
+
 export function newSession() {
   if (remote.value.home) remoteStore.sendHomeUi({ type: 'new_session' })
   else remoteStore.newSession()

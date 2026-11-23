@@ -21,7 +21,7 @@ Shell: fixed app frame; the document never scrolls, only panes do
       RecentSessions: title, relative age, selected and running state
     Footer: connection state only while not connected, Settings; always reachable
   Main: flexible, min-width 0
-    TitleBar: 44px; Session settings button beside the session title (opens Manage session); floats over the transcript on a top blur on the conversation, solid with a rule on other pages; navigation toggle, page title + one line of context, page controls, run state, connection problem, workspace-panel toggle
+    TitleBar: 44px; NewChatWorkspace (labeled native workspace choice + open-path action) beside the title for an empty new chat only, never in the composer or sidebar; Session settings button beside the session title (opens Manage session); floats over the transcript on a top blur on the conversation, solid with a rule on other pages; navigation toggle, page title + one line of context, page controls, run state, connection problem, workspace-panel toggle
       Context: current folder (Files), change totals (Review changes); never a second page header
       PageControls: segmented choice owned by the page (Review changes: Changes / Full file)
       RunState: spinner + elapsed when a session works and the page is not the conversation; opens it
@@ -53,9 +53,11 @@ Shell: fixed app frame; the document never scrolls, only panes do
       EmptyState: centered greeting and workspace context
       FollowOutput: pinned only while near bottom; floating Jump to latest when reading history
     Composer: floats over the bottom of the transcript on a bottom blur; its measured height pads the transcript and positions Jump to latest; same column alignment, one bordered flat surface, auto-growing field
-      NewChatWorkspace: labeled native workspace choice beside input, only for an empty new chat
-        Open another workspace path action; never a workspace selector in left sidebar
-      Controls: one quiet row; attachment, model, reasoning, context, send/stop
+      Compact: 10px top, 8px sides and bottom inset; field and controls row sit 4px apart; controls are 28px on pointer, 44px on touch
+      Controls: one quiet row; attachment, model-and-reasoning, context, send/stop
+        ModelReasoning: one trigger showing model and reasoning level; opens a sheet with the reasoning slider above the model search and list
+          ReasoningSlider: discrete stops, filled track, a dot per stop, round thumb, chosen level beside the name, first and last level beneath; keyboard and touch operable
+        Send: flat accent key, 8px corners concentric with the 16px surface and 8px inset; neutral when it cannot send; inverted square while stopping
         Phone: same single row; context does not take a line of its own
       Context: compact percentage plus accessible used/limit token information
       No explanatory helper copy beneath the composer

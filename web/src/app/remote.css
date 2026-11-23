@@ -267,10 +267,10 @@ textarea.form-field { resize: vertical; min-height: 96px; }
 .composer-surface[data-dropping] { box-shadow: var(--shadow-pane), 0 0 0 2px var(--focus); background: color-mix(in srgb, var(--focus) 8%, var(--composer)) !important; }
 .composer-suggestion { width: 100%; text-align: left; }
 .composer-suggestion[aria-selected="true"] { background: var(--hover); }
-.composer textarea { line-height: 1.6; overflow-y: auto; }
+.composer textarea { line-height: 1.5; overflow-y: auto; }
 .composer-surface > :last-child { min-width: 0; }
 .composer-controls { width: 100% !important; min-width: 0; }
-.model-trigger { display: flex; align-items: center; min-width: 0; max-width: min(40%, 220px); padding: 5px 8px; border-radius: var(--r-control); color: var(--text2); font-size: 13px; overflow: hidden; transition: background var(--motion-fast), color var(--motion-fast); }
+.model-trigger { display: flex; align-items: center; min-width: 0; max-width: min(60%, 280px); padding: 4px 8px; border-radius: var(--r-control); color: var(--text2); font-size: 13px; overflow: hidden; transition: background var(--motion-fast), color var(--motion-fast); }
 .model-trigger:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .model-trigger > * { min-width: 0; }
 .model-trigger svg[data-mun="VectorSymbol"] { width: 12px; height: 12px; color: var(--faint); }
@@ -382,7 +382,7 @@ button.trace-disclosure__row:hover { background: var(--hover); }
   .session-search { font-size: 16px; }
   /* Touch-sized composer: the field, the pickers and the row all reach 44px. */
   .composer textarea { min-height: 28px !important; }
-  .composer select, .composer-workspace-picker { height: 44px; padding: 0 4px; }
+  .composer select { height: 44px; padding: 0 4px; }
   .model-trigger { min-height: 44px; }
 }
 @media (max-width: 599px) {
@@ -410,8 +410,6 @@ button.trace-disclosure__row:hover { background: var(--hover); }
 .status-section { margin-top: 12px; }
 .status-caption { font-size: 12px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
 
-.composer-workspace { width: 100% !important; min-width: 0; padding: 0 4px 0 0; color: var(--muted); }
-.composer-workspace-picker { flex: 1; min-width: 0; max-width: none !important; padding: 5px 0; color: var(--text); background: transparent; border: 0; font: inherit; font-size: 13px; }
 .composer-context { flex: none; font: var(--w-base) 12px/1.5 var(--sans); color: var(--muted); white-space: nowrap; }
 .composer-controls { flex-wrap: wrap; }
 /* Mün passes camel-case stroke attributes through; CSS is reliable across hosts. */
@@ -510,8 +508,8 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 .topbar--floating { border-bottom-width: 0; }
 /* Composer row: every control is centred on one line and the send key is a true square. */
 .composer-controls { align-items: center; }
-.send-button { box-sizing: border-box; width: 32px; height: 32px; padding: 0 !important; }
-@media (hover: hover) and (pointer: fine) { .composer-controls .model-trigger { min-height: 32px; } }
+.send-button { box-sizing: border-box; width: 28px; height: 28px; padding: 0 !important; }
+@media (hover: hover) and (pointer: fine) { .composer-controls .model-trigger { min-height: 28px; } }
 @media (hover: none), (pointer: coarse) {
   .send-button { width: 44px; height: 44px; }
   /* Fields and disclosures all reach the 44px touch target. */
@@ -547,3 +545,46 @@ svg { stroke-linecap: round; stroke-linejoin: round; stroke-width: var(--icon-st
 .attachment-chip { align-items: center; }
 .attachment-chip .icon-button { width: 28px; height: 28px; margin: -8px -2px -8px 0; }
 @media (hover: none), (pointer: coarse) { .attachment-chip .icon-button { width: 44px; height: 44px; margin: -8px -8px -8px -6px; } }
+
+/* Send key: one flat key, concentric with the composer (16px surface, 8px inset, 8px key). */
+.send-button { display: inline-flex; align-items: center; justify-content: center; flex: none; border: 0; border-radius: var(--r-control); background: var(--accent); color: var(--accent-ink); transition: background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast); }
+.send-button:hover:not(:disabled) { background: var(--accent-hover); }
+.send-button:active:not(:disabled) { transform: scale(0.94); }
+.send-button[data-mode="stop"] { background: var(--text); color: var(--bg); }
+.send-button:disabled { background: var(--hover); color: var(--faint); }
+
+/* Model and reasoning share one trigger; the level reads quieter than the model name. */
+.model-trigger__reasoning { flex: none; color: var(--muted); }
+.model-trigger__reasoning::before { content: "·"; margin-right: 4px; color: var(--faint); }
+.composer-surface { overflow: visible; }
+
+/* New-chat workspace choice lives in the title bar. */
+.workspace-chooser { width: auto !important; max-width: 100%; display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; margin-left: 4px; }
+.workspace-chooser__field { width: auto !important; display: flex; align-items: center; gap: 6px; min-width: 0; height: 28px; padding: 0 4px 0 8px; border-radius: var(--r-control); background: var(--hover); color: var(--muted); }
+.workspace-chooser__field svg { flex: none; }
+.workspace-picker { box-sizing: border-box; width: min(220px, 36vw); min-width: 0; height: 28px; padding: 0 18px 0 0; border: 0; border-radius: 0; background: no-repeat right 4px center / 10px 10px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='%23888' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 3.5 5 6.5 8 3.5'/%3E%3C/svg%3E"); color: var(--text); font: inherit; font-size: 13px; text-overflow: ellipsis; -webkit-appearance: none; appearance: none; cursor: pointer; }
+.workspace-picker:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--r-inline); }
+@media (hover: none), (pointer: coarse) { .workspace-chooser__field { height: 44px; background: transparent; } .workspace-picker { height: 44px; font-size: 16px; } }
+
+/* Reasoning slider: filled track, a dot per stop, a round thumb. The native range input stays on top for keyboard and touch. */
+.reasoning-slider { padding: 2px 2px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+/* Mün wraps every ZStack child in its own grid cell: stack them as absolute layers instead. */
+.stop-slider { --thumb: 20px; --track-h: 28px; position: relative; display: block !important; width: 100% !important; height: var(--track-h); }
+.stop-slider > div { position: absolute !important; inset: 0; display: block !important; pointer-events: none; }
+.stop-slider span, .stop-slider__input { position: absolute; }
+.stop-slider__track, .stop-slider__fill { top: 50%; left: 0; height: 6px; margin-top: -3px; border-radius: 3px; pointer-events: none; }
+.stop-slider__track { right: 0; background: color-mix(in srgb, var(--text) 12%, transparent); }
+.stop-slider__fill { background: var(--accent); }
+.stop-slider__stop { top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: color-mix(in srgb, var(--text) 32%, transparent); pointer-events: none; }
+.stop-slider__stop[data-passed="true"] { background: color-mix(in srgb, var(--accent-ink) 70%, transparent); }
+.stop-slider__input { inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; background: transparent; border: 0; -webkit-appearance: none; appearance: none; cursor: pointer; touch-action: pan-y; }
+.stop-slider__input:disabled { cursor: default; opacity: 0.45; }
+.stop-slider__input:focus { outline: none; }
+.stop-slider__input::-webkit-slider-runnable-track { height: var(--track-h); background: transparent; border: 0; }
+.stop-slider__input::-moz-range-track { height: var(--track-h); background: transparent; border: 0; }
+.stop-slider__input::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: var(--thumb); height: var(--thumb); margin-top: calc((var(--track-h) - var(--thumb)) / 2); border: 0; border-radius: 50%; background: radial-gradient(circle, var(--accent) 0 3px, #fff 3.5px); box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.28); transition: transform var(--motion-fast), box-shadow var(--motion-fast); }
+.stop-slider__input::-moz-range-thumb { width: var(--thumb); height: var(--thumb); box-sizing: border-box; border: 0; border-radius: 50%; background: radial-gradient(circle, var(--accent) 0 3px, #fff 3.5px); box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.28); }
+.stop-slider__input:active:not(:disabled)::-webkit-slider-thumb { transform: scale(1.1); }
+.stop-slider__input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--focus), 0 2px 6px rgba(0, 0, 0, 0.28); }
+.stop-slider__input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(--focus), 0 2px 6px rgba(0, 0, 0, 0.28); }
+@media (hover: none), (pointer: coarse) { .stop-slider { --thumb: 26px; --track-h: 44px; } }
