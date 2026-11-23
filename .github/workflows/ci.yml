@@ -203,3 +203,57 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and smoke Docker image
         run: sh ./Scripts/test-linux-container.sh
+
+  bun-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            host: bun-darwin-arm64
+          - os: ubuntu-latest
+            host: bun-linux-x64
+          - os: windows-latest
+            host: bun-windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: RuntimeSource/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.5"
+      - run: npm --prefix RuntimeSource ci
+      - run: npm --prefix RuntimeSource run build
+      - name: Compile bridge and edit daemon for every release target
+        shell: bash
+        run: |
+          mkdir -p runtime-bin
+          for target in bun-darwin-arm64 bun-darwin-x64 bun-linux-x64 bun-linux-arm64 bun-windows-x64 bun-windows-arm64; do
+            ext=""
+            if [[ "$target" == *windows* ]]; then ext=".exe"; fi
+            bun build --compile --target="$target" RuntimeSource/dist/bridge.js --outfile "runtime-bin/yeet-bridge-$target$ext"
+            bun build --compile --target="$target" RuntimeSource/dist/edit-backend/daemon.js --outfile "runtime-bin/yeet-editd-$target$ext"
+          done
+      - name: Smoke the native bridge and edit daemon with no Node on PATH
+        shell: bash
+        env:
+          HOST_TARGET: ${{ matrix.host }}
+        run: |
+          ext=""
+          if [[ "$HOST_TARGET" == *windows* ]]; then ext=".exe"; fi
+          bridge="runtime-bin/yeet-bridge-$HOST_TARGET$ext"
+          editd="runtime-bin/yeet-editd-$HOST_TARGET$ext"
+          export YEET_BUNDLED_SKILLS_DIR="$PWD/RuntimeSource/skills"
+          printf '%s\n' '{"v":1,"id":"1","op":"ping"}' '{"v":1,"id":"2","op":"skill-list"}' '{"v":1,"id":"3","op":"shutdown"}' > bridge-in.txt
+          "$bridge" < bridge-in.txt > bridge-out.txt
+          grep -q '"type":"pong"' bridge-out.txt
+          grep -q '"type":"skills"' bridge-out.txt
+          mkdir -p ws && printf 'hello\n' > ws/a.txt
+          printf '%s\n' '{"id":1,"method":"health"}' '{"id":2,"method":"read","params":{"path":"a.txt"}}' \
+            | "$editd" --root "$PWD/ws" > editd-out.txt
+          grep -q '"ok":true' editd-out.txt
+          grep -q '"anchored"' editd-out.txt
